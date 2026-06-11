@@ -6,6 +6,43 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 6 — Fetch family
+
+`fetch` and its surrounding types (SPEC.md §6.6 / §2.9), networking routed
+exclusively through a new `NetTransport` provider; response bodies stream via the
+Phase 5 streams.
+
+#### Added
+
+- **Engine `Value::Bytes`** — the marshaler now converts `Uint8Array`/typed-array
+  views ↔ `Vec<u8>` (copying), so byte bodies can cross the op boundary. True
+  zero-copy `ArrayBuffer` transfer remains Phase 8 (DECISIONS.md D3a).
+- **`NetTransport` provider** (`providers`) — outbound HTTP for `fetch`:
+  `HttpRequest` (buffered body) → `HttpResponse` (metadata + a streamed
+  `ByteStream` body, via `futures-core`). Capability-gated on `Capability::Net`.
+- **default-providers** — `ReqwestTransport` (reqwest + rustls TLS, no OpenSSL;
+  HTTP/1.1 + HTTP/2; streamed response bodies) and a deterministic
+  `MockTransport`/`MockResponse` (testing) so fetch is tested without network.
+- **runtime fetch** — capability-gated `fetch` async op + a `fetch_body_read`
+  op that streams the response body into a JS `ReadableStream`. `HostProviders`
+  gains the net provider.
+- **Prelude**: `Headers` (case-insensitive, combining), the `Body` mixin
+  (`arrayBuffer`/`text`/`json`/`blob`/`bytes`/`body` stream), `Request`,
+  `Response` (+ `Response.json`/`error`), and `fetch`; `Blob`, `File`, and
+  `FormData` (multipart encoding).
+- New dependencies: `reqwest` (rustls), `futures-core`/`futures-util`; `url`
+  unchanged. `deny.toml` allows `CDLA-Permissive-2.0` (the rustls root-cert
+  bundle).
+
+#### Decisions
+
+- **D20** locked: after weighing a from-scratch HTTP client, use a **vetted HTTP
+  crate** (reqwest + rustls) for the default `NetTransport` — HTTP/1.1 framing
+  and TLS are security-sensitive, and **TLS may not be hand-rolled** (§7/D9).
+  Confined to `default-providers`. Streaming model: **buffered request body,
+  streamed response** for Phase 6; streaming request bodies are a follow-up
+  (SPEC §7).
+
 ### Phase 5 — Streams
 
 The Streams surface (SPEC.md §6.5 / §2.8) — the largest correctness item —
@@ -206,8 +243,8 @@ end-to-end with snapshot scaffolding (SPEC.md §6.1).
   uncaught-exception JS class not yet preserved; primitive-only value marshaling;
   snapshot-creation concurrency constraint.
 
-### Phase 6 will add
+### Phase 7 will add
 
-Fetch family (SPEC.md §6.6): `Headers`, `Request`, `Response`, the `Body` mixin,
-and `fetch` over a new `NetTransport` provider (streaming bodies via the Phase 5
-streams), plus `Blob`, `File`, `FormData`.
+WebCrypto (SPEC.md §6.7): `crypto.getRandomValues` (the Entropy provider),
+`crypto.randomUUID`, and `crypto.subtle` (digest, HMAC, AES-GCM/CBC, ECDSA/ECDH,
+RSA) — resolving the open **D9** crypto-backend decision (RustCrypto vs `ring`).

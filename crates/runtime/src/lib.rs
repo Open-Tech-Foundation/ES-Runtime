@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod builtins;
+mod fetch_ops;
 mod prelude;
 mod timer;
 mod url_ops;
@@ -27,7 +28,7 @@ use crate::timer::TimerQueue;
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet};
 pub use es_runtime_engine::{AsyncOp, Engine, OpDecl, OpError, OpResult, V8Engine, Value};
-pub use es_runtime_providers::{Clock, Console, ConsoleLevel};
+pub use es_runtime_providers::{Clock, Console, ConsoleLevel, NetTransport};
 
 /// Runtime-layer error (DECISIONS.md D12).
 #[derive(Debug, thiserror::Error)]
@@ -81,12 +82,21 @@ pub struct TickStatus {
 pub struct HostProviders {
     clock: Arc<dyn Clock>,
     console: Arc<dyn Console>,
+    net: Arc<dyn NetTransport>,
 }
 
 impl HostProviders {
-    /// Bundles the providers a runtime needs.
-    pub fn new(clock: Arc<dyn Clock>, console: Arc<dyn Console>) -> Self {
-        HostProviders { clock, console }
+    /// Bundles the providers a runtime needs (Phase 6: clock, console, net).
+    pub fn new(
+        clock: Arc<dyn Clock>,
+        console: Arc<dyn Console>,
+        net: Arc<dyn NetTransport>,
+    ) -> Self {
+        HostProviders {
+            clock,
+            console,
+            net,
+        }
     }
 
     fn clock(&self) -> Arc<dyn Clock> {
@@ -95,6 +105,10 @@ impl HostProviders {
 
     fn console(&self) -> Arc<dyn Console> {
         self.console.clone()
+    }
+
+    fn net(&self) -> Arc<dyn NetTransport> {
+        self.net.clone()
     }
 }
 
@@ -251,19 +265,102 @@ mod tests {
         }
     }
 
+    /// A canned NetTransport for fetch tests (no real network).
+    struct MockNet {
+        status: u16,
+        headers: Vec<(String, String)>,
+        chunks: Vec<Vec<u8>>,
+        fail: bool,
+    }
+    impl MockNet {
+        fn ok(body: &str) -> Self {
+            MockNet {
+                status: 200,
+                headers: vec![("content-type".into(), "text/plain".into())],
+                chunks: vec![body.as_bytes().to_vec()],
+                fail: false,
+            }
+        }
+        /// A transport that errors — for runtimes whose tests never fetch.
+        fn stub() -> Self {
+            MockNet {
+                status: 0,
+                headers: Vec::new(),
+                chunks: Vec::new(),
+                fail: true,
+            }
+        }
+    }
+    impl es_runtime_providers::NetTransport for MockNet {
+        fn fetch(
+            &self,
+            request: es_runtime_providers::HttpRequest,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                es_runtime_providers::HttpResponse,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            if self.fail {
+                return Box::pin(async {
+                    Err(es_runtime_providers::ProviderError::Other(
+                        "no network".into(),
+                    ))
+                });
+            }
+            let (status, headers, chunks, url) = (
+                self.status,
+                self.headers.clone(),
+                self.chunks.clone(),
+                request.url,
+            );
+            Box::pin(async move {
+                let body: es_runtime_providers::ByteStream =
+                    Box::pin(futures_util::stream::iter(chunks.into_iter().map(Ok)));
+                Ok(es_runtime_providers::HttpResponse {
+                    status,
+                    status_text: "OK".into(),
+                    url,
+                    headers,
+                    body,
+                })
+            })
+        }
+    }
+
     fn runtime() -> Runtime {
-        runtime_with(
+        runtime_full(
             Arc::new(TestConsole::default()),
             Arc::new(FixedClock {
                 monotonic: 0,
                 wall: 0,
             }),
+            Arc::new(MockNet::stub()),
         )
     }
 
     fn runtime_with(console: Arc<dyn Console>, clock: Arc<dyn Clock>) -> Runtime {
+        runtime_full(console, clock, Arc::new(MockNet::stub()))
+    }
+
+    fn runtime_with_net(net: Arc<dyn NetTransport>) -> Runtime {
+        runtime_full(
+            Arc::new(TestConsole::default()),
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+            net,
+        )
+    }
+
+    fn runtime_full(
+        console: Arc<dyn Console>,
+        clock: Arc<dyn Clock>,
+        net: Arc<dyn NetTransport>,
+    ) -> Runtime {
         let engine = V8Engine::new(Limits::default()).expect("engine");
-        Runtime::new(Box::new(engine), HostProviders::new(clock, console)).expect("runtime")
+        Runtime::new(Box::new(engine), HostProviders::new(clock, console, net)).expect("runtime")
     }
 
     #[test]
@@ -816,5 +913,89 @@ mod tests {
              return s;",
         );
         assert_eq!(out, Value::String("héo".into()));
+    }
+
+    #[test]
+    fn headers_are_case_insensitive_and_combine() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const h = new Headers(); h.append('X-A', '1'); h.append('x-a', '2'); \
+             return h.get('X-A') === '1, 2' && h.has('x-a') && !h.has('y'); })()",
+        );
+    }
+
+    #[test]
+    fn blob_concatenates_and_reads() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const b = new Blob(['hello', ' ', 'world'], { type: 'text/plain' }); \
+             return b.size + '|' + b.type + '|' + (await b.text());",
+        );
+        assert_eq!(out, Value::String("11|text/plain|hello world".into()));
+    }
+
+    #[test]
+    fn form_data_basic_operations() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const f = new FormData(); f.append('a', '1'); f.append('b', '2'); f.append('a', '3'); \
+             return f.get('a') === '1' && f.getAll('a').join(',') === '1,3' && f.has('b'); })()",
+        );
+    }
+
+    #[test]
+    fn fetch_requires_net_capability() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_net(Arc::new(MockNet::ok("x")));
+        // Deny-by-default: no Net capability granted.
+        let out = eval_async(&mut rt, "await fetch('https://x.test/'); return 'ok';");
+        match out {
+            Value::String(s) => assert!(
+                s.starts_with("ERR:") && (s.contains("capability") || s.contains("NotAllowed")),
+                "expected capability denial, got {s}"
+            ),
+            other => panic!("expected rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_returns_response_with_capability() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_net(Arc::new(MockNet::ok("hello world")));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/data'); \
+             return r.status + '|' + r.ok + '|' + r.headers.get('content-type') + '|' + (await r.text());",
+        );
+        assert_eq!(out, Value::String("200|true|text/plain|hello world".into()));
+    }
+
+    #[test]
+    fn fetch_streams_a_chunked_response_body() {
+        let _g = v8_guard();
+        let net = MockNet {
+            status: 200,
+            headers: vec![],
+            chunks: vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()],
+            fail: false,
+        };
+        let mut rt = runtime_with_net(Arc::new(net));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // Drain the response body stream chunk by chunk.
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/'); const reader = r.body.getReader(); \
+             const dec = new TextDecoder(); let s = ''; let x; \
+             while (!(x = await reader.read()).done) s += dec.decode(x.value); \
+             return s;",
+        );
+        assert_eq!(out, Value::String("foobarbaz".into()));
     }
 }

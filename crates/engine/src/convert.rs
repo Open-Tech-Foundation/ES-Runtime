@@ -25,6 +25,14 @@ pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>)
         Value::Number(value.number_value(scope).unwrap_or(f64::NAN))
     } else if value.is_string() {
         Value::String(js_to_string(scope, value))
+    } else if value.is_array_buffer_view() {
+        // Uint8Array and other typed-array/DataView views — copied out
+        // (interim; zero-copy is Phase 8). Bare ArrayBuffers are wrapped as a
+        // Uint8Array in the prelude before crossing, so a view suffices here.
+        let view = v8::Local::<v8::ArrayBufferView>::try_from(value).expect("checked view");
+        let mut buf = vec![0u8; view.byte_length()];
+        view.copy_contents(&mut buf);
+        Value::Bytes(buf)
     } else {
         Value::Other(js_to_string(scope, value))
     }
@@ -41,7 +49,19 @@ pub(crate) fn value_to_js<'s>(
         Value::Bool(b) => v8::Boolean::new(scope, *b).into(),
         Value::Number(n) => v8::Number::new(scope, *n).into(),
         Value::String(s) | Value::Other(s) => js_string(scope, s).into(),
+        Value::Bytes(bytes) => bytes_to_uint8array(scope, bytes).into(),
     }
+}
+
+/// Builds a `Uint8Array` (over a fresh `ArrayBuffer`) holding a copy of `bytes`.
+fn bytes_to_uint8array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: &[u8],
+) -> v8::Local<'s, v8::Uint8Array> {
+    let len = bytes.len();
+    let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes.to_vec()).make_shared();
+    let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+    v8::Uint8Array::new(scope, buffer, 0, len).expect("uint8array construction")
 }
 
 /// Builds (without throwing) the JS exception a layer error should surface as

@@ -49,8 +49,8 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ◐ `ReadableStream` (default) ☑, `WritableStream` ☑, `TransformStream` ☑, **backpressure** ☑, `CountQueuingStrategy`/`ByteLengthQueuingStrategy` ☑, `tee`/`pipeTo`/`pipeThrough` ☑ *(Phase 5, hand-written — DECISIONS D19)*. **byte/BYOB** streams ⊘ → follow-up.
 
 ### 2.9 Fetch family
-- ☐ `Headers`, `Request`, `Response`, `Body` mixin, `fetch` — networking exclusively via the `NetTransport` provider; streaming bodies via §2.8.
-- ☐ `Blob`, `File`, `FormData`.
+- ◐ `Headers`, `Request`, `Response`, `Body` mixin, `fetch` ☑ — networking exclusively via the `NetTransport` provider; **response** bodies stream via §2.8. Request-body streaming ⊘ → follow-up (buffered for now). *(Phase 6, DECISIONS D20.)*
+- ☑ `Blob`, `File`, `FormData`. *(Phase 6.)*
 
 ### 2.10 WebCrypto
 - ☐ `crypto.getRandomValues` (Entropy provider), `crypto.randomUUID`.
@@ -72,7 +72,7 @@ Traits the embedder must satisfy (defaults shipped in `default-providers`):
 - ☑ `Timers` — schedule/cancel. *(Phase 3: trait + `TokioTimers`/`ManualTimers`.)*
 - ☑ `TaskSpawner` — offload blocking work. *(Phase 3: trait + `TokioTaskSpawner`/`InlineTaskSpawner`.)*
 - ☑ `Console` — guest output sink (the lightest provider; DECISIONS D17). *(Phase 4: trait + `TracingConsole`/`NullConsole`/`CapturingConsole`.)*
-- ☐ `NetTransport` — outbound HTTP for `fetch`. *(Phase 6.)*
+- ☑ `NetTransport` — outbound HTTP for `fetch`. *(Phase 6: trait + `ReqwestTransport`/`MockTransport`; DECISIONS D20.)*
 - ☐ `FileSystem` — capability-scoped, async, optional/deniable. *(Later.)*
 
 All calls: async-friendly, cancellable, capability-checked, typed errors. No provider, no capability ⇒ clean JS exception.
@@ -111,7 +111,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 3. ☑ **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers. (`providers` + `default-providers` crates + a tokio `Driver`; `runtime` API unchanged — DECISIONS D16.)
 4. ☑ **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort. (JS prelude over the op system + `Console` provider; DECISIONS D17/D18.)
 5. ◐ **Streams** — readable/writable/transform + backpressure + queuing strategies + tee/pipe + encoding streams, hand-written (DECISIONS D19). Byte/BYOB streams deferred to a follow-up.
-6. **Fetch family** — Headers/Request/Response/Body/fetch over NetTransport; Blob/File/FormData.
+6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
 7. **WebCrypto** — getRandomValues, randomUUID, subtle.
 8. **Snapshot + perf** — bake prelude into snapshot; zero-copy audit; benchmark context creation + op throughput.
 9. **Hardening + conformance** — limits, watchdog, fuzzing, WPT run, security review, sanitizer CI, docs finalization.
@@ -132,6 +132,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 - **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) is implemented in the **hardening phase (§6.9)**, not Phase 2. A *host-written* op handler that panics currently aborts the process; hostile JS cannot force this. (DECISIONS D15.)
 - **`DOMException` engine reconciliation** — the JS class exists (Phase 4 prelude), but errors thrown from the engine still surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
 - **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) → a streams follow-up (DECISIONS D19). Default streams + encoding streams ship in Phase 5.
+- **Streaming `fetch` request bodies** → a follow-up; Phase 6 buffers the request body and streams the response (DECISIONS D20).
 - **`URLPattern`** → later (not covered by the `url` crate). Minor WHATWG URL conformance gaps tracked vs WPT (D18).
 - **`reportError` ErrorEvent dispatch** and **sub-millisecond `performance.now`** are minimal in Phase 4; full behavior lands with the event loop / clock refinements.
 

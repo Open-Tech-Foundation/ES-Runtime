@@ -121,6 +121,54 @@ pub enum ConsoleLevel {
     Error,
 }
 
+/// A stream of body byte-chunks, as produced/consumed by [`NetTransport`].
+///
+/// Modeled as a `futures` [`Stream`](futures_core::Stream) so the response body
+/// can be delivered incrementally and fed to a JS `ReadableStream` (streaming
+/// downloads). Each item is a chunk or a [`ProviderError`]; the stream ends at
+/// `None`.
+pub type ByteStream =
+    Pin<Box<dyn futures_core::Stream<Item = Result<Vec<u8>, ProviderError>> + Send>>;
+
+/// An outbound HTTP request handed to a [`NetTransport`].
+pub struct HttpRequest {
+    /// The HTTP method (`GET`, `POST`, …).
+    pub method: String,
+    /// The absolute request URL.
+    pub url: String,
+    /// Header name/value pairs, in order.
+    pub headers: Vec<(String, String)>,
+    /// The request body, already buffered. Streaming request bodies are a
+    /// follow-up (SPEC §7); response bodies stream via [`ByteStream`].
+    pub body: Option<Vec<u8>>,
+}
+
+/// The response a [`NetTransport`] returns: metadata available immediately, body
+/// streamed.
+pub struct HttpResponse {
+    /// The HTTP status code.
+    pub status: u16,
+    /// The status reason phrase (e.g. `"OK"`).
+    pub status_text: String,
+    /// The final URL after any redirects.
+    pub url: String,
+    /// Response header name/value pairs, in order.
+    pub headers: Vec<(String, String)>,
+    /// The response body, streamed as byte-chunks.
+    pub body: ByteStream,
+}
+
+/// Outbound HTTP for `fetch` (ARCHITECTURE.md §6, SPEC §2.9).
+///
+/// The runtime routes all networking through this trait; it never opens a socket
+/// itself (no ambient authority). A `fetch` op is **capability-checked**
+/// (`Capability::Net`) before this is ever called.
+pub trait NetTransport: Send + Sync {
+    /// Sends `request` and resolves to the response once its headers arrive; the
+    /// body then streams via [`HttpResponse::body`].
+    fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>>;
+}
+
 /// A sink for guest `console.*` output (SPEC.md §2.2).
 ///
 /// console output is the **guest program's** output, not the runtime's

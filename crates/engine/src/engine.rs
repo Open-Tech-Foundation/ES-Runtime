@@ -303,4 +303,32 @@ mod tests {
         let bad = Limits::default().with_heap_limit_bytes(0);
         assert!(matches!(V8Engine::new(bad), Err(Error::Common(_))));
     }
+
+    #[test]
+    fn marshals_uint8array_to_bytes() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        assert_eq!(
+            engine.eval("new Uint8Array([1, 2, 3])").unwrap(),
+            Value::Bytes(vec![1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn bytes_round_trip_through_an_op() {
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .register_op(OpDecl::sync("echo", |mut args| Ok(args.remove(0))))
+            .unwrap();
+        // Uint8Array → Value::Bytes (in) → Value::Bytes → Uint8Array (out).
+        let ok = engine
+            .eval(
+                "const a = __ops.echo(new Uint8Array([9, 8, 7])); \
+                 a instanceof Uint8Array && a.length === 3 && a[0] === 9 && a[2] === 7",
+            )
+            .unwrap();
+        assert_eq!(ok, Value::Bool(true));
+    }
 }

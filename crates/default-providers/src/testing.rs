@@ -11,8 +11,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use futures_util::stream;
+
 use es_runtime_providers::{
-    BoxFuture, Clock, Console, ConsoleLevel, Entropy, ProviderError, TaskSpawner, Timers,
+    BoxFuture, ByteStream, Clock, Console, ConsoleLevel, Entropy, HttpRequest, HttpResponse,
+    NetTransport, ProviderError, TaskSpawner, Timers,
 };
 
 /// A [`Clock`] whose monotonic time advances only via [`advance`](Self::advance)
@@ -147,6 +150,84 @@ impl Console for CapturingConsole {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .push((level, message.to_string()));
+    }
+}
+
+/// A canned HTTP response for [`MockTransport`].
+#[derive(Clone)]
+pub struct MockResponse {
+    /// HTTP status code.
+    pub status: u16,
+    /// Status reason phrase.
+    pub status_text: String,
+    /// Response headers.
+    pub headers: Vec<(String, String)>,
+    /// Body delivered as these chunks (lets tests exercise streaming).
+    pub chunks: Vec<Vec<u8>>,
+}
+
+impl MockResponse {
+    /// A `200 OK` response with `body` as a single chunk.
+    pub fn ok(body: impl Into<Vec<u8>>) -> Self {
+        MockResponse {
+            status: 200,
+            status_text: "OK".to_string(),
+            headers: Vec::new(),
+            chunks: vec![body.into()],
+        }
+    }
+
+    /// Adds a response header.
+    #[must_use]
+    pub fn header(mut self, name: &str, value: &str) -> Self {
+        self.headers.push((name.to_string(), value.to_string()));
+        self
+    }
+
+    /// Replaces the body with multiple chunks (to exercise streamed reads).
+    #[must_use]
+    pub fn chunks(mut self, chunks: Vec<Vec<u8>>) -> Self {
+        self.chunks = chunks;
+        self
+    }
+}
+
+/// A deterministic [`NetTransport`] that answers from a handler closure — no
+/// network. Tests assert on fetch behavior without connectivity.
+pub struct MockTransport {
+    handler: Box<dyn Fn(HttpRequest) -> MockResponse + Send + Sync>,
+}
+
+impl MockTransport {
+    /// Builds a transport whose `handler` decides the response per request.
+    pub fn new(handler: impl Fn(HttpRequest) -> MockResponse + Send + Sync + 'static) -> Self {
+        MockTransport {
+            handler: Box::new(handler),
+        }
+    }
+
+    /// Builds a transport that always returns `response`.
+    pub fn constant(response: MockResponse) -> Self {
+        MockTransport::new(move |_req| response.clone())
+    }
+}
+
+impl NetTransport for MockTransport {
+    fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
+        let url = request.url.clone();
+        let response = (self.handler)(request);
+        let chunks: Vec<Result<Vec<u8>, ProviderError>> =
+            response.chunks.into_iter().map(Ok).collect();
+        let body: ByteStream = Box::pin(stream::iter(chunks));
+        Box::pin(async move {
+            Ok(HttpResponse {
+                status: response.status,
+                status_text: response.status_text,
+                url,
+                headers: response.headers,
+                body,
+            })
+        })
     }
 }
 

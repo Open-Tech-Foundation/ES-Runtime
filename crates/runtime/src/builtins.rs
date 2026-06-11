@@ -18,6 +18,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     install_performance(engine, providers.clock())?;
     // Pure-computation ops (no provider): URL parsing/serialization.
     crate::url_ops::install(engine)?;
+    // Networking ops, capability-gated on Net.
+    crate::fetch_ops::install(engine, providers.net())?;
     Ok(())
 }
 

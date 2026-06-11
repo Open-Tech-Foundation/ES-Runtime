@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 es-runtime-common.workspace = true
+futures-core.workspace = true
 thiserror.workspace = true
 
 [lints]

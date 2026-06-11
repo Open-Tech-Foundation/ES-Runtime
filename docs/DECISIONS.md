@@ -41,11 +41,13 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 >   reconstructing the class requires reading the thrown object's constructor and
 >   re-mapping; deferred to Phase 2 when ops re-enter JS. *Impact:* lossy error
 >   class on the JS round-trip.
-> - **Primitive-only value marshaling.** `engine::Value` marshals JS primitives;
->   every other value collapses to `Value::Other(String(value))`. *Reason:*
->   structured + zero-copy marshaling belongs with the op system and the perf
->   pass (Phases 2/8). *Impact:* callers cannot yet inspect object/array
->   structure through the boundary.
+> - **Primitive-only value marshaling.** `engine::Value` marshals JS primitives
+>   plus, since Phase 6, `Value::Bytes` (`Uint8Array`/typed-array views, **copied**
+>   to/from `Vec<u8>`). Every other value still collapses to
+>   `Value::Other(String(value))`. *Reason:* structured marshaling belongs with
+>   later phases; **zero-copy** `ArrayBuffer` transfer (avoiding the `Value::Bytes`
+>   copy) is the Phase 8 perf pass (ARCHITECTURE §9). *Impact:* byte bodies cross
+>   the boundary correctly but with a copy; objects/arrays still don't.
 > - **Snapshot-creation concurrency constraint leaks to the caller.** V8 forbids
 >   building a snapshot concurrently with other isolate creation; `snapshot::build`
 >   documents this as a caller obligation rather than hiding it. *Reason:*
@@ -192,3 +194,10 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 **Context:** The WHATWG Streams spec is the largest min-common item. The choices were full vs. default-first scope, and hand-writing vs. vendoring the standards reference JS.
 **Decision (maintainer):** **Hand-write** the spec's abstract operations in the prelude (no external code — fits the from-scratch ethos of D2; no large vendored blob or extra license/attribution), and **default-first**: ship `ReadableStream` (default), `WritableStream`, `TransformStream`, both queuing strategies, backpressure, `tee`, `pipeTo`/`pipeThrough`, and the encoding streams now. **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) are deferred to a follow-up sub-phase (SPEC §7).
 **Consequences:** Full control and a clean dependency graph; more implementation care, with conformance tracked against WPT (D13). Streams live in one prelude IIFE (`streams.js`) so the interdependent readable/writable/transform/pipe machinery can share internal slots (a module-private `Symbol`); encoding streams build on the public `TransformStream`.
+
+---
+
+### D20 — Fetch: vetted HTTP client (reqwest + rustls), confined to default-providers · *Locked (maintainer sign-off, 2026-06-12)*
+**Context:** `fetch` needs an HTTP client for the default `NetTransport`. A from-scratch HTTP/1.1 client was considered (fits D2), but HTTP framing is security-sensitive and **TLS cannot be hand-rolled** without violating §7/D9 ("vetted, constant-time crypto only; no hand-rolled primitives").
+**Decision (maintainer):** Use a **vetted HTTP crate** — `reqwest` with **rustls** TLS (no OpenSSL/native-tls), HTTP/1.1 + HTTP/2 — for the default transport, **confined to `default-providers`**. `runtime`/`engine`/`providers` never depend on it; the seam is the `NetTransport` trait. Streaming model for Phase 6: **buffered request body, streamed response body** (response chunks pulled on tick into a JS `ReadableStream`); streaming request bodies are a follow-up (SPEC §7).
+**Consequences:** Battle-tested framing/TLS for low risk; a large dependency tree, but isolated to the batteries crate (the audit/deny surface grows only there). `deny.toml` adds `CDLA-Permissive-2.0` for the rustls root-cert bundle. The TLS crypto backend (rustls' provider) is **not** the `crypto.subtle` backend — **D9** stays *Open* until Phase 7. A new engine `Value::Bytes` variant (copying `Uint8Array` ↔ `Vec<u8>`) carries byte bodies across the op boundary; zero-copy is Phase 8 (D3a).

@@ -12,6 +12,7 @@ authors.workspace = true
 es-runtime-common.workspace = true
 es-runtime-engine.workspace = true
 es-runtime-providers.workspace = true
+futures-util = { workspace = true, features = ["alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true

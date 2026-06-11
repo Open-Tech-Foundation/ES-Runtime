@@ -21,6 +21,7 @@ mod clock;
 mod console;
 mod driver;
 mod entropy;
+mod net;
 mod task;
 mod timers;
 
@@ -30,5 +31,6 @@ pub use clock::SystemClock;
 pub use console::{NullConsole, TracingConsole};
 pub use driver::Driver;
 pub use entropy::OsEntropy;
+pub use net::ReqwestTransport;
 pub use task::TokioTaskSpawner;
 pub use timers::TokioTimers;

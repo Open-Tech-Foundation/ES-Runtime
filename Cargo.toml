@@ -42,6 +42,12 @@ tokio = "1.52.3"
 getrandom = "0.4.2"
 # WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
 url = "2.5.8"
+# Async byte-stream trait for provider bodies (trait-only, tiny).
+futures-core = "0.3.32"
+# Vetted HTTP client for the default NetTransport (DECISIONS.md D20). rustls TLS
+# only (no OpenSSL/native-tls). Confined to `default-providers`.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset"] }
+futures-util = { version = "0.3.32", default-features = false }
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).

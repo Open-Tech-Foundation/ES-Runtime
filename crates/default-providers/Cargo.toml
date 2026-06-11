@@ -12,7 +12,10 @@ authors.workspace = true
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
 es-runtime-runtime.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
 getrandom.workspace = true
+reqwest.workspace = true
 tokio = { workspace = true, features = ["rt", "time"] }
 tracing.workspace = true
 

@@ -20,7 +20,11 @@ pub enum Value {
     Number(f64),
     /// A JS string, decoded to a Rust `String`.
     String(String),
-    /// A JS value Phase 1 does not yet marshal structurally. Carries the value's
+    /// Bytes from a JS `Uint8Array`/typed array view (copied). Marshals back to
+    /// a `Uint8Array`. This is the interim copying path; true zero-copy
+    /// `ArrayBuffer` transfer is Phase 8 (ARCHITECTURE.md §9).
+    Bytes(Vec<u8>),
+    /// A JS value not yet marshaled structurally. Carries the value's
     /// `String(value)` coercion so it is still inspectable; later phases replace
     /// this with structured variants.
     Other(String),
@@ -40,6 +44,14 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Returns the bytes if this is [`Value::Bytes`], else `None`.
+    pub fn as_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Value::Bytes(b) => Some(b),
             _ => None,
         }
     }
