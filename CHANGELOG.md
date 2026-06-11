@@ -6,6 +6,43 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 3 — Provider traits + default tokio providers
+
+The I/O integration seam (SPEC.md §6.3): provider traits, reference tokio-backed
+implementations, deterministic test providers, and a standalone driver.
+
+#### Added
+
+- **`es-runtime-providers` crate** — trait definitions only, no impls, no
+  `unsafe` (ARCHITECTURE.md §6, DECISIONS.md D5): `Clock` (monotonic + wall ms),
+  `Entropy` (fill CSPRNG bytes), `Timers` (`sleep` future), `TaskSpawner`
+  (offload blocking work). `ProviderError` maps to a JS exception via
+  `IntoException`. (`NetTransport`/`FileSystem` arrive with their consuming APIs.)
+- **`es-runtime-default-providers` crate** — the **only** crate owning a real
+  loop/clock/entropy:
+  - Production impls: `SystemClock` (std `Instant`/`SystemTime`), `OsEntropy`
+    (`getrandom`), `TokioTimers` (tokio timer wheel), `TokioTaskSpawner` (tokio
+    blocking pool).
+  - `Driver` — runs a `Runtime` to quiescence on tokio: reads the `Clock` for
+    each tick's time, parks on `Timers` between ticks, accumulates unhandled
+    rejections. This is the concrete loop `runtime` deliberately does not own
+    (D4); Layer B swaps it for its scheduler.
+  - `testing` module — deterministic providers (`ManualClock`, `ManualTimers`
+    that advance a linked clock, seeded non-crypto `SeededEntropy`,
+    `InlineTaskSpawner`) for reproducible runs (D5). The driver integration test
+    runs an async op + a timer to completion with zero real waiting.
+- New dependencies: `tokio` (rt + time) and `getrandom`, confined to
+  `default-providers`.
+
+#### Decisions
+
+- **Providers + driver only** (maintainer sign-off): Phase 3 does **not** change
+  `runtime`'s public API. `runtime` keeps `tick(now_ms)` and gains a `providers`
+  dependency only when a provider-backed web API lands (`performance.now` →
+  Phase 4, `getRandomValues` → Phase 7). The `Driver` supplies tick time from the
+  `Clock`. **D9 (crypto.subtle backend) remains open** — `getrandom` is raw OS
+  entropy, not the algorithm backend.
+
 ### Phase 2 — Op system + driven loop
 
 The JS↔Rust op bridge and the embedder-driven event loop (SPEC.md §6.2): sync +
@@ -98,9 +135,9 @@ end-to-end with snapshot scaffolding (SPEC.md §6.1).
   uncaught-exception JS class not yet preserved; primitive-only value marshaling;
   snapshot-creation concurrency constraint.
 
-### Phase 3 will add
+### Phase 4 will add
 
-Provider traits (`Clock`, `Entropy`, `Timers`, `TaskSpawner`) in a new
-`providers` crate, and the reference tokio-backed `default-providers`, plus
-deterministic test providers — replacing the embedder-supplied tick time with a
-real `Clock`/`Timers` source and giving ops their first real I/O capabilities.
+Core web primitives (SPEC.md §6.4): `console`, the encoding family
+(`TextEncoder`/`TextDecoder`, `atob`/`btoa`), the URL family, `structuredClone`,
+`performance.now` (wiring the `Clock` provider into `runtime`), events
+(`Event`/`EventTarget`), and Abort — mostly pure-JS prelude over the op system.

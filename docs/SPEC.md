@@ -67,12 +67,12 @@ Anything intentionally deferred from the snapshot is listed in §7 with rational
 
 Traits the embedder must satisfy (defaults shipped in `default-providers`):
 
-- `Clock` — wall + monotonic time.
-- `Entropy` — CSPRNG bytes.
-- `Timers` — schedule/cancel.
-- `NetTransport` — outbound HTTP for `fetch`.
-- `FileSystem` — capability-scoped, async, optional/deniable.
-- `TaskSpawner` — offload blocking work.
+- ☑ `Clock` — wall + monotonic time. *(Phase 3: trait + `SystemClock`/`ManualClock`.)*
+- ☑ `Entropy` — CSPRNG bytes. *(Phase 3: trait + `OsEntropy`/`SeededEntropy`.)*
+- ☑ `Timers` — schedule/cancel. *(Phase 3: trait + `TokioTimers`/`ManualTimers`.)*
+- ☑ `TaskSpawner` — offload blocking work. *(Phase 3: trait + `TokioTaskSpawner`/`InlineTaskSpawner`.)*
+- ☐ `NetTransport` — outbound HTTP for `fetch`. *(Phase 6.)*
+- ☐ `FileSystem` — capability-scoped, async, optional/deniable. *(Later.)*
 
 All calls: async-friendly, cancellable, capability-checked, typed errors. No provider, no capability ⇒ clean JS exception.
 
@@ -107,7 +107,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 
 1. ☑ **Foundation** — workspace, `common`, error model, tracing, CI; `engine` V8 init running `"1+1"`; snapshot scaffolding.
 2. ☑ **Op system + driven loop** — sync/async ops, promise resolution, microtask checkpoint, tick/poll API, timer plumbing. (`runtime` crate + engine trait introduced here; see DECISIONS D15.)
-3. **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers.
+3. ☑ **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers. (`providers` + `default-providers` crates + a tokio `Driver`; `runtime` API unchanged — DECISIONS D16.)
 4. **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort.
 5. **Streams** — full readable/writable/transform incl. byte streams + backpressure.
 6. **Fetch family** — Headers/Request/Response/Body/fetch over NetTransport; Blob/File/FormData.

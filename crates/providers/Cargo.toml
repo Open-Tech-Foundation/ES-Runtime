@@ -1,0 +1,16 @@
+[package]
+name = "es-runtime-providers"
+description = "I/O provider traits for ES-Runtime (Clock, Entropy, Timers, TaskSpawner) — definitions only, no implementations."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+es-runtime-common.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -13,7 +13,9 @@ resolver = "3"
 members = [
     "crates/common",
     "crates/engine",
+    "crates/providers",
     "crates/runtime",
+    "crates/default-providers",
 ]
 
 # Shared package metadata. Individual crates inherit via `field.workspace = true`.
@@ -35,11 +37,16 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
 # V8 bindings (DECISIONS.md D2). Confined to the `engine` crate.
 v8 = "150.0.0"
+# Async runtime + OS CSPRNG, used only by `default-providers` (DECISIONS.md D5).
+tokio = "1.52.3"
+getrandom = "0.4.2"
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).
 es-runtime-common = { path = "crates/common", version = "0.0.0" }
 es-runtime-engine = { path = "crates/engine", version = "0.0.0" }
+es-runtime-providers = { path = "crates/providers", version = "0.0.0" }
+es-runtime-runtime = { path = "crates/runtime", version = "0.0.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1

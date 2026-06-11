@@ -160,5 +160,12 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 2. **Extract the engine abstraction trait now** (`engine::Engine`; impl `engine::V8Engine`), resolving the Phase 1 "concrete only" note.
 3. **Async ops are std-only, poll-on-tick** (`Waker::noop`, no reactor); tokio integration arrives with default-providers (Phase 3).
 4. Ops are exposed at the low-level `globalThis.__ops.<name>`; ergonomic WinterTC wrappers come with the prelude (Phase 4/8). Timers (`setTimeout` &c.) are engine builtins; the embedder supplies time per tick until the `Clock`/`Timers` providers do (Phase 3).
-**Consequences:** Clean Layer-B seam and a real second-engine boundary now; `runtime` gains a `providers` dependency in Phase 3. See D3a (Phase 2) for the boundary leak notes.
+**Consequences:** Clean Layer-B seam and a real second-engine boundary now. See D3a (Phase 2) for the boundary leak notes.
 **Deferred (not silently):** **Panic-across-FFI containment** for op/timer/reject callbacks (`catch_unwind` per D12) is implemented in the **hardening phase (§6.9)**, alongside the heap/watchdog/stack limits — not in Phase 2. Until then a *host-written* op handler that panics aborts the process (Rust's `extern "C"` panic = abort, not UB); hostile **JS** cannot force this, since handlers validate their marshaled arguments and return typed `OpError`s. Tracked for Phase 9.
+
+---
+
+### D16 — Phase 3 provider integration: traits + driver, runtime API unchanged · *Locked (maintainer sign-off, 2026-06-11)*
+**Context:** Phase 3 adds the provider traits and tokio defaults. The open question was how deeply to wire them into `runtime` now — internalize a `Clock` (pull time, drop `tick`'s `now_ms`) vs. keep the explicit driven API and let a driver supply time.
+**Decision (with maintainer sign-off):** **Providers + driver only.** Define the traits in `providers`; implement tokio + deterministic test providers and a `Driver` in `default-providers`. `runtime`'s public API is **unchanged** (`tick(now_ms)` stays); the `Driver` reads the `Clock` and supplies the time. `runtime` gains its `providers` dependency only when it first consumes a provider-backed web API (`performance.now` → Phase 4, `getRandomValues` → Phase 7), per "add the dependency when it is used."
+**Consequences:** Minimal, no boundary churn; the explicit `tick(now)` seam (D4) is preserved and the `Driver` is the swappable concrete loop. `getrandom` supplies raw OS entropy for the `Entropy` default — it does **not** resolve **D9** (the `crypto.subtle` algorithm backend), which stays *Open* until Phase 7.
