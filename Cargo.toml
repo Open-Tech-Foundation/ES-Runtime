@@ -48,6 +48,11 @@ futures-core = "0.3.32"
 # only (no OpenSSL/native-tls). Confined to `default-providers`.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset"] }
 futures-util = { version = "0.3.32", default-features = false }
+# WebCrypto backend: the RustCrypto suite (DECISIONS.md D9). Used by `runtime`.
+sha1 = "0.11.0"
+sha2 = "0.11.0"
+hmac = "0.13.0"
+aes-gcm = "0.10.3"
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).

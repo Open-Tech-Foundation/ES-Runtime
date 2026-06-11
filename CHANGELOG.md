@@ -6,6 +6,30 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 7 — WebCrypto (first tranche)
+
+`crypto` (SPEC.md §6.7 / §2.10), backed by vetted RustCrypto primitives
+(DECISIONS.md D9). Resolves the open D9 crypto-backend decision.
+
+#### Added
+
+- **`crypto.getRandomValues`** (fills an integer TypedArray in place) and
+  **`crypto.randomUUID`** (v4), drawing from the `Entropy` provider — now wired
+  into `HostProviders` (the D16-anticipated point).
+- **`crypto.subtle`** (first tranche): `digest` (SHA-1/256/384/512), **HMAC**
+  (`generateKey`/`importKey`/`exportKey`/`sign`/constant-time `verify`), and
+  **AES-GCM** (`generateKey`/`importKey`/`exportKey`/`encrypt`/`decrypt`, tag
+  mismatch → `OperationError`). Plus the `CryptoKey` class.
+- Crypto runs in synchronous `runtime` ops (RustCrypto: `sha1`, `sha2`, `hmac`,
+  `aes-gcm`); the prelude `subtle` wraps each in a Promise.
+- Tests use known-answer vectors (SHA-256("abc")), HMAC sign/verify (incl.
+  tamper), and AES-GCM round-trip + tamper rejection.
+
+#### Decisions
+
+- **D9 locked: RustCrypto** (breadth + portability). ECDSA/ECDH and RSA are
+  staged for **Phase 7b** (SPEC §7). The TLS backend (D20) is independent.
+
 ### Phase 6 — Fetch family
 
 `fetch` and its surrounding types (SPEC.md §6.6 / §2.9), networking routed
@@ -243,8 +267,11 @@ end-to-end with snapshot scaffolding (SPEC.md §6.1).
   uncaught-exception JS class not yet preserved; primitive-only value marshaling;
   snapshot-creation concurrency constraint.
 
-### Phase 7 will add
+### Next
 
-WebCrypto (SPEC.md §6.7): `crypto.getRandomValues` (the Entropy provider),
-`crypto.randomUUID`, and `crypto.subtle` (digest, HMAC, AES-GCM/CBC, ECDSA/ECDH,
-RSA) — resolving the open **D9** crypto-backend decision (RustCrypto vs `ring`).
+- **Phase 7b** — the rest of `crypto.subtle`: AES-CBC/CTR, ECDSA/ECDH (P-256/384/521),
+  RSA (PKCS1/PSS/OAEP), HKDF/PBKDF2.
+- **Phase 8** — bake the prelude into a V8 startup snapshot (D8); zero-copy
+  ArrayBuffer audit; benchmarks.
+- **Phase 9** — hardening: heap/CPU/stack limits, the watchdog, panic-across-FFI
+  containment (D15), byte/BYOB streams, fuzzing, WPT conformance run.

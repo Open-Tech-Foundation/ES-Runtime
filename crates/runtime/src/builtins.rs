@@ -20,6 +20,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::url_ops::install(engine)?;
     // Networking ops, capability-gated on Net.
     crate::fetch_ops::install(engine, providers.net())?;
+    // WebCrypto ops, backed by the Entropy provider + RustCrypto.
+    crate::crypto_ops::install(engine, providers.entropy())?;
     Ok(())
 }
 

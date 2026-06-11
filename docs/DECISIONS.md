@@ -114,11 +114,11 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 
 ---
 
-### D9 — Crypto backend · *Open*
-**Context:** `crypto.subtle` must use vetted, constant-time primitives; never hand-rolled.
-**Options:** `ring` (fast, audited, narrower algorithm set, build-toolchain constraints) vs **RustCrypto** suite (pure-Rust, broad coverage, easier portability) — or a hybrid.
-**Decision:** _Pending maintainer sign-off._ Default lean: RustCrypto for breadth + portability unless a perf gap dictates `ring`.
-**Consequences:** Determines algorithm coverage, build complexity, and cross-platform story.
+### D9 — Crypto backend: RustCrypto · *Locked (maintainer sign-off, 2026-06-12)*
+**Context:** `crypto.subtle` must use vetted, constant-time primitives; never hand-rolled (§7).
+**Options weighed:** `ring` (fast, audited, narrower — no AES-CBC/RSA-OAEP/P-521) vs the **RustCrypto** suite (pure-Rust, broad WebCrypto coverage, portable) vs a hybrid.
+**Decision (maintainer):** **RustCrypto**, for breadth + portability (the original default lean). Phase 7 uses `sha1`, `sha2`, `hmac`, and `aes-gcm`; the remaining algorithm crates (`ecdsa`/`p256`/`p384`, RSA) are added with Phase 7b. Crypto runs in `runtime` ops (it is computation, not I/O); `random_bytes` draws from the `Entropy` provider.
+**Consequences:** Broad coverage with a pure-Rust, cross-platform build; per-algorithm crates to track. The TLS backend (D20, rustls) is independent of this choice. **Scope:** Phase 7 ships getRandomValues, randomUUID, and `subtle` digest/HMAC/AES-GCM; ECDSA/ECDH/RSA are staged (SPEC §7).
 
 ---
 

@@ -29,6 +29,7 @@ pub(crate) fn source() -> String {
         // fetch family: blob before fetch (fetch bodies may be Blob/FormData).
         include_str!("prelude/blob.js"),
         include_str!("prelude/fetch.js"),
+        include_str!("prelude/crypto.js"),
     ]
     .join("\n")
 }

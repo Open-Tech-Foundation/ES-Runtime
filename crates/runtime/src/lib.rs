@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod builtins;
+mod crypto_ops;
 mod fetch_ops;
 mod prelude;
 mod timer;
@@ -28,7 +29,7 @@ use crate::timer::TimerQueue;
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet};
 pub use es_runtime_engine::{AsyncOp, Engine, OpDecl, OpError, OpResult, V8Engine, Value};
-pub use es_runtime_providers::{Clock, Console, ConsoleLevel, NetTransport};
+pub use es_runtime_providers::{Clock, Console, ConsoleLevel, Entropy, NetTransport};
 
 /// Runtime-layer error (DECISIONS.md D12).
 #[derive(Debug, thiserror::Error)]
@@ -83,19 +84,22 @@ pub struct HostProviders {
     clock: Arc<dyn Clock>,
     console: Arc<dyn Console>,
     net: Arc<dyn NetTransport>,
+    entropy: Arc<dyn Entropy>,
 }
 
 impl HostProviders {
-    /// Bundles the providers a runtime needs (Phase 6: clock, console, net).
+    /// Bundles the providers a runtime needs (clock, console, net, entropy).
     pub fn new(
         clock: Arc<dyn Clock>,
         console: Arc<dyn Console>,
         net: Arc<dyn NetTransport>,
+        entropy: Arc<dyn Entropy>,
     ) -> Self {
         HostProviders {
             clock,
             console,
             net,
+            entropy,
         }
     }
 
@@ -109,6 +113,10 @@ impl HostProviders {
 
     fn net(&self) -> Arc<dyn NetTransport> {
         self.net.clone()
+    }
+
+    fn entropy(&self) -> Arc<dyn Entropy> {
+        self.entropy.clone()
     }
 }
 
@@ -328,6 +336,35 @@ mod tests {
         }
     }
 
+    /// A deterministic (non-crypto) entropy source for tests.
+    struct TestEntropy {
+        state: std::sync::atomic::AtomicU64,
+    }
+    impl TestEntropy {
+        fn new() -> Self {
+            TestEntropy {
+                state: std::sync::atomic::AtomicU64::new(0x1234_5678_9abc_def0),
+            }
+        }
+    }
+    impl Entropy for TestEntropy {
+        fn fill(
+            &self,
+            dest: &mut [u8],
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            use std::sync::atomic::Ordering;
+            let mut x = self.state.load(Ordering::SeqCst) | 1;
+            for b in dest.iter_mut() {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                *b = (x & 0xff) as u8;
+            }
+            self.state.store(x, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
     fn runtime() -> Runtime {
         runtime_full(
             Arc::new(TestConsole::default()),
@@ -336,11 +373,17 @@ mod tests {
                 wall: 0,
             }),
             Arc::new(MockNet::stub()),
+            Arc::new(TestEntropy::new()),
         )
     }
 
     fn runtime_with(console: Arc<dyn Console>, clock: Arc<dyn Clock>) -> Runtime {
-        runtime_full(console, clock, Arc::new(MockNet::stub()))
+        runtime_full(
+            console,
+            clock,
+            Arc::new(MockNet::stub()),
+            Arc::new(TestEntropy::new()),
+        )
     }
 
     fn runtime_with_net(net: Arc<dyn NetTransport>) -> Runtime {
@@ -351,6 +394,7 @@ mod tests {
                 wall: 0,
             }),
             net,
+            Arc::new(TestEntropy::new()),
         )
     }
 
@@ -358,9 +402,14 @@ mod tests {
         console: Arc<dyn Console>,
         clock: Arc<dyn Clock>,
         net: Arc<dyn NetTransport>,
+        entropy: Arc<dyn Entropy>,
     ) -> Runtime {
         let engine = V8Engine::new(Limits::default()).expect("engine");
-        Runtime::new(Box::new(engine), HostProviders::new(clock, console, net)).expect("runtime")
+        Runtime::new(
+            Box::new(engine),
+            HostProviders::new(clock, console, net, entropy),
+        )
+        .expect("runtime")
     }
 
     #[test]
@@ -997,5 +1046,98 @@ mod tests {
              return s;",
         );
         assert_eq!(out, Value::String("foobarbaz".into()));
+    }
+
+    #[test]
+    fn get_random_values_fills_in_place() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const a = new Uint8Array(16); const r = crypto.getRandomValues(a); \
+             return r === a && a.some((x) => x !== 0); })()",
+        );
+    }
+
+    #[test]
+    fn random_uuid_is_well_formed_v4() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(crypto.randomUUID())",
+        );
+    }
+
+    #[test]
+    fn subtle_digest_matches_known_sha256_vector() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // SHA-256("abc").
+        let out = eval_async(
+            &mut rt,
+            "const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('abc')); \
+             return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');",
+        );
+        assert_eq!(
+            out,
+            Value::String(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into()
+            )
+        );
+    }
+
+    #[test]
+    fn subtle_hmac_signs_and_verifies() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); \
+             const key = await crypto.subtle.importKey('raw', enc.encode('secret'), \
+               { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']); \
+             const sig = await crypto.subtle.sign('HMAC', key, enc.encode('message')); \
+             const good = await crypto.subtle.verify('HMAC', key, sig, enc.encode('message')); \
+             const bad = await crypto.subtle.verify('HMAC', key, sig, enc.encode('tampered')); \
+             return good === true && bad === false;",
+        );
+        assert_eq!(out, Value::Bool(true));
+    }
+
+    #[test]
+    fn subtle_aes_gcm_round_trips() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']); \
+             const iv = crypto.getRandomValues(new Uint8Array(12)); \
+             const pt = new TextEncoder().encode('hello gcm'); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, pt); \
+             const out = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct); \
+             return new TextDecoder().decode(out);",
+        );
+        assert_eq!(out, Value::String("hello gcm".into()));
+    }
+
+    #[test]
+    fn subtle_aes_gcm_rejects_tampered_ciphertext() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, true, ['encrypt', 'decrypt']); \
+             const iv = crypto.getRandomValues(new Uint8Array(12)); \
+             const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode('data'))); \
+             ct[0] ^= 0xff; \
+             await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct); return 'no-error';",
+        );
+        match out {
+            Value::String(s) => assert!(
+                s.starts_with("ERR:") && (s.contains("OperationError") || s.contains("decryption")),
+                "expected OperationError, got {s}"
+            ),
+            other => panic!("expected rejection, got {other:?}"),
+        }
     }
 }
