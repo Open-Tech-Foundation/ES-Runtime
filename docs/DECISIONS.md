@@ -185,3 +185,10 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 **Context:** WHATWG URL is large and subtle; a from-scratch JS implementation carries real conformance risk.
 **Decision (maintainer):** Implement `URL`/`URLSearchParams` parsing and serialization with the servo **`url`** crate behind sync ops; the JS wrappers provide the surface. `URLSearchParams` is pure JS.
 **Consequences:** Well-tested, ~WHATWG-conformant parsing for low effort; `runtime` gains a `url` dependency (MIT OR Apache-2.0). Minor WHATWG gaps (e.g. the `hostname` setter's port handling) are tracked against WPT (D13). **URLPattern** is **not** covered by the crate and is deferred (SPEC §7).
+
+---
+
+### D19 — Streams: hand-written, default-first · *Locked (maintainer sign-off, 2026-06-12)*
+**Context:** The WHATWG Streams spec is the largest min-common item. The choices were full vs. default-first scope, and hand-writing vs. vendoring the standards reference JS.
+**Decision (maintainer):** **Hand-write** the spec's abstract operations in the prelude (no external code — fits the from-scratch ethos of D2; no large vendored blob or extra license/attribution), and **default-first**: ship `ReadableStream` (default), `WritableStream`, `TransformStream`, both queuing strategies, backpressure, `tee`, `pipeTo`/`pipeThrough`, and the encoding streams now. **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) are deferred to a follow-up sub-phase (SPEC §7).
+**Consequences:** Full control and a clean dependency graph; more implementation care, with conformance tracked against WPT (D13). Streams live in one prelude IIFE (`streams.js`) so the interdependent readable/writable/transform/pipe machinery can share internal slots (a module-private `Symbol`); encoding streams build on the public `TransformStream`.

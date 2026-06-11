@@ -6,6 +6,37 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 5 — Streams
+
+The Streams surface (SPEC.md §6.5 / §2.8) — the largest correctness item —
+hand-written to the WHATWG abstract operations (DECISIONS.md D19), pure JS in the
+prelude.
+
+#### Added
+
+- **`ReadableStream`** (default) + `ReadableStreamDefaultController` +
+  `ReadableStreamDefaultReader`: enqueue/read/close/error/cancel, start/pull/cancel
+  algorithms, `desiredSize` backpressure, `tee`.
+- **`WritableStream`** + controller + writer: write/close/abort with the full
+  erroring/abort state machine, `ready`/`closed` promises, backpressure.
+- **`TransformStream`** + controller: transform/flush with backpressure linking
+  the writable and readable sides.
+- **`pipeTo`** (with `preventClose`/`preventAbort`/`preventCancel` + `AbortSignal`)
+  and **`pipeThrough`**.
+- **`CountQueuingStrategy`**, **`ByteLengthQueuingStrategy`**.
+- **`TextEncoderStream`** / **`TextDecoderStream`** (deferred from Phase 4) on
+  `TransformStream`, handling surrogate pairs / multi-byte UTF-8 split across
+  chunk boundaries.
+- A test harness (`eval_async`) that drives async JS to completion via the tick
+  microtask loop.
+
+#### Decisions
+
+- **D19** locked (maintainer sign-off): Streams are **hand-written to spec**
+  (fits the from-scratch ethos, D2) and **default-first** — byte/BYOB streams
+  (`ReadableByteStreamController`, BYOB readers) are deferred to a follow-up
+  (SPEC §7). Conformance tracked vs WPT (D13).
+
 ### Phase 4 — Core web primitives
 
 The WinterTC pure-JS surface (SPEC.md §6.4), shipped as a JS prelude over the op
@@ -175,9 +206,8 @@ end-to-end with snapshot scaffolding (SPEC.md §6.1).
   uncaught-exception JS class not yet preserved; primitive-only value marshaling;
   snapshot-creation concurrency constraint.
 
-### Phase 5 will add
+### Phase 6 will add
 
-Streams (SPEC.md §6.5): `ReadableStream` (default + byte/BYOB), `WritableStream`,
-`TransformStream`, with correct backpressure and queuing strategies — the largest
-correctness item — plus the deferred `TextEncoderStream`/`TextDecoderStream` that
-build on `TransformStream`.
+Fetch family (SPEC.md §6.6): `Headers`, `Request`, `Response`, the `Body` mixin,
+and `fetch` over a new `NetTransport` provider (streaming bodies via the Phase 5
+streams), plus `Blob`, `File`, `FormData`.

@@ -31,7 +31,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ◐ `console` (log/info/warn/error/debug ☑) → the injected `Console` sink, not stdout (DECISIONS D17). group/table minimal. *(Phase 4.)*
 
 ### 2.3 Encoding
-- ◐ `TextEncoder`, `TextDecoder` (UTF-8) ☑, `atob`, `btoa` ☑. `TextEncoderStream`/`TextDecoderStream` ⊘ → Phase 5 (need Streams). *(Phase 4.)*
+- ☑ `TextEncoder`, `TextDecoder` (UTF-8), `atob`, `btoa` *(Phase 4)*; `TextEncoderStream`/`TextDecoderStream` *(Phase 5, on `TransformStream`)*.
 
 ### 2.4 URL
 - ◐ `URL`, `URLSearchParams` ☑ (via the `url` crate, DECISIONS D18). `URLPattern` ⊘ → later. *(Phase 4.)*
@@ -46,7 +46,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ☑ `Event`, `EventTarget`, `CustomEvent` (flat dispatch model). *(Phase 4.)*
 
 ### 2.8 Streams (largest correctness item)
-- ☐ `ReadableStream` (default + **byte/BYOB** streams), `WritableStream`, `TransformStream`, with correct **backpressure** and queuing strategies (`CountQueuingStrategy`, `ByteLengthQueuingStrategy`).
+- ◐ `ReadableStream` (default) ☑, `WritableStream` ☑, `TransformStream` ☑, **backpressure** ☑, `CountQueuingStrategy`/`ByteLengthQueuingStrategy` ☑, `tee`/`pipeTo`/`pipeThrough` ☑ *(Phase 5, hand-written — DECISIONS D19)*. **byte/BYOB** streams ⊘ → follow-up.
 
 ### 2.9 Fetch family
 - ☐ `Headers`, `Request`, `Response`, `Body` mixin, `fetch` — networking exclusively via the `NetTransport` provider; streaming bodies via §2.8.
@@ -110,7 +110,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 2. ☑ **Op system + driven loop** — sync/async ops, promise resolution, microtask checkpoint, tick/poll API, timer plumbing. (`runtime` crate + engine trait introduced here; see DECISIONS D15.)
 3. ☑ **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers. (`providers` + `default-providers` crates + a tokio `Driver`; `runtime` API unchanged — DECISIONS D16.)
 4. ☑ **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort. (JS prelude over the op system + `Console` provider; DECISIONS D17/D18.)
-5. **Streams** — full readable/writable/transform incl. byte streams + backpressure.
+5. ◐ **Streams** — readable/writable/transform + backpressure + queuing strategies + tee/pipe + encoding streams, hand-written (DECISIONS D19). Byte/BYOB streams deferred to a follow-up.
 6. **Fetch family** — Headers/Request/Response/Body/fetch over NetTransport; Blob/File/FormData.
 7. **WebCrypto** — getRandomValues, randomUUID, subtle.
 8. **Snapshot + perf** — bake prelude into snapshot; zero-copy audit; benchmark context creation + op throughput.
@@ -131,7 +131,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 **Deferrals:**
 - **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) is implemented in the **hardening phase (§6.9)**, not Phase 2. A *host-written* op handler that panics currently aborts the process; hostile JS cannot force this. (DECISIONS D15.)
 - **`DOMException` engine reconciliation** — the JS class exists (Phase 4 prelude), but errors thrown from the engine still surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
-- **`TextEncoderStream` / `TextDecoderStream`** → Phase 5 (need `TransformStream`).
+- **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) → a streams follow-up (DECISIONS D19). Default streams + encoding streams ship in Phase 5.
 - **`URLPattern`** → later (not covered by the `url` crate). Minor WHATWG URL conformance gaps tracked vs WPT (D18).
 - **`reportError` ErrorEvent dispatch** and **sub-millisecond `performance.now`** are minimal in Phase 4; full behavior lands with the event loop / clock refinements.
 

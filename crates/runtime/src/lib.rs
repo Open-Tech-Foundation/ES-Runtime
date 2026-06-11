@@ -441,6 +441,27 @@ mod tests {
         assert_eq!(rt.eval(expr).unwrap(), Value::Bool(true), "expr: {expr}");
     }
 
+    /// Runs an async JS `body` (which should `return` a value) to completion by
+    /// ticking the microtask loop, then returns the resolved value. A rejection
+    /// is returned as a `Value::String` prefixed with `ERR:`.
+    fn eval_async(rt: &mut Runtime, body: &str) -> Value {
+        rt.eval(&format!(
+            "globalThis.__done = false; globalThis.__result = undefined; \
+             (async () => {{ {body} }})().then( \
+               (r) => {{ globalThis.__result = r; globalThis.__done = true; }}, \
+               (e) => {{ globalThis.__result = 'ERR:' + ((e && e.message) || e); \
+                         globalThis.__done = true; }});"
+        ))
+        .unwrap();
+        for _ in 0..200 {
+            rt.tick(0);
+            if rt.eval("globalThis.__done").unwrap() == Value::Bool(true) {
+                break;
+            }
+        }
+        rt.eval("globalThis.__result").unwrap()
+    }
+
     #[test]
     fn text_encoder_decoder_round_trip() {
         let _g = v8_guard();
@@ -627,5 +648,173 @@ mod tests {
             &mut rt,
             "AbortSignal.timeout(0), true", // smoke: constructor path works with 0
         );
+    }
+
+    #[test]
+    fn readable_stream_reads_enqueued_chunks() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const rs = new ReadableStream({ start(c) { c.enqueue('a'); c.enqueue('b'); c.close(); } }); \
+             const r = rs.getReader(); const got = []; let x; \
+             while (!(x = await r.read()).done) got.push(x.value); \
+             return got.join(',');",
+        );
+        assert_eq!(out, Value::String("a,b".into()));
+    }
+
+    #[test]
+    fn readable_stream_pull_drives_the_source() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "let i = 0; \
+             const rs = new ReadableStream({ pull(c) { c.enqueue(i++); if (i === 3) c.close(); } }); \
+             const r = rs.getReader(); const got = []; let x; \
+             while (!(x = await r.read()).done) got.push(x.value); \
+             return got.join(',');",
+        );
+        assert_eq!(out, Value::String("0,1,2".into()));
+    }
+
+    #[test]
+    fn readable_stream_cancel_calls_the_source() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "let cancelled = null; \
+             const rs = new ReadableStream({ cancel(reason) { cancelled = reason; } }); \
+             await rs.getReader().cancel('stop'); return cancelled;",
+        );
+        assert_eq!(out, Value::String("stop".into()));
+    }
+
+    #[test]
+    fn readable_stream_tee_duplicates_chunks() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const rs = new ReadableStream({ start(c) { c.enqueue(1); c.enqueue(2); c.close(); } }); \
+             const [a, b] = rs.tee(); \
+             const drain = async (s) => { const r = s.getReader(); const o = []; let x; \
+               while (!(x = await r.read()).done) o.push(x.value); return o.join(','); }; \
+             const [sa, sb] = await Promise.all([drain(a), drain(b)]); \
+             return sa + '|' + sb;",
+        );
+        assert_eq!(out, Value::String("1,2|1,2".into()));
+    }
+
+    #[test]
+    fn count_queuing_strategy_reports_backpressure() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const rs = new ReadableStream( \
+               { start(c) { globalThis.a = c.desiredSize; c.enqueue('x'); globalThis.b = c.desiredSize; } }, \
+               new CountQueuingStrategy({ highWaterMark: 2 })); \
+             await Promise.resolve(); return globalThis.a + ',' + globalThis.b;",
+        );
+        assert_eq!(out, Value::String("2,1".into()));
+    }
+
+    #[test]
+    fn writable_stream_writes_and_closes() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const written = []; \
+             const ws = new WritableStream({ write(chunk) { written.push(chunk); } }); \
+             const w = ws.getWriter(); \
+             await w.write('a'); await w.write('b'); await w.close(); \
+             return written.join(',');",
+        );
+        assert_eq!(out, Value::String("a,b".into()));
+    }
+
+    #[test]
+    fn transform_stream_maps_chunks() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const ts = new TransformStream({ transform(chunk, c) { c.enqueue(chunk * 2); } }); \
+             const w = ts.writable.getWriter(); const r = ts.readable.getReader(); \
+             w.write(1); w.write(2); w.close(); \
+             const got = []; let x; \
+             while (!(x = await r.read()).done) got.push(x.value); \
+             return got.join(',');",
+        );
+        assert_eq!(out, Value::String("2,4".into()));
+    }
+
+    #[test]
+    fn pipe_to_moves_chunks_to_the_sink() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const src = new ReadableStream({ start(c) { c.enqueue('x'); c.enqueue('y'); c.close(); } }); \
+             const sink = []; \
+             const dest = new WritableStream({ write(chunk) { sink.push(chunk); } }); \
+             await src.pipeTo(dest); return sink.join(',');",
+        );
+        assert_eq!(out, Value::String("x,y".into()));
+    }
+
+    #[test]
+    fn pipe_through_a_transform() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const src = new ReadableStream({ start(c) { c.enqueue(1); c.enqueue(2); c.close(); } }); \
+             const ts = new TransformStream({ transform(chunk, c) { c.enqueue(chunk + 10); } }); \
+             const r = src.pipeThrough(ts).getReader(); \
+             const got = []; let x; \
+             while (!(x = await r.read()).done) got.push(x.value); \
+             return got.join(',');",
+        );
+        assert_eq!(out, Value::String("11,12".into()));
+    }
+
+    #[test]
+    fn text_encoder_stream_round_trips() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const tes = new TextEncoderStream(); \
+             const w = tes.writable.getWriter(); const r = tes.readable.getReader(); \
+             w.write('hé'); w.write('llo'); w.close(); \
+             const bytes = []; let x; \
+             while (!(x = await r.read()).done) bytes.push(...x.value); \
+             return new TextDecoder().decode(new Uint8Array(bytes));",
+        );
+        assert_eq!(out, Value::String("héllo".into()));
+    }
+
+    #[test]
+    fn text_decoder_stream_handles_split_multibyte() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // "é" is 0xC3 0xA9, split across two chunks.
+        let out = eval_async(
+            &mut rt,
+            "const tds = new TextDecoderStream(); \
+             const w = tds.writable.getWriter(); const r = tds.readable.getReader(); \
+             w.write(new Uint8Array([0x68, 0xC3])); \
+             w.write(new Uint8Array([0xA9, 0x6F])); \
+             w.close(); \
+             let s = ''; let x; \
+             while (!(x = await r.read()).done) s += x.value; \
+             return s;",
+        );
+        assert_eq!(out, Value::String("héo".into()));
     }
 }
