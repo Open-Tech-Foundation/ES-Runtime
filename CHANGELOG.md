@@ -6,6 +6,50 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 2 — Op system + driven loop
+
+The JS↔Rust op bridge and the embedder-driven event loop (SPEC.md §6.2): sync +
+async ops, promise resolution, a microtask checkpoint, the tick/poll API, and
+timer plumbing.
+
+#### Added
+
+- **Engine abstraction trait.** Extracted `engine::Engine` (object-safe, names no
+  V8 type) from the concrete type, now `engine::V8Engine` (DECISIONS.md D3). The
+  trait is the surface `runtime` depends on — a second engine could be slotted in
+  without editing `runtime`.
+- **`es-runtime-runtime` crate** — the driven runtime, built on the engine trait,
+  with **zero direct `v8` dependency** and no `unsafe`. Holds a `Box<dyn Engine>`,
+  the op wiring, and the timer schedule.
+  - `Runtime::tick(now_ms) -> TickStatus` advances one step in order — due
+    **timers → ready async ops → microtask checkpoint → unhandled rejections** —
+    and reports work remaining + the next deadline so the embedder can park. No
+    loop or thread is owned (DECISIONS.md D4).
+  - `Runtime::register_op`, `set_capabilities`, `eval`, `has_pending_work`.
+- **Op system** (`engine::op`) — a single non-capturing dispatch callback keyed by
+  op id, op table in an isolate slot via `Rc<RefCell<_>>`:
+  - Sync and async ops; arguments marshaled and **validated as untrusted**;
+    **capability-check-first** dispatch (denied → clean JS exception, never a
+    partial effect — ARCHITECTURE.md §4, D7). Ops exposed as `globalThis.__ops.<name>`.
+  - Async ops return a real `Promise`; std-only **poll-on-tick** (no reactor,
+    `Waker::noop`) settles them, then the microtask checkpoint runs reactions.
+  - Errors carry their JS exception class via `OpError`/`IntoException`.
+- **Timers** — `setTimeout`/`setInterval`/`clearTimeout`/`clearInterval` builtins;
+  the engine holds the JS callbacks, the runtime owns the deadline-ordered
+  schedule. Time is embedder-supplied per tick (the `Clock`/`Timers` providers
+  become that source in Phase 3).
+- **Unhandled-rejection tracking** via the promise-reject callback; surfaced in
+  `TickStatus.unhandled_rejections`.
+- Explicit microtask policy so reactions run only at the checkpoint, never
+  implicitly mid-eval.
+
+#### Decisions
+
+- `runtime` introduced now (Phase 2) rather than Phase 4, and the engine trait
+  extracted now — both per maintainer sign-off. New D3a leak notes: DOMException
+  is not yet a real JS class (surfaced as `Error` with a name-prefixed message);
+  async readiness is observed only on `tick`; timer JS callbacks stay in `engine`.
+
 ### Phase 1 — Foundation
 
 Workspace, error model, observability, CI, and a V8 engine that runs `1 + 1`
@@ -54,9 +98,9 @@ end-to-end with snapshot scaffolding (SPEC.md §6.1).
   uncaught-exception JS class not yet preserved; primitive-only value marshaling;
   snapshot-creation concurrency constraint.
 
-### Phase 2 will add
+### Phase 3 will add
 
-The op system and the driven event loop: sync/async ops, promise resolution, a
-microtask checkpoint, the tick/poll API, and timer plumbing — plus extraction of
-the engine *trait* (the abstraction `runtime` will depend on) now that there will
-be a second consumer to design it against.
+Provider traits (`Clock`, `Entropy`, `Timers`, `TaskSpawner`) in a new
+`providers` crate, and the reference tokio-backed `default-providers`, plus
+deterministic test providers — replacing the embedder-supplied tick time with a
+real `Clock`/`Timers` source and giving ops their first real I/O capabilities.

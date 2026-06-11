@@ -3,8 +3,8 @@
 //! Baking the pure-JS prelude into a V8 startup snapshot makes context creation
 //! cheap, which directly serves Layer B's density goals. Phase 1 stands up the
 //! mechanism end-to-end — build a blob (optionally running prelude source into
-//! its default context) and restore an [`Engine`](crate::Engine) from it via
-//! [`Engine::with_snapshot`](crate::Engine::with_snapshot). The actual
+//! its default context) and restore a [`V8Engine`](crate::V8Engine) from it via
+//! [`V8Engine::with_snapshot`](crate::V8Engine::with_snapshot). The actual
 //! min-common prelude is authored and baked in Phase 8; here the prelude is a
 //! caller-supplied parameter so the round-trip is real and testable.
 
@@ -19,13 +19,13 @@ use crate::error::{Error, Result};
 /// context.
 ///
 /// Returns the serialized blob, suitable for
-/// [`Engine::with_snapshot`](crate::Engine::with_snapshot).
+/// [`V8Engine::with_snapshot`](crate::V8Engine::with_snapshot).
 ///
 /// # Concurrency
 ///
 /// V8 does not permit snapshot creation to run concurrently with other isolate
 /// creation in the same process. Callers must not invoke `build` while another
-/// thread is constructing an isolate (e.g. an [`Engine`](crate::Engine)). In a
+/// thread is constructing an isolate (e.g. a [`V8Engine`](crate::V8Engine)). In a
 /// typical embedding the snapshot is built once at startup, before any isolate
 /// exists, so this is naturally satisfied. (Recorded as a D3a leak note.)
 pub fn build(prelude: Option<&str>) -> Result<Vec<u8>> {
@@ -87,8 +87,8 @@ fn run_prelude(scope: &mut v8::PinScope<'_, '_>, source: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Engine;
     use crate::value::Value;
+    use crate::{Engine, V8Engine};
     use es_runtime_common::Limits;
 
     #[test]
@@ -105,7 +105,7 @@ mod tests {
         // is the end-to-end proof the snapshot pipeline works (DECISIONS.md D8).
         let _v8 = crate::v8_test_guard();
         let blob = build(Some("globalThis.marker = 40 + 2;")).expect("build");
-        let mut engine = Engine::with_snapshot(Limits::default(), blob).expect("restore");
+        let mut engine = V8Engine::with_snapshot(Limits::default(), blob).expect("restore");
         assert_eq!(
             engine.eval("globalThis.marker").unwrap(),
             Value::Number(42.0)

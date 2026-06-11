@@ -182,6 +182,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "es-runtime-runtime"
+version = "0.0.0"
+dependencies = [
+ "es-runtime-common",
+ "es-runtime-engine",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "fslock"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,18 @@
+[package]
+name = "es-runtime-runtime"
+description = "The driven runtime: op wiring, the tick/poll event loop, and timer scheduling, built on the engine abstraction."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+es-runtime-common.workspace = true
+es-runtime-engine.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

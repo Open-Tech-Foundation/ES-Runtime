@@ -29,11 +29,13 @@
 mod convert;
 mod engine;
 pub mod error;
+pub mod op;
 pub mod snapshot;
 mod value;
 
-pub use engine::Engine;
+pub use engine::{Engine, V8Engine};
 pub use error::{Error, Result};
+pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use value::Value;
 
 use std::sync::Once;
@@ -45,7 +47,7 @@ static V8_INIT: Once = Once::new();
 ///
 /// V8 requires its platform be set up before any isolate is created, and that
 /// this happens a single time for the life of the process. Every entry point
-/// that touches V8 ([`Engine::new`], [`snapshot::build`], …) calls this first,
+/// that touches V8 ([`V8Engine::new`], [`snapshot::build`], …) calls this first,
 /// so callers never have to sequence it themselves. Idempotent and thread-safe
 /// via [`Once`].
 /// Serializes V8-touching unit tests within this test binary.

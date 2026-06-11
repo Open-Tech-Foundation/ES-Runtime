@@ -37,7 +37,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ☐ `URL`, `URLSearchParams`, `URLPattern`.
 
 ### 2.5 Timers (provider-backed)
-- ☐ `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`.
+- ◐ `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`. Mechanism in place (Phase 2): engine builtins + runtime-owned schedule, embedder-supplied time. Provider-backing (`Clock`/`Timers`) lands in Phase 3.
 
 ### 2.6 Abort
 - ☐ `AbortController`, `AbortSignal` (incl. `AbortSignal.timeout`, `AbortSignal.any`).
@@ -105,8 +105,8 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 
 Each phase must compile, pass CI, and be independently reviewable. At each phase start, restate the plan and seek sign-off before locking any cross-cutting decision.
 
-1. **Foundation** — workspace, `common`, error model, tracing, CI; `engine` V8 init running `"1+1"`; snapshot scaffolding.
-2. **Op system + driven loop** — sync/async ops, promise resolution, microtask checkpoint, tick/poll API, timer plumbing.
+1. ☑ **Foundation** — workspace, `common`, error model, tracing, CI; `engine` V8 init running `"1+1"`; snapshot scaffolding.
+2. ☑ **Op system + driven loop** — sync/async ops, promise resolution, microtask checkpoint, tick/poll API, timer plumbing. (`runtime` crate + engine trait introduced here; see DECISIONS D15.)
 3. **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers.
 4. **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort.
 5. **Streams** — full readable/writable/transform incl. byte streams + backpressure.
@@ -127,7 +127,10 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 - No HTTP *server* — only the `fetch` client. Serving belongs to the embedder/Layer B.
 - No `deno_core` or any pre-built runtime framework.
 
-**Deferrals:** _(record here as the snapshot is implemented — e.g. any min-common API intentionally postponed, with reason.)_
+**Deferrals:**
+- **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) is implemented in the **hardening phase (§6.9)**, not Phase 2. A *host-written* op handler that panics currently aborts the process; hostile JS cannot force this. (DECISIONS D15.)
+- **`DOMException` as a real JS class** awaits the runtime prelude (Phase 4). Until then, `DOMException`-classed errors (e.g. capability denial → `NotAllowedError`) surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
+- **`queueMicrotask` / `reportError`** globals (§2.1) not yet installed; the microtask *checkpoint* mechanism exists (Phase 2), the `globalThis` bindings come with §2.1.
 
 ---
 

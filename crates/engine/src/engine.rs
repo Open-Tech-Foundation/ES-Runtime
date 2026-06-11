@@ -1,28 +1,86 @@
 //! Isolate + context lifecycle and script evaluation.
 
-use es_runtime_common::Limits;
+use es_runtime_common::{CapabilitySet, Limits};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
+use crate::op::{OpDecl, OpState, TimerId, install_op};
 use crate::value::Value;
 
-/// An embedded V8 instance: one isolate and one persistent context.
+/// The engine abstraction `runtime` depends on (ARCHITECTURE.md §3, DECISIONS.md
+/// D3).
 ///
-/// Created with [`Engine::new`] (fresh context) or [`Engine::with_snapshot`]
-/// (context restored from a startup snapshot). [`Engine::eval`] runs source
-/// against that context; state persists across calls, since the context is held
-/// for the engine's lifetime rather than rebuilt per evaluation.
+/// This is the boundary that lets a second engine be slotted in without editing
+/// `runtime`: every method is expressed in plain Rust and [`es_runtime_common`]
+/// types — no V8 type appears. [`V8Engine`] is the V8 implementation; a future
+/// JavaScriptCore engine would implement the same trait.
 ///
-/// The isolate is `!Send`/`!Sync` (V8's threading model): an `Engine` is driven
+/// The trait is object-safe so embedders can hold a `Box<dyn Engine>`.
+pub trait Engine {
+    /// Compiles and runs `source` in the engine's context, returning the
+    /// marshaled result. A compile failure is [`Error::Compile`]; an uncaught JS
+    /// exception is [`Error::Execution`] — never an unwind across the boundary.
+    fn eval(&mut self, source: &str) -> Result<Value>;
+
+    /// Registers a host op callable from JS as `globalThis.__ops.<name>`
+    /// (ARCHITECTURE.md §4).
+    fn register_op(&mut self, op: OpDecl) -> Result<()>;
+
+    /// Replaces the capability set checked before capability-gated ops dispatch
+    /// (DECISIONS.md D7). Deny-by-default: the initial set grants nothing.
+    fn set_capabilities(&mut self, capabilities: CapabilitySet);
+
+    /// Polls pending async ops once; resolves/rejects the JS promises of any
+    /// that completed and returns how many were settled. Poll-on-tick: there is
+    /// no reactor, so readiness is observed only when this is called
+    /// (ARCHITECTURE.md §5).
+    fn poll_async_ops(&mut self) -> usize;
+
+    /// Whether any async op is still awaiting completion.
+    fn has_pending_async_ops(&self) -> bool;
+
+    /// Runs the V8 microtask checkpoint (drains the microtask queue, e.g.
+    /// promise reactions). Microtasks are explicit, never auto-run mid-eval.
+    fn run_microtasks(&mut self);
+
+    /// Drains timers created by `setTimeout`/`setInterval` since the last call,
+    /// as `(id, delay_ms, repeat)`. The embedder/`runtime` owns scheduling; the
+    /// engine only holds the JS callbacks (ARCHITECTURE.md §5).
+    fn take_new_timers(&mut self) -> Vec<(TimerId, u64, bool)>;
+
+    /// Invokes the JS callback registered for timer `id`. Returns `false` if no
+    /// such timer is active (already cleared). One-shot timers are removed; the
+    /// caller is responsible for rescheduling repeating ones.
+    fn fire_timer(&mut self, id: TimerId) -> bool;
+
+    /// Whether timer `id` is still active (not cleared).
+    fn timer_is_active(&self, id: TimerId) -> bool;
+
+    /// Drains promise rejections that went unhandled since the last call, as
+    /// their stringified messages (ARCHITECTURE.md §5).
+    fn take_unhandled_rejections(&mut self) -> Vec<String>;
+}
+
+/// An embedded V8 instance: one isolate and one persistent context, plus the op
+/// table and pending-work registries.
+///
+/// Created with [`V8Engine::new`] (fresh context) or [`V8Engine::with_snapshot`]
+/// (context restored from a startup snapshot). State persists across [`Engine::eval`]
+/// calls, since the context is held for the engine's lifetime.
+///
+/// The isolate is `!Send`/`!Sync` (V8's threading model): a `V8Engine` is driven
 /// by a single thread, which is exactly the embedder's drive model
 /// (ARCHITECTURE.md §5).
-pub struct Engine {
+pub struct V8Engine {
     isolate: v8::OwnedIsolate,
     /// The persistent context evaluations run in, held across the isolate's life.
     context: v8::Global<v8::Context>,
+    /// Op table + pending-work registries, shared with the in-isolate dispatch
+    /// callback via an isolate slot (see [`OpState`]).
+    op_state: std::rc::Rc<std::cell::RefCell<OpState>>,
 }
 
-impl Engine {
+impl V8Engine {
     /// Creates an engine with a fresh, empty context.
     ///
     /// `limits` are validated up front ([`Limits::validate`]); the heap ceiling
@@ -34,10 +92,8 @@ impl Engine {
         crate::ensure_v8_initialized();
 
         let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
-        let mut isolate = v8::Isolate::new(params);
-        let context = Self::make_context(&mut isolate);
-
-        Ok(Engine { isolate, context })
+        let isolate = v8::Isolate::new(params);
+        Self::wire(isolate)
     }
 
     /// Restores an engine from a startup snapshot built by
@@ -54,10 +110,39 @@ impl Engine {
         let params = v8::CreateParams::default()
             .heap_limits(0, limits.heap_limit_bytes)
             .snapshot_blob(snapshot.into());
-        let mut isolate = v8::Isolate::new(params);
+        let isolate = v8::Isolate::new(params);
+        Self::wire(isolate)
+    }
+
+    /// Common construction: configure the isolate, build the context, install
+    /// the timer builtins, and wire the shared [`OpState`] into an isolate slot
+    /// so the dispatch and reject callbacks can reach it.
+    fn wire(mut isolate: v8::OwnedIsolate) -> Result<Self> {
+        // Microtasks run only at our explicit checkpoint, never implicitly when
+        // a JS call returns — the embedder owns when reactions fire (D4).
+        isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+
+        let op_state = std::rc::Rc::new(std::cell::RefCell::new(OpState::new()));
+        // The dispatch callback and reject callback reach this via the slot.
+        isolate.set_slot(op_state.clone());
+        crate::op::install_promise_reject_callback(&mut isolate);
+
         let context = Self::make_context(&mut isolate);
 
-        Ok(Engine { isolate, context })
+        // Timer builtins (`setTimeout` &c.) are part of the driven loop, not a
+        // user op; install them on the global once.
+        {
+            v8::scope!(let scope, &mut isolate);
+            let context = v8::Local::new(scope, &context);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            crate::op::install_timer_builtins(scope, context)?;
+        }
+
+        Ok(V8Engine {
+            isolate,
+            context,
+            op_state,
+        })
     }
 
     /// Builds a context in `isolate` and globalizes a handle to it. When the
@@ -68,15 +153,10 @@ impl Engine {
         let context = v8::Context::new(scope, v8::ContextOptions::default());
         v8::Global::new(scope, context)
     }
+}
 
-    /// Compiles and runs `source` in the engine's context, returning the
-    /// marshaled result.
-    ///
-    /// Errors are typed (DECISIONS.md D12): a compile failure is
-    /// [`Error::Compile`]; an uncaught JS exception is [`Error::Execution`].
-    /// Both are caught via a V8 `TryCatch`, so an exception in evaluated code is
-    /// surfaced as a Rust `Err`, never an unwind across the boundary.
-    pub fn eval(&mut self, source: &str) -> Result<Value> {
+impl Engine for V8Engine {
+    fn eval(&mut self, source: &str) -> Result<Value> {
         v8::scope!(let scope, &mut self.isolate);
         let context = v8::Local::new(scope, &self.context);
         let scope = &mut v8::ContextScope::new(scope, context);
@@ -102,14 +182,57 @@ impl Engine {
 
         Ok(marshal(scope, result))
     }
+
+    fn register_op(&mut self, op: OpDecl) -> Result<()> {
+        let op_id = self
+            .op_state
+            .borrow_mut()
+            .add_op(op.required_capability, op.handler);
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        install_op(scope, context, &op.name, op_id)
+    }
+
+    fn set_capabilities(&mut self, capabilities: CapabilitySet) {
+        self.op_state.borrow_mut().capabilities = capabilities;
+    }
+
+    fn poll_async_ops(&mut self) -> usize {
+        crate::op::poll_async_ops(&mut self.isolate, &self.context, &self.op_state)
+    }
+
+    fn has_pending_async_ops(&self) -> bool {
+        self.op_state.borrow().has_pending_async()
+    }
+
+    fn run_microtasks(&mut self) {
+        self.isolate.perform_microtask_checkpoint();
+    }
+
+    fn take_new_timers(&mut self) -> Vec<(TimerId, u64, bool)> {
+        self.op_state.borrow_mut().take_new_timers()
+    }
+
+    fn fire_timer(&mut self, id: TimerId) -> bool {
+        crate::op::fire_timer(&mut self.isolate, &self.context, &self.op_state, id)
+    }
+
+    fn timer_is_active(&self, id: TimerId) -> bool {
+        self.op_state.borrow().timer_is_active(id)
+    }
+
+    fn take_unhandled_rejections(&mut self) -> Vec<String> {
+        crate::op::take_unhandled_rejections(&mut self.isolate, &self.context, &self.op_state)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn engine() -> Engine {
-        Engine::new(Limits::default()).expect("engine construction")
+    fn engine() -> V8Engine {
+        V8Engine::new(Limits::default()).expect("engine construction")
     }
 
     #[test]
@@ -178,6 +301,6 @@ mod tests {
     #[test]
     fn invalid_limits_rejected_before_v8() {
         let bad = Limits::default().with_heap_limit_bytes(0);
-        assert!(matches!(Engine::new(bad), Err(Error::Common(_))));
+        assert!(matches!(V8Engine::new(bad), Err(Error::Common(_))));
     }
 }

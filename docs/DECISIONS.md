@@ -51,6 +51,27 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 >   documents this as a caller obligation rather than hiding it. *Reason:*
 >   inherent V8 global-state limitation. *Impact:* embedders must build snapshots
 >   before spawning isolates (natural at startup); tests serialize via a guard.
+>
+> **Phase 2:**
+> - **Engine trait now extracted** (resolving the Phase 1 "concrete only" note).
+>   `engine::Engine` is object-safe and names no V8 type; `runtime` holds a
+>   `Box<dyn Engine>`. The boundary held — no V8 type appears in `runtime`.
+> - **`DOMException` is not yet a real JS class.** Bare V8 has no `DOMException`
+>   constructor; it is a web-platform class defined only once the runtime prelude
+>   exists (Phase 4). Until then a `DOMException`-classed error (e.g. a capability
+>   denial → `NotAllowedError`) is thrown as a plain `Error` whose message is
+>   prefixed with the `.name`. *Impact:* JS sees the right text but not yet the
+>   right class/`instanceof`.
+> - **Async readiness is observed only on `tick`.** With no reactor (std-only,
+>   `Waker::noop`), a pending op's future is polled when the embedder ticks, not
+>   when its work actually becomes ready. *Reason:* the driven model (D4); a real
+>   reactor arrives with tokio default-providers (Phase 3). *Impact:* completion
+>   latency is bounded by tick cadence, which the embedder controls.
+> - **Timer JS callbacks stay in `engine`.** A JS function can't cross the
+>   boundary as a marshaled `Value`, so `setTimeout` callbacks are held in
+>   `engine` and invoked by id (`fire_timer`); `runtime` owns only the schedule.
+>   *Reason:* keeps `runtime` free of V8 handles. *Impact:* timer wiring is split
+>   across the boundary by design.
 
 ---
 
@@ -129,3 +150,15 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 **Context:** No specific workload chosen; usage to emerge over time.
 **Decision:** Build a general-purpose embeddable runtime; bake in no workload-specific assumptions.
 **Consequences:** Broader applicability; some convenience features deferred until a real consumer (Layer B) defines them.
+
+---
+
+### D15 — Phase 2 op-system & loop structure · *Locked (maintainer sign-off, 2026-06-11)*
+**Context:** The roadmap places the public tick/poll loop in `runtime` (§6.4) but the op system + driven loop is Phase 2 (§6.2), and `runtime` formally depends on `providers` (Phase 3). A decision was needed on where the Phase 2 machinery lives and how async ops run before tokio exists.
+**Decision (with maintainer sign-off):**
+1. **Introduce `runtime` now (Phase 2)**, depending on `engine` + `common` only (not yet `providers`); it owns the op wiring, the tick/poll loop, and the timer schedule.
+2. **Extract the engine abstraction trait now** (`engine::Engine`; impl `engine::V8Engine`), resolving the Phase 1 "concrete only" note.
+3. **Async ops are std-only, poll-on-tick** (`Waker::noop`, no reactor); tokio integration arrives with default-providers (Phase 3).
+4. Ops are exposed at the low-level `globalThis.__ops.<name>`; ergonomic WinterTC wrappers come with the prelude (Phase 4/8). Timers (`setTimeout` &c.) are engine builtins; the embedder supplies time per tick until the `Clock`/`Timers` providers do (Phase 3).
+**Consequences:** Clean Layer-B seam and a real second-engine boundary now; `runtime` gains a `providers` dependency in Phase 3. See D3a (Phase 2) for the boundary leak notes.
+**Deferred (not silently):** **Panic-across-FFI containment** for op/timer/reject callbacks (`catch_unwind` per D12) is implemented in the **hardening phase (§6.9)**, alongside the heap/watchdog/stack limits — not in Phase 2. Until then a *host-written* op handler that panics aborts the process (Rust's `extern "C"` panic = abort, not UB); hostile **JS** cannot force this, since handlers validate their marshaled arguments and return typed `OpError`s. Tracked for Phase 9.

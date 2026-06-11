@@ -13,6 +13,7 @@ resolver = "3"
 members = [
     "crates/common",
     "crates/engine",
+    "crates/runtime",
 ]
 
 # Shared package metadata. Individual crates inherit via `field.workspace = true`.
@@ -38,6 +39,7 @@ v8 = "150.0.0"
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).
 es-runtime-common = { path = "crates/common", version = "0.0.0" }
+es-runtime-engine = { path = "crates/engine", version = "0.0.0" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1
