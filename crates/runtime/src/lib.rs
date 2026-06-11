@@ -14,14 +14,20 @@
 // No `unsafe` in the runtime; it is confined to `engine` (ARCHITECTURE.md §7).
 #![forbid(unsafe_code)]
 
+mod builtins;
+mod prelude;
 mod timer;
+mod url_ops;
+
+use std::sync::Arc;
 
 use crate::timer::TimerQueue;
 
 // One-stop public surface for embedders: the engine abstraction + impl, the op
-// types, values, and capabilities — all reachable from this crate.
+// types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet};
 pub use es_runtime_engine::{AsyncOp, Engine, OpDecl, OpError, OpResult, V8Engine, Value};
+pub use es_runtime_providers::{Clock, Console, ConsoleLevel};
 
 /// Runtime-layer error (DECISIONS.md D12).
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +71,33 @@ pub struct TickStatus {
     pub next_timer_deadline_ms: Option<u64>,
 }
 
+/// The host providers a [`Runtime`] consumes for its web APIs.
+///
+/// Phase 4 consumes a [`Clock`] (for `performance`) and a [`Console`] sink (for
+/// `console.*`). Further providers are bundled here as the APIs that need them
+/// land (Entropy → Phase 7, NetTransport → Phase 6). Cloning is cheap (the
+/// providers are behind `Arc`).
+#[derive(Clone)]
+pub struct HostProviders {
+    clock: Arc<dyn Clock>,
+    console: Arc<dyn Console>,
+}
+
+impl HostProviders {
+    /// Bundles the providers a runtime needs.
+    pub fn new(clock: Arc<dyn Clock>, console: Arc<dyn Console>) -> Self {
+        HostProviders { clock, console }
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
+    }
+
+    fn console(&self) -> Arc<dyn Console> {
+        self.console.clone()
+    }
+}
+
 /// The embeddable runtime: an engine plus the driven loop's scheduling state.
 pub struct Runtime {
     engine: Box<dyn Engine>,
@@ -77,16 +110,27 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    /// Builds a runtime over the given engine.
+    /// Builds a runtime over the given engine, installing the host ops and the
+    /// JS prelude that together provide the WinterTC web-API surface.
     ///
     /// Taking a `Box<dyn Engine>` keeps the boundary clean: the caller chooses
     /// the engine (today [`V8Engine`]), the runtime drives it through the trait.
-    pub fn new(engine: Box<dyn Engine>) -> Self {
-        Runtime {
+    /// `providers` supply the host capabilities the prelude needs (a [`Clock`]
+    /// and a [`Console`] sink in Phase 4).
+    ///
+    /// Fails if op registration or prelude evaluation fails — both indicate a
+    /// build-time bug, surfaced loudly rather than left half-initialized.
+    pub fn new(engine: Box<dyn Engine>, providers: HostProviders) -> Result<Self> {
+        let mut runtime = Runtime {
             engine,
             timers: TimerQueue::default(),
             now_ms: 0,
-        }
+        };
+        // Register the world-touching ops, then evaluate the prelude that builds
+        // the pure-JS APIs on top of them (DECISIONS.md D8).
+        builtins::install(runtime.engine.as_mut(), &providers)?;
+        runtime.engine.eval(&prelude::source())?;
+        Ok(runtime)
     }
 
     /// Registers a host op, callable from JS as `globalThis.__ops.<name>`.
@@ -169,6 +213,7 @@ impl Runtime {
 mod tests {
     use super::*;
     use es_runtime_common::Limits;
+    use std::sync::Mutex;
 
     /// Serializes V8-touching tests in this binary (see the engine crate's note:
     /// V8's snapshot/isolate global state is not safe under the parallel harness).
@@ -178,9 +223,47 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// A capturing console sink for assertions.
+    #[derive(Default)]
+    struct TestConsole {
+        lines: Mutex<Vec<(ConsoleLevel, String)>>,
+    }
+    impl Console for TestConsole {
+        fn write(&self, level: ConsoleLevel, message: &str) {
+            self.lines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((level, message.to_string()));
+        }
+    }
+
+    /// A clock returning fixed monotonic/wall readings.
+    struct FixedClock {
+        monotonic: u64,
+        wall: u64,
+    }
+    impl Clock for FixedClock {
+        fn monotonic_ms(&self) -> u64 {
+            self.monotonic
+        }
+        fn wall_ms(&self) -> u64 {
+            self.wall
+        }
+    }
+
     fn runtime() -> Runtime {
+        runtime_with(
+            Arc::new(TestConsole::default()),
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+        )
+    }
+
+    fn runtime_with(console: Arc<dyn Console>, clock: Arc<dyn Clock>) -> Runtime {
         let engine = V8Engine::new(Limits::default()).expect("engine");
-        Runtime::new(Box::new(engine))
+        Runtime::new(Box::new(engine), HostProviders::new(clock, console)).expect("runtime")
     }
 
     #[test]
@@ -292,5 +375,257 @@ mod tests {
         let status = rt.tick(0);
         assert!(!status.has_pending_work);
         assert_eq!(status.next_timer_deadline_ms, None);
+    }
+
+    #[test]
+    fn console_routes_to_the_injected_sink() {
+        let _g = v8_guard();
+        let console = Arc::new(TestConsole::default());
+        let mut rt = runtime_with(
+            console.clone(),
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+        );
+        rt.eval(r#"console.log("hi", 42); console.error("boom");"#)
+            .unwrap();
+        let lines = console.lines.lock().unwrap().clone();
+        assert_eq!(
+            lines,
+            vec![
+                (ConsoleLevel::Log, "hi 42".to_string()),
+                (ConsoleLevel::Error, "boom".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn performance_reads_the_clock_provider() {
+        let _g = v8_guard();
+        let mut rt = runtime_with(
+            Arc::new(TestConsole::default()),
+            Arc::new(FixedClock {
+                monotonic: 1234,
+                wall: 5678,
+            }),
+        );
+        assert_eq!(rt.eval("performance.now()").unwrap(), Value::Number(1234.0));
+        assert_eq!(
+            rt.eval("performance.timeOrigin").unwrap(),
+            Value::Number(5678.0)
+        );
+    }
+
+    #[test]
+    fn queue_microtask_runs_at_the_checkpoint() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval("globalThis.x = 0; queueMicrotask(() => { globalThis.x = 1; });")
+            .unwrap();
+        // Explicit microtask policy: not run until the tick's checkpoint.
+        assert_eq!(rt.eval("globalThis.x").unwrap(), Value::Number(0.0));
+        rt.tick(0);
+        assert_eq!(rt.eval("globalThis.x").unwrap(), Value::Number(1.0));
+    }
+
+    #[test]
+    fn self_aliases_global_this() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_eq!(rt.eval("self === globalThis").unwrap(), Value::Bool(true));
+    }
+
+    /// Asserts a JS expression evaluates to `true`.
+    fn assert_true(rt: &mut Runtime, expr: &str) {
+        assert_eq!(rt.eval(expr).unwrap(), Value::Bool(true), "expr: {expr}");
+    }
+
+    #[test]
+    fn text_encoder_decoder_round_trip() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // "héllo😀": é is 2 UTF-8 bytes, 😀 is 4 → 1+2+1+1+1+4 = 10 bytes.
+        assert_eq!(
+            rt.eval(r#"new TextEncoder().encode("héllo😀").length"#)
+                .unwrap(),
+            Value::Number(10.0)
+        );
+        assert_true(
+            &mut rt,
+            r#"new TextDecoder().decode(new TextEncoder().encode("héllo😀")) === "héllo😀""#,
+        );
+    }
+
+    #[test]
+    fn atob_btoa_round_trip() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(&mut rt, r#"btoa("hello") === "aGVsbG8=""#);
+        assert_true(&mut rt, r#"atob("aGVsbG8=") === "hello""#);
+        assert_true(
+            &mut rt,
+            r#"(() => { try { btoa("Ā"); return false; } catch (e) { return e.name === "InvalidCharacterError"; } })()"#,
+        );
+    }
+
+    #[test]
+    fn structured_clone_deep_copies_with_cycles() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const o = { a: [1, 2], m: new Map([['k', 3]]) }; o.self = o; \
+             const c = structuredClone(o); \
+             return c !== o && c.a[0] === 1 && c.a !== o.a && c.self === c && c.m.get('k') === 3; })()",
+        );
+    }
+
+    #[test]
+    fn structured_clone_rejects_functions() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { try { structuredClone(() => {}); return false; } \
+             catch (e) { return e.name === 'DataCloneError'; } })()",
+        );
+    }
+
+    #[test]
+    fn dom_exception_is_an_error_with_name_and_code() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const e = new DOMException('x', 'AbortError'); \
+             return e instanceof Error && e.name === 'AbortError' && e.message === 'x' \
+             && new DOMException('', 'DataCloneError').code === 25; })()",
+        );
+    }
+
+    #[test]
+    fn url_parses_and_exposes_components() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const u = new URL('https://user:pw@example.com:8080/a/b?x=1&y=2#frag'); \
+             return u.protocol === 'https:' && u.hostname === 'example.com' && u.port === '8080' \
+             && u.pathname === '/a/b' && u.search === '?x=1&y=2' && u.hash === '#frag' \
+             && u.username === 'user' && u.origin === 'https://example.com:8080'; })()",
+        );
+    }
+
+    #[test]
+    fn url_resolves_against_a_base_and_rejects_invalid() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "new URL('../c', 'https://example.com/a/b').href === 'https://example.com/c'",
+        );
+        assert_true(&mut rt, "URL.canParse('https://ok.test/') === true");
+        assert_true(&mut rt, "URL.canParse('not a url') === false");
+        assert_true(
+            &mut rt,
+            "(() => { try { new URL('not a url'); return false; } catch (e) { return e instanceof TypeError; } })()",
+        );
+    }
+
+    #[test]
+    fn url_search_params_stay_in_sync() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const u = new URL('https://h.test/?a=1'); \
+             u.searchParams.append('b', '2'); \
+             return u.search === '?a=1&b=2' && u.searchParams.get('a') === '1' \
+             && u.searchParams.getAll('b').length === 1; })()",
+        );
+        assert_true(
+            &mut rt,
+            "new URLSearchParams('x=1&x=2&y=3').getAll('x').join(',') === '1,2'",
+        );
+    }
+
+    #[test]
+    fn event_target_dispatches_to_listeners() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const t = new EventTarget(); let got = null; \
+             t.addEventListener('x', (e) => { got = e.detail; }); \
+             t.dispatchEvent(new CustomEvent('x', { detail: 42 })); return got === 42; })()",
+        );
+        // once: fires at most once.
+        assert_true(
+            &mut rt,
+            "(() => { const t = new EventTarget(); let n = 0; \
+             t.addEventListener('x', () => n++, { once: true }); \
+             t.dispatchEvent(new Event('x')); t.dispatchEvent(new Event('x')); return n === 1; })()",
+        );
+        // preventDefault on a cancelable event → dispatchEvent returns false.
+        assert_true(
+            &mut rt,
+            "(() => { const t = new EventTarget(); t.addEventListener('x', (e) => e.preventDefault()); \
+             return t.dispatchEvent(new Event('x', { cancelable: true })) === false; })()",
+        );
+    }
+
+    #[test]
+    fn abort_controller_signals_abort() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { const c = new AbortController(); let reason = null; \
+             c.signal.addEventListener('abort', () => { reason = c.signal.reason; }); \
+             c.abort('stop'); return c.signal.aborted === true && reason === 'stop'; })()",
+        );
+        // Default reason is an AbortError DOMException.
+        assert_true(
+            &mut rt,
+            "(() => { const c = new AbortController(); c.abort(); \
+             return c.signal.reason instanceof DOMException && c.signal.reason.name === 'AbortError'; })()",
+        );
+        // AbortSignal.any follows the first source to abort.
+        assert_true(
+            &mut rt,
+            "(() => { const a = new AbortController(); const b = new AbortController(); \
+             const any = AbortSignal.any([a.signal, b.signal]); let fired = false; \
+             any.addEventListener('abort', () => { fired = true; }); \
+             b.abort('z'); return any.aborted && any.reason === 'z' && fired; })()",
+        );
+        // throwIfAborted throws the reason.
+        assert_true(
+            &mut rt,
+            "(() => { try { AbortSignal.abort('e').throwIfAborted(); return false; } \
+             catch (err) { return err === 'e'; } })()",
+        );
+    }
+
+    #[test]
+    fn abort_signal_timeout_fires_on_tick() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval(
+            "globalThis.timedOut = false; \
+             const s = AbortSignal.timeout(50); \
+             s.addEventListener('abort', () => { globalThis.timedOut = true; });",
+        )
+        .unwrap();
+        // Not yet due.
+        assert_eq!(rt.tick(10).timers_fired, 0);
+        assert_eq!(rt.eval("globalThis.timedOut").unwrap(), Value::Bool(false));
+        // Past the deadline: the timer fires and aborts the signal.
+        assert_eq!(rt.tick(50).timers_fired, 1);
+        assert_true(&mut rt, "globalThis.timedOut === true");
+        assert_true(
+            &mut rt,
+            "AbortSignal.timeout(0), true", // smoke: constructor path works with 0
+        );
     }
 }

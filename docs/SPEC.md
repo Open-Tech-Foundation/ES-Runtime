@@ -25,25 +25,25 @@ Generic and target-agnostic — no assumptions about a specific workload (multi-
 Implement to spec; track conformance against the official Minimum Common Web API test suite and relevant Web Platform Tests.
 
 ### 2.1 Globals & structure
-- ☐ `globalThis` wiring, `queueMicrotask`, `structuredClone`, `reportError`.
+- ◐ `globalThis` wiring (+ `self`) ☑, `queueMicrotask` ☑, `structuredClone` ☑ (standard cloneable types + cycles), `reportError` ◐ (minimal: routes to console.error; ErrorEvent dispatch later). *(Phase 4.)*
 
 ### 2.2 Console
-- ☐ `console` (log/info/warn/error/debug; group/table best-effort) → routed to the embedder's logging sink, not stdout directly.
+- ◐ `console` (log/info/warn/error/debug ☑) → the injected `Console` sink, not stdout (DECISIONS D17). group/table minimal. *(Phase 4.)*
 
 ### 2.3 Encoding
-- ☐ `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`.
+- ◐ `TextEncoder`, `TextDecoder` (UTF-8) ☑, `atob`, `btoa` ☑. `TextEncoderStream`/`TextDecoderStream` ⊘ → Phase 5 (need Streams). *(Phase 4.)*
 
 ### 2.4 URL
-- ☐ `URL`, `URLSearchParams`, `URLPattern`.
+- ◐ `URL`, `URLSearchParams` ☑ (via the `url` crate, DECISIONS D18). `URLPattern` ⊘ → later. *(Phase 4.)*
 
 ### 2.5 Timers (provider-backed)
 - ◐ `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`. Mechanism in place (Phase 2): engine builtins + runtime-owned schedule, embedder-supplied time. Provider-backing (`Clock`/`Timers`) lands in Phase 3.
 
 ### 2.6 Abort
-- ☐ `AbortController`, `AbortSignal` (incl. `AbortSignal.timeout`, `AbortSignal.any`).
+- ☑ `AbortController`, `AbortSignal` (incl. `AbortSignal.timeout`, `AbortSignal.any`). *(Phase 4.)*
 
 ### 2.7 Events
-- ☐ `Event`, `EventTarget`, `CustomEvent`.
+- ☑ `Event`, `EventTarget`, `CustomEvent` (flat dispatch model). *(Phase 4.)*
 
 ### 2.8 Streams (largest correctness item)
 - ☐ `ReadableStream` (default + **byte/BYOB** streams), `WritableStream`, `TransformStream`, with correct **backpressure** and queuing strategies (`CountQueuingStrategy`, `ByteLengthQueuingStrategy`).
@@ -57,7 +57,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ☐ `crypto.subtle`: digest, HMAC, AES-GCM/CBC, ECDSA/ECDH, RSA per spec — vetted constant-time library only.
 
 ### 2.11 Performance
-- ☐ `performance.now()`, `performance.timeOrigin` (Clock provider).
+- ☑ `performance.now()`, `performance.timeOrigin` (Clock provider). *(Phase 4; integer-ms precision, sub-ms later.)*
 
 Anything intentionally deferred from the snapshot is listed in §7 with rationale.
 
@@ -71,6 +71,7 @@ Traits the embedder must satisfy (defaults shipped in `default-providers`):
 - ☑ `Entropy` — CSPRNG bytes. *(Phase 3: trait + `OsEntropy`/`SeededEntropy`.)*
 - ☑ `Timers` — schedule/cancel. *(Phase 3: trait + `TokioTimers`/`ManualTimers`.)*
 - ☑ `TaskSpawner` — offload blocking work. *(Phase 3: trait + `TokioTaskSpawner`/`InlineTaskSpawner`.)*
+- ☑ `Console` — guest output sink (the lightest provider; DECISIONS D17). *(Phase 4: trait + `TracingConsole`/`NullConsole`/`CapturingConsole`.)*
 - ☐ `NetTransport` — outbound HTTP for `fetch`. *(Phase 6.)*
 - ☐ `FileSystem` — capability-scoped, async, optional/deniable. *(Later.)*
 
@@ -108,7 +109,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 1. ☑ **Foundation** — workspace, `common`, error model, tracing, CI; `engine` V8 init running `"1+1"`; snapshot scaffolding.
 2. ☑ **Op system + driven loop** — sync/async ops, promise resolution, microtask checkpoint, tick/poll API, timer plumbing. (`runtime` crate + engine trait introduced here; see DECISIONS D15.)
 3. ☑ **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers. (`providers` + `default-providers` crates + a tokio `Driver`; `runtime` API unchanged — DECISIONS D16.)
-4. **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort.
+4. ☑ **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort. (JS prelude over the op system + `Console` provider; DECISIONS D17/D18.)
 5. **Streams** — full readable/writable/transform incl. byte streams + backpressure.
 6. **Fetch family** — Headers/Request/Response/Body/fetch over NetTransport; Blob/File/FormData.
 7. **WebCrypto** — getRandomValues, randomUUID, subtle.
@@ -129,8 +130,10 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 
 **Deferrals:**
 - **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) is implemented in the **hardening phase (§6.9)**, not Phase 2. A *host-written* op handler that panics currently aborts the process; hostile JS cannot force this. (DECISIONS D15.)
-- **`DOMException` as a real JS class** awaits the runtime prelude (Phase 4). Until then, `DOMException`-classed errors (e.g. capability denial → `NotAllowedError`) surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
-- **`queueMicrotask` / `reportError`** globals (§2.1) not yet installed; the microtask *checkpoint* mechanism exists (Phase 2), the `globalThis` bindings come with §2.1.
+- **`DOMException` engine reconciliation** — the JS class exists (Phase 4 prelude), but errors thrown from the engine still surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
+- **`TextEncoderStream` / `TextDecoderStream`** → Phase 5 (need `TransformStream`).
+- **`URLPattern`** → later (not covered by the `url` crate). Minor WHATWG URL conformance gaps tracked vs WPT (D18).
+- **`reportError` ErrorEvent dispatch** and **sub-millisecond `performance.now`** are minimal in Phase 4; full behavior lands with the event loop / clock refinements.
 
 ---
 

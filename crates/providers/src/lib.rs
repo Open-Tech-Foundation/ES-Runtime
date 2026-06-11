@@ -105,6 +105,38 @@ pub trait TaskSpawner: Send + Sync {
     fn spawn_blocking(&self, work: Box<dyn FnOnce() + Send + 'static>) -> BoxFuture<()>;
 }
 
+/// The severity of a `console` message, mirroring the method that produced it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConsoleLevel {
+    /// `console.debug`.
+    Debug,
+    /// `console.info`.
+    Info,
+    /// `console.log`.
+    Log,
+    /// `console.warn`.
+    Warn,
+    /// `console.error`.
+    Error,
+}
+
+/// A sink for guest `console.*` output (SPEC.md §2.2).
+///
+/// console output is the **guest program's** output, not the runtime's
+/// telemetry, so — like every other side effect — it arrives through an
+/// injectable sink rather than reaching for an ambient global (no ambient
+/// authority, DECISIONS.md D5). Because executed JS may be hostile
+/// (ARCHITECTURE.md §7), an implementation may bound, rate-limit, drop, or
+/// route output per-tenant; that is the embedder's choice, not the runtime's.
+///
+/// It is the lightest provider — an output sink needing no capability beyond
+/// "may emit" — and is distinct from the heavier I/O providers above.
+pub trait Console: Send + Sync {
+    /// Records one already-formatted console message at `level`.
+    fn write(&self, level: ConsoleLevel, message: &str);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

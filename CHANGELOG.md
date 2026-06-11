@@ -6,6 +6,46 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 4 — Core web primitives
+
+The WinterTC pure-JS surface (SPEC.md §6.4), shipped as a JS prelude over the op
+system, with world-touching parts as host ops.
+
+#### Added
+
+- **Prelude harness** — `runtime` now installs host ops and evaluates a JS
+  prelude at construction (`Runtime::new` takes [`HostProviders`] and returns
+  `Result`). Per D8 the prelude is snapshot-baked in Phase 8; evaluated at
+  startup until then.
+- **Console** as an injectable output sink (DECISIONS.md D17): a `Console`
+  provider trait (guest output, not telemetry — boundable/attributable per §7),
+  with `TracingConsole` (default → `tracing`), `NullConsole` (deniable), and
+  `CapturingConsole` (tests). `console.*` formats args and routes through it;
+  group/table are minimal.
+- **performance** — `performance.now()` / `timeOrigin`, backed by the `Clock`
+  provider (the D16 point where `runtime` gains its `providers` dependency).
+- **Globals** — `queueMicrotask`, `reportError`, `structuredClone` (deep clone of
+  the standard cloneable types incl. cycles; `DataCloneError` otherwise), and the
+  `self` alias.
+- **DOMException** — a real JS class in the prelude (closes the JS-class half of
+  the D3a note), used by atob/btoa, structuredClone, and Abort.
+- **Encoding** — `TextEncoder`/`TextDecoder` (UTF-8, pure JS) and `atob`/`btoa`.
+- **URL family** — `URL` + `URLSearchParams`, parsing/serialization via the
+  servo `url` crate behind sync ops (DECISIONS.md D18), with `search`/`searchParams`
+  kept in sync.
+- **Events** — `Event`, `CustomEvent`, `EventTarget` (flat dispatch: once,
+  passive, signal, capture flag, `preventDefault`).
+- **Abort** — `AbortController`, `AbortSignal` incl. `AbortSignal.abort`,
+  `AbortSignal.timeout` (timer-driven), and `AbortSignal.any`.
+- New dependency: `url`, in `runtime`.
+
+#### Decisions
+
+- **D17** (Console = injectable output-sink provider; default forwards to
+  tracing) and **D18** (URL via the `url` crate) locked. Deferrals (SPEC §7):
+  `TextEncoderStream`/`TextDecoderStream` → Phase 5 (need Streams); `URLPattern`
+  → later; full WHATWG-URL conformance gaps tracked vs WPT.
+
 ### Phase 3 — Provider traits + default tokio providers
 
 The I/O integration seam (SPEC.md §6.3): provider traits, reference tokio-backed
@@ -135,9 +175,9 @@ end-to-end with snapshot scaffolding (SPEC.md §6.1).
   uncaught-exception JS class not yet preserved; primitive-only value marshaling;
   snapshot-creation concurrency constraint.
 
-### Phase 4 will add
+### Phase 5 will add
 
-Core web primitives (SPEC.md §6.4): `console`, the encoding family
-(`TextEncoder`/`TextDecoder`, `atob`/`btoa`), the URL family, `structuredClone`,
-`performance.now` (wiring the `Clock` provider into `runtime`), events
-(`Event`/`EventTarget`), and Abort — mostly pure-JS prelude over the op system.
+Streams (SPEC.md §6.5): `ReadableStream` (default + byte/BYOB), `WritableStream`,
+`TransformStream`, with correct backpressure and queuing strategies — the largest
+correctness item — plus the deferred `TextEncoderStream`/`TextDecoderStream` that
+build on `TransformStream`.

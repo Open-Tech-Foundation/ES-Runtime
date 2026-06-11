@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 mod clock;
+mod console;
 mod driver;
 mod entropy;
 mod task;
@@ -26,6 +27,7 @@ mod timers;
 pub mod testing;
 
 pub use clock::SystemClock;
+pub use console::{NullConsole, TracingConsole};
 pub use driver::Driver;
 pub use entropy::OsEntropy;
 pub use task::TokioTaskSpawner;

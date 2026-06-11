@@ -11,7 +11,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use es_runtime_providers::{BoxFuture, Clock, Entropy, ProviderError, TaskSpawner, Timers};
+use es_runtime_providers::{
+    BoxFuture, Clock, Console, ConsoleLevel, Entropy, ProviderError, TaskSpawner, Timers,
+};
 
 /// A [`Clock`] whose monotonic time advances only via [`advance`](Self::advance)
 /// / [`set`](Self::set). Cheaply cloneable; clones share the same time.
@@ -106,6 +108,45 @@ impl Entropy for SeededEntropy {
             *byte = (x & 0xff) as u8;
         }
         Ok(())
+    }
+}
+
+/// A [`Console`] that records every message in memory, so tests can assert on
+/// guest output deterministically instead of poking a global subscriber.
+#[derive(Default)]
+pub struct CapturingConsole {
+    messages: Mutex<Vec<(ConsoleLevel, String)>>,
+}
+
+impl CapturingConsole {
+    /// An empty capturing console.
+    pub fn new() -> Self {
+        CapturingConsole::default()
+    }
+
+    /// A snapshot of every `(level, message)` captured so far.
+    pub fn messages(&self) -> Vec<(ConsoleLevel, String)> {
+        self.messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// A snapshot of just the message texts captured so far.
+    pub fn lines(&self) -> Vec<String> {
+        self.messages()
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect()
+    }
+}
+
+impl Console for CapturingConsole {
+    fn write(&self, level: ConsoleLevel, message: &str) {
+        self.messages
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((level, message.to_string()));
     }
 }
 

@@ -11,8 +11,10 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-engine.workspace = true
+es-runtime-providers.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

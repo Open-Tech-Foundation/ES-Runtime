@@ -40,6 +40,8 @@ v8 = "150.0.0"
 # Async runtime + OS CSPRNG, used only by `default-providers` (DECISIONS.md D5).
 tokio = "1.52.3"
 getrandom = "0.4.2"
+# WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
+url = "2.5.8"
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).

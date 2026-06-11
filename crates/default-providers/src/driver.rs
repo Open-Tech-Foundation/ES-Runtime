@@ -63,16 +63,18 @@ mod tests {
     use super::*;
 
     use es_runtime_common::Limits;
-    use es_runtime_runtime::{AsyncOp, OpDecl, Runtime, V8Engine, Value};
+    use es_runtime_runtime::{AsyncOp, HostProviders, OpDecl, Runtime, V8Engine, Value};
 
     use crate::testing::{ManualClock, ManualTimers};
+    use crate::{NullConsole, SystemClock};
 
     // This is the one V8-touching test in this crate, so it needs no
     // serialization guard (the others don't create an isolate).
     #[tokio::test]
     async fn drives_async_op_and_timer_to_completion_deterministically() {
         let engine = V8Engine::new(Limits::default()).expect("engine");
-        let mut rt = Runtime::new(Box::new(engine));
+        let providers = HostProviders::new(Arc::new(SystemClock::new()), Arc::new(NullConsole));
+        let mut rt = Runtime::new(Box::new(engine), providers).expect("runtime");
         rt.register_op(OpDecl::r#async("answer", |_args| -> AsyncOp {
             Box::pin(async { Ok(Value::Number(42.0)) })
         }))

@@ -56,12 +56,14 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 > - **Engine trait now extracted** (resolving the Phase 1 "concrete only" note).
 >   `engine::Engine` is object-safe and names no V8 type; `runtime` holds a
 >   `Box<dyn Engine>`. The boundary held — no V8 type appears in `runtime`.
-> - **`DOMException` is not yet a real JS class.** Bare V8 has no `DOMException`
->   constructor; it is a web-platform class defined only once the runtime prelude
->   exists (Phase 4). Until then a `DOMException`-classed error (e.g. a capability
->   denial → `NotAllowedError`) is thrown as a plain `Error` whose message is
->   prefixed with the `.name`. *Impact:* JS sees the right text but not yet the
->   right class/`instanceof`.
+> - **`DOMException` is partially real (updated Phase 4).** The prelude now
+>   defines a real `globalThis.DOMException` class, so prelude APIs (atob/btoa,
+>   structuredClone, Abort) throw the correct type with `instanceof Error`. The
+>   remaining gap: errors thrown from the **engine** (Rust side, e.g. a capability
+>   denial → `NotAllowedError`) still surface as a plain `Error` with a
+>   name-prefixed message, because the engine has no handle to the JS class. A
+>   later phase reconciles the two paths (engine throws the prelude's
+>   `DOMException`).
 > - **Async readiness is observed only on `tick`.** With no reactor (std-only,
 >   `Waker::noop`), a pending op's future is polled when the embedder ticks, not
 >   when its work actually becomes ready. *Reason:* the driven model (D4); a real
@@ -169,3 +171,17 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 **Context:** Phase 3 adds the provider traits and tokio defaults. The open question was how deeply to wire them into `runtime` now — internalize a `Clock` (pull time, drop `tick`'s `now_ms`) vs. keep the explicit driven API and let a driver supply time.
 **Decision (with maintainer sign-off):** **Providers + driver only.** Define the traits in `providers`; implement tokio + deterministic test providers and a `Driver` in `default-providers`. `runtime`'s public API is **unchanged** (`tick(now_ms)` stays); the `Driver` reads the `Clock` and supplies the time. `runtime` gains its `providers` dependency only when it first consumes a provider-backed web API (`performance.now` → Phase 4, `getRandomValues` → Phase 7), per "add the dependency when it is used."
 **Consequences:** Minimal, no boundary churn; the explicit `tick(now)` seam (D4) is preserved and the `Driver` is the swappable concrete loop. `getrandom` supplies raw OS entropy for the `Entropy` default — it does **not** resolve **D9** (the `crypto.subtle` algorithm backend), which stays *Open* until Phase 7.
+
+---
+
+### D17 — `console` is an injectable output-sink provider · *Locked (maintainer sign-off, 2026-06-11)*
+**Context:** SPEC §2.2 requires console output to reach "the embedder's logging sink, not stdout." Options weighed: route straight to `tracing`; a `Console` provider trait; or an ad-hoc host callback.
+**Decision (maintainer):** **Hybrid.** A minimal `Console` output-sink **provider** is the seam; the shipped default forwards to `tracing`. Rationale: `console.*` is the *guest program's* output, not the runtime's telemetry, so — like every other side effect — it is injected, not pulled from an ambient global. This (1) preserves no-ambient-authority (D5); (2) lets a hostile guest's output be bounded/rate-limited/dropped rather than flooding host telemetry (§7); (3) gives Layer B per-tenant sink isolation. `default-providers` ships `TracingConsole` (default), `NullConsole` (deniable), and `CapturingConsole` (tests).
+**Consequences:** `Console` joins the provider list as the lightest provider (an output sink, no capability beyond "may emit"); `runtime` consumes it via `HostProviders`. The JS-facing `console` object is identical to a raw-tracing approach, so this is an internal seam, not a guest-visible commitment.
+
+---
+
+### D18 — URL family via the `url` crate · *Locked (maintainer sign-off, 2026-06-11)*
+**Context:** WHATWG URL is large and subtle; a from-scratch JS implementation carries real conformance risk.
+**Decision (maintainer):** Implement `URL`/`URLSearchParams` parsing and serialization with the servo **`url`** crate behind sync ops; the JS wrappers provide the surface. `URLSearchParams` is pure JS.
+**Consequences:** Well-tested, ~WHATWG-conformant parsing for low effort; `runtime` gains a `url` dependency (MIT OR Apache-2.0). Minor WHATWG gaps (e.g. the `hostname` setter's port handling) are tracked against WPT (D13). **URLPattern** is **not** covered by the crate and is deferred (SPEC §7).
