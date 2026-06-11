@@ -1,0 +1,54 @@
+# Virtual workspace root for ES-Runtime (Layer A).
+#
+# Crate layout and dependency direction are fixed by ARCHITECTURE.md §2 / DECISIONS.md D11:
+#
+#   common → engine → providers → runtime → default-providers → runtime-cli
+#
+# Each crate may depend only on crates to its left. The `v8` crate appears *only*
+# in `engine`; real I/O appears *only* in `default-providers`. Phase 1 introduces
+# `common` and `engine`; the remaining crates are added in their own phases
+# (SPEC.md §6) to keep merged code free of stubs.
+[workspace]
+resolver = "3"
+members = [
+    "crates/common",
+    "crates/engine",
+]
+
+# Shared package metadata. Individual crates inherit via `field.workspace = true`.
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/opentechf/ES-Runtime"
+authors = ["Open Tech Foundation <https://opentechf.org> and its contributors"]
+
+# Single source of truth for dependency versions. Pinned per DECISIONS.md D7
+# (supply chain) / ARCHITECTURE.md §7; bumped deliberately, not floated.
+[workspace.dependencies]
+# Error model (DECISIONS.md D12).
+thiserror = "2.0.18"
+# Observability (ARCHITECTURE.md §8): structured spans, no println!.
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# V8 bindings (DECISIONS.md D2). Confined to the `engine` crate.
+v8 = "150.0.0"
+
+# Internal crates, referenced by path so the dependency graph is the boundary
+# (DECISIONS.md D11).
+es-runtime-common = { path = "crates/common", version = "0.0.0" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# CI runs `clippy -D warnings`; these raise specific hazards to the default
+# (warn) level so they surface there. Pedantic groups are intentionally not
+# enabled wholesale — they add noise without commensurate signal at this stage.
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"                   # ARCHITECTURE.md §8: no println!
+print_stderr = "warn"

@@ -1,0 +1,18 @@
+[package]
+name = "es-runtime-engine"
+description = "V8 embedding for ES-Runtime: isolate/context lifecycle, evaluation, snapshots. The only crate that uses the v8 crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+es-runtime-common.workspace = true
+v8.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,49 @@
+# cargo-deny config — supply-chain CI gate (ARCHITECTURE.md §7, SPEC.md §5).
+# Run as `cargo deny check`. Covers advisories, licenses, bans, and sources.
+
+[advisories]
+# RustSec advisory DB. Unmaintained/unsound advisories are surfaced; a known
+# exception must be listed explicitly here rather than silenced globally.
+version = 2
+yanked = "deny"
+ignore = [
+    # `paste` is unmaintained (informational advisory, not a vulnerability) and
+    # has no safe upgrade. It reaches us only transitively through the `v8`
+    # crate (es-runtime-engine → v8 → paste); we do not depend on it directly
+    # and cannot drop it without v8 doing so upstream. Re-evaluate when v8
+    # removes the dependency.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained-only, transitive via the v8 crate, no fix available" },
+]
+
+[licenses]
+# Project ships under Apache-2.0 (DECISIONS.md D10, Locked). Dependencies must
+# carry an OSI-approved permissive license compatible with that. Copyleft and
+# unknown licenses fail the gate; add a deliberate exception below if ever needed.
+version = 2
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+]
+exceptions = []
+
+[bans]
+# Surface duplicate versions (bloat / audit-surface) without failing the build
+# yet; tighten to "deny" once the graph stabilizes.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# Only crates.io for now; no git or alternate registries until explicitly added.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

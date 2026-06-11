@@ -1,0 +1,4 @@
+# Formatting is a CI gate (`cargo fmt --check`, SPEC.md §5). Keep config minimal
+# and stable-only so the gate runs on the pinned stable toolchain.
+edition = "2024"
+max_width = 100

@@ -1,0 +1,6 @@
+# Pins the toolchain for reproducible local + CI builds. MSRV is declared
+# separately as `rust-version` in the workspace package and exercised by a
+# dedicated CI job (SPEC.md §5). Keep this channel >= that MSRV.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
