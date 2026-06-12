@@ -24,7 +24,7 @@ cargo esrun examples/timers.js
 
 # Inline snippet, help, version
 cargo esrun -e "console.log(6 * 7)"
-cargo esrun -- --help
+cargo esrun --help
 ```
 
 The full implemented WinterTC surface is available (console, URL, fetch, crypto,
