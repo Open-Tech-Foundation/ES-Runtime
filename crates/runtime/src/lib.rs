@@ -1521,4 +1521,89 @@ mod tests {
         );
         assert_eq!(out, Value::String("all-ok".into()));
     }
+
+    /// In-JS test harness for the conformance suite: `test(name, fn)` (sync or
+    /// async), `assert*` helpers, and a `__results` tally read back by the runner.
+    const CONFORMANCE_HARNESS: &str = r#"
+        globalThis.__results = { pass: 0, fail: 0, failures: [] };
+        globalThis.__pending = [];
+        globalThis.test = (name, fn) => {
+          let r;
+          try { r = fn(); }
+          catch (e) { __results.fail++; __results.failures.push(name + ": " + ((e && e.message) || e)); return; }
+          if (r && typeof r.then === "function") {
+            __pending.push(r.then(
+              () => { __results.pass++; },
+              (e) => { __results.fail++; __results.failures.push(name + ": " + ((e && e.message) || e)); },
+            ));
+          } else { __results.pass++; }
+        };
+        globalThis.assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
+        globalThis.assertEquals = (actual, expected, msg) => {
+          if (actual !== expected) {
+            throw new Error((msg ? msg + ": " : "") + `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+          }
+        };
+        globalThis.assertThrows = (fn, name) => {
+          let threw = null;
+          try { fn(); } catch (e) { threw = e; }
+          if (!threw) throw new Error("expected a throw, but none occurred");
+          if (name && threw.name !== name) throw new Error(`expected ${name}, got ${threw.name}`);
+        };
+        globalThis.__await_all = () => Promise.all(__pending);
+    "#;
+
+    /// Runs every `conformance/*.js` spec-assertion file and records the
+    /// pass-rate (SPEC §5 / §8). Gated on zero failures and a non-regressing
+    /// count; the recorded snapshot lives in `conformance/RESULTS.md`.
+    #[test]
+    #[allow(clippy::print_stdout)] // reports the pass-rate under `--nocapture`
+    fn conformance_suite_passes() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval(CONFORMANCE_HARNESS).expect("conformance harness");
+
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/conformance");
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+            .expect("read conformance dir")
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "js"))
+            .collect();
+        files.sort();
+        assert!(!files.is_empty(), "no conformance files found in {dir}");
+
+        for path in &files {
+            let src = std::fs::read_to_string(path).expect("read conformance file");
+            rt.eval(&src)
+                .unwrap_or_else(|e| panic!("loading {}: {e}", path.display()));
+        }
+
+        // Settle the async tests, then read the tallies.
+        eval_async(&mut rt, "await globalThis.__await_all(); return 'done';");
+
+        let number = |rt: &mut Runtime, expr: &str| match rt.eval(expr).unwrap() {
+            Value::Number(n) => n as u32,
+            other => panic!("{expr} was not a number: {other:?}"),
+        };
+        let pass = number(&mut rt, "__results.pass");
+        let fail = number(&mut rt, "__results.fail");
+        let failures = match rt.eval("__results.failures.join('\\n')").unwrap() {
+            Value::String(s) => s,
+            _ => String::new(),
+        };
+
+        assert_eq!(fail, 0, "conformance failures ({fail}):\n{failures}");
+        // Non-regression floor; bump alongside conformance/RESULTS.md as the
+        // suite grows so removed/skipped assertions are caught.
+        const BASELINE: u32 = 57;
+        assert!(
+            pass >= BASELINE,
+            "conformance pass count {pass} below baseline {BASELINE}"
+        );
+        println!(
+            "conformance: {pass}/{} assertions passing across {} files",
+            pass + fail,
+            files.len()
+        );
+    }
 }

@@ -95,7 +95,7 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 ## 5. Conformance & testing
 
 - Unit tests per module; integration tests via `runtime-cli`.
-- **Conformance:** Minimum Common Web API / WPT subset per implemented API; pass-rate tracked in-repo and trending up.
+- **Conformance:** ☑ a curated in-repo suite of spec-behaviour assertions over the implemented surface (`crates/runtime/conformance/*.js`), run by the `conformance_suite_passes` gate with a recorded, non-regressing pass-rate (`conformance/RESULTS.md` — currently 57/57). The full WPT harness (`testharness.js`) is a later addition; the curated suite is meant to trend up as coverage grows.
 - **Fuzzing:** `cargo-fuzz` on URL parsing, streams, encoding, and the JS↔Rust marshaler.
 - **Soundness:** Miri on the safe core where applicable; ASAN/valgrind on the FFI surface in CI; isolate/handle release verified.
 - **CI gates (all required):** `cargo fmt --check`, `cargo clippy -D warnings`, tests, `cargo-deny`, `cargo-audit`, MSRV build, conformance run.
@@ -114,7 +114,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
 7. ☑ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM/AES-CBC/AES-CTR + HKDF/PBKDF2 derivation + ECDSA/ECDH (P-256/384/521) + RSA (PKCS1-v1_5/PSS/OAEP) (RustCrypto — DECISIONS D9). Carries the `rsa` Marvin advisory (SECURITY.md).
 8. ☑ **Snapshot + perf** — the prelude + op shells bake into a V8 startup snapshot (D8); `Runtime::with_snapshot` restores it (~2.3× faster startup in the `bench` example). Zero-copy `ArrayBuffer` transfer was audited and deliberately deferred (D3a Phase 8). Benchmark harness (`default-providers` `bench` example) covers context creation + op-dispatch throughput.
-9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`). Remaining: fuzzing (`cargo-fuzz`), WPT/min-common conformance run, sanitizer CI (Miri/ASAN), intrinsic-integrity audit, byte/BYOB streams, security review + docs finalization.
+9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; intrinsic-integrity audit; byte/BYOB streams; security review + docs finalization.
 
 ---
 

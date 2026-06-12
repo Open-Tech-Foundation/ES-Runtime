@@ -36,6 +36,14 @@ WPT conformance, and byte/BYOB streams remain for later Phase 9 passes.
   loop), with a tokio-timeout backstop for async-callback runaways. `Runtime`
   exposes `interrupt_handle()`.
 
+- **Conformance suite + pass-rate tracking** (§5/§8) — a curated in-repo set of
+  spec-behaviour assertions (`crates/runtime/conformance/*.js`: encoding, base64,
+  URL, structuredClone, events, abort, crypto, streams, performance) run by the
+  `conformance_suite_passes` test, which is a CI gate. Zero-failure + a
+  non-regressing count are enforced; the snapshot (currently **57/57**) is
+  recorded in `conformance/RESULTS.md`. An in-JS harness provides
+  `test`/`assert*` (sync + async).
+
 #### Tests
 
 - Watchdog stops a `while(true){}` from another thread (engine recovers after);
