@@ -227,6 +227,8 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 **Decision (maintainer):** **Hand-write** the spec's abstract operations in the prelude (no external code — fits the from-scratch ethos of D2; no large vendored blob or extra license/attribution), and **default-first**: ship `ReadableStream` (default), `WritableStream`, `TransformStream`, both queuing strategies, backpressure, `tee`, `pipeTo`/`pipeThrough`, and the encoding streams now. **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) are deferred to a follow-up sub-phase (SPEC §7).
 **Consequences:** Full control and a clean dependency graph; more implementation care, with conformance tracked against WPT (D13). Streams live in one prelude IIFE (`streams.js`) so the interdependent readable/writable/transform/pipe machinery can share internal slots (a module-private `Symbol`); encoding streams build on the public `TransformStream`.
 
+**Update (Phase 9, 2026-06-12):** **Byte/BYOB streams shipped** — `type: "bytes"` `ReadableStream` + `ReadableByteStreamController`, `ReadableStreamBYOBReader`/`Request`, `autoAllocateChunkSize`, the pull-into queue, and `byobRequest.respond`/`respondWithNewView`, hand-written to the spec's abstract operations. One deliberate deviation: enqueued chunks are **copied** into controller-owned buffers and BYOB views are filled in place — we do **not** transfer/detach ArrayBuffers (single-threaded, so the spec's detach dance is unnecessary; true zero-copy is the D3a follow-up).
+
 ---
 
 ### D20 — Fetch: vetted HTTP client (reqwest + rustls), confined to default-providers · *Locked (maintainer sign-off, 2026-06-12)*

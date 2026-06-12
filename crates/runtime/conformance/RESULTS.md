@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **57 / 57** (100%) |
+| Assertions passing | **62 / 62** (100%) |
 | Files | 9 |
 | Last updated | 2026-06-12 |
 
@@ -29,13 +29,13 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 | `events.js` | Event/EventTarget §2.7 | 7 |
 | `abort.js` | AbortController/Signal §2.6 | 6 |
 | `crypto.js` | crypto/subtle §2.10 | 8 |
-| `streams.js` | Readable/Writable/Transform §2.8 | 6 |
+| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 11 |
 | `performance.js` | performance, microtasks §2.11/§2.1 | 4 |
 
 ## Not yet covered
 
-Deferred surface (tracked in SPEC §7), so deliberately untested here: byte/BYOB
-streams, streaming `fetch` request bodies, `URLPattern`, and the asymmetric
+Deferred surface (tracked in SPEC §7), so deliberately untested here: streaming
+`fetch` request bodies, `URLPattern`, and the asymmetric
 `crypto.subtle` JWK edge cases. `fetch` itself is exercised by the Rust
 integration tests (it needs a mock transport, not available in this pure-JS
 harness). Adding assertions here as features land is how the pass count grows.

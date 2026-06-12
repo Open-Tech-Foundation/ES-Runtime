@@ -36,6 +36,14 @@ WPT conformance, and byte/BYOB streams remain for later Phase 9 passes.
   loop), with a tokio-timeout backstop for async-callback runaways. `Runtime`
   exposes `interrupt_handle()`.
 
+- **Byte/BYOB streams** (§2.8, closes the §7 deferral) — `ReadableStream`
+  `type: "bytes"` + `ReadableByteStreamController`, `ReadableStreamBYOBReader`,
+  `ReadableStreamBYOBRequest`, `autoAllocateChunkSize`, the pull-into queue, and
+  `byobRequest.respond`/`respondWithNewView`, hand-written to the WHATWG abstract
+  operations (DECISIONS D19). Copy-based: enqueued chunks are copied into
+  controller-owned buffers and BYOB views filled in place — no ArrayBuffer
+  transfer/detach (single-threaded; zero-copy is the D3a follow-up). 5 new
+  conformance assertions (now 62/62).
 - **Conformance suite + pass-rate tracking** (§5/§8) — a curated in-repo set of
   spec-behaviour assertions (`crates/runtime/conformance/*.js`: encoding, base64,
   URL, structuredClone, events, abort, crypto, streams, performance) run by the

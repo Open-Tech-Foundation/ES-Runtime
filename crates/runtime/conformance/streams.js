@@ -46,6 +46,63 @@ test("pipeTo moves data into a writable sink", async () => {
   assertEquals(out.join(","), "1,2");
 });
 
+test("byte stream default reader yields Uint8Array chunks", async () => {
+  const rs = new ReadableStream({
+    type: "bytes",
+    start(c) { c.enqueue(new Uint8Array([1, 2, 3])); c.close(); },
+  });
+  const reader = rs.getReader();
+  const r1 = await reader.read();
+  assert(r1.value instanceof Uint8Array);
+  assertEquals(r1.value.length, 3);
+  assertEquals(r1.value[0], 1);
+  assertEquals((await reader.read()).done, true);
+});
+
+test("BYOB reader fills a caller-supplied view", async () => {
+  const rs = new ReadableStream({
+    type: "bytes",
+    start(c) { c.enqueue(new Uint8Array([10, 20, 30, 40])); c.close(); },
+  });
+  const reader = rs.getReader({ mode: "byob" });
+  const res = await reader.read(new Uint8Array(4));
+  assertEquals(res.value.length, 4);
+  assertEquals(res.value[3], 40);
+});
+
+test("BYOB reads drain a chunk across two views", async () => {
+  const rs = new ReadableStream({
+    type: "bytes",
+    start(c) { c.enqueue(new Uint8Array([1, 2, 3, 4, 5])); c.close(); },
+  });
+  const reader = rs.getReader({ mode: "byob" });
+  const a = await reader.read(new Uint8Array(2));
+  assertEquals([...a.value].join(","), "1,2");
+  const b = await reader.read(new Uint8Array(2));
+  assertEquals([...b.value].join(","), "3,4");
+});
+
+test("byte stream pull + autoAllocate + byobRequest.respond", async () => {
+  const rs = new ReadableStream({
+    type: "bytes",
+    autoAllocateChunkSize: 8,
+    pull(c) {
+      c.byobRequest.view[0] = 99;
+      c.byobRequest.respond(1);
+      c.close();
+    },
+  });
+  const r = await rs.getReader().read();
+  assertEquals(r.value.length, 1);
+  assertEquals(r.value[0], 99);
+});
+
+test("byte-stream globals are exposed", () => {
+  assertEquals(typeof ReadableByteStreamController, "function");
+  assertEquals(typeof ReadableStreamBYOBReader, "function");
+  assertEquals(typeof ReadableStreamBYOBRequest, "function");
+});
+
 test("TextEncoderStream / TextDecoderStream round-trip via pipeThrough", async () => {
   const rs = new ReadableStream({ start(c) { c.enqueue("hé"); c.enqueue("llo"); c.close(); } });
   const decoded = rs.pipeThrough(new TextEncoderStream()).pipeThrough(new TextDecoderStream());
