@@ -17,6 +17,7 @@
 mod builtins;
 mod crypto_ops;
 mod ec_ops;
+mod encoding_ops;
 mod fetch_ops;
 mod prelude;
 mod rsa_ops;

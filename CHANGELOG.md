@@ -8,6 +8,13 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Performance
 
+- **Op-backed `TextEncoder`/`TextDecoder`** — UTF-8 transcoding now rides V8's
+  native UTF-16↔UTF-8 conversion via `utf8_encode`/`utf8_decode` ops instead of
+  a pure-JS code-point loop. ~47% faster on encode+decode; behaviour unchanged
+  (fatal/BOM/replacement still correct). (Investigated structured marshaling for
+  the URL path — returning a built JS object instead of JSON — and **reverted
+  it**: per-property Rust→V8 object construction is slower than V8's native
+  `JSON.parse`. Noted in `bench/README.md`.)
 - **Lazy `URLSearchParams`** — `new URL()` no longer parses the query into a
   `URLSearchParams` eagerly; it's built on first `.searchParams` access. Cuts
   ~38% off URL construction for the common case that never reads `.searchParams`
