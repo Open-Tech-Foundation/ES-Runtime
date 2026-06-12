@@ -156,8 +156,9 @@
           : ops.url_parse(String(url), null);
       if (json === null) throw new TypeError(`Invalid URL: "${url}"`);
       this.#c = JSON.parse(json);
-      this.#params = new URLSearchParams(this.#c.search);
-      this.#params._attach(this);
+      // `#params` (URLSearchParams) is built lazily on first `.searchParams`
+      // access — parsing the query eagerly here costs ~40% of `new URL()` for
+      // code that never touches it (the common case).
     }
 
     static canParse(url, base) {
@@ -182,7 +183,9 @@
     }
     set href(v) {
       this.#apply("href", v);
-      this.#params._reload(this.#c.search);
+      // Only resync if a URLSearchParams has actually been materialized;
+      // otherwise it will be built from the current search on first access.
+      if (this.#params !== undefined) this.#params._reload(this.#c.search);
     }
     get origin() {
       return this.#c.origin;
@@ -240,9 +243,14 @@
     }
     set search(v) {
       this.#apply("search", v);
-      this.#params._reload(this.#c.search);
+      if (this.#params !== undefined) this.#params._reload(this.#c.search);
     }
     get searchParams() {
+      // Lazily materialize + attach on first access (see constructor).
+      if (this.#params === undefined) {
+        this.#params = new URLSearchParams(this.#c.search);
+        this.#params._attach(this);
+      }
       return this.#params;
     }
 

@@ -6,6 +6,14 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Performance
+
+- **Lazy `URLSearchParams`** — `new URL()` no longer parses the query into a
+  `URLSearchParams` eagerly; it's built on first `.searchParams` access. Cuts
+  ~38% off URL construction for the common case that never reads `.searchParams`
+  (no behaviour change; setters resync only a materialized instance). Measured
+  in the cross-runtime benchmark (`bench/`).
+
 ### Tooling — standalone `esrun` CLI + crate rename
 
 - **`esrun`** (`es-runtime-cli`) — a standalone binary that wires the default

@@ -31,10 +31,10 @@ indicative and will vary by machine — re-run locally for your own.
 ```
 runtime  |    startup |    compute |     sha256 |     webapi
 ---------+------------+------------+------------+------------
-node     |       19.9 |      218.0 |      741.3 |      145.3
-bun      |        9.3 |      138.9 |      552.9 |      116.5
-deno     |       25.2 |      231.2 |      622.1 |      224.2
-esrun    |       15.1 |      266.0 |      379.0 |      621.0
+node     |       18.5 |      212.7 |      697.1 |      131.6
+bun      |        9.2 |      122.7 |      513.0 |      108.0
+deno     |       24.3 |      226.1 |      600.9 |      207.3
+esrun    |       15.3 |      250.0 |      367.0 |      410.0
 ```
 
 (node v24, bun 1.3, deno 2.8, esrun 0.0.0.)
@@ -53,10 +53,15 @@ esrun    |       15.1 |      266.0 |      379.0 |      621.0
   genuinely-async WebCrypto that pays per-call scheduling overhead. A real,
   explainable win **for this access pattern** (not a claim that RustCrypto beats
   BoringSSL raw).
-- **webapi — esrun is slowest.** Each `new URL(...)` crosses the JS↔Rust op
-  boundary (argument marshaling + the `url` crate) 100 000 times; the others
-  parse in-engine. This is the honest cost of the op-per-call design on a hot
-  pure-JS path, and a candidate for the zero-copy / batching follow-ups (D3a).
+- **webapi — esrun is slowest**, but the gap is in the prelude/op layer, not the
+  engine. Decomposing `new URL()` (100k, with a query): the `url_parse` op +
+  eager full-component JSON build + marshal is ~40%, `JSON.parse` + object
+  construction ~20%, and the rest was eager `URLSearchParams` query parsing —
+  now **lazy** (built only when `.searchParams` is read), which cut the URL
+  workload ~38%. The remaining gap is the JSON round-trip (a structured-`Value`
+  follow-up would remove it, D3a) plus esrun's pure-JS `TextEncoder`/`Decoder`
+  vs the others' native ones. Op *dispatch* itself is cheap (~49 ns/call);
+  the cost is per-call *work*, not the boundary crossing.
 
 ## Caveats
 
