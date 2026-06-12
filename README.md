@@ -3,7 +3,7 @@ V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secu
 
 It ships in two shapes from the same core:
 
-- **Embeddable library** (`es-runtime-runtime`) — a driven (tick/poll) runtime with
+- **Embeddable library** (`es-runtime`) — a driven (tick/poll) runtime with
   all I/O injected via provider traits and V8 kept behind an engine abstraction.
 - **Standalone CLI** (`esrun`) — a thin binary that wires the default tokio
   providers and runs JavaScript files end-to-end.

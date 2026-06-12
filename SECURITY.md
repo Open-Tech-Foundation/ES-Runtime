@@ -3,7 +3,9 @@
 ES-Runtime is a security-hardened, embeddable JavaScript runtime (Layer A). This
 document records the project's security posture and any **known, accepted gaps**
 that are tracked for revisit. Architectural guarantees are specified in
-`docs/SPEC.md` §4 and the rationale in `docs/DECISIONS.md`.
+`docs/SPEC.md` §4 and the rationale in `docs/DECISIONS.md`. A full threat model,
+attack-surface enumeration, and residual-risk register is in
+[`docs/SECURITY-REVIEW.md`](docs/SECURITY-REVIEW.md).
 
 ## Reporting
 

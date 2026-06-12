@@ -102,7 +102,7 @@ Every provider call is async-friendly, cancellable, capability-checked, and retu
 - **Capabilities:** deny-by-default tokens threaded from the embedder; no global escape hatches.
 - **Resource limits enforced by the runtime:** per-isolate heap limit (near-heap-limit callback → graceful termination, never host OOM); execution-time/CPU watchdog (interrupt + `TerminateExecution`); stack-depth guard; bounded pending-op concurrency.
 - **No panic across FFI:** boundaries wrapped in `catch_unwind`; all Rust errors converted to proper JS exception classes. A Rust panic must never unwind into V8.
-- **Intrinsic integrity:** global built from a clean snapshot; prelude intrinsics frozen/sealed where the spec allows, resisting prototype pollution and global tampering.
+- **Intrinsic integrity:** the security boundary is in Rust, not JS — the op table and capability set live in the engine's `OpState`, so guest tampering (prototype pollution, global reassignment, forging `__ops`) cannot escalate privilege. JS-surface defense-in-depth (`harden.js`) locks the `__ops` binding and freezes namespace objects; SES-style primordial freezing is left to the embedder. See `SECURITY.md` / `docs/SECURITY-REVIEW.md`.
 - **Crypto:** vetted, constant-time library only; correct nonce/IV handling; no hand-rolled primitives.
 - **Memory safety:** `unsafe` minimized, centralized in `engine`, every invariant documented; no handle outlives its scope.
 - **Supply chain:** pinned deps; `cargo-deny` + `cargo-audit` in CI.
@@ -118,8 +118,8 @@ Every provider call is async-friendly, cancellable, capability-checked, and retu
 
 ## 9. Performance
 
-- Zero-copy for `ArrayBuffer`/typed-array transfer; avoid gratuitous UTF-8↔UTF-16 round-trips.
-- **V8 startup snapshot** with the prelude baked in for fast context creation — this directly serves Layer B's future density goals.
+- **V8 startup snapshot** with the prelude + op shells baked in — ☑ implemented (D8); ~2.3× faster runtime construction (`default-providers` `bench` example).
+- Zero-copy for `ArrayBuffer`/typed-array transfer — **audited and deferred** (D3a Phase 8): `Value::Bytes` currently copies in/out; sound zero-copy needs a backing-store detach/pin protocol since async ops outlive the call scope. Avoid gratuitous UTF-8↔UTF-16 round-trips.
 
 ---
 

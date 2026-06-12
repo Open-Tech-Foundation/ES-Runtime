@@ -114,7 +114,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
 7. ☑ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM/AES-CBC/AES-CTR + HKDF/PBKDF2 derivation + ECDSA/ECDH (P-256/384/521) + RSA (PKCS1-v1_5/PSS/OAEP) (RustCrypto — DECISIONS D9). Carries the `rsa` Marvin advisory (SECURITY.md).
 8. ☑ **Snapshot + perf** — the prelude + op shells bake into a V8 startup snapshot (D8); `Runtime::with_snapshot` restores it (~2.3× faster startup in the `bench` example). Zero-copy `ArrayBuffer` transfer was audited and deliberately deferred (D3a Phase 8). Benchmark harness (`default-providers` `bench` example) covers context creation + op-dispatch throughput.
-9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. ☑ byte/BYOB streams; ☑ intrinsic-integrity audit (Rust-side boundary verified + JS-surface defense-in-depth; SES-style primordial hardening deferred to the embedder). Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; security review + docs finalization.
+9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. ☑ byte/BYOB streams; ☑ intrinsic-integrity audit (Rust-side boundary verified + JS-surface defense-in-depth; SES-style primordial hardening deferred to the embedder); ☑ internal security review (`docs/SECURITY-REVIEW.md`) + docs finalization. Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; an **external** security review (pre-`1.0`).
 
 ---
 
@@ -141,10 +141,11 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 
 ## 8. Definition of done
 
-- `runtime-cli` runs real ES modules using the full implemented WinterTC surface on the default tokio providers, end-to-end.
-- `runtime` has **zero** direct `v8` dependency; all engine access via `engine`.
-- All I/O is provider-routed; deterministic providers make runs reproducible.
-- Limits + watchdog demonstrably stop a runaway / heap-bomb script without harming the host.
-- CI green on every gate; conformance pass-rate recorded and trending up.
-- `ARCHITECTURE.md`, `SPEC.md`, `DECISIONS.md`, `CHANGELOG.md` complete and current.
-- A second engine could slot behind `engine` without changing `runtime`, verified by review, with leak points documented.
+- ◐ `runtime-cli` (`esrun`) runs JavaScript using the full implemented WinterTC surface on the default tokio providers, end-to-end. *Caveat:* single-file **classic scripts** only — there is no ES-module loader yet (no `import`/`export` resolution); top-level `await` works via an async wrapper.
+- ☑ `runtime` has **zero** direct `v8` dependency; all engine access via `engine` (verified by review — `runtime` names no V8 type).
+- ☑ All I/O is provider-routed; deterministic providers make runs reproducible.
+- ☑ Limits + watchdog demonstrably stop a runaway / heap-bomb script without harming the host (engine tests + `esrun --timeout`).
+- ☑ CI green on every gate; conformance pass-rate recorded and trending up (`conformance/RESULTS.md`).
+- ☑ `ARCHITECTURE.md`, `SPEC.md`, `DECISIONS.md`, `CHANGELOG.md` complete and current; `SECURITY.md` + `docs/SECURITY-REVIEW.md` added.
+- ☑ A second engine could slot behind `engine` without changing `runtime`, verified by review, with leak points documented (D3a).
+- ◐ Outstanding before a `1.0`: fuzzing + sanitizer CI (need nightly), an external security review, and the `rsa` Marvin advisory (SECURITY.md).

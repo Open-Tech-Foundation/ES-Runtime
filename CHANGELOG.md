@@ -6,6 +6,19 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Tooling — standalone `esrun` CLI + crate rename
+
+- **`esrun`** (`es-runtime-cli`) — a standalone binary that wires the default
+  tokio providers and runs a JavaScript file or `-e <code>` snippet end-to-end
+  (the §8 standalone embedding). Grants all capabilities (trusted-local-script
+  mode); wraps the script in an async context so top-level `await` works.
+  **Single self-contained binary** — V8 is statically linked and the prelude is
+  embedded; no asset directory. **No ES-module loader yet** (`import`/`export`
+  are not resolved). Example scripts under `examples/`; `cargo build-cli`
+  builds it; `cargo install --path crates/runtime-cli` puts `esrun` on `PATH`.
+- **Crate rename:** the flagship library crate `es-runtime-runtime` → **`es-runtime`**
+  (import `es_runtime`); directory stays `crates/runtime`.
+
 ### Phase 9 (in progress) — Hardening: the safety spine
 
 The resource-limit and FFI-safety guarantees (SPEC.md §4) that demonstrably stop
@@ -36,6 +49,12 @@ WPT conformance, and byte/BYOB streams remain for later Phase 9 passes.
   loop), with a tokio-timeout backstop for async-callback runaways. `Runtime`
   exposes `interrupt_handle()`.
 
+- **Internal security review + docs finalization** — `docs/SECURITY-REVIEW.md`:
+  a consolidated threat model, trust boundaries, attack-surface→defense table,
+  and a residual-risk register (fuzzing/external-review pending, `rsa` advisory,
+  SES deferral, `panic=abort` caveat, watchdog scope). Finalized SPEC §8
+  definition-of-done status, refreshed ARCHITECTURE §7/§9 (intrinsic integrity,
+  snapshot done / zero-copy deferred), and cross-linked from `SECURITY.md`.
 - **Intrinsic-integrity audit** (§4) — confirmed + documented that the security
   boundary is in Rust: the op table and capability set live in `OpState`, so
   guest JS tampering (prototype pollution, global reassignment, forging
