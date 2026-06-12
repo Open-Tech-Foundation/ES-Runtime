@@ -30,7 +30,9 @@ use crate::timer::TimerQueue;
 // One-stop public surface for embedders: the engine abstraction + impl, the op
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet};
-pub use es_runtime_engine::{AsyncOp, Engine, OpDecl, OpError, OpResult, V8Engine, Value};
+pub use es_runtime_engine::{
+    AsyncOp, Engine, InterruptHandle, OpDecl, OpError, OpResult, V8Engine, Value,
+};
 pub use es_runtime_providers::{Clock, Console, ConsoleLevel, Entropy, NetTransport};
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -210,6 +212,15 @@ impl Runtime {
     /// (DECISIONS.md D7). Deny-by-default until granted.
     pub fn set_capabilities(&mut self, capabilities: CapabilitySet) {
         self.engine.set_capabilities(capabilities);
+    }
+
+    /// Returns a thread-safe handle for interrupting this runtime's execution —
+    /// e.g. for a watchdog thread that bounds execution time (SPEC §4). Calling
+    /// [`InterruptHandle::terminate`] stops the running script; the in-flight
+    /// [`eval`](Self::eval)/[`tick`](Self::tick) then surfaces a termination
+    /// rather than hanging.
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        self.engine.interrupt_handle()
     }
 
     /// Compiles and runs `source`, returning the marshaled result. Pending work

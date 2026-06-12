@@ -33,7 +33,7 @@ pub mod op;
 pub mod snapshot;
 mod value;
 
-pub use engine::{Engine, V8Engine};
+pub use engine::{Engine, InterruptHandle, V8Engine};
 pub use error::{Error, Result};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use value::Value;

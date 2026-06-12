@@ -1,11 +1,68 @@
 //! Isolate + context lifecycle and script evaluation.
 
+use std::ffi::c_void;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use es_runtime_common::{CapabilitySet, Limits};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
 use crate::op::{OpDecl, OpState, TimerId, install_op};
 use crate::value::Value;
+
+/// A thread-safe handle for interrupting a running engine — typically held by a
+/// watchdog thread that bounds execution time (SPEC §4). Calling
+/// [`terminate`](Self::terminate) stops the engine's currently running
+/// JavaScript as soon as V8 reaches an interruption point; the in-flight
+/// [`Engine::eval`] then returns [`Error::Terminated`] rather than hanging.
+///
+/// Names no V8 type, so it stays within the engine boundary (DECISIONS.md D3).
+/// It is `Send + Sync` (V8's `IsolateHandle` is), so the watchdog can live on
+/// another thread while the engine is driven on its own.
+#[derive(Clone)]
+pub struct InterruptHandle(v8::IsolateHandle);
+
+impl InterruptHandle {
+    /// Terminates the engine's currently executing JavaScript. Safe to call from
+    /// any thread and idempotent; a no-op if nothing is running.
+    pub fn terminate(&self) {
+        self.0.terminate_execution();
+    }
+
+    /// Whether the engine is currently in the terminating state (a `terminate`
+    /// has fired and not yet been cleared). Lets a driver stop ticking a
+    /// runtime that has been interrupted. Safe to call from any thread.
+    pub fn is_terminating(&self) -> bool {
+        self.0.is_execution_terminating()
+    }
+}
+
+/// Data for the near-heap-limit callback. Kept behind a stable (boxed) address
+/// for the isolate's lifetime so the raw `*mut c_void` we hand V8 stays valid.
+struct HeapGuard {
+    handle: v8::IsolateHandle,
+    /// Set when the guard trips, read by `eval` to label the termination reason.
+    tripped: Arc<AtomicBool>,
+    /// Extra bytes granted to the callback's returned limit so V8 has room to
+    /// unwind to the termination instead of hard-OOMing the process.
+    headroom: usize,
+}
+
+/// Near-heap-limit callback: terminate execution (so the host never OOMs) and
+/// grant a little headroom so V8 can unwind to that termination cleanly.
+unsafe extern "C" fn near_heap_limit(
+    data: *mut c_void,
+    current_limit: usize,
+    _initial_limit: usize,
+) -> usize {
+    // SAFETY: `data` is the `&HeapGuard` registered in `wire`, which lives in a
+    // box owned by the `V8Engine` for at least as long as this isolate.
+    let guard = unsafe { &*(data as *const HeapGuard) };
+    guard.tripped.store(true, Ordering::SeqCst);
+    guard.handle.terminate_execution();
+    current_limit.saturating_add(guard.headroom)
+}
 
 /// The engine abstraction `runtime` depends on (ARCHITECTURE.md §3, DECISIONS.md
 /// D3).
@@ -59,6 +116,10 @@ pub trait Engine {
     /// Drains promise rejections that went unhandled since the last call, as
     /// their stringified messages (ARCHITECTURE.md §5).
     fn take_unhandled_rejections(&mut self) -> Vec<String>;
+
+    /// Returns a thread-safe handle for interrupting this engine's execution
+    /// (e.g. from a watchdog thread). See [`InterruptHandle`].
+    fn interrupt_handle(&self) -> InterruptHandle;
 }
 
 /// An embedded V8 instance: one isolate and one persistent context, plus the op
@@ -84,6 +145,16 @@ pub struct V8Engine {
     /// caller must register ops in the **same order** used to build the snapshot
     /// so op ids line up (DECISIONS.md D8).
     ops_baked: bool,
+    /// Thread-safe interrupt handle, cloned for [`InterruptHandle`] and used by
+    /// `eval` to detect a watchdog/heap termination.
+    interrupt: v8::IsolateHandle,
+    /// Set by the near-heap-limit callback; lets `eval` label a termination as a
+    /// heap-limit hit vs a watchdog interrupt.
+    heap_tripped: Arc<AtomicBool>,
+    /// Keeps the near-heap-limit callback's data alive for the isolate's life
+    /// (its address was handed to V8). `None` for snapshot-builder engines,
+    /// which install no heap guard. Dropped after `isolate` (field order).
+    _heap_guard: Option<Box<HeapGuard>>,
 }
 
 impl V8Engine {
@@ -99,7 +170,7 @@ impl V8Engine {
 
         let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
         let isolate = v8::Isolate::new(params);
-        Self::wire(isolate, false)
+        Self::wire(isolate, false, Some(limits.heap_limit_bytes))
     }
 
     /// Restores an engine from a startup snapshot built by
@@ -136,7 +207,7 @@ impl V8Engine {
             .external_references(crate::op::external_references())
             .snapshot_blob(snapshot.into());
         let isolate = v8::Isolate::new(params);
-        Self::wire(isolate, ops_baked)
+        Self::wire(isolate, ops_baked, Some(limits.heap_limit_bytes))
     }
 
     /// Builds a V8 startup-snapshot blob with the prelude and op shells baked in
@@ -160,7 +231,9 @@ impl V8Engine {
         crate::ensure_v8_initialized();
 
         let creator = v8::Isolate::snapshot_creator(Some(crate::op::external_references()), None);
-        let mut engine = Self::wire(creator, false)?;
+        // No heap guard for the short-lived builder isolate — its callback data
+        // would dangle through `create_blob` (which itself runs a GC).
+        let mut engine = Self::wire(creator, false, None)?;
         configure(&mut engine)?;
         engine.into_snapshot_blob()
     }
@@ -194,7 +267,11 @@ impl V8Engine {
     /// Common construction: configure the isolate, build the context, install
     /// the timer builtins, and wire the shared [`OpState`] into an isolate slot
     /// so the dispatch and reject callbacks can reach it.
-    fn wire(mut isolate: v8::OwnedIsolate, ops_baked: bool) -> Result<Self> {
+    fn wire(
+        mut isolate: v8::OwnedIsolate,
+        ops_baked: bool,
+        heap_limit: Option<usize>,
+    ) -> Result<Self> {
         // Microtasks run only at our explicit checkpoint, never implicitly when
         // a JS call returns — the embedder owns when reactions fire (D4).
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
@@ -203,6 +280,23 @@ impl V8Engine {
         // The dispatch callback and reject callback reach this via the slot.
         isolate.set_slot(op_state.clone());
         crate::op::install_promise_reject_callback(&mut isolate);
+
+        let interrupt = isolate.thread_safe_handle();
+        let heap_tripped = Arc::new(AtomicBool::new(false));
+
+        // Install the near-heap-limit guard so a heap-bomb terminates cleanly
+        // instead of OOM-ing the host (SPEC §4). Skipped for snapshot builders.
+        let _heap_guard = heap_limit.map(|limit| {
+            let guard = Box::new(HeapGuard {
+                handle: interrupt.clone(),
+                tripped: heap_tripped.clone(),
+                // A little room (≥2 MiB) for V8 to unwind to the termination.
+                headroom: (limit / 8).max(2 * 1024 * 1024),
+            });
+            let data = (&*guard as *const HeapGuard) as *mut c_void;
+            isolate.add_near_heap_limit_callback(near_heap_limit, data);
+            guard
+        });
 
         let context = Self::make_context(&mut isolate);
 
@@ -220,6 +314,9 @@ impl V8Engine {
             context,
             op_state,
             ops_baked,
+            interrupt,
+            heap_tripped,
+            _heap_guard,
         })
     }
 
@@ -235,30 +332,69 @@ impl V8Engine {
 
 impl Engine for V8Engine {
     fn eval(&mut self, source: &str) -> Result<Value> {
-        v8::scope!(let scope, &mut self.isolate);
-        let context = v8::Local::new(scope, &self.context);
-        let scope = &mut v8::ContextScope::new(scope, context);
-        v8::tc_scope!(let scope, scope);
+        // What an evaluation produced, computed inside the scope and acted on
+        // after it is dropped (so the isolate is free for `cancel_terminate`).
+        enum Outcome {
+            Ok(Value),
+            Compile(String),
+            Execution(String),
+            OverlongSource,
+            Terminated,
+        }
 
-        let Some(code) = v8::String::new(scope, source) else {
-            return Err(Error::Internal(
+        // Cloned before the scope borrows `self.isolate`; reading the terminating
+        // flag this way avoids a second borrow of the isolate.
+        let interrupt = self.interrupt.clone();
+
+        let outcome = {
+            v8::scope!(let scope, &mut self.isolate);
+            let context = v8::Local::new(scope, &self.context);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            v8::tc_scope!(let scope, scope);
+
+            if let Some(code) = v8::String::new(scope, source) {
+                if let Some(script) = v8::Script::compile(scope, code, None) {
+                    let run = script.run(scope);
+                    // A watchdog/heap termination makes `run` return `None` with
+                    // the terminating flag set; distinguish it from a normal throw.
+                    if interrupt.is_execution_terminating() {
+                        Outcome::Terminated
+                    } else if let Some(result) = run {
+                        Outcome::Ok(marshal(scope, result))
+                    } else {
+                        Outcome::Execution(describe_exception(scope, "execution failed"))
+                    }
+                } else if interrupt.is_execution_terminating() {
+                    Outcome::Terminated
+                } else {
+                    Outcome::Compile(describe_exception(scope, "compilation failed"))
+                }
+            } else {
+                Outcome::OverlongSource
+            }
+        };
+
+        match outcome {
+            Outcome::Ok(value) => Ok(value),
+            Outcome::Compile(message) => Err(Error::Compile { message }),
+            Outcome::Execution(message) => Err(Error::Execution { message }),
+            Outcome::OverlongSource => Err(Error::Internal(
                 "source string exceeds V8's maximum length".into(),
-            ));
-        };
-
-        let Some(script) = v8::Script::compile(scope, code, None) else {
-            return Err(Error::Compile {
-                message: describe_exception(scope, "compilation failed"),
-            });
-        };
-
-        let Some(result) = script.run(scope) else {
-            return Err(Error::Execution {
-                message: describe_exception(scope, "execution failed"),
-            });
-        };
-
-        Ok(marshal(scope, result))
+            )),
+            Outcome::Terminated => {
+                // Clear the terminating state so the isolate can be dropped (or,
+                // in principle, reused) cleanly, and label the cause.
+                self.isolate.cancel_terminate_execution();
+                let reason = if self.heap_tripped.swap(false, Ordering::SeqCst) {
+                    "heap limit exceeded"
+                } else {
+                    "execution terminated"
+                };
+                Err(Error::Terminated {
+                    reason: reason.into(),
+                })
+            }
+        }
     }
 
     fn register_op(&mut self, op: OpDecl) -> Result<()> {
@@ -308,6 +444,10 @@ impl Engine for V8Engine {
 
     fn take_unhandled_rejections(&mut self) -> Vec<String> {
         crate::op::take_unhandled_rejections(&mut self.isolate, &self.context, &self.op_state)
+    }
+
+    fn interrupt_handle(&self) -> InterruptHandle {
+        InterruptHandle(self.interrupt.clone())
     }
 }
 
@@ -414,5 +554,46 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ok, Value::Bool(true));
+    }
+
+    #[test]
+    fn watchdog_terminates_a_runaway_loop() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let handle = engine.interrupt_handle();
+        // Interrupt from another thread, like a real execution-time watchdog.
+        let watchdog = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            handle.terminate();
+        });
+        let err = engine.eval("while (true) {}").unwrap_err();
+        watchdog.join().unwrap();
+        match err {
+            Error::Terminated { reason } => assert_eq!(reason, "execution terminated"),
+            other => panic!("expected Terminated, got {other:?}"),
+        }
+        // The flag was cleared, so the engine is usable again.
+        assert_eq!(engine.eval("1 + 1").unwrap(), Value::Number(2.0));
+    }
+
+    #[test]
+    fn heap_guard_terminates_a_heap_bomb_without_oom() {
+        let _v8 = crate::v8_test_guard();
+        // A small heap cap so the bomb trips quickly; the guard must terminate
+        // before V8 hard-OOMs the process (SPEC §4).
+        let limits = Limits::default().with_heap_limit_bytes(16 * 1024 * 1024);
+        let mut engine = V8Engine::new(limits).expect("engine");
+        let err = engine
+            .eval("const a = []; for (;;) { a.push(new Array(100000).fill(7)); }")
+            .unwrap_err();
+        match err {
+            Error::Terminated { reason } => {
+                assert!(
+                    reason.contains("heap"),
+                    "expected heap reason, got {reason}"
+                );
+            }
+            other => panic!("expected Terminated, got {other:?}"),
+        }
     }
 }

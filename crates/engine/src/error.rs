@@ -37,6 +37,16 @@ pub enum Error {
     /// boundary, not adversarial JS.
     #[error("engine internal error: {0}")]
     Internal(String),
+
+    /// Execution was terminated before completing — by the watchdog
+    /// (`InterruptHandle::terminate`) or the near-heap-limit guard. The script
+    /// is stopped cleanly, never an OOM or a hang (ARCHITECTURE.md §7, SPEC §4).
+    /// The engine should be considered spent; the embedder discards it.
+    #[error("execution terminated: {reason}")]
+    Terminated {
+        /// Why execution was stopped (e.g. "heap limit exceeded", "timed out").
+        reason: String,
+    },
 }
 
 impl IntoException for Error {
@@ -48,6 +58,7 @@ impl IntoException for Error {
             // surfaced as a generic Error for now (see D3a).
             Error::Execution { .. } => ExceptionClass::Error,
             Error::Internal(_) => ExceptionClass::Error,
+            Error::Terminated { .. } => ExceptionClass::Error,
         }
     }
 }
