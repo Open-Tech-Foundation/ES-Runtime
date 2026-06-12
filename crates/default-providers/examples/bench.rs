@@ -18,10 +18,10 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use es_runtime::{HostProviders, OpDecl, Runtime, V8Engine, Value};
 use es_runtime_common::Limits;
 use es_runtime_default_providers::testing::{MockResponse, MockTransport};
 use es_runtime_default_providers::{NullConsole, OsEntropy, SystemClock};
-use es_runtime_runtime::{HostProviders, OpDecl, Runtime, V8Engine, Value};
 
 fn providers() -> HostProviders {
     HostProviders::new(

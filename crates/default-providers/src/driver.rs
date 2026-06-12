@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
+use es_runtime::Runtime;
 use es_runtime_providers::{Clock, Timers};
-use es_runtime_runtime::Runtime;
 
 /// Drives a [`Runtime`] to quiescence on tokio.
 ///
@@ -62,8 +62,8 @@ impl Driver {
 mod tests {
     use super::*;
 
+    use es_runtime::{AsyncOp, HostProviders, OpDecl, Runtime, V8Engine, Value};
     use es_runtime_common::Limits;
-    use es_runtime_runtime::{AsyncOp, HostProviders, OpDecl, Runtime, V8Engine, Value};
 
     use crate::testing::{ManualClock, ManualTimers, MockResponse, MockTransport, SeededEntropy};
     use crate::{NullConsole, SystemClock};

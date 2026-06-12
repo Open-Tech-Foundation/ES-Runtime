@@ -19,11 +19,11 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use es_runtime::{HostProviders, Runtime, V8Engine};
 use es_runtime_common::{CapabilitySet, Limits};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{OsEntropy, ReqwestTransport, SystemClock, TokioTimers};
 use es_runtime_providers::{Console, ConsoleLevel};
-use es_runtime_runtime::{HostProviders, Runtime, V8Engine};
 
 const USAGE: &str = "\
 esrun — run JavaScript on the ES-Runtime

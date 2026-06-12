@@ -536,13 +536,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "es-runtime"
+version = "0.0.0"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "cbc",
+ "ctr",
+ "es-runtime-common",
+ "es-runtime-engine",
+ "es-runtime-providers",
+ "futures-util",
+ "hkdf 0.13.0",
+ "hmac 0.13.0",
+ "p256",
+ "p384",
+ "p521",
+ "pbkdf2",
+ "rsa",
+ "sha1 0.10.6",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "thiserror",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "es-runtime-cli"
 version = "0.0.0"
 dependencies = [
+ "es-runtime",
  "es-runtime-common",
  "es-runtime-default-providers",
  "es-runtime-providers",
- "es-runtime-runtime",
  "tokio",
 ]
 
@@ -559,9 +586,9 @@ dependencies = [
 name = "es-runtime-default-providers"
 version = "0.0.0"
 dependencies = [
+ "es-runtime",
  "es-runtime-common",
  "es-runtime-providers",
- "es-runtime-runtime",
  "futures-core",
  "futures-util",
  "getrandom 0.4.2",
@@ -587,33 +614,6 @@ dependencies = [
  "es-runtime-common",
  "futures-core",
  "thiserror",
-]
-
-[[package]]
-name = "es-runtime-runtime"
-version = "0.0.0"
-dependencies = [
- "aes",
- "aes-gcm",
- "cbc",
- "ctr",
- "es-runtime-common",
- "es-runtime-engine",
- "es-runtime-providers",
- "futures-util",
- "hkdf 0.13.0",
- "hmac 0.13.0",
- "p256",
- "p384",
- "p521",
- "pbkdf2",
- "rsa",
- "sha1 0.10.6",
- "sha1 0.11.0",
- "sha2 0.11.0",
- "thiserror",
- "tracing",
- "url",
 ]
 
 [[package]]

@@ -11,7 +11,7 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
-es-runtime-runtime.workspace = true
+es-runtime.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true

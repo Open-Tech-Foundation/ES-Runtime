@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
-es-runtime-runtime.workspace = true
+es-runtime.workspace = true
 es-runtime-default-providers.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 

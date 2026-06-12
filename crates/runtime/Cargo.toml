@@ -1,5 +1,5 @@
 [package]
-name = "es-runtime-runtime"
+name = "es-runtime"
 description = "The driven runtime: op wiring, the tick/poll event loop, and timer scheduling, built on the engine abstraction."
 version.workspace = true
 edition.workspace = true

@@ -10,36 +10,47 @@ It ships in two shapes from the same core:
 
 ## Quick start (run JavaScript)
 
+**Build once** (npm-script-style alias; produces a single self-contained binary
+at `target/release/esrun` — no extra files or asset directory needed):
+
 ```sh
-# Build the CLI (optimized binary at target/release/esrun)
-cargo build --release -p es-runtime-cli
+cargo build-cli           # alias for: cargo build --release -p es-runtime-cli
+```
 
-# Run a file
-cargo esrun examples/hello.js          # alias for: cargo run -p es-runtime-cli --
-cargo esrun examples/crypto.js
-cargo esrun examples/timers.js
+**Then run JS like `node`/`bun`** with the `esrun` binary:
 
-# Or run the built binary directly
+```sh
 ./target/release/esrun examples/hello.js
+./target/release/esrun examples/crypto.js
+./target/release/esrun -e "console.log(6 * 7)"
+./target/release/esrun --help
+```
 
-# Inline snippet, help, version
-cargo esrun -e "console.log(6 * 7)"
-cargo esrun --help
+To call it simply as `esrun file.js` from anywhere, install it onto your `PATH`:
+
+```sh
+cargo install --path crates/runtime-cli   # installs `esrun` to ~/.cargo/bin
+esrun examples/timers.js
 ```
 
 The full implemented WinterTC surface is available (console, URL, fetch, crypto,
 streams, encoding, timers, events); all host capabilities are granted. Top-level
-`await` works (the CLI wraps the script in an async context).
+`await` works (the CLI wraps the script in an async context). **Single-file
+scripts only — there is no ES-module resolution yet** (`import`/`export` are not
+supported).
 
 ## Common tasks
 
 | Task | Command |
 | --- | --- |
-| Run a JS file | `cargo esrun <file.js>` |
+| Build the `esrun` binary | `cargo build-cli` |
+| Build everything (lib + CLI) | `cargo build-all` |
+| Install `esrun` on `PATH` | `cargo install --path crates/runtime-cli` |
+| Run a JS file | `esrun <file.js>` (or `./target/release/esrun <file.js>`) |
 | Run tests | `cargo test --workspace` |
 | Lints + format check | `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --check` |
 | Supply-chain gates | `cargo deny check` · `cargo audit` |
-| Startup/throughput benchmark | `cargo bench-run` |
+| Startup/throughput benchmark | `cargo run --release -p es-runtime-default-providers --example bench` |
 
 ## License
 

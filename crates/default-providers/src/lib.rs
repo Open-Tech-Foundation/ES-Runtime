@@ -10,7 +10,7 @@
 //! - **Deterministic** ([`testing`]) — seeded/manual providers that make runs
 //!   reproducible (DECISIONS.md D5), for tests only.
 //!
-//! [`Driver`] ties a [`Runtime`](es_runtime_runtime::Runtime) to a clock and a
+//! [`Driver`] ties a [`Runtime`](es_runtime::Runtime) to a clock and a
 //! timer source and advances it to quiescence on tokio — the concrete loop the
 //! `runtime` crate deliberately does not own (D4).
 
