@@ -23,13 +23,13 @@ use p256::elliptic_curve::rand_core::{CryptoRng, RngCore};
 use crate::Result;
 use crate::crypto_ops::{arg_bytes, arg_str, data_error, not_supported, operation_error};
 
-/// Adapts an [`Entropy`] provider to the `rand_core` 0.6 traits the curve
-/// crates' key generation expects. `fill_bytes` cannot signal failure, so a
-/// provider error is latched in `failed` and checked after generation; the
-/// produced key is discarded in that case.
-struct EntropyRng<'a> {
-    entropy: &'a dyn Entropy,
-    failed: bool,
+/// Adapts an [`Entropy`] provider to the `rand_core` 0.6 traits the curve and
+/// RSA crates' key generation expects. `fill_bytes` cannot signal failure, so
+/// a provider error is latched in `failed` and checked after generation; the
+/// produced key is discarded in that case. Shared with [`crate::rsa_ops`].
+pub(crate) struct EntropyRng<'a> {
+    pub(crate) entropy: &'a dyn Entropy,
+    pub(crate) failed: bool,
 }
 
 impl RngCore for EntropyRng<'_> {
@@ -63,9 +63,10 @@ impl RngCore for EntropyRng<'_> {
 
 impl CryptoRng for EntropyRng<'_> {}
 
-/// Computes the message prehash for ECDSA, honouring `algorithm.hash` (so e.g.
-/// ECDSA over P-256 with SHA-512 works). Uses our `sha2` 0.11.
-fn prehash(hash: &str, data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
+/// Computes the message prehash for ECDSA/RSA, honouring `algorithm.hash` (so
+/// e.g. ECDSA over P-256 with SHA-512 works). Uses our `sha2` 0.11. Shared
+/// with [`crate::rsa_ops`].
+pub(crate) fn prehash(hash: &str, data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
     use sha2::Digest as _;
     Ok(match hash {
         "SHA-1" => sha1::Sha1::digest(data).to_vec(),

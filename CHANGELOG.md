@@ -6,11 +6,11 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
-### Phase 7b — WebCrypto (AES block modes, key derivation, elliptic curve)
+### Phase 7b — WebCrypto (AES block modes, key derivation, elliptic curve, RSA)
 
-Extends `crypto.subtle` with the remaining symmetric ciphers, the key-derivation
-functions, and elliptic-curve ECDSA/ECDH (SPEC.md §6.7 / §2.10), still
-RustCrypto (DECISIONS.md D9). RSA remains staged.
+Completes `crypto.subtle` (SPEC.md §6.7 / §2.10): the remaining symmetric
+ciphers, the key-derivation functions, elliptic-curve ECDSA/ECDH, and RSA — all
+RustCrypto (DECISIONS.md D9).
 
 #### Added
 
@@ -50,6 +50,28 @@ RustCrypto (DECISIONS.md D9). RSA remains staged.
 - Tests cover ECDSA P-256 sign/verify (+ tamper) and P-521/SHA-512, a P-384
   export→import round-trip across **all four formats**, ECDH shared-secret
   agreement, and an ECDH→AES-GCM `deriveKey` between two parties.
+- **RSA** — **RSASSA-PKCS1-v1_5** and **RSA-PSS** (sign/verify) and **RSA-OAEP**
+  (encrypt/decrypt) on `crypto.subtle`, with `generateKey` (key pairs) and
+  `importKey`/`exportKey` for **spki/pkcs8/jwk** (private JWK incl. the CRT
+  params `d`/`p`/`q`/`dp`/`dq`/`qi`). Arbitrary `algorithm.hash`
+  (SHA-1/256/384/512). New `rsa_ops` module + ops backed by the `rsa` crate;
+  JWK components cross the boundary via a small length-prefixed framing.
+- All RSA randomness (key gen, PSS salt, PKCS#1 blinding, OAEP padding) routes
+  through the **Entropy provider**, never ambient `OsRng`. `rsa`/`num-bigint-dig`
+  are built at `opt-level = 3` in the dev profile so test-suite key generation
+  stays fast (~1.4 s vs ~33 s).
+- **Accepted security gap:** the `rsa` crate carries **RUSTSEC-2023-0071**
+  (Marvin timing sidechannel, medium, no fix available). Maintainer-accepted
+  with rationale — RSA private-key ops are host-side, and the alternatives
+  (aws-lc-rs: ambient RNG + C backend; openssl-rs: system dep) cost more than
+  they buy. Listed explicitly in `deny.toml` + `.cargo/audit.toml`; tracked on
+  the new **`SECURITY.md`** revisit list. RSA-OAEP labels are UTF-8 only (an
+  `rsa` 0.9 API limitation).
+- New `SECURITY.md` records the project's supply-chain posture and the accepted
+  advisory gaps (RSA Marvin, `paste` unmaintained).
+- Tests: one 2048-bit key reused across PKCS1-v1_5 + PSS sign/verify, OAEP
+  round-trip (with and without a label), and SPKI/PKCS8/JWK export→import with
+  cross-verification.
 
 ### Phase 7 — WebCrypto (first tranche)
 

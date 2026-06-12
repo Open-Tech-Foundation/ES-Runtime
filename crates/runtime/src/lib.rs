@@ -19,6 +19,7 @@ mod crypto_ops;
 mod ec_ops;
 mod fetch_ops;
 mod prelude;
+mod rsa_ops;
 mod timer;
 mod url_ops;
 
@@ -1379,5 +1380,42 @@ mod tests {
              return new TextDecoder().decode(pt);",
         );
         assert_eq!(out, Value::String("shared".into()));
+    }
+
+    #[test]
+    fn subtle_rsa_all_schemes_and_formats() {
+        // One 2048-bit key generation (the expensive step) reused across every
+        // scheme and key format: PKCS1-v1_5 + PSS sign/verify, OAEP round-trip,
+        // and SPKI/PKCS8/JWK export→import.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); const data = enc.encode('rsa payload'); \
+             const kp = await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify']); \
+             const sig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', kp.privateKey, data); \
+             const good = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', kp.publicKey, sig, data); \
+             const bad = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', kp.publicKey, sig, enc.encode('tampered')); \
+             const pkcs8 = await crypto.subtle.exportKey('pkcs8', kp.privateKey); \
+             const spki = await crypto.subtle.exportKey('spki', kp.publicKey); \
+             const pssPriv = await crypto.subtle.importKey('pkcs8', pkcs8, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']); \
+             const pssPub = await crypto.subtle.importKey('spki', spki, { name: 'RSA-PSS', hash: 'SHA-256' }, true, ['verify']); \
+             const pssSig = await crypto.subtle.sign({ name: 'RSA-PSS', saltLength: 32 }, pssPriv, data); \
+             const pssOk = await crypto.subtle.verify({ name: 'RSA-PSS', saltLength: 32 }, pssPub, pssSig, data); \
+             const oaepPriv = await crypto.subtle.importKey('pkcs8', pkcs8, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['decrypt']); \
+             const oaepPub = await crypto.subtle.importKey('spki', spki, { name: 'RSA-OAEP', hash: 'SHA-256' }, true, ['encrypt']); \
+             const ct = await crypto.subtle.encrypt({ name: 'RSA-OAEP' }, oaepPub, enc.encode('secret')); \
+             const pt = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'RSA-OAEP' }, oaepPriv, ct)); \
+             const ctL = await crypto.subtle.encrypt({ name: 'RSA-OAEP', label: enc.encode('ctx') }, oaepPub, enc.encode('labeled')); \
+             const ptL = new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'RSA-OAEP', label: enc.encode('ctx') }, oaepPriv, ctL)); \
+             const jwkPriv = await crypto.subtle.exportKey('jwk', kp.privateKey); \
+             const jwkPub = await crypto.subtle.exportKey('jwk', kp.publicKey); \
+             const fromJwkPriv = await crypto.subtle.importKey('jwk', jwkPriv, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, ['sign']); \
+             const fromJwkPub = await crypto.subtle.importKey('jwk', jwkPub, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, ['verify']); \
+             const jwkSig = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', fromJwkPriv, data); \
+             const jwkOk = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', fromJwkPub, jwkSig, data); \
+             return [good === true, bad === false, pssOk === true, pt === 'secret', ptL === 'labeled', jwkOk === true].every(Boolean) ? 'all-ok' : 'mismatch';",
+        );
+        assert_eq!(out, Value::String("all-ok".into()));
     }
 }

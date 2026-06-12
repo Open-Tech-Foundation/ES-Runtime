@@ -29,6 +29,8 @@ pbkdf2.workspace = true
 p256.workspace = true
 p384.workspace = true
 p521.workspace = true
+rsa.workspace = true
+sha1_rsa.workspace = true
 
 [lints]
 workspace = true

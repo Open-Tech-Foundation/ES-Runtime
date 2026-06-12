@@ -77,6 +77,15 @@ pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
 p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
 p384 = { version = "0.13.1", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
 p521 = { version = "0.13.3", default-features = false, features = ["ecdsa", "ecdh", "pkcs8", "std"] }
+# RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP). Same `digest` 0.10 generation as
+# the EC crates above, so it reuses the already-present `sha2` 0.10 / `digest`
+# 0.10 (adds only `sha1` 0.10 within that cluster). Its `sha1`/`sha2` features
+# re-export those hashes (with OID) for DigestInfo prefixes.
+rsa = { version = "0.9.10", default-features = false, features = ["std", "sha2"] }
+# digest-0.10 SHA-1 *with OID*, only for RSA's DigestInfo prefix (`rsa`
+# re-exports `sha2` but not `sha1`). Our primary SHA-1 stays `sha1` 0.11; this
+# 0.10 line is already in the tree via `rsa`, so it adds no new version.
+sha1_rsa = { package = "sha1", version = "0.10.6", features = ["oid"] }
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).
@@ -84,6 +93,15 @@ es-runtime-common = { path = "crates/common", version = "0.0.0" }
 es-runtime-engine = { path = "crates/engine", version = "0.0.0" }
 es-runtime-providers = { path = "crates/providers", version = "0.0.0" }
 es-runtime-runtime = { path = "crates/runtime", version = "0.0.0" }
+
+# Optimize the big-integer/RSA math even in dev+test: unoptimized RSA key
+# generation is ~30s/key, which would dominate the test suite. These crates are
+# pure computation with no debugging value here, so building them at opt-level 3
+# keeps `cargo test` fast while our own crates stay in debug.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.dev.package.rsa]
+opt-level = 3
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1

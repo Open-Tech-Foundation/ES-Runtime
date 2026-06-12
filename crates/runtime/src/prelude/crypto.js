@@ -1,9 +1,9 @@
 // WebCrypto (SPEC §2.10): crypto.getRandomValues, crypto.randomUUID, and
-// crypto.subtle (digest, HMAC, AES-GCM/CBC/CTR, HKDF/PBKDF2 derivation, and
-// ECDSA/ECDH over P-256/P-384/P-521). Crypto runs in vetted Rust ops
-// (RustCrypto, D9); this layer is the JS surface + key bookkeeping. EC keys
-// cross the op boundary as PKCS#8 (private) / SEC1 points (public); JWK is
-// assembled here. RSA is staged for a follow-up (SPEC §7).
+// crypto.subtle (digest, HMAC, AES-GCM/CBC/CTR, HKDF/PBKDF2 derivation,
+// ECDSA/ECDH over P-256/P-384/P-521, and RSA — RSASSA-PKCS1-v1_5/RSA-PSS/
+// RSA-OAEP). Crypto runs in vetted Rust ops (RustCrypto, D9); this layer is the
+// JS surface + key bookkeeping. Asymmetric keys cross the op boundary as
+// PKCS#8 (private) / SEC1 points or SPKI (public); JWK is assembled here.
 (() => {
   "use strict";
   const ops = globalThis.__ops;
@@ -53,6 +53,7 @@
   const AES_ALGS = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
   const KDF_ALGS = new Set(["HKDF", "PBKDF2"]);
   const EC_ALGS = new Set(["ECDSA", "ECDH"]);
+  const RSA_ALGS = new Set(["RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP"]);
   const HASH_BITS = { "SHA-1": 160, "SHA-256": 256, "SHA-384": 384, "SHA-512": 512 };
   // Field byte length (and so the JWK coordinate width) per named curve.
   const EC_FIELD = { "P-256": 32, "P-384": 48, "P-521": 66 };
@@ -176,6 +177,101 @@
     throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
   }
 
+  // ---- RSA helpers --------------------------------------------------------
+
+  // Parse the host's length-prefixed framing (u32 BE length + bytes, repeated).
+  function unframe(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+    const parts = [];
+    let off = 0;
+    while (off < u8.length) {
+      const len = dv.getUint32(off);
+      off += 4;
+      parts.push(u8.subarray(off, off + len));
+      off += len;
+    }
+    return parts;
+  }
+
+  function rsaAlgorithm(name, hashNm, n, e) {
+    return {
+      name,
+      hash: { name: hashNm },
+      modulusLength: n.length * 8,
+      publicExponent: new Uint8Array(e),
+    };
+  }
+
+  function importRsaKey(format, keyData, algo, extractable, usages) {
+    const hashNm = hashName(algo.hash);
+    if (format === "spki") {
+      const spki = ops.rsa_import_spki(toBytes(keyData));
+      const [n, e] = unframe(ops.rsa_jwk_public_params(spki));
+      return new CryptoKey("public", extractable, rsaAlgorithm(algo.name, hashNm, n, e), usages, spki);
+    }
+    if (format === "pkcs8") {
+      const pkcs8 = ops.rsa_import_pkcs8(toBytes(keyData));
+      const [n, e] = unframe(ops.rsa_jwk_private_params(pkcs8));
+      return new CryptoKey("private", extractable, rsaAlgorithm(algo.name, hashNm, n, e), usages, pkcs8);
+    }
+    if (format === "jwk") {
+      const jwk = keyData;
+      if (jwk.kty !== "RSA") throw new DOMException("JWK kty must be RSA", "DataError");
+      if (jwk.n == null || jwk.e == null) throw new DOMException("JWK missing n/e", "DataError");
+      const n = b64uToBytes(jwk.n);
+      const e = b64uToBytes(jwk.e);
+      if (jwk.d != null) {
+        if (jwk.p == null || jwk.q == null) {
+          throw new DOMException("RSA private JWK requires p and q", "DataError");
+        }
+        const pkcs8 = ops.rsa_pkcs8_from_jwk(n, e, b64uToBytes(jwk.d), b64uToBytes(jwk.p), b64uToBytes(jwk.q));
+        return new CryptoKey("private", extractable, rsaAlgorithm(algo.name, hashNm, n, e), usages, pkcs8);
+      }
+      const spki = ops.rsa_spki_from_jwk(n, e);
+      return new CryptoKey("public", extractable, rsaAlgorithm(algo.name, hashNm, n, e), usages, spki);
+    }
+    throw new DOMException(`unsupported import format: ${format}`, "NotSupportedError");
+  }
+
+  function exportRsaKey(format, key) {
+    if (!key.extractable) {
+      throw new DOMException("key is not extractable", "InvalidAccessError");
+    }
+    if (format === "spki") {
+      if (key.type !== "public") throw new DOMException("spki export is public-only", "InvalidAccessError");
+      return asArrayBuffer(key[KEY].slice());
+    }
+    if (format === "pkcs8") {
+      if (key.type !== "private") throw new DOMException("pkcs8 export is private-only", "InvalidAccessError");
+      return asArrayBuffer(key[KEY].slice());
+    }
+    if (format === "jwk") {
+      const priv = key.type === "private";
+      const parts = priv
+        ? unframe(ops.rsa_jwk_private_params(key[KEY]))
+        : unframe(ops.rsa_jwk_public_params(key[KEY]));
+      const jwk = {
+        kty: "RSA",
+        n: bytesToB64u(parts[0]),
+        e: bytesToB64u(parts[1]),
+        key_ops: [...key.usages],
+        ext: key.extractable,
+      };
+      if (priv) {
+        const [, , d, p, q, dp, dq, qi] = parts;
+        jwk.d = bytesToB64u(d);
+        jwk.p = bytesToB64u(p);
+        jwk.q = bytesToB64u(q);
+        jwk.dp = bytesToB64u(dp);
+        jwk.dq = bytesToB64u(dq);
+        jwk.qi = bytesToB64u(qi);
+      }
+      return jwk;
+    }
+    throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
+  }
+
   class CryptoKey {
     #type;
     #extractable;
@@ -243,6 +339,25 @@
           publicKey: new CryptoKey("public", true, alg, pubUsages, sec1),
         };
       }
+      if (RSA_ALGS.has(algo.name)) {
+        const exp = toBytes(algo.publicExponent);
+        const pkcs8 = ops.rsa_generate_pkcs8(algo.modulusLength, exp);
+        const spki = ops.rsa_public_spki(pkcs8);
+        const alg = {
+          name: algo.name,
+          hash: { name: hashName(algo.hash) },
+          modulusLength: algo.modulusLength,
+          publicExponent: new Uint8Array(exp),
+        };
+        // OAEP keys do encrypt/decrypt(+wrap); SSA/PSS keys sign/verify.
+        const isOaep = algo.name === "RSA-OAEP";
+        const privOps = isOaep ? ["decrypt", "unwrapKey"] : ["sign"];
+        const pubOps = isOaep ? ["encrypt", "wrapKey"] : ["verify"];
+        return {
+          privateKey: new CryptoKey("private", extractable, alg, usages.filter((u) => privOps.includes(u)), pkcs8),
+          publicKey: new CryptoKey("public", true, alg, usages.filter((u) => pubOps.includes(u)), spki),
+        };
+      }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
     },
 
@@ -250,6 +365,9 @@
       const algo = normalizeAlgorithm(algorithm);
       if (EC_ALGS.has(algo.name)) {
         return importEcKey(format, keyData, algo, extractable, usages);
+      }
+      if (RSA_ALGS.has(algo.name)) {
+        return importRsaKey(format, keyData, algo, extractable, usages);
       }
       if (format !== "raw") {
         throw new DOMException(`unsupported import format: ${format}`, "NotSupportedError");
@@ -287,6 +405,9 @@
       if (EC_ALGS.has(key.algorithm.name)) {
         return exportEcKey(format, key);
       }
+      if (RSA_ALGS.has(key.algorithm.name)) {
+        return exportRsaKey(format, key);
+      }
       if (format !== "raw") {
         throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
       }
@@ -306,6 +427,14 @@
       if (algo.name === "ECDSA") {
         return asArrayBuffer(
           ops.ecdsa_sign(key.algorithm.namedCurve, hashName(algo.hash), key[KEY], toBytes(data)),
+        );
+      }
+      if (algo.name === "RSASSA-PKCS1-v1_5") {
+        return asArrayBuffer(ops.rsa_pkcs1v15_sign(key.algorithm.hash.name, key[KEY], toBytes(data)));
+      }
+      if (algo.name === "RSA-PSS") {
+        return asArrayBuffer(
+          ops.rsa_pss_sign(key.algorithm.hash.name, algo.saltLength, key[KEY], toBytes(data)),
         );
       }
       throw new DOMException(`unsupported sign algorithm: ${algo.name}`, "NotSupportedError");
@@ -330,6 +459,18 @@
           toBytes(data),
         );
       }
+      if (algo.name === "RSASSA-PKCS1-v1_5") {
+        return ops.rsa_pkcs1v15_verify(key.algorithm.hash.name, key[KEY], toBytes(signature), toBytes(data));
+      }
+      if (algo.name === "RSA-PSS") {
+        return ops.rsa_pss_verify(
+          key.algorithm.hash.name,
+          algo.saltLength,
+          key[KEY],
+          toBytes(signature),
+          toBytes(data),
+        );
+      }
       throw new DOMException(`unsupported verify algorithm: ${algo.name}`, "NotSupportedError");
     },
 
@@ -347,6 +488,10 @@
           return asArrayBuffer(
             ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
           );
+        case "RSA-OAEP": {
+          const label = algo.label ? toBytes(algo.label) : new Uint8Array(0);
+          return asArrayBuffer(ops.rsa_oaep_encrypt(key.algorithm.hash.name, label, key[KEY], toBytes(data)));
+        }
       }
       throw new DOMException(`unsupported encrypt algorithm: ${algo.name}`, "NotSupportedError");
     },
@@ -366,6 +511,10 @@
           return asArrayBuffer(
             ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
           );
+        case "RSA-OAEP": {
+          const label = algo.label ? toBytes(algo.label) : new Uint8Array(0);
+          return asArrayBuffer(ops.rsa_oaep_decrypt(key.algorithm.hash.name, label, key[KEY], toBytes(data)));
+        }
       }
       throw new DOMException(`unsupported decrypt algorithm: ${algo.name}`, "NotSupportedError");
     },

@@ -1,0 +1,24 @@
+# cargo-audit configuration — read automatically by `cargo audit` (the CI
+# supply-chain gate, SPEC.md §5). Mirrors the advisory exceptions in deny.toml;
+# both must be kept in sync.
+#
+# A known exception is listed here explicitly (never silenced globally) with a
+# documented rationale, and is revisited rather than forgotten.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack" timing sidechannel in the `rsa` crate
+    # (medium, 5.9), used by `crypto.subtle` RSA (DECISIONS.md D9). There is *no
+    # fixed upgrade*: the issue is architectural in RustCrypto's RSA and the
+    # advisory has stood open since 2023 with no pure-Rust remedy.
+    #
+    # Accepted (maintainer, 2026-06-12) because: RSA private-key operations run
+    # host-side, so a sandboxed guest has no high-resolution local timing oracle
+    # against them; the alternative backends each cost more than they buy here
+    # (aws-lc-rs forfeits Entropy-provider-routed randomness and adds a C/asm
+    # crypto backend to `runtime`; openssl-rs adds a system dependency). This is
+    # a recorded **security gap to revisit** when RustCrypto ships a
+    # constant-time RSA or `elliptic-curve` 0.14 reshapes the stack. See
+    # DECISIONS.md D9 and SECURITY.md.
+    "RUSTSEC-2023-0071",
+]

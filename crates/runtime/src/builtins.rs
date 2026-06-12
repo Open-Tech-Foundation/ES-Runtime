@@ -24,6 +24,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::crypto_ops::install(engine, providers.entropy())?;
     // Elliptic-curve WebCrypto (ECDSA/ECDH), also Entropy-backed for key gen.
     crate::ec_ops::install(engine, providers.entropy())?;
+    // RSA WebCrypto (PKCS1-v1_5 / PSS / OAEP), Entropy-backed for key gen/salt.
+    crate::rsa_ops::install(engine, providers.entropy())?;
     Ok(())
 }
 
