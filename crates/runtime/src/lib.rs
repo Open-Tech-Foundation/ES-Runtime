@@ -1216,4 +1216,64 @@ mod tests {
             Value::String("874d6191b620e3261bef6864990db6ce".into())
         );
     }
+
+    #[test]
+    fn subtle_hkdf_rfc5869_test_case_1() {
+        // RFC 5869 Appendix A.1 (SHA-256).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const hex = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16))); \
+             const toHex = (a) => [...new Uint8Array(a)].map((b) => b.toString(16).padStart(2, '0')).join(''); \
+             const ikm = new Uint8Array(22).fill(0x0b); \
+             const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']); \
+             const bits = await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: hex('000102030405060708090a0b0c'), info: hex('f0f1f2f3f4f5f6f7f8f9') }, key, 42 * 8); \
+             return toHex(bits);",
+        );
+        assert_eq!(
+            out,
+            Value::String(
+                "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn subtle_pbkdf2_rfc6070_vector() {
+        // RFC 6070 PBKDF2-HMAC-SHA1, P="password" S="salt" c=1 dkLen=20.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const toHex = (a) => [...new Uint8Array(a)].map((b) => b.toString(16).padStart(2, '0')).join(''); \
+             const enc = new TextEncoder(); \
+             const key = await crypto.subtle.importKey('raw', enc.encode('password'), 'PBKDF2', false, ['deriveBits']); \
+             const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-1', salt: enc.encode('salt'), iterations: 1 }, key, 20 * 8); \
+             return toHex(bits);",
+        );
+        assert_eq!(
+            out,
+            Value::String("0c60c80f961f0e71f3a9b524af6012062fe037a6".into())
+        );
+    }
+
+    #[test]
+    fn subtle_derive_key_then_aes_gcm_round_trips() {
+        // deriveKey: PBKDF2 → AES-GCM key, used end-to-end.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); \
+             const base = await crypto.subtle.importKey('raw', enc.encode('correct horse'), 'PBKDF2', false, ['deriveKey']); \
+             const key = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: enc.encode('battery'), iterations: 200 }, base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']); \
+             const iv = crypto.getRandomValues(new Uint8Array(12)); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode('staple')); \
+             const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct); \
+             return new TextDecoder().decode(pt);",
+        );
+        assert_eq!(out, Value::String("staple".into()));
+    }
 }

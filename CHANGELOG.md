@@ -6,10 +6,11 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
-### Phase 7b — WebCrypto (AES block modes)
+### Phase 7b — WebCrypto (AES block modes + key derivation)
 
-Extends `crypto.subtle` with the remaining symmetric ciphers (SPEC.md §6.7 /
-§2.10), still RustCrypto (DECISIONS.md D9).
+Extends `crypto.subtle` with the remaining symmetric ciphers and the
+key-derivation functions (SPEC.md §6.7 / §2.10), still RustCrypto
+(DECISIONS.md D9).
 
 #### Added
 
@@ -17,12 +18,18 @@ Extends `crypto.subtle` with the remaining symmetric ciphers (SPEC.md §6.7 /
   **AES-CTR** (`encrypt`/`decrypt`; 128/192/256-bit keys; 32/64/128-bit counter
   widths) on `crypto.subtle`, plus `generateKey`/`importKey` for both. One CTR
   op backs encrypt and decrypt (the mode is symmetric).
-- New ops `subtle_aes_cbc_encrypt`/`_decrypt` and `subtle_aes_ctr`, backed by the
-  `aes` + `cbc` + `ctr` RustCrypto crates. Pinned to the `cipher` 0.4 generation
+- **`deriveBits`/`deriveKey`** via **HKDF** (SHA-1/256/384/512) and **PBKDF2**
+  (HMAC-SHA-1/256/384/512). KDF base keys import as non-extractable `raw` keys;
+  `deriveKey` targets AES-* and HMAC derived keys.
+- New ops `subtle_aes_cbc_encrypt`/`_decrypt`, `subtle_aes_ctr`, `subtle_hkdf`,
+  and `subtle_pbkdf2`, backed by the `aes`/`cbc`/`ctr` and `hkdf`/`pbkdf2`
+  RustCrypto crates. `aes`/`cbc`/`ctr` are pinned to the `cipher` 0.4 generation
   so they reuse the same `aes` 0.8 that `aes-gcm` already pulls (no duplicate
-  `aes`); `aes-gcm` 0.11 — which would unify onto `cipher` 0.5 — is still an rc.
-- Tests add NIST SP 800-38A known-answer vectors (CBC F.2.1, CTR F.5.1) and
-  round-trips for both modes.
+  `aes`; `aes-gcm` 0.11, which would unify onto `cipher` 0.5, is still an rc);
+  `hkdf`/`pbkdf2` 0.13 reuse the existing `hmac` 0.13 + `sha2`.
+- Tests add NIST SP 800-38A vectors (CBC F.2.1, CTR F.5.1), RFC 5869 (HKDF) and
+  RFC 6070 (PBKDF2) known-answer vectors, round-trips, and a PBKDF2→AES-GCM
+  `deriveKey` end-to-end.
 
 ### Phase 7 — WebCrypto (first tranche)
 

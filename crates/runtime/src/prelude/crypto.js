@@ -1,7 +1,7 @@
 // WebCrypto (SPEC §2.10): crypto.getRandomValues, crypto.randomUUID, and
-// crypto.subtle (digest, HMAC, AES-GCM). Crypto runs in vetted Rust ops
-// (RustCrypto, D9); this layer is the JS surface + key bookkeeping.
-// ECDSA/ECDH/RSA are staged for a follow-up (SPEC §7).
+// crypto.subtle (digest, HMAC, AES-GCM/CBC/CTR, HKDF/PBKDF2 derivation).
+// Crypto runs in vetted Rust ops (RustCrypto, D9); this layer is the JS surface
+// + key bookkeeping. ECDSA/ECDH/RSA are staged for a follow-up (SPEC §7).
 (() => {
   "use strict";
   const ops = globalThis.__ops;
@@ -49,6 +49,8 @@
 
   const KEY = Symbol("cryptoKeyMaterial");
   const AES_ALGS = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
+  const KDF_ALGS = new Set(["HKDF", "PBKDF2"]);
+  const HASH_BITS = { "SHA-1": 160, "SHA-256": 256, "SHA-384": 384, "SHA-512": 512 };
 
   function toBytes(data) {
     if (data instanceof Uint8Array) return data;
@@ -104,9 +106,7 @@
       const algo = normalizeAlgorithm(algorithm);
       if (algo.name === "HMAC") {
         const hash = hashName(algo.hash);
-        const lengthBits =
-          algo.length ??
-          { "SHA-1": 160, "SHA-256": 256, "SHA-384": 384, "SHA-512": 512 }[hash];
+        const lengthBits = algo.length ?? HASH_BITS[hash];
         const material = ops.random_bytes(Math.ceil(lengthBits / 8));
         return new CryptoKey("secret", extractable, { name: "HMAC", hash: { name: hash }, length: lengthBits }, usages, material);
       }
@@ -145,6 +145,15 @@
           throw new DOMException(`invalid ${algo.name} key length`, "DataError");
         }
         return new CryptoKey("secret", extractable, { name: algo.name, length: bits }, usages, material);
+      }
+      if (KDF_ALGS.has(algo.name)) {
+        // HKDF/PBKDF2 base keys carry the raw IKM/password and are never
+        // extractable (per spec); the derivation parameters are supplied at
+        // derive time, so the key's algorithm is just its name.
+        if (extractable) {
+          throw new DOMException(`${algo.name} keys must be non-extractable`, "SyntaxError");
+        }
+        return new CryptoKey("secret", false, { name: algo.name }, usages, material);
       }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
     },
@@ -217,6 +226,49 @@
           );
       }
       throw new DOMException(`unsupported decrypt algorithm: ${algo.name}`, "NotSupportedError");
+    },
+
+    async deriveBits(algorithm, baseKey, length) {
+      const algo = normalizeAlgorithm(algorithm);
+      if (length == null || length % 8 !== 0) {
+        throw new DOMException("deriveBits length must be a non-null multiple of 8", "OperationError");
+      }
+      const lengthBytes = length / 8;
+      if (algo.name === "HKDF") {
+        const info = algo.info ? toBytes(algo.info) : new Uint8Array(0);
+        return asArrayBuffer(
+          ops.subtle_hkdf(hashName(algo.hash), baseKey[KEY], toBytes(algo.salt), info, lengthBytes),
+        );
+      }
+      if (algo.name === "PBKDF2") {
+        return asArrayBuffer(
+          ops.subtle_pbkdf2(
+            hashName(algo.hash),
+            baseKey[KEY],
+            toBytes(algo.salt),
+            algo.iterations,
+            lengthBytes,
+          ),
+        );
+      }
+      throw new DOMException(`unsupported derive algorithm: ${algo.name}`, "NotSupportedError");
+    },
+
+    async deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages) {
+      const dka = normalizeAlgorithm(derivedKeyAlgorithm);
+      let bits;
+      if (AES_ALGS.has(dka.name)) {
+        bits = dka.length;
+        if (bits !== 128 && bits !== 192 && bits !== 256) {
+          throw new DOMException(`invalid derived ${dka.name} key length`, "OperationError");
+        }
+      } else if (dka.name === "HMAC") {
+        bits = dka.length ?? HASH_BITS[hashName(dka.hash)];
+      } else {
+        throw new DOMException(`cannot derive ${dka.name} keys`, "NotSupportedError");
+      }
+      const derived = await subtle.deriveBits(algorithm, baseKey, bits);
+      return subtle.importKey("raw", derived, dka, extractable, usages);
     },
   };
 

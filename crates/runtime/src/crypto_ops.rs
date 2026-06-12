@@ -7,8 +7,9 @@
 //! the prelude's `crypto.subtle` wraps each in a Promise. Offloading large
 //! operations via `TaskSpawner` is a later refinement.
 //!
-//! Phase 7 ships digest, HMAC, and AES-GCM; Phase 7b adds AES-CBC and AES-CTR.
-//! HKDF/PBKDF2 and ECDSA/ECDH/RSA are staged (SPEC §7).
+//! Phase 7 ships digest, HMAC, and AES-GCM; Phase 7b adds AES-CBC, AES-CTR,
+//! and the HKDF/PBKDF2 key-derivation functions. ECDSA/ECDH/RSA are staged
+//! (SPEC §7).
 
 use std::sync::Arc;
 
@@ -21,8 +22,10 @@ use aes_gcm::aead::{Aead, KeyInit as AeadKeyInit, Payload};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher};
+use hkdf::Hkdf;
 use hmac::digest::KeyInit as MacKeyInit;
 use hmac::{Hmac, Mac};
+use pbkdf2::pbkdf2_hmac;
 use sha2::Digest as _;
 
 use crate::Result;
@@ -97,6 +100,30 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         let length = args.get(2).and_then(Value::as_number).unwrap_or(0.0) as usize;
         let data = arg_bytes(&args, 3)?;
         Ok(Value::Bytes(aes_ctr(&key, &counter, length, &data)?))
+    }))?;
+
+    // Key derivation (`deriveBits`/`deriveKey`). `length` is in bytes — the
+    // prelude converts from the spec's bit length.
+    engine.register_op(OpDecl::sync("subtle_hkdf", |args| {
+        let hash = arg_str(&args, 0)?;
+        let ikm = arg_bytes(&args, 1)?;
+        let salt = arg_bytes(&args, 2)?;
+        let info = arg_bytes(&args, 3)?;
+        let length = args.get(4).and_then(Value::as_number).unwrap_or(0.0) as usize;
+        Ok(Value::Bytes(hkdf_derive(
+            &hash, &ikm, &salt, &info, length,
+        )?))
+    }))?;
+
+    engine.register_op(OpDecl::sync("subtle_pbkdf2", |args| {
+        let hash = arg_str(&args, 0)?;
+        let password = arg_bytes(&args, 1)?;
+        let salt = arg_bytes(&args, 2)?;
+        let iterations = args.get(3).and_then(Value::as_number).unwrap_or(0.0) as u32;
+        let length = args.get(4).and_then(Value::as_number).unwrap_or(0.0) as usize;
+        Ok(Value::Bytes(pbkdf2_derive(
+            &hash, &password, &salt, iterations, length,
+        )?))
     }))?;
 
     Ok(())
@@ -321,4 +348,57 @@ fn aes_ctr(
             "AES-CTR counter length must be 32, 64, or 128 bits",
         )),
     }
+}
+
+// ---- Key derivation: HKDF (RFC 5869) and PBKDF2 (RFC 8018) -----------------
+
+fn hkdf_derive(
+    hash: &str,
+    ikm: &[u8],
+    salt: &[u8],
+    info: &[u8],
+    length: usize,
+) -> std::result::Result<Vec<u8>, OpError> {
+    let mut okm = vec![0u8; length];
+    let ok = match hash {
+        "SHA-1" => Hkdf::<sha1::Sha1>::new(Some(salt), ikm)
+            .expand(info, &mut okm)
+            .is_ok(),
+        "SHA-256" => Hkdf::<sha2::Sha256>::new(Some(salt), ikm)
+            .expand(info, &mut okm)
+            .is_ok(),
+        "SHA-384" => Hkdf::<sha2::Sha384>::new(Some(salt), ikm)
+            .expand(info, &mut okm)
+            .is_ok(),
+        "SHA-512" => Hkdf::<sha2::Sha512>::new(Some(salt), ikm)
+            .expand(info, &mut okm)
+            .is_ok(),
+        other => return Err(not_supported(format!("unsupported HKDF hash: {other}"))),
+    };
+    // `expand` only fails when the requested length exceeds 255 * HashLen.
+    if !ok {
+        return Err(operation_error("HKDF output length too large"));
+    }
+    Ok(okm)
+}
+
+fn pbkdf2_derive(
+    hash: &str,
+    password: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    length: usize,
+) -> std::result::Result<Vec<u8>, OpError> {
+    if iterations == 0 {
+        return Err(operation_error("PBKDF2 iterations must be at least 1"));
+    }
+    let mut out = vec![0u8; length];
+    match hash {
+        "SHA-1" => pbkdf2_hmac::<sha1::Sha1>(password, salt, iterations, &mut out),
+        "SHA-256" => pbkdf2_hmac::<sha2::Sha256>(password, salt, iterations, &mut out),
+        "SHA-384" => pbkdf2_hmac::<sha2::Sha384>(password, salt, iterations, &mut out),
+        "SHA-512" => pbkdf2_hmac::<sha2::Sha512>(password, salt, iterations, &mut out),
+        other => return Err(not_supported(format!("unsupported PBKDF2 hash: {other}"))),
+    }
+    Ok(out)
 }
