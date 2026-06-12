@@ -87,7 +87,7 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 - ☑ **Bounded pending-op** concurrency → `max_pending_ops`; the over-limit async dispatch throws `RangeError` (Phase 9).
 - ☑ **Deny-by-default** capabilities; no ambient authority (Phase 2/D7).
 - ☑ **No Rust panic** crosses the FFI boundary → op/timer/reject callbacks are `catch_unwind`-wrapped (Phase 9, resolves D15; assumes `panic = "unwind"`).
-- ◐ **Intrinsic integrity** against prototype pollution / global tampering → prelude objects are frozen where built; a systematic audit/freeze pass is a follow-up.
+- ◐ **Intrinsic integrity** against prototype pollution / global tampering → **the load-bearing guarantee holds (☑): the op table and the capability set live in Rust `OpState`, not in JS, so no guest tampering (prototype pollution, global reassignment, forging `__ops`) can escalate privilege or dispatch an ungated op** (tested). JS-surface defense-in-depth: the `__ops` binding is locked and namespace objects (`console`/`crypto`/`performance`) frozen (`harden.js`). **Deferred:** SES-style primordial freezing (hardening the *prelude's own* correctness against `Object`/`Array.prototype` pollution) is left to the embedder / Layer B rather than baked into a general-purpose Layer A (SECURITY.md).
 - ☑ **Reproducibility** under deterministic providers (Phase 3 test providers).
 
 ---
@@ -114,7 +114,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
 7. ☑ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM/AES-CBC/AES-CTR + HKDF/PBKDF2 derivation + ECDSA/ECDH (P-256/384/521) + RSA (PKCS1-v1_5/PSS/OAEP) (RustCrypto — DECISIONS D9). Carries the `rsa` Marvin advisory (SECURITY.md).
 8. ☑ **Snapshot + perf** — the prelude + op shells bake into a V8 startup snapshot (D8); `Runtime::with_snapshot` restores it (~2.3× faster startup in the `bench` example). Zero-copy `ArrayBuffer` transfer was audited and deliberately deferred (D3a Phase 8). Benchmark harness (`default-providers` `bench` example) covers context creation + op-dispatch throughput.
-9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. ☑ byte/BYOB streams. Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; intrinsic-integrity audit; security review + docs finalization.
+9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. ☑ byte/BYOB streams; ☑ intrinsic-integrity audit (Rust-side boundary verified + JS-surface defense-in-depth; SES-style primordial hardening deferred to the embedder). Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; security review + docs finalization.
 
 ---
 

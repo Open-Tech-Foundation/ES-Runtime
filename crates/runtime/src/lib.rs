@@ -1522,6 +1522,70 @@ mod tests {
         assert_eq!(out, Value::String("all-ok".into()));
     }
 
+    #[test]
+    fn capability_gate_survives_js_tampering() {
+        // The security boundary is in Rust (OpState owns the op table + the
+        // capability set), so guest JS cannot tamper its way past a gate
+        // (SPEC §4 intrinsic integrity).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.register_op(
+            OpDecl::sync("guarded", |_args| Ok(Value::Bool(true))).requires(Capability::Net),
+        )
+        .unwrap();
+        // No Net capability granted. Guest attempts to subvert the gate.
+        let out = eval_async(
+            &mut rt,
+            "try { globalThis.__ops = { __fake: true }; } catch (e) {} \
+             const reassigned = globalThis.__ops.__fake === true; \
+             Object.prototype.granted = true; \
+             globalThis.fetch = () => 'pwned'; \
+             let denied = false; \
+             try { __ops.guarded(); } catch (e) { denied = e instanceof Error; } \
+             return `reassigned=${reassigned} denied=${denied}`;",
+        );
+        assert_eq!(out, Value::String("reassigned=false denied=true".into()));
+    }
+
+    #[test]
+    fn op_table_binding_is_locked() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = rt
+            .eval(
+                "const before = globalThis.__ops; \
+                 let redefThrew = false; \
+                 try { Object.defineProperty(globalThis, '__ops', { value: {} }); } \
+                 catch (e) { redefThrew = true; } \
+                 const same = globalThis.__ops === before; \
+                 const hidden = !Object.keys(globalThis).includes('__ops'); \
+                 `same=${same} redefThrew=${redefThrew} hidden=${hidden}`",
+            )
+            .unwrap();
+        assert_eq!(
+            out,
+            Value::String("same=true redefThrew=true hidden=true".into())
+        );
+    }
+
+    #[test]
+    fn op_dispatch_survives_prototype_pollution() {
+        // Op dispatch + marshaling run in Rust, so polluting the JS primordials
+        // cannot derail a host op call.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.register_op(OpDecl::sync("ping", |_args| Ok(Value::Number(7.0))))
+            .unwrap();
+        let out = rt
+            .eval(
+                "Array.prototype.push = function () { throw new Error('polluted'); }; \
+                 Object.prototype.evil = 1; \
+                 __ops.ping();",
+            )
+            .unwrap();
+        assert_eq!(out, Value::Number(7.0));
+    }
+
     /// In-JS test harness for the conformance suite: `test(name, fn)` (sync or
     /// async), `assert*` helpers, and a `__results` tally read back by the runner.
     const CONFORMANCE_HARNESS: &str = r#"

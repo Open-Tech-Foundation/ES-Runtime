@@ -36,6 +36,14 @@ WPT conformance, and byte/BYOB streams remain for later Phase 9 passes.
   loop), with a tokio-timeout backstop for async-callback runaways. `Runtime`
   exposes `interrupt_handle()`.
 
+- **Intrinsic-integrity audit** (§4) — confirmed + documented that the security
+  boundary is in Rust: the op table and capability set live in `OpState`, so
+  guest JS tampering (prototype pollution, global reassignment, forging
+  `__ops`) can't escalate privilege or dispatch an ungated op. Added `harden.js`
+  (last prelude fragment) as defense-in-depth: locks the `globalThis.__ops`
+  binding (object stays extensible for op registration) and freezes `console`.
+  3 tamper-resistance tests. SES-style primordial freezing is deliberately
+  deferred to the embedder/Layer B (SECURITY.md), not baked into Layer A.
 - **Byte/BYOB streams** (§2.8, closes the §7 deferral) — `ReadableStream`
   `type: "bytes"` + `ReadableByteStreamController`, `ReadableStreamBYOBReader`,
   `ReadableStreamBYOBRequest`, `autoAllocateChunkSize`, the pull-into queue, and

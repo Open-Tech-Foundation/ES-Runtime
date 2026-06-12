@@ -31,6 +31,30 @@ security review. **Until those land, do not run hostile/untrusted code** with
 `esrun` (which also grants all capabilities); the embeddable library lets an
 embedder restrict capabilities and inject its own providers.
 
+## Intrinsic integrity (prototype pollution / global tampering)
+
+**The security boundary is in Rust, not in JavaScript.** The op table and the
+capability set live in the engine's `OpState`; every capability-gated op is
+checked there before dispatch. Consequently, no amount of guest JS tampering —
+polluting `Object`/`Array.prototype`, reassigning or deleting globals, or trying
+to forge `globalThis.__ops` — can grant a capability or dispatch an op the host
+did not register and gate. This is covered by tests (`capability_gate_survives_js_tampering`,
+`op_table_binding_is_locked`, `op_dispatch_survives_prototype_pollution`).
+
+As defense-in-depth on the JS surface, `harden.js` (the last prelude fragment)
+locks the `globalThis.__ops` binding (non-writable/non-configurable, while the
+object stays extensible so the host can still register ops) and freezes the
+runtime's plain namespace objects (`console`; `crypto`/`performance` are frozen
+at definition).
+
+**Deliberately deferred — SES-style primordial hardening.** Freezing the JS
+primordials (`Object.prototype`, `Array.prototype`, …) would protect the
+*prelude's own* correctness against pollution, but it is an opinionated policy
+with real guest-compatibility cost. It is left to the embedder / Layer B rather
+than baked into a general-purpose Layer A. Until an embedder opts in, a guest
+that pollutes primordials can break the *prelude's* JS behaviour for itself — it
+still cannot escalate privilege past the Rust boundary.
+
 ## Supply-chain gates
 
 Every change must pass `cargo deny check` and `cargo audit` in CI (`docs/SPEC.md`

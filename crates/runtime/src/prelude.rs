@@ -30,6 +30,8 @@ pub(crate) fn source() -> String {
         include_str!("prelude/blob.js"),
         include_str!("prelude/fetch.js"),
         include_str!("prelude/crypto.js"),
+        // Hardening last: every global + host op must already be in place.
+        include_str!("prelude/harden.js"),
     ]
     .join("\n")
 }
