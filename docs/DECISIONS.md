@@ -46,8 +46,8 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 >   to/from `Vec<u8>`). Every other value still collapses to
 >   `Value::Other(String(value))`. *Reason:* structured marshaling belongs with
 >   later phases; **zero-copy** `ArrayBuffer` transfer (avoiding the `Value::Bytes`
->   copy) is the Phase 8 perf pass (ARCHITECTURE §9). *Impact:* byte bodies cross
->   the boundary correctly but with a copy; objects/arrays still don't.
+>   copy) was **audited in Phase 8 — see that note below**. *Impact:* byte bodies
+>   cross the boundary correctly but with a copy; objects/arrays still don't.
 > - **Snapshot-creation concurrency constraint leaks to the caller.** V8 forbids
 >   building a snapshot concurrently with other isolate creation; `snapshot::build`
 >   documents this as a caller obligation rather than hiding it. *Reason:*
@@ -76,6 +76,32 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 >   `engine` and invoked by id (`fire_timer`); `runtime` owns only the schedule.
 >   *Reason:* keeps `runtime` free of V8 handles. *Impact:* timer wiring is split
 >   across the boundary by design.
+>
+> **Phase 8:**
+> - **Startup-snapshot baking does not cross the boundary.** `runtime` drives
+>   snapshot creation through `V8Engine::build_snapshot`/`with_snapshot`, naming
+>   the *engine* type (already re-exported) but no V8 type. The op-id ordering
+>   contract (build and restore must register ops in the same order) is a real
+>   coupling, documented on both methods. *Impact:* the snapshot feature is
+>   engine-specific by nature; a second engine would expose its own equivalent.
+> - **Zero-copy `ArrayBuffer` transfer — audited, deliberately deferred.** Two
+>   `Value::Bytes` copy points exist: **(in)** `convert::marshal` copies a
+>   typed-array view into a fresh `Vec` via `copy_contents`; **(out)**
+>   `bytes_to_uint8array` does `bytes.to_vec()` before
+>   `ArrayBuffer::new_backing_store_from_vec` (the backing-store adoption itself
+>   is *already* zero-copy). *Audit outcome:*
+>   - The **in** copy is the load-bearing one and the hard one to remove: true
+>     zero-copy would hand Rust a borrow into a V8 backing store, but ops —
+>     especially async ones polled on a later `tick` — outlive the call scope,
+>     and V8 may move, detach, or free the buffer in between. Sound zero-copy
+>     would need an externalize/detach protocol over pinned backing stores; the
+>     unsafe surface and lifetime risk outweigh the win for now.
+>   - The **out** copy is merely an artifact of `value_to_js(&Value)` borrowing;
+>     an owned-`Value` return path could move the `Vec` straight into the backing
+>     store. A low-risk follow-up, not taken here to avoid reshaping the
+>     marshaling ownership model mid-phase.
+>   *Decision (Phase 8):* keep copying — both paths are correct and bounded by
+>   body size — and revisit alongside the broader structured-marshaling work.
 
 ---
 

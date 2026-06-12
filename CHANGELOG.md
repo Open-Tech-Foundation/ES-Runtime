@@ -6,6 +6,37 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 8 — Startup snapshot + perf
+
+Bakes the prelude and op shells into a V8 startup snapshot (SPEC.md §6.8,
+DECISIONS.md D8), so constructing a runtime can skip compiling *and* running the
+prelude.
+
+#### Added
+
+- **`V8Engine::build_snapshot(configure)`** — runs op registration + the prelude
+  into a snapshot-creator isolate and serializes the heap — and
+  **`V8Engine::with_snapshot_baked_ops`** to restore it. The native callbacks
+  (`op_dispatch`, `timer_set`, `timer_clear`) are registered as one canonical
+  **external-reference list** supplied at both build and restore (matched by
+  index, so ASLR-safe across processes).
+- **`Runtime::build_snapshot(providers)`** and **`Runtime::with_snapshot(blob,
+  providers)`**: the restore path rebinds only the Rust op handlers (the JS
+  `__ops.<name>` shells and the prelude are baked) in the same order
+  `build_snapshot` used, and skips prelude evaluation entirely.
+- A lightweight **`bench` example** (`default-providers`, std-only — no bench
+  framework) measuring fresh vs snapshot startup and op-dispatch throughput.
+  Indicative: ~**2.3× faster** runtime startup from a snapshot.
+
+#### Changed / audited
+
+- **Zero-copy `ArrayBuffer` transfer audited and deferred** (D3a Phase 8): the
+  `Value::Bytes` in-copy (`copy_contents`) is unsafe to elide while async ops
+  outlive the call scope; the out-copy (`bytes.to_vec()`) is a low-risk
+  follow-up. Both kept as copies for now — correct and bounded by body size.
+- Only the JS heap is serialized into the snapshot (context, `__ops.<name>`
+  shells with their op-ids, prelude state); Rust handler closures are not.
+
 ### Phase 7b — WebCrypto (AES block modes, key derivation, elliptic curve, RSA)
 
 Completes `crypto.subtle` (SPEC.md §6.7 / §2.10): the remaining symmetric
