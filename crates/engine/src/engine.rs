@@ -170,7 +170,12 @@ impl V8Engine {
 
         let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
         let isolate = v8::Isolate::new(params);
-        Self::wire(isolate, false, Some(limits.heap_limit_bytes))
+        Self::wire(
+            isolate,
+            false,
+            Some(limits.heap_limit_bytes),
+            limits.max_pending_ops as usize,
+        )
     }
 
     /// Restores an engine from a startup snapshot built by
@@ -207,7 +212,12 @@ impl V8Engine {
             .external_references(crate::op::external_references())
             .snapshot_blob(snapshot.into());
         let isolate = v8::Isolate::new(params);
-        Self::wire(isolate, ops_baked, Some(limits.heap_limit_bytes))
+        Self::wire(
+            isolate,
+            ops_baked,
+            Some(limits.heap_limit_bytes),
+            limits.max_pending_ops as usize,
+        )
     }
 
     /// Builds a V8 startup-snapshot blob with the prelude and op shells baked in
@@ -233,7 +243,7 @@ impl V8Engine {
         let creator = v8::Isolate::snapshot_creator(Some(crate::op::external_references()), None);
         // No heap guard for the short-lived builder isolate — its callback data
         // would dangle through `create_blob` (which itself runs a GC).
-        let mut engine = Self::wire(creator, false, None)?;
+        let mut engine = Self::wire(creator, false, None, limits.max_pending_ops as usize)?;
         configure(&mut engine)?;
         engine.into_snapshot_blob()
     }
@@ -271,12 +281,14 @@ impl V8Engine {
         mut isolate: v8::OwnedIsolate,
         ops_baked: bool,
         heap_limit: Option<usize>,
+        max_pending_ops: usize,
     ) -> Result<Self> {
         // Microtasks run only at our explicit checkpoint, never implicitly when
         // a JS call returns — the embedder owns when reactions fire (D4).
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
 
         let op_state = std::rc::Rc::new(std::cell::RefCell::new(OpState::new()));
+        op_state.borrow_mut().set_max_pending_ops(max_pending_ops);
         // The dispatch callback and reject callback reach this via the slot.
         isolate.set_slot(op_state.clone());
         crate::op::install_promise_reject_callback(&mut isolate);
@@ -574,6 +586,49 @@ mod tests {
         }
         // The flag was cleared, so the engine is usable again.
         assert_eq!(engine.eval("1 + 1").unwrap(), Value::Number(2.0));
+    }
+
+    #[test]
+    fn panicking_op_is_contained_as_a_js_exception() {
+        // A host op that panics must surface as a catchable JS exception, never
+        // unwind across V8's C++ frames or abort the process (DECISIONS.md D15).
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .register_op(OpDecl::sync("boom", |_args| panic!("intentional op panic")))
+            .unwrap();
+        let out = engine
+            .eval(
+                "try { __ops.boom(); 'no-throw' } \
+                 catch (e) { 'caught:' + (e instanceof Error) }",
+            )
+            .unwrap();
+        assert_eq!(out, Value::String("caught:true".into()));
+        // The engine is still usable afterwards.
+        assert_eq!(engine.eval("1 + 1").unwrap(), Value::Number(2.0));
+    }
+
+    #[test]
+    fn pending_async_op_bound_is_enforced() {
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+        let limits = Limits::default().with_max_pending_ops(2);
+        let mut engine = V8Engine::new(limits).expect("engine");
+        // An op whose promise never settles, so each call stays pending.
+        engine
+            .register_op(OpDecl::r#async("pend", |_args| {
+                Box::pin(std::future::pending())
+            }))
+            .unwrap();
+        let out = engine
+            .eval(
+                "__ops.pend(); __ops.pend(); \
+                 try { __ops.pend(); 'allowed' } \
+                 catch (e) { 'bounded:' + (e instanceof RangeError) }",
+            )
+            .unwrap();
+        assert_eq!(out, Value::String("bounded:true".into()));
     }
 
     #[test]

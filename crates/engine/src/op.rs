@@ -165,6 +165,10 @@ pub(crate) struct OpState {
     /// Promises rejected without a handler, keyed by identity hash so a later
     /// "handler added" event can revoke the entry.
     unhandled_rejections: HashMap<i32, v8::Global<v8::Value>>,
+    /// Upper bound on concurrently pending async ops (DECISIONS.md D7 / SPEC §4).
+    /// Dispatching a new async op past this throws, so adversarial JS can't pile
+    /// up unbounded host work. `usize::MAX` until set from the engine's limits.
+    max_pending_ops: usize,
 }
 
 impl OpState {
@@ -177,7 +181,13 @@ impl OpState {
             new_timers: Vec::new(),
             next_timer_id: 1,
             unhandled_rejections: HashMap::new(),
+            max_pending_ops: usize::MAX,
         }
+    }
+
+    /// Sets the bound on concurrently pending async ops (from engine limits).
+    pub(crate) fn set_max_pending_ops(&mut self, max: usize) {
+        self.max_pending_ops = max;
     }
 
     /// Adds an op to the table and returns its id (its index).
@@ -216,8 +226,28 @@ fn op_state(scope: &v8::PinScope<'_, '_>) -> Option<Rc<RefCell<OpState>>> {
     scope.get_slot::<Rc<RefCell<OpState>>>().cloned()
 }
 
-/// The single callback installed for every op; the op id rides in `data`.
+/// The op callback V8 invokes. Wraps [`op_dispatch_inner`] in `catch_unwind` so
+/// a panic in a host op handler (or in marshaling) is contained as a JS
+/// exception instead of unwinding across V8's C++ frames, which is undefined
+/// behaviour (DECISIONS.md D15). Containment assumes `panic = "unwind"`; under
+/// `panic = "abort"` the process aborts, which is then the chosen policy.
 fn op_dispatch(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        op_dispatch_inner(&mut *scope, args, rv);
+    }));
+    if caught.is_err() && !scope.is_execution_terminating() {
+        throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "internal error in host op"),
+        );
+    }
+}
+
+fn op_dispatch_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -286,6 +316,16 @@ fn op_dispatch(
             throw(scope, &err);
         }
         Outcome::Async(future) => {
+            // Bound in-flight async work so adversarial JS can't pile up
+            // unbounded pending ops (SPEC §4).
+            if state.pending_async.len() >= state.max_pending_ops {
+                drop(state);
+                throw(
+                    scope,
+                    &OpError::range_error("too many concurrent async operations"),
+                );
+                return;
+            }
             let Some(resolver) = v8::PromiseResolver::new(scope) else {
                 drop(state);
                 throw(
@@ -443,7 +483,24 @@ fn install_global_fn(
 
 /// `setTimeout(cb, delay)` / `setInterval(cb, delay)`: stores the callback and
 /// reports the new timer to `runtime` for scheduling. Returns the timer id.
+/// Contains panics as a JS exception rather than unwinding across V8 (D15).
 fn timer_set(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        timer_set_inner(&mut *scope, args, rv);
+    }));
+    if caught.is_err() && !scope.is_execution_terminating() {
+        throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "internal error in setTimeout"),
+        );
+    }
+}
+
+fn timer_set_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     mut rv: v8::ReturnValue<v8::Value>,
@@ -486,8 +543,19 @@ fn timer_set(
 
 /// `clearTimeout(id)` / `clearInterval(id)`: deactivates the timer. A later
 /// `fire_timer`/`timer_is_active` for it then reports inactive, so `runtime`
-/// stops scheduling it.
+/// stops scheduling it. Best-effort; a panic is contained, never an unwind
+/// across V8 (D15).
 fn timer_clear(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        timer_clear_inner(&mut *scope, args, rv);
+    }));
+}
+
+fn timer_clear_inner(
     scope: &mut v8::PinScope,
     args: v8::FunctionCallbackArguments,
     _rv: v8::ReturnValue<v8::Value>,
@@ -542,6 +610,14 @@ pub(crate) fn install_promise_reject_callback(isolate: &mut v8::OwnedIsolate) {
 }
 
 extern "C" fn promise_reject_callback(message: v8::PromiseRejectMessage) {
+    // Contain any panic: this is invoked by V8, so an unwind here would cross
+    // C++ frames (UB). The body only touches op state, but stay safe (D15).
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        promise_reject_callback_inner(message);
+    }));
+}
+
+fn promise_reject_callback_inner(message: v8::PromiseRejectMessage) {
     // SAFETY: `message` is valid for the duration of this callback; the macro
     // builds a CallbackScope over it, which is exactly its intended use.
     v8::callback_scope!(unsafe scope, &message);
