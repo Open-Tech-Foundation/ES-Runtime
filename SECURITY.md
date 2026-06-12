@@ -10,6 +10,27 @@ that are tracked for revisit. Architectural guarantees are specified in
 Until a formal channel is published, report suspected vulnerabilities privately
 to the maintainer rather than via public issues.
 
+## Runtime safety status
+
+The resource-limit / FFI-safety spine (SPEC.md §4) is in place as of Phase 9:
+
+- **Heap limit** — a near-limit guard terminates execution before the host OOMs.
+- **Execution watchdog** — a thread-safe `InterruptHandle` terminates a runaway
+  script; it surfaces as `Error::Terminated`, never a hang (`esrun --timeout`).
+- **Stack guard** — V8-native; deep recursion is a catchable `RangeError`.
+- **Bounded pending-ops** — adversarial JS can't pile up unbounded host work.
+- **Panic containment** — op/timer/reject callbacks are `catch_unwind`-wrapped,
+  so a host panic is a JS exception, not an unwind across the FFI (assumes
+  `panic = "unwind"`).
+- **Deny-by-default capabilities**; deterministic providers for reproducibility.
+
+**Not yet hardened** (later Phase 9): `cargo-fuzz` (URL/streams/encoding/the
+marshaler), sanitizer CI (Miri/ASAN), a WPT/min-common conformance run, a
+systematic intrinsic-integrity (prototype-pollution) audit, and an external
+security review. **Until those land, do not run hostile/untrusted code** with
+`esrun` (which also grants all capabilities); the embeddable library lets an
+embedder restrict capabilities and inject its own providers.
+
 ## Supply-chain gates
 
 Every change must pass `cargo deny check` and `cargo audit` in CI (`docs/SPEC.md`

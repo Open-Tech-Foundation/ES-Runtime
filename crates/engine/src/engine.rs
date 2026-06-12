@@ -589,6 +589,29 @@ mod tests {
     }
 
     #[test]
+    fn deep_recursion_surfaces_as_an_error_not_a_crash() {
+        // V8's native stack guard turns unbounded recursion into a catchable
+        // RangeError, so a stack-depth bomb is a typed error, never UB or a hang
+        // (SPEC §4). No host stack guard is needed on top of this.
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let err = engine
+            .eval("function f() { return 1 + f(); } f();")
+            .unwrap_err();
+        match err {
+            Error::Execution { message } => {
+                assert!(
+                    message.contains("stack"),
+                    "expected a stack error, got {message}"
+                );
+            }
+            other => panic!("expected Execution, got {other:?}"),
+        }
+        // The engine recovers and runs normally afterwards.
+        assert_eq!(engine.eval("2 + 2").unwrap(), Value::Number(4.0));
+    }
+
+    #[test]
     fn panicking_op_is_contained_as_a_js_exception() {
         // A host op that panics must surface as a catchable JS exception, never
         // unwind across V8's C++ frames or abort the process (DECISIONS.md D15).

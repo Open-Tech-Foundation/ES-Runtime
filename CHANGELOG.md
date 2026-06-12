@@ -6,6 +6,43 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 9 (in progress) — Hardening: the safety spine
+
+The resource-limit and FFI-safety guarantees (SPEC.md §4) that demonstrably stop
+a runaway or heap-bomb script without harming the host. Fuzzing, sanitizer CI,
+WPT conformance, and byte/BYOB streams remain for later Phase 9 passes.
+
+#### Added
+
+- **Execution watchdog** — `engine` exposes a thread-safe `InterruptHandle`
+  (`terminate`/`is_terminating`; names no V8 type, so it stays within the engine
+  boundary D3) and `Engine::interrupt_handle()`. `eval` detects a
+  watchdog/heap termination and returns `Error::Terminated { reason }` rather
+  than hanging; the engine recovers (the terminating state is cleared).
+- **Near-heap-limit guard** — terminates execution and grants unwind headroom,
+  so a heap bomb surfaces as `Terminated("heap limit exceeded")` instead of an
+  OOM crash.
+- **Bounded pending-ops** — `OpState` enforces `Limits::max_pending_ops`; the
+  over-limit async dispatch throws a `RangeError`.
+- **Panic-across-FFI containment (resolves D15)** — the V8-invoked callbacks
+  (`op_dispatch`, `timer_set`, `timer_clear`, `promise_reject_callback`) run
+  inside `catch_unwind`; a Rust panic in a host op handler or in marshaling is
+  contained as a JS exception, never an unwind across V8's C++ frames (assumes
+  `panic = "unwind"`).
+- **Stack guard** — documented + tested: V8's native guard turns unbounded
+  recursion into a catchable `RangeError`.
+- **`esrun -t/--timeout <ms>`** — a watchdog thread terminates the engine after
+  the deadline (cross-thread V8 termination stops even a synchronous infinite
+  loop), with a tokio-timeout backstop for async-callback runaways. `Runtime`
+  exposes `interrupt_handle()`.
+
+#### Tests
+
+- Watchdog stops a `while(true){}` from another thread (engine recovers after);
+  a heap bomb is terminated cleanly; a panicking op surfaces as a catchable JS
+  `Error`; the pending-op bound rejects the over-limit call; deep recursion is a
+  typed error. Verified end-to-end via `esrun -t`.
+
 ### Phase 8 — Startup snapshot + perf
 
 Bakes the prelude and op shells into a V8 startup snapshot (SPEC.md §6.8,

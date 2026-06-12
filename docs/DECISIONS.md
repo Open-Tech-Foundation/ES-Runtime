@@ -197,6 +197,8 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 **Consequences:** Clean Layer-B seam and a real second-engine boundary now. See D3a (Phase 2) for the boundary leak notes.
 **Deferred (not silently):** **Panic-across-FFI containment** for op/timer/reject callbacks (`catch_unwind` per D12) is implemented in the **hardening phase (§6.9)**, alongside the heap/watchdog/stack limits — not in Phase 2. Until then a *host-written* op handler that panics aborts the process (Rust's `extern "C"` panic = abort, not UB); hostile **JS** cannot force this, since handlers validate their marshaled arguments and return typed `OpError`s. Tracked for Phase 9.
 
+**Resolved (Phase 9, 2026-06-12):** The V8-invoked callbacks (`op_dispatch`, `timer_set`, `timer_clear`, `promise_reject_callback`) now run inside `catch_unwind`. A panic in a host op handler or in marshaling is contained as a JS exception (`"internal error in host op"`) instead of unwinding across V8's C++ frames. Containment assumes `panic = "unwind"` (the default); under `panic = "abort"` the process aborts, which is then the chosen policy. Landed with the execution watchdog, near-heap-limit guard, bounded pending-ops, and the V8-native stack guard (see SPEC §4 / CHANGELOG Phase 9).
+
 ---
 
 ### D16 — Phase 3 provider integration: traits + driver, runtime API unchanged · *Locked (maintainer sign-off, 2026-06-11)*

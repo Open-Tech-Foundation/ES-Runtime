@@ -81,14 +81,14 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 
 ## 4. Resource limits & security guarantees
 
-- Per-isolate **heap limit** → graceful termination on near-limit; host never OOMs.
-- **Execution-time / CPU watchdog** → runaway script terminated; surfaces as a typed error, never a hang.
-- **Stack-depth** guard.
-- **Bounded pending-op** concurrency.
-- **Deny-by-default** capabilities; no ambient authority.
-- **No Rust panic** crosses the FFI boundary.
-- **Intrinsic integrity** against prototype pollution / global tampering.
-- **Reproducibility** under deterministic providers.
+- ☑ Per-isolate **heap limit** → near-limit guard terminates execution before the host OOMs (Phase 9: `add_near_heap_limit_callback` → `Error::Terminated`).
+- ☑ **Execution-time watchdog** → a runaway script is terminated via a thread-safe `InterruptHandle`; surfaces as `Error::Terminated`, never a hang (Phase 9). CPU-cycle accounting (vs wall-clock) is not separately implemented.
+- ☑ **Stack-depth** guard → V8-native; unbounded recursion is a catchable `RangeError`, not UB or a hang (Phase 9 test).
+- ☑ **Bounded pending-op** concurrency → `max_pending_ops`; the over-limit async dispatch throws `RangeError` (Phase 9).
+- ☑ **Deny-by-default** capabilities; no ambient authority (Phase 2/D7).
+- ☑ **No Rust panic** crosses the FFI boundary → op/timer/reject callbacks are `catch_unwind`-wrapped (Phase 9, resolves D15; assumes `panic = "unwind"`).
+- ◐ **Intrinsic integrity** against prototype pollution / global tampering → prelude objects are frozen where built; a systematic audit/freeze pass is a follow-up.
+- ☑ **Reproducibility** under deterministic providers (Phase 3 test providers).
 
 ---
 
@@ -114,7 +114,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
 7. ☑ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM/AES-CBC/AES-CTR + HKDF/PBKDF2 derivation + ECDSA/ECDH (P-256/384/521) + RSA (PKCS1-v1_5/PSS/OAEP) (RustCrypto — DECISIONS D9). Carries the `rsa` Marvin advisory (SECURITY.md).
 8. ☑ **Snapshot + perf** — the prelude + op shells bake into a V8 startup snapshot (D8); `Runtime::with_snapshot` restores it (~2.3× faster startup in the `bench` example). Zero-copy `ArrayBuffer` transfer was audited and deliberately deferred (D3a Phase 8). Benchmark harness (`default-providers` `bench` example) covers context creation + op-dispatch throughput.
-9. **Hardening + conformance** — limits, watchdog, fuzzing, WPT run, security review, sanitizer CI, docs finalization.
+9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`). Remaining: fuzzing (`cargo-fuzz`), WPT/min-common conformance run, sanitizer CI (Miri/ASAN), intrinsic-integrity audit, byte/BYOB streams, security review + docs finalization.
 
 ---
 
@@ -129,7 +129,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 - No `deno_core` or any pre-built runtime framework.
 
 **Deferrals:**
-- **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) is implemented in the **hardening phase (§6.9)**, not Phase 2. A *host-written* op handler that panics currently aborts the process; hostile JS cannot force this. (DECISIONS D15.)
+- **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) — ☑ **implemented in Phase 9**: a host op panic is contained as a JS exception, not an abort (assumes `panic = "unwind"`). (DECISIONS D15.)
 - **`DOMException` engine reconciliation** — the JS class exists (Phase 4 prelude), but errors thrown from the engine still surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
 - **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) → a streams follow-up (DECISIONS D19). Default streams + encoding streams ship in Phase 5.
 - **Streaming `fetch` request bodies** → a follow-up; Phase 6 buffers the request body and streams the response (DECISIONS D20).
