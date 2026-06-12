@@ -303,6 +303,29 @@ fn op_dispatch(
     }
 }
 
+/// The canonical list of native callbacks that may be embedded in a snapshotted
+/// heap, in a **fixed order**. V8 matches external references by index (not by
+/// address), so the same list — built fresh each call, which is correct under
+/// ASLR — must be supplied at both snapshot creation and restore
+/// (DECISIONS.md D8). Every native callback reachable from a `v8::Function`
+/// that can survive into a snapshot belongs here: the op dispatcher and the two
+/// timer setters/clearers. (The promise-reject callback is isolate-level
+/// configuration re-applied at restore, not a heap-embedded reference.)
+pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalReference]> {
+    use v8::MapFnTo;
+    std::borrow::Cow::Owned(vec![
+        v8::ExternalReference {
+            function: op_dispatch.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: timer_set.map_fn_to(),
+        },
+        v8::ExternalReference {
+            function: timer_clear.map_fn_to(),
+        },
+    ])
+}
+
 /// Installs op `op_id` as `globalThis.__ops.<name>`, creating the `__ops`
 /// holder object on first use.
 pub(crate) fn install_op(

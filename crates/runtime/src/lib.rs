@@ -157,6 +157,49 @@ impl Runtime {
         Ok(runtime)
     }
 
+    /// Builds a startup-snapshot blob with the host ops' JS shells and the whole
+    /// prelude baked in (DECISIONS.md D8). Restoring a runtime from it via
+    /// [`with_snapshot`](Self::with_snapshot) skips both compiling *and* running
+    /// the prelude, which is the bulk of [`new`](Self::new)'s cost.
+    ///
+    /// `providers` are consumed only to satisfy op registration while building;
+    /// the Rust handler closures are **not** serialized, so the choice of
+    /// providers here does not affect the blob — it captures only the op
+    /// names/order and the prelude's global state. Build once at startup, before
+    /// any engine exists (V8 forbids concurrent snapshot creation).
+    pub fn build_snapshot(providers: &HostProviders) -> Result<Vec<u8>> {
+        Ok(V8Engine::build_snapshot(
+            es_runtime_common::Limits::default(),
+            |engine| {
+                // `builtins::install` yields the runtime `Error`; unwrap its sole
+                // engine variant so the closure speaks the engine's `Result`.
+                builtins::install(engine, providers).map_err(|Error::Engine(e)| e)?;
+                engine.eval(&prelude::source())?;
+                Ok(())
+            },
+        )?)
+    }
+
+    /// Restores a runtime from a [`build_snapshot`](Self::build_snapshot) blob.
+    ///
+    /// The prelude and `__ops.<name>` shells come from the snapshot, so this only
+    /// rebinds the Rust op handlers — in the **same order** `build_snapshot` used,
+    /// which [`builtins::install`] guarantees — and does not re-evaluate the
+    /// prelude. Equivalent in behaviour to [`new`](Self::new), far cheaper.
+    pub fn with_snapshot(snapshot: Vec<u8>, providers: HostProviders) -> Result<Self> {
+        let engine =
+            V8Engine::with_snapshot_baked_ops(es_runtime_common::Limits::default(), snapshot)?;
+        let mut runtime = Runtime {
+            engine: Box::new(engine),
+            timers: TimerQueue::default(),
+            now_ms: 0,
+        };
+        // Rebind handlers only; the engine skips the (baked) JS shells and the
+        // prelude is already present in the restored context.
+        builtins::install(runtime.engine.as_mut(), &providers)?;
+        Ok(runtime)
+    }
+
     /// Registers a host op, callable from JS as `globalThis.__ops.<name>`.
     pub fn register_op(&mut self, op: OpDecl) -> Result<()> {
         self.engine.register_op(op)?;
@@ -412,6 +455,55 @@ mod tests {
             HostProviders::new(clock, console, net, entropy),
         )
         .expect("runtime")
+    }
+
+    fn test_providers() -> HostProviders {
+        HostProviders::new(
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+            Arc::new(TestConsole::default()),
+            Arc::new(MockNet::stub()),
+            Arc::new(TestEntropy::new()),
+        )
+    }
+
+    #[test]
+    fn snapshot_runtime_runs_baked_prelude() {
+        // Bake the real ops + full prelude into a snapshot, restore a runtime
+        // from it, and exercise several op-backed APIs to prove the baked
+        // context behaves like a freshly-built one (DECISIONS.md D8).
+        let _g = v8_guard();
+        let blob = Runtime::build_snapshot(&test_providers()).expect("build snapshot");
+        let mut rt = Runtime::with_snapshot(blob, test_providers()).expect("restore");
+        let out = eval_async(
+            &mut rt,
+            "const u = new URL('https://x.test/a?b=1'); \
+             const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('abc')); \
+             const id = crypto.randomUUID(); \
+             console.log('from snapshot'); \
+             return `${u.host}|${new Uint8Array(h).length}|${id.length}`;",
+        );
+        assert_eq!(out, Value::String("x.test|32|36".into()));
+    }
+
+    #[test]
+    fn snapshot_runtime_async_ops_and_timers_work() {
+        // The driven loop (timers + async settling) must work over a restored
+        // engine just as over a fresh one.
+        let _g = v8_guard();
+        let blob = Runtime::build_snapshot(&test_providers()).expect("build snapshot");
+        let mut rt = Runtime::with_snapshot(blob, test_providers()).expect("restore");
+        // `eval_async` drives ticks at now=0, so use a 0ms timer (fires at 0);
+        // this still exercises the baked `setTimeout` builtin + the driven loop.
+        let out = eval_async(
+            &mut rt,
+            "let v = 0; \
+             await new Promise((r) => setTimeout(() => { v = 7; r(); }, 0)); \
+             return v;",
+        );
+        assert_eq!(out, Value::Number(7.0));
     }
 
     #[test]

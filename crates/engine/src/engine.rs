@@ -78,6 +78,12 @@ pub struct V8Engine {
     /// Op table + pending-work registries, shared with the in-isolate dispatch
     /// callback via an isolate slot (see [`OpState`]).
     op_state: std::rc::Rc<std::cell::RefCell<OpState>>,
+    /// When the engine was restored from a snapshot whose `__ops.<name>` shells
+    /// are already baked in, [`register_op`](Engine::register_op) binds only the
+    /// Rust handler (the JS function is present), rather than re-creating it. The
+    /// caller must register ops in the **same order** used to build the snapshot
+    /// so op ids line up (DECISIONS.md D8).
+    ops_baked: bool,
 }
 
 impl V8Engine {
@@ -93,7 +99,7 @@ impl V8Engine {
 
         let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
         let isolate = v8::Isolate::new(params);
-        Self::wire(isolate)
+        Self::wire(isolate, false)
     }
 
     /// Restores an engine from a startup snapshot built by
@@ -104,20 +110,91 @@ impl V8Engine {
     /// (DECISIONS.md D8) — so global state captured at build time is present
     /// immediately.
     pub fn with_snapshot(limits: Limits, snapshot: Vec<u8>) -> Result<Self> {
+        Self::restore(limits, snapshot, false)
+    }
+
+    /// Restores an engine from a snapshot whose `globalThis.__ops.<name>` shells
+    /// and prelude are already baked in (built via [`V8Engine::build_snapshot`]).
+    ///
+    /// Unlike [`with_snapshot`](Self::with_snapshot), subsequent
+    /// [`register_op`](Engine::register_op) calls bind **only the Rust handler** —
+    /// the JS function is already present from the snapshot. Ops must be
+    /// registered in the same order used at build time so ids line up
+    /// (DECISIONS.md D8).
+    pub fn with_snapshot_baked_ops(limits: Limits, snapshot: Vec<u8>) -> Result<Self> {
+        Self::restore(limits, snapshot, true)
+    }
+
+    fn restore(limits: Limits, snapshot: Vec<u8>, ops_baked: bool) -> Result<Self> {
         limits.validate()?;
         crate::ensure_v8_initialized();
 
+        // The blob may embed our native callbacks by external-reference index;
+        // the same canonical list used at build must be supplied here (D8).
         let params = v8::CreateParams::default()
             .heap_limits(0, limits.heap_limit_bytes)
+            .external_references(crate::op::external_references())
             .snapshot_blob(snapshot.into());
         let isolate = v8::Isolate::new(params);
-        Self::wire(isolate)
+        Self::wire(isolate, ops_baked)
+    }
+
+    /// Builds a V8 startup-snapshot blob with the prelude and op shells baked in
+    /// (DECISIONS.md D8).
+    ///
+    /// `configure` is run against a creator-backed engine — it registers the ops
+    /// and evaluates the prelude exactly as a live engine would. Only the JS heap
+    /// (the context, the `__ops.<name>` function shells with their op ids, and the
+    /// prelude's global state) is serialized; the Rust handler closures are not,
+    /// so they are rebound at restore by replaying the same registration order.
+    ///
+    /// # Concurrency
+    ///
+    /// V8 forbids snapshot creation concurrent with other isolate creation in the
+    /// process; build once at startup before any [`V8Engine`] exists (a D3a note).
+    pub fn build_snapshot<F>(limits: Limits, configure: F) -> Result<Vec<u8>>
+    where
+        F: FnOnce(&mut dyn Engine) -> Result<()>,
+    {
+        limits.validate()?;
+        crate::ensure_v8_initialized();
+
+        let creator = v8::Isolate::snapshot_creator(Some(crate::op::external_references()), None);
+        let mut engine = Self::wire(creator, false)?;
+        configure(&mut engine)?;
+        engine.into_snapshot_blob()
+    }
+
+    /// Consumes a creator-backed engine: marks its context as the snapshot's
+    /// default and serializes the blob. All live handles bar the default context
+    /// are released first (a V8 requirement for `create_blob`).
+    fn into_snapshot_blob(self) -> Result<Vec<u8>> {
+        let V8Engine {
+            mut isolate,
+            context,
+            op_state,
+            ..
+        } = self;
+        {
+            v8::scope!(let scope, &mut isolate);
+            let local = v8::Local::new(scope, &context);
+            scope.set_default_context(local);
+        }
+        // Release the only persistent handles before create_blob: the context
+        // Global (the default context is now held by V8 itself) and the op-state
+        // Rc (its timer/rejection registries are empty at build time).
+        drop(context);
+        drop(op_state);
+
+        let blob = isolate.create_blob(v8::FunctionCodeHandling::Keep);
+        blob.map(|data| data.to_vec())
+            .ok_or_else(|| Error::Internal("V8 returned no snapshot blob".into()))
     }
 
     /// Common construction: configure the isolate, build the context, install
     /// the timer builtins, and wire the shared [`OpState`] into an isolate slot
     /// so the dispatch and reject callbacks can reach it.
-    fn wire(mut isolate: v8::OwnedIsolate) -> Result<Self> {
+    fn wire(mut isolate: v8::OwnedIsolate, ops_baked: bool) -> Result<Self> {
         // Microtasks run only at our explicit checkpoint, never implicitly when
         // a JS call returns — the embedder owns when reactions fire (D4).
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
@@ -142,6 +219,7 @@ impl V8Engine {
             isolate,
             context,
             op_state,
+            ops_baked,
         })
     }
 
@@ -188,6 +266,12 @@ impl Engine for V8Engine {
             .op_state
             .borrow_mut()
             .add_op(op.required_capability, op.handler);
+        // When the op shells are baked into a restored snapshot, the JS function
+        // already exists — binding the handler (above) is all that is needed, and
+        // re-creating the shell would be wasted work (DECISIONS.md D8).
+        if self.ops_baked {
+            return Ok(());
+        }
         v8::scope!(let scope, &mut self.isolate);
         let context = v8::Local::new(scope, &self.context);
         let scope = &mut v8::ContextScope::new(scope, context);

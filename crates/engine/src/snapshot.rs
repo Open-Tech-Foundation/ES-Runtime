@@ -33,8 +33,10 @@ pub fn build(prelude: Option<&str>) -> Result<Vec<u8>> {
 
     // A snapshot-creator isolate. V8 *requires* `create_blob` be called on it
     // before it drops, so we must reach that call even when the prelude fails —
-    // hence the prelude outcome is captured and surfaced only afterward.
-    let mut creator = v8::Isolate::snapshot_creator(None, None);
+    // hence the prelude outcome is captured and surfaced only afterward. The
+    // canonical external-reference list is supplied so blobs are symmetric with
+    // the restore path even though this generic builder bakes no ops (D8).
+    let mut creator = v8::Isolate::snapshot_creator(Some(crate::op::external_references()), None);
     let prelude_result = {
         v8::scope!(let scope, &mut creator);
         let context = v8::Context::new(scope, v8::ContextOptions::default());
@@ -117,5 +119,37 @@ mod tests {
         let _v8 = crate::v8_test_guard();
         let err = build(Some("function (")).unwrap_err();
         assert!(matches!(err, Error::Compile { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn baked_ops_and_prelude_survive_round_trip() {
+        // The full D8 mechanism end-to-end at the engine layer: bake an op shell
+        // (`__ops.double`) plus a prelude that captures it, restore with the op
+        // shells baked, rebind only the handler, and call the baked global.
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+
+        let blob = V8Engine::build_snapshot(Limits::default(), |engine| {
+            engine.register_op(OpDecl::sync("double", |mut args| {
+                let n = args.remove(0).as_number().unwrap_or(0.0);
+                Ok(Value::Number(n * 2.0))
+            }))?;
+            engine.eval("globalThis.twice = (x) => __ops.double(x);")?;
+            Ok(())
+        })
+        .expect("build snapshot");
+
+        let mut engine =
+            V8Engine::with_snapshot_baked_ops(Limits::default(), blob).expect("restore");
+        // Rebind the handler in the same order used at build (here, just one op);
+        // the JS shell + the `twice` global come from the snapshot.
+        engine
+            .register_op(OpDecl::sync("double", |mut args| {
+                let n = args.remove(0).as_number().unwrap_or(0.0);
+                Ok(Value::Number(n * 2.0))
+            }))
+            .expect("rebind handler");
+
+        assert_eq!(engine.eval("twice(21)").unwrap(), Value::Number(42.0));
     }
 }
