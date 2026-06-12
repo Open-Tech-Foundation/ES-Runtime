@@ -22,6 +22,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::fetch_ops::install(engine, providers.net())?;
     // WebCrypto ops, backed by the Entropy provider + RustCrypto.
     crate::crypto_ops::install(engine, providers.entropy())?;
+    // Elliptic-curve WebCrypto (ECDSA/ECDH), also Entropy-backed for key gen.
+    crate::ec_ops::install(engine, providers.entropy())?;
     Ok(())
 }
 

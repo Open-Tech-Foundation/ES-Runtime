@@ -8,8 +8,8 @@
 //! operations via `TaskSpawner` is a later refinement.
 //!
 //! Phase 7 ships digest, HMAC, and AES-GCM; Phase 7b adds AES-CBC, AES-CTR,
-//! and the HKDF/PBKDF2 key-derivation functions. ECDSA/ECDH/RSA are staged
-//! (SPEC §7).
+//! and the HKDF/PBKDF2 key-derivation functions. Elliptic-curve ECDSA/ECDH
+//! live in the sibling [`crate::ec_ops`] module; RSA is staged (SPEC §7).
 
 use std::sync::Arc;
 
@@ -129,14 +129,14 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
     Ok(())
 }
 
-fn arg_str(args: &[Value], i: usize) -> std::result::Result<String, OpError> {
+pub(crate) fn arg_str(args: &[Value], i: usize) -> std::result::Result<String, OpError> {
     args.get(i)
         .and_then(Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| type_error(format!("argument {i} must be a string")))
 }
 
-fn arg_bytes(args: &[Value], i: usize) -> std::result::Result<Vec<u8>, OpError> {
+pub(crate) fn arg_bytes(args: &[Value], i: usize) -> std::result::Result<Vec<u8>, OpError> {
     args.get(i)
         .and_then(Value::as_bytes)
         .map(<[u8]>::to_vec)
@@ -148,14 +148,19 @@ fn type_error(message: String) -> OpError {
 }
 
 /// `NotSupportedError` for an unknown algorithm.
-fn not_supported(message: impl Into<String>) -> OpError {
+pub(crate) fn not_supported(message: impl Into<String>) -> OpError {
     OpError::new(ExceptionClass::DomException("NotSupportedError"), message)
 }
 
 /// `OperationError` for a crypto-operation failure (bad key length, auth tag
 /// mismatch, …).
-fn operation_error(message: impl Into<String>) -> OpError {
+pub(crate) fn operation_error(message: impl Into<String>) -> OpError {
     OpError::new(ExceptionClass::DomException("OperationError"), message)
+}
+
+/// `DataError` for malformed key material (bad DER, wrong point encoding, …).
+pub(crate) fn data_error(message: impl Into<String>) -> OpError {
+    OpError::new(ExceptionClass::DomException("DataError"), message)
 }
 
 fn digest(alg: &str, data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {

@@ -6,11 +6,11 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
-### Phase 7b — WebCrypto (AES block modes + key derivation)
+### Phase 7b — WebCrypto (AES block modes, key derivation, elliptic curve)
 
-Extends `crypto.subtle` with the remaining symmetric ciphers and the
-key-derivation functions (SPEC.md §6.7 / §2.10), still RustCrypto
-(DECISIONS.md D9).
+Extends `crypto.subtle` with the remaining symmetric ciphers, the key-derivation
+functions, and elliptic-curve ECDSA/ECDH (SPEC.md §6.7 / §2.10), still
+RustCrypto (DECISIONS.md D9). RSA remains staged.
 
 #### Added
 
@@ -30,6 +30,26 @@ key-derivation functions (SPEC.md §6.7 / §2.10), still RustCrypto
 - Tests add NIST SP 800-38A vectors (CBC F.2.1, CTR F.5.1), RFC 5869 (HKDF) and
   RFC 6070 (PBKDF2) known-answer vectors, round-trips, and a PBKDF2→AES-GCM
   `deriveKey` end-to-end.
+- **ECDSA** (sign/verify) and **ECDH** (`deriveBits`/`deriveKey`) over **P-256,
+  P-384, P-521** on `crypto.subtle`, with `generateKey` (key pairs) and
+  `importKey`/`exportKey` for **all four formats** (`raw`/`spki`/`pkcs8`/`jwk`).
+  ECDSA honours an arbitrary `algorithm.hash` (SHA-1/256/384/512). New
+  `ec_ops` module + ops (`ec_generate_pkcs8`, `ec_public_point`,
+  `ec_private_scalar`, `ec_import_pkcs8`, `ec_pkcs8_from_scalar`,
+  `ec_import_spki`, `ec_export_spki`, `ecdsa_sign`, `ecdsa_verify`,
+  `ecdh_derive`), backed by `p256`/`p384`/`p521`.
+- EC keys cross the op boundary as PKCS#8 (private) / SEC1 points (public); JWK
+  is assembled in JS from the exposed coordinates/scalar. **ECDSA signing draws
+  its nonce from the `Entropy` provider** (hedged `RandomizedPrehashSigner`),
+  never ambient `OsRng` — notable for P-521, whose deterministic path otherwise
+  reaches for `OsRng`.
+- The EC crates sit on the older `elliptic-curve` 0.13 / `digest` 0.10
+  generation (0.14 is pre-release), so they bring **duplicate `digest` 0.10,
+  `sha2` 0.10, and `hkdf` 0.12** — warn-level under `deny.toml`, accepted per
+  DECISIONS.md D9.
+- Tests cover ECDSA P-256 sign/verify (+ tamper) and P-521/SHA-512, a P-384
+  export→import round-trip across **all four formats**, ECDH shared-secret
+  agreement, and an ECDH→AES-GCM `deriveKey` between two parties.
 
 ### Phase 7 — WebCrypto (first tranche)
 

@@ -26,6 +26,9 @@ cbc.workspace = true
 ctr.workspace = true
 hkdf.workspace = true
 pbkdf2.workspace = true
+p256.workspace = true
+p384.workspace = true
+p521.workspace = true
 
 [lints]
 workspace = true

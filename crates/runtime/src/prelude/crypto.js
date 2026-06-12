@@ -1,7 +1,9 @@
 // WebCrypto (SPEC §2.10): crypto.getRandomValues, crypto.randomUUID, and
-// crypto.subtle (digest, HMAC, AES-GCM/CBC/CTR, HKDF/PBKDF2 derivation).
-// Crypto runs in vetted Rust ops (RustCrypto, D9); this layer is the JS surface
-// + key bookkeeping. ECDSA/ECDH/RSA are staged for a follow-up (SPEC §7).
+// crypto.subtle (digest, HMAC, AES-GCM/CBC/CTR, HKDF/PBKDF2 derivation, and
+// ECDSA/ECDH over P-256/P-384/P-521). Crypto runs in vetted Rust ops
+// (RustCrypto, D9); this layer is the JS surface + key bookkeeping. EC keys
+// cross the op boundary as PKCS#8 (private) / SEC1 points (public); JWK is
+// assembled here. RSA is staged for a follow-up (SPEC §7).
 (() => {
   "use strict";
   const ops = globalThis.__ops;
@@ -50,7 +52,10 @@
   const KEY = Symbol("cryptoKeyMaterial");
   const AES_ALGS = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
   const KDF_ALGS = new Set(["HKDF", "PBKDF2"]);
+  const EC_ALGS = new Set(["ECDSA", "ECDH"]);
   const HASH_BITS = { "SHA-1": 160, "SHA-256": 256, "SHA-384": 384, "SHA-512": 512 };
+  // Field byte length (and so the JWK coordinate width) per named curve.
+  const EC_FIELD = { "P-256": 32, "P-384": 48, "P-521": 66 };
 
   function toBytes(data) {
     if (data instanceof Uint8Array) return data;
@@ -68,6 +73,107 @@
   }
   function hashName(h) {
     return typeof h === "string" ? h : h.name;
+  }
+
+  // ---- EC / JWK helpers ---------------------------------------------------
+
+  function b64uToBytes(s) {
+    let t = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (t.length % 4) t += "=";
+    const bin = atob(t);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+  function bytesToB64u(bytes) {
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let bin = "";
+    for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  // SEC1 uncompressed point (0x04 || X || Y) from raw coordinate bytes.
+  function sec1FromXY(x, y) {
+    const out = new Uint8Array(1 + x.length + y.length);
+    out[0] = 0x04;
+    out.set(x, 1);
+    out.set(y, 1 + x.length);
+    return out;
+  }
+  function ecCurve(algo) {
+    const curve = algo.namedCurve;
+    if (!EC_FIELD[curve]) {
+      throw new DOMException(`unsupported named curve: ${curve}`, "NotSupportedError");
+    }
+    return curve;
+  }
+
+  function importEcKey(format, keyData, algo, extractable, usages) {
+    const curve = ecCurve(algo);
+    const alg = { name: algo.name, namedCurve: curve };
+    if (format === "raw") {
+      // `raw` is public-only: an uncompressed SEC1 point.
+      return new CryptoKey("public", extractable, alg, usages, toBytes(keyData).slice());
+    }
+    if (format === "spki") {
+      return new CryptoKey("public", extractable, alg, usages, ops.ec_import_spki(curve, toBytes(keyData)));
+    }
+    if (format === "pkcs8") {
+      return new CryptoKey("private", extractable, alg, usages, ops.ec_import_pkcs8(curve, toBytes(keyData)));
+    }
+    if (format === "jwk") {
+      const jwk = keyData;
+      if (jwk.kty !== "EC") throw new DOMException("JWK kty must be EC", "DataError");
+      if (jwk.crv !== curve) throw new DOMException("JWK crv does not match algorithm", "DataError");
+      if (jwk.d != null) {
+        const pkcs8 = ops.ec_pkcs8_from_scalar(curve, b64uToBytes(jwk.d));
+        return new CryptoKey("private", extractable, alg, usages, pkcs8);
+      }
+      if (jwk.x == null || jwk.y == null) {
+        throw new DOMException("JWK is missing coordinates", "DataError");
+      }
+      const sec1 = sec1FromXY(b64uToBytes(jwk.x), b64uToBytes(jwk.y));
+      return new CryptoKey("public", extractable, alg, usages, sec1);
+    }
+    throw new DOMException(`unsupported import format: ${format}`, "NotSupportedError");
+  }
+
+  function exportEcKey(format, key) {
+    if (!key.extractable) {
+      throw new DOMException("key is not extractable", "InvalidAccessError");
+    }
+    const curve = key.algorithm.namedCurve;
+    const f = EC_FIELD[curve];
+    if (format === "raw") {
+      if (key.type !== "public") throw new DOMException("raw export is public-only", "InvalidAccessError");
+      return asArrayBuffer(key[KEY].slice());
+    }
+    if (format === "spki") {
+      if (key.type !== "public") throw new DOMException("spki export is public-only", "InvalidAccessError");
+      return asArrayBuffer(ops.ec_export_spki(curve, key[KEY]));
+    }
+    if (format === "pkcs8") {
+      if (key.type !== "private") throw new DOMException("pkcs8 export is private-only", "InvalidAccessError");
+      return asArrayBuffer(key[KEY].slice());
+    }
+    if (format === "jwk") {
+      let sec1 = key[KEY];
+      let d;
+      if (key.type === "private") {
+        sec1 = ops.ec_public_point(curve, key[KEY]);
+        d = bytesToB64u(ops.ec_private_scalar(curve, key[KEY]));
+      }
+      const jwk = {
+        kty: "EC",
+        crv: curve,
+        x: bytesToB64u(sec1.subarray(1, 1 + f)),
+        y: bytesToB64u(sec1.subarray(1 + f, 1 + 2 * f)),
+        key_ops: [...key.usages],
+        ext: key.extractable,
+      };
+      if (d != null) jwk.d = d;
+      return jwk;
+    }
+    throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
   }
 
   class CryptoKey {
@@ -121,14 +227,33 @@
         const material = ops.random_bytes(algo.length / 8);
         return new CryptoKey("secret", extractable, { name: algo.name, length: algo.length }, usages, material);
       }
+      if (EC_ALGS.has(algo.name)) {
+        const curve = ecCurve(algo);
+        const alg = { name: algo.name, namedCurve: curve };
+        const pkcs8 = ops.ec_generate_pkcs8(curve);
+        const sec1 = ops.ec_public_point(curve, pkcs8);
+        // Split the requested usages between the two keys: ECDSA →
+        // sign(private)/verify(public); ECDH → derive*(private), none public.
+        const isEcdsa = algo.name === "ECDSA";
+        const privOps = isEcdsa ? ["sign"] : ["deriveBits", "deriveKey"];
+        const privUsages = usages.filter((u) => privOps.includes(u));
+        const pubUsages = isEcdsa ? usages.filter((u) => u === "verify") : [];
+        return {
+          privateKey: new CryptoKey("private", extractable, alg, privUsages, pkcs8),
+          publicKey: new CryptoKey("public", true, alg, pubUsages, sec1),
+        };
+      }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
     },
 
     async importKey(format, keyData, algorithm, extractable, usages) {
+      const algo = normalizeAlgorithm(algorithm);
+      if (EC_ALGS.has(algo.name)) {
+        return importEcKey(format, keyData, algo, extractable, usages);
+      }
       if (format !== "raw") {
         throw new DOMException(`unsupported import format: ${format}`, "NotSupportedError");
       }
-      const algo = normalizeAlgorithm(algorithm);
       const material = toBytes(keyData).slice();
       if (algo.name === "HMAC") {
         return new CryptoKey(
@@ -159,6 +284,9 @@
     },
 
     async exportKey(format, key) {
+      if (EC_ALGS.has(key.algorithm.name)) {
+        return exportEcKey(format, key);
+      }
       if (format !== "raw") {
         throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
       }
@@ -175,6 +303,11 @@
           ops.subtle_hmac_sign(key.algorithm.hash.name, key[KEY], toBytes(data)),
         );
       }
+      if (algo.name === "ECDSA") {
+        return asArrayBuffer(
+          ops.ecdsa_sign(key.algorithm.namedCurve, hashName(algo.hash), key[KEY], toBytes(data)),
+        );
+      }
       throw new DOMException(`unsupported sign algorithm: ${algo.name}`, "NotSupportedError");
     },
 
@@ -183,6 +316,15 @@
       if (algo.name === "HMAC") {
         return ops.subtle_hmac_verify(
           key.algorithm.hash.name,
+          key[KEY],
+          toBytes(signature),
+          toBytes(data),
+        );
+      }
+      if (algo.name === "ECDSA") {
+        return ops.ecdsa_verify(
+          key.algorithm.namedCurve,
+          hashName(algo.hash),
           key[KEY],
           toBytes(signature),
           toBytes(data),
@@ -230,6 +372,21 @@
 
     async deriveBits(algorithm, baseKey, length) {
       const algo = normalizeAlgorithm(algorithm);
+      if (algo.name === "ECDH") {
+        // The full shared secret is the agreed X coordinate (field width).
+        // A null length returns all of it; otherwise take the leading bits.
+        const curve = baseKey.algorithm.namedCurve;
+        const shared = ops.ecdh_derive(curve, baseKey[KEY], algo.public[KEY]);
+        if (length == null) return asArrayBuffer(shared);
+        if (length % 8 !== 0) {
+          throw new DOMException("ECDH length must be a multiple of 8", "OperationError");
+        }
+        const bytes = length / 8;
+        if (bytes > shared.length) {
+          throw new DOMException("requested ECDH length exceeds the shared secret", "OperationError");
+        }
+        return asArrayBuffer(shared.subarray(0, bytes));
+      }
       if (length == null || length % 8 !== 0) {
         throw new DOMException("deriveBits length must be a non-null multiple of 8", "OperationError");
       }

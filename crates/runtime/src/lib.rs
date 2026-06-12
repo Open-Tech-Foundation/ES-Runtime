@@ -16,6 +16,7 @@
 
 mod builtins;
 mod crypto_ops;
+mod ec_ops;
 mod fetch_ops;
 mod prelude;
 mod timer;
@@ -1275,5 +1276,108 @@ mod tests {
              return new TextDecoder().decode(pt);",
         );
         assert_eq!(out, Value::String("staple".into()));
+    }
+
+    #[test]
+    fn subtle_ecdsa_p256_sign_verify_round_trips() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); \
+             const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']); \
+             const data = enc.encode('sign me'); \
+             const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, kp.privateKey, data); \
+             const good = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, kp.publicKey, sig, data); \
+             const bad = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, kp.publicKey, sig, enc.encode('tampered')); \
+             return `${good}:${bad}`;",
+        );
+        assert_eq!(out, Value::String("true:false".into()));
+    }
+
+    #[test]
+    fn subtle_ecdsa_p521_sha512_round_trips() {
+        // Exercises the divergent P-521 signing path (entropy-routed nonce).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); \
+             const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-521' }, true, ['sign', 'verify']); \
+             const data = enc.encode('p521'); \
+             const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-512' }, kp.privateKey, data); \
+             return String(await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-512' }, kp.publicKey, sig, data));",
+        );
+        assert_eq!(out, Value::String("true".into()));
+    }
+
+    #[test]
+    fn subtle_ec_key_export_import_all_formats_round_trip() {
+        // Export the keys to every format, re-import, and confirm a signature
+        // from the original private key verifies under each re-imported public.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); const data = enc.encode('formats'); \
+             const algo = { name: 'ECDSA', namedCurve: 'P-384' }; \
+             const kp = await crypto.subtle.generateKey(algo, true, ['sign', 'verify']); \
+             const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-384' }, kp.privateKey, data); \
+             const pkcs8 = await crypto.subtle.exportKey('pkcs8', kp.privateKey); \
+             const spki = await crypto.subtle.exportKey('spki', kp.publicKey); \
+             const raw = await crypto.subtle.exportKey('raw', kp.publicKey); \
+             const jwkPub = await crypto.subtle.exportKey('jwk', kp.publicKey); \
+             const jwkPriv = await crypto.subtle.exportKey('jwk', kp.privateKey); \
+             const priv2 = await crypto.subtle.importKey('pkcs8', pkcs8, algo, true, ['sign']); \
+             const sig2 = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-384' }, priv2, data); \
+             const fromSpki = await crypto.subtle.importKey('spki', spki, algo, true, ['verify']); \
+             const fromRaw = await crypto.subtle.importKey('raw', raw, algo, true, ['verify']); \
+             const fromJwk = await crypto.subtle.importKey('jwk', jwkPub, algo, true, ['verify']); \
+             const fromJwkPriv = await crypto.subtle.importKey('jwk', jwkPriv, algo, true, ['sign']); \
+             const sig3 = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-384' }, fromJwkPriv, data); \
+             const v = (k, s) => crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-384' }, k, s, data); \
+             const results = [await v(fromSpki, sig), await v(fromRaw, sig), await v(fromJwk, sig2), await v(fromSpki, sig3)]; \
+             return results.every((r) => r === true) ? 'all-ok' : 'mismatch';",
+        );
+        assert_eq!(out, Value::String("all-ok".into()));
+    }
+
+    #[test]
+    fn subtle_ecdh_agreement_is_symmetric() {
+        // Both parties derive the same shared secret (P-256).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const algo = { name: 'ECDH', namedCurve: 'P-256' }; \
+             const a = await crypto.subtle.generateKey(algo, true, ['deriveBits']); \
+             const b = await crypto.subtle.generateKey(algo, true, ['deriveBits']); \
+             const toHex = (buf) => [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join(''); \
+             const ab = await crypto.subtle.deriveBits({ name: 'ECDH', public: b.publicKey }, a.privateKey, 256); \
+             const ba = await crypto.subtle.deriveBits({ name: 'ECDH', public: a.publicKey }, b.privateKey, 256); \
+             return toHex(ab) === toHex(ba) ? 'agree' : 'disagree';",
+        );
+        assert_eq!(out, Value::String("agree".into()));
+    }
+
+    #[test]
+    fn subtle_ecdh_derive_key_then_aes_gcm_round_trips() {
+        // ECDH deriveKey → AES-GCM, used end-to-end between two parties.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); \
+             const algo = { name: 'ECDH', namedCurve: 'P-256' }; \
+             const a = await crypto.subtle.generateKey(algo, true, ['deriveKey']); \
+             const b = await crypto.subtle.generateKey(algo, true, ['deriveKey']); \
+             const keyA = await crypto.subtle.deriveKey({ name: 'ECDH', public: b.publicKey }, a.privateKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt']); \
+             const keyB = await crypto.subtle.deriveKey({ name: 'ECDH', public: a.publicKey }, b.privateKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']); \
+             const iv = crypto.getRandomValues(new Uint8Array(12)); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, keyA, enc.encode('shared')); \
+             const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, keyB, ct); \
+             return new TextDecoder().decode(pt);",
+        );
+        assert_eq!(out, Value::String("shared".into()));
     }
 }
