@@ -7,7 +7,8 @@
 //! the prelude's `crypto.subtle` wraps each in a Promise. Offloading large
 //! operations via `TaskSpawner` is a later refinement.
 //!
-//! Phase 7 ships digest, HMAC, and AES-GCM; ECDSA/ECDH/RSA are staged (SPEC §7).
+//! Phase 7 ships digest, HMAC, and AES-GCM; Phase 7b adds AES-CBC and AES-CTR.
+//! HKDF/PBKDF2 and ECDSA/ECDH/RSA are staged (SPEC §7).
 
 use std::sync::Arc;
 
@@ -15,8 +16,11 @@ use es_runtime_common::{ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::Entropy;
 
+use aes::{Aes128, Aes192, Aes256};
 use aes_gcm::aead::{Aead, KeyInit as AeadKeyInit, Payload};
 use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+use cbc::cipher::block_padding::Pkcs7;
+use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, StreamCipher};
 use hmac::digest::KeyInit as MacKeyInit;
 use hmac::{Hmac, Mac};
 use sha2::Digest as _;
@@ -69,6 +73,30 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         let data = arg_bytes(&args, 2)?;
         let aad = arg_bytes(&args, 3).unwrap_or_default();
         Ok(Value::Bytes(aes_gcm_open(&key, &iv, &data, &aad)?))
+    }))?;
+
+    engine.register_op(OpDecl::sync("subtle_aes_cbc_encrypt", |args| {
+        let key = arg_bytes(&args, 0)?;
+        let iv = arg_bytes(&args, 1)?;
+        let data = arg_bytes(&args, 2)?;
+        Ok(Value::Bytes(aes_cbc_encrypt(&key, &iv, &data)?))
+    }))?;
+
+    engine.register_op(OpDecl::sync("subtle_aes_cbc_decrypt", |args| {
+        let key = arg_bytes(&args, 0)?;
+        let iv = arg_bytes(&args, 1)?;
+        let data = arg_bytes(&args, 2)?;
+        Ok(Value::Bytes(aes_cbc_decrypt(&key, &iv, &data)?))
+    }))?;
+
+    // AES-CTR is symmetric: the same keystream XOR serves encrypt and decrypt,
+    // so one op backs both `subtle.encrypt` and `subtle.decrypt`.
+    engine.register_op(OpDecl::sync("subtle_aes_ctr", |args| {
+        let key = arg_bytes(&args, 0)?;
+        let counter = arg_bytes(&args, 1)?;
+        let length = args.get(2).and_then(Value::as_number).unwrap_or(0.0) as usize;
+        let data = arg_bytes(&args, 3)?;
+        Ok(Value::Bytes(aes_ctr(&key, &counter, length, &data)?))
     }))?;
 
     Ok(())
@@ -202,5 +230,95 @@ fn aes_gcm_open(
             .decrypt(nonce, payload)
             .map_err(|_| operation_error("decryption failed")),
         _ => Err(operation_error("AES-GCM key must be 16 or 32 bytes")),
+    }
+}
+
+// ---- AES-CBC (PKCS#7 padding, per WebCrypto) -------------------------------
+
+fn cbc_encrypt<C: KeyIvInit + BlockEncryptMut>(
+    key: &[u8],
+    iv: &[u8],
+    data: &[u8],
+) -> std::result::Result<Vec<u8>, OpError> {
+    let enc = C::new_from_slices(key, iv).map_err(|_| operation_error("invalid AES-CBC key/iv"))?;
+    Ok(enc.encrypt_padded_vec_mut::<Pkcs7>(data))
+}
+
+fn cbc_decrypt<C: KeyIvInit + BlockDecryptMut>(
+    key: &[u8],
+    iv: &[u8],
+    data: &[u8],
+) -> std::result::Result<Vec<u8>, OpError> {
+    let dec = C::new_from_slices(key, iv).map_err(|_| operation_error("invalid AES-CBC key/iv"))?;
+    dec.decrypt_padded_vec_mut::<Pkcs7>(data)
+        .map_err(|_| operation_error("invalid AES-CBC padding"))
+}
+
+fn aes_cbc_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
+    if iv.len() != 16 {
+        return Err(operation_error("AES-CBC IV must be 16 bytes"));
+    }
+    match key.len() {
+        16 => cbc_encrypt::<cbc::Encryptor<Aes128>>(key, iv, data),
+        24 => cbc_encrypt::<cbc::Encryptor<Aes192>>(key, iv, data),
+        32 => cbc_encrypt::<cbc::Encryptor<Aes256>>(key, iv, data),
+        _ => Err(operation_error("AES-CBC key must be 16, 24, or 32 bytes")),
+    }
+}
+
+fn aes_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
+    if iv.len() != 16 {
+        return Err(operation_error("AES-CBC IV must be 16 bytes"));
+    }
+    match key.len() {
+        16 => cbc_decrypt::<cbc::Decryptor<Aes128>>(key, iv, data),
+        24 => cbc_decrypt::<cbc::Decryptor<Aes192>>(key, iv, data),
+        32 => cbc_decrypt::<cbc::Decryptor<Aes256>>(key, iv, data),
+        _ => Err(operation_error("AES-CBC key must be 16, 24, or 32 bytes")),
+    }
+}
+
+// ---- AES-CTR ---------------------------------------------------------------
+//
+// WebCrypto's `length` selects how many low-order bits of the 16-byte counter
+// block increment; the rest is a fixed nonce. RustCrypto exposes fixed-width
+// big-endian counters, so we support the common 32/64/128-bit widths and reject
+// others as `NotSupportedError`.
+
+fn ctr_apply<C: KeyIvInit + StreamCipher>(
+    key: &[u8],
+    counter: &[u8],
+    data: &[u8],
+) -> std::result::Result<Vec<u8>, OpError> {
+    let mut cipher = C::new_from_slices(key, counter)
+        .map_err(|_| operation_error("invalid AES-CTR key/counter"))?;
+    let mut buf = data.to_vec();
+    cipher.apply_keystream(&mut buf);
+    Ok(buf)
+}
+
+fn aes_ctr(
+    key: &[u8],
+    counter: &[u8],
+    length: usize,
+    data: &[u8],
+) -> std::result::Result<Vec<u8>, OpError> {
+    if counter.len() != 16 {
+        return Err(operation_error("AES-CTR counter must be 16 bytes"));
+    }
+    match (key.len(), length) {
+        (16, 128) => ctr_apply::<ctr::Ctr128BE<Aes128>>(key, counter, data),
+        (24, 128) => ctr_apply::<ctr::Ctr128BE<Aes192>>(key, counter, data),
+        (32, 128) => ctr_apply::<ctr::Ctr128BE<Aes256>>(key, counter, data),
+        (16, 64) => ctr_apply::<ctr::Ctr64BE<Aes128>>(key, counter, data),
+        (24, 64) => ctr_apply::<ctr::Ctr64BE<Aes192>>(key, counter, data),
+        (32, 64) => ctr_apply::<ctr::Ctr64BE<Aes256>>(key, counter, data),
+        (16, 32) => ctr_apply::<ctr::Ctr32BE<Aes128>>(key, counter, data),
+        (24, 32) => ctr_apply::<ctr::Ctr32BE<Aes192>>(key, counter, data),
+        (32, 32) => ctr_apply::<ctr::Ctr32BE<Aes256>>(key, counter, data),
+        (_, 32 | 64 | 128) => Err(operation_error("AES-CTR key must be 16, 24, or 32 bytes")),
+        _ => Err(not_supported(
+            "AES-CTR counter length must be 32, 64, or 128 bits",
+        )),
     }
 }

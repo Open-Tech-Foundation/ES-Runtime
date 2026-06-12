@@ -48,6 +48,7 @@
   // ---- subtle helpers -----------------------------------------------------
 
   const KEY = Symbol("cryptoKeyMaterial");
+  const AES_ALGS = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
 
   function toBytes(data) {
     if (data instanceof Uint8Array) return data;
@@ -109,12 +110,16 @@
         const material = ops.random_bytes(Math.ceil(lengthBits / 8));
         return new CryptoKey("secret", extractable, { name: "HMAC", hash: { name: hash }, length: lengthBits }, usages, material);
       }
-      if (algo.name === "AES-GCM") {
-        if (algo.length !== 128 && algo.length !== 256) {
-          throw new DOMException("AES-GCM key length must be 128 or 256", "OperationError");
+      if (AES_ALGS.has(algo.name)) {
+        const allowed = algo.name === "AES-GCM" ? [128, 256] : [128, 192, 256];
+        if (!allowed.includes(algo.length)) {
+          throw new DOMException(
+            `${algo.name} key length must be ${allowed.join(" or ")}`,
+            "OperationError",
+          );
         }
         const material = ops.random_bytes(algo.length / 8);
-        return new CryptoKey("secret", extractable, { name: "AES-GCM", length: algo.length }, usages, material);
+        return new CryptoKey("secret", extractable, { name: algo.name, length: algo.length }, usages, material);
       }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
     },
@@ -134,8 +139,12 @@
           material,
         );
       }
-      if (algo.name === "AES-GCM") {
-        return new CryptoKey("secret", extractable, { name: "AES-GCM", length: material.length * 8 }, usages, material);
+      if (AES_ALGS.has(algo.name)) {
+        const bits = material.length * 8;
+        if (bits !== 128 && bits !== 192 && bits !== 256) {
+          throw new DOMException(`invalid ${algo.name} key length`, "DataError");
+        }
+        return new CryptoKey("secret", extractable, { name: algo.name, length: bits }, usages, material);
       }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
     },
@@ -175,20 +184,37 @@
 
     async encrypt(algorithm, key, data) {
       const algo = normalizeAlgorithm(algorithm);
-      if (algo.name === "AES-GCM") {
-        const iv = toBytes(algo.iv);
-        const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
-        return asArrayBuffer(ops.subtle_aes_gcm_encrypt(key[KEY], iv, toBytes(data), aad));
+      switch (algo.name) {
+        case "AES-GCM": {
+          const iv = toBytes(algo.iv);
+          const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
+          return asArrayBuffer(ops.subtle_aes_gcm_encrypt(key[KEY], iv, toBytes(data), aad));
+        }
+        case "AES-CBC":
+          return asArrayBuffer(ops.subtle_aes_cbc_encrypt(key[KEY], toBytes(algo.iv), toBytes(data)));
+        case "AES-CTR":
+          return asArrayBuffer(
+            ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
+          );
       }
       throw new DOMException(`unsupported encrypt algorithm: ${algo.name}`, "NotSupportedError");
     },
 
     async decrypt(algorithm, key, data) {
       const algo = normalizeAlgorithm(algorithm);
-      if (algo.name === "AES-GCM") {
-        const iv = toBytes(algo.iv);
-        const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
-        return asArrayBuffer(ops.subtle_aes_gcm_decrypt(key[KEY], iv, toBytes(data), aad));
+      switch (algo.name) {
+        case "AES-GCM": {
+          const iv = toBytes(algo.iv);
+          const aad = algo.additionalData ? toBytes(algo.additionalData) : new Uint8Array(0);
+          return asArrayBuffer(ops.subtle_aes_gcm_decrypt(key[KEY], iv, toBytes(data), aad));
+        }
+        case "AES-CBC":
+          return asArrayBuffer(ops.subtle_aes_cbc_decrypt(key[KEY], toBytes(algo.iv), toBytes(data)));
+        case "AES-CTR":
+          // CTR is symmetric — the same op decrypts.
+          return asArrayBuffer(
+            ops.subtle_aes_ctr(key[KEY], toBytes(algo.counter), algo.length, toBytes(data)),
+          );
       }
       throw new DOMException(`unsupported decrypt algorithm: ${algo.name}`, "NotSupportedError");
     },

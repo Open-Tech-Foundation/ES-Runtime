@@ -54,7 +54,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 
 ### 2.10 WebCrypto
 - ☑ `crypto.getRandomValues` (Entropy provider), `crypto.randomUUID`. *(Phase 7.)*
-- ◐ `crypto.subtle`: digest (SHA-1/256/384/512), HMAC, AES-GCM ☑ *(Phase 7, RustCrypto — DECISIONS D9)*. AES-CBC/CTR, ECDSA/ECDH, RSA, HKDF/PBKDF2 ⊘ → Phase 7b.
+- ◐ `crypto.subtle`: digest (SHA-1/256/384/512), HMAC, AES-GCM, AES-CBC, AES-CTR ☑ *(Phase 7/7b, RustCrypto — DECISIONS D9)*. ECDSA/ECDH, RSA, HKDF/PBKDF2 ⊘ → Phase 7b (remaining).
 
 ### 2.11 Performance
 - ☑ `performance.now()`, `performance.timeOrigin` (Clock provider). *(Phase 4; integer-ms precision, sub-ms later.)*
@@ -112,7 +112,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 4. ☑ **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort. (JS prelude over the op system + `Console` provider; DECISIONS D17/D18.)
 5. ◐ **Streams** — readable/writable/transform + backpressure + queuing strategies + tee/pipe + encoding streams, hand-written (DECISIONS D19). Byte/BYOB streams deferred to a follow-up.
 6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
-7. ◐ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM (RustCrypto — DECISIONS D9). ECDSA/ECDH/RSA staged to Phase 7b.
+7. ◐ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM/AES-CBC/AES-CTR (RustCrypto — DECISIONS D9). HKDF/PBKDF2 and ECDSA/ECDH/RSA staged to Phase 7b.
 8. **Snapshot + perf** — bake prelude into snapshot; zero-copy audit; benchmark context creation + op throughput.
 9. **Hardening + conformance** — limits, watchdog, fuzzing, WPT run, security review, sanitizer CI, docs finalization.
 
@@ -133,7 +133,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 - **`DOMException` engine reconciliation** — the JS class exists (Phase 4 prelude), but errors thrown from the engine still surface as `Error` with a name-prefixed message. (DECISIONS D3a.)
 - **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) → a streams follow-up (DECISIONS D19). Default streams + encoding streams ship in Phase 5.
 - **Streaming `fetch` request bodies** → a follow-up; Phase 6 buffers the request body and streams the response (DECISIONS D20).
-- **`crypto.subtle` — AES-CBC/CTR, ECDSA/ECDH, RSA, HKDF/PBKDF2** → Phase 7b; Phase 7 ships digest/HMAC/AES-GCM (DECISIONS D9).
+- **`crypto.subtle` — ECDSA/ECDH, RSA, HKDF/PBKDF2** → Phase 7b (remaining); Phase 7 shipped digest/HMAC/AES-GCM and Phase 7b adds AES-CBC/CTR (DECISIONS D9). AES-CTR supports 32/64/128-bit counter widths; other widths surface as `NotSupportedError`.
 - **`URLPattern`** → later (not covered by the `url` crate). Minor WHATWG URL conformance gaps tracked vs WPT (D18).
 - **`reportError` ErrorEvent dispatch** and **sub-millisecond `performance.now`** are minimal in Phase 4; full behavior lands with the event loop / clock refinements.
 

@@ -49,10 +49,18 @@ futures-core = "0.3.32"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset"] }
 futures-util = { version = "0.3.32", default-features = false }
 # WebCrypto backend: the RustCrypto suite (DECISIONS.md D9). Used by `runtime`.
+# Two version generations coexist intentionally: `aes-gcm` 0.10 (+ `aes` 0.8,
+# `cbc`, `ctr`) sit on `cipher` 0.4, while the hashing crates (`sha2`, `hmac`)
+# sit on `digest` 0.11 — `aes-gcm` 0.11 is still an rc, so we don't float onto
+# it. `cbc`/`ctr` are pinned to the 0.1/0.9 line so they reuse the same `aes`
+# 0.8 / `cipher` 0.4 that `aes-gcm` already pulls (no duplicate `aes`).
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 hmac = "0.13.0"
 aes-gcm = "0.10.3"
+aes = "0.8.4"
+cbc = { version = "0.1.2", features = ["alloc"] }
+ctr = "0.9.2"
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).

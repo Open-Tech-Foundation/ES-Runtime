@@ -6,6 +6,24 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Phase 7b — WebCrypto (AES block modes)
+
+Extends `crypto.subtle` with the remaining symmetric ciphers (SPEC.md §6.7 /
+§2.10), still RustCrypto (DECISIONS.md D9).
+
+#### Added
+
+- **AES-CBC** (`encrypt`/`decrypt`, PKCS#7 padding; 128/192/256-bit keys) and
+  **AES-CTR** (`encrypt`/`decrypt`; 128/192/256-bit keys; 32/64/128-bit counter
+  widths) on `crypto.subtle`, plus `generateKey`/`importKey` for both. One CTR
+  op backs encrypt and decrypt (the mode is symmetric).
+- New ops `subtle_aes_cbc_encrypt`/`_decrypt` and `subtle_aes_ctr`, backed by the
+  `aes` + `cbc` + `ctr` RustCrypto crates. Pinned to the `cipher` 0.4 generation
+  so they reuse the same `aes` 0.8 that `aes-gcm` already pulls (no duplicate
+  `aes`); `aes-gcm` 0.11 — which would unify onto `cipher` 0.5 — is still an rc.
+- Tests add NIST SP 800-38A known-answer vectors (CBC F.2.1, CTR F.5.1) and
+  round-trips for both modes.
+
 ### Phase 7 — WebCrypto (first tranche)
 
 `crypto` (SPEC.md §6.7 / §2.10), backed by vetted RustCrypto primitives

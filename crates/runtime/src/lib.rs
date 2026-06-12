@@ -1140,4 +1140,80 @@ mod tests {
             other => panic!("expected rejection, got {other:?}"),
         }
     }
+
+    #[test]
+    fn subtle_aes_cbc_round_trips() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const key = await crypto.subtle.generateKey({ name: 'AES-CBC', length: 256 }, true, ['encrypt', 'decrypt']); \
+             const iv = crypto.getRandomValues(new Uint8Array(16)); \
+             const pt = new TextEncoder().encode('hello cbc, longer than one block'); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, key, pt); \
+             const out = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, ct); \
+             return new TextDecoder().decode(out);",
+        );
+        assert_eq!(
+            out,
+            Value::String("hello cbc, longer than one block".into())
+        );
+    }
+
+    #[test]
+    fn subtle_aes_cbc_known_answer() {
+        // FIPS-197 / NIST SP 800-38A AES-128-CBC, first block of F.2.1.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const hex = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16))); \
+             const toHex = (a) => [...new Uint8Array(a)].map((b) => b.toString(16).padStart(2, '0')).join(''); \
+             const key = await crypto.subtle.importKey('raw', hex('2b7e151628aed2a6abf7158809cf4f3c'), 'AES-CBC', false, ['encrypt']); \
+             const iv = hex('000102030405060708090a0b0c0d0e0f'); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, key, hex('6bc1bee22e409f96e93d7e117393172a')); \
+             return toHex(ct).slice(0, 32);",
+        );
+        // Expected first ciphertext block for that vector.
+        assert_eq!(
+            out,
+            Value::String("7649abac8119b246cee98e9b12e9197d".into())
+        );
+    }
+
+    #[test]
+    fn subtle_aes_ctr_round_trips() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const key = await crypto.subtle.generateKey({ name: 'AES-CTR', length: 128 }, true, ['encrypt', 'decrypt']); \
+             const counter = crypto.getRandomValues(new Uint8Array(16)); \
+             const pt = new TextEncoder().encode('hello ctr'); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-CTR', counter, length: 64 }, key, pt); \
+             const out = await crypto.subtle.decrypt({ name: 'AES-CTR', counter, length: 64 }, key, ct); \
+             return new TextDecoder().decode(out);",
+        );
+        assert_eq!(out, Value::String("hello ctr".into()));
+    }
+
+    #[test]
+    fn subtle_aes_ctr_known_answer() {
+        // NIST SP 800-38A F.5.1 CTR-AES128.Encrypt, first block (128-bit counter).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const hex = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16))); \
+             const toHex = (a) => [...new Uint8Array(a)].map((b) => b.toString(16).padStart(2, '0')).join(''); \
+             const key = await crypto.subtle.importKey('raw', hex('2b7e151628aed2a6abf7158809cf4f3c'), 'AES-CTR', false, ['encrypt']); \
+             const counter = hex('f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'); \
+             const ct = await crypto.subtle.encrypt({ name: 'AES-CTR', counter, length: 128 }, key, hex('6bc1bee22e409f96e93d7e117393172a')); \
+             return toHex(ct);",
+        );
+        assert_eq!(
+            out,
+            Value::String("874d6191b620e3261bef6864990db6ce".into())
+        );
+    }
 }
