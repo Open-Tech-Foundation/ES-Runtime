@@ -536,6 +536,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "es-runtime-cli"
+version = "0.0.0"
+dependencies = [
+ "es-runtime-common",
+ "es-runtime-default-providers",
+ "es-runtime-providers",
+ "es-runtime-runtime",
+ "tokio",
+]
+
+[[package]]
 name = "es-runtime-common"
 version = "0.0.0"
 dependencies = [

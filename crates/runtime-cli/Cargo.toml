@@ -1,0 +1,23 @@
+[package]
+name = "es-runtime-cli"
+description = "esrun: a standalone CLI that runs JavaScript files on the ES-Runtime with the default tokio providers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "esrun"
+path = "src/main.rs"
+
+[dependencies]
+es-runtime-common.workspace = true
+es-runtime-providers.workspace = true
+es-runtime-runtime.workspace = true
+es-runtime-default-providers.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true

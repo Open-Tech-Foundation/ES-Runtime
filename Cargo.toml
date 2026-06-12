@@ -16,6 +16,7 @@ members = [
     "crates/providers",
     "crates/runtime",
     "crates/default-providers",
+    "crates/runtime-cli",
 ]
 
 # Shared package metadata. Individual crates inherit via `field.workspace = true`.
@@ -93,6 +94,7 @@ es-runtime-common = { path = "crates/common", version = "0.0.0" }
 es-runtime-engine = { path = "crates/engine", version = "0.0.0" }
 es-runtime-providers = { path = "crates/providers", version = "0.0.0" }
 es-runtime-runtime = { path = "crates/runtime", version = "0.0.0" }
+es-runtime-default-providers = { path = "crates/default-providers", version = "0.0.0" }
 
 # Optimize the big-integer/RSA math even in dev+test: unoptimized RSA key
 # generation is ~30s/key, which would dominate the test suite. These crates are

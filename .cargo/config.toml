@@ -1,0 +1,7 @@
+# Convenience aliases (npm-script-like shortcuts). Cargo reads these for
+# `cargo <alias>`; they do not change how the crates build.
+[alias]
+# Run a JS file on the standalone CLI:  cargo esrun examples/hello.js
+esrun = "run --quiet -p es-runtime-cli --"
+# Run the startup/throughput benchmark (release is meaningful):
+bench-run = "run --release --quiet -p es-runtime-default-providers --example bench"
