@@ -71,6 +71,14 @@ pub trait Clock: Send + Sync {
     /// timer deadlines and elapsed-time measurement.
     fn monotonic_ms(&self) -> u64;
 
+    /// Microseconds from the same epoch as [`monotonic_ms`](Self::monotonic_ms),
+    /// never decreasing. Backs `performance.now()`'s sub-millisecond precision.
+    /// The default derives from `monotonic_ms` (whole-ms resolution), so
+    /// deterministic/test clocks stay correct without overriding.
+    fn monotonic_micros(&self) -> u64 {
+        self.monotonic_ms() * 1_000
+    }
+
     /// Milliseconds since the Unix epoch (UTC) — the basis for `Date.now`.
     fn wall_ms(&self) -> u64;
 }

@@ -48,12 +48,13 @@ fn install_console(engine: &mut dyn Engine, console: Arc<dyn Console>) -> Result
     Ok(())
 }
 
-/// `__ops.now()` → monotonic ms (`performance.now`); `__ops.time_origin()` → the
-/// wall-clock ms captured at construction (`performance.timeOrigin`).
+/// `__ops.now()` → monotonic ms with sub-ms (µs) precision (`performance.now`);
+/// `__ops.time_origin()` → the wall-clock ms captured at construction
+/// (`performance.timeOrigin`).
 fn install_performance(engine: &mut dyn Engine, clock: Arc<dyn Clock>) -> Result<()> {
     let now_clock = clock.clone();
     engine.register_op(OpDecl::sync("now", move |_args| {
-        Ok(Value::Number(now_clock.monotonic_ms() as f64))
+        Ok(Value::Number(now_clock.monotonic_micros() as f64 / 1_000.0))
     }))?;
 
     // timeOrigin is fixed at construction.

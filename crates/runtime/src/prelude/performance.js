@@ -1,7 +1,7 @@
 // performance (SPEC §2.11), backed by the Clock provider. `now()` is monotonic
-// milliseconds since the clock's epoch (≈ ms since construction); `timeOrigin`
-// is the wall-clock time at construction. Sub-millisecond precision is a later
-// refinement (the Clock currently yields integer ms).
+// milliseconds since the clock's epoch (≈ ms since construction) with
+// sub-millisecond (µs) precision; `timeOrigin` is the wall-clock time at
+// construction.
 (() => {
   "use strict";
   const ops = globalThis.__ops;

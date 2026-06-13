@@ -33,6 +33,12 @@ impl Clock for SystemClock {
         self.base.elapsed().as_millis() as u64
     }
 
+    fn monotonic_micros(&self) -> u64 {
+        // Real µs resolution (`u64` µs is still ~584k years of uptime), so
+        // `performance.now()` is sub-millisecond on the system clock.
+        self.base.elapsed().as_micros() as u64
+    }
+
     fn wall_ms(&self) -> u64 {
         // Before the Unix epoch should never happen; treat as 0 if it does.
         SystemTime::now()
