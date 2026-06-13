@@ -2008,4 +2008,249 @@ mod tests {
         assert_eq!(rt.module_eval_state(), ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.ok").unwrap(), Value::Number(5.0));
     }
+
+    // ----- ES module semantics ----------------------------------------------
+
+    #[test]
+    fn default_export_and_import() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./greet.mjs", "export default (name) => 'hi ' + name;")]);
+        let state = run_module(
+            &mut rt,
+            "import greet from './greet.mjs'; globalThis.greeting = greet('x');",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(
+            rt.eval("globalThis.greeting").unwrap(),
+            Value::String("hi x".into())
+        );
+    }
+
+    #[test]
+    fn namespace_import_exposes_all_exports() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./m.mjs", "export const a = 1; export const b = 2;")]);
+        let state = run_module(
+            &mut rt,
+            "import * as ns from './m.mjs'; \
+             globalThis.keys = Object.keys(ns).sort().join(','); globalThis.sum = ns.a + ns.b;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(
+            rt.eval("globalThis.keys").unwrap(),
+            Value::String("a,b".into())
+        );
+        assert_eq!(rt.eval("globalThis.sum").unwrap(), Value::Number(3.0));
+    }
+
+    #[test]
+    fn module_instance_is_shared_across_importers() {
+        // A module imported by two others is evaluated once and its namespace is
+        // the same object on both sides (module identity).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            ("./shared.mjs", "export const x = 1;"),
+            (
+                "./a.mjs",
+                "import * as s from './shared.mjs'; export const sa = s;",
+            ),
+            (
+                "./b.mjs",
+                "import * as s from './shared.mjs'; export const sb = s;",
+            ),
+        ]);
+        let state = run_module(
+            &mut rt,
+            "import { sa } from './a.mjs'; import { sb } from './b.mjs'; \
+             globalThis.same = sa === sb;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_true(&mut rt, "globalThis.same");
+    }
+
+    #[test]
+    fn re_export_forwards_a_binding() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            ("./b.mjs", "export const val = 7;"),
+            ("./a.mjs", "export { val } from './b.mjs';"),
+        ]);
+        let state = run_module(
+            &mut rt,
+            "import { val } from './a.mjs'; globalThis.reexport = val;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.reexport").unwrap(), Value::Number(7.0));
+    }
+
+    #[test]
+    fn imported_binding_is_live() {
+        // A `let` export mutated by the module is observed through the importer's
+        // binding (ESM live bindings, not a value copy).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[(
+            "./c.mjs",
+            "export let count = 0; export function bump() { count += 1; }",
+        )]);
+        let state = run_module(
+            &mut rt,
+            "import { count, bump } from './c.mjs'; bump(); bump(); globalThis.live = count;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.live").unwrap(), Value::Number(2.0));
+    }
+
+    #[test]
+    fn dependencies_evaluate_before_dependents() {
+        // Post-order: a depends on b, main on a → b, then a, then main.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            (
+                "./a.mjs",
+                "import './b.mjs'; globalThis.order = (globalThis.order||'') + 'a';",
+            ),
+            (
+                "./b.mjs",
+                "globalThis.order = (globalThis.order||'') + 'b';",
+            ),
+        ]);
+        let state = run_module(
+            &mut rt,
+            "import './a.mjs'; globalThis.order = (globalThis.order||'') + 'main';",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(
+            rt.eval("globalThis.order").unwrap(),
+            Value::String("bamain".into())
+        );
+    }
+
+    #[test]
+    fn cyclic_imports_resolve_via_function_hoisting() {
+        // The canonical working ESM cycle: a calls into b which calls back into a
+        // through hoisted function declarations.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            (
+                "./a.mjs",
+                "import { getB } from './b.mjs'; \
+                 export function getA() { return 'A'; } \
+                 globalThis.cycleResult = getB();",
+            ),
+            (
+                "./b.mjs",
+                "import { getA } from './a.mjs'; \
+                 export function getB() { return 'B+' + getA(); }",
+            ),
+        ]);
+        let state = run_module(&mut rt, "import './a.mjs';", &loader);
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(
+            rt.eval("globalThis.cycleResult").unwrap(),
+            Value::String("B+A".into())
+        );
+    }
+
+    #[test]
+    fn duplicate_import_of_one_module_evaluates_it_once() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[(
+            "./m.mjs",
+            "globalThis.mCount = (globalThis.mCount || 0) + 1; export const v = 21;",
+        )]);
+        let state = run_module(
+            &mut rt,
+            "import { v } from './m.mjs'; import { v as v2 } from './m.mjs'; \
+             globalThis.dup = v + v2;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.mCount").unwrap(), Value::Number(1.0));
+        assert_eq!(rt.eval("globalThis.dup").unwrap(), Value::Number(42.0));
+    }
+
+    #[test]
+    fn three_level_graph_resolves() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            (
+                "./a.mjs",
+                "import { b } from './b.mjs'; export const a = b + 1;",
+            ),
+            (
+                "./b.mjs",
+                "import { c } from './c.mjs'; export const b = c + 1;",
+            ),
+            ("./c.mjs", "export const c = 1;"),
+        ]);
+        let state = run_module(
+            &mut rt,
+            "import { a } from './a.mjs'; globalThis.deep = a;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.deep").unwrap(), Value::Number(3.0));
+    }
+
+    #[test]
+    fn dependency_top_level_await_blocks_dependent() {
+        // main must observe the dependency's TLA having completed before main's
+        // own body runs.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[(
+            "./a.mjs",
+            "await new Promise((r) => setTimeout(r, 0)); globalThis.depReady = true;",
+        )]);
+        let state = run_module(
+            &mut rt,
+            "import './a.mjs'; globalThis.mainSawDep = globalThis.depReady === true;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_true(&mut rt, "globalThis.mainSawDep");
+    }
+
+    #[test]
+    fn throw_in_a_dependency_fails_the_graph() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./a.mjs", "throw new Error('dep boom');")]);
+        match run_module(
+            &mut rt,
+            "import './a.mjs'; globalThis.reached = true;",
+            &loader,
+        ) {
+            ModuleEvalState::Failed(message) => assert!(message.contains("dep boom"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        // The dependent's body must not have run.
+        assert_eq!(rt.eval("globalThis.reached").unwrap(), Value::Undefined);
+    }
+
+    #[test]
+    fn syntax_error_in_a_dependency_is_a_load_error() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let loader = MapLoader::new(&[("./a.mjs", "export const = ;")]);
+        // The error surfaces while compiling the dependency during the load walk.
+        let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", &loader)).unwrap_err();
+        assert!(matches!(err, Error::Engine(_)), "got {err:?}");
+    }
 }
