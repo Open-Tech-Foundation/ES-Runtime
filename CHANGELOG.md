@@ -35,7 +35,8 @@ pre-`0.1.0` and the public API is unstable.
   (`import x from "pkg"`, `"pkg/sub"`, `"@scope/pkg"`) resolve against an
   existing `node_modules` tree via the new `NodeModuleLoader`: walk
   `node_modules` upward, read `package.json` (`exports` string + `import`/
-  `default` conditions, or `module`/`main`/`index`), probe `.js`/`.mjs`/`.cjs`.
+  `default` conditions + subpath patterns like `"./fn/*"`, or
+  `module`/`main`/`index`), probe `.js`/`.mjs`/`.cjs`.
   **ES module packages only** — CommonJS packages and `node:` builtins are
   rejected with a clear message; nothing is installed (run `npm install`
   yourself). This narrows the no-npm non-goal (SPEC §125 amended; DECISIONS

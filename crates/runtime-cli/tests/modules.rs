@@ -149,6 +149,24 @@ fn dynamic_import_resolves_relative_and_node_modules() {
 }
 
 #[test]
+fn all_esm_export_import_patterns_work() {
+    // esm/consumer.mjs exercises every standardized export/import form against
+    // the export fixtures and throws on any mismatch.
+    let out = run_file("esm/consumer.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("ESM-SUITE-OK"), "{}", stdout(&out));
+}
+
+#[test]
+fn node_modules_export_patterns_work() {
+    // A node_modules package with an exports map: ".", a subpath, and a wildcard
+    // subpath, with named + default exports and an internal re-export.
+    let out = run_file("esm/consumer-pkg.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("PKG-SUITE-OK"), "{}", stdout(&out));
+}
+
+#[test]
 fn version_flag_succeeds() {
     let out = esrun().arg("--version").output().expect("spawn esrun");
     assert!(out.status.success());
