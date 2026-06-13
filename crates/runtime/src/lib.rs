@@ -33,9 +33,10 @@ use crate::timer::TimerQueue;
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet};
 pub use es_runtime_engine::{
-    AsyncOp, Engine, InterruptHandle, OpDecl, OpError, OpResult, V8Engine, Value,
+    AsyncOp, Engine, InterruptHandle, ModuleEvalState, ModuleId, OpDecl, OpError, OpResult,
+    V8Engine, Value,
 };
-pub use es_runtime_providers::{Clock, Console, ConsoleLevel, Entropy, NetTransport};
+pub use es_runtime_providers::{Clock, Console, ConsoleLevel, Entropy, ModuleLoader, NetTransport};
 
 /// Runtime-layer error (DECISIONS.md D12).
 #[derive(Debug, thiserror::Error)]
@@ -44,12 +45,24 @@ pub enum Error {
     /// An error from the engine layer, surfaced through the runtime.
     #[error(transparent)]
     Engine(#[from] es_runtime_engine::Error),
+
+    /// A lower-layer (`common`) error surfaced directly by the runtime — e.g. a
+    /// capability the runtime itself gates (module loading needs `FileSystem`).
+    #[error(transparent)]
+    Common(#[from] es_runtime_common::Error),
+
+    /// A module could not be resolved or loaded by the [`ModuleLoader`] while
+    /// building a module graph ([`Runtime::load_module_source`]).
+    #[error("module loading failed: {0}")]
+    ModuleLoad(String),
 }
 
 impl es_runtime_common::IntoException for Error {
     fn exception_class(&self) -> es_runtime_common::ExceptionClass {
         match self {
             Error::Engine(e) => e.exception_class(),
+            Error::Common(e) => e.exception_class(),
+            Error::ModuleLoad(_) => es_runtime_common::ExceptionClass::Error,
         }
     }
 }
@@ -135,6 +148,11 @@ pub struct Runtime {
     /// are anchored here, so a `setTimeout(cb, d)` measures `d` from "now"
     /// rather than from whenever the next tick happens to arrive.
     now_ms: u64,
+    /// Set while a module graph evaluation kicked off by
+    /// [`load_module_source`](Self::load_module_source) has not yet settled, so
+    /// [`tick`](Self::tick) keeps reporting pending work (top-level await) until
+    /// the evaluation promise resolves or rejects.
+    module_eval_pending: bool,
 }
 
 impl Runtime {
@@ -153,6 +171,7 @@ impl Runtime {
             engine,
             timers: TimerQueue::default(),
             now_ms: 0,
+            module_eval_pending: false,
         };
         // Register the world-touching ops, then evaluate the prelude that builds
         // the pure-JS APIs on top of them (DECISIONS.md D8).
@@ -175,9 +194,13 @@ impl Runtime {
         Ok(V8Engine::build_snapshot(
             es_runtime_common::Limits::default(),
             |engine| {
-                // `builtins::install` yields the runtime `Error`; unwrap its sole
-                // engine variant so the closure speaks the engine's `Result`.
-                builtins::install(engine, providers).map_err(|Error::Engine(e)| e)?;
+                // `builtins::install` yields the runtime `Error`; it only ever
+                // produces the engine variant here, so re-surface that and treat
+                // any other (impossible) variant as an internal error.
+                builtins::install(engine, providers).map_err(|e| match e {
+                    Error::Engine(e) => e,
+                    other => es_runtime_engine::Error::Internal(other.to_string()),
+                })?;
                 engine.eval(&prelude::source())?;
                 Ok(())
             },
@@ -197,6 +220,7 @@ impl Runtime {
             engine: Box::new(engine),
             timers: TimerQueue::default(),
             now_ms: 0,
+            module_eval_pending: false,
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
@@ -235,6 +259,98 @@ impl Runtime {
         Ok(value)
     }
 
+    /// Loads, instantiates, and begins evaluating an ES module graph rooted at
+    /// `entry_specifier` with the already-read `entry_source` (SPEC §2.1).
+    ///
+    /// V8 resolves a module graph synchronously, so the whole graph is fetched
+    /// and compiled *before* instantiation: this walks the entry's imports,
+    /// [`resolve`](ModuleLoader::resolve)s each specifier and
+    /// [`load`](ModuleLoader::load)s its source through `loader`, compiling each
+    /// distinct module once (so diamonds and import cycles load a module a single
+    /// time), then instantiates and kicks off evaluation. Evaluation (which may
+    /// top-level-await) is then advanced by [`tick`](Self::tick); poll
+    /// [`module_eval_state`](Self::module_eval_state) for the outcome once
+    /// [`has_pending_work`](Self::has_pending_work) reports quiescence.
+    ///
+    /// The entry source is supplied by the caller (so a CLI can run a file it
+    /// already read, or an inline snippet), and loading it needs no capability;
+    /// following any `import`, however, consults `loader` and so requires
+    /// [`Capability::FileSystem`] for a file-backed loader. A self-contained
+    /// module (no imports) therefore runs even when that capability is denied.
+    pub async fn load_module_source(
+        &mut self,
+        entry_specifier: &str,
+        entry_source: &str,
+        loader: &dyn ModuleLoader,
+    ) -> Result<()> {
+        use std::collections::HashMap;
+
+        // canonical specifier → compiled id (the dedup that makes diamonds and
+        // cycles load each module exactly once).
+        let mut compiled: HashMap<String, ModuleId> = HashMap::new();
+        // (referrer id, raw specifier) → target id, for instantiation.
+        let mut resolved: HashMap<(ModuleId, String), ModuleId> = HashMap::new();
+
+        let entry_id = self.engine.compile_module(entry_specifier, entry_source)?;
+        compiled.insert(entry_specifier.to_string(), entry_id);
+
+        // Modules whose imports still need expanding, with their canonical
+        // specifier (the referrer for resolving those imports).
+        let mut frontier: Vec<(ModuleId, String)> = vec![(entry_id, entry_specifier.to_string())];
+        while let Some((referrer_id, referrer_spec)) = frontier.pop() {
+            let requests = self.engine.module_requests(referrer_id)?;
+            if !requests.is_empty() {
+                // Following an import is the capability-gated step (the loader
+                // touches the host); the entry itself was supplied, so a graph
+                // with no imports needs nothing.
+                self.require_module_capability()?;
+            }
+            for raw in requests {
+                let canonical = loader
+                    .resolve(&raw, &referrer_spec)
+                    .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                let target_id = match compiled.get(&canonical) {
+                    Some(&id) => id,
+                    None => {
+                        let source = loader
+                            .load(&canonical)
+                            .await
+                            .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                        let id = self.engine.compile_module(&canonical, &source)?;
+                        compiled.insert(canonical.clone(), id);
+                        frontier.push((id, canonical));
+                        id
+                    }
+                };
+                resolved.insert((referrer_id, raw), target_id);
+            }
+        }
+
+        self.engine.instantiate_module(entry_id, &resolved)?;
+        self.engine.evaluate_module(entry_id)?;
+        self.module_eval_pending = true;
+        // Anchor any timers the synchronous portion of evaluation created.
+        self.drain_new_timers(self.now_ms);
+        Ok(())
+    }
+
+    /// The outcome of the module evaluation started by
+    /// [`load_module_source`](Self::load_module_source): pending, completed, or
+    /// failed (with the stringified reason). [`ModuleEvalState::Pending`] before
+    /// any module is loaded.
+    pub fn module_eval_state(&mut self) -> ModuleEvalState {
+        self.engine.module_eval_state()
+    }
+
+    /// Errors unless the `FileSystem` capability needed to load modules is granted.
+    fn require_module_capability(&self) -> Result<()> {
+        if self.engine.capabilities().contains(Capability::FileSystem) {
+            Ok(())
+        } else {
+            Err(es_runtime_common::Error::CapabilityDenied(Capability::FileSystem).into())
+        }
+    }
+
     /// Advances the loop by one step (ARCHITECTURE.md §5), in order:
     /// due **timers** → ready **async ops** → **microtask checkpoint** →
     /// **unhandled-rejection** collection. `now_ms` is the embedder's current
@@ -267,6 +383,13 @@ impl Runtime {
         // 4. Collect rejections that remained unhandled.
         let unhandled_rejections = self.engine.take_unhandled_rejections();
 
+        // A kicked-off module evaluation stops being pending work once its
+        // promise settles (completed or failed); the outcome is read by the
+        // embedder via [`module_eval_state`](Self::module_eval_state).
+        if self.module_eval_pending && self.engine.module_eval_state() != ModuleEvalState::Pending {
+            self.module_eval_pending = false;
+        }
+
         TickStatus {
             timers_fired,
             async_ops_settled,
@@ -276,9 +399,10 @@ impl Runtime {
         }
     }
 
-    /// Whether any async op or timer is still outstanding.
+    /// Whether any async op, timer, or unsettled module evaluation is still
+    /// outstanding.
     pub fn has_pending_work(&self) -> bool {
-        self.engine.has_pending_async_ops() || !self.timers.is_empty()
+        self.engine.has_pending_async_ops() || !self.timers.is_empty() || self.module_eval_pending
     }
 
     /// Moves newly created engine timers into the schedule, anchored at `now_ms`.
@@ -1671,5 +1795,217 @@ mod tests {
             pass + fail,
             files.len()
         );
+    }
+
+    // ----- ES module loading -------------------------------------------------
+
+    /// Drives a synchronous future (the mock loader never truly pends) to its
+    /// result, so the async `load_module_source` can be used from sync tests.
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        use std::task::{Context, Poll};
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let mut future = std::pin::pin!(future);
+        for _ in 0..10_000 {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut cx) {
+                return value;
+            }
+        }
+        panic!("future did not complete — the mock loader should be synchronous");
+    }
+
+    /// An in-memory [`ModuleLoader`]: resolves `file://` URLs the way
+    /// `FsModuleLoader` does but serves sources from a map, so graph-walking
+    /// (resolution, dedup, cycles) is exercised without touching disk.
+    struct MapLoader {
+        base: url::Url,
+        files: std::collections::HashMap<String, String>,
+    }
+    impl MapLoader {
+        fn new(files: &[(&str, &str)]) -> Self {
+            let base = url::Url::parse("file:///app/").unwrap();
+            let files = files
+                .iter()
+                .map(|(spec, src)| (base.join(spec).unwrap().to_string(), src.to_string()))
+                .collect();
+            MapLoader { base, files }
+        }
+    }
+    impl ModuleLoader for MapLoader {
+        fn resolve(
+            &self,
+            specifier: &str,
+            referrer: &str,
+        ) -> std::result::Result<String, es_runtime_providers::ProviderError> {
+            let base = if referrer.is_empty() {
+                self.base.clone()
+            } else {
+                url::Url::parse(referrer)
+                    .map_err(|e| es_runtime_providers::ProviderError::Other(e.to_string()))?
+            };
+            base.join(specifier)
+                .map(|u| u.to_string())
+                .map_err(|e| es_runtime_providers::ProviderError::Other(e.to_string()))
+        }
+        fn load(
+            &self,
+            specifier: &str,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<String, es_runtime_providers::ProviderError>,
+        > {
+            let result = self.files.get(specifier).cloned().ok_or_else(|| {
+                es_runtime_providers::ProviderError::Other(format!("not found: {specifier}"))
+            });
+            Box::pin(async move { result })
+        }
+    }
+
+    const ENTRY: &str = "file:///app/main.mjs";
+
+    /// Loads + evaluates a module graph (granting FileSystem) and ticks to
+    /// quiescence, returning the evaluation outcome.
+    fn run_module(rt: &mut Runtime, source: &str, loader: &dyn ModuleLoader) -> ModuleEvalState {
+        rt.set_capabilities(CapabilitySet::all());
+        block_on(rt.load_module_source(ENTRY, source, loader)).expect("load module graph");
+        for _ in 0..200 {
+            if !rt.tick(0).has_pending_work {
+                break;
+            }
+        }
+        rt.module_eval_state()
+    }
+
+    #[test]
+    fn module_graph_resolves_imports_across_files() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            (
+                "./a.mjs",
+                "import { base } from './b.mjs'; export const val = base + 1;",
+            ),
+            ("./b.mjs", "export const base = 41;"),
+        ]);
+        let state = run_module(
+            &mut rt,
+            "import { val } from './a.mjs'; globalThis.result = val;",
+            &loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
+    }
+
+    #[test]
+    fn diamond_evaluates_shared_dependency_once() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            ("./a.mjs", "import './c.mjs';"),
+            ("./b.mjs", "import './c.mjs';"),
+            (
+                "./c.mjs",
+                "globalThis.cCount = (globalThis.cCount || 0) + 1;",
+            ),
+        ]);
+        let state = run_module(&mut rt, "import './a.mjs'; import './b.mjs';", &loader);
+        assert_eq!(state, ModuleEvalState::Completed);
+        // c is reachable via both a and b but compiled + evaluated exactly once.
+        assert_eq!(rt.eval("globalThis.cCount").unwrap(), Value::Number(1.0));
+    }
+
+    #[test]
+    fn import_cycle_completes() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            ("./a.mjs", "import './b.mjs'; globalThis.aRan = true;"),
+            ("./b.mjs", "import './a.mjs'; globalThis.bRan = true;"),
+        ]);
+        let state = run_module(&mut rt, "import './a.mjs';", &loader);
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_true(&mut rt, "globalThis.aRan && globalThis.bRan");
+    }
+
+    #[test]
+    fn top_level_await_settles_across_ticks() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let loader = MapLoader::new(&[]);
+        block_on(rt.load_module_source(
+            ENTRY,
+            "await new Promise((r) => setTimeout(r, 0)); globalThis.tla = 7;",
+            &loader,
+        ))
+        .expect("load");
+        // The graph is async (TLA), so it is not done before any tick runs.
+        assert_eq!(rt.module_eval_state(), ModuleEvalState::Pending);
+        for _ in 0..200 {
+            if !rt.tick(0).has_pending_work {
+                break;
+            }
+        }
+        assert_eq!(rt.module_eval_state(), ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.tla").unwrap(), Value::Number(7.0));
+    }
+
+    #[test]
+    fn import_meta_url_is_the_module_specifier() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[]);
+        let state = run_module(&mut rt, "globalThis.metaUrl = import.meta.url;", &loader);
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(
+            rt.eval("globalThis.metaUrl").unwrap(),
+            Value::String(ENTRY.into())
+        );
+    }
+
+    #[test]
+    fn module_top_level_throw_is_failed() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[]);
+        match run_module(&mut rt, "throw new Error('nope');", &loader) {
+            ModuleEvalState::Failed(message) => assert!(message.contains("nope"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_module_is_a_load_error() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let loader = MapLoader::new(&[]); // ./gone.mjs is absent
+        let err =
+            block_on(rt.load_module_source(ENTRY, "import './gone.mjs';", &loader)).unwrap_err();
+        assert!(matches!(err, Error::ModuleLoad(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn imports_denied_without_filesystem_capability() {
+        let _g = v8_guard();
+        let mut rt = runtime(); // deny-by-default: no FileSystem capability
+        let loader = MapLoader::new(&[("./a.mjs", "export const v = 1;")]);
+        let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", &loader)).unwrap_err();
+        assert!(matches!(err, Error::Common(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn self_contained_module_runs_without_capability() {
+        let _g = v8_guard();
+        let mut rt = runtime(); // no capabilities granted
+        let loader = MapLoader::new(&[]);
+        // No imports → the loader is never consulted → no capability needed.
+        block_on(rt.load_module_source(ENTRY, "globalThis.ok = 5;", &loader)).expect("load");
+        for _ in 0..200 {
+            if !rt.tick(0).has_pending_work {
+                break;
+            }
+        }
+        assert_eq!(rt.module_eval_state(), ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.ok").unwrap(), Value::Number(5.0));
     }
 }
