@@ -21,8 +21,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use es_runtime::{HostProviders, Runtime, V8Engine};
-use es_runtime_common::{CapabilitySet, Limits};
+use es_runtime::{HostProviders, Runtime};
+use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{OsEntropy, ReqwestTransport, SystemClock, TokioTimers};
 use es_runtime_providers::{Console, ConsoleLevel};
@@ -39,6 +39,9 @@ USAGE:
 
 The full WinterTC surface is available (console, URL, fetch, crypto, streams,
 encoding, timers, events). All host capabilities are granted.";
+
+/// The V8 startup snapshot with the prelude baked in, built by build.rs.
+static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
 
 /// A console that prints to the process's stdout/stderr, like Node/Deno.
 struct StdoutConsole;
@@ -142,8 +145,10 @@ async fn run() -> Result<(), String> {
         Arc::new(OsEntropy),
     );
 
-    let engine = V8Engine::new(Limits::default()).map_err(|e| format!("engine: {e}"))?;
-    let mut runtime = Runtime::new(Box::new(engine), providers).map_err(|e| e.to_string())?;
+    // Restore the prelude from the snapshot baked in at build time (build.rs)
+    // instead of compiling + evaluating it — the bulk of construction cost.
+    let mut runtime =
+        Runtime::with_snapshot(SNAPSHOT.to_vec(), providers).map_err(|e| e.to_string())?;
     // A trusted local script: grant the full capability set.
     runtime.set_capabilities(CapabilitySet::all());
 

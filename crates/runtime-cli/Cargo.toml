@@ -19,5 +19,11 @@ es-runtime.workspace = true
 es-runtime-default-providers.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
+# build.rs runs V8 to bake the prelude snapshot into the binary (see build.rs;
+# host-arch only — cross-compilation would need a target-run step).
+[build-dependencies]
+es-runtime.workspace = true
+es-runtime-default-providers.workspace = true
+
 [lints]
 workspace = true
