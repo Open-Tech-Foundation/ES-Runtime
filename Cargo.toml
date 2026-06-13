@@ -105,6 +105,14 @@ opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
 
+# Release tuning for the Rust-side hot paths (op marshaling, URL serialization,
+# RustCrypto). V8 itself is a prebuilt static library, so this doesn't change
+# engine performance — only our code. `panic = "abort"` is deliberately *not*
+# set: panic containment at the V8 boundary relies on unwinding (D15).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1
 missing_docs = "warn"
