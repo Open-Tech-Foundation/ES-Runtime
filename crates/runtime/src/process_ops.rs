@@ -66,6 +66,15 @@ pub(crate) fn install(
         .requires(Capability::Env),
     )?;
 
+    let p = process.clone();
+    engine.register_op(
+        OpDecl::sync("process_arch", move |_args| {
+            let proc = require(&p)?;
+            Ok(Value::String(proc.arch()))
+        })
+        .requires(Capability::Env),
+    )?;
+
     engine.register_op(
         OpDecl::sync("process_exit", move |args| {
             let proc = require(&process)?;

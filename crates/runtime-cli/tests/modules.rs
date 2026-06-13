@@ -172,8 +172,8 @@ fn runtime_process_exposes_env_args_platform_cwd() {
         .env("ESRUN_TEST_VAR", "hello")
         .arg("-e")
         .arg(
-            "import { env, args, platform, cwd } from 'runtime:process'; \
-             console.log(env.ESRUN_TEST_VAR, platform, args.join(','), typeof cwd());",
+            "import { env, args, platform, arch, cwd } from 'runtime:process'; \
+             console.log(env.ESRUN_TEST_VAR, platform, arch, args.join(','), typeof cwd());",
         )
         .arg("alpha")
         .arg("beta")
@@ -186,6 +186,11 @@ fn runtime_process_exposes_env_args_platform_cwd() {
     assert!(
         s.contains("linux") || s.contains("macos") || s.contains("windows"),
         "platform: {s}"
+    );
+    // arch is the OS-native std value (x86_64/aarch64/arm/...).
+    assert!(
+        s.contains("x86_64") || s.contains("aarch64") || s.contains("arm"),
+        "arch: {s}"
     );
     assert!(s.contains("alpha,beta"), "args: {s}"); // user args only, in order
     assert!(s.contains("string"), "cwd: {s}");

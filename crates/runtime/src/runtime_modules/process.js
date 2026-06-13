@@ -16,6 +16,10 @@ const args = Object.freeze(ops.process_args());
 // `platform`: the host OS — std::env::consts::OS values ("linux"/"macos"/...).
 const platform = ops.process_platform();
 
+// `arch`: the host CPU architecture — std::env::consts::ARCH values
+// ("x86_64"/"aarch64"/"arm"/...).
+const arch = ops.process_arch();
+
 // `cwd()`: the current working directory (a function — it can change).
 function cwd() {
   return ops.process_cwd();
@@ -26,5 +30,5 @@ function exit(code = 0) {
   ops.process_exit(Number(code) | 0);
 }
 
-export { env, args, platform, cwd, exit };
-export default { env, args, platform, cwd, exit };
+export { env, args, platform, arch, cwd, exit };
+export default { env, args, platform, arch, cwd, exit };

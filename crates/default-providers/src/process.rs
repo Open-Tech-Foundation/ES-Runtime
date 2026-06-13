@@ -54,6 +54,10 @@ impl Process for SystemProcess {
         std::env::consts::OS.to_string()
     }
 
+    fn arch(&self) -> String {
+        std::env::consts::ARCH.to_string()
+    }
+
     fn exit(&self, code: i32) {
         self.exit.code.store(code, Ordering::SeqCst);
         self.exit.requested.store(true, Ordering::SeqCst);
@@ -76,6 +80,7 @@ mod tests {
         let p = SystemProcess::new(vec!["a".into(), "b".into()]);
         assert_eq!(p.args(), ["a", "b"]);
         assert!(!p.platform().is_empty());
+        assert!(!p.arch().is_empty());
         assert!(p.cwd().is_ok());
         assert_eq!(p.requested_exit_code(), None);
         p.exit(3);

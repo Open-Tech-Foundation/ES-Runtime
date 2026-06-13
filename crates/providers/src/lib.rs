@@ -225,6 +225,10 @@ pub trait Process: Send + Sync {
     /// `"macos"`, `"windows"`, …).
     fn platform(&self) -> String;
 
+    /// The host CPU architecture — Rust's `std::env::consts::ARCH` values
+    /// (`"x86_64"`, `"aarch64"`, `"arm"`, …).
+    fn arch(&self) -> String;
+
     /// Records a guest `process.exit(code)` request. The runtime also halts
     /// execution (via its interrupt handle); the embedder reads
     /// [`requested_exit_code`](Self::requested_exit_code) after the run to learn

@@ -290,7 +290,7 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
   - `env` — a **mutable in-process object** seeded from the host snapshot (writes/deletes work in-process; they do not yet propagate to the host or child processes — that lands with `child_process`).
   - `args` — frozen array of the user args (binary + script/`-e` excluded).
   - `cwd()` — function → working directory string.
-  - `platform` — **OS-native** value (`std::env::consts::OS`: `"linux"`/`"macos"`/`"windows"`).
+  - `platform` / `arch` — **OS-native** values (`std::env::consts::OS` / `ARCH`: e.g. `"linux"` / `"x86_64"`).
   - `exit(code = 0)` — records the code on the provider and halts via the engine interrupt; the CLI reads the code and exits cleanly (not as an error).
   - Gated on a new **`Capability::Env`** (deny-by-default; `esrun` grants it).
 - **Standards.** Aligned *in spirit* with the WinterTC CLI-API proposal (clean `args`, `process.env`-like `env`, `exit(code?=0)`), but the proposal is an unstable WIP global-`CLI` draft, so v1 binds to our `runtime:` module scheme instead; a thin `CLI` global re-exporting `runtime:process` is a cheap future add. `cwd`/`platform` are our supersets (not in the proposal); terminal metadata (interactive/NO_COLOR) is deferred to Phase 13.

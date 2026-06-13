@@ -23,7 +23,7 @@ pre-`0.1.0` and the public API is unstable.
   `runtime:<name>` is served by the runtime itself (loader-independent, never
   touches the filesystem), with the capability check in the ops. First module
   `runtime:process` exposes `env` (mutable in-process snapshot), `args` (user
-  args), `cwd()`, `platform` (OS-native `"linux"/"macos"/"windows"`), and
+  args), `cwd()`, `platform` + `arch` (OS-native, e.g. `"linux"`/`"x86_64"`), and
   `exit(code = 0)` (halts + sets the process exit code) — gated on a new
   `Capability::Env`, backed by a new `Process` provider (`SystemProcess` reads
   the real process; embedders inject a controlled view). Aligned in spirit with
