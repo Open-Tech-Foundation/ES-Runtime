@@ -92,6 +92,7 @@ Traits in `providers/`; concrete impls only in `default-providers/` (or, later, 
 | `NetTransport` | `fetch` (connect, send, stream response) |
 | `ModuleLoader` | ES module `resolve` + `load` (both async — resolution may walk `node_modules` and read `package.json`); capability-gated on `FileSystem`. `NodeModuleLoader` serves local `file:` modules **and** `node_modules` ESM packages (D22); `FsModuleLoader` is the strict file-only loader; a deny-all default refuses imports |
 | `FileSystem` | capability-scoped, async, optional/deniable |
+| `Process` | host env/args/cwd/platform + `exit`, backing `runtime:process`; capability-gated on `Env` (D26) |
 | `TaskSpawner` | offloading blocking work at the provider's discretion |
 
 Every provider call is async-friendly, cancellable, capability-checked, and returns typed errors. Because clock and entropy are providers, runs are **fully reproducible** under a deterministic provider set.

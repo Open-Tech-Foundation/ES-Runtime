@@ -24,6 +24,7 @@ mod entropy;
 mod modules;
 mod net;
 mod node_modules;
+mod process;
 mod task;
 mod timers;
 
@@ -37,5 +38,6 @@ pub use entropy::OsEntropy;
 pub use modules::{DenyModuleLoader, FsModuleLoader};
 pub use net::ReqwestTransport;
 pub use node_modules::NodeModuleLoader;
+pub use process::SystemProcess;
 pub use task::TokioTaskSpawner;
 pub use timers::TokioTimers;

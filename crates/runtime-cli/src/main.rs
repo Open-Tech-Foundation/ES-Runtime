@@ -28,11 +28,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Runtime};
+use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime};
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, TokioTimers, path,
+    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemProcess, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -81,6 +81,9 @@ enum Source {
 struct Config {
     source: Source,
     timeout: Option<Duration>,
+    /// User arguments after the script/`-e` code, exposed as `runtime:process`
+    /// `args` (the runtime binary and the script/code are excluded).
+    args: Vec<String>,
 }
 
 fn parse_args() -> Result<Config, String> {
@@ -112,6 +115,7 @@ fn parse_args() -> Result<Config, String> {
                 return Ok(Config {
                     source: Source::Inline(code),
                     timeout,
+                    args: args.collect(),
                 });
             }
             flag if flag.starts_with('-') => {
@@ -121,6 +125,7 @@ fn parse_args() -> Result<Config, String> {
                 return Ok(Config {
                     source: Source::File(path.to_string()),
                     timeout,
+                    args: args.collect(),
                 });
             }
         }
@@ -184,12 +189,17 @@ async fn run() -> Result<(), String> {
     let clock = Arc::new(SystemClock::new());
     let timers = Arc::new(TokioTimers);
     let net = Arc::new(ReqwestTransport::new().map_err(|e| format!("http transport: {e}"))?);
+    // Host process view for runtime:process (env/cwd/platform from the OS; args
+    // are the user's, after the script/-e). A concrete handle is kept to read
+    // the exit code a guest `process.exit()` may request.
+    let process = Arc::new(SystemProcess::new(config.args));
     let providers = HostProviders::new(
         clock.clone(),
         Arc::new(StdoutConsole),
         net,
         Arc::new(OsEntropy),
-    );
+    )
+    .with_process(process.clone());
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project
@@ -237,6 +247,11 @@ async fn run() -> Result<(), String> {
         },
         None => load.await,
     };
+    // A guest `process.exit(code)` during the synchronous top level halts the
+    // load via the interrupt; exit with that code (not as an error).
+    if let Some(code) = process.requested_exit_code() {
+        std::process::exit(code);
+    }
     if let Err(err) = loaded {
         if timed_out.load(Ordering::SeqCst) {
             return Err(timeout_message(config.timeout));
@@ -260,6 +275,12 @@ async fn run() -> Result<(), String> {
         },
         None => drive.await,
     };
+
+    // A guest `process.exit(code)` from async code halts the drive via the
+    // interrupt; exit with that code rather than reporting the termination.
+    if let Some(code) = process.requested_exit_code() {
+        std::process::exit(code);
+    }
 
     // A top-level throw (or a rejected top-level await) fails the module's
     // evaluation. Report it as the primary error — its rejection also shows up

@@ -29,6 +29,9 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::ec_ops::install(engine, providers.entropy())?;
     // RSA WebCrypto (PKCS1-v1_5 / PSS / OAEP), Entropy-backed for key gen/salt.
     crate::rsa_ops::install(engine, providers.entropy())?;
+    // runtime:process ops, gated on Env; `exit` halts via the interrupt handle.
+    let interrupt = engine.interrupt_handle();
+    crate::process_ops::install(engine, providers.process(), interrupt)?;
     Ok(())
 }
 

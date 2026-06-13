@@ -167,6 +167,62 @@ fn node_modules_export_patterns_work() {
 }
 
 #[test]
+fn runtime_process_exposes_env_args_platform_cwd() {
+    let out = esrun()
+        .env("ESRUN_TEST_VAR", "hello")
+        .arg("-e")
+        .arg(
+            "import { env, args, platform, cwd } from 'runtime:process'; \
+             console.log(env.ESRUN_TEST_VAR, platform, args.join(','), typeof cwd());",
+        )
+        .arg("alpha")
+        .arg("beta")
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("hello"), "env: {s}");
+    // platform is the OS-native std value (linux/macos/windows).
+    assert!(
+        s.contains("linux") || s.contains("macos") || s.contains("windows"),
+        "platform: {s}"
+    );
+    assert!(s.contains("alpha,beta"), "args: {s}"); // user args only, in order
+    assert!(s.contains("string"), "cwd: {s}");
+}
+
+#[test]
+fn runtime_process_exit_sets_exit_code() {
+    let out = esrun()
+        .arg("-e")
+        .arg("import { exit } from 'runtime:process'; console.log('before'); exit(5); console.log('after');")
+        .output()
+        .expect("spawn esrun");
+    assert_eq!(out.status.code(), Some(5), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("before"), "{}", stdout(&out));
+    assert!(
+        !stdout(&out).contains("after"),
+        "exit did not halt: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn unknown_runtime_builtin_module_errors() {
+    let out = esrun()
+        .arg("-e")
+        .arg("import 'runtime:nope';")
+        .output()
+        .expect("spawn esrun");
+    assert!(!out.status.success(), "should exit non-zero");
+    assert!(
+        stderr(&out).contains("unknown built-in module"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
 fn version_flag_succeeds() {
     let out = esrun().arg("--version").output().expect("spawn esrun");
     assert!(out.status.success());

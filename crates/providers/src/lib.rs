@@ -205,6 +205,36 @@ pub trait ModuleLoader: Send + Sync {
     fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>>;
 }
 
+/// Host process information — environment, arguments, working directory,
+/// platform — and the exit hook, backing the `runtime:process` module
+/// (DECISIONS D24). Capability-checked (`Capability::Env`) before any op
+/// consults it; an embedder supplies a controlled view rather than the runtime
+/// reaching for the real process (no ambient authority, D5).
+pub trait Process: Send + Sync {
+    /// Environment as `(name, value)` pairs — a snapshot taken at first read.
+    fn env(&self) -> Vec<(String, String)>;
+
+    /// Program arguments (the user args, excluding the runtime binary and the
+    /// entry script / `-e` code), in order.
+    fn args(&self) -> Vec<String>;
+
+    /// The current working directory as a path string.
+    fn cwd(&self) -> Result<String, ProviderError>;
+
+    /// The host platform — Rust's `std::env::consts::OS` values (`"linux"`,
+    /// `"macos"`, `"windows"`, …).
+    fn platform(&self) -> String;
+
+    /// Records a guest `process.exit(code)` request. The runtime also halts
+    /// execution (via its interrupt handle); the embedder reads
+    /// [`requested_exit_code`](Self::requested_exit_code) after the run to learn
+    /// the code and that exit (not an error) caused the stop.
+    fn exit(&self, code: i32);
+
+    /// The exit code requested via [`exit`](Self::exit), if any.
+    fn requested_exit_code(&self) -> Option<i32>;
+}
+
 /// A sink for guest `console.*` output (SPEC.md §2.2).
 ///
 /// console output is the **guest program's** output, not the runtime's

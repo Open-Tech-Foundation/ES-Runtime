@@ -21,7 +21,9 @@ mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
 mod prelude;
+mod process_ops;
 mod rsa_ops;
+mod runtime_modules;
 mod timer;
 mod url_ops;
 
@@ -37,7 +39,9 @@ pub use es_runtime_engine::{
     AsyncOp, Engine, InterruptHandle, ModuleEvalState, ModuleId, OpDecl, OpError, OpResult,
     V8Engine, Value,
 };
-pub use es_runtime_providers::{Clock, Console, ConsoleLevel, Entropy, ModuleLoader, NetTransport};
+pub use es_runtime_providers::{
+    Clock, Console, ConsoleLevel, Entropy, ModuleLoader, NetTransport, Process,
+};
 
 /// Runtime-layer error (DECISIONS.md D12).
 #[derive(Debug, thiserror::Error)]
@@ -105,10 +109,14 @@ pub struct HostProviders {
     console: Arc<dyn Console>,
     net: Arc<dyn NetTransport>,
     entropy: Arc<dyn Entropy>,
+    process: Option<Arc<dyn Process>>,
 }
 
 impl HostProviders {
     /// Bundles the providers a runtime needs (clock, console, net, entropy).
+    /// Host process info (`runtime:process`) is opt-in via
+    /// [`with_process`](Self::with_process); absent, the `runtime:process` ops
+    /// fail cleanly (like a denied capability).
     pub fn new(
         clock: Arc<dyn Clock>,
         console: Arc<dyn Console>,
@@ -120,7 +128,16 @@ impl HostProviders {
             console,
             net,
             entropy,
+            process: None,
         }
+    }
+
+    /// Adds the [`Process`] view backing `runtime:process` (env/args/cwd/
+    /// platform/exit). Capability-gated on [`Capability::Env`].
+    #[must_use]
+    pub fn with_process(mut self, process: Arc<dyn Process>) -> Self {
+        self.process = Some(process);
+        self
     }
 
     fn clock(&self) -> Arc<dyn Clock> {
@@ -137,6 +154,10 @@ impl HostProviders {
 
     fn entropy(&self) -> Arc<dyn Entropy> {
         self.entropy.clone()
+    }
+
+    fn process(&self) -> Option<Arc<dyn Process>> {
+        self.process.clone()
     }
 }
 
@@ -336,35 +357,54 @@ impl Runtime {
                 continue;
             }
             let requests = self.engine.module_requests(referrer_id)?;
-            if requests.is_empty() {
-                continue;
-            }
-            // Following an import is the capability-gated, loader-touching step;
-            // a graph with no imports needs neither a loader nor a capability.
-            self.require_module_capability()?;
-            let loader = self.loader()?;
             for raw in requests {
-                let canonical = loader
-                    .resolve(&raw, &referrer_spec)
-                    .await
-                    .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                let target_id = match self.module_map.get(&canonical) {
-                    Some(&id) => id,
-                    None => {
-                        let source = loader
-                            .load(&canonical)
-                            .await
-                            .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                        let id = self.engine.compile_module(&canonical, &source)?;
-                        self.module_map.insert(canonical.clone(), id);
-                        id
+                let (target_id, newly_compiled) = if runtime_modules::is_builtin_scheme(&raw) {
+                    // `runtime:` built-ins are served by the runtime itself — no
+                    // loader, no FileSystem capability (their ops are gated).
+                    self.resolve_builtin(&raw)?
+                } else {
+                    // A file / node_modules import: the capability-gated,
+                    // loader-touching path.
+                    self.require_module_capability()?;
+                    let loader = self.loader()?;
+                    let canonical = loader
+                        .resolve(&raw, &referrer_spec)
+                        .await
+                        .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                    match self.module_map.get(&canonical) {
+                        Some(&id) => (id, None),
+                        None => {
+                            let source = loader
+                                .load(&canonical)
+                                .await
+                                .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                            let id = self.engine.compile_module(&canonical, &source)?;
+                            self.module_map.insert(canonical.clone(), id);
+                            (id, Some(canonical))
+                        }
                     }
                 };
+                if let Some(canonical) = newly_compiled {
+                    frontier.push((target_id, canonical));
+                }
                 resolved.insert((referrer_id, raw), target_id);
-                frontier.push((target_id, canonical));
             }
         }
         Ok(resolved)
+    }
+
+    /// Resolves a `runtime:` built-in to a compiled [`ModuleId`], compiling its
+    /// baked source on first use (deduped via the realm module map). Returns the
+    /// id and, when newly compiled, its canonical specifier to walk.
+    fn resolve_builtin(&mut self, specifier: &str) -> Result<(ModuleId, Option<String>)> {
+        if let Some(&id) = self.module_map.get(specifier) {
+            return Ok((id, None));
+        }
+        let source = runtime_modules::source(specifier)
+            .ok_or_else(|| Error::ModuleLoad(format!("unknown built-in module {specifier:?}")))?;
+        let id = self.engine.compile_module(specifier, source)?;
+        self.module_map.insert(specifier.to_string(), id);
+        Ok((id, Some(specifier.to_string())))
     }
 
     /// Loads, instantiates, and begins evaluating dynamic `import()` requests
@@ -398,6 +438,13 @@ impl Runtime {
         specifier: &str,
         referrer: &str,
     ) -> Result<ModuleId> {
+        // A dynamic import() of a `runtime:` built-in (e.g. `import("runtime:process")`).
+        if runtime_modules::is_builtin_scheme(specifier) {
+            let (id, _) = self.resolve_builtin(specifier)?;
+            let resolved = self.build_graph(id, specifier.to_string()).await?;
+            self.engine.instantiate_module(id, &resolved)?;
+            return Ok(id);
+        }
         self.require_module_capability()?;
         let loader = self.loader()?;
         let canonical = loader

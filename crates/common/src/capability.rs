@@ -31,18 +31,22 @@ pub enum Capability {
     FileSystem,
     /// Offload blocking work (`TaskSpawner` provider).
     TaskSpawn,
+    /// Read host process info — environment, args, cwd, platform (`Process`
+    /// provider; backs `runtime:process`). Deny-by-default like the rest.
+    Env,
 }
 
 impl Capability {
     /// All capabilities, in a fixed order. Used to build [`CapabilitySet::all`]
     /// and to keep the bit assignment in [`bit`](Self::bit) exhaustive.
-    const ALL: [Capability; 6] = [
+    const ALL: [Capability; 7] = [
         Capability::Clock,
         Capability::Entropy,
         Capability::Timers,
         Capability::Net,
         Capability::FileSystem,
         Capability::TaskSpawn,
+        Capability::Env,
     ];
 
     /// This capability's single-bit mask within a [`CapabilitySet`].
@@ -55,6 +59,7 @@ impl Capability {
             Capability::Net => 1 << 3,
             Capability::FileSystem => 1 << 4,
             Capability::TaskSpawn => 1 << 5,
+            Capability::Env => 1 << 6,
         }
     }
 }
