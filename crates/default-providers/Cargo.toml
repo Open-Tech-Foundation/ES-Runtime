@@ -16,8 +16,9 @@ futures-core.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true
 reqwest.workspace = true
-tokio = { workspace = true, features = ["rt", "time"] }
+tokio = { workspace = true, features = ["rt", "time", "fs"] }
 tracing.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime.

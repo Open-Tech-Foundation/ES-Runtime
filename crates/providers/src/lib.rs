@@ -177,6 +177,31 @@ pub trait NetTransport: Send + Sync {
     fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>>;
 }
 
+/// Resolves and loads ES module sources (ARCHITECTURE.md §6, SPEC §2.1).
+///
+/// `runtime` walks the import graph through this: for each module it
+/// [`resolve`](Self::resolve)s a specifier to a canonical id, then
+/// [`load`](Self::load)s that id's source. Because V8 resolves the graph
+/// synchronously, the whole graph is loaded *before* instantiation — so loading
+/// is async here but resolution is pure.
+///
+/// Loading is **capability-checked** by `runtime` before this is ever called: a
+/// file-backed loader requires `Capability::FileSystem`. An embedder that grants
+/// no module capability supplies no loader, and any `import` then fails cleanly.
+pub trait ModuleLoader: Send + Sync {
+    /// Resolves `specifier` relative to `referrer` into a canonical module id
+    /// (the string later passed to [`load`](Self::load) and exposed as
+    /// `import.meta.url`). Pure — path/URL math only, no I/O.
+    ///
+    /// `referrer` is the canonical id of the importing module, or `""` for an
+    /// entry point (resolve against the loader's base, e.g. the working dir).
+    fn resolve(&self, specifier: &str, referrer: &str) -> Result<String, ProviderError>;
+
+    /// Loads the UTF-8 source for a canonical id (as returned by
+    /// [`resolve`](Self::resolve)).
+    fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>>;
+}
+
 /// A sink for guest `console.*` output (SPEC.md §2.2).
 ///
 /// console output is the **guest program's** output, not the runtime's
