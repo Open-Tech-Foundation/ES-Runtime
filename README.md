@@ -10,8 +10,16 @@ It ships in two shapes from the same core:
 
 ## Quick start (run JavaScript)
 
-**Build once** (npm-script-style alias; produces a single self-contained binary
-at `target/release/esrun` — no extra files or asset directory needed):
+**Install** the latest release (Linux/macOS) — downloads a prebuilt binary and
+verifies its checksum:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
+```
+
+Or **build once** from source (npm-script-style alias; produces a single
+self-contained binary at `target/release/esrun` — no extra files or asset
+directory needed):
 
 ```sh
 cargo build-cli           # alias for: cargo build --release -p es-runtime-cli
@@ -60,8 +68,8 @@ supported yet.
 
 ## Documentation
 
-- **[API reference](docs/API.md)** — the `runtime:` modules and their exports (canonical).
-- **[Architecture](docs/ARCHITECTURE.md)** · **[Spec](docs/SPEC.md)** · **[Decisions](docs/DECISIONS.md)** · **[Security review](docs/SECURITY-REVIEW.md)**
+- **[API reference](docs/API.md)** — globals, scope/non-goals, the `runtime:` modules and their exports (canonical).
+- **[Architecture](docs/ARCHITECTURE.md)** · **[Spec](docs/SPEC.md)** · **[Decisions](docs/DECISIONS.md)** · **[Security review](docs/SECURITY-REVIEW.md)** · **[Licensing](docs/LICENSING.md)**
 - **Marketing site** (`@opentf/web`, in [`site/`](site/)) — run with `bun install && bun run dev`.
 
 Every public API is documented in both [`docs/API.md`](docs/API.md) and the site

@@ -10,9 +10,53 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 
 ## Contents
 
+- [Scope & non-goals](#scope--non-goals)
+- [Web-standard globals](#web-standard-globals)
 - [The `runtime:` scheme](#the-runtime-scheme)
 - [Capabilities](#capabilities)
 - [`runtime:process`](#runtimeprocess)
+
+---
+
+## Scope & non-goals
+
+ES-Runtime is a runtime, not a toolchain, and is **not** a Node.js drop-in.
+The following are deliberate, durable boundaries — not unimplemented features:
+
+| Not supported            | Notes                                                              |
+| ------------------------ | ------------------------------------------------------------------ |
+| Node.js compatibility    | No `node:` builtins, no Node globals (`process`/`Buffer`/`require`). |
+| CommonJS                 | ES Modules only — no `require`/`module.exports`, no CJS↔ESM interop. |
+| TypeScript               | Runs JavaScript; transpile types ahead of time.                    |
+| JSX                      | Not a JS standard; compile ahead of time.                          |
+| JSON module imports      | `import x from "./x.json"` unsupported (no import attributes).      |
+| Package installer        | Resolves an existing `node_modules`; does not install.             |
+| Bundler / linter / formatter / test runner | Left to dedicated tools.                         |
+| Watch mode               | No built-in file watcher / auto-restart.                           |
+| FFI / native addons      | Host extends via injected providers + ops (Rust), not FFI.         |
+| Workers / multi-thread   | Multi-isolate is the embeddable VM layer (Layer B), not a global.  |
+
+See `site/app/docs/scope` for the rendered version.
+
+## Web-standard globals
+
+The global scope tracks the WinterTC Minimum Common Web Platform API. Host
+capabilities (filesystem, process, network) are **not** globals — they live in
+[`runtime:` modules](#the-runtime-scheme).
+
+- **Core:** `globalThis`, `self`, `console`, `queueMicrotask`, `structuredClone`, `reportError`
+- **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
+- **URL:** `URL`, `URLSearchParams`
+- **Fetch:** `fetch`, `Request`, `Response`, `Headers`
+- **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`
+- **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
+- **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `crypto.subtle` (digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2), `CryptoKey`
+- **Events:** `Event`, `EventTarget`, `CustomEvent`, `AbortController`, `AbortSignal`
+- **Data:** `Blob`, `File`, `FormData`, `DOMException`
+- **Performance:** `performance` (`now()`, `timeOrigin`)
+
+**Not available:** `process`/`Buffer`/`require` (Node), `Worker`/`MessageChannel`,
+`WebSocket` (not yet), `navigator`/`localStorage`/`window` (browser).
 
 ---
 

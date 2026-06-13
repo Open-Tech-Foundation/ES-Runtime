@@ -1,0 +1,106 @@
+{
+  "runtimes": {
+    "node": "v24.14.0",
+    "bun": "1.3.12",
+    "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
+    "esrun": "esrun 0.1.0"
+  },
+  "results_ms": {
+    "startup": {
+      "node": 19.8,
+      "bun": 9.9,
+      "deno": 25.8,
+      "esrun": 7.1
+    },
+    "bigscript": {
+      "node": 34.5,
+      "bun": 24.4,
+      "deno": 35.7,
+      "esrun": 19.8
+    },
+    "compute": {
+      "node": 225.5,
+      "bun": 138.2,
+      "deno": 241.1,
+      "esrun": 266.5
+    },
+    "json": {
+      "node": 328.8,
+      "bun": 286.9,
+      "deno": 268.5,
+      "esrun": 260.7
+    },
+    "jsonbig": {
+      "node": 802.2,
+      "bun": 727.6,
+      "deno": 619.3,
+      "esrun": 736.0
+    },
+    "sha256": {
+      "node": 780.8,
+      "bun": 602.4,
+      "deno": 654.4,
+      "esrun": 383.4
+    },
+    "crypto": {
+      "node": 264.5,
+      "bun": 132.3,
+      "deno": 193.4,
+      "esrun": 37.6
+    },
+    "url": {
+      "node": 65.2,
+      "bun": 92.5,
+      "deno": 121.5,
+      "esrun": 106.8
+    },
+    "encoding": {
+      "node": 81.9,
+      "bun": 27.7,
+      "deno": 86.7,
+      "esrun": 87.2
+    },
+    "base64": {
+      "node": 8.7,
+      "bun": 16.0,
+      "deno": 8.6,
+      "esrun": 93.9
+    },
+    "structured": {
+      "node": 261.4,
+      "bun": 310.1,
+      "deno": 318.5,
+      "esrun": 364.1
+    },
+    "async": {
+      "node": 77.1,
+      "bun": 62.3,
+      "deno": 41.5,
+      "esrun": 39.5
+    },
+    "timers": {
+      "node": 10.6,
+      "bun": 9.3,
+      "deno": 33.9,
+      "esrun": 7.7
+    },
+    "streams": {
+      "node": 29.7,
+      "bun": 25.6,
+      "deno": 22.4,
+      "esrun": 16.3
+    },
+    "fetch": {
+      "node": 118.5,
+      "bun": 32.3,
+      "deno": 59.9,
+      "esrun": 53.0
+    },
+    "rss": {
+      "node": 40,
+      "bun": 29,
+      "deno": 54,
+      "esrun": 18
+    }
+  }
+}

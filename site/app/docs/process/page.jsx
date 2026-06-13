@@ -58,7 +58,7 @@ const exports = [
 export default function ProcessDoc() {
   return (
     <DocsShell active="/docs/process">
-      <p className="text-sm font-medium text-indigo-600">API reference</p>
+      <p className="text-sm font-medium text-brand-600">API reference</p>
       <h1 className="mt-2 font-mono text-3xl font-bold tracking-tight text-zinc-900 sm:text-4xl">
         runtime:process
       </h1>
@@ -68,7 +68,7 @@ export default function ProcessDoc() {
         proposal.
       </p>
       <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
-        <span className="rounded-full bg-indigo-50 px-3 py-1 font-medium text-indigo-700">
+        <span className="rounded-full bg-brand-50 px-3 py-1 font-medium text-brand-700">
           Capability: Env
         </span>
         <span className="rounded-full bg-zinc-100 px-3 py-1 font-medium text-zinc-600">

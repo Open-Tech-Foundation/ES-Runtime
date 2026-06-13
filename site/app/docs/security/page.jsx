@@ -11,7 +11,7 @@ const caps = [
 export default function SecurityDoc() {
   return (
     <DocsShell active="/docs/security">
-      <p className="text-sm font-medium text-indigo-600">Concepts</p>
+      <p className="text-sm font-medium text-brand-600">Concepts</p>
       <h1 className="mt-2 text-4xl font-bold tracking-tight text-zinc-900">
         Security model
       </h1>
@@ -38,7 +38,7 @@ export default function SecurityDoc() {
           <tbody className="divide-y divide-zinc-100">
             {caps.map((c) => (
               <tr>
-                <td className="px-4 py-2.5 font-mono text-[13px] text-indigo-700">
+                <td className="px-4 py-2.5 font-mono text-[13px] text-brand-700">
                   {c.name}
                 </td>
                 <td className="px-4 py-2.5 text-zinc-600">{c.desc}</td>

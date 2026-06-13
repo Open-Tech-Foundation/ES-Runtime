@@ -1,18 +1,17 @@
+import pkg from "../package.json";
+
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
 export default function Nav() {
   return (
     <header className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/80 backdrop-blur">
       <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-        <a href="/" className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 font-mono text-sm font-bold text-white">
-            e
-          </span>
-          <span className="text-[15px] font-semibold tracking-tight text-zinc-900">
+        <a href="/" className="flex items-baseline gap-2">
+          <span className="font-mono text-[17px] font-bold tracking-tight text-zinc-900">
             esrun
           </span>
-          <span className="rounded-full border border-zinc-200 px-2 py-0.5 text-[10px] font-medium text-zinc-500">
-            v0.1
+          <span className="rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-500">
+            v{pkg.version}
           </span>
         </a>
 
@@ -33,7 +32,7 @@ export default function Nav() {
             href={GITHUB}
             target="_blank"
             rel="noreferrer"
-            className="ml-1 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+            className="ml-1 rounded-md border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-700 transition-colors hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700"
           >
             GitHub
           </a>

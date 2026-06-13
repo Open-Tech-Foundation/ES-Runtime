@@ -19,7 +19,7 @@ console.log(env.HOME, args);`;
 export default function ModulesDoc() {
   return (
     <DocsShell active="/docs/modules">
-      <p className="text-sm font-medium text-indigo-600">Concepts</p>
+      <p className="text-sm font-medium text-brand-600">Concepts</p>
       <h1 className="mt-2 text-4xl font-bold tracking-tight text-zinc-900">
         Module system
       </h1>
@@ -27,8 +27,21 @@ export default function ModulesDoc() {
         esrun loads standard ES Modules. Static imports, dynamic{" "}
         <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">import()</code>,
         top-level await, and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">import.meta.url</code>{" "}
-        all behave as specified. There is no CommonJS.
+        all behave as specified.
       </p>
+
+      <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm leading-relaxed text-zinc-600">
+        <strong className="text-zinc-900">Not supported, by design:</strong>{" "}
+        CommonJS (<code className="rounded bg-white px-1.5 py-0.5 text-[12px]">require</code> /{" "}
+        <code className="rounded bg-white px-1.5 py-0.5 text-[12px]">module.exports</code>), JSON module
+        imports (<code className="rounded bg-white px-1.5 py-0.5 text-[12px]">import data from "./x.json"</code>),
+        import attributes, JSX, and TypeScript. esrun runs JavaScript ES
+        Modules — transpile anything else ahead of time. See{" "}
+        <a href="/docs/scope" className="font-medium text-brand-600 hover:text-brand-700">
+          Scope &amp; non-goals
+        </a>
+        .
+      </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Static imports</h2>
       <div className="mt-4">
@@ -72,7 +85,7 @@ export default function ModulesDoc() {
         Each built-in module is backed by host ops that carry the capability
         check — the security boundary is the op, not the JavaScript. The first
         shipped module is{" "}
-        <a href="/docs/process" className="font-medium text-indigo-600 hover:text-indigo-500">
+        <a href="/docs/process" className="font-medium text-brand-600 hover:text-brand-500">
           runtime:process
         </a>
         ; <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:fs</code>,{" "}

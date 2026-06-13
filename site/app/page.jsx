@@ -1,12 +1,13 @@
-import CodeBlock from "../components/CodeBlock.jsx";
+import BenchChart from "../components/BenchChart.jsx";
+import InstallBox from "../components/InstallBox.jsx";
 
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
-const HERO_CODE = `// hello.mjs
-import { env, args } from "runtime:process";
-
-const name = args[0] ?? env.USER ?? "world";
-console.log(\`hello, \${name}\`);`;
+const HERO_METRICS = [
+  { key: "startup", label: "Cold start", unit: "ms" },
+  { key: "rss", label: "Peak memory", unit: "MB" },
+  { key: "crypto", label: "WebCrypto", unit: "ms" },
+];
 
 const features = [
   {
@@ -14,20 +15,20 @@ const features = [
     body: "Deny-by-default security. Code gets exactly the host powers you grant — no ambient filesystem, network, or environment access.",
   },
   {
-    title: "ESM-only",
-    body: "Standard ES Modules end to end. Static imports, dynamic import(), top-level await, and import.meta — no CommonJS, ever.",
+    title: "Web standards only",
+    body: "Built to the WinterTC Minimum Common Web Platform API — fetch, URL, streams, WebCrypto, encoding, timers, events. No bespoke runtime globals.",
+  },
+  {
+    title: "ESM, and only ESM",
+    body: "Standard ES Modules end to end: static imports, dynamic import(), top-level await, import.meta. No CommonJS, no JSON imports, no JSX.",
   },
   {
     title: "Built on V8",
-    body: "The same engine that powers Chrome and Node, embedded from Rust. A baked startup snapshot boots a realm in milliseconds.",
-  },
-  {
-    title: "WinterTC-aligned",
-    body: "Implements the Minimum Common Web Platform API, so the code you write targets a standard server-side surface, not a bespoke one.",
+    body: "The engine that powers Chrome and Node, embedded from Rust. A baked startup snapshot boots a realm in milliseconds with a tiny memory footprint.",
   },
   {
     title: "Sandboxed modules",
-    body: "node_modules resolution with package exports, subpath patterns, and pnpm-aware realpath — all confined to a filesystem root jail.",
+    body: "node_modules resolution with package exports and pnpm-aware realpath — all confined to a filesystem root jail that is on by default.",
   },
   {
     title: "Embeddable by design",
@@ -36,9 +37,9 @@ const features = [
 ];
 
 const stats = [
-  { value: "~6.6ms", label: "cold start to first eval" },
+  { value: "7.1ms", label: "cold start to first eval" },
+  { value: "18MB", label: "peak resident memory" },
   { value: "0", label: "ambient capabilities by default" },
-  { value: "ESM", label: "the only module system" },
 ];
 
 export default function HomePage() {
@@ -50,25 +51,25 @@ export default function HomePage() {
           className="pointer-events-none absolute inset-0 opacity-[0.4]"
           style="background-image: radial-gradient(circle at 1px 1px, #e4e4e7 1px, transparent 0); background-size: 28px 28px;"
         />
-        <div className="relative mx-auto grid max-w-6xl gap-12 px-6 py-20 lg:grid-cols-2 lg:items-center lg:py-28">
+        <div className="relative mx-auto grid max-w-6xl gap-12 px-6 py-20 lg:grid-cols-2 lg:items-center lg:py-24">
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-600">
-              <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
-              WinterTC-aligned · V8 · Rust
-            </div>
-            <h1 className="mt-6 text-4xl font-bold leading-[1.05] tracking-tight text-zinc-900 sm:text-5xl lg:text-6xl">
-              A secure, embeddable
-              <span className="text-indigo-600"> JavaScript runtime.</span>
+            <p className="text-sm font-semibold uppercase tracking-wider text-brand-600">
+              Server-side JavaScript · Web standards
+            </p>
+            <h1 className="mt-4 text-4xl font-bold leading-[1.05] tracking-tight text-zinc-900 sm:text-5xl lg:text-[3.4rem]">
+              A secure, standards-based
+              <span className="text-brand-600"> server runtime.</span>
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-zinc-600">
               esrun runs modern ECMAScript on V8 with deny-by-default
-              capabilities and a sandboxed module system — built in Rust to
-              embed inside your own application.
+              capabilities and a Web-standard API surface — built in Rust to
+              embed inside server applications. It is not Node-compatible by
+              design.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a
                 href="/docs"
-                className="rounded-lg bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-500"
+                className="rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-700"
               >
                 Get started
               </a>
@@ -81,14 +82,29 @@ export default function HomePage() {
                 View on GitHub
               </a>
             </div>
+            <div className="mt-6 max-w-xl">
+              <InstallBox />
+            </div>
           </div>
 
+          {/* Benchmark chart replaces the usage snippet. */}
           <div className="lg:pl-4">
-            <CodeBlock code={HERO_CODE} title="hello.mjs" lang="js" />
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 font-mono text-[13px] text-zinc-700">
-              <span className="text-zinc-400">$</span>
-              <span>esrun hello.mjs Ada</span>
-              <span className="ml-auto text-zinc-400">hello, Ada</span>
+            <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm">
+              <div className="mb-5 flex items-baseline justify-between">
+                <h2 className="text-sm font-semibold text-zinc-900">
+                  Benchmarks
+                </h2>
+                <span className="text-xs text-zinc-400">
+                  vs Node · Bun · Deno
+                </span>
+              </div>
+              <BenchChart metrics={HERO_METRICS} />
+              <a
+                href="/docs/benchmarks"
+                className="mt-5 inline-block text-xs font-medium text-brand-600 hover:text-brand-700"
+              >
+                See full benchmarks →
+              </a>
             </div>
           </div>
         </div>
@@ -108,15 +124,15 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Features */}
+      {/* Builtin Core Features */}
       <section className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
         <div className="max-w-2xl">
           <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
-            Built for hosts that take security seriously.
+            Builtin Core Features
           </h2>
-          <p className="mt-4 text-lg text-zinc-600">
-            Every capability is explicit. The engine is confined to one crate,
-            and the host decides what the script may touch.
+          <p className="mt-3 text-lg text-zinc-600">
+            Essential runtime capabilities — every host power is explicit, and
+            the engine is confined to a single auditable crate.
           </p>
         </div>
 
@@ -131,6 +147,44 @@ export default function HomePage() {
               </p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Scope / non-goals teaser */}
+      <section className="border-t border-zinc-200 bg-zinc-50">
+        <div className="mx-auto max-w-6xl px-6 py-16 lg:py-20">
+          <div className="grid gap-10 lg:grid-cols-2">
+            <div>
+              <h2 className="text-2xl font-bold tracking-tight text-zinc-900">
+                A focused scope.
+              </h2>
+              <p className="mt-3 text-zinc-600">
+                esrun is a runtime, not a toolchain. It deliberately leaves
+                package management, building, and testing to other tools — and
+                is not a drop-in for Node.
+              </p>
+              <a
+                href="/docs/scope"
+                className="mt-5 inline-block text-sm font-semibold text-brand-600 hover:text-brand-700"
+              >
+                Read the scope &amp; non-goals →
+              </a>
+            </div>
+            <ul className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm text-zinc-600">
+              <li>✗ Node.js compatibility</li>
+              <li>✗ CommonJS</li>
+              <li>✗ TypeScript</li>
+              <li>✗ JSX</li>
+              <li>✗ JSON imports</li>
+              <li>✗ Package installer</li>
+              <li>✗ Bundler / linter / formatter</li>
+              <li>✗ Test runner</li>
+              <li>✗ Watch mode</li>
+              <li>✗ FFI</li>
+              <li>✗ Workers</li>
+              <li>✗ Native addons</li>
+            </ul>
+          </div>
         </div>
       </section>
 

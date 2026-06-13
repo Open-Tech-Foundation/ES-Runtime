@@ -5,18 +5,31 @@
 const NAV = [
   {
     group: "Getting started",
-    items: [{ href: "/docs", label: "Overview" }],
-  },
-  {
-    group: "Concepts",
     items: [
-      { href: "/docs/modules", label: "Module system" },
-      { href: "/docs/security", label: "Security model" },
+      { href: "/docs", label: "Overview" },
+      { href: "/docs/scope", label: "Scope & non-goals" },
     ],
   },
   {
-    group: "API reference",
-    items: [{ href: "/docs/process", label: "runtime:process" }],
+    group: "Comparisons",
+    items: [
+      { href: "/docs/comparison", label: "vs Node · Bun · Deno" },
+      { href: "/docs/benchmarks", label: "Benchmarks" },
+    ],
+  },
+  {
+    group: "Web standard APIs",
+    items: [
+      { href: "/docs/globals", label: "Global objects" },
+    ],
+  },
+  {
+    group: "Runtime APIs",
+    items: [
+      { href: "/docs/modules", label: "Module system" },
+      { href: "/docs/security", label: "Security model" },
+      { href: "/docs/process", label: "runtime:process" },
+    ],
   },
 ];
 
@@ -38,7 +51,7 @@ export default function DocsShell({ active, children }) {
                       className={
                         "block rounded-md px-3 py-1.5 text-sm transition-colors " +
                         (item.href === active
-                          ? "bg-indigo-50 font-medium text-indigo-700"
+                          ? "bg-brand-50 font-medium text-brand-700"
                           : "text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900")
                       }
                     >
