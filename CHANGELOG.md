@@ -6,6 +6,17 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Project
+
+- **API versioning starts at 0.1.0** (was `0.0.0`). Semver from here; the public
+  Rust API and the `runtime:` standard-module namespace are the versioned
+  contract. Locked v1 direction in DECISIONS **D24**: single repo serving both
+  embedding and standalone use; **ESM-only, permanently** (no CommonJS interop);
+  host capabilities exposed as async `runtime:` modules (`runtime:fs`,
+  `runtime:net`, `runtime:http`, `runtime:process`) rather than globals;
+  filesystem **root confinement by default** (CLI opt-out); Windows CI next,
+  macOS after.
+
 ### Added
 
 - **ES modules** — `esrun` now runs every input as an ES module: static

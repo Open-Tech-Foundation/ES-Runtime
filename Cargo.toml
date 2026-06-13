@@ -20,8 +20,12 @@ members = [
 ]
 
 # Shared package metadata. Individual crates inherit via `field.workspace = true`.
+# Versioning starts at 0.1.0 (DECISIONS D24): semver from here, 0.x allows
+# breaking changes but each is deliberate and changelogged; the public API
+# (engine `Engine`/`Value`, `Runtime`, provider traits) and the `runtime:`
+# standard-module namespace are the versioned contract.
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -93,11 +97,11 @@ sha1_rsa = { package = "sha1", version = "0.10.6", features = ["oid"] }
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).
-es-runtime-common = { path = "crates/common", version = "0.0.0" }
-es-runtime-engine = { path = "crates/engine", version = "0.0.0" }
-es-runtime-providers = { path = "crates/providers", version = "0.0.0" }
-es-runtime = { path = "crates/runtime", version = "0.0.0" }
-es-runtime-default-providers = { path = "crates/default-providers", version = "0.0.0" }
+es-runtime-common = { path = "crates/common", version = "0.1.0" }
+es-runtime-engine = { path = "crates/engine", version = "0.1.0" }
+es-runtime-providers = { path = "crates/providers", version = "0.1.0" }
+es-runtime = { path = "crates/runtime", version = "0.1.0" }
+es-runtime-default-providers = { path = "crates/default-providers", version = "0.1.0" }
 
 # Optimize the big-integer/RSA math even in dev+test: unoptimized RSA key
 # generation is ~30s/key, which would dominate the test suite. These crates are
