@@ -191,11 +191,14 @@ pub trait NetTransport: Send + Sync {
 pub trait ModuleLoader: Send + Sync {
     /// Resolves `specifier` relative to `referrer` into a canonical module id
     /// (the string later passed to [`load`](Self::load) and exposed as
-    /// `import.meta.url`). Pure — path/URL math only, no I/O.
+    /// `import.meta.url`).
     ///
-    /// `referrer` is the canonical id of the importing module, or `""` for an
-    /// entry point (resolve against the loader's base, e.g. the working dir).
-    fn resolve(&self, specifier: &str, referrer: &str) -> Result<String, ProviderError>;
+    /// Async because resolution may touch the host — e.g. a `node_modules`
+    /// walk that stats files and reads `package.json`. A pure path/URL loader
+    /// just returns a ready future. `referrer` is the canonical id of the
+    /// importing module, or `""` for an entry point (resolve against the
+    /// loader's base, e.g. the working dir).
+    fn resolve(&self, specifier: &str, referrer: &str) -> BoxFuture<Result<String, ProviderError>>;
 
     /// Loads the UTF-8 source for a canonical id (as returned by
     /// [`resolve`](Self::resolve)).

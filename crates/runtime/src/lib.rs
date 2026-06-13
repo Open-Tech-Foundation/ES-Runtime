@@ -308,6 +308,7 @@ impl Runtime {
             for raw in requests {
                 let canonical = loader
                     .resolve(&raw, &referrer_spec)
+                    .await
                     .map_err(|e| Error::ModuleLoad(e.to_string()))?;
                 let target_id = match compiled.get(&canonical) {
                     Some(&id) => id,
@@ -1836,16 +1837,23 @@ mod tests {
             &self,
             specifier: &str,
             referrer: &str,
-        ) -> std::result::Result<String, es_runtime_providers::ProviderError> {
-            let base = if referrer.is_empty() {
-                self.base.clone()
-            } else {
-                url::Url::parse(referrer)
-                    .map_err(|e| es_runtime_providers::ProviderError::Other(e.to_string()))?
-            };
-            base.join(specifier)
-                .map(|u| u.to_string())
-                .map_err(|e| es_runtime_providers::ProviderError::Other(e.to_string()))
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<String, es_runtime_providers::ProviderError>,
+        > {
+            let base = self.base.clone();
+            let specifier = specifier.to_string();
+            let referrer = referrer.to_string();
+            Box::pin(async move {
+                let base = if referrer.is_empty() {
+                    base
+                } else {
+                    url::Url::parse(&referrer)
+                        .map_err(|e| es_runtime_providers::ProviderError::Other(e.to_string()))?
+                };
+                base.join(&specifier)
+                    .map(|u| u.to_string())
+                    .map_err(|e| es_runtime_providers::ProviderError::Other(e.to_string()))
+            })
         }
         fn load(
             &self,

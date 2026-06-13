@@ -45,37 +45,44 @@ impl FsModuleLoader {
 }
 
 impl ModuleLoader for FsModuleLoader {
-    fn resolve(&self, specifier: &str, referrer: &str) -> Result<String, ProviderError> {
-        // ESM requires a relative path, absolute path, or URL. Reject bare names
-        // up front — they would otherwise resolve as relative paths, masking the
-        // "no bare-specifier resolution" non-goal with surprising behaviour.
-        let relative = specifier.starts_with("./") || specifier.starts_with("../");
-        let absolute_path = specifier.starts_with('/');
-        let url_like = !relative && !absolute_path && Url::parse(specifier).is_ok();
-        if !(relative || absolute_path || url_like) {
-            return Err(ProviderError::Other(format!(
-                "bare module specifier not supported: {specifier:?} \
-                 (use a relative path, an absolute path, or a file: URL)"
-            )));
-        }
+    fn resolve(&self, specifier: &str, referrer: &str) -> BoxFuture<Result<String, ProviderError>> {
+        let base = self.base.clone();
+        let specifier = specifier.to_string();
+        let referrer = referrer.to_string();
+        Box::pin(async move {
+            // ESM requires a relative path, absolute path, or URL. Reject bare
+            // names up front — they would otherwise resolve as relative paths,
+            // masking the "no bare-specifier resolution" non-goal with
+            // surprising behaviour.
+            let relative = specifier.starts_with("./") || specifier.starts_with("../");
+            let absolute_path = specifier.starts_with('/');
+            let url_like = !relative && !absolute_path && Url::parse(&specifier).is_ok();
+            if !(relative || absolute_path || url_like) {
+                return Err(ProviderError::Other(format!(
+                    "bare module specifier not supported: {specifier:?} \
+                     (use a relative path, an absolute path, or a file: URL)"
+                )));
+            }
 
-        let base = if referrer.is_empty() {
-            self.base.clone()
-        } else {
-            Url::parse(referrer)
-                .map_err(|e| ProviderError::Other(format!("invalid referrer {referrer:?}: {e}")))?
-        };
-        let resolved = base
-            .join(specifier)
-            .map_err(|e| ProviderError::Other(format!("cannot resolve {specifier:?}: {e}")))?;
+            let base = if referrer.is_empty() {
+                base
+            } else {
+                Url::parse(&referrer).map_err(|e| {
+                    ProviderError::Other(format!("invalid referrer {referrer:?}: {e}"))
+                })?
+            };
+            let resolved = base
+                .join(&specifier)
+                .map_err(|e| ProviderError::Other(format!("cannot resolve {specifier:?}: {e}")))?;
 
-        if resolved.scheme() != "file" {
-            return Err(ProviderError::Other(format!(
-                "unsupported module scheme {:?}: only file: modules are supported",
-                resolved.scheme()
-            )));
-        }
-        Ok(resolved.into())
+            if resolved.scheme() != "file" {
+                return Err(ProviderError::Other(format!(
+                    "unsupported module scheme {:?}: only file: modules are supported",
+                    resolved.scheme()
+                )));
+            }
+            Ok(resolved.into())
+        })
     }
 
     fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>> {
@@ -100,10 +107,17 @@ impl ModuleLoader for FsModuleLoader {
 pub struct DenyModuleLoader;
 
 impl ModuleLoader for DenyModuleLoader {
-    fn resolve(&self, specifier: &str, _referrer: &str) -> Result<String, ProviderError> {
-        Err(ProviderError::Other(format!(
-            "module loading is not permitted (cannot resolve {specifier:?})"
-        )))
+    fn resolve(
+        &self,
+        specifier: &str,
+        _referrer: &str,
+    ) -> BoxFuture<Result<String, ProviderError>> {
+        let specifier = specifier.to_string();
+        Box::pin(async move {
+            Err(ProviderError::Other(format!(
+                "module loading is not permitted (cannot resolve {specifier:?})"
+            )))
+        })
     }
 
     fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>> {
@@ -124,55 +138,63 @@ mod tests {
         FsModuleLoader::with_base_dir("/app").expect("base dir")
     }
 
-    #[test]
-    fn resolves_relative_against_referrer() {
+    #[tokio::test]
+    async fn resolves_relative_against_referrer() {
         let l = loader();
         assert_eq!(
-            l.resolve("./util.mjs", "file:///app/main.mjs").unwrap(),
+            l.resolve("./util.mjs", "file:///app/main.mjs")
+                .await
+                .unwrap(),
             "file:///app/util.mjs"
         );
         assert_eq!(
             l.resolve("../lib/x.mjs", "file:///app/sub/main.mjs")
+                .await
                 .unwrap(),
             "file:///app/lib/x.mjs"
         );
     }
 
-    #[test]
-    fn resolves_entry_relative_to_base() {
+    #[tokio::test]
+    async fn resolves_entry_relative_to_base() {
         // Empty referrer → resolve against the loader's base directory.
         assert_eq!(
-            loader().resolve("./main.mjs", "").unwrap(),
+            loader().resolve("./main.mjs", "").await.unwrap(),
             "file:///app/main.mjs"
         );
     }
 
-    #[test]
-    fn resolves_absolute_path_and_file_url() {
+    #[tokio::test]
+    async fn resolves_absolute_path_and_file_url() {
         let l = loader();
         assert_eq!(
-            l.resolve("/abs/x.mjs", "file:///app/main.mjs").unwrap(),
+            l.resolve("/abs/x.mjs", "file:///app/main.mjs")
+                .await
+                .unwrap(),
             "file:///abs/x.mjs"
         );
         assert_eq!(
             l.resolve("file:///elsewhere/y.mjs", "file:///app/main.mjs")
+                .await
                 .unwrap(),
             "file:///elsewhere/y.mjs"
         );
     }
 
-    #[test]
-    fn rejects_bare_specifier() {
+    #[tokio::test]
+    async fn rejects_bare_specifier() {
         let err = loader()
             .resolve("lodash", "file:///app/main.mjs")
+            .await
             .unwrap_err();
         assert!(format!("{err}").contains("bare module specifier"), "{err}");
     }
 
-    #[test]
-    fn rejects_non_file_scheme() {
+    #[tokio::test]
+    async fn rejects_non_file_scheme() {
         let err = loader()
             .resolve("https://example.com/x.mjs", "file:///app/main.mjs")
+            .await
             .unwrap_err();
         assert!(format!("{err}").contains("only file:"), "{err}");
     }
@@ -202,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn deny_loader_refuses() {
-        assert!(DenyModuleLoader.resolve("./x.mjs", "").is_err());
+        assert!(DenyModuleLoader.resolve("./x.mjs", "").await.is_err());
         assert!(DenyModuleLoader.load("file:///x.mjs").await.is_err());
     }
 }
