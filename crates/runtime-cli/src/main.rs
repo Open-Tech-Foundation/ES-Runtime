@@ -9,8 +9,10 @@
 //! (SPEC.md §8).
 //!
 //! Every input runs as an ES module: `import`/`export` and top-level `await`
-//! work, and imports resolve as local files via [`FsModuleLoader`] (relative
-//! paths, absolute paths, or `file:` URLs — no npm/bare specifiers).
+//! work. Imports resolve via [`NodeModuleLoader`]: relative/absolute paths and
+//! `file:` URLs as local files, and bare specifiers through `node_modules`
+//! (ES module packages only — CommonJS packages and `node:` builtins are
+//! rejected; nothing is installed).
 //!
 //! ```text
 //! esrun script.mjs           # run a module file
@@ -30,7 +32,7 @@ use es_runtime::{HostProviders, ModuleEvalState, Runtime};
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    FsModuleLoader, OsEntropy, ReqwestTransport, SystemClock, TokioTimers,
+    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, TokioTimers,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -46,9 +48,11 @@ USAGE:
     esrun --version          Show the version
 
 Inputs run as ES modules: import/export and top-level await work. Imports
-resolve as local files (relative paths, absolute paths, or file: URLs); there
-is no npm/bare-specifier or remote-module resolution. The full WinterTC surface
-is available (console, URL, fetch, crypto, streams, encoding, timers, events).
+resolve as local files (relative/absolute paths or file: URLs) and as bare
+specifiers through node_modules (ES module packages only — CommonJS packages
+and node: builtins are rejected; nothing is installed). No dynamic import(),
+import attributes, or remote modules yet. The full WinterTC surface is
+available (console, URL, fetch, crypto, streams, encoding, timers, events).
 All host capabilities are granted.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.
@@ -176,9 +180,10 @@ async fn run() -> Result<(), String> {
         net,
         Arc::new(OsEntropy),
     );
-    // Local-file module loader, rooted at the working directory for entry-point
-    // relative resolution.
-    let loader = FsModuleLoader::new().map_err(|e| format!("module loader: {e}"))?;
+    // Module loader: relative/absolute/file: specifiers resolve as local files,
+    // and bare specifiers resolve through node_modules (ESM packages only).
+    // Rooted at the working directory for entry-point relative resolution.
+    let loader = NodeModuleLoader::new().map_err(|e| format!("module loader: {e}"))?;
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.

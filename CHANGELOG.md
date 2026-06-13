@@ -21,8 +21,20 @@ pre-`0.1.0` and the public API is unstable.
   module runs without it. **Backward-incompatible:** inputs now run in module
   scope (strict mode, `this === undefined`), and the old async-IIFE wrapper for
   top-level await is gone (modules provide it natively). Dynamic `import()`,
-  import attributes / JSON modules, and remote/bare specifiers are not yet
-  supported (DECISIONS D21). New `examples/modules/`.
+  import attributes / JSON modules, and remote modules are not yet supported
+  (DECISIONS D21). New `examples/modules/`.
+- **`node_modules` resolution (ES module packages)** — bare specifiers
+  (`import x from "pkg"`, `"pkg/sub"`, `"@scope/pkg"`) resolve against an
+  existing `node_modules` tree via the new `NodeModuleLoader`: walk
+  `node_modules` upward, read `package.json` (`exports` string + `import`/
+  `default` conditions, or `module`/`main`/`index`), probe `.js`/`.mjs`/`.cjs`.
+  **ES module packages only** — CommonJS packages and `node:` builtins are
+  rejected with a clear message; nothing is installed (run `npm install`
+  yourself). This narrows the no-npm non-goal (SPEC §125 amended; DECISIONS
+  D22). `ModuleLoader::resolve` is now **async** (resolution does I/O); the
+  strict file-only `FsModuleLoader` is kept for embedders wanting no
+  `node_modules`. Adds `serde_json` to `default-providers` (already present
+  transitively — no new crate).
 
 ### Performance
 

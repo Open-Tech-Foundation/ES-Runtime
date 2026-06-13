@@ -103,11 +103,12 @@ fn missing_import_is_a_load_error() {
 }
 
 #[test]
-fn bare_specifier_is_rejected() {
+fn uninstalled_bare_package_is_not_found() {
+    // bare.mjs imports "lodash", which is not in any node_modules here.
     let out = run_file("bare.mjs");
     assert!(!out.status.success(), "should exit non-zero");
     assert!(
-        stderr(&out).contains("bare module specifier"),
+        stderr(&out).contains("cannot find package"),
         "{}",
         stderr(&out)
     );
@@ -118,6 +119,24 @@ fn nonexistent_entry_file_errors_cleanly() {
     let out = run_file("no-such-file.mjs");
     assert!(!out.status.success(), "should exit non-zero");
     assert!(stderr(&out).contains("cannot read"), "{}", stderr(&out));
+}
+
+#[test]
+fn resolves_a_bare_esm_package_from_node_modules() {
+    let out = run_file("uses-package.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("hi world from greeter"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn rejects_a_commonjs_package() {
+    let out = run_file("uses-cjs-package.mjs");
+    assert!(!out.status.success(), "should exit non-zero");
+    assert!(stderr(&out).contains("CommonJS"), "{}", stderr(&out));
 }
 
 #[test]

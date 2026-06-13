@@ -90,7 +90,7 @@ Traits in `providers/`; concrete impls only in `default-providers/` (or, later, 
 | `Entropy` | `crypto.getRandomValues`, `randomUUID` |
 | `Timers` | `setTimeout`/`setInterval` family |
 | `NetTransport` | `fetch` (connect, send, stream response) |
-| `ModuleLoader` | ES module `resolve` (pure) + `load` (async source); capability-gated on `FileSystem`. Default `FsModuleLoader` serves local `file:` modules; a deny-all default refuses imports |
+| `ModuleLoader` | ES module `resolve` + `load` (both async — resolution may walk `node_modules` and read `package.json`); capability-gated on `FileSystem`. `NodeModuleLoader` serves local `file:` modules **and** `node_modules` ESM packages (D22); `FsModuleLoader` is the strict file-only loader; a deny-all default refuses imports |
 | `FileSystem` | capability-scoped, async, optional/deniable |
 | `TaskSpawner` | offloading blocking work at the provider's discretion |
 
@@ -146,7 +146,7 @@ Because V8 resolves a graph synchronously, the whole graph is loaded *before* in
 runtime.load_module_source(entry, src, loader)
   └▶ engine.compile_module(entry) → ModuleId           (parse; no code runs)
   └▶ loop: engine.module_requests(id) → ["./util.mjs", …]
-       └▶ ModuleLoader.resolve(spec, referrer) → canonical file: id   (capability check: FileSystem)
+       └▶ ModuleLoader.resolve(spec, referrer) → canonical file: id   (async; capability check: FileSystem; bare specifiers walk node_modules)
        └▶ ModuleLoader.load(id) → source (async)        (dedup by id: diamonds/cycles load once)
        └▶ engine.compile_module(id, source) → ModuleId
   └▶ engine.instantiate_module(entry, resolved)         (sync resolve callback = pure id lookup)
