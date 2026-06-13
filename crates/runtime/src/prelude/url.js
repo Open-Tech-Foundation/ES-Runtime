@@ -2,6 +2,18 @@
 // host `url_parse`/`url_set` ops (the `url` crate); these wrappers provide the
 // JS surface and keep URL.search and URL.searchParams in sync. URLPattern is
 // deferred (SPEC §7).
+//
+// Wire shape (see url_ops.rs): the ops return `[href, o0..o14]` — the canonical
+// href plus fifteen component offsets (UTF-16 code-unit indices). Every getter
+// below is a lazy `href.slice(...)`; nothing is materialized for components the
+// script never reads. Offset map (`u[0]` is href, offsets shifted +1):
+//   protocol  u[0].slice(0, u[1]+1)      hostname  u[0].slice(u[6], u[7])
+//   username  u[0].slice(u[2], u[3])     port      u[0].slice(u[8], u[9])
+//   password  u[0].slice(u[4], u[5])     pathname  u[0].slice(u[10], u[11])
+//   host      u[0].slice(u[6], u[9])     search    "?"-prefixed u[12]..u[13]
+//                                        hash      "#"-prefixed u[14]..u[15]
+// u[12]/u[14] sit *after* the "?"/"#", so a present-but-empty query/fragment
+// reads back as "" (WHATWG) and the delimiter is at index u[..]-1 when present.
 (() => {
   "use strict";
   const ops = globalThis.__ops;
@@ -146,109 +158,118 @@
   }
 
   class URL {
-    #c;
-    #params;
+    #u; // [href, o0..o14] — see the header comment for the offset map.
+    #params; // lazily-built URLSearchParams (first `.searchParams` access)
+    #origin; // lazily-fetched origin (first `.origin` access)
 
     constructor(url, base) {
-      const json =
+      const u =
         base !== undefined
           ? ops.url_parse(String(url), String(base))
           : ops.url_parse(String(url), null);
-      if (json === null) throw new TypeError(`Invalid URL: "${url}"`);
-      this.#c = JSON.parse(json);
-      // `#params` (URLSearchParams) is built lazily on first `.searchParams`
-      // access — parsing the query eagerly here costs ~40% of `new URL()` for
-      // code that never touches it (the common case).
+      if (u === null) throw new TypeError(`Invalid URL: "${url}"`);
+      this.#u = u;
     }
 
     static canParse(url, base) {
-      const json =
+      const u =
         base !== undefined
           ? ops.url_parse(String(url), String(base))
           : ops.url_parse(String(url), null);
-      return json !== null;
+      return u !== null;
     }
 
     #apply(component, value) {
-      const json = ops.url_set(this.#c.href, component, String(value));
-      if (json === null) {
+      const u = ops.url_set(this.#u[0], component, String(value));
+      if (u === null) {
         if (component === "href") throw new TypeError("Invalid URL");
         return; // an invalid component setter is a no-op
       }
-      this.#c = JSON.parse(json);
+      this.#u = u;
+      this.#origin = undefined;
     }
 
     get href() {
-      return this.#c.href;
+      return this.#u[0];
     }
     set href(v) {
       this.#apply("href", v);
       // Only resync if a URLSearchParams has actually been materialized;
       // otherwise it will be built from the current search on first access.
-      if (this.#params !== undefined) this.#params._reload(this.#c.search);
+      if (this.#params !== undefined) this.#params._reload(this.search);
     }
     get origin() {
-      return this.#c.origin;
+      if (this.#origin === undefined) this.#origin = ops.url_origin(this.#u[0]);
+      return this.#origin;
     }
     get protocol() {
-      return this.#c.protocol;
+      const u = this.#u;
+      return u[0].slice(0, u[1] + 1);
     }
     set protocol(v) {
       this.#apply("protocol", v);
     }
     get username() {
-      return this.#c.username;
+      const u = this.#u;
+      return u[0].slice(u[2], u[3]);
     }
     set username(v) {
       this.#apply("username", v);
     }
     get password() {
-      return this.#c.password;
+      const u = this.#u;
+      return u[0].slice(u[4], u[5]);
     }
     set password(v) {
       this.#apply("password", v);
     }
     get host() {
-      return this.#c.host;
+      const u = this.#u;
+      return u[0].slice(u[6], u[9]);
     }
     set host(v) {
       this.#apply("host", v);
     }
     get hostname() {
-      return this.#c.hostname;
+      const u = this.#u;
+      return u[0].slice(u[6], u[7]);
     }
     set hostname(v) {
       this.#apply("hostname", v);
     }
     get port() {
-      return this.#c.port;
+      const u = this.#u;
+      return u[0].slice(u[8], u[9]);
     }
     set port(v) {
       this.#apply("port", v);
     }
     get pathname() {
-      return this.#c.pathname;
+      const u = this.#u;
+      return u[0].slice(u[10], u[11]);
     }
     set pathname(v) {
       this.#apply("pathname", v);
     }
     get hash() {
-      return this.#c.hash;
+      const u = this.#u;
+      return u[14] < u[15] ? u[0].slice(u[14] - 1, u[15]) : "";
     }
     set hash(v) {
       this.#apply("hash", v);
     }
     get search() {
-      return this.#c.search;
+      const u = this.#u;
+      return u[12] < u[13] ? u[0].slice(u[12] - 1, u[13]) : "";
     }
     set search(v) {
       this.#apply("search", v);
-      if (this.#params !== undefined) this.#params._reload(this.#c.search);
+      if (this.#params !== undefined) this.#params._reload(this.search);
     }
     get searchParams() {
-      // Lazily materialize + attach on first access (see constructor).
+      // Lazily materialize + attach on first access.
       if (this.#params === undefined) {
-        this.#params = new URLSearchParams(this.#c.search);
+        this.#params = new URLSearchParams(this.search);
         this.#params._attach(this);
       }
       return this.#params;
@@ -260,10 +281,10 @@
     }
 
     toString() {
-      return this.#c.href;
+      return this.#u[0];
     }
     toJSON() {
-      return this.#c.href;
+      return this.#u[0];
     }
   }
 
