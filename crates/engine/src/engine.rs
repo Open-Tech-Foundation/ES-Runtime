@@ -155,6 +155,29 @@ pub trait Engine {
     /// The state of the most recent [`evaluate_module`](Self::evaluate_module):
     /// pending, completed, or failed (with the stringified reason).
     fn module_eval_state(&mut self) -> ModuleEvalState;
+
+    /// Drains the dynamic `import()` requests raised since the last call, as
+    /// `(request id, specifier, referrer)`. The runtime resolves + loads each
+    /// graph then [`link_dynamic_import`](Self::link_dynamic_import)s or
+    /// [`reject_dynamic_import`](Self::reject_dynamic_import)s it.
+    fn take_pending_dynamic_imports(&mut self) -> Vec<(u64, String, String)>;
+
+    /// Links a loaded+instantiated module to dynamic-import request `reqid`,
+    /// beginning evaluation; the request's promise resolves with the module
+    /// namespace once evaluation settles (driven by
+    /// [`settle_dynamic_imports`](Self::settle_dynamic_imports)).
+    fn link_dynamic_import(&mut self, reqid: u64, module: ModuleId) -> Result<()>;
+
+    /// Rejects dynamic-import request `reqid` (its graph could not be loaded).
+    fn reject_dynamic_import(&mut self, reqid: u64, message: &str) -> Result<()>;
+
+    /// Settles linked dynamic imports whose module evaluation has completed
+    /// (resolving with the namespace or rejecting with the error). Call each tick.
+    fn settle_dynamic_imports(&mut self);
+
+    /// Whether any dynamic import is in flight (awaiting load, or its module's
+    /// evaluation to settle).
+    fn has_pending_dynamic_imports(&self) -> bool;
 }
 
 /// An embedded V8 instance: one isolate and one persistent context, plus the op
@@ -337,6 +360,7 @@ impl V8Engine {
         let modules = std::rc::Rc::new(std::cell::RefCell::new(ModuleRegistry::new()));
         isolate.set_slot(modules.clone());
         crate::module::install_import_meta_callback(&mut isolate);
+        crate::module::install_dynamic_import_callback(&mut isolate);
 
         let interrupt = isolate.thread_safe_handle();
         let heap_tripped = Arc::new(AtomicBool::new(false));
@@ -554,6 +578,39 @@ impl Engine for V8Engine {
 
     fn module_eval_state(&mut self) -> ModuleEvalState {
         crate::module::eval_state(&mut self.isolate, &self.context, &self.modules)
+    }
+
+    fn take_pending_dynamic_imports(&mut self) -> Vec<(u64, String, String)> {
+        crate::module::take_pending_dynamic(&self.modules)
+    }
+
+    fn link_dynamic_import(&mut self, reqid: u64, module: ModuleId) -> Result<()> {
+        crate::module::link_dynamic(
+            &mut self.isolate,
+            &self.context,
+            &self.modules,
+            &self.interrupt,
+            reqid,
+            module,
+        )
+    }
+
+    fn reject_dynamic_import(&mut self, reqid: u64, message: &str) -> Result<()> {
+        crate::module::reject_dynamic(
+            &mut self.isolate,
+            &self.context,
+            &self.modules,
+            reqid,
+            message,
+        )
+    }
+
+    fn settle_dynamic_imports(&mut self) {
+        crate::module::settle_dynamic(&mut self.isolate, &self.context, &self.modules);
+    }
+
+    fn has_pending_dynamic_imports(&self) -> bool {
+        crate::module::has_pending_dynamic(&self.modules)
     }
 }
 
@@ -896,6 +953,102 @@ mod tests {
             .compile_module("file:///bad.mjs", "export const = ;")
             .unwrap_err();
         assert!(matches!(err, Error::Compile { .. }), "got {err:?}");
+    }
+
+    /// Drives an entry module that uses `import()`, playing the runtime's role:
+    /// each turn, fulfil pending dynamic-import requests with `loader`, settle
+    /// completed ones, and run microtasks — until quiescent.
+    fn drive_with_dynamic_imports(
+        engine: &mut V8Engine,
+        entry: ModuleId,
+        loader: &dyn Fn(&mut V8Engine, &str) -> ModuleId,
+    ) {
+        engine.instantiate_module(entry, &HashMap::new()).unwrap();
+        engine.evaluate_module(entry).unwrap();
+        for _ in 0..100 {
+            for (reqid, spec, _referrer) in engine.take_pending_dynamic_imports() {
+                let id = loader(engine, &spec);
+                engine.instantiate_module(id, &HashMap::new()).unwrap();
+                engine.link_dynamic_import(reqid, id).unwrap();
+            }
+            engine.settle_dynamic_imports();
+            engine.run_microtasks();
+            if !engine.has_pending_dynamic_imports()
+                && engine.module_eval_state() != ModuleEvalState::Pending
+            {
+                engine.run_microtasks();
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn dynamic_import_resolves_with_namespace() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let entry = engine
+            .compile_module(
+                "file:///entry.mjs",
+                "globalThis.ns = null; import('./dep.mjs').then((m) => { globalThis.ns = m.value; });",
+            )
+            .unwrap();
+        drive_with_dynamic_imports(&mut engine, entry, &|e, spec| {
+            assert_eq!(spec, "./dep.mjs");
+            e.compile_module("file:///dep.mjs", "export const value = 123;")
+                .unwrap()
+        });
+        assert_eq!(engine.eval("globalThis.ns").unwrap(), Value::Number(123.0));
+    }
+
+    #[test]
+    fn dynamic_import_of_top_level_await_module_waits() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let entry = engine
+            .compile_module(
+                "file:///entry.mjs",
+                "globalThis.tla = 0; import('./tla.mjs').then((m) => { globalThis.tla = m.v; });",
+            )
+            .unwrap();
+        drive_with_dynamic_imports(&mut engine, entry, &|e, _spec| {
+            e.compile_module(
+                "file:///tla.mjs",
+                "export const v = await Promise.resolve(7);",
+            )
+            .unwrap()
+        });
+        assert_eq!(engine.eval("globalThis.tla").unwrap(), Value::Number(7.0));
+    }
+
+    #[test]
+    fn dynamic_import_rejection_is_catchable() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let entry = engine
+            .compile_module(
+                "file:///entry.mjs",
+                "globalThis.err = null; import('./missing.mjs').catch((e) => { globalThis.err = e.message; });",
+            )
+            .unwrap();
+        engine.instantiate_module(entry, &HashMap::new()).unwrap();
+        engine.evaluate_module(entry).unwrap();
+        for _ in 0..100 {
+            for (reqid, _spec, _referrer) in engine.take_pending_dynamic_imports() {
+                engine
+                    .reject_dynamic_import(reqid, "cannot find module")
+                    .unwrap();
+            }
+            engine.settle_dynamic_imports();
+            engine.run_microtasks();
+            if !engine.has_pending_dynamic_imports() {
+                engine.run_microtasks();
+                break;
+            }
+        }
+        assert_eq!(
+            engine.eval("globalThis.err").unwrap(),
+            Value::String("cannot find module".into())
+        );
     }
 
     #[test]

@@ -55,6 +55,26 @@ pub(crate) struct ModuleRegistry {
     resolve: HashMap<(ModuleId, String), ModuleId>,
     /// The evaluation promise of the most recent [`evaluate`], if any.
     eval_promise: Option<v8::Global<v8::Promise>>,
+    /// Next dynamic-`import()` request id.
+    next_dynamic: u64,
+    /// `import()` calls raised by the host callback, awaiting the runtime to load
+    /// the graph: `(request id, specifier, referrer)`. Drained by the runtime.
+    pending_dynamic: Vec<(u64, String, String)>,
+    /// Resolvers for dynamic imports between the callback and either linking
+    /// (graph loaded) or rejection (load failed), keyed by request id.
+    dynamic_resolvers: HashMap<u64, v8::Global<v8::PromiseResolver>>,
+    /// Linked dynamic imports awaiting their module's evaluation to settle:
+    /// `(request id, resolver, module, evaluation promise)`.
+    dynamic_settling: Vec<DynamicSettling>,
+}
+
+/// A dynamic import whose module is evaluating; when the evaluation promise
+/// settles, its resolver is fulfilled with the module namespace or rejected
+/// with the error.
+struct DynamicSettling {
+    resolver: v8::Global<v8::PromiseResolver>,
+    module: v8::Global<v8::Module>,
+    eval: v8::Global<v8::Promise>,
 }
 
 impl ModuleRegistry {
@@ -66,6 +86,10 @@ impl ModuleRegistry {
             specifier_by_id: HashMap::new(),
             resolve: HashMap::new(),
             eval_promise: None,
+            next_dynamic: 0,
+            pending_dynamic: Vec::new(),
+            dynamic_resolvers: HashMap::new(),
+            dynamic_settling: Vec::new(),
         }
     }
 
@@ -343,4 +367,189 @@ fn import_meta_inner(
     {
         meta.create_data_property(scope, key.into(), value.into());
     }
+}
+
+// ----- dynamic import() -----------------------------------------------------
+
+/// Installs the host callback V8 invokes for `import(specifier)`. Isolate-level
+/// config (like the import-meta initializer), so it is applied in
+/// [`wire`](crate::engine) and is never serialized into a snapshot.
+pub(crate) fn install_dynamic_import_callback(isolate: &mut v8::OwnedIsolate) {
+    isolate.set_host_import_module_dynamically_callback(dynamic_import_callback);
+}
+
+/// Called by V8 for each `import(...)`. Records the request (specifier +
+/// referrer) and returns a promise the runtime settles once it has loaded,
+/// instantiated, and evaluated the module graph (off the synchronous callback,
+/// since loading is async). The callback itself cannot capture (it is
+/// `UnitType`), so it reaches the registry through the isolate slot.
+fn dynamic_import_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _host_defined_options: v8::Local<'s, v8::Data>,
+    resource_name: v8::Local<'s, v8::Value>,
+    specifier: v8::Local<'s, v8::String>,
+    _import_attributes: v8::Local<'s, v8::FixedArray>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    // V8 invokes this; contain any panic rather than unwind across C++ (D15).
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dynamic_import_inner(scope, resource_name, specifier)
+    }))
+    .unwrap_or(None)
+}
+
+fn dynamic_import_inner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    resource_name: v8::Local<'s, v8::Value>,
+    specifier: v8::Local<'s, v8::String>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let registry = registry(scope)?;
+    let specifier = specifier.to_rust_string_lossy(scope);
+    // The referrer is the importing module's specifier (its ScriptOrigin
+    // resource name); empty when imported from a non-module context.
+    let referrer = if resource_name.is_string() {
+        js_to_string(scope, resource_name)
+    } else {
+        String::new()
+    };
+
+    let resolver = v8::PromiseResolver::new(scope)?;
+    let promise = resolver.get_promise(scope);
+    let resolver = v8::Global::new(scope, resolver);
+
+    let mut reg = registry.borrow_mut();
+    let reqid = reg.next_dynamic;
+    reg.next_dynamic += 1;
+    reg.dynamic_resolvers.insert(reqid, resolver);
+    reg.pending_dynamic.push((reqid, specifier, referrer));
+    Some(promise)
+}
+
+/// Drains the dynamic `import()` requests raised since the last call, for the
+/// runtime to resolve + load.
+pub(crate) fn take_pending_dynamic(
+    registry: &Rc<RefCell<ModuleRegistry>>,
+) -> Vec<(u64, String, String)> {
+    std::mem::take(&mut registry.borrow_mut().pending_dynamic)
+}
+
+/// Whether any dynamic import is in flight (awaiting load, or awaiting its
+/// module's evaluation to settle).
+pub(crate) fn has_pending_dynamic(registry: &Rc<RefCell<ModuleRegistry>>) -> bool {
+    let reg = registry.borrow();
+    !reg.pending_dynamic.is_empty()
+        || !reg.dynamic_resolvers.is_empty()
+        || !reg.dynamic_settling.is_empty()
+}
+
+/// Links a loaded+instantiated module to its dynamic-import request: kicks off
+/// evaluation and tracks the evaluation promise so [`settle_dynamic`] can
+/// resolve the request with the module namespace once it completes.
+/// `Module::evaluate` is idempotent, so this is correct for a fresh, already
+/// evaluating, or already-evaluated (shared) module alike.
+pub(crate) fn link_dynamic(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+    registry: &Rc<RefCell<ModuleRegistry>>,
+    interrupt: &v8::IsolateHandle,
+    reqid: u64,
+    id: ModuleId,
+) -> Result<()> {
+    let module_global = registry.borrow().module(id)?;
+    let resolver = registry
+        .borrow_mut()
+        .dynamic_resolvers
+        .remove(&reqid)
+        .ok_or_else(|| Error::Internal(format!("unknown dynamic import request {reqid}")))?;
+
+    v8::scope!(let scope, isolate);
+    let context = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, context);
+
+    let module = v8::Local::new(scope, &module_global);
+    match module.evaluate(scope) {
+        Some(value) => {
+            let promise = v8::Local::<v8::Promise>::try_from(value)
+                .map_err(|_| Error::Internal("module evaluation returned no promise".into()))?;
+            let eval = v8::Global::new(scope, promise);
+            registry
+                .borrow_mut()
+                .dynamic_settling
+                .push(DynamicSettling {
+                    resolver,
+                    module: module_global,
+                    eval,
+                });
+            Ok(())
+        }
+        None if interrupt.is_execution_terminating() => Err(Error::Terminated {
+            reason: "execution terminated".into(),
+        }),
+        None => Err(Error::Internal(
+            "dynamic import evaluation failed to start".into(),
+        )),
+    }
+}
+
+/// Rejects a dynamic import whose graph could not be resolved/loaded, with
+/// `message` as the error.
+pub(crate) fn reject_dynamic(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+    registry: &Rc<RefCell<ModuleRegistry>>,
+    reqid: u64,
+    message: &str,
+) -> Result<()> {
+    let resolver = registry
+        .borrow_mut()
+        .dynamic_resolvers
+        .remove(&reqid)
+        .ok_or_else(|| Error::Internal(format!("unknown dynamic import request {reqid}")))?;
+
+    v8::scope!(let scope, isolate);
+    let context = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, context);
+
+    let resolver = v8::Local::new(scope, &resolver);
+    let text = v8::String::new(scope, message).unwrap_or_else(|| v8::String::empty(scope));
+    let error = v8::Exception::error(scope, text);
+    resolver.reject(scope, error);
+    Ok(())
+}
+
+/// Settles linked dynamic imports whose module evaluation has completed:
+/// fulfilled → resolve with the module namespace; rejected → reject with the
+/// evaluation error. Called each tick.
+pub(crate) fn settle_dynamic(
+    isolate: &mut v8::OwnedIsolate,
+    context: &v8::Global<v8::Context>,
+    registry: &Rc<RefCell<ModuleRegistry>>,
+) {
+    let settling = std::mem::take(&mut registry.borrow_mut().dynamic_settling);
+    if settling.is_empty() {
+        return;
+    }
+
+    v8::scope!(let scope, isolate);
+    let context = v8::Local::new(scope, context);
+    let scope = &mut v8::ContextScope::new(scope, context);
+
+    let mut still_pending = Vec::new();
+    for entry in settling {
+        let eval = v8::Local::new(scope, &entry.eval);
+        match eval.state() {
+            v8::PromiseState::Pending => still_pending.push(entry),
+            v8::PromiseState::Fulfilled => {
+                let module = v8::Local::new(scope, &entry.module);
+                let namespace = module.get_module_namespace();
+                let resolver = v8::Local::new(scope, &entry.resolver);
+                resolver.resolve(scope, namespace);
+            }
+            v8::PromiseState::Rejected => {
+                let reason = eval.result(scope);
+                let resolver = v8::Local::new(scope, &entry.resolver);
+                resolver.reject(scope, reason);
+            }
+        }
+    }
+    registry.borrow_mut().dynamic_settling = still_pending;
 }
