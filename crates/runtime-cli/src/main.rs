@@ -144,7 +144,11 @@ async fn run() -> Result<(), String> {
     // The module's canonical specifier (a file: URL — also import.meta.url and
     // the referrer its imports resolve against), its source, and a short label
     // for diagnostics.
-    let (specifier, source, label) = match config.source {
+    // Returns the module's canonical specifier (a file: URL — also
+    // import.meta.url and the referrer its imports resolve against), its source,
+    // a short diagnostic label, and the **base directory** (the entry's own
+    // directory, or cwd for `-e`) from which the loader detects the sandbox root.
+    let (specifier, source, label, base_dir) = match config.source {
         Source::File(path) => {
             let code =
                 std::fs::read_to_string(&path).map_err(|e| format!("cannot read {path}: {e}"))?;
@@ -153,9 +157,13 @@ async fn run() -> Result<(), String> {
             // module specifier, so it bypasses the loader's specifier rules.
             let abs =
                 std::fs::canonicalize(&path).map_err(|e| format!("cannot resolve {path}: {e}"))?;
+            let dir = abs
+                .parent()
+                .map(std::path::Path::to_path_buf)
+                .ok_or_else(|| format!("entry path has no parent directory: {path}"))?;
             let url = Url::from_file_path(&abs)
                 .map_err(|()| format!("not a valid module path: {path}"))?;
-            (url.to_string(), code, path)
+            (url.to_string(), code, path, dir)
         }
         Source::Inline(code) => {
             // A synthetic file: id in the working directory, so the snippet's
@@ -167,7 +175,7 @@ async fn run() -> Result<(), String> {
             let url = base
                 .join("[eval]")
                 .map_err(|e| format!("cannot derive eval specifier: {e}"))?;
-            (url.to_string(), code, "<eval>".to_string())
+            (url.to_string(), code, "<eval>".to_string(), cwd)
         }
     };
 
@@ -182,11 +190,13 @@ async fn run() -> Result<(), String> {
         Arc::new(OsEntropy),
     );
     // Module loader: relative/absolute/file: specifiers resolve as local files,
-    // and bare specifiers resolve through node_modules (ESM packages only).
-    // Rooted at the working directory for entry-point relative resolution. Held
-    // behind an Arc so dynamic import() can reach it during evaluation.
-    let loader: Arc<dyn ModuleLoader> =
-        Arc::new(NodeModuleLoader::new().map_err(|e| format!("module loader: {e}"))?);
+    // bare specifiers through node_modules (ESM packages only). Based at the
+    // entry's directory, from which it detects the sandbox root (the project
+    // root containing node_modules/package.json) — resolution is jailed under it
+    // by default (D25). Held behind an Arc so dynamic import() can reach it.
+    let loader: Arc<dyn ModuleLoader> = Arc::new(
+        NodeModuleLoader::with_base_dir(&base_dir).map_err(|e| format!("module loader: {e}"))?,
+    );
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.

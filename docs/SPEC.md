@@ -116,6 +116,16 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 8. ☑ **Snapshot + perf** — the prelude + op shells bake into a V8 startup snapshot (D8); `Runtime::with_snapshot` restores it (~2.3× faster startup in the `bench` example). Zero-copy `ArrayBuffer` transfer was audited and deliberately deferred (D3a Phase 8). Benchmark harness (`default-providers` `bench` example) covers context creation + op-dispatch throughput.
 9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. ☑ byte/BYOB streams; ☑ intrinsic-integrity audit (Rust-side boundary verified + JS-surface defense-in-depth; SES-style primordial hardening deferred to the embedder); ☑ internal security review (`docs/SECURITY-REVIEW.md`) + docs finalization. Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; an **external** security review (pre-`1.0`).
 
+### v1 standalone roadmap (phases 10–14, DECISIONS D24)
+
+Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM module support (static + dynamic, `node_modules` ESM) landed ahead of these (D21/D22/D23).
+
+10. ◐ **FS sandbox + symlink-correct resolution** — module/file resolution **realpaths** resolved modules (Node-default, preserve-symlinks off) so pnpm's symlinked store resolves transitive deps; resolution is **root-jailed** to the detected project root by default (DECISIONS D25). Windows CI added (macOS later).
+11. ☐ **`runtime:` standard modules I** — the `runtime:` built-in scheme (served by the runtime, loader-independent, capability-gated) + `runtime:process` (env/args/cwd) and `runtime:fs` (async file ops, jailed). New `FileSystem` + process/env providers.
+12. ☐ **`runtime:` standard modules II** — `runtime:net` (sockets, listener provider) and `runtime:http` (HTTP **server** — the standalone capstone). Streaming request bodies.
+13. ☐ **Diagnostics & DX** — error model standardization: JS stack traces + source position, stable error codes, one coherent CLI error block, optional color (SPEC §7 deferral promoted).
+14. ☐ **Production hardening & release** — fuzzing + sanitizers/Miri in CI, soak/leak tests, a WPT subset for WinterTC-compliance credibility, external security review, API freeze + semver commitment, embedder guide + supported-platforms statement, macOS CI.
+
 ---
 
 ## 7. Non-goals & deferrals
