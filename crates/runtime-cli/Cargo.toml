@@ -18,6 +18,9 @@ es-runtime-providers.workspace = true
 es-runtime.workspace = true
 es-runtime-default-providers.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
+# Canonicalizing the entry path / inline-snippet base into a file: module
+# specifier (the referrer the entry's imports resolve against).
+url.workspace = true
 
 # build.rs runs V8 to bake the prelude snapshot into the binary (see build.rs;
 # host-arch only — cross-compilation would need a target-run step).

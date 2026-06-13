@@ -2,14 +2,19 @@
 //!
 //! This is the thin executable wrapper around the embeddable `runtime` library:
 //! it wires the default tokio providers (system clock, OS entropy, reqwest
-//! networking, a stdout/stderr console), constructs a [`Runtime`], evaluates the
-//! given source, and drives it to completion on the [`Driver`]. The runtime
-//! itself owns no loop and no I/O — everything host-facing is injected here, so
-//! this file *is* the standalone embedding (SPEC.md §8).
+//! networking, a stdout/stderr console), constructs a [`Runtime`], loads the
+//! given source as an **ES module**, and drives it to completion on the
+//! [`Driver`]. The runtime itself owns no loop and no I/O — everything
+//! host-facing is injected here, so this file *is* the standalone embedding
+//! (SPEC.md §8).
+//!
+//! Every input runs as an ES module: `import`/`export` and top-level `await`
+//! work, and imports resolve as local files via [`FsModuleLoader`] (relative
+//! paths, absolute paths, or `file:` URLs — no npm/bare specifiers).
 //!
 //! ```text
-//! esrun script.js          # run a file
-//! esrun -e "console.log(1)" # run an inline snippet
+//! esrun script.mjs           # run a module file
+//! esrun -e "console.log(1)"  # run an inline module snippet
 //! esrun --version | --help
 //! ```
 
@@ -21,24 +26,30 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use es_runtime::{HostProviders, Runtime};
+use es_runtime::{HostProviders, ModuleEvalState, Runtime};
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
-use es_runtime_default_providers::{OsEntropy, ReqwestTransport, SystemClock, TokioTimers};
+use es_runtime_default_providers::{
+    FsModuleLoader, OsEntropy, ReqwestTransport, SystemClock, TokioTimers,
+};
 use es_runtime_providers::{Console, ConsoleLevel};
+use url::Url;
 
 const USAGE: &str = "\
-esrun — run JavaScript on the ES-Runtime
+esrun — run JavaScript (ES modules) on the ES-Runtime
 
 USAGE:
-    esrun <file.js>          Run a JavaScript file
-    esrun -e <code>          Run an inline snippet
+    esrun <file>             Run a JavaScript module file
+    esrun -e <code>          Run an inline module snippet
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --help             Show this help
     esrun --version          Show the version
 
-The full WinterTC surface is available (console, URL, fetch, crypto, streams,
-encoding, timers, events). All host capabilities are granted.";
+Inputs run as ES modules: import/export and top-level await work. Imports
+resolve as local files (relative paths, absolute paths, or file: URLs); there
+is no npm/bare-specifier or remote-module resolution. The full WinterTC surface
+is available (console, URL, fetch, crypto, streams, encoding, timers, events).
+All host capabilities are granted.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.
 static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
@@ -125,13 +136,34 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), String> {
     let config = parse_args()?;
-    let (source, label) = match config.source {
+    // The module's canonical specifier (a file: URL — also import.meta.url and
+    // the referrer its imports resolve against), its source, and a short label
+    // for diagnostics.
+    let (specifier, source, label) = match config.source {
         Source::File(path) => {
             let code =
                 std::fs::read_to_string(&path).map_err(|e| format!("cannot read {path}: {e}"))?;
-            (code, path)
+            // Canonicalize the entry path (resolving relative components and
+            // symlinks) into a file: URL. This is a filesystem path, not a
+            // module specifier, so it bypasses the loader's specifier rules.
+            let abs =
+                std::fs::canonicalize(&path).map_err(|e| format!("cannot resolve {path}: {e}"))?;
+            let url = Url::from_file_path(&abs)
+                .map_err(|()| format!("not a valid module path: {path}"))?;
+            (url.to_string(), code, path)
         }
-        Source::Inline(code) => (code, "<eval>".to_string()),
+        Source::Inline(code) => {
+            // A synthetic file: id in the working directory, so the snippet's
+            // relative imports resolve against the cwd.
+            let cwd = std::env::current_dir()
+                .map_err(|e| format!("cannot read working directory: {e}"))?;
+            let base = Url::from_directory_path(&cwd)
+                .map_err(|()| "working directory is not absolute".to_string())?;
+            let url = base
+                .join("[eval]")
+                .map_err(|e| format!("cannot derive eval specifier: {e}"))?;
+            (url.to_string(), code, "<eval>".to_string())
+        }
     };
 
     // Default providers — the standalone embedding's host surface.
@@ -144,17 +176,21 @@ async fn run() -> Result<(), String> {
         net,
         Arc::new(OsEntropy),
     );
+    // Local-file module loader, rooted at the working directory for entry-point
+    // relative resolution.
+    let loader = FsModuleLoader::new().map_err(|e| format!("module loader: {e}"))?;
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.
     let mut runtime =
         Runtime::with_snapshot(SNAPSHOT.to_vec(), providers).map_err(|e| e.to_string())?;
-    // A trusted local script: grant the full capability set.
+    // A trusted local script: grant the full capability set (incl. FileSystem,
+    // which module loading requires).
     runtime.set_capabilities(CapabilitySet::all());
 
     // Execution-time watchdog (SPEC §4): a separate thread terminates the engine
     // after the deadline. Cross-thread V8 termination means even a synchronous
-    // infinite loop in the top-level script is stopped. `timed_out` lets us
+    // infinite loop in a module's top level is stopped. `timed_out` lets us
     // report a timeout distinctly from an ordinary error.
     let timed_out = Arc::new(AtomicBool::new(false));
     if let Some(deadline) = config.timeout {
@@ -167,21 +203,32 @@ async fn run() -> Result<(), String> {
         });
     }
 
-    // Wrap in an async IIFE so top-level `await` works — the engine evaluates a
-    // classic script, which disallows it; real ES-module top-level await is a
-    // later feature. A runtime throw becomes an unhandled rejection, reported
-    // below. Syntax errors still surface here, labelled with the source.
-    let wrapped = format!("(async () => {{\n{source}\n}})();");
-    if let Err(err) = runtime.eval(&wrapped) {
+    // Load the module graph (resolving + reading any imports) and begin
+    // evaluating it. Top-level await is native to modules, so no wrapper is
+    // needed. A compile/instantiation error or a missing import surfaces here;
+    // a top-level throw rejects the evaluation, observed after the drive below.
+    let load = runtime.load_module_source(&specifier, &source, &loader);
+    let loaded = match config.timeout {
+        Some(deadline) => match tokio::time::timeout(deadline, load).await {
+            Ok(result) => result,
+            Err(_) => {
+                runtime.interrupt_handle().terminate();
+                return Err(timeout_message(config.timeout));
+            }
+        },
+        None => load.await,
+    };
+    if let Err(err) = loaded {
         if timed_out.load(Ordering::SeqCst) {
             return Err(timeout_message(config.timeout));
         }
         return Err(format!("{label}: {err}"));
     }
 
-    // Drive async work (fetch, setTimeout, promise reactions) to quiescence.
-    // The timeout is a backstop for runaways that live in async callbacks, which
-    // yield to the executor (where a blocking watchdog can't preempt them).
+    // Drive async work (top-level await, fetch, setTimeout, promise reactions)
+    // to quiescence. The timeout is a backstop for runaways that live in async
+    // callbacks, which yield to the executor (where a blocking watchdog can't
+    // preempt them).
     let driver = Driver::new(clock, timers);
     let drive = driver.run_to_completion(&mut runtime);
     let rejections = match config.timeout {
@@ -194,6 +241,14 @@ async fn run() -> Result<(), String> {
         },
         None => drive.await,
     };
+
+    // A top-level throw (or a rejected top-level await) fails the module's
+    // evaluation. Report it as the primary error — its rejection also shows up
+    // in `rejections`, so it is the one uncaught-rejection we don't re-report.
+    if let ModuleEvalState::Failed(message) = runtime.module_eval_state() {
+        eprintln!("Uncaught: {message}");
+        return Err(format!("{label}: module evaluation failed"));
+    }
 
     if !rejections.is_empty() {
         for message in &rejections {

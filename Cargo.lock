@@ -571,6 +571,7 @@ dependencies = [
  "es-runtime-default-providers",
  "es-runtime-providers",
  "tokio",
+ "url",
 ]
 
 [[package]]
