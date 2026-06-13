@@ -1,0 +1,112 @@
+# Release artifacts for the `esrun` CLI.
+#
+# Triggered by pushing a semver tag (e.g. `v0.1.0`). Builds the standalone
+# binary per target, packages it (tar.gz on Unix, zip on Windows) with a
+# SHA-256 checksum, and publishes them all to a GitHub Release.
+#
+# The `v8` crate downloads a prebuilt static library at build time, so each
+# runner needs network access. The toolchain is pinned by rust-toolchain.toml.
+#
+# Targets: Linux + Windows now; macOS is wired but disabled until a runner is
+# available (see the commented matrix entries).
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"] # semver tags only
+  workflow_dispatch: # allow manual dry-runs (build, no publish)
+
+permissions:
+  contents: write # create releases + upload assets
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          # macOS — enable once a runner is provisioned:
+          # - os: macos-latest
+          #   target: aarch64-apple-darwin
+          #   archive: tar.gz
+          # - os: macos-13
+          #   target: x86_64-apple-darwin
+          #   archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build esrun
+        run: cargo build --release --locked -p es-runtime-cli --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="dev-${GITHUB_SHA::8}"
+          NAME="esrun-${VERSION}-${{ matrix.target }}"
+          mkdir -p "dist/$NAME"
+          cp "target/${{ matrix.target }}/release/esrun" "dist/$NAME/"
+          cp README.md LICENSE NOTICE "dist/$NAME/" 2>/dev/null || true
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          ( cd dist && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { "dev-$($env:GITHUB_SHA.Substring(0,8))" }
+          $name = "esrun-$version-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/esrun.exe" "dist/$name/"
+          Copy-Item README.md,LICENSE,NOTICE "dist/$name/" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File "dist/$name.zip.sha256" -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: esrun-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
