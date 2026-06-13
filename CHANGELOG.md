@@ -83,6 +83,14 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Fixed
 
+- **`console.log` object inspection** — replaced the `JSON.stringify`-based
+  formatter (which silently dropped function-valued properties, `undefined`,
+  symbols, etc. — so an object/module-namespace full of functions printed as
+  `{}`) with a recursive `util.inspect`-lite: functions as `[Function: name]` /
+  `[class Name]`, arrays/objects/Map/Set/Error/RegExp/Date, null-prototype and
+  module-namespace objects, nested quoting, a depth limit, and a circular guard.
+  (A namespace import of a function-only package such as `moderndash` now prints
+  its members instead of `{}`.)
 - **`TextEncoder.encodeInto`** — `read`/`written` are now spec-correct under
   truncation: output is cut at a UTF-8 code-point boundary (never mid-sequence)
   and `read` counts only the UTF-16 code units actually encoded (was: always
