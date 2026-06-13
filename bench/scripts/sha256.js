@@ -5,13 +5,18 @@
   const data = new Uint8Array(4096);
   crypto.getRandomValues(data);
   const N = 20_000;
+  const run = async (n) => {
+    let acc = 0;
+    for (let i = 0; i < n; i++) {
+      const d = await crypto.subtle.digest("SHA-256", data);
+      acc ^= new Uint8Array(d)[0];
+    }
+    return acc;
+  };
+  await run(N / 10); // untimed JIT warmup
   const t0 = performance.now();
-  let last = 0;
-  for (let i = 0; i < N; i++) {
-    const d = await crypto.subtle.digest("SHA-256", data);
-    last ^= new Uint8Array(d)[0];
-  }
+  const acc = await run(N);
   const t1 = performance.now();
-  if (last === -1) console.log(last);
+  if (acc === -1) console.log(acc); // defeat dead-code elimination
   console.log("RESULT_MS=" + (t1 - t0).toFixed(2));
 })();
