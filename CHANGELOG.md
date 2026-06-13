@@ -8,6 +8,17 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Performance
 
+- **Prelude snapshot baked into `esrun`** — `build.rs` now builds the V8 startup
+  snapshot at compile time and `include_bytes!`s it into the binary; the CLI
+  restores it via `Runtime::with_snapshot` instead of compiling + evaluating the
+  ~16 prelude files on every launch. Startup drops to ~6.6 ms (fastest of
+  node/bun/deno/esrun on the bench box). Host-arch builds only — cross-compiling
+  the CLI would need a target-run step (noted in `build.rs`).
+- **Op-backed `atob`/`btoa`** — base64 transcoding moves from a pure-JS
+  per-character concatenation into host `base64_encode`/`base64_decode` ops
+  (`base64_ops.rs`); ~4.5× faster on the base64 workload (386 → 86 ms). Same
+  semantics, including forgiving-base64 decode (with one recorded looseness:
+  all trailing `=` are stripped).
 - **URL ops return offsets, not JSON** — `url_parse`/`url_set` now return the
   canonical href plus 15 component offsets (`url::Position`s, UTF-16 indices)
   as one small JS array (new `Value::Array`); every `URL` getter is a lazy
@@ -40,10 +51,17 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Benchmark
 
-- `bench/` reworked: the `webapi` workload is split into `url` and `encoding`
-  (separately attributable), a pure-engine `json` baseline is added, workloads
-  run an untimed JIT warmup and report the **median** of `WORKLOAD_RUNS`
-  (default 5) instead of best-of-3. Representative results refreshed.
+- `bench/` reworked and broadened from 4 workloads to 15 plus a peak-RSS row.
+  The `webapi` workload is split into `url` and `encoding` (separately
+  attributable); new workloads add a pure-engine `json` baseline, large-document
+  `jsonbig`, key-based `crypto` (HMAC + AES-GCM), `base64`, `structured`
+  (`structuredClone`), `async` (microtask overhead), `timers`, `streams`,
+  `fetch` (against a local server — the first workload to exercise the network
+  provider seam), and `bigscript` (user-source parse cost). Deno is now detected
+  (incl. `~/.deno/bin/deno`); workloads run an untimed JIT warmup and report the
+  **median** of `WORKLOAD_RUNS` (default 5); `BENCH_JSON=1` emits machine-
+  readable output and `WORKLOADS=...` runs a subset. Representative results
+  refreshed across all four runtimes.
 
 ### Performance (earlier in this cycle)
 

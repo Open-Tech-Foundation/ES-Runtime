@@ -50,7 +50,8 @@ supported).
 | Run tests | `cargo test --workspace` |
 | Lints + format check | `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --check` |
 | Supply-chain gates | `cargo deny check` · `cargo audit` |
-| Startup/throughput benchmark | `cargo run --release -p es-runtime-default-providers --example bench` |
+| Startup/throughput microbenchmark | `cargo run --release -p es-runtime-default-providers --example bench` |
+| Cross-runtime benchmark (vs Node/Bun/Deno) | `bench/run.sh` (see `bench/README.md`) |
 
 ## License
 
