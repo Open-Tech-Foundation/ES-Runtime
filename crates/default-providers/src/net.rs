@@ -1,5 +1,7 @@
 //! tokio/reqwest-backed [`NetTransport`] (DECISIONS.md D20).
 
+use std::sync::OnceLock;
+
 use futures_util::StreamExt;
 
 use es_runtime_providers::{
@@ -8,24 +10,42 @@ use es_runtime_providers::{
 
 /// A [`NetTransport`] backed by `reqwest` with rustls TLS (no OpenSSL). HTTP/1.1
 /// and HTTP/2; response bodies stream.
+///
+/// The client is built on the **first fetch**, not at construction: client
+/// build-out (TLS config, root-store loading) costs startup milliseconds that
+/// scripts which never fetch shouldn't pay. A build failure surfaces as a
+/// [`ProviderError`] from that first fetch.
 pub struct ReqwestTransport {
-    client: reqwest::Client,
+    client: OnceLock<Result<reqwest::Client, String>>,
 }
 
 impl ReqwestTransport {
-    /// Builds a transport with the default reqwest client.
+    /// Builds a transport. Infallible today (the client is built lazily); the
+    /// `Result` is kept so a future eager validation can fail here.
     pub fn new() -> Result<Self, ProviderError> {
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(|e| ProviderError::Other(format!("http client: {e}")))?;
-        Ok(ReqwestTransport { client })
+        Ok(ReqwestTransport {
+            client: OnceLock::new(),
+        })
+    }
+
+    /// The shared client, built on first use (cheap to clone: an `Arc` inside).
+    fn client(&self) -> Result<reqwest::Client, ProviderError> {
+        self.client
+            .get_or_init(|| {
+                reqwest::Client::builder()
+                    .build()
+                    .map_err(|e| format!("http client: {e}"))
+            })
+            .clone()
+            .map_err(ProviderError::Other)
     }
 }
 
 impl NetTransport for ReqwestTransport {
     fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
-        let client = self.client.clone();
+        let client = self.client();
         Box::pin(async move {
+            let client = client?;
             let method = reqwest::Method::from_bytes(request.method.as_bytes())
                 .map_err(|e| ProviderError::Other(format!("method: {e}")))?;
             let mut builder = client.request(method, &request.url);
