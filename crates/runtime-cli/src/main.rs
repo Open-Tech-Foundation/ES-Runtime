@@ -50,9 +50,10 @@ USAGE:
 Inputs run as ES modules: import/export and top-level await work. Imports
 resolve as local files (relative/absolute paths or file: URLs) and as bare
 specifiers through node_modules (ES module packages only — CommonJS packages
-and node: builtins are rejected; nothing is installed). No dynamic import(),
-import attributes, or remote modules yet. The full WinterTC surface is
-available (console, URL, fetch, crypto, streams, encoding, timers, events).
+and node: builtins are rejected; nothing is installed). Static and dynamic
+import() both work; import attributes and remote modules are not supported yet.
+The full WinterTC surface is available (console, URL, fetch, crypto, streams,
+encoding, timers, events).
 All host capabilities are granted.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.

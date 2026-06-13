@@ -20,9 +20,17 @@ pre-`0.1.0` and the public API is unstable.
   loop. Loading an import requires `Capability::FileSystem`; a self-contained
   module runs without it. **Backward-incompatible:** inputs now run in module
   scope (strict mode, `this === undefined`), and the old async-IIFE wrapper for
-  top-level await is gone (modules provide it natively). Dynamic `import()`,
-  import attributes / JSON modules, and remote modules are not yet supported
-  (DECISIONS D21). New `examples/modules/`.
+  top-level await is gone (modules provide it natively). Import attributes /
+  JSON modules and remote modules are not yet supported (DECISIONS D21). New
+  `examples/modules/`.
+- **Dynamic `import()`** — `import(specifier)` resolves with the module
+  namespace after the imported module (and any top-level await in it) fully
+  evaluates, and shares instances with static imports via a realm module map.
+  The engine installs V8's host-import callback and settles the request once
+  evaluation completes; `runtime` stores the loader and exposes an async
+  `process_dynamic_imports()` drive step the `Driver` calls each iteration.
+  Works for everything the static loader supports (local files + `node_modules`
+  ESM packages). DECISIONS D23. New `examples/modules/dynamic.mjs`.
 - **`node_modules` resolution (ES module packages)** — bare specifiers
   (`import x from "pkg"`, `"pkg/sub"`, `"@scope/pkg"`) resolve against an
   existing `node_modules` tree via the new `NodeModuleLoader`: walk

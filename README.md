@@ -36,12 +36,13 @@ esrun examples/timers.js
 
 The full implemented WinterTC surface is available (console, URL, fetch, crypto,
 streams, encoding, timers, events); all host capabilities are granted. Inputs run
-as **ES modules**: `import`/`export`, `import.meta.url`, and native top-level
-`await` all work. Imports resolve as **local files** (relative or absolute paths,
-or `file:` URLs) and **bare specifiers through `node_modules`** for ES module
-packages (run `npm install` yourself — nothing is fetched). CommonJS packages and
-`node:` builtins are rejected with a clear message; dynamic `import()`, import
-attributes, and remote modules are not supported yet.
+as **ES modules**: static `import`/`export`, dynamic `import()`,
+`import.meta.url`, and native top-level `await` all work. Imports resolve as
+**local files** (relative or absolute paths, or `file:` URLs) and **bare
+specifiers through `node_modules`** for ES module packages (run `npm install`
+yourself — nothing is fetched). CommonJS packages and `node:` builtins are
+rejected with a clear message; import attributes and remote modules are not
+supported yet.
 
 ## Common tasks
 

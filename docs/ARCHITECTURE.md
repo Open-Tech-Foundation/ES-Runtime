@@ -47,7 +47,7 @@ runtime-cli ──▶ runtime ──▶ engine ──▶ [v8 crate]
 - **Execution control:** run scripts/modules; interrupt and terminate execution; install a near-heap-limit callback; stack-depth guard.
 - **Value marshaling:** create/read primitives, objects, arrays, functions, promises, exceptions; **zero-copy** `ArrayBuffer`/typed-array transfer.
 - **Op registration:** register Rust handlers callable from JS (see §4).
-- **Module instantiation:** ☑ implemented. Compile/instantiate/evaluate ES modules behind an opaque `ModuleId` (no V8 type crosses): `runtime` runs the async load phase, the engine's synchronous resolve callback is a pure lookup over the compiled id map, and evaluation (top-level await) settles on the driven loop. `import.meta.url` is set by an isolate-level initializer. Loading is routed through the capability-checked `ModuleLoader` provider (§6). See DECISIONS D21.
+- **Module instantiation:** ☑ implemented. Compile/instantiate/evaluate ES modules behind an opaque `ModuleId` (no V8 type crosses): `runtime` runs the async load phase, the engine's synchronous resolve callback is a pure lookup over the compiled id map, and evaluation (top-level await) settles on the driven loop. `import.meta.url` is set by an isolate-level initializer. **Dynamic `import()`** rides a host callback whose promise the runtime settles after loading + evaluating the requested graph (shared with static imports via the realm module map). Loading is routed through the capability-checked `ModuleLoader` provider (§6). See DECISIONS D21/D22/D23.
 
 **Honest boundary note.** Fully hiding V8 is hard — handle/scope semantics and the value API are large and leak easily. The boundary is drawn pragmatically at the points above. Where it must stay leaky, the leak is **named explicitly in `DECISIONS.md`**, not smeared into `runtime`. The test of success: a second engine could be slotted behind `engine` without editing `runtime`.
 
@@ -155,3 +155,5 @@ runtime.load_module_source(entry, src, loader)
 ```
 
 Layer B can supply its own `ModuleLoader` (e.g. scheduler-routed or content-addressed) — `runtime` and `engine` are unchanged.
+
+**Dynamic `import()`** runs the same loader, but *during* evaluation: V8's host-import callback records the request and hands back a promise; the runtime's `process_dynamic_imports()` (driven each loop iteration, since loading is async) resolves + loads + instantiates the graph — deduped against the realm module map, so it shares instances with static imports — then settles the promise with the module namespace once the module's own evaluation (incl. top-level await) completes.
