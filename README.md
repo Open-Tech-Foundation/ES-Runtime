@@ -22,6 +22,7 @@ cargo build-cli           # alias for: cargo build --release -p es-runtime-cli
 ```sh
 ./target/release/esrun examples/hello.js
 ./target/release/esrun examples/crypto.js
+./target/release/esrun examples/modules/main.mjs   # ES module: import/export + top-level await
 ./target/release/esrun -e "console.log(6 * 7)"
 ./target/release/esrun --help
 ```
@@ -34,10 +35,11 @@ esrun examples/timers.js
 ```
 
 The full implemented WinterTC surface is available (console, URL, fetch, crypto,
-streams, encoding, timers, events); all host capabilities are granted. Top-level
-`await` works (the CLI wraps the script in an async context). **Single-file
-scripts only — there is no ES-module resolution yet** (`import`/`export` are not
-supported).
+streams, encoding, timers, events); all host capabilities are granted. Inputs run
+as **ES modules**: `import`/`export`, `import.meta.url`, and native top-level
+`await` all work. Imports resolve as **local files** (relative or absolute paths,
+or `file:` URLs) — there is no npm/bare-specifier or remote-module resolution.
+Dynamic `import()` and import attributes are not supported yet.
 
 ## Common tasks
 

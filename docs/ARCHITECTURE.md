@@ -47,7 +47,7 @@ runtime-cli ──▶ runtime ──▶ engine ──▶ [v8 crate]
 - **Execution control:** run scripts/modules; interrupt and terminate execution; install a near-heap-limit callback; stack-depth guard.
 - **Value marshaling:** create/read primitives, objects, arrays, functions, promises, exceptions; **zero-copy** `ArrayBuffer`/typed-array transfer.
 - **Op registration:** register Rust handlers callable from JS (see §4).
-- **Module instantiation:** resolve + instantiate ES modules through a capability-checked resolver hook.
+- **Module instantiation:** ☑ implemented. Compile/instantiate/evaluate ES modules behind an opaque `ModuleId` (no V8 type crosses): `runtime` runs the async load phase, the engine's synchronous resolve callback is a pure lookup over the compiled id map, and evaluation (top-level await) settles on the driven loop. `import.meta.url` is set by an isolate-level initializer. Loading is routed through the capability-checked `ModuleLoader` provider (§6). See DECISIONS D21.
 
 **Honest boundary note.** Fully hiding V8 is hard — handle/scope semantics and the value API are large and leak easily. The boundary is drawn pragmatically at the points above. Where it must stay leaky, the leak is **named explicitly in `DECISIONS.md`**, not smeared into `runtime`. The test of success: a second engine could be slotted behind `engine` without editing `runtime`.
 
@@ -90,6 +90,7 @@ Traits in `providers/`; concrete impls only in `default-providers/` (or, later, 
 | `Entropy` | `crypto.getRandomValues`, `randomUUID` |
 | `Timers` | `setTimeout`/`setInterval` family |
 | `NetTransport` | `fetch` (connect, send, stream response) |
+| `ModuleLoader` | ES module `resolve` (pure) + `load` (async source); capability-gated on `FileSystem`. Default `FsModuleLoader` serves local `file:` modules; a deny-all default refuses imports |
 | `FileSystem` | capability-scoped, async, optional/deniable |
 | `TaskSpawner` | offloading blocking work at the provider's discretion |
 
@@ -136,3 +137,21 @@ JS: fetch(url)
 ```
 
 Layer B later replaces the `NetTransport` impl with its scheduler-routed transport — `runtime` is unchanged.
+
+## 11. Data flow (ES module graph)
+
+Because V8 resolves a graph synchronously, the whole graph is loaded *before* instantiation:
+
+```
+runtime.load_module_source(entry, src, loader)
+  └▶ engine.compile_module(entry) → ModuleId           (parse; no code runs)
+  └▶ loop: engine.module_requests(id) → ["./util.mjs", …]
+       └▶ ModuleLoader.resolve(spec, referrer) → canonical file: id   (capability check: FileSystem)
+       └▶ ModuleLoader.load(id) → source (async)        (dedup by id: diamonds/cycles load once)
+       └▶ engine.compile_module(id, source) → ModuleId
+  └▶ engine.instantiate_module(entry, resolved)         (sync resolve callback = pure id lookup)
+  └▶ engine.evaluate_module(entry)                      (returns a promise; top-level await)
+       └▶ driven loop ticks until module_eval_state() settles (Completed / Failed)
+```
+
+Layer B can supply its own `ModuleLoader` (e.g. scheduler-routed or content-addressed) — `runtime` and `engine` are unchanged.

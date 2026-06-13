@@ -135,13 +135,14 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 - **Streaming `fetch` request bodies** → a follow-up; Phase 6 buffers the request body and streams the response (DECISIONS D20).
 - **`crypto.subtle` minor gaps.** The algorithm set is complete (digest/HMAC/AES-GCM/CBC/CTR, HKDF/PBKDF2, ECDSA/ECDH, RSA PKCS1-v1_5/PSS/OAEP — DECISIONS D9). Remaining edges: AES-CTR supports only 32/64/128-bit counter widths (others → `NotSupportedError`); RSA-OAEP **labels must be UTF-8** (the `rsa` 0.9 API limitation; non-UTF-8 → `NotSupportedError`); EC keys import/export as raw/spki/pkcs8/jwk and RSA as spki/pkcs8/jwk; `deriveKey` targets AES-* and HMAC keys. All asymmetric signing/keygen randomness routes through the Entropy provider, never ambient `OsRng`. RSA carries an **accepted timing-sidechannel advisory** (RUSTSEC-2023-0071) tracked on the SECURITY.md revisit list.
 - **`URLPattern`** → later (not covered by the `url` crate). Minor WHATWG URL conformance gaps tracked vs WPT (D18).
+- **ES module loading** — ☑ **implemented**: static `import`/`export`, `import.meta.url`, native top-level await, **local `file:` modules** via the capability-checked `ModuleLoader` provider (DECISIONS D21). **Deferred:** dynamic `import()`, import attributes / JSON modules, and remote (`http:`) modules; bare/npm specifiers remain a non-goal (§125).
 - **`reportError` ErrorEvent dispatch** and **sub-millisecond `performance.now`** are minimal in Phase 4; full behavior lands with the event loop / clock refinements.
 
 ---
 
 ## 8. Definition of done
 
-- ◐ `runtime-cli` (`esrun`) runs JavaScript using the full implemented WinterTC surface on the default tokio providers, end-to-end. *Caveat:* single-file **classic scripts** only — there is no ES-module loader yet (no `import`/`export` resolution); top-level `await` works via an async wrapper.
+- ☑ `runtime-cli` (`esrun`) runs JavaScript using the full implemented WinterTC surface on the default tokio providers, end-to-end. Inputs run as **ES modules** (`import`/`export`, `import.meta.url`, native top-level `await`); imports resolve as **local files** via `FsModuleLoader` (relative/absolute paths or `file:` URLs), gated on `Capability::FileSystem`. *Deferred (SPEC §7):* dynamic `import()`, import attributes / JSON modules, and remote (`http:`) or bare/npm specifiers (the last per §125). See DECISIONS D21; running every input as a module is a deliberate break from the prior classic-script behaviour (module scope: strict mode, `this === undefined`).
 - ☑ `runtime` has **zero** direct `v8` dependency; all engine access via `engine` (verified by review — `runtime` names no V8 type).
 - ☑ All I/O is provider-routed; deterministic providers make runs reproducible.
 - ☑ Limits + watchdog demonstrably stop a runaway / heap-bomb script without harming the host (engine tests + `esrun --timeout`).

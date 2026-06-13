@@ -97,9 +97,15 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    termination.
 6. **Side channels (Spectre, timing).** Relies on V8's own mitigations; not
    separately addressed at this layer.
-7. **`esrun` grants all capabilities** (trusted-local-script mode) and runs
-   classic scripts only (no ES-module loader). It is a convenience runner, not a
-   sandbox for untrusted code.
+7. **`esrun` grants all capabilities** (trusted-local-script mode) and loads ES
+   modules from the local filesystem via `FsModuleLoader`. That loader does
+   **not** confine resolution to a root — a `file:`/relative/absolute specifier
+   may reach any readable path (no `..`/symlink jail yet), so module loading has
+   the same reach as the granted `FileSystem` capability. `esrun` is a
+   convenience runner for trusted local code, not a sandbox for untrusted code;
+   an embedder sandboxing modules should supply a root-confining `ModuleLoader`
+   and withhold `FileSystem` where appropriate. (Root-jailing is a tracked
+   hardening follow-up; DECISIONS D21.)
 8. **Engine after `Terminated` is "spent."** The embedder should discard a
    runtime whose `eval`/tick returned `Error::Terminated` rather than reuse it.
 

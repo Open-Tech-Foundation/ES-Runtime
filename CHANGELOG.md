@@ -6,6 +6,24 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **ES modules** — `esrun` now runs every input as an ES module: static
+  `import`/`export`, `import.meta.url`, and native top-level `await`. Imports
+  resolve as **local files** (relative/absolute paths or `file:` URLs) through a
+  new capability-checked `ModuleLoader` provider; `default-providers` ships
+  `FsModuleLoader` (file-backed) and a deny-all default. The engine gained
+  module compile/instantiate/evaluate behind an opaque `ModuleId` (no V8 type
+  crosses the boundary), and `runtime` gained an async graph loader
+  (`Runtime::load_module_source`) that walks + dedups the import graph before
+  V8's synchronous instantiation, then settles top-level await on the driven
+  loop. Loading an import requires `Capability::FileSystem`; a self-contained
+  module runs without it. **Backward-incompatible:** inputs now run in module
+  scope (strict mode, `this === undefined`), and the old async-IIFE wrapper for
+  top-level await is gone (modules provide it natively). Dynamic `import()`,
+  import attributes / JSON modules, and remote/bare specifiers are not yet
+  supported (DECISIONS D21). New `examples/modules/`.
+
 ### Performance
 
 - **Prelude snapshot baked into `esrun`** — `build.rs` now builds the V8 startup
@@ -83,11 +101,11 @@ pre-`0.1.0` and the public API is unstable.
 - **`esrun`** (`es-runtime-cli`) — a standalone binary that wires the default
   tokio providers and runs a JavaScript file or `-e <code>` snippet end-to-end
   (the §8 standalone embedding). Grants all capabilities (trusted-local-script
-  mode); wraps the script in an async context so top-level `await` works.
-  **Single self-contained binary** — V8 is statically linked and the prelude is
-  embedded; no asset directory. **No ES-module loader yet** (`import`/`export`
-  are not resolved). Example scripts under `examples/`; `cargo build-cli`
-  builds it; `cargo install --path crates/runtime-cli` puts `esrun` on `PATH`.
+  mode). Inputs run as ES modules (see **Added** above), with native top-level
+  `await`. **Single self-contained binary** — V8 is statically linked and the
+  prelude is embedded; no asset directory. Example scripts under `examples/`;
+  `cargo build-cli` builds it; `cargo install --path crates/runtime-cli` puts
+  `esrun` on `PATH`.
 - **Crate rename:** the flagship library crate `es-runtime-runtime` → **`es-runtime`**
   (import `es_runtime`); directory stays `crates/runtime`.
 
