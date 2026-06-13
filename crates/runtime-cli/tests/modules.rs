@@ -140,6 +140,15 @@ fn rejects_a_commonjs_package() {
 }
 
 #[test]
+fn dynamic_import_resolves_relative_and_node_modules() {
+    let out = run_file("dynamic.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("hello modules"), "{stdout}");
+    assert!(stdout.contains("hi dynamic from greeter"), "{stdout}");
+}
+
+#[test]
 fn version_flag_succeeds() {
     let out = esrun().arg("--version").output().expect("spawn esrun");
     assert!(out.status.success());

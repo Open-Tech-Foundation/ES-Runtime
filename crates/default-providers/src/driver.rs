@@ -38,7 +38,17 @@ impl Driver {
             let status = runtime.tick(now);
             rejections.extend(status.unhandled_rejections);
 
-            if !status.has_pending_work {
+            // Resolve + load any dynamic import()s raised this tick (async I/O),
+            // linking each so a later tick settles its promise. A processing
+            // error here is an internal failure, not a guest rejection.
+            if let Err(err) = runtime.process_dynamic_imports().await {
+                rejections.push(format!("dynamic import failed: {err}"));
+                break;
+            }
+
+            // `has_pending_work` (re-read after processing) now also covers
+            // in-flight dynamic imports awaiting their module's evaluation.
+            if !runtime.has_pending_work() {
                 break;
             }
 

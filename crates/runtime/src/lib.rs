@@ -25,6 +25,7 @@ mod rsa_ops;
 mod timer;
 mod url_ops;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::timer::TimerQueue;
@@ -153,6 +154,13 @@ pub struct Runtime {
     /// [`tick`](Self::tick) keeps reporting pending work (top-level await) until
     /// the evaluation promise resolves or rejects.
     module_eval_pending: bool,
+    /// The realm's module map: canonical specifier → compiled [`ModuleId`].
+    /// Shared by the initial graph load and dynamic `import()` so a module
+    /// imported both statically and dynamically is the **same instance**.
+    module_map: HashMap<String, ModuleId>,
+    /// The loader used for static graph loading and dynamic `import()`. Stored
+    /// (not passed per-call) so dynamic imports raised mid-execution can reach it.
+    module_loader: Option<Arc<dyn ModuleLoader>>,
 }
 
 impl Runtime {
@@ -172,6 +180,8 @@ impl Runtime {
             timers: TimerQueue::default(),
             now_ms: 0,
             module_eval_pending: false,
+            module_map: HashMap::new(),
+            module_loader: None,
         };
         // Register the world-touching ops, then evaluate the prelude that builds
         // the pure-JS APIs on top of them (DECISIONS.md D8).
@@ -221,6 +231,8 @@ impl Runtime {
             timers: TimerQueue::default(),
             now_ms: 0,
             module_eval_pending: false,
+            module_map: HashMap::new(),
+            module_loader: None,
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
@@ -277,55 +289,24 @@ impl Runtime {
     /// following any `import`, however, consults `loader` and so requires
     /// [`Capability::FileSystem`] for a file-backed loader. A self-contained
     /// module (no imports) therefore runs even when that capability is denied.
+    ///
+    /// `loader` is stored on the runtime so that dynamic `import()` raised during
+    /// evaluation can reach it (drive it with
+    /// [`process_dynamic_imports`](Self::process_dynamic_imports)).
     pub async fn load_module_source(
         &mut self,
         entry_specifier: &str,
         entry_source: &str,
-        loader: &dyn ModuleLoader,
+        loader: Arc<dyn ModuleLoader>,
     ) -> Result<()> {
-        use std::collections::HashMap;
-
-        // canonical specifier → compiled id (the dedup that makes diamonds and
-        // cycles load each module exactly once).
-        let mut compiled: HashMap<String, ModuleId> = HashMap::new();
-        // (referrer id, raw specifier) → target id, for instantiation.
-        let mut resolved: HashMap<(ModuleId, String), ModuleId> = HashMap::new();
+        self.module_loader = Some(loader);
 
         let entry_id = self.engine.compile_module(entry_specifier, entry_source)?;
-        compiled.insert(entry_specifier.to_string(), entry_id);
-
-        // Modules whose imports still need expanding, with their canonical
-        // specifier (the referrer for resolving those imports).
-        let mut frontier: Vec<(ModuleId, String)> = vec![(entry_id, entry_specifier.to_string())];
-        while let Some((referrer_id, referrer_spec)) = frontier.pop() {
-            let requests = self.engine.module_requests(referrer_id)?;
-            if !requests.is_empty() {
-                // Following an import is the capability-gated step (the loader
-                // touches the host); the entry itself was supplied, so a graph
-                // with no imports needs nothing.
-                self.require_module_capability()?;
-            }
-            for raw in requests {
-                let canonical = loader
-                    .resolve(&raw, &referrer_spec)
-                    .await
-                    .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                let target_id = match compiled.get(&canonical) {
-                    Some(&id) => id,
-                    None => {
-                        let source = loader
-                            .load(&canonical)
-                            .await
-                            .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                        let id = self.engine.compile_module(&canonical, &source)?;
-                        compiled.insert(canonical.clone(), id);
-                        frontier.push((id, canonical));
-                        id
-                    }
-                };
-                resolved.insert((referrer_id, raw), target_id);
-            }
-        }
+        self.module_map
+            .insert(entry_specifier.to_string(), entry_id);
+        let resolved = self
+            .build_graph(entry_id, entry_specifier.to_string())
+            .await?;
 
         self.engine.instantiate_module(entry_id, &resolved)?;
         self.engine.evaluate_module(entry_id)?;
@@ -333,6 +314,120 @@ impl Runtime {
         // Anchor any timers the synchronous portion of evaluation created.
         self.drain_new_timers(self.now_ms);
         Ok(())
+    }
+
+    /// Walks the import graph reachable from `root_id`, compiling each distinct
+    /// canonical specifier once (deduped via the realm [`module_map`], so
+    /// diamonds and cycles load a module a single time and shared modules are one
+    /// instance), and returns the `(referrer, specifier) → target` map covering
+    /// the whole subgraph for [`instantiate_module`](Engine::instantiate_module).
+    async fn build_graph(
+        &mut self,
+        root_id: ModuleId,
+        root_spec: String,
+    ) -> Result<HashMap<(ModuleId, String), ModuleId>> {
+        let mut resolved: HashMap<(ModuleId, String), ModuleId> = HashMap::new();
+        let mut seen: std::collections::HashSet<ModuleId> = std::collections::HashSet::new();
+        let mut frontier = vec![(root_id, root_spec)];
+
+        while let Some((referrer_id, referrer_spec)) = frontier.pop() {
+            // Record each module's edges once per build (also breaks cycles).
+            if !seen.insert(referrer_id) {
+                continue;
+            }
+            let requests = self.engine.module_requests(referrer_id)?;
+            if requests.is_empty() {
+                continue;
+            }
+            // Following an import is the capability-gated, loader-touching step;
+            // a graph with no imports needs neither a loader nor a capability.
+            self.require_module_capability()?;
+            let loader = self.loader()?;
+            for raw in requests {
+                let canonical = loader
+                    .resolve(&raw, &referrer_spec)
+                    .await
+                    .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                let target_id = match self.module_map.get(&canonical) {
+                    Some(&id) => id,
+                    None => {
+                        let source = loader
+                            .load(&canonical)
+                            .await
+                            .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                        let id = self.engine.compile_module(&canonical, &source)?;
+                        self.module_map.insert(canonical.clone(), id);
+                        id
+                    }
+                };
+                resolved.insert((referrer_id, raw), target_id);
+                frontier.push((target_id, canonical));
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// Loads, instantiates, and begins evaluating dynamic `import()` requests
+    /// raised since the last call, settling each request's promise with the
+    /// module namespace (or rejecting it). Async because resolution/loading is
+    /// I/O; the embedder/driver calls this each loop iteration alongside
+    /// [`tick`](Self::tick). A no-op when nothing dynamic is pending.
+    pub async fn process_dynamic_imports(&mut self) -> Result<()> {
+        // Re-drain: linking a module evaluates it, which can synchronously raise
+        // further `import()` calls; loop until none remain.
+        loop {
+            let pending = self.engine.take_pending_dynamic_imports();
+            if pending.is_empty() {
+                return Ok(());
+            }
+            for (reqid, specifier, referrer) in pending {
+                match self.load_for_dynamic_import(&specifier, &referrer).await {
+                    Ok(id) => self.engine.link_dynamic_import(reqid, id)?,
+                    Err(err) => self.engine.reject_dynamic_import(reqid, &err.to_string())?,
+                }
+            }
+            self.drain_new_timers(self.now_ms);
+        }
+    }
+
+    /// Resolves + loads + instantiates the graph for one dynamic `import()`,
+    /// reusing the realm module map (so a dynamically imported module that was
+    /// also imported statically is the same instance). Returns its [`ModuleId`].
+    async fn load_for_dynamic_import(
+        &mut self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Result<ModuleId> {
+        self.require_module_capability()?;
+        let loader = self.loader()?;
+        let canonical = loader
+            .resolve(specifier, referrer)
+            .await
+            .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+        let id = match self.module_map.get(&canonical) {
+            Some(&id) => id,
+            None => {
+                let source = loader
+                    .load(&canonical)
+                    .await
+                    .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                let id = self.engine.compile_module(&canonical, &source)?;
+                self.module_map.insert(canonical.clone(), id);
+                id
+            }
+        };
+        let resolved = self.build_graph(id, canonical).await?;
+        // Idempotent if the module is already instantiated (shared instance).
+        self.engine.instantiate_module(id, &resolved)?;
+        Ok(id)
+    }
+
+    /// The configured module loader, or an error if none was set (no loader =
+    /// imports denied, like a denied capability).
+    fn loader(&self) -> Result<Arc<dyn ModuleLoader>> {
+        self.module_loader.clone().ok_or_else(|| {
+            Error::ModuleLoad("no module loader configured (imports are not permitted)".into())
+        })
     }
 
     /// The outcome of the module evaluation started by
@@ -377,6 +472,11 @@ impl Runtime {
         // 2. Settle ready async ops (resolving promises enqueues microtasks).
         let async_ops_settled = self.engine.poll_async_ops();
 
+        // 2b. Settle dynamic import() promises whose module evaluation has
+        // completed (resolving with the namespace, or rejecting), so their
+        // reactions run in the checkpoint below.
+        self.engine.settle_dynamic_imports();
+
         // 3. Microtask checkpoint (promise reactions, queueMicrotask).
         self.engine.run_microtasks();
         self.drain_new_timers(now_ms);
@@ -403,7 +503,10 @@ impl Runtime {
     /// Whether any async op, timer, or unsettled module evaluation is still
     /// outstanding.
     pub fn has_pending_work(&self) -> bool {
-        self.engine.has_pending_async_ops() || !self.timers.is_empty() || self.module_eval_pending
+        self.engine.has_pending_async_ops()
+            || !self.timers.is_empty()
+            || self.module_eval_pending
+            || self.engine.has_pending_dynamic_imports()
     }
 
     /// Moves newly created engine timers into the schedule, anchored at `now_ms`.
@@ -1823,13 +1926,16 @@ mod tests {
         files: std::collections::HashMap<String, String>,
     }
     impl MapLoader {
-        fn new(files: &[(&str, &str)]) -> Self {
+        // Returns a trait object (not Self) deliberately — tests pass it straight
+        // to the Arc-taking module APIs.
+        #[allow(clippy::new_ret_no_self)]
+        fn new(files: &[(&str, &str)]) -> Arc<dyn ModuleLoader> {
             let base = url::Url::parse("file:///app/").unwrap();
             let files = files
                 .iter()
                 .map(|(spec, src)| (base.join(spec).unwrap().to_string(), src.to_string()))
                 .collect();
-            MapLoader { base, files }
+            Arc::new(MapLoader { base, files })
         }
     }
     impl ModuleLoader for MapLoader {
@@ -1872,14 +1978,26 @@ mod tests {
 
     /// Loads + evaluates a module graph (granting FileSystem) and ticks to
     /// quiescence, returning the evaluation outcome.
-    fn run_module(rt: &mut Runtime, source: &str, loader: &dyn ModuleLoader) -> ModuleEvalState {
+    fn run_module(
+        rt: &mut Runtime,
+        source: &str,
+        loader: Arc<dyn ModuleLoader>,
+    ) -> ModuleEvalState {
         rt.set_capabilities(CapabilitySet::all());
-        block_on(rt.load_module_source(ENTRY, source, loader)).expect("load module graph");
-        for _ in 0..200 {
-            if !rt.tick(0).has_pending_work {
-                break;
+        block_on(async {
+            rt.load_module_source(ENTRY, source, loader)
+                .await
+                .expect("load module graph");
+            for _ in 0..500 {
+                rt.tick(0);
+                rt.process_dynamic_imports()
+                    .await
+                    .expect("process dynamic imports");
+                if !rt.has_pending_work() {
+                    break;
+                }
             }
-        }
+        });
         rt.module_eval_state()
     }
 
@@ -1897,7 +2015,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import { val } from './a.mjs'; globalThis.result = val;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
@@ -1915,7 +2033,11 @@ mod tests {
                 "globalThis.cCount = (globalThis.cCount || 0) + 1;",
             ),
         ]);
-        let state = run_module(&mut rt, "import './a.mjs'; import './b.mjs';", &loader);
+        let state = run_module(
+            &mut rt,
+            "import './a.mjs'; import './b.mjs';",
+            loader.clone(),
+        );
         assert_eq!(state, ModuleEvalState::Completed);
         // c is reachable via both a and b but compiled + evaluated exactly once.
         assert_eq!(rt.eval("globalThis.cCount").unwrap(), Value::Number(1.0));
@@ -1929,7 +2051,7 @@ mod tests {
             ("./a.mjs", "import './b.mjs'; globalThis.aRan = true;"),
             ("./b.mjs", "import './a.mjs'; globalThis.bRan = true;"),
         ]);
-        let state = run_module(&mut rt, "import './a.mjs';", &loader);
+        let state = run_module(&mut rt, "import './a.mjs';", loader.clone());
         assert_eq!(state, ModuleEvalState::Completed);
         assert_true(&mut rt, "globalThis.aRan && globalThis.bRan");
     }
@@ -1943,7 +2065,7 @@ mod tests {
         block_on(rt.load_module_source(
             ENTRY,
             "await new Promise((r) => setTimeout(r, 0)); globalThis.tla = 7;",
-            &loader,
+            loader.clone(),
         ))
         .expect("load");
         // The graph is async (TLA), so it is not done before any tick runs.
@@ -1962,7 +2084,11 @@ mod tests {
         let _g = v8_guard();
         let mut rt = runtime();
         let loader = MapLoader::new(&[]);
-        let state = run_module(&mut rt, "globalThis.metaUrl = import.meta.url;", &loader);
+        let state = run_module(
+            &mut rt,
+            "globalThis.metaUrl = import.meta.url;",
+            loader.clone(),
+        );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(
             rt.eval("globalThis.metaUrl").unwrap(),
@@ -1975,7 +2101,7 @@ mod tests {
         let _g = v8_guard();
         let mut rt = runtime();
         let loader = MapLoader::new(&[]);
-        match run_module(&mut rt, "throw new Error('nope');", &loader) {
+        match run_module(&mut rt, "throw new Error('nope');", loader.clone()) {
             ModuleEvalState::Failed(message) => assert!(message.contains("nope"), "{message}"),
             other => panic!("expected Failed, got {other:?}"),
         }
@@ -1987,8 +2113,8 @@ mod tests {
         let mut rt = runtime();
         rt.set_capabilities(CapabilitySet::all());
         let loader = MapLoader::new(&[]); // ./gone.mjs is absent
-        let err =
-            block_on(rt.load_module_source(ENTRY, "import './gone.mjs';", &loader)).unwrap_err();
+        let err = block_on(rt.load_module_source(ENTRY, "import './gone.mjs';", loader.clone()))
+            .unwrap_err();
         assert!(matches!(err, Error::ModuleLoad(_)), "got {err:?}");
     }
 
@@ -1997,7 +2123,8 @@ mod tests {
         let _g = v8_guard();
         let mut rt = runtime(); // deny-by-default: no FileSystem capability
         let loader = MapLoader::new(&[("./a.mjs", "export const v = 1;")]);
-        let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", &loader)).unwrap_err();
+        let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", loader.clone()))
+            .unwrap_err();
         assert!(matches!(err, Error::Common(_)), "got {err:?}");
     }
 
@@ -2007,7 +2134,7 @@ mod tests {
         let mut rt = runtime(); // no capabilities granted
         let loader = MapLoader::new(&[]);
         // No imports → the loader is never consulted → no capability needed.
-        block_on(rt.load_module_source(ENTRY, "globalThis.ok = 5;", &loader)).expect("load");
+        block_on(rt.load_module_source(ENTRY, "globalThis.ok = 5;", loader.clone())).expect("load");
         for _ in 0..200 {
             if !rt.tick(0).has_pending_work {
                 break;
@@ -2027,7 +2154,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import greet from './greet.mjs'; globalThis.greeting = greet('x');",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(
@@ -2045,7 +2172,7 @@ mod tests {
             &mut rt,
             "import * as ns from './m.mjs'; \
              globalThis.keys = Object.keys(ns).sort().join(','); globalThis.sum = ns.a + ns.b;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(
@@ -2076,7 +2203,7 @@ mod tests {
             &mut rt,
             "import { sa } from './a.mjs'; import { sb } from './b.mjs'; \
              globalThis.same = sa === sb;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_true(&mut rt, "globalThis.same");
@@ -2093,7 +2220,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import { val } from './a.mjs'; globalThis.reexport = val;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.reexport").unwrap(), Value::Number(7.0));
@@ -2112,7 +2239,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import { count, bump } from './c.mjs'; bump(); bump(); globalThis.live = count;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.live").unwrap(), Value::Number(2.0));
@@ -2136,7 +2263,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import './a.mjs'; globalThis.order = (globalThis.order||'') + 'main';",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(
@@ -2164,7 +2291,7 @@ mod tests {
                  export function getB() { return 'B+' + getA(); }",
             ),
         ]);
-        let state = run_module(&mut rt, "import './a.mjs';", &loader);
+        let state = run_module(&mut rt, "import './a.mjs';", loader.clone());
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(
             rt.eval("globalThis.cycleResult").unwrap(),
@@ -2184,7 +2311,7 @@ mod tests {
             &mut rt,
             "import { v } from './m.mjs'; import { v as v2 } from './m.mjs'; \
              globalThis.dup = v + v2;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.mCount").unwrap(), Value::Number(1.0));
@@ -2209,7 +2336,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import { a } from './a.mjs'; globalThis.deep = a;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.deep").unwrap(), Value::Number(3.0));
@@ -2228,7 +2355,7 @@ mod tests {
         let state = run_module(
             &mut rt,
             "import './a.mjs'; globalThis.mainSawDep = globalThis.depReady === true;",
-            &loader,
+            loader.clone(),
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_true(&mut rt, "globalThis.mainSawDep");
@@ -2242,7 +2369,7 @@ mod tests {
         match run_module(
             &mut rt,
             "import './a.mjs'; globalThis.reached = true;",
-            &loader,
+            loader.clone(),
         ) {
             ModuleEvalState::Failed(message) => assert!(message.contains("dep boom"), "{message}"),
             other => panic!("expected Failed, got {other:?}"),
@@ -2258,7 +2385,90 @@ mod tests {
         rt.set_capabilities(CapabilitySet::all());
         let loader = MapLoader::new(&[("./a.mjs", "export const = ;")]);
         // The error surfaces while compiling the dependency during the load walk.
-        let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", &loader)).unwrap_err();
+        let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", loader.clone()))
+            .unwrap_err();
         assert!(matches!(err, Error::Engine(_)), "got {err:?}");
+    }
+
+    // ----- dynamic import() -------------------------------------------------
+
+    #[test]
+    fn dynamic_import_resolves_to_namespace() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./dep.mjs", "export const value = 55;")]);
+        let state = run_module(
+            &mut rt,
+            "const m = await import('./dep.mjs'); globalThis.v = m.value;",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.v").unwrap(), Value::Number(55.0));
+    }
+
+    #[test]
+    fn dynamic_import_then_chain_without_tla() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./dep.mjs", "export const value = 9;")]);
+        // The entry is synchronous; the import() resolves over later ticks.
+        let state = run_module(
+            &mut rt,
+            "globalThis.v = 0; import('./dep.mjs').then((m) => { globalThis.v = m.value; });",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.v").unwrap(), Value::Number(9.0));
+    }
+
+    #[test]
+    fn dynamic_import_shares_instance_with_static_import() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[(
+            "./shared.mjs",
+            "globalThis.n = (globalThis.n || 0) + 1; export const x = 1;",
+        )]);
+        // Imported statically and dynamically: evaluated once, same namespace.
+        let state = run_module(
+            &mut rt,
+            "import './shared.mjs'; const m = await import('./shared.mjs'); \
+             globalThis.same = globalThis.n === 1 && m.x === 1;",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_true(&mut rt, "globalThis.same");
+    }
+
+    #[test]
+    fn dynamic_import_of_missing_module_rejects() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[]); // ./gone.mjs absent
+        let state = run_module(
+            &mut rt,
+            "globalThis.err = ''; try { await import('./gone.mjs'); } \
+             catch (e) { globalThis.err = String(e.message || e); }",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        match rt.eval("globalThis.err").unwrap() {
+            Value::String(s) => assert!(s.contains("not found"), "{s}"),
+            other => panic!("expected string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dynamic_import_of_top_level_await_module() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./tla.mjs", "export const v = await Promise.resolve(7);")]);
+        let state = run_module(
+            &mut rt,
+            "const m = await import('./tla.mjs'); globalThis.tla = m.v;",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.tla").unwrap(), Value::Number(7.0));
     }
 }

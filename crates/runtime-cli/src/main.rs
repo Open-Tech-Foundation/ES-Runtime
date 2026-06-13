@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use es_runtime::{HostProviders, ModuleEvalState, Runtime};
+use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Runtime};
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
@@ -182,8 +182,10 @@ async fn run() -> Result<(), String> {
     );
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // and bare specifiers resolve through node_modules (ESM packages only).
-    // Rooted at the working directory for entry-point relative resolution.
-    let loader = NodeModuleLoader::new().map_err(|e| format!("module loader: {e}"))?;
+    // Rooted at the working directory for entry-point relative resolution. Held
+    // behind an Arc so dynamic import() can reach it during evaluation.
+    let loader: Arc<dyn ModuleLoader> =
+        Arc::new(NodeModuleLoader::new().map_err(|e| format!("module loader: {e}"))?);
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.
@@ -212,7 +214,7 @@ async fn run() -> Result<(), String> {
     // evaluating it. Top-level await is native to modules, so no wrapper is
     // needed. A compile/instantiation error or a missing import surfaces here;
     // a top-level throw rejects the evaluation, observed after the drive below.
-    let load = runtime.load_module_source(&specifier, &source, &loader);
+    let load = runtime.load_module_source(&specifier, &source, loader);
     let loaded = match config.timeout {
         Some(deadline) => match tokio::time::timeout(deadline, load).await {
             Ok(result) => result,
