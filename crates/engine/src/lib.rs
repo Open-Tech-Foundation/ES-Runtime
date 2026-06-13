@@ -29,12 +29,14 @@
 mod convert;
 mod engine;
 pub mod error;
+mod module;
 pub mod op;
 pub mod snapshot;
 mod value;
 
 pub use engine::{Engine, InterruptHandle, V8Engine};
 pub use error::{Error, Result};
+pub use module::{ModuleEvalState, ModuleId};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use value::Value;
 

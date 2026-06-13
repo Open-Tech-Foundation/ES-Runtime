@@ -1,5 +1,6 @@
 //! Isolate + context lifecycle and script evaluation.
 
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,6 +9,7 @@ use es_runtime_common::{CapabilitySet, Limits};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
+use crate::module::{ModuleEvalState, ModuleId, ModuleRegistry};
 use crate::op::{OpDecl, OpState, TimerId, install_op};
 use crate::value::Value;
 
@@ -120,6 +122,39 @@ pub trait Engine {
     /// Returns a thread-safe handle for interrupting this engine's execution
     /// (e.g. from a watchdog thread). See [`InterruptHandle`].
     fn interrupt_handle(&self) -> InterruptHandle;
+
+    /// The capabilities currently granted (DECISIONS.md D7). Lets the caller gate
+    /// effects it performs itself — e.g. `runtime` checks `FileSystem` before
+    /// loading a module graph — using the same deny-by-default set the ops see.
+    fn capabilities(&self) -> CapabilitySet;
+
+    /// Compiles `source` as an ES module identified by `specifier`, returning its
+    /// [`ModuleId`]. Compilation runs no user code; it only parses and records the
+    /// module's imports (read via [`module_requests`](Self::module_requests)).
+    fn compile_module(&mut self, specifier: &str, source: &str) -> Result<ModuleId>;
+
+    /// The import specifiers `id` requests, in source order — for the caller to
+    /// resolve and load before instantiation (V8 resolves synchronously, so the
+    /// whole graph must be compiled first; ARCHITECTURE.md §5).
+    fn module_requests(&mut self, id: ModuleId) -> Result<Vec<String>>;
+
+    /// Instantiates `id`, resolving each `(referrer, specifier)` through
+    /// `resolved`. Every referenced module must already be compiled. Wires the
+    /// import graph; runs no user code.
+    fn instantiate_module(
+        &mut self,
+        id: ModuleId,
+        resolved: &HashMap<(ModuleId, String), ModuleId>,
+    ) -> Result<()>;
+
+    /// Begins evaluating instantiated module `id`. Evaluation returns a promise
+    /// (top-level await); poll [`module_eval_state`](Self::module_eval_state)
+    /// across ticks to observe completion or failure.
+    fn evaluate_module(&mut self, id: ModuleId) -> Result<()>;
+
+    /// The state of the most recent [`evaluate_module`](Self::evaluate_module):
+    /// pending, completed, or failed (with the stringified reason).
+    fn module_eval_state(&mut self) -> ModuleEvalState;
 }
 
 /// An embedded V8 instance: one isolate and one persistent context, plus the op
@@ -139,6 +174,9 @@ pub struct V8Engine {
     /// Op table + pending-work registries, shared with the in-isolate dispatch
     /// callback via an isolate slot (see [`OpState`]).
     op_state: std::rc::Rc<std::cell::RefCell<OpState>>,
+    /// Compiled-module registry, shared with the in-isolate resolve and
+    /// import-meta callbacks via an isolate slot (see [`ModuleRegistry`]).
+    modules: std::rc::Rc<std::cell::RefCell<ModuleRegistry>>,
     /// When the engine was restored from a snapshot whose `__ops.<name>` shells
     /// are already baked in, [`register_op`](Engine::register_op) binds only the
     /// Rust handler (the JS function is present), rather than re-creating it. The
@@ -293,6 +331,13 @@ impl V8Engine {
         isolate.set_slot(op_state.clone());
         crate::op::install_promise_reject_callback(&mut isolate);
 
+        // Module registry slot + the import.meta initializer. Both are reached by
+        // the in-isolate module callbacks; the initializer is isolate-level config
+        // (not serialized), so a snapshot-restored isolate gets it here too.
+        let modules = std::rc::Rc::new(std::cell::RefCell::new(ModuleRegistry::new()));
+        isolate.set_slot(modules.clone());
+        crate::module::install_import_meta_callback(&mut isolate);
+
         let interrupt = isolate.thread_safe_handle();
         let heap_tripped = Arc::new(AtomicBool::new(false));
 
@@ -325,6 +370,7 @@ impl V8Engine {
             isolate,
             context,
             op_state,
+            modules,
             ops_baked,
             interrupt,
             heap_tripped,
@@ -460,6 +506,54 @@ impl Engine for V8Engine {
 
     fn interrupt_handle(&self) -> InterruptHandle {
         InterruptHandle(self.interrupt.clone())
+    }
+
+    fn capabilities(&self) -> CapabilitySet {
+        self.op_state.borrow().capabilities
+    }
+
+    fn compile_module(&mut self, specifier: &str, source: &str) -> Result<ModuleId> {
+        crate::module::compile(
+            &mut self.isolate,
+            &self.context,
+            &self.modules,
+            &self.interrupt,
+            specifier,
+            source,
+        )
+    }
+
+    fn module_requests(&mut self, id: ModuleId) -> Result<Vec<String>> {
+        crate::module::requests(&mut self.isolate, &self.context, &self.modules, id)
+    }
+
+    fn instantiate_module(
+        &mut self,
+        id: ModuleId,
+        resolved: &HashMap<(ModuleId, String), ModuleId>,
+    ) -> Result<()> {
+        crate::module::instantiate(
+            &mut self.isolate,
+            &self.context,
+            &self.modules,
+            &self.interrupt,
+            id,
+            resolved,
+        )
+    }
+
+    fn evaluate_module(&mut self, id: ModuleId) -> Result<()> {
+        crate::module::evaluate(
+            &mut self.isolate,
+            &self.context,
+            &self.modules,
+            &self.interrupt,
+            id,
+        )
+    }
+
+    fn module_eval_state(&mut self) -> ModuleEvalState {
+        crate::module::eval_state(&mut self.isolate, &self.context, &self.modules)
     }
 }
 
@@ -652,6 +746,156 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, Value::String("bounded:true".into()));
+    }
+
+    /// Drives the loop to quiescence for a module evaluation: poll async ops +
+    /// run microtasks until the evaluation settles or a bounded number of turns
+    /// elapse (so a genuinely-stuck graph fails the test rather than hanging).
+    fn settle_module(engine: &mut V8Engine) -> ModuleEvalState {
+        for _ in 0..100 {
+            match engine.module_eval_state() {
+                ModuleEvalState::Pending => {
+                    engine.poll_async_ops();
+                    engine.run_microtasks();
+                }
+                done => return done,
+            }
+        }
+        engine.module_eval_state()
+    }
+
+    #[test]
+    fn module_with_no_imports_evaluates_and_runs() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let id = engine
+            .compile_module("file:///main.mjs", "globalThis.ran = 7;")
+            .expect("compile");
+        assert!(engine.module_requests(id).unwrap().is_empty());
+        engine
+            .instantiate_module(id, &HashMap::new())
+            .expect("instantiate");
+        engine.evaluate_module(id).expect("evaluate");
+        assert_eq!(settle_module(&mut engine), ModuleEvalState::Completed);
+        assert_eq!(engine.eval("globalThis.ran").unwrap(), Value::Number(7.0));
+    }
+
+    #[test]
+    fn two_module_graph_resolves_imports() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let util = engine
+            .compile_module("file:///util.mjs", "export const v = 42;")
+            .expect("compile util");
+        let main = engine
+            .compile_module(
+                "file:///main.mjs",
+                "import { v } from './util.mjs'; globalThis.result = v + 1;",
+            )
+            .expect("compile main");
+        assert_eq!(engine.module_requests(main).unwrap(), ["./util.mjs"]);
+
+        let mut resolved = HashMap::new();
+        resolved.insert((main, "./util.mjs".to_string()), util);
+        engine
+            .instantiate_module(main, &resolved)
+            .expect("instantiate");
+        engine.evaluate_module(main).expect("evaluate");
+
+        assert_eq!(settle_module(&mut engine), ModuleEvalState::Completed);
+        assert_eq!(
+            engine.eval("globalThis.result").unwrap(),
+            Value::Number(43.0)
+        );
+    }
+
+    #[test]
+    fn top_level_await_settles_after_polling() {
+        use crate::op::AsyncOp;
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .register_op(OpDecl::r#async("answer", |_args| -> AsyncOp {
+                Box::pin(async { Ok(Value::Number(99.0)) })
+            }))
+            .unwrap();
+        let id = engine
+            .compile_module(
+                "file:///tla.mjs",
+                "const v = await __ops.answer(); globalThis.tla = v;",
+            )
+            .expect("compile");
+        engine
+            .instantiate_module(id, &HashMap::new())
+            .expect("instantiate");
+        engine.evaluate_module(id).expect("evaluate");
+        // The graph is async (TLA), so it is not done the instant evaluate returns.
+        assert_eq!(engine.module_eval_state(), ModuleEvalState::Pending);
+        assert_eq!(settle_module(&mut engine), ModuleEvalState::Completed);
+        assert_eq!(engine.eval("globalThis.tla").unwrap(), Value::Number(99.0));
+    }
+
+    #[test]
+    fn top_level_throw_surfaces_as_failed() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let id = engine
+            .compile_module("file:///boom.mjs", "throw new Error('boom');")
+            .expect("compile");
+        engine
+            .instantiate_module(id, &HashMap::new())
+            .expect("instantiate");
+        engine.evaluate_module(id).expect("evaluate");
+        match settle_module(&mut engine) {
+            ModuleEvalState::Failed(message) => assert!(message.contains("boom"), "{message}"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn import_meta_url_is_the_specifier() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let id = engine
+            .compile_module(
+                "file:///app/main.mjs",
+                "globalThis.metaUrl = import.meta.url;",
+            )
+            .expect("compile");
+        engine
+            .instantiate_module(id, &HashMap::new())
+            .expect("instantiate");
+        engine.evaluate_module(id).expect("evaluate");
+        assert_eq!(settle_module(&mut engine), ModuleEvalState::Completed);
+        assert_eq!(
+            engine.eval("globalThis.metaUrl").unwrap(),
+            Value::String("file:///app/main.mjs".into())
+        );
+    }
+
+    #[test]
+    fn missing_resolution_fails_instantiation() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let main = engine
+            .compile_module("file:///main.mjs", "import './gone.mjs';")
+            .expect("compile");
+        // No entry for ('./gone.mjs') in the resolve map → resolve callback
+        // returns None → V8 throws during instantiation.
+        let err = engine
+            .instantiate_module(main, &HashMap::new())
+            .unwrap_err();
+        assert!(matches!(err, Error::Execution { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn compiling_invalid_module_is_a_compile_error() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let err = engine
+            .compile_module("file:///bad.mjs", "export const = ;")
+            .unwrap_err();
+        assert!(matches!(err, Error::Compile { .. }), "got {err:?}");
     }
 
     #[test]
