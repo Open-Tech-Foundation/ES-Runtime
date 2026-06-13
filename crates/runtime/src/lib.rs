@@ -14,6 +14,7 @@
 // No `unsafe` in the runtime; it is confined to `engine` (ARCHITECTURE.md §7).
 #![forbid(unsafe_code)]
 
+mod base64_ops;
 mod builtins;
 mod crypto_ops;
 mod ec_ops;
