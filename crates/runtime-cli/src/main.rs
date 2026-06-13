@@ -32,7 +32,7 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Runtime};
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, TokioTimers,
+    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -153,17 +153,18 @@ async fn run() -> Result<(), String> {
             let code =
                 std::fs::read_to_string(&path).map_err(|e| format!("cannot read {path}: {e}"))?;
             // Canonicalize the entry path (resolving relative components and
-            // symlinks) into a file: URL. This is a filesystem path, not a
-            // module specifier, so it bypasses the loader's specifier rules.
+            // symlinks, and normalizing the Windows verbatim prefix) into a
+            // file: URL via the shared cross-OS path layer (D25). This is a
+            // filesystem path, not a module specifier, so it bypasses the
+            // loader's specifier rules.
             let abs =
-                std::fs::canonicalize(&path).map_err(|e| format!("cannot resolve {path}: {e}"))?;
+                path::canonicalize(&path).map_err(|e| format!("cannot resolve {path}: {e}"))?;
             let dir = abs
                 .parent()
                 .map(std::path::Path::to_path_buf)
                 .ok_or_else(|| format!("entry path has no parent directory: {path}"))?;
-            let url = Url::from_file_path(&abs)
-                .map_err(|()| format!("not a valid module path: {path}"))?;
-            (url.to_string(), code, path, dir)
+            let url = path::to_file_url(&abs).map_err(|e| e.to_string())?;
+            (url, code, path, dir)
         }
         Source::Inline(code) => {
             // A synthetic file: id in the working directory, so the snippet's

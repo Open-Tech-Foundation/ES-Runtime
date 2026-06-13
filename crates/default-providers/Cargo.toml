@@ -12,6 +12,7 @@ authors.workspace = true
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
 es-runtime.workspace = true
+dunce.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 getrandom.workspace = true

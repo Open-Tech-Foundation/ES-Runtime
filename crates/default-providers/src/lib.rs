@@ -27,6 +27,7 @@ mod node_modules;
 mod task;
 mod timers;
 
+pub mod path;
 pub mod testing;
 
 pub use clock::SystemClock;
