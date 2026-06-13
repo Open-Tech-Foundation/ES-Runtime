@@ -23,6 +23,7 @@ mod driver;
 mod entropy;
 mod modules;
 mod net;
+mod node_modules;
 mod task;
 mod timers;
 
@@ -34,5 +35,6 @@ pub use driver::Driver;
 pub use entropy::OsEntropy;
 pub use modules::{DenyModuleLoader, FsModuleLoader};
 pub use net::ReqwestTransport;
+pub use node_modules::NodeModuleLoader;
 pub use task::TokioTaskSpawner;
 pub use timers::TokioTimers;

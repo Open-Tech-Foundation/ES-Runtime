@@ -43,6 +43,9 @@ tokio = "1.52.3"
 getrandom = "0.4.2"
 # WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
 url = "2.5.8"
+# package.json parsing for node_modules resolution (DECISIONS.md D22). Confined
+# to `default-providers`; already present transitively, so no new crate.
+serde_json = "1.0.150"
 # Async byte-stream trait for provider bodies (trait-only, tiny).
 futures-core = "0.3.32"
 # Vetted HTTP client for the default NetTransport (DECISIONS.md D20). rustls TLS
