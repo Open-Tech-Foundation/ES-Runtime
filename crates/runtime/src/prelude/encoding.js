@@ -19,11 +19,22 @@
     }
 
     encodeInto(source, destination) {
-      const encoded = this.encode(source);
-      const n = Math.min(encoded.length, destination.length);
-      destination.set(encoded.subarray(0, n));
-      // `read` ≈ `written` here since we encode whole code points up to `n`.
-      return { read: source.length, written: n };
+      const s = String(source);
+      const encoded = ops.utf8_encode(s);
+      if (encoded.length <= destination.length) {
+        destination.set(encoded);
+        return { read: s.length, written: encoded.length };
+      }
+      // Truncate on a code-point boundary: back `written` off any UTF-8
+      // continuation bytes (0b10xxxxxx) so only whole code points are written.
+      let written = destination.length;
+      while (written > 0 && (encoded[written] & 0xc0) === 0x80) written--;
+      destination.set(encoded.subarray(0, written));
+      // `read` is the count of UTF-16 code units consumed — the decoded
+      // prefix's JS length (truncation only; the common path never pays this).
+      const read = ops.utf8_decode(encoded.subarray(0, written), false, true)
+        .length;
+      return { read, written };
     }
   }
 
