@@ -10,13 +10,10 @@
  * sort([1, 3, 2]) //=> [1, 2, 3]
  * sort(['x', 'z', 'y'], 'desc') //=> ['z', 'y', 'x']
  */
-function sort(arr = [], order = "asc") {
+export default function sort(arr = [], order = "asc") {
   return [...arr].sort((a, b) => {
     const val = a < b ? -1 : a > b ? 1 : 0;
 
     return order === "asc" ? val : -val;
   });
 }
-
-const res = sort([1, 3, 2]); //=> [1, 2, 3]
-console.log(res);
