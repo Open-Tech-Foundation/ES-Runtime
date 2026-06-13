@@ -8,6 +8,45 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Performance
 
+- **URL ops return offsets, not JSON** — `url_parse`/`url_set` now return the
+  canonical href plus 15 component offsets (`url::Position`s, UTF-16 indices)
+  as one small JS array (new `Value::Array`); every `URL` getter is a lazy
+  `href.slice(...)` and `.origin` is a separate lazy op. Replaces the 11-field
+  JSON round-trip (~3× faster URL workload in `bench/`); same shape Node's Ada
+  integration uses. Wire format documented in `url_ops.rs`/`url.js`.
+- **Zero-copy op returns** — op results are consumed, not cloned: a returned
+  `Value::Bytes` vec moves into the `ArrayBuffer` backing store (was: two extra
+  copies per `TextEncoder.encode`), `utf8_encode` reuses the marshaled string's
+  buffer, and `utf8_decode` converts valid UTF-8 in place. The JS→Rust crossing
+  still copies (zero-copy there remains D3a/Phase 8).
+- **Lazy HTTP client** — `ReqwestTransport` builds its reqwest client (TLS
+  config, root store) on first `fetch` instead of at construction. Startup
+  drops ~15 ms → ~8.5 ms (fastest of node/bun/esrun on the bench box); scripts
+  that never fetch never pay for the client.
+- **Sub-millisecond `performance.now()`** — new defaulted
+  `Clock::monotonic_micros` (overridden by `SystemClock`); `performance.now()`
+  now has µs precision instead of integer ms. Deterministic/test clocks are
+  unaffected (default derives from `monotonic_ms`).
+- **Release profile** — `lto = "thin"` + `codegen-units = 1` for the Rust-side
+  hot paths (V8 is prebuilt; unaffected). `panic = "abort"` deliberately not
+  set (D15 containment relies on unwinding).
+
+### Fixed
+
+- **`TextEncoder.encodeInto`** — `read`/`written` are now spec-correct under
+  truncation: output is cut at a UTF-8 code-point boundary (never mid-sequence)
+  and `read` counts only the UTF-16 code units actually encoded (was: always
+  reported the full source length).
+
+### Benchmark
+
+- `bench/` reworked: the `webapi` workload is split into `url` and `encoding`
+  (separately attributable), a pure-engine `json` baseline is added, workloads
+  run an untimed JIT warmup and report the **median** of `WORKLOAD_RUNS`
+  (default 5) instead of best-of-3. Representative results refreshed.
+
+### Performance (earlier in this cycle)
+
 - **Op-backed `TextEncoder`/`TextDecoder`** — UTF-8 transcoding now rides V8's
   native UTF-16↔UTF-8 conversion via `utf8_encode`/`utf8_decode` ops instead of
   a pure-JS code-point loop. ~47% faster on encode+decode; behaviour unchanged

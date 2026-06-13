@@ -119,7 +119,8 @@ Every provider call is async-friendly, cancellable, capability-checked, and retu
 ## 9. Performance
 
 - **V8 startup snapshot** with the prelude + op shells baked in — ☑ implemented (D8); ~2.3× faster runtime construction (`default-providers` `bench` example).
-- Zero-copy for `ArrayBuffer`/typed-array transfer — **audited and deferred** (D3a Phase 8): `Value::Bytes` currently copies in/out; sound zero-copy needs a backing-store detach/pin protocol since async ops outlive the call scope. Avoid gratuitous UTF-8↔UTF-16 round-trips.
+- Zero-copy for `ArrayBuffer`/typed-array transfer — **audited and deferred** (D3a Phase 8): `Value::Bytes` copies on the JS→Rust crossing; sound zero-copy there needs a backing-store detach/pin protocol since async ops outlive the call scope. The Rust→JS direction **is** zero-copy: a returned `Value::Bytes` vec *moves* into the `ArrayBuffer` backing store, and op results are consumed, not cloned. Avoid gratuitous UTF-8↔UTF-16 round-trips.
+- **Hot ops return offsets, not structures.** `url_parse` returns the canonical href plus component offsets (one string + 15 numbers in a JS array); the prelude's getters are lazy `slice()`s. This beat both per-property V8 object building *and* a JSON round-trip (see `bench/README.md`).
 
 ---
 
