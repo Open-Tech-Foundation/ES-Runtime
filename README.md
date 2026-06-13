@@ -58,6 +58,15 @@ supported yet.
 | Startup/throughput microbenchmark | `cargo run --release -p es-runtime-default-providers --example bench` |
 | Cross-runtime benchmark (vs Node/Bun/Deno) | `bench/run.sh` (see `bench/README.md`) |
 
+## Documentation
+
+- **[API reference](docs/API.md)** — the `runtime:` modules and their exports (canonical).
+- **[Architecture](docs/ARCHITECTURE.md)** · **[Spec](docs/SPEC.md)** · **[Decisions](docs/DECISIONS.md)** · **[Security review](docs/SECURITY-REVIEW.md)**
+- **Marketing site** (`@opentf/web`, in [`site/`](site/)) — run with `bun install && bun run dev`.
+
+Every public API is documented in both [`docs/API.md`](docs/API.md) and the site
+under `site/app/docs/**`, kept in sync (DECISIONS D27).
+
 ## License
 
 Licensed under the [Apache License, Version 2.0](LICENSE). See the [NOTICE](NOTICE) file for attribution.

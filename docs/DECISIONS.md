@@ -295,3 +295,12 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
   - Gated on a new **`Capability::Env`** (deny-by-default; `esrun` grants it).
 - **Standards.** Aligned *in spirit* with the WinterTC CLI-API proposal (clean `args`, `process.env`-like `env`, `exit(code?=0)`), but the proposal is an unstable WIP global-`CLI` draft, so v1 binds to our `runtime:` module scheme instead; a thin `CLI` global re-exporting `runtime:process` is a cheap future add. `cwd`/`platform` are our supersets (not in the proposal); terminal metadata (interactive/NO_COLOR) is deferred to Phase 13.
 **Consequences:** A reusable built-in-module mechanism and the first practical standard module. `runtime:path` follows, using `cwd()`/`platform`. The `Process` provider's `env` snapshot is read-only-to-host for now; host/child propagation is future work tied to `child_process`.
+
+### D27 — Documentation process: every public API in repo MD + marketing site + API reference · *Adopted (maintainer sign-off, 2026-06-14)*
+**Context:** As the `runtime:` surface grows (D26 onward), API docs must not drift. The maintainer set a standing rule: every new public/host API is documented in three places, kept in sync, as part of the same change that ships it.
+**Decision (maintainer):**
+- **Repo MD (canonical):** `docs/API.md` is the source-of-truth API reference in the repo — every `runtime:` module and its exports, with signatures, capability, and behavior notes. README's quick-start links to it.
+- **Marketing site:** the `@opentf/web` app under `site/` (Vite + Tailwind v4, file-based routing in `site/app/`). Built with the org's own framework, **not React** (D-note). Public-facing overview + concept pages.
+- **API reference (site):** `site/app/docs/**` mirrors `docs/API.md` as browsable reference pages (e.g. `site/app/docs/process/page.jsx` ↔ `runtime:process`).
+- **Definition of done:** a PR that adds or changes a public API updates all three. The repo MD is authoritative if they ever disagree.
+**Consequences:** Docs ship with the code. The site lives in-repo (`site/`, its own bun/Vite toolchain, `node_modules`/`dist` git-ignored) so it versions alongside the runtime. Bun is the JS package manager for `site/`.
