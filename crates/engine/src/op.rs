@@ -308,7 +308,7 @@ fn op_dispatch_inner(
     match outcome {
         Outcome::Ok(value) => {
             drop(state);
-            let js = value_to_js(scope, &value);
+            let js = value_to_js(scope, value);
             rv.set(js);
         }
         Outcome::Err(err) => {
@@ -434,7 +434,7 @@ pub(crate) fn poll_async_ops(
         let resolver = v8::Local::new(scope, &resolver);
         match result {
             Ok(value) => {
-                let js = value_to_js(scope, &value);
+                let js = value_to_js(scope, value);
                 resolver.resolve(scope, js);
             }
             Err(err) => {

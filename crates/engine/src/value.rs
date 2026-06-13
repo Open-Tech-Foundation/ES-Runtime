@@ -24,6 +24,11 @@ pub enum Value {
     /// a `Uint8Array`. This is the interim copying path; true zero-copy
     /// `ArrayBuffer` transfer is Phase 8 (ARCHITECTURE.md §9).
     Bytes(Vec<u8>),
+    /// An ordered sequence, marshaled to a JS array. Currently produced only by
+    /// host ops returning multi-part results (e.g. the URL ops' href+offsets);
+    /// JS arrays crossing **into** Rust still marshal as [`Value::Other`] —
+    /// full structural marshaling remains later work (D3a).
+    Array(Vec<Value>),
     /// A JS value not yet marshaled structurally. Carries the value's
     /// `String(value)` coercion so it is still inspectable; later phases replace
     /// this with structured variants.

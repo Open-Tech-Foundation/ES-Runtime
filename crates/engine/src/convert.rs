@@ -38,28 +38,37 @@ pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>)
     }
 }
 
-/// Marshals a [`Value`] into a V8 value for return to JS.
+/// Marshals a [`Value`] into a V8 value for return to JS. Consumes the value so
+/// owned byte buffers move into the `ArrayBuffer` backing store without a copy.
 pub(crate) fn value_to_js<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: &Value,
+    value: Value,
 ) -> v8::Local<'s, v8::Value> {
     match value {
         Value::Undefined => v8::undefined(scope).into(),
         Value::Null => v8::null(scope).into(),
-        Value::Bool(b) => v8::Boolean::new(scope, *b).into(),
-        Value::Number(n) => v8::Number::new(scope, *n).into(),
-        Value::String(s) | Value::Other(s) => js_string(scope, s).into(),
+        Value::Bool(b) => v8::Boolean::new(scope, b).into(),
+        Value::Number(n) => v8::Number::new(scope, n).into(),
+        Value::String(s) | Value::Other(s) => js_string(scope, &s).into(),
         Value::Bytes(bytes) => bytes_to_uint8array(scope, bytes).into(),
+        Value::Array(items) => {
+            let elements: Vec<v8::Local<v8::Value>> = items
+                .into_iter()
+                .map(|item| value_to_js(scope, item))
+                .collect();
+            v8::Array::new_with_elements(scope, &elements).into()
+        }
     }
 }
 
-/// Builds a `Uint8Array` (over a fresh `ArrayBuffer`) holding a copy of `bytes`.
+/// Builds a `Uint8Array` whose `ArrayBuffer` takes ownership of `bytes` — no
+/// copy; the Vec becomes the backing store.
 fn bytes_to_uint8array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    bytes: &[u8],
+    bytes: Vec<u8>,
 ) -> v8::Local<'s, v8::Uint8Array> {
     let len = bytes.len();
-    let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes.to_vec()).make_shared();
+    let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
     let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
     v8::Uint8Array::new(scope, buffer, 0, len).expect("uint8array construction")
 }
