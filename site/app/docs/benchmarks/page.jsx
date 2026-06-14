@@ -22,6 +22,7 @@ const workloads = [
   { key: "timers", label: "setTimeout churn", unit: "ms" },
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
+  { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
   { key: "fsread", label: "File read", unit: "ms" },
   { key: "fswrite", label: "File write", unit: "ms" },
   { key: "fsappend", label: "File append", unit: "ms" },

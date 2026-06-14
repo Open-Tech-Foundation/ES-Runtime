@@ -2,9 +2,34 @@
 //! own (ARCHITECTURE.md §5, DECISIONS.md D4).
 
 use std::sync::Arc;
+use std::task::Wake;
 
 use es_runtime::Runtime;
 use es_runtime_providers::{Clock, Timers};
+use tokio::sync::Notify;
+
+/// The waker the driver injects into the runtime: when a pending async-op future
+/// signals readiness (its backing tokio task made progress), it notifies the
+/// driver, which re-ticks immediately instead of waiting out a blind interval.
+struct DriverWaker {
+    notify: Arc<Notify>,
+}
+
+impl Wake for DriverWaker {
+    fn wake(self: Arc<Self>) {
+        self.notify.notify_one();
+    }
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.notify.notify_one();
+    }
+}
+
+/// Fallback re-poll interval while async work is pending. The injected waker
+/// wakes us the instant an op-future is ready, so this only bounds the wait for
+/// readiness a waker can't deliver (e.g. a reactor-driven client future polled
+/// outside a task). Kept at 1ms — the prior poll-on-interval behavior — so this
+/// path is never slower than before; the waker just removes the wait when it can.
+const ASYNC_FALLBACK_MS: u64 = 1;
 
 /// Drives a [`Runtime`] to quiescence on tokio.
 ///
@@ -33,6 +58,16 @@ impl Driver {
     /// (SPEC.md §6.9), not the driver's.
     pub async fn run_to_completion(&self, runtime: &mut Runtime) -> Vec<String> {
         let mut rejections = Vec::new();
+
+        // Wire a real waker: a ready op-future will notify us so we re-tick at
+        // once, rather than re-polling on a fixed interval (the latency floor
+        // that otherwise dominates I/O-bound workloads like an HTTP server).
+        let notify = Arc::new(Notify::new());
+        let waker = std::task::Waker::from(Arc::new(DriverWaker {
+            notify: notify.clone(),
+        }));
+        runtime.set_async_waker(waker);
+
         loop {
             let now = self.clock.monotonic_ms();
             let status = runtime.tick(now);
@@ -54,17 +89,26 @@ impl Driver {
 
             match status.next_timer_deadline_ms {
                 Some(deadline) => {
+                    // Sleep until the timer is due, but let a ready async op cut
+                    // the wait short (its future woke us) so I/O isn't blocked
+                    // behind a pending timer.
                     let delay = deadline.saturating_sub(self.clock.monotonic_ms());
-                    self.timers.sleep(delay).await;
+                    tokio::select! {
+                        () = notify.notified() => {}
+                        () = self.timers.sleep(delay) => {}
+                    }
                 }
                 None => {
                     // Async work pending but no timer due (e.g. an open socket
-                    // awaiting bytes). Park briefly so the runtime's I/O reactor
-                    // can deliver network readiness before we re-poll — a busy
-                    // `yield_now` starves the reactor on a current-thread runtime
-                    // (sockets stall) and pegs a core. 1ms keeps latency low
-                    // while leaving the CPU near idle.
-                    self.timers.sleep(1).await;
+                    // awaiting bytes). Wait for a pending op to wake us (its
+                    // future signalled readiness on our waker) — re-polling at
+                    // once with near-zero latency — with a bounded fallback so a
+                    // future that registers no waker can't stall the loop. The
+                    // CPU stays idle while parked.
+                    tokio::select! {
+                        () = notify.notified() => {}
+                        () = self.timers.sleep(ASYNC_FALLBACK_MS) => {}
+                    }
                 }
             }
         }

@@ -26,7 +26,7 @@ cd "$(dirname "$0")"
 ESRUN="${ESRUN:-../target/release/esrun}"
 STARTUP_RUNS="${STARTUP_RUNS:-25}"
 WORKLOAD_RUNS="${WORKLOAD_RUNS:-5}"
-ALL_WORKLOADS="compute json jsonbig sha256 crypto url encoding base64 structured async timers streams fetch fsread fswrite fsappend glob"
+ALL_WORKLOADS="compute json jsonbig sha256 crypto url encoding base64 structured async timers streams fetch http fsread fswrite fsappend glob"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923

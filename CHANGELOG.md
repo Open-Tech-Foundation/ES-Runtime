@@ -6,7 +6,24 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Changed
+
+- **Driven loop now wakes on readiness, not on a fixed interval.** The standalone
+  `Driver` injects a real `Waker` (`Runtime::set_async_waker` / `Engine::set_async_waker`)
+  into the engine's async-op polling, and a newly-dispatched op wakes the loop
+  immediately. Previously the loop re-polled pending async ops on a blind ~1ms
+  interval, so each I/O op paid up to a full interval of latency. Now a ready op
+  re-ticks at once (a 1ms fallback remains only for futures that register no
+  waker). Sequential HTTP round-trip latency dropped from ~13 ms to ~0.14 ms per
+  request; `fetch` and the `fs` workloads regained their proper latency, and
+  `runtime:http` under concurrent load now outpaces Node. Embedder-visible API:
+  `Engine::set_async_waker` (default no-op) and `Runtime::set_async_waker`.
+
 ### Added
+
+- **Benchmarks** — added an **http** workload (each runtime's own HTTP server,
+  2 000 requests in batches of 100 concurrent over loopback); numbers on the
+  benchmarks page regenerated.
 
 - **`runtime:http`** — an HTTP/1.1 server, the fifth `runtime:` standard module:
   `serve((request) => response)`. The handler takes a web `Request` and returns

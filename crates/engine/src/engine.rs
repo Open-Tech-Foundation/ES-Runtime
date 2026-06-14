@@ -95,6 +95,14 @@ pub trait Engine {
     /// (ARCHITECTURE.md §5).
     fn poll_async_ops(&mut self) -> usize;
 
+    /// Injects the [`Waker`](std::task::Waker) used to poll pending async-op
+    /// futures. A driver with a reactor wires this to its own wakeup so a future
+    /// signals readiness the instant its backing task progresses, instead of
+    /// being re-polled on a blind interval. Default: a no-op waker (poll-on-tick).
+    fn set_async_waker(&mut self, waker: std::task::Waker) {
+        let _ = waker;
+    }
+
     /// Whether any async op is still awaiting completion.
     fn has_pending_async_ops(&self) -> bool;
 
@@ -502,6 +510,10 @@ impl Engine for V8Engine {
 
     fn poll_async_ops(&mut self) -> usize {
         crate::op::poll_async_ops(&mut self.isolate, &self.context, &self.op_state)
+    }
+
+    fn set_async_waker(&mut self, waker: std::task::Waker) {
+        self.op_state.borrow_mut().set_async_waker(waker);
     }
 
     fn has_pending_async_ops(&self) -> bool {

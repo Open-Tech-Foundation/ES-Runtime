@@ -36,6 +36,7 @@ and `/tmp/deno/bin/deno` if not on `PATH`.
 | **timers** | 10 000 zero-delay `setTimeout`s drained to completion — timer scheduling + driver. |
 | **streams** | `ReadableStream`→`TransformStream`→`WritableStream` pipe of 5 000 × 1 KiB chunks — the streams machinery (pure-JS prelude for esrun). |
 | **fetch** | 300 sequential GETs against a local HTTP server — the network provider seam end-to-end (started by run.sh via Node; skipped if Node is absent). |
+| **http** | 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
 | **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory floor. |
 
 Methodology: `startup`/`bigscript` report the **min** over `STARTUP_RUNS` (the
@@ -53,25 +54,30 @@ numbers are indicative and will vary by machine — re-run locally for your own.
 ```
 workload    |      node |       bun |      deno |     esrun
 -----------+-----------+-----------+-----------+-----------
-startup     |      19.1 |       9.2 |      24.4 |       6.6
-bigscript   |      30.3 |      22.4 |      35.5 |      18.8
-compute     |     215.3 |     130.9 |     229.0 |     252.7
-json        |     317.0 |     227.9 |     260.3 |     237.8
-jsonbig     |     768.5 |     710.6 |     610.4 |     656.6
-sha256      |     683.6 |     539.6 |     596.7 |     364.3
-crypto      |     236.9 |     116.0 |     188.9 |      37.3
-url         |      60.5 |      87.7 |     116.8 |     106.0
-encoding    |      86.5 |      26.1 |      83.6 |      85.0
-base64      |       7.9 |      15.4 |       8.2 |      86.2
-structured  |     249.6 |     293.7 |     292.6 |     342.9
-async       |      70.1 |      56.4 |      36.6 |      38.7
-timers      |       9.4 |       8.5 |      29.2 |       5.4
-streams     |      26.1 |      22.8 |      17.0 |      12.6
-fetch       |     107.8 |      28.7 |      46.5 |      44.3
-rss         |        40 |        29 |        54 |        18
+startup     |      18.1 |       9.2 |      25.8 |       7.2
+bigscript   |      30.3 |      22.9 |      36.1 |      20.0
+compute     |     214.4 |     157.8 |     244.1 |     267.7
+json        |     317.1 |     253.6 |     271.7 |     250.1
+jsonbig     |     756.1 |     738.1 |     671.8 |     755.3
+sha256      |     729.1 |     566.7 |     664.6 |     381.5
+crypto      |     265.8 |     127.2 |     190.8 |      39.6
+url         |      67.1 |      96.5 |     126.2 |     115.7
+encoding    |      88.1 |      27.8 |      92.6 |      97.7
+base64      |      10.5 |      15.4 |       9.7 |      88.7
+structured  |     265.4 |     318.2 |     324.4 |     370.5
+async       |      73.9 |      61.6 |      38.8 |      36.8
+timers      |       7.2 |       9.3 |      30.7 |       5.4
+streams     |      31.4 |      26.8 |      17.4 |      12.7
+fetch       |     123.9 |      25.4 |      47.5 |      47.7
+http        |     514.7 |      75.7 |     136.6 |     159.3
+fsread      |     168.7 |      45.0 |      55.2 |      82.0
+fswrite     |     235.4 |      13.9 |     114.8 |     110.8
+fsappend    |     151.9 |      48.6 |      55.9 |      74.9
+glob        |     286.4 |      43.7 |       n/a |      57.4
+rss         |        40 |        29 |        53 |        19
 ```
 
-(node v24, bun 1.3, deno 2.8, esrun 0.0.0.)
+(node v24, bun 1.3, deno 2.8, esrun 0.1.)
 
 ## Interpretation
 
@@ -94,8 +100,15 @@ rss         |        40 |        29 |        54 |        18
 - **timers, streams — fastest.** The driven loop's timer queue and the pure-JS
   streams prelude both hold up well; nothing pathological in the seam the loop
   exposes.
-- **async — second (38.7 ms), ahead of Node and Bun.** The microtask-checkpoint
+- **async — second, ahead of Node and Bun.** The microtask-checkpoint
   integration of the *driven* loop (esrun's distinctive risk) is competitive.
+- **http — ahead of Node, behind Bun/Deno.** `runtime:http` (hyper) serving 64-byte
+  responses under concurrent load lands ~3× Bun and ~1.2× Deno but comfortably
+  past Node. This is the workload that motivated wiring a **real waker** into the
+  driven loop: a ready (or just-dispatched) async op now wakes the loop at once
+  instead of waiting out a fixed re-poll interval, which also restored `fetch`
+  and the `fs` workloads to their proper latency. Sequential round-trip latency
+  fell from ~13 ms to ~0.14 ms/request.
 - **rss (18 MB) — lowest footprint** of the four, the 70 MB on-disk binary
   notwithstanding.
 - **json, jsonbig — mid-pack and competitive**; pure-engine baselines confirming

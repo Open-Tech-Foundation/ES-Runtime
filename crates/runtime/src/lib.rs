@@ -545,6 +545,14 @@ impl Runtime {
         }
     }
 
+    /// Injects the [`Waker`](std::task::Waker) the engine uses to poll pending
+    /// async ops. A driver wires this to its own wakeup primitive so a ready
+    /// op-future wakes the loop immediately instead of waiting for the next
+    /// blind re-poll. Forwarded to [`Engine::set_async_waker`].
+    pub fn set_async_waker(&mut self, waker: std::task::Waker) {
+        self.engine.set_async_waker(waker);
+    }
+
     /// Advances the loop by one step (ARCHITECTURE.md §5), in order:
     /// due **timers** → ready **async ops** → **microtask checkpoint** →
     /// **unhandled-rejection** collection. `now_ms` is the embedder's current

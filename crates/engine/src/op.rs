@@ -169,6 +169,11 @@ pub(crate) struct OpState {
     /// Dispatching a new async op past this throws, so adversarial JS can't pile
     /// up unbounded host work. `usize::MAX` until set from the engine's limits.
     max_pending_ops: usize,
+    /// Waker used to poll pending async-op futures. An embedder with a reactor
+    /// (e.g. the standalone driver) injects a real waker so a future signals
+    /// readiness the instant its backing task makes progress, instead of being
+    /// re-polled on a blind interval. `None` ⇒ a no-op waker (poll-on-tick).
+    async_waker: Option<Waker>,
 }
 
 impl OpState {
@@ -182,12 +187,18 @@ impl OpState {
             next_timer_id: 1,
             unhandled_rejections: HashMap::new(),
             max_pending_ops: usize::MAX,
+            async_waker: None,
         }
     }
 
     /// Sets the bound on concurrently pending async ops (from engine limits).
     pub(crate) fn set_max_pending_ops(&mut self, max: usize) {
         self.max_pending_ops = max;
+    }
+
+    /// Injects the waker used when polling pending async ops (see the field).
+    pub(crate) fn set_async_waker(&mut self, waker: Waker) {
+        self.async_waker = Some(waker);
     }
 
     /// Adds an op to the table and returns its id (its index).
@@ -337,6 +348,13 @@ fn op_dispatch_inner(
             let promise = resolver.get_promise(scope);
             let resolver = v8::Global::new(scope, resolver);
             state.pending_async.push(PendingAsync { future, resolver });
+            // Wake the driver so it re-ticks and polls this future now, rather
+            // than parking first: the future hasn't been polled yet, so it has
+            // registered no waker and nothing else would wake the loop until a
+            // blind fallback — the per-op latency that dominates sequential I/O.
+            if let Some(waker) = &state.async_waker {
+                waker.wake_by_ref();
+            }
             drop(state);
             rv.set(promise.into());
         }
@@ -403,9 +421,15 @@ pub(crate) fn poll_async_ops(
     context: &v8::Global<v8::Context>,
     op_state: &Rc<RefCell<OpState>>,
 ) -> usize {
-    // No reactor: a no-op waker, and readiness is observed only here.
-    let waker = Waker::noop();
-    let mut cx = Context::from_waker(waker);
+    // Poll with the embedder's waker if one was injected (a driver with a
+    // reactor wires this so a ready future wakes it immediately); otherwise a
+    // no-op waker, and readiness is observed only on the next tick.
+    let waker = op_state
+        .borrow()
+        .async_waker
+        .clone()
+        .unwrap_or_else(|| Waker::noop().clone());
+    let mut cx = Context::from_waker(&waker);
 
     let mut ready: Vec<(v8::Global<v8::PromiseResolver>, OpResult)> = Vec::new();
     {
