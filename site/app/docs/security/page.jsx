@@ -16,12 +16,28 @@ export default function SecurityDoc() {
         Security model
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        esrun's <strong>embeddable library</strong> is deny-by-default: a runtime
-        the host creates can compute, but cannot reach the host environment, the
-        filesystem, or the network until the host grants a capability for it. The
-        standalone <code className="font-mono">esrun</code> CLI grants all
-        capabilities, so scripts run unrestricted.
+        ES Runtime ships in two forms, and they differ on what code can reach by
+        default:
       </p>
+      <ul className="mt-4 space-y-2 text-zinc-600">
+        <li className="flex gap-3">
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
+          <span>
+            <strong className="text-zinc-900">Embeddable library — deny-by-default.</strong>{" "}
+            A runtime the host creates can compute, but cannot reach the host
+            environment, filesystem, or network until the host grants a
+            capability for it.
+          </span>
+        </li>
+        <li className="flex gap-3">
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
+          <span>
+            <strong className="text-zinc-900">The <code className="font-mono">esrun</code> CLI — unrestricted.</strong>{" "}
+            The standalone binary grants all capabilities so scripts run without
+            setup. It is not deny-by-default.
+          </span>
+        </li>
+      </ul>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Capabilities</h2>
       <p className="mt-3 text-zinc-600">

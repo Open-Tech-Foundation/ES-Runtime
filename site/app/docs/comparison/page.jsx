@@ -116,8 +116,8 @@ export default function ComparisonDoc() {
             File access — including module resolution — is confined to a project
             root that can't be escaped, even via symlink, in both the library and
             the CLI. Deno gates host access with CLI permission flags and Node.js
-            has an experimental permission model; esrun's CLI grants all
-            capabilities, while its embeddable library is deny-by-default.
+            has an experimental permission model; the esrun CLI grants all
+            capabilities, while the embeddable library is deny-by-default.
           </span>
         </li>
         <li className="flex gap-3">

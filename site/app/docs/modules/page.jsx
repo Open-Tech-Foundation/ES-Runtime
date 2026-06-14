@@ -2,13 +2,13 @@ import DocsShell from "../../../components/DocsShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
 
 const STATIC = `// Relative and bare specifiers both work.
-import { greet } from "./greet.mjs";
+import { greet } from "./greet.js";
 import greeter from "greeter";           // from node_modules (ESM)
 
 export const message = greet("world");`;
 
 const DYNAMIC = `// Dynamic import() is fully supported, including top-level await.
-const { default: plugin } = await import("./plugins/auth.mjs");
+const { default: plugin } = await import("./plugins/auth.js");
 await plugin.init();`;
 
 const BUILTIN = `// Host functionality is imported under the runtime: scheme.
@@ -45,12 +45,12 @@ export default function ModulesDoc() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Static imports</h2>
       <div className="mt-4">
-        <CodeBlock code={STATIC} title="app.mjs" lang="js" />
+        <CodeBlock code={STATIC} title="app.js" lang="js" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Dynamic import</h2>
       <div className="mt-4">
-        <CodeBlock code={DYNAMIC} title="app.mjs" lang="js" />
+        <CodeBlock code={DYNAMIC} title="app.js" lang="js" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
@@ -79,7 +79,7 @@ export default function ModulesDoc() {
         host dependency explicit and statically visible in the source.
       </p>
       <div className="mt-4">
-        <CodeBlock code={BUILTIN} title="app.mjs" lang="js" />
+        <CodeBlock code={BUILTIN} title="app.js" lang="js" />
       </div>
       <p className="mt-4 text-zinc-600">
         Each built-in module is backed by host ops that carry the capability

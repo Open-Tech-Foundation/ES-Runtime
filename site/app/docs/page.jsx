@@ -5,13 +5,13 @@ import InstallBox from "../../components/InstallBox.jsx";
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
 const RUN = `# Run a module file
-esrun app.mjs
+esrun app.js
 
 # Evaluate an inline snippet (top-level await is supported)
 esrun -e "console.log(await Promise.resolve(42))"
 
 # Pass arguments through to the script
-esrun app.mjs --name Ada`;
+esrun app.js --name Ada`;
 
 export default function DocsOverview() {
   return (
@@ -21,18 +21,17 @@ export default function DocsOverview() {
         Overview
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        esrun is a secure, standards-based JavaScript runtime for the server,
-        built on V8 in Rust. It runs standard ES Modules with a sandboxed module
-        system; its embeddable library is deny-by-default, granting host
-        capabilities only when the host asks.
+        ES Runtime is a secure, standards-based JavaScript runtime for the
+        server, built on V8 in Rust. It runs standard ES Modules with a
+        sandboxed module system.
       </p>
 
       <div className="mt-6 rounded-xl border border-brand-200 bg-brand-50 p-5 leading-relaxed text-brand-900">
         Ships in two shapes from one core: an{" "}
-        <strong>embeddable library</strong> and a{" "}
+        <strong>embeddable library</strong>, which is deny-by-default, and the{" "}
         <strong>standalone CLI</strong> (
         <code className="rounded bg-white/70 px-1.5 py-0.5 text-[13px]">esrun</code>
-        ).
+        ), which grants all capabilities.
       </div>
 
       <p className="mt-4 text-zinc-600">

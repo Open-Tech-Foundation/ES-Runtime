@@ -3,14 +3,6 @@ import CodeBlock from "../../components/CodeBlock.jsx";
 
 const IMPORT = `import { env, args } from "runtime:process";`;
 
-const capabilities = [
-  { cap: "Env", grants: "Environment, arguments, cwd, platform — backs runtime:process." },
-  { cap: "FileRead", grants: "Read files within the configured root jail." },
-  { cap: "FileWrite", grants: "Write files within the configured root jail." },
-  { cap: "Net", grants: "Open outbound network connections." },
-  { cap: "HrTime", grants: "Access high-resolution timing." },
-];
-
 const modules = [
   { name: "runtime:process", status: "Available", cap: "Env", href: "/api/process" },
   { name: "runtime:path", status: "Planned", cap: "—", href: null },
@@ -27,8 +19,9 @@ export default function ApiOverview() {
         Overview
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        ES Runtime is ESM-only, and its embeddable library is deny-by-default.
-        Host functionality is exposed as ES modules under the{" "}
+        ES Runtime is ESM-only; the embeddable library is deny-by-default (the
+        esrun CLI grants all capabilities). Host functionality is exposed as ES
+        modules under the{" "}
         <code className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.9em]">
           runtime:
         </code>{" "}
@@ -91,58 +84,6 @@ export default function ApiOverview() {
             ))}
           </tbody>
         </table>
-      </div>
-
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Capabilities</h2>
-      <p className="mt-3 text-zinc-600">
-        A fresh runtime can compute but cannot reach the host until the embedder
-        grants the relevant capability. The check lives on the native op, so it
-        cannot be bypassed by reaching a different module path.
-      </p>
-      <div className="mt-5 overflow-hidden rounded-xl border border-zinc-200">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500">
-            <tr>
-              <th className="px-4 py-3 font-semibold">Capability</th>
-              <th className="px-4 py-3 font-semibold">Grants</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100">
-            {capabilities.map((c) => (
-              <tr>
-                <td className="px-4 py-3 font-mono font-medium text-zinc-900">
-                  {c.cap}
-                </td>
-                <td className="px-4 py-3 text-zinc-600">{c.grants}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="mt-10 grid gap-4 sm:grid-cols-2">
-        <a
-          href="/api/cli"
-          className="flex flex-col rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-        >
-          <span className="font-mono font-semibold text-zinc-900">
-            esrun CLI →
-          </span>
-          <span className="mt-1 text-sm text-zinc-600">
-            Command-line options: run a file, -e, --timeout, --help, --version.
-          </span>
-        </a>
-        <a
-          href="/api/process"
-          className="flex flex-col rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-        >
-          <span className="font-mono font-semibold text-zinc-900">
-            runtime:process →
-          </span>
-          <span className="mt-1 text-sm text-zinc-600">
-            Environment, arguments, working directory, platform, and exit.
-          </span>
-        </a>
       </div>
     </ApiShell>
   );

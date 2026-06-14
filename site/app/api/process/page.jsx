@@ -12,7 +12,7 @@ console.log(env.HOME);      // read
 env.FEATURE_FLAG = "on";    // write (in-process only)
 delete env.SECRET;          // delete (in-process only)`;
 
-const ARGS_EX = `// esrun app.mjs build --watch
+const ARGS_EX = `// esrun app.js build --watch
 import { args } from "runtime:process";
 
 console.log(args); // ["build", "--watch"]`;
@@ -79,13 +79,6 @@ export default function ProcessDoc() {
         </span>
       </div>
 
-      <p className="mt-8 text-zinc-600">
-        Every member requires the <strong>Env</strong> capability; the check
-        lives on the host op. Values are snapshotted when the module is
-        evaluated, and the module is loaded on demand — importing it adds no cost
-        to startup if you never use it.
-      </p>
-
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Import</h2>
       <div className="mt-4">
         <CodeBlock code={IMPORT} title="runtime:process" lang="js" />
@@ -114,21 +107,21 @@ export default function ProcessDoc() {
         env — reading and writing
       </h2>
       <div className="mt-4">
-        <CodeBlock code={ENV_EX} title="env.mjs" lang="js" />
+        <CodeBlock code={ENV_EX} title="env.js" lang="js" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         args — program arguments
       </h2>
       <div className="mt-4">
-        <CodeBlock code={ARGS_EX} title="args.mjs" lang="js" />
+        <CodeBlock code={ARGS_EX} title="args.js" lang="js" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         exit — stopping the run
       </h2>
       <div className="mt-4">
-        <CodeBlock code={EXIT_EX} title="exit.mjs" lang="js" />
+        <CodeBlock code={EXIT_EX} title="exit.js" lang="js" />
       </div>
 
       <div className="mt-12 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-600">

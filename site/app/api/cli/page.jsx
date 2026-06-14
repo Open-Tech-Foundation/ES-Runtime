@@ -8,16 +8,16 @@ esrun -h, --help         Show this help
 esrun -v, --version      Show the version`;
 
 const RUN = `# Run a module file
-esrun app.mjs
+esrun app.js
 
 # Inline snippet (top-level await works)
 esrun -e "console.log(await Promise.resolve(42))"
 
 # Pass arguments through to the script (read via runtime:process)
-esrun app.mjs build --watch
+esrun app.js build --watch
 
 # Stop a runaway script after 500ms
-esrun -t 500 app.mjs`;
+esrun -t 500 app.js`;
 
 const options = [
   {
@@ -89,17 +89,6 @@ export default function CliDoc() {
           <code className="font-mono">args</code> from runtime:process
         </a>
         . The runtime binary and the script path are excluded.
-      </div>
-
-      <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm leading-relaxed text-zinc-600">
-        <strong className="text-zinc-900">Capabilities.</strong> The standalone
-        CLI grants the host capabilities its features need so scripts “just run.”
-        The deny-by-default model is what an <em>embedder</em> of the library
-        controls — see the{" "}
-        <a href="/api" className="font-medium text-brand-600 hover:text-brand-700">
-          API overview
-        </a>
-        .
       </div>
     </ApiShell>
   );
