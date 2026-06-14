@@ -1,6 +1,7 @@
 // A dependency-free horizontal bar chart driven by bench/run.sh JSON output
-// (site/src/benchmarks.json). Lower is better; esrun is drawn in the brand
-// color. Pass `metrics` as [{ key, label, unit? }] selecting rows to show.
+// (site/src/benchmarks.json). Lower is better; the winner of each row (the
+// fastest/smallest value) is drawn in green, everyone else in neutral grey.
+// Pass `metrics` as [{ key, label, unit? }] selecting rows to show.
 //
 // NOTE: the @opentf/web compiler rewrites every `.map()` into a reactive list
 // helper, so non-render computations must use plain loops (never `.map`), and
@@ -19,6 +20,21 @@ function maxOf(row, runtimes) {
   return max || 1;
 }
 
+// The winning runtime for a row: the one with the lowest value (lower is
+// better). Returns its key, or null if the row has no numeric values.
+function winnerOf(row, runtimes) {
+  let best = null;
+  let bestV = Infinity;
+  for (const rt of runtimes) {
+    const v = row[rt];
+    if (typeof v === "number" && v < bestV) {
+      bestV = v;
+      best = rt;
+    }
+  }
+  return best;
+}
+
 export default function BenchChart({ metrics }) {
   const runtimes = ORDER.filter((rt) => bench.runtimes[rt]);
 
@@ -27,6 +43,7 @@ export default function BenchChart({ metrics }) {
       {metrics.map((m) => {
         const row = bench.results_ms[m.key] || {};
         const max = maxOf(row, runtimes);
+        const winner = winnerOf(row, runtimes);
         const unit = m.unit || "ms";
 
         return (
@@ -42,7 +59,7 @@ export default function BenchChart({ metrics }) {
                 const v = row[rt];
                 const pct =
                   typeof v === "number" ? Math.max((v / max) * 100, 2) : 0;
-                const isE = rt === "esrun";
+                const isWin = rt === winner;
                 return (
                   <div className="flex items-center gap-2.5">
                     <span className="w-12 shrink-0 text-right text-[11px] font-medium text-zinc-600">
@@ -51,8 +68,8 @@ export default function BenchChart({ metrics }) {
                     <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100">
                       <div
                         className={
-                          isE
-                            ? "h-full rounded-full bg-brand-500"
+                          isWin
+                            ? "h-full rounded-full bg-emerald-500"
                             : "h-full rounded-full bg-zinc-300"
                         }
                         style={{ width: pct + "%" }}
@@ -60,8 +77,8 @@ export default function BenchChart({ metrics }) {
                     </div>
                     <span
                       className={
-                        isE
-                          ? "w-14 shrink-0 text-right text-[11px] font-semibold tabular-nums text-brand-700"
+                        isWin
+                          ? "w-14 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
                           : "w-14 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                       }
                     >

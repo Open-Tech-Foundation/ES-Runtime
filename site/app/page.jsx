@@ -2,13 +2,16 @@ import BenchChart from "../components/BenchChart.jsx";
 import InstallBox from "../components/InstallBox.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
 
-// Top results where esrun leads — the rest live on /docs/benchmarks.
+// A balanced, honest slice of the benchmarks — all top-priority for server
+// runtimes. Three where we lead (startup, memory, crypto) and two where we
+// don't (HTTP throughput, CPU compute). The chart greens the real winner per
+// row, so the trade-offs show plainly. Full set lives on /docs/benchmarks.
 const HERO_METRICS = [
   { key: "startup", label: "Cold start", unit: "ms" },
   { key: "rss", label: "Peak memory", unit: "MB" },
   { key: "crypto", label: "WebCrypto", unit: "ms" },
-  { key: "sha256", label: "SHA-256", unit: "ms" },
-  { key: "timers", label: "Timers", unit: "ms" },
+  { key: "fetch", label: "HTTP fetch", unit: "ms" },
+  { key: "compute", label: "CPU compute", unit: "ms" },
 ];
 
 const features = [
