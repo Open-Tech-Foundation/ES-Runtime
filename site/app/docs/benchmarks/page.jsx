@@ -22,6 +22,7 @@ const workloads = [
   { key: "timers", label: "setTimeout churn", unit: "ms" },
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
+  { key: "fs", label: "File I/O (write + read)", unit: "ms" },
 ];
 
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
