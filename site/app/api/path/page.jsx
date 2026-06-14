@@ -8,19 +8,19 @@ const here = dirname(fromFileURL(import.meta.url));
 const cfg = resolve(here, "config", "app.json");`;
 
 const exports = [
-  { sig: "sep", type: "string", desc: 'Path segment separator for the host OS ("/" or "\\").' },
-  { sig: "delimiter", type: "string", desc: 'Path list delimiter for the host OS (":" or ";").' },
-  { sig: "isAbsolute(p)", type: "(string) => boolean", desc: "Whether p is an absolute path." },
-  { sig: "normalize(p)", type: "(string) => string", desc: "Collapses . / .. and redundant separators." },
-  { sig: "join(...segments)", type: "(...string) => string", desc: "Joins segments with the separator, then normalizes." },
-  { sig: "resolve(...segments)", type: "(...string) => string", desc: "Resolves to an absolute path, anchoring at cwd() if no segment is absolute." },
-  { sig: "dirname(p)", type: "(string) => string", desc: "The directory portion of p." },
-  { sig: "basename(p)", type: "(string) => string", desc: "The final segment of p (no suffix-stripping overload)." },
-  { sig: "extname(p)", type: "(string) => string", desc: "The extension of the final segment, including the dot (or empty)." },
-  { sig: "parse(p)", type: "(string) => object", desc: "{ root, dir, base, name, ext }." },
-  { sig: "relative(from, to)", type: "(string, string) => string", desc: "Relative path from from to to (both resolved first)." },
-  { sig: "fromFileURL(url)", type: "(string | URL) => string", desc: "Converts a file: URL to a path." },
-  { sig: "toFileURL(p)", type: "(string) => URL", desc: "Converts a path (resolved to absolute) to a file: URL." },
+  { sig: "sep", type: "string", desc: 'Path segment separator for the host OS ("/" or "\\").', ex: `sep; // "/" on POSIX, "\\\\" on Windows` },
+  { sig: "delimiter", type: "string", desc: 'Path list delimiter for the host OS (":" or ";").', ex: `env.PATH.split(delimiter);` },
+  { sig: "isAbsolute(p)", type: "(string) => boolean", desc: "Whether p is an absolute path.", ex: `isAbsolute("/etc/hosts"); // true` },
+  { sig: "normalize(p)", type: "(string) => string", desc: "Collapses . / .. and redundant separators.", ex: `normalize("/a/./b/../c"); // "/a/c"` },
+  { sig: "join(...segments)", type: "(...string) => string", desc: "Joins segments with the separator, then normalizes.", ex: `join("src", "lib", "x.js"); // "src/lib/x.js"` },
+  { sig: "resolve(...segments)", type: "(...string) => string", desc: "Resolves to an absolute path, anchoring at cwd() if no segment is absolute.", ex: `resolve("data", "out.json"); // "<cwd>/data/out.json"` },
+  { sig: "dirname(p)", type: "(string) => string", desc: "The directory portion of p.", ex: `dirname("/var/log/app.log"); // "/var/log"` },
+  { sig: "basename(p)", type: "(string) => string", desc: "The final segment of p (no suffix-stripping overload).", ex: `basename("/var/log/app.log"); // "app.log"` },
+  { sig: "extname(p)", type: "(string) => string", desc: "The extension of the final segment, including the dot (or empty).", ex: `extname("archive.tar.gz"); // ".gz"` },
+  { sig: "parse(p)", type: "(string) => object", desc: "{ root, dir, base, name, ext }.", ex: `parse("/a/b.txt"); // { root, dir, base, name, ext }` },
+  { sig: "relative(from, to)", type: "(string, string) => string", desc: "Relative path from from to to (both resolved first).", ex: `relative("/a/b", "/a/c/d"); // "../c/d"` },
+  { sig: "fromFileURL(url)", type: "(string | URL) => string", desc: "Converts a file: URL to a path.", ex: `fromFileURL(import.meta.url); // "/abs/mod.js"` },
+  { sig: "toFileURL(p)", type: "(string) => URL", desc: "Converts a path (resolved to absolute) to a file: URL.", ex: `toFileURL("/a/b.txt").href; // "file:///a/b.txt"` },
 ];
 
 export default function PathDoc() {
@@ -76,6 +76,9 @@ export default function PathDoc() {
             <p className="mt-2 text-sm leading-relaxed text-zinc-600">
               {e.desc}
             </p>
+            <code className="mt-3 block overflow-x-auto rounded-lg bg-zinc-950 px-3 py-2 font-mono text-[12px] text-emerald-300">
+              {e.ex}
+            </code>
           </div>
         ))}
       </div>

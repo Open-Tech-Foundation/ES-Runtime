@@ -25,33 +25,39 @@ exit();              // defaults to 0`;
 const exports = [
   {
     sig: "env",
-    type: "object",
-    desc: "Environment variables as a mutable plain object, seeded from a host snapshot taken when the module is evaluated. Reads, writes, and deletes work in-process; they do not propagate to the host process or to child processes.",
+    type: "Record<string, string>",
+    desc: "Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated. Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes.",
+    ex: `env.HOME; env.FLAG = "on"; delete env.SECRET;`,
   },
   {
     sig: "args",
     type: "readonly string[]",
-    desc: "Program arguments after the runtime binary and the script (or -e snippet). Frozen. Does not include the executable or script path.",
+    desc: "Program arguments after the runtime binary and the script (or -e snippet). Frozen. Excludes the executable and script path.",
+    ex: `args; // ["build", "--watch"]`,
   },
   {
     sig: "platform",
     type: "string",
-    desc: 'Host operating system: "linux", "macos", "windows", etc. (the OS-native std value).',
+    desc: "Host operating system — the OS-native std value.",
+    ex: `platform; // "linux" | "macos" | "windows"`,
   },
   {
     sig: "arch",
     type: "string",
-    desc: 'Host CPU architecture: "x86_64", "aarch64", "arm", etc. (the OS-native std value).',
+    desc: "Host CPU architecture — the OS-native std value.",
+    ex: `arch; // "x86_64" | "aarch64" | "arm"`,
   },
   {
     sig: "cwd()",
     type: "() => string",
-    desc: "Returns the current working directory. A function, not a value, because the directory can change during a run.",
+    desc: "Current working directory. A function (not a value) because it can change during a run.",
+    ex: `cwd(); // "/srv/app"`,
   },
   {
     sig: "exit(code = 0)",
     type: "(code?: number) => never",
-    desc: "Records the exit code and halts execution immediately — code after the call does not run. The embedder reads the recorded code and treats the result as a clean exit, not an error.",
+    desc: "Records the exit code and halts execution immediately — code after the call does not run. The embedder treats it as a clean exit, not an error.",
+    ex: `if (failed) exit(1); // halts immediately`,
   },
 ];
 
@@ -99,6 +105,9 @@ export default function ProcessDoc() {
             <p className="mt-2 text-sm leading-relaxed text-zinc-600">
               {e.desc}
             </p>
+            <code className="mt-3 block overflow-x-auto rounded-lg bg-zinc-950 px-3 py-2 font-mono text-[12px] text-emerald-300">
+              {e.ex}
+            </code>
           </div>
         ))}
       </div>
