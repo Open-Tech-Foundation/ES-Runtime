@@ -73,8 +73,8 @@ export default function ScopeDoc() {
       <div className="mt-6 space-y-4">
         {nonGoals.map((g) => (
           <div className="rounded-xl border border-zinc-200 p-5">
-            <h3 className="flex items-start gap-2 text-base font-semibold text-zinc-900">
-              <StatusIcon status="no" className="mt-0.5 inline-block h-[18px] w-[18px] shrink-0 text-rose-500" />
+            <h3 className="flex items-center gap-2 text-base font-semibold text-zinc-900">
+              <StatusIcon status="no" className="inline-block h-5 w-5 shrink-0 align-middle text-rose-500" />
               <span>{g.title}</span>
             </h3>
             <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">

@@ -7,6 +7,7 @@ const NAV = [
     group: "Getting started",
     items: [
       { href: "/docs", label: "Overview" },
+      { href: "/docs/install", label: "Installation" },
       { href: "/docs/scope", label: "Scope & non-goals" },
     ],
   },
