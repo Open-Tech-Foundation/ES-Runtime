@@ -1,38 +1,68 @@
-// A terminal-style install command with a copy button. The command wraps
-// instead of scrolling so it stays readable. On copy it turns green and the
-// button shows a ✓ — driven by the framework's component-local reactivity
-// ($state compiles to a signal; the compiler wraps the className/child reads in
-// effects). Reactive primitives must come from the framework, never another
-// signals package (single-source-of-truth rule in the @opentf/web SPEC).
-const CMD =
-  "curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash";
+// A terminal-style install command with OS tabs and a copy button. The command
+// wraps instead of scrolling so it stays readable; on copy it turns green and
+// the button shows a ✓. State is the framework's component-local reactivity
+// ($state -> signal; the compiler wraps the className/child reads in effects).
+// Reactive primitives must come from the framework, never another signals
+// package (single-source-of-truth rule in the @opentf/web SPEC).
+const RAW = "https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main";
+const UNIX = `curl -fsSL ${RAW}/install.sh | bash`;
+const WIN = `irm ${RAW}/install.ps1 | iex`;
+
+const CODE_BASE = "flex-1 break-all text-[13px] leading-relaxed transition-colors ";
+const TAB_BASE = "rounded-t-md px-3 py-1.5 text-xs font-medium transition-colors ";
 
 export default function InstallBox() {
+  let active = $state("unix"); // "unix" | "win"
   let copied = $state(false);
 
+  function select(os) {
+    active = os;
+    copied = false;
+  }
+
   function copy() {
-    navigator.clipboard?.writeText(CMD);
+    navigator.clipboard?.writeText(active === "win" ? WIN : UNIX);
     copied = true;
     setTimeout(() => (copied = false), 1600);
   }
 
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
-      <div className="flex items-center gap-1.5 border-b border-zinc-800 px-4 py-2.5">
-        <span className="h-2.5 w-2.5 rounded-full bg-zinc-700" />
-        <span className="h-2.5 w-2.5 rounded-full bg-zinc-700" />
-        <span className="h-2.5 w-2.5 rounded-full bg-zinc-700" />
-        <span className="ml-2 text-xs font-medium text-zinc-500">Install</span>
-      </div>
-      <div className="flex items-start gap-3 px-4 py-3.5">
-        <code
+      {/* Tabs */}
+      <div className="flex items-center gap-1 border-b border-zinc-800 px-2 pt-2">
+        <button
+          type="button"
+          onclick={() => select("unix")}
           className={
-            "flex-1 break-all text-[13px] leading-relaxed transition-colors " +
-            (copied ? "text-emerald-400" : "text-zinc-100")
+            TAB_BASE +
+            (active === "unix"
+              ? "bg-zinc-900 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300")
           }
         >
-          <span className="select-none text-brand-400">$ </span>
-          {CMD}
+          Linux / macOS
+        </button>
+        <button
+          type="button"
+          onclick={() => select("win")}
+          className={
+            TAB_BASE +
+            (active === "win"
+              ? "bg-zinc-900 text-zinc-100"
+              : "text-zinc-500 hover:text-zinc-300")
+          }
+        >
+          Windows (PowerShell)
+        </button>
+      </div>
+
+      {/* Command */}
+      <div className="flex items-start gap-3 px-4 py-3.5">
+        <code className={CODE_BASE + (copied ? "text-emerald-400" : "text-zinc-100")}>
+          <span className="select-none text-brand-400">
+            {active === "win" ? "> " : "$ "}
+          </span>
+          {active === "win" ? WIN : UNIX}
         </code>
         <button
           type="button"

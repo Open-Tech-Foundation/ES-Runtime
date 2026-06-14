@@ -10,11 +10,19 @@ It ships in two shapes from the same core:
 
 ## Quick start (run JavaScript)
 
-**Install** the latest release (Linux/macOS) — downloads a prebuilt binary and
-verifies its checksum:
+**Install** the latest release — downloads a prebuilt binary and verifies its
+checksum.
+
+Linux / macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
 ```
 
 Or **build once** from source (npm-script-style alias; produces a single

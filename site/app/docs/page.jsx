@@ -1,12 +1,8 @@
 import DocsShell from "../../components/DocsShell.jsx";
 import CodeBlock from "../../components/CodeBlock.jsx";
+import InstallBox from "../../components/InstallBox.jsx";
 
-const BUILD = `# Build the standalone CLI from source
-git clone https://github.com/Open-Tech-Foundation/ES-Runtime
-cd ES-Runtime
-cargo build --release
-
-# The binary is target/release/esrun`;
+const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
 const RUN = `# Run a module file
 esrun app.mjs
@@ -43,11 +39,23 @@ export default function DocsOverview() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Install</h2>
       <p className="mt-3 text-zinc-600">
-        Build the CLI from source with a recent stable Rust toolchain:
+        Download a prebuilt, checksum-verified binary for your platform:
       </p>
       <div className="mt-4">
-        <CodeBlock code={BUILD} title="Terminal" lang="sh" />
+        <InstallBox />
       </div>
+      <p className="mt-3 text-sm text-zinc-500">
+        Prefer to build from source? See the{" "}
+        <a
+          href={GITHUB}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-brand-600 hover:text-brand-700"
+        >
+          README
+        </a>
+        .
+      </p>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Run a script</h2>
       <div className="mt-4">

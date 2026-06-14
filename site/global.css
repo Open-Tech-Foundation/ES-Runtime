@@ -48,3 +48,10 @@ pre {
 a {
   text-decoration: none;
 }
+
+/* Tailwind v4's preflight resets <button> to cursor:default; restore the
+   pointer for enabled controls so clickable elements read as clickable. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]) {
+  cursor: pointer;
+}

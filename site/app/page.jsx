@@ -137,18 +137,18 @@ export default function HomePage() {
               </a>
             </div>
             <ul className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm text-zinc-600">
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Node.js compatibility</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> CommonJS</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> TypeScript</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> JSX</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> JSON imports</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Package installer</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Bundler / linter</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Test runner</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Watch mode</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> FFI</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Workers</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" /> Native addons</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Node.js compatibility</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> CommonJS</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> TypeScript</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> JSX</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> JSON imports</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Package installer</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Bundler / linter</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Test runner</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Watch mode</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> FFI</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Workers</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Native addons</li>
             </ul>
           </div>
         </div>
