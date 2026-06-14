@@ -5,7 +5,7 @@ const IMPORT = `import { env, args } from "runtime:process";`;
 
 const modules = [
   { name: "runtime:process", status: "Available", cap: "Env", href: "/api/process" },
-  { name: "runtime:path", status: "Planned", cap: "—", href: null },
+  { name: "runtime:path", status: "Available", cap: "Env", href: "/api/path" },
   { name: "runtime:fs", status: "Planned", cap: "FileRead / FileWrite", href: null },
   { name: "runtime:net", status: "Planned", cap: "Net", href: null },
   { name: "runtime:http", status: "Planned", cap: "Net", href: null },

@@ -15,6 +15,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [The `runtime:` scheme](#the-runtime-scheme)
 - [Capabilities](#capabilities)
 - [`runtime:process`](#runtimeprocess)
+- [`runtime:path`](#runtimepath)
 
 ---
 
@@ -82,7 +83,7 @@ the required capability has been granted.
 | Module            | Status      | Capability | Reference                     |
 | ----------------- | ----------- | ---------- | ----------------------------- |
 | `runtime:process` | Available   | `Env`      | [↓](#runtimeprocess)          |
-| `runtime:path`    | Planned     | —          | —                             |
+| `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Planned     | `FileRead` / `FileWrite` | —               |
 | `runtime:net`     | Planned     | `Net`      | —                             |
 | `runtime:http`    | Planned     | `Net`      | —                             |
@@ -164,6 +165,46 @@ import { exit } from "runtime:process";
 if (failed) exit(1);
 exit(); // defaults to 0
 ```
+
+---
+
+## `runtime:path`
+
+Modern, platform-aware path utilities. Pure computation — it performs no I/O.
+The host platform and working directory come from
+[`runtime:process`](#runtimeprocess), so separators and `resolve()` follow the
+real OS; that is why it carries `Env` (\*importing it evaluates `runtime:process`).
+
+This is intentionally free of legacy baggage: one platform-correct surface (no
+`posix`/`win32` dual namespaces, no overloaded signatures), plus first-class
+`file:` URL interop — `dirname(fromFileURL(import.meta.url))` is the modern
+`__dirname`.
+
+```js
+import { join, resolve, dirname, fromFileURL } from "runtime:path";
+
+const here = dirname(fromFileURL(import.meta.url));
+const cfg = resolve(here, "config", "app.json");
+```
+
+### Exports
+
+| Export                  | Type                          | Description                                                                 |
+| ----------------------- | ----------------------------- | --------------------------------------------------------------------------- |
+| `sep`                   | `string`                      | Path segment separator for the host OS (`"/"` or `"\\"`).                    |
+| `delimiter`             | `string`                      | Path list delimiter for the host OS (`":"` or `";"`).                       |
+| `isAbsolute(p)`         | `(string) => boolean`         | Whether `p` is an absolute path.                                            |
+| `normalize(p)`          | `(string) => string`          | Collapses `.`/`..` and redundant separators.                                |
+| `join(...segments)`     | `(...string) => string`       | Joins segments with the separator, then normalizes.                         |
+| `resolve(...segments)`  | `(...string) => string`       | Resolves to an absolute path, anchoring at `cwd()` if no segment is absolute.|
+| `dirname(p)`            | `(string) => string`          | The directory portion of `p`.                                               |
+| `basename(p)`           | `(string) => string`          | The final segment of `p` (no suffix-stripping overload).                    |
+| `extname(p)`            | `(string) => string`          | The extension of the final segment, including the dot (or `""`).            |
+| `parse(p)`              | `(string) => object`          | `{ root, dir, base, name, ext }`.                                           |
+| `relative(from, to)`    | `(string, string) => string`  | Relative path from `from` to `to` (both resolved first).                    |
+| `fromFileURL(url)`      | `(string \| URL) => string`   | Converts a `file:` URL to a path.                                           |
+| `toFileURL(p)`          | `(string) => URL`             | Converts a path (resolved to absolute) to a `file:` URL.                    |
+| `default`               | `object`                      | An aggregate of all named exports.                                          |
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

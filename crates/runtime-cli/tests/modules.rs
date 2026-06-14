@@ -212,6 +212,51 @@ fn runtime_process_exit_sets_exit_code() {
     );
 }
 
+// POSIX-only: separators/roots are platform-specific and the CI test job runs
+// on Linux (macOS is also POSIX). Windows path semantics are exercised by hand.
+#[cfg(unix)]
+#[test]
+fn runtime_path_exposes_modern_surface() {
+    let out = esrun()
+        .arg("-e")
+        .arg(
+            "import * as p from 'runtime:path'; const o=(k,v)=>console.log(k+'='+v);\
+             o('sep',p.sep); o('delimiter',p.delimiter);\
+             o('join',p.join('a','b','..','c/d/'));\
+             o('normalize',p.normalize('/a/./b/../c'));\
+             o('isAbs',p.isAbsolute('/a')+','+p.isAbsolute('a'));\
+             o('dirname',p.dirname('/a/b/c.txt'));\
+             o('basename',p.basename('/a/b/c.txt'));\
+             o('extname',p.extname('archive.tar.gz'));\
+             o('relative',p.relative('/a/b/c','/a/x/y'));\
+             o('parse',JSON.stringify(p.parse('/a/b/c.txt')));\
+             o('resolveAbs',p.resolve('/x','y','z'));\
+             o('fromFileURL',p.fromFileURL('file:///a/b%20c.txt'));\
+             o('toFileURL',p.toFileURL('/a/b c.txt').href);",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "sep=/",
+        "delimiter=:",
+        "join=a/c/d",
+        "normalize=/a/c",
+        "isAbs=true,false",
+        "dirname=/a/b",
+        "basename=c.txt",
+        "extname=.gz",
+        "relative=../../x/y",
+        "parse={\"root\":\"/\",\"dir\":\"/a/b\",\"base\":\"c.txt\",\"name\":\"c\",\"ext\":\".txt\"}",
+        "resolveAbs=/x/y/z",
+        "fromFileURL=/a/b c.txt",
+        "toFileURL=file:///a/b%20c.txt",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
 #[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()

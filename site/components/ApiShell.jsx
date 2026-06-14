@@ -9,6 +9,7 @@ const NAV = [
       { href: "/api", label: "Overview" },
       { href: "/api/cli", label: "CLI" },
       { href: "/api/process", label: "runtime:process" },
+      { href: "/api/path", label: "runtime:path" },
     ],
   },
 ];

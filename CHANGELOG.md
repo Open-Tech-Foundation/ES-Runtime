@@ -6,6 +6,18 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:path`** — modern, platform-aware path utilities, the second
+  `runtime:` standard module (DECISIONS D26, SPEC §11). A pure-computation ES
+  module that takes the host platform and `cwd()` from `runtime:process` (so it
+  carries `Env`); separators and `resolve()` follow the real OS. Exports `sep`,
+  `delimiter`, `isAbsolute`, `normalize`, `join`, `resolve`, `dirname`,
+  `basename`, `extname`, `parse`, `relative`, and `file:` URL interop
+  (`fromFileURL`/`toFileURL` — `dirname(fromFileURL(import.meta.url))` is the
+  modern `__dirname`). One platform-correct surface: no `posix`/`win32` dual
+  namespaces and no overloaded signatures. New `examples/modules/path.mjs`.
+
 ## [0.1.0] - 2026-06-14
 
 ### Project
