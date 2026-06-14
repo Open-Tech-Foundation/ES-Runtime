@@ -7,15 +7,8 @@ const NAV = [
     group: "Reference",
     items: [
       { href: "/api", label: "Overview" },
+      { href: "/api/cli", label: "CLI" },
       { href: "/api/process", label: "runtime:process" },
-    ],
-  },
-  {
-    group: "Concepts",
-    items: [
-      { href: "/docs/security", label: "Capabilities" },
-      { href: "/docs/globals", label: "Web-standard globals" },
-      { href: "/docs/modules", label: "Module system" },
     ],
   },
 ];

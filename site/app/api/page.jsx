@@ -120,19 +120,30 @@ export default function ApiOverview() {
         </table>
       </div>
 
-      <a
-        href="/api/process"
-        className="mt-10 flex items-center justify-between rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-      >
-        <span>
+      <div className="mt-10 grid gap-4 sm:grid-cols-2">
+        <a
+          href="/api/cli"
+          className="flex flex-col rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
+        >
+          <span className="font-mono font-semibold text-zinc-900">
+            esrun CLI →
+          </span>
+          <span className="mt-1 text-sm text-zinc-600">
+            Command-line options: run a file, -e, --timeout, --help, --version.
+          </span>
+        </a>
+        <a
+          href="/api/process"
+          className="flex flex-col rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
+        >
           <span className="font-mono font-semibold text-zinc-900">
             runtime:process →
           </span>
-          <span className="mt-1 block text-sm text-zinc-600">
+          <span className="mt-1 text-sm text-zinc-600">
             Environment, arguments, working directory, platform, and exit.
           </span>
-        </span>
-      </a>
+        </a>
+      </div>
     </ApiShell>
   );
 }
