@@ -4,11 +4,8 @@ import InstallBox from "../../../components/InstallBox.jsx";
 
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
-const UPGRADE = `# Re-run the installer — it fetches the latest release.
-curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
-
-# Pin a specific version:
-ESRUN_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash`;
+const UPGRADE = `# Built in — downloads the latest release and replaces the binary.
+esrun upgrade`;
 
 const UNINSTALL_UNIX = `# Remove the install dir, then drop the PATH line from your shell profile.
 rm -rf "$HOME/.esrun"`;
@@ -42,7 +39,8 @@ export default function InstallDoc() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Upgrade</h2>
       <p className="mt-3 text-zinc-600">
-        Re-run the installer; it overwrites the binary with the latest release.
+        <code className="font-mono">esrun upgrade</code> updates the binary in
+        place — no reinstall needed.
       </p>
       <div className="mt-4">
         <CodeBlock code={UPGRADE} title="Terminal" lang="sh" />

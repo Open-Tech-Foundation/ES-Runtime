@@ -4,6 +4,8 @@ import CodeBlock from "../../../components/CodeBlock.jsx";
 const USAGE = `esrun <file>             Run a JavaScript module file
 esrun -e <code>          Run an inline module snippet
 esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
+esrun upgrade            Update esrun to the latest release
+esrun types              Print the runtime: TypeScript definitions
 esrun -h, --help         Show this help
 esrun -v, --version      Show the version`;
 
@@ -31,6 +33,14 @@ const options = [
   {
     flag: "-t, --timeout <ms>",
     desc: "Watchdog: stop execution after <ms> milliseconds. Useful for bounding untrusted or long-running scripts.",
+  },
+  {
+    flag: "upgrade",
+    desc: "Download the latest release for your platform, verify its checksum, and replace the running binary in place.",
+  },
+  {
+    flag: "types",
+    desc: "Print the runtime: TypeScript definitions to stdout (esrun types > esrun.d.ts) — version-matched and offline. Also published as @opentf/esrun-types.",
   },
   {
     flag: "-h, --help",

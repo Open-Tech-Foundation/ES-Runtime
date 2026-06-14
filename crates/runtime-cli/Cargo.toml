@@ -21,6 +21,8 @@ tokio = { workspace = true, features = ["rt", "macros", "time"] }
 # Canonicalizing the entry path / inline-snippet base into a file: module
 # specifier (the referrer the entry's imports resolve against).
 url.workspace = true
+# `esrun upgrade` — self-update from GitHub releases.
+self_update.workspace = true
 
 # build.rs runs V8 to bake the prelude snapshot into the binary (see build.rs;
 # host-arch only — cross-compilation would need a target-run step).

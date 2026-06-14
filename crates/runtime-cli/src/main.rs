@@ -45,6 +45,7 @@ USAGE:
     esrun <file>             Run a JavaScript module file
     esrun -e <code>          Run an inline module snippet
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
+    esrun upgrade            Update esrun to the latest release
     esrun types              Print the runtime: TypeScript definitions
     esrun -h, --help         Show this help
     esrun -v, --version      Show the version
@@ -74,6 +75,25 @@ const TYPES: &str = concat!(
     "\n",
     include_str!("../../../types/runtime-fs.d.ts"),
 );
+
+/// `esrun upgrade` — find the latest GitHub release for this target, download +
+/// extract it, and replace the running binary in place (the same outcome as
+/// re-running install.sh / install.ps1, but built in). HTTPS via rustls.
+fn upgrade() -> Result<String, Box<dyn std::error::Error>> {
+    let status = self_update::backends::github::Update::configure()
+        .repo_owner("Open-Tech-Foundation")
+        .repo_name("ES-Runtime")
+        .bin_name("esrun")
+        .current_version(env!("CARGO_PKG_VERSION"))
+        .show_download_progress(true)
+        .build()?
+        .update()?;
+    Ok(if status.updated() {
+        format!("Upgraded esrun to {}.", status.version())
+    } else {
+        format!("esrun is already up to date ({}).", status.version())
+    })
+}
 
 /// A console that prints to the process's stdout/stderr, like Node/Deno.
 struct StdoutConsole;
@@ -113,6 +133,16 @@ fn parse_args() -> Result<Config, String> {
             }
             "types" => {
                 print!("{TYPES}");
+                std::process::exit(0);
+            }
+            "upgrade" => {
+                match upgrade() {
+                    Ok(msg) => println!("{msg}"),
+                    Err(e) => {
+                        eprintln!("error: upgrade failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
                 std::process::exit(0);
             }
             "-v" | "-V" | "--version" => {

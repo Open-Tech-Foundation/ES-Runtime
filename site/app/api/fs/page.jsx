@@ -55,8 +55,8 @@ const fns = [
   {
     sig: "new Glob(pattern)",
     type: "Glob",
-    desc: "Glob matcher/scanner. match(path) is pure; scan(cwd | options) walks the jailed tree. Patterns: *, **, ?, [a-z], [!x], {a,b}, leading !.",
-    ex: `for await (const p of new Glob("**/*.ts").scan("src")) console.log(p);`,
+    desc: "Glob matcher/scanner. match(path) is pure; scan(cwd | options) is an async iterator over the jailed tree. Patterns: *, **, ?, [a-z], [!x], {a,b}, leading !.",
+    ex: `new Glob("**/*.ts").match("src/app.ts"); // true`,
   },
 ];
 

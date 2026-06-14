@@ -8,6 +8,11 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`esrun upgrade`** — self-update built into the CLI: finds the latest GitHub
+  release for the platform, downloads + extracts it, and replaces the running
+  binary in place (rustls TLS, via `self_update`). The Installation page's
+  Upgrade step now uses it.
+
 - **`@opentf/esrun-types`** — hand-written TypeScript definitions for the
   `runtime:` standard modules (`runtime:process`, `runtime:path`, `runtime:fs`),
   in [`types/`](types/), for editor completion and type-checking. Ambient

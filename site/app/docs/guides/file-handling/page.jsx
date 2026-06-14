@@ -25,15 +25,22 @@ await res.body.pipeTo(file("./big.bin").writable());`;
 const FOLDERS = `import { mkdir, readDir, remove, rename } from "runtime:fs";
 
 await mkdir("./logs/2026", { recursive: true });
-for (const e of await readDir("./logs")) console.log(e.name, e.isDir);
+
+for (const entry of await readDir("./logs")) {
+  console.log(entry.name, entry.isDir);
+}
+
 await rename("./logs/app.log", "./logs/app.1.log");
 await remove("./logs", { recursive: true });`;
 
 const GLOB = `import { Glob } from "runtime:fs";
 
 const ts = new Glob("**/*.ts");
-ts.match("src/index.ts");                  // true (pure, no I/O)
-for await (const p of ts.scan("src")) console.log(p);`;
+ts.match("src/index.ts"); // true (pure, no I/O)
+
+for await (const path of ts.scan("src")) {
+  console.log(path);
+}`;
 
 const PATHS = `import { join, dirname, fromFileURL } from "runtime:path";
 
