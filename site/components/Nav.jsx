@@ -1,7 +1,10 @@
 import { router } from "@opentf/web/router";
-import pkg from "../package.json";
 
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
+
+// Injected from the workspace Cargo.toml at build time (see vite.config.js) —
+// the released runtime version, not this site's package.json.
+const VERSION = __RUNTIME_VERSION__;
 
 const LINKS = [
   { href: "/", label: "Home" },
@@ -26,7 +29,7 @@ export default function Nav() {
             ES <span className="text-brand-600">Runtime</span>
           </span>
           <span className="rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] font-medium tabular-nums text-zinc-500">
-            v{pkg.version}
+            v{VERSION}
           </span>
         </a>
 
