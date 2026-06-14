@@ -11,6 +11,12 @@ const NAV = [
     ],
   },
   {
+    group: "Guides",
+    items: [
+      { href: "/docs/guides/file-handling", label: "File handling" },
+    ],
+  },
+  {
     group: "Comparisons",
     items: [
       { href: "/docs/comparison", label: "vs Node.js · Bun · Deno" },
