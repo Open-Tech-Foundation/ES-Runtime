@@ -85,7 +85,7 @@ export default function ModulesDoc() {
         Each built-in module is backed by host ops that carry the capability
         check — the security boundary is the op, not the JavaScript. The first
         shipped module is{" "}
-        <a href="/docs/process" className="font-medium text-brand-600 hover:text-brand-500">
+        <a href="/api" className="font-medium text-brand-600 hover:text-brand-500">
           runtime:process
         </a>
         ; <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:fs</code>,{" "}

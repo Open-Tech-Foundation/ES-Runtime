@@ -1,45 +1,41 @@
 import BenchChart from "../components/BenchChart.jsx";
 import InstallBox from "../components/InstallBox.jsx";
+import StatusIcon from "../components/StatusIcon.jsx";
 
-const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
-
+// Top results where esrun leads — the rest live on /docs/benchmarks.
 const HERO_METRICS = [
   { key: "startup", label: "Cold start", unit: "ms" },
   { key: "rss", label: "Peak memory", unit: "MB" },
   { key: "crypto", label: "WebCrypto", unit: "ms" },
+  { key: "sha256", label: "SHA-256", unit: "ms" },
+  { key: "timers", label: "Timers", unit: "ms" },
 ];
 
 const features = [
   {
     title: "Capability-gated",
-    body: "Deny-by-default security. Code gets exactly the host powers you grant — no ambient filesystem, network, or environment access.",
+    body: "Deny-by-default. Code gets exactly the host powers you grant — no ambient filesystem, network, or environment access.",
   },
   {
     title: "Web standards only",
-    body: "Built to the WinterTC Minimum Common Web Platform API — fetch, URL, streams, WebCrypto, encoding, timers, events. No bespoke runtime globals.",
+    body: "The WinterTC Minimum Common Web Platform API: fetch, URL, streams, WebCrypto, encoding, timers, events. No bespoke globals.",
   },
   {
     title: "ESM, and only ESM",
-    body: "Standard ES Modules end to end: static imports, dynamic import(), top-level await, import.meta. No CommonJS, no JSON imports, no JSX.",
+    body: "Static imports, dynamic import(), top-level await, import.meta. No CommonJS, no JSON imports, no JSX.",
+  },
+  {
+    title: "Built on Rust",
+    body: "Memory-safe by construction — no data races, no use-after-free. The host stays crash-resistant even under hostile input.",
   },
   {
     title: "Built on V8",
-    body: "The engine that powers Chrome and Node, embedded from Rust. A baked startup snapshot boots a realm in milliseconds with a tiny memory footprint.",
-  },
-  {
-    title: "Sandboxed modules",
-    body: "node_modules resolution with package exports and pnpm-aware realpath — all confined to a filesystem root jail that is on by default.",
+    body: "The engine behind Chrome and Node, embedded from Rust. A baked snapshot boots a realm in milliseconds.",
   },
   {
     title: "Embeddable by design",
-    body: "A driven event loop with no owned thread. Tick it from your host loop and stay in full control of scheduling and lifetime.",
+    body: "A driven event loop with no owned thread. Tick it from your host loop and keep full control of scheduling and lifetime.",
   },
-];
-
-const stats = [
-  { value: "7.1ms", label: "cold start to first eval" },
-  { value: "18MB", label: "peak resident memory" },
-  { value: "0", label: "ambient capabilities by default" },
 ];
 
 export default function HomePage() {
@@ -53,33 +49,24 @@ export default function HomePage() {
         />
         <div className="relative mx-auto grid max-w-6xl gap-12 px-6 py-20 lg:grid-cols-2 lg:items-center lg:py-24">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-wider text-brand-600">
-              Server-side JavaScript · Web standards
-            </p>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-brand-700 ring-1 ring-inset ring-brand-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-brand-500" />
+              Alpha
+            </span>
             <h1 className="mt-4 text-4xl font-bold leading-[1.05] tracking-tight text-zinc-900 sm:text-5xl lg:text-[3.4rem]">
               A secure, standards-based
               <span className="text-brand-600"> server runtime.</span>
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-zinc-600">
-              esrun runs modern ECMAScript on V8 with deny-by-default
-              capabilities and a Web-standard API surface — built in Rust to
-              embed inside server applications. It is not Node-compatible by
-              design.
+              V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable,
+              capability-secured.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a
                 href="/docs"
-                className="rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-700"
+                className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-zinc-800"
               >
-                Get started
-              </a>
-              <a
-                href={GITHUB}
-                target="_blank"
-                rel="noreferrer"
-                className="rounded-lg border border-zinc-200 px-5 py-3 text-sm font-semibold text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50"
-              >
-                View on GitHub
+                <span>🚀</span> Get started
               </a>
             </div>
             <div className="mt-6 max-w-xl">
@@ -110,31 +97,11 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Stats */}
-      <section className="border-b border-zinc-200 bg-zinc-50">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 divide-y divide-zinc-200 px-6 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-          {stats.map((s) => (
-            <div className="px-2 py-8 text-center sm:py-10">
-              <div className="text-3xl font-bold tracking-tight text-zinc-900">
-                {s.value}
-              </div>
-              <div className="mt-1 text-sm text-zinc-500">{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
       {/* Builtin Core Features */}
       <section className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
-        <div className="max-w-2xl">
-          <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
-            Builtin Core Features
-          </h2>
-          <p className="mt-3 text-lg text-zinc-600">
-            Essential runtime capabilities — every host power is explicit, and
-            the engine is confined to a single auditable crate.
-          </p>
-        </div>
+        <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
+          Builtin Core Features
+        </h2>
 
         <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {features.map((f) => (
@@ -159,9 +126,8 @@ export default function HomePage() {
                 A focused scope.
               </h2>
               <p className="mt-3 text-zinc-600">
-                esrun is a runtime, not a toolchain. It deliberately leaves
-                package management, building, and testing to other tools — and
-                is not a drop-in for Node.
+                A runtime, not a toolchain — and not a Node drop-in. Package
+                management, building, and testing are left to other tools.
               </p>
               <a
                 href="/docs/scope"
@@ -171,18 +137,18 @@ export default function HomePage() {
               </a>
             </div>
             <ul className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm text-zinc-600">
-              <li>✗ Node.js compatibility</li>
-              <li>✗ CommonJS</li>
-              <li>✗ TypeScript</li>
-              <li>✗ JSX</li>
-              <li>✗ JSON imports</li>
-              <li>✗ Package installer</li>
-              <li>✗ Bundler / linter / formatter</li>
-              <li>✗ Test runner</li>
-              <li>✗ Watch mode</li>
-              <li>✗ FFI</li>
-              <li>✗ Workers</li>
-              <li>✗ Native addons</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Node.js compatibility</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> CommonJS</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> TypeScript</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> JSX</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> JSON imports</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Package installer</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Bundler / linter</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Test runner</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Watch mode</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> FFI</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Workers</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" /> Native addons</li>
             </ul>
           </div>
         </div>
@@ -195,7 +161,7 @@ export default function HomePage() {
             Ship a runtime you can trust.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-zinc-400">
-            Read the docs to embed esrun, or explore the standard{" "}
+            Embed esrun, or explore the standard{" "}
             <span className="font-mono text-zinc-200">runtime:</span> module
             APIs.
           </p>
@@ -207,7 +173,7 @@ export default function HomePage() {
               Read the docs
             </a>
             <a
-              href="/docs/process"
+              href="/api"
               className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold text-zinc-200 transition-colors hover:bg-zinc-900"
             >
               API reference

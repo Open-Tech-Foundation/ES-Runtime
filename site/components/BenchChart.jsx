@@ -1,23 +1,22 @@
 // A dependency-free horizontal bar chart driven by bench/run.sh JSON output
 // (site/src/benchmarks.json). Lower is better; esrun is drawn in the brand
 // color. Pass `metrics` as [{ key, label, unit? }] selecting rows to show.
+//
+// NOTE: the @opentf/web compiler rewrites every `.map()` into a reactive list
+// helper, so non-render computations must use plain loops (never `.map`), and
+// dynamic styles must be objects (a style string becomes Object.assign(...,str)).
 import bench from "../src/benchmarks.json";
 
-// Display order: esrun first, then the runtimes we compare against.
 const ORDER = ["esrun", "bun", "node", "deno"];
+const LABELS = { esrun: "esrun", bun: "Bun", node: "Node", deno: "Deno" };
 
-const LABELS = {
-  esrun: "esrun",
-  bun: "Bun",
-  node: "Node",
-  deno: "Deno",
-};
-
-function barClass(rt) {
-  return rt === "esrun" ? "bg-brand-500" : "bg-zinc-300";
-}
-function textClass(rt) {
-  return rt === "esrun" ? "font-semibold text-brand-700" : "text-zinc-500";
+function maxOf(row, runtimes) {
+  let max = 0;
+  for (const rt of runtimes) {
+    const v = row[rt];
+    if (typeof v === "number" && v > max) max = v;
+  }
+  return max || 1;
 }
 
 export default function BenchChart({ metrics }) {
@@ -27,10 +26,7 @@ export default function BenchChart({ metrics }) {
     <div className="space-y-5">
       {metrics.map((m) => {
         const row = bench.results_ms[m.key] || {};
-        const vals = runtimes
-          .map((rt) => row[rt])
-          .filter((v) => typeof v === "number");
-        const max = vals.length ? Math.max(...vals) : 1;
+        const max = maxOf(row, runtimes);
         const unit = m.unit || "ms";
 
         return (
@@ -41,26 +37,32 @@ export default function BenchChart({ metrics }) {
               </span>
               <span className="text-[10px] text-zinc-400">lower is better</span>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               {runtimes.map((rt) => {
                 const v = row[rt];
                 const pct =
                   typeof v === "number" ? Math.max((v / max) * 100, 2) : 0;
+                const isE = rt === "esrun";
                 return (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5">
                     <span className="w-12 shrink-0 text-right text-[11px] font-medium text-zinc-600">
                       {LABELS[rt]}
                     </span>
-                    <div className="h-3.5 flex-1 overflow-hidden rounded-full bg-zinc-100">
+                    <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100">
                       <div
-                        className={"h-full rounded-full " + barClass(rt)}
-                        style={"width:" + pct + "%"}
+                        className={
+                          isE
+                            ? "h-full rounded-full bg-brand-500"
+                            : "h-full rounded-full bg-zinc-300"
+                        }
+                        style={{ width: pct + "%" }}
                       />
                     </div>
                     <span
                       className={
-                        "w-14 shrink-0 text-right text-[11px] tabular-nums " +
-                        textClass(rt)
+                        isE
+                          ? "w-14 shrink-0 text-right text-[11px] font-semibold tabular-nums text-brand-700"
+                          : "w-14 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                       }
                     >
                       {typeof v === "number" ? v + unit : "—"}

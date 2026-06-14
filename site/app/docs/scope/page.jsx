@@ -1,4 +1,5 @@
 import DocsShell from "../../../components/DocsShell.jsx";
+import StatusIcon from "../../../components/StatusIcon.jsx";
 
 const nonGoals = [
   {
@@ -73,7 +74,7 @@ export default function ScopeDoc() {
         {nonGoals.map((g) => (
           <div className="rounded-xl border border-zinc-200 p-5">
             <h3 className="flex items-center gap-2 text-base font-semibold text-zinc-900">
-              <span className="font-mono text-zinc-300">✗</span>
+              <StatusIcon status="no" />
               {g.title}
             </h3>
             <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">

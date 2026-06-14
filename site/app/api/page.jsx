@@ -1,5 +1,5 @@
-import DocsShell from "../../../components/DocsShell.jsx";
-import CodeBlock from "../../../components/CodeBlock.jsx";
+import DocsShell from "../../components/DocsShell.jsx";
+import CodeBlock from "../../components/CodeBlock.jsx";
 
 const IMPORT = `import { env, args, platform, arch, cwd, exit } from "runtime:process";
 
@@ -55,9 +55,9 @@ const exports = [
   },
 ];
 
-export default function ProcessDoc() {
+export default function ApiDoc() {
   return (
-    <DocsShell active="/docs/process">
+    <DocsShell active="/api">
       <p className="text-sm font-medium text-brand-600">API reference</p>
       <h1 className="mt-2 font-mono text-3xl font-bold tracking-tight text-zinc-900 sm:text-4xl">
         runtime:process
