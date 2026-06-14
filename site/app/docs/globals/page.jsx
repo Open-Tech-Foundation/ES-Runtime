@@ -94,7 +94,7 @@ const groups = [
 ];
 
 const notAvailable = [
-  { n: "process / Buffer / require", why: "Node globals — not provided (use runtime: modules)" },
+  { n: "process / Buffer / require", why: "Node.js globals — not provided (use runtime: modules)" },
   { n: "Worker / MessageChannel", why: "no Workers in Layer A (see Scope)" },
   { n: "WebSocket", why: "not yet implemented" },
   { n: "navigator / localStorage / window", why: "browser globals — out of scope" },

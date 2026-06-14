@@ -17,7 +17,7 @@ const HERO_METRICS = [
 const features = [
   {
     title: "Capability-gated",
-    body: "Deny-by-default. Code gets exactly the host powers you grant — no ambient filesystem, network, or environment access.",
+    body: "The embeddable library is deny-by-default: the host grants exactly the powers code needs — no ambient filesystem, network, or environment access.",
   },
   {
     title: "Web standards only",
@@ -33,7 +33,7 @@ const features = [
   },
   {
     title: "Built on V8",
-    body: "The engine behind Chrome and Node, embedded from Rust. A baked snapshot boots a realm in milliseconds.",
+    body: "The engine behind Chrome and Node.js, embedded from Rust. A baked snapshot boots a realm in milliseconds.",
   },
   {
     title: "Embeddable by design",
@@ -85,7 +85,7 @@ export default function HomePage() {
                   Benchmarks
                 </h2>
                 <span className="text-xs text-zinc-400">
-                  vs Node · Bun · Deno
+                  vs Node.js · Bun · Deno
                 </span>
               </div>
               <BenchChart metrics={HERO_METRICS} />
@@ -129,7 +129,7 @@ export default function HomePage() {
                 A focused scope.
               </h2>
               <p className="mt-3 text-zinc-600">
-                A runtime, not a toolchain — and not a Node drop-in. Package
+                A runtime, not a toolchain — and not a Node.js drop-in. Package
                 management, building, and testing are left to other tools.
               </p>
               <a

@@ -9,8 +9,9 @@ const rows = [
   { f: "JSX (built-in)", esrun: "no", node: "no", bun: "yes", deno: "yes" },
   { f: "JSON module imports", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "Web APIs (fetch/URL/streams/WebCrypto)", esrun: "yes", node: "yes", bun: "yes", deno: "yes" },
-  { f: "Node compatibility (node: builtins)", esrun: "no", node: "yes", bun: "yes", deno: "partial" },
-  { f: "Capability sandbox (deny by default)", esrun: "yes", node: "partial", bun: "no", deno: "yes" },
+  { f: "Temporal API", esrun: "yes", node: "yes", bun: "no", deno: "yes" },
+  { f: "Node.js compatibility (node: builtins)", esrun: "no", node: "yes", bun: "yes", deno: "partial" },
+  { f: "Capability sandbox (deny by default)", esrun: "no", node: "partial", bun: "no", deno: "yes" },
   { f: "Workers / multi-thread", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "FFI (dlopen)", esrun: "no", node: "no", bun: "yes", deno: "yes" },
   { f: "Native addons (N-API)", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
@@ -20,18 +21,18 @@ const rows = [
 ];
 
 const cols = ["esrun", "node", "bun", "deno"];
-const colLabel = { esrun: "esrun", node: "Node", bun: "Bun", deno: "Deno" };
+const colLabel = { esrun: "esrun", node: "Node.js", bun: "Bun", deno: "Deno" };
 
 export default function ComparisonDoc() {
   return (
     <DocsShell active="/docs/comparison">
       <p className="text-sm font-medium text-brand-600">Comparisons</p>
       <h1 className="mt-2 text-4xl font-bold tracking-tight text-zinc-900">
-        esrun vs Node · Bun · Deno
+        esrun vs Node.js · Bun · Deno
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        Node, Bun, and Deno are general-purpose runtimes with broad toolchains
-        and (varying degrees of) Node compatibility. esrun is intentionally
+        Node.js, Bun, and Deno are general-purpose runtimes with broad toolchains
+        and (varying degrees of) Node.js compatibility. esrun is intentionally
         smaller: a sandboxed, standards-only execution core you embed or run
         directly. The table makes the trade-offs explicit.
       </p>
@@ -92,7 +93,7 @@ export default function ComparisonDoc() {
         <li className="flex gap-3">
           <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
           <span>
-            <strong className="text-zinc-900">No Node API.</strong> Where Node,
+            <strong className="text-zinc-900">No Node.js API.</strong> Where Node.js,
             Bun, and Deno all expose <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">node:fs</code>,{" "}
             <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Buffer</code>, and a global{" "}
             <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">process</code>, esrun exposes host
@@ -111,10 +112,12 @@ export default function ComparisonDoc() {
         <li className="flex gap-3">
           <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-500" />
           <span>
-            <strong className="text-zinc-900">Sandbox is the default.</strong>{" "}
-            Deno is permission-prompted and Node has an experimental permission
-            model; esrun is deny-by-default with a filesystem root jail that is
-            always on.
+            <strong className="text-zinc-900">Always-on filesystem jail.</strong>{" "}
+            File access — including module resolution — is confined to a project
+            root that can't be escaped, even via symlink, in both the library and
+            the CLI. Deno gates host access with CLI permission flags and Node.js
+            has an experimental permission model; esrun's CLI grants all
+            capabilities, while its embeddable library is deny-by-default.
           </span>
         </li>
         <li className="flex gap-3">

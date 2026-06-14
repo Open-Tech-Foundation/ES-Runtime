@@ -16,9 +16,11 @@ export default function SecurityDoc() {
         Security model
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        esrun is deny-by-default. A freshly created runtime can compute, but it
-        cannot reach the host environment, the filesystem, or the network until
-        the embedder grants a capability for it.
+        esrun's <strong>embeddable library</strong> is deny-by-default: a runtime
+        the host creates can compute, but cannot reach the host environment, the
+        filesystem, or the network until the host grants a capability for it. The
+        standalone <code className="font-mono">esrun</code> CLI grants all
+        capabilities, so scripts run unrestricted.
       </p>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Capabilities</h2>

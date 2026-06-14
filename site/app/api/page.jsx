@@ -27,8 +27,8 @@ export default function ApiOverview() {
         Overview
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        ES Runtime is ESM-only and deny-by-default. Host functionality is exposed
-        as ES modules under the{" "}
+        ES Runtime is ESM-only, and its embeddable library is deny-by-default.
+        Host functionality is exposed as ES modules under the{" "}
         <code className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.9em]">
           runtime:
         </code>{" "}

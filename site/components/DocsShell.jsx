@@ -13,7 +13,7 @@ const NAV = [
   {
     group: "Comparisons",
     items: [
-      { href: "/docs/comparison", label: "vs Node · Bun · Deno" },
+      { href: "/docs/comparison", label: "vs Node.js · Bun · Deno" },
       { href: "/docs/benchmarks", label: "Benchmarks" },
     ],
   },
@@ -24,11 +24,10 @@ const NAV = [
     ],
   },
   {
-    group: "Runtime APIs",
+    group: "Runtime",
     items: [
       { href: "/docs/modules", label: "Module system" },
       { href: "/docs/security", label: "Security model" },
-      { href: "/api/process", label: "runtime:process" },
     ],
   },
 ];

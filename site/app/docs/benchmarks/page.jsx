@@ -24,8 +24,10 @@ const workloads = [
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
 ];
 
+const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
+
 const versions = Object.keys(bench.runtimes).map((k) => ({
-  k,
+  k: LABELS[k] || k,
   v: bench.runtimes[k],
 }));
 

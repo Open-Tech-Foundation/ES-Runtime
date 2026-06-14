@@ -22,8 +22,9 @@ export default function DocsOverview() {
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
         esrun is a secure, standards-based JavaScript runtime for the server,
-        built on V8 in Rust. It runs standard ES Modules with a deny-by-default
-        capability model and a sandboxed module system.
+        built on V8 in Rust. It runs standard ES Modules with a sandboxed module
+        system; its embeddable library is deny-by-default, granting host
+        capabilities only when the host asks.
       </p>
 
       <div className="mt-6 rounded-xl border border-brand-200 bg-brand-50 p-5 leading-relaxed text-brand-900">
@@ -35,7 +36,7 @@ export default function DocsOverview() {
       </div>
 
       <p className="mt-4 text-zinc-600">
-        It is <strong>not</strong> Node-compatible — see{" "}
+        It is <strong>not</strong> Node.js-compatible — see{" "}
         <a href="/docs/scope" className="font-medium text-brand-600 hover:text-brand-700">
           Scope &amp; non-goals
         </a>{" "}

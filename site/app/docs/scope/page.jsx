@@ -4,7 +4,7 @@ import StatusIcon from "../../../components/StatusIcon.jsx";
 const nonGoals = [
   {
     title: "No Node.js compatibility",
-    body: "esrun is not a drop-in for Node. There is no node: builtin namespace, no Node globals (no process global, no Buffer, no require), and no npm lifecycle. Code targets Web standards plus the runtime: modules, not the Node API.",
+    body: "esrun is not a drop-in for Node.js. There is no node: builtin namespace, no Node.js globals (no process global, no Buffer, no require), and no npm lifecycle. Code targets Web standards plus the runtime: modules, not the Node.js API.",
   },
   {
     title: "No CommonJS",
@@ -59,8 +59,8 @@ export default function ScopeDoc() {
 
       <div className="mt-8 rounded-xl border border-brand-200 bg-brand-50 p-5 text-sm leading-relaxed text-brand-900">
         <strong>In scope:</strong> executing standard ES Modules on V8 with a
-        Web-standard API surface, deny-by-default capabilities, a sandboxed
-        module system, and host functionality exposed through{" "}
+        Web-standard API surface, deny-by-default capabilities for embedders, a
+        sandboxed module system, and host functionality exposed through{" "}
         <code className="rounded bg-white/60 px-1.5 py-0.5">runtime:</code>{" "}
         modules. esrun ships as an embeddable Rust library and a standalone CLI.
       </div>

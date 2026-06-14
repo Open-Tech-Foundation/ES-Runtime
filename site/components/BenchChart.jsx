@@ -9,7 +9,7 @@
 import bench from "../src/benchmarks.json";
 
 const ORDER = ["esrun", "bun", "node", "deno"];
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node", deno: "Deno" };
+const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
 
 function maxOf(row, runtimes) {
   let max = 0;
@@ -62,7 +62,7 @@ export default function BenchChart({ metrics }) {
                 const isWin = rt === winner;
                 return (
                   <div className="flex items-center gap-2.5">
-                    <span className="w-12 shrink-0 text-right text-[11px] font-medium text-zinc-600">
+                    <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
                       {LABELS[rt]}
                     </span>
                     <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100">
