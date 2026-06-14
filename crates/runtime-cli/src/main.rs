@@ -44,8 +44,8 @@ USAGE:
     esrun <file>             Run a JavaScript module file
     esrun -e <code>          Run an inline module snippet
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
-    esrun --help             Show this help
-    esrun --version          Show the version
+    esrun -h, --help         Show this help
+    esrun -v, --version      Show the version
 
 Inputs run as ES modules: import/export and top-level await work. Imports
 resolve as local files (relative/absolute paths or file: URLs) and as bare
@@ -95,7 +95,7 @@ fn parse_args() -> Result<Config, String> {
                 println!("{USAGE}");
                 std::process::exit(0);
             }
-            "-V" | "--version" => {
+            "-v" | "-V" | "--version" => {
                 println!("esrun {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }

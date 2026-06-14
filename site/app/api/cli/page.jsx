@@ -4,8 +4,8 @@ import CodeBlock from "../../../components/CodeBlock.jsx";
 const USAGE = `esrun <file>             Run a JavaScript module file
 esrun -e <code>          Run an inline module snippet
 esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
-esrun -h, --help         Show help
-esrun -V, --version      Show the version`;
+esrun -h, --help         Show this help
+esrun -v, --version      Show the version`;
 
 const RUN = `# Run a module file
 esrun app.mjs
@@ -37,7 +37,7 @@ const options = [
     desc: "Print usage and exit.",
   },
   {
-    flag: "-V, --version",
+    flag: "-v, --version",
     desc: "Print the esrun version and exit.",
   },
 ];
