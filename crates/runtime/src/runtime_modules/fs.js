@@ -124,6 +124,7 @@ class Glob {
       !!opts.dot,
       !!opts.absolute,
       opts.onlyFiles !== false, // default: files only, like the prior art
+      !!opts.followSymlinks,
     );
     for (const p of JSON.parse(json)) yield p;
   }

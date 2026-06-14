@@ -41,6 +41,8 @@ declare module "runtime:fs" {
     absolute?: boolean;
     /** Yield only files, skipping directories (default `true`). */
     onlyFiles?: boolean;
+    /** Traverse symlinked directories; entries leaving the root jail are skipped (default `false`). */
+    followSymlinks?: boolean;
   }
 
   /**

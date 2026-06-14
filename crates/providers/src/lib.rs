@@ -274,6 +274,9 @@ pub struct GlobScanOptions {
     pub absolute: bool,
     /// Yield only files, skipping directories.
     pub only_files: bool,
+    /// Traverse into symlinked directories. The implementation still rejects any
+    /// followed entry whose real path leaves the root jail.
+    pub follow_symlinks: bool,
 }
 
 /// Filesystem access backing `runtime:fs` (DECISIONS D25, SPEC §11).

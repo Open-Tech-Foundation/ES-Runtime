@@ -141,6 +141,7 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
                 dot: arg_bool(&args, 2),
                 absolute: arg_bool(&args, 3),
                 only_files: arg_bool(&args, 4),
+                follow_symlinks: arg_bool(&args, 5),
             };
             Box::pin(async move {
                 let paths = require(&f)?

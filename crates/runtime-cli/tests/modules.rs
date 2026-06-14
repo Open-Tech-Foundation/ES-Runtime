@@ -298,6 +298,41 @@ fn runtime_fs_read_write_stat_and_jail() {
 }
 
 #[test]
+fn runtime_fs_glob_covers_all_patterns() {
+    // match() is pure (no FS), so the full pattern set runs without fixtures.
+    let script = "import { Glob } from 'runtime:fs'; const m = (p, s) => new Glob(p).match(s);\
+        const out = [];\
+        out.push('q=' + m('???.ts','foo.ts') + ',' + m('???.ts','foobar.ts'));\
+        out.push('star=' + m('*.ts','index.ts') + ',' + m('*.ts','src/index.ts'));\
+        out.push('globstar=' + m('**/*.ts','src/index.ts'));\
+        out.push('class=' + m('ba[rz].ts','bar.ts') + ',' + m('ba[rz].ts','bat.ts'));\
+        out.push('range=' + m('f[a-c].ts','fb.ts') + ',' + m('f[a-c].ts','fz.ts'));\
+        out.push('negbang=' + m('f[!o]o.ts','fao.ts') + ',' + m('f[!o]o.ts','foo.ts'));\
+        out.push('negcaret=' + m('f[^o]o.ts','fao.ts') + ',' + m('f[^o]o.ts','foo.ts'));\
+        out.push('brace=' + m('{a,b}.ts','a.ts') + ',' + m('{a,b}.ts','c.ts'));\
+        out.push('not=' + m('!index.ts','a.ts') + ',' + m('!index.ts','index.ts'));\
+        out.push('escape=' + m('\\\\!x.ts','!x.ts') + ',' + m('\\\\!x.ts','x.ts'));\
+        console.log(out.join('\\n'));";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "q=true,false",
+        "star=true,false",
+        "globstar=true",
+        "class=true,false",
+        "range=true,false",
+        "negbang=true,false",
+        "negcaret=true,false",
+        "brace=true,false",
+        "not=true,false",
+        "escape=true,false",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
+#[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()
         .arg("-e")

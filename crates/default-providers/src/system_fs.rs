@@ -18,14 +18,24 @@ use walkdir::WalkDir;
 
 use crate::path;
 
-/// Compiles a glob pattern with `literal_separator` so `*` does not cross `/`
-/// while `**` does (the conventional shell/Bun semantics).
-fn glob_matcher(pattern: &str) -> Result<globset::GlobMatcher, ProviderError> {
-    GlobBuilder::new(pattern)
+/// Compiles a glob pattern into a matcher plus a "negated" flag, covering the
+/// full conventional set: `?`, `*` (not crossing `/`), `**` (crossing), `[ab]`,
+/// `[a-z]`, `[!abc]` **and** `[^abc]`, `{a,b}`, `\` escaping, and a leading `!`
+/// that negates the whole pattern.
+fn parse_glob(pattern: &str) -> Result<(globset::GlobMatcher, bool), ProviderError> {
+    // A leading `!` negates; `\!…` is a literal `!` (globset unescapes it).
+    let (negated, body) = match pattern.strip_prefix('!') {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, pattern.to_string()),
+    };
+    // Accept the `[^…]` negated-class form (globset spells it `[!…]`).
+    let body = body.replace("[^", "[!");
+    let matcher = GlobBuilder::new(&body)
         .literal_separator(true)
         .build()
         .map(|g| g.compile_matcher())
-        .map_err(|e| ProviderError::Other(format!("invalid glob pattern {pattern:?}: {e}")))
+        .map_err(|e| ProviderError::Other(format!("invalid glob pattern {pattern:?}: {e}")))?;
+    Ok((matcher, negated))
 }
 
 /// A [`FileSystem`] over the real OS, jailed to `root`. Relative paths resolve
@@ -241,7 +251,8 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn glob_match(&self, pattern: &str, path: &str) -> Result<bool, ProviderError> {
-        Ok(glob_matcher(pattern)?.is_match(path))
+        let (matcher, negated) = parse_glob(pattern)?;
+        Ok(negated ^ matcher.is_match(path))
     }
 
     fn glob_scan(
@@ -251,17 +262,26 @@ impl FileSystem for SystemFileSystem {
         opts: GlobScanOptions,
     ) -> BoxFuture<Result<Vec<String>, ProviderError>> {
         let resolved = self.jailed(&base);
+        let root = self.root.clone();
         Box::pin(async move {
             let base_real = resolved?;
-            let matcher = glob_matcher(&pattern)?;
+            let (matcher, negated) = parse_glob(&pattern)?;
             let mut out = Vec::new();
-            // follow_links(false) keeps the walk from leaving the jail via a
-            // symlink; the base is already confined to root.
-            for entry in WalkDir::new(&base_real).follow_links(false) {
+            // Default: don't follow symlinks (can't leave the jail). When the
+            // caller opts in, follow them but reject any entry whose real path
+            // escapes the root.
+            for entry in WalkDir::new(&base_real).follow_links(opts.follow_symlinks) {
                 let entry = entry.map_err(|e| ProviderError::Other(format!("glob scan: {e}")))?;
                 let path = entry.path();
                 if path == base_real {
                     continue; // skip the base itself
+                }
+                if opts.follow_symlinks
+                    && path::canonicalize(path)
+                        .map(|real| !path::within_root(&real, &root))
+                        .unwrap_or(false)
+                {
+                    continue; // a followed link left the jail
                 }
                 let rel = path.strip_prefix(&base_real).unwrap_or(path);
                 let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -271,7 +291,7 @@ impl FileSystem for SystemFileSystem {
                 if opts.only_files && !entry.file_type().is_file() {
                     continue;
                 }
-                if matcher.is_match(&rel_str) {
+                if negated ^ matcher.is_match(&rel_str) {
                     out.push(if opts.absolute {
                         path.to_string_lossy().into_owned()
                     } else {
