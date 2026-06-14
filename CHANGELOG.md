@@ -8,6 +8,12 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`@opentf/esrun-types`** — hand-written TypeScript definitions for the
+  `runtime:` standard modules (`runtime:process`, `runtime:path`, `runtime:fs`),
+  in [`types/`](types/), for editor completion and type-checking. Ambient
+  `declare module` blocks; add via `tsconfig` `types` or a triple-slash
+  reference. Validated with `tsc --strict`.
+
 - **`runtime:fs`** — modern, Blob-based file I/O, the third `runtime:` standard
   module (SPEC §11, DECISIONS D25). `file(path)` is a lazy, Blob-like handle
   (`text`/`json`/`bytes`/`arrayBuffer`/`stream`/`exists`/`stat`/`write`/`delete`,
