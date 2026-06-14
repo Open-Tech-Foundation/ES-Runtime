@@ -12,6 +12,7 @@ const NAV = [
       { href: "/api/path", label: "runtime:path" },
       { href: "/api/fs", label: "runtime:fs" },
       { href: "/api/net", label: "runtime:net" },
+      { href: "/api/http", label: "runtime:http" },
     ],
   },
 ];

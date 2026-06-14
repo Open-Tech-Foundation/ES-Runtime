@@ -11,3 +11,4 @@
 /// <reference path="./runtime-path.d.ts" />
 /// <reference path="./runtime-fs.d.ts" />
 /// <reference path="./runtime-net.d.ts" />
+/// <reference path="./runtime-http.d.ts" />

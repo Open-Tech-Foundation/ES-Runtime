@@ -36,6 +36,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::fs_ops::install(engine, providers.file_system())?;
     // runtime:net ops: connect (Net), listen (NetListen); read/write/accept by id.
     crate::net_ops::install(engine, providers.net_provider())?;
+    // runtime:http ops: serve (NetListen); next_request/body_read/respond by id.
+    crate::http_ops::install(engine, providers.http_server())?;
     Ok(())
 }
 

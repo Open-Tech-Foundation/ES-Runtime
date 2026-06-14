@@ -361,6 +361,31 @@ fn runtime_net_tcp_echo_roundtrip() {
 }
 
 #[test]
+fn runtime_http_serve_and_fetch_roundtrip() {
+    // Loopback: serve() an echo-ish handler, fetch() it through the real HTTP
+    // client, read body + a custom header, then stop the server so the process
+    // exits cleanly (must not hang).
+    let script = "import { serve } from 'runtime:http';\
+        const server = serve({ hostname: '127.0.0.1', port: 0 }, async (req) => {\
+          const who = await req.text();\
+          return new Response('hello ' + (who || 'world'), {\
+            status: 201, headers: { 'x-greeting': 'hi' },\
+          });\
+        });\
+        const { port } = await server.addr;\
+        const res = await fetch(`http://127.0.0.1:${port}/`, { method: 'POST', body: 'bun' });\
+        console.log('HTTP:' + res.status + ':' + res.headers.get('x-greeting') + ':' + (await res.text()));\
+        await server.stop();";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("HTTP:201:hi:hello bun"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()
         .arg("-e")

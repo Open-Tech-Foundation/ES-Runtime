@@ -389,6 +389,71 @@ pub trait NetProvider: Send + Sync {
     fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
 
+/// An inbound HTTP request delivered to an [`HttpServerProvider`] consumer.
+///
+/// The body is **buffered** (read in full before the request is handed to the
+/// guest), mirroring the outbound [`HttpRequest`] shape; streaming request
+/// bodies are a follow-up. `url` is reconstructed as an absolute URL (scheme +
+/// `Host` header, or the bound address when no `Host` is sent) so the guest can
+/// build a web `Request` from it.
+pub struct HttpServerRequest {
+    /// The HTTP method (`GET`, `POST`, …).
+    pub method: String,
+    /// The absolute request URL.
+    pub url: String,
+    /// Request header name/value pairs, in order.
+    pub headers: Vec<(String, String)>,
+    /// The request body, already buffered (empty if none).
+    pub body: Vec<u8>,
+}
+
+/// The response a guest hands back for one [`HttpServerRequest`].
+pub struct HttpServerResponse {
+    /// The HTTP status code.
+    pub status: u16,
+    /// Response header name/value pairs, in order.
+    pub headers: Vec<(String, String)>,
+    /// The response body, already buffered (empty if none).
+    pub body: Vec<u8>,
+}
+
+/// An HTTP/1.1 server backing `runtime:http` (the `serve((req) => res)` shape).
+///
+/// The implementation owns the listener and every accepted connection, parsing
+/// requests and writing responses; the runtime only supplies the response for
+/// each request. The flow is a handoff: [`serve`](Self::serve) binds and starts
+/// accepting, [`next_request`](Self::next_request) pulls the next parsed request
+/// (with an opaque id), and [`respond`](Self::respond) completes that id. This
+/// lets a multi-threaded HTTP backend feed the single-threaded JS isolate one
+/// request at a time. `serve` is capability-checked on `Capability::NetListen`
+/// (like `runtime:net` `listen`) before this is ever called; an embedder that
+/// installs no `HttpServerProvider` has no `runtime:http` access at all.
+pub trait HttpServerProvider: Send + Sync {
+    /// Binds an HTTP server to `host:port` and starts accepting; resolves to
+    /// (server id, bound-address info). `port` 0 picks an ephemeral port.
+    fn serve(&self, host: String, port: u16)
+    -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
+
+    /// Waits for the next inbound request on server `id`; resolves to a new
+    /// (request id, request), or `None` once the server is closed.
+    fn next_request(
+        &self,
+        id: u64,
+    ) -> BoxFuture<Result<Option<(u64, HttpServerRequest)>, ProviderError>>;
+
+    /// Completes request `request_id` by sending `response` to its client
+    /// (idempotent; a stale/unknown id is ignored).
+    fn respond(
+        &self,
+        request_id: u64,
+        response: HttpServerResponse,
+    ) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Closes server `id`: stops accepting and tears the listener down
+    /// (idempotent).
+    fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+}
+
 /// A sink for guest `console.*` output (SPEC.md §2.2).
 ///
 /// console output is the **guest program's** output, not the runtime's

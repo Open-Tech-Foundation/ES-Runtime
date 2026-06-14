@@ -21,6 +21,7 @@ mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
 mod fs_ops;
+mod http_ops;
 mod net_ops;
 mod prelude;
 mod process_ops;
@@ -42,8 +43,8 @@ pub use es_runtime_engine::{
     V8Engine, Value,
 };
 pub use es_runtime_providers::{
-    Clock, Console, ConsoleLevel, Entropy, FileSystem, ModuleLoader, NetProvider, NetTransport,
-    Process,
+    Clock, Console, ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader,
+    NetProvider, NetTransport, Process,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -115,6 +116,7 @@ pub struct HostProviders {
     process: Option<Arc<dyn Process>>,
     file_system: Option<Arc<dyn FileSystem>>,
     net_provider: Option<Arc<dyn NetProvider>>,
+    http_server: Option<Arc<dyn HttpServerProvider>>,
 }
 
 impl HostProviders {
@@ -136,6 +138,7 @@ impl HostProviders {
             process: None,
             file_system: None,
             net_provider: None,
+            http_server: None,
         }
     }
 
@@ -166,6 +169,16 @@ impl HostProviders {
         self
     }
 
+    /// Adds the [`HttpServerProvider`] backing `runtime:http` (`serve`). Binding
+    /// a server is capability-gated on
+    /// [`NetListen`](es_runtime_common::Capability::NetListen), like
+    /// `runtime:net` `listen`.
+    #[must_use]
+    pub fn with_http_server(mut self, http_server: Arc<dyn HttpServerProvider>) -> Self {
+        self.http_server = Some(http_server);
+        self
+    }
+
     fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
     }
@@ -192,6 +205,10 @@ impl HostProviders {
 
     fn net_provider(&self) -> Option<Arc<dyn NetProvider>> {
         self.net_provider.clone()
+    }
+
+    fn http_server(&self) -> Option<Arc<dyn HttpServerProvider>> {
+        self.http_server.clone()
     }
 }
 

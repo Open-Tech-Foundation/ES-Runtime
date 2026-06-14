@@ -18,6 +18,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:path`](#runtimepath)
 - [`runtime:fs`](#runtimefs)
 - [`runtime:net`](#runtimenet)
+- [`runtime:http`](#runtimehttp)
 
 ---
 
@@ -88,7 +89,7 @@ the required capability has been granted.
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
 | `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
-| `runtime:http`    | Planned     | `Net`      | —                             |
+| `runtime:http`    | Available   | `NetListen` | [↓](#runtimehttp)               |
 
 ---
 
@@ -106,7 +107,7 @@ different module path.
 | `FileRead`  | Read files within the configured root jail.                         |
 | `FileWrite` | Write files within the configured root jail.                        |
 | `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`). |
-| `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen`). |
+| `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen`, `runtime:http` `serve`). |
 | `HrTime`    | Access high-resolution timing.                                      |
 
 Filesystem access (including module resolution) is confined to a project **root
@@ -290,6 +291,43 @@ for await (const conn of server) {
 
 **`Listener`** — async-iterable of `Socket`; `addr: Promise<{ hostname, port }>`,
 `accept()`, `close()`.
+
+## `runtime:http`
+
+An HTTP/1.1 server: `serve((request) => response)`. The handler receives a web
+`Request` and returns (or resolves to) a web `Response` — the same Fetch API
+objects `fetch` uses. A thrown error or a non-`Response` return becomes a `500`.
+`serve` requires `NetListen` (it binds a listening socket). All I/O is async.
+Request and response bodies are buffered (streaming bodies are a follow-up); TLS
+is not supported yet (terminate it at a proxy).
+
+```js
+import { serve } from "runtime:http";
+
+const server = serve({ hostname: "127.0.0.1", port: 8080 }, async (request) => {
+  const url = new URL(request.url);
+  if (url.pathname === "/echo") {
+    return new Response(await request.text(), { status: 200 });
+  }
+  return Response.json({ method: request.method, path: url.pathname });
+});
+
+const { port } = await server.addr; // ephemeral port resolved here
+// … later:
+await server.stop();
+```
+
+### Exports
+
+| Export                            | Type                                          | Description                                                        |
+| --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
+| `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
+| `serve(options, handler)`         | `({ hostname?, port? }, Handler) => Server`   | Start a server bound to `options`. `NetListen`.                    |
+
+`Handler` is `(request: Request) => Response | Promise<Response>`.
+
+**`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
+`finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

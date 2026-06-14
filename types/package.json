@@ -1,14 +1,15 @@
 {
   "name": "@opentf/esrun-types",
   "version": "0.1.0",
-  "description": "TypeScript type definitions for ES Runtime (esrun) — the runtime: standard modules (process, path, fs).",
+  "description": "TypeScript type definitions for ES Runtime (esrun) — the runtime: standard modules (process, path, fs, net, http).",
   "types": "index.d.ts",
   "files": [
     "index.d.ts",
     "runtime-process.d.ts",
     "runtime-path.d.ts",
     "runtime-fs.d.ts",
-    "runtime-net.d.ts"
+    "runtime-net.d.ts",
+    "runtime-http.d.ts"
   ],
   "keywords": ["esrun", "es-runtime", "opentf", "types", "runtime"],
   "license": "Apache-2.0",

@@ -8,6 +8,18 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`runtime:http`** — an HTTP/1.1 server, the fifth `runtime:` standard module:
+  `serve((request) => response)`. The handler takes a web `Request` and returns
+  (or resolves to) a web `Response` — the same Fetch API objects `fetch` uses;
+  a thrown error or non-`Response` return becomes a `500`. `serve(options?,
+  handler)` returns a `Server` with `addr` (resolves to the bound address —
+  `port: 0` picks an ephemeral one), `finished`, and `stop()`. Backed by a new
+  injectable `HttpServerProvider` (vetted **hyper** 1.x, `SystemHttpServer`;
+  each connection served on its own task, requests handed to the single-threaded
+  isolate one at a time) and gated on `Capability::NetListen` (like `runtime:net`
+  `listen`). Request/response bodies are buffered; TLS is not supported yet. New
+  `examples/modules/http.mjs` and `runtime-http.d.ts`.
+
 - **`runtime:net`** — TCP sockets, the fourth `runtime:` standard module.
   `connect(address, options?)` follows the WinterTC Sockets API (returns a
   `Socket` synchronously; `.opened`/`.closed` promises, `.readable`/`.writable`
@@ -27,7 +39,7 @@ pre-`0.1.0` and the public API is unstable.
 
 - **`@opentf/esrun-types`** — hand-written TypeScript definitions for the
   `runtime:` standard modules (`runtime:process`, `runtime:path`, `runtime:fs`,
-  `runtime:net`),
+  `runtime:net`, `runtime:http`),
   in [`types/`](types/), for editor completion and type-checking. Ambient
   `declare module` blocks; add via `tsconfig` `types` or a triple-slash
   reference. Validated with `tsc --strict`. Also emitted by **`esrun types`**
