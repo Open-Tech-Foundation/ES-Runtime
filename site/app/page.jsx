@@ -146,7 +146,7 @@ export default function HomePage() {
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> JSX</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> JSON imports</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Package installer</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Bundler / linter</li>
+              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Bundler / linter / formatter</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Test runner</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Watch mode</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> FFI</li>

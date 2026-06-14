@@ -91,46 +91,6 @@ export default function DocsOverview() {
           </span>
         </li>
       </ul>
-
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Next steps</h2>
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <a
-          href="/docs/modules"
-          className="rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-        >
-          <div className="font-semibold text-zinc-900">Module system →</div>
-          <p className="mt-1 text-sm text-zinc-600">
-            Imports, dynamic import, node_modules, and the runtime: scheme.
-          </p>
-        </a>
-        <a
-          href="/docs/globals"
-          className="rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-        >
-          <div className="font-semibold text-zinc-900">Global objects →</div>
-          <p className="mt-1 text-sm text-zinc-600">
-            The Web-standard globals available in the runtime.
-          </p>
-        </a>
-        <a
-          href="/api/process"
-          className="rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-        >
-          <div className="font-semibold text-zinc-900">runtime:process →</div>
-          <p className="mt-1 text-sm text-zinc-600">
-            Environment, arguments, working directory, platform, and exit.
-          </p>
-        </a>
-        <a
-          href="/docs/benchmarks"
-          className="rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
-        >
-          <div className="font-semibold text-zinc-900">Benchmarks →</div>
-          <p className="mt-1 text-sm text-zinc-600">
-            Measured performance vs Node, Bun, and Deno.
-          </p>
-        </a>
-      </div>
     </DocsShell>
   );
 }
