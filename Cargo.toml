@@ -98,6 +98,11 @@ rsa = { version = "0.9.10", default-features = false, features = ["std", "sha2"]
 # re-exports `sha2` but not `sha1`). Our primary SHA-1 stays `sha1` 0.11; this
 # 0.10 line is already in the tree via `rsa`, so it adds no new version.
 sha1_rsa = { package = "sha1", version = "0.10.6", features = ["oid"] }
+# Glob matching + directory walking for runtime:fs `Glob` (DECISIONS D25):
+# globset gives `**`/`{a,b}` semantics, walkdir the traversal we confine to the
+# root jail. Both permissive (MIT / Unlicense). Used only by default-providers.
+globset = "0.4.16"
+walkdir = "2.5.0"
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).

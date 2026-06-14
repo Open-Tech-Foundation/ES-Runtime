@@ -239,6 +239,98 @@ pub trait Process: Send + Sync {
     fn requested_exit_code(&self) -> Option<i32>;
 }
 
+/// Metadata about a filesystem entry, from [`FileSystem::stat`].
+pub struct FileStat {
+    /// Size in bytes.
+    pub size: u64,
+    /// Whether the entry is a regular file.
+    pub is_file: bool,
+    /// Whether the entry is a directory.
+    pub is_dir: bool,
+    /// Whether the entry is a symbolic link.
+    pub is_symlink: bool,
+    /// Modification time in milliseconds since the Unix epoch, if the host
+    /// exposes it.
+    pub mtime_ms: Option<f64>,
+}
+
+/// One entry in a directory listing, from [`FileSystem::read_dir`].
+pub struct DirEntry {
+    /// The entry's file name (no directory components).
+    pub name: String,
+    /// Whether the entry is a regular file.
+    pub is_file: bool,
+    /// Whether the entry is a directory.
+    pub is_dir: bool,
+    /// Whether the entry is a symbolic link.
+    pub is_symlink: bool,
+}
+
+/// Options for [`FileSystem::glob_scan`].
+pub struct GlobScanOptions {
+    /// Match dotfiles and dot-directories (default: skipped).
+    pub dot: bool,
+    /// Return absolute paths instead of paths relative to the scan base.
+    pub absolute: bool,
+    /// Yield only files, skipping directories.
+    pub only_files: bool,
+}
+
+/// Filesystem access backing `runtime:fs` (DECISIONS D25, SPEC §11).
+///
+/// The implementation confines every path to a **root jail** (canonicalize then
+/// containment-check); a path that escapes is rejected. Reads are
+/// capability-checked on `Capability::FileRead` and mutations on
+/// `Capability::FileWrite` by `runtime` before any method here runs. Methods are
+/// async because file I/O is blocking work the driver offloads; an embedder that
+/// installs no `FileSystem` provider has no `runtime:fs` access at all.
+pub trait FileSystem: Send + Sync {
+    /// Reads the whole file at `path` as bytes.
+    fn read(&self, path: String) -> BoxFuture<Result<Vec<u8>, ProviderError>>;
+
+    /// Writes `data` to `path`, resolving to the number of bytes written. With
+    /// `append`, bytes are added at the end (creating the file if needed);
+    /// otherwise the file is created or truncated.
+    fn write(
+        &self,
+        path: String,
+        data: Vec<u8>,
+        append: bool,
+    ) -> BoxFuture<Result<u64, ProviderError>>;
+
+    /// Metadata for `path` (follows symlinks).
+    fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>>;
+
+    /// Whether `path` exists (a missing path is `false`, not an error).
+    fn exists(&self, path: String) -> BoxFuture<Result<bool, ProviderError>>;
+
+    /// Lists the entries of the directory at `path` (no `.`/`..`).
+    fn read_dir(&self, path: String) -> BoxFuture<Result<Vec<DirEntry>, ProviderError>>;
+
+    /// Creates the directory at `path`; with `recursive`, creates missing
+    /// parents and succeeds if it already exists.
+    fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Removes the file or (with `recursive`) directory tree at `path`.
+    fn remove(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Renames/moves `from` to `to` (both jailed).
+    fn rename(&self, from: String, to: String) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Tests whether `path` matches the glob `pattern` (pure; no I/O). Supports
+    /// `*`, `**`, `?`, character classes, and `{a,b}` alternation.
+    fn glob_match(&self, pattern: &str, path: &str) -> Result<bool, ProviderError>;
+
+    /// Walks `base` (jailed) and returns the paths matching the glob `pattern`,
+    /// relative to `base` unless `opts.absolute`.
+    fn glob_scan(
+        &self,
+        base: String,
+        pattern: String,
+        opts: GlobScanOptions,
+    ) -> BoxFuture<Result<Vec<String>, ProviderError>>;
+}
+
 /// A sink for guest `console.*` output (SPEC.md §2.2).
 ///
 /// console output is the **guest program's** output, not the runtime's

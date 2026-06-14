@@ -10,6 +10,7 @@ const NAV = [
       { href: "/api/cli", label: "CLI" },
       { href: "/api/process", label: "runtime:process" },
       { href: "/api/path", label: "runtime:path" },
+      { href: "/api/fs", label: "runtime:fs" },
     ],
   },
 ];

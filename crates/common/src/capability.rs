@@ -34,12 +34,19 @@ pub enum Capability {
     /// Read host process info — environment, args, cwd, platform (`Process`
     /// provider; backs `runtime:process`). Deny-by-default like the rest.
     Env,
+    /// Read files within the configured root jail (`FileSystem` provider; backs
+    /// `runtime:fs` reads — `file().text()`, `readDir`, `stat`, …).
+    FileRead,
+    /// Create, write, or remove files within the configured root jail
+    /// (`FileSystem` provider; backs `runtime:fs` mutations — `write`, `mkdir`,
+    /// `remove`, `rename`).
+    FileWrite,
 }
 
 impl Capability {
     /// All capabilities, in a fixed order. Used to build [`CapabilitySet::all`]
     /// and to keep the bit assignment in [`bit`](Self::bit) exhaustive.
-    const ALL: [Capability; 7] = [
+    const ALL: [Capability; 9] = [
         Capability::Clock,
         Capability::Entropy,
         Capability::Timers,
@@ -47,6 +54,8 @@ impl Capability {
         Capability::FileSystem,
         Capability::TaskSpawn,
         Capability::Env,
+        Capability::FileRead,
+        Capability::FileWrite,
     ];
 
     /// This capability's single-bit mask within a [`CapabilitySet`].
@@ -60,6 +69,8 @@ impl Capability {
             Capability::FileSystem => 1 << 4,
             Capability::TaskSpawn => 1 << 5,
             Capability::Env => 1 << 6,
+            Capability::FileRead => 1 << 7,
+            Capability::FileWrite => 1 << 8,
         }
     }
 }

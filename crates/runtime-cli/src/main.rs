@@ -32,7 +32,8 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemProcess, TokioTimers, path,
+    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemProcess,
+    TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -193,13 +194,18 @@ async fn run() -> Result<(), String> {
     // are the user's, after the script/-e). A concrete handle is kept to read
     // the exit code a guest `process.exit()` may request.
     let process = Arc::new(SystemProcess::new(config.args));
+    // Filesystem view for runtime:fs: relative paths resolve under the entry's
+    // directory, jailed to the same detected project root the loader uses (D25).
+    let fs_root = path::detect_root(&base_dir);
+    let file_system = Arc::new(SystemFileSystem::new(&base_dir, &fs_root));
     let providers = HostProviders::new(
         clock.clone(),
         Arc::new(StdoutConsole),
         net,
         Arc::new(OsEntropy),
     )
-    .with_process(process.clone());
+    .with_process(process.clone())
+    .with_file_system(file_system);
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project

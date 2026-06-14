@@ -16,6 +16,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [Capabilities](#capabilities)
 - [`runtime:process`](#runtimeprocess)
 - [`runtime:path`](#runtimepath)
+- [`runtime:fs`](#runtimefs)
 
 ---
 
@@ -84,7 +85,7 @@ the required capability has been granted.
 | ----------------- | ----------- | ---------- | ----------------------------- |
 | `runtime:process` | Available   | `Env`      | [↓](#runtimeprocess)          |
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
-| `runtime:fs`      | Planned     | `FileRead` / `FileWrite` | —               |
+| `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
 | `runtime:net`     | Planned     | `Net`      | —                             |
 | `runtime:http`    | Planned     | `Net`      | —                             |
 
@@ -205,6 +206,48 @@ const cfg = resolve(here, "config", "app.json");
 | `fromFileURL(url)`      | `(string \| URL) => string`   | Converts a `file:` URL to a path.                                           |
 | `toFileURL(p)`          | `(string) => URL`             | Converts a path (resolved to absolute) to a `file:` URL.                    |
 | `default`               | `object`                      | An aggregate of all named exports.                                          |
+
+---
+
+## `runtime:fs`
+
+Modern, **Blob-based** file I/O, modeled on the web `Blob` surface rather than
+the legacy Node `fs` API. Reads require `FileRead`, mutations require
+`FileWrite`, and every path is confined to the project **root jail** (D25) — a
+path that escapes (via `..` or a symlink) is rejected. All operations are async
+(no sync variants); there are no callbacks.
+
+```js
+import { file, write, readDir, stat, mkdir, remove } from "runtime:fs";
+
+await mkdir("data", { recursive: true });
+await write("data/app.json", JSON.stringify({ ok: true }));
+
+const f = file("data/app.json");          // lazy, Blob-like handle
+const cfg = await f.json();                // .text() / .bytes() / .arrayBuffer() / .stream()
+await write("data/copy.json", f);          // any web body: string|Blob|ArrayBuffer|TypedArray|Response|ReadableStream|file()
+```
+
+Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
+
+### Module functions
+
+| Export                | Type                                            | Description                                                                 |
+| --------------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `file(path)`          | `(path) => FsFile`                              | A lazy, `Blob`-like handle — nothing is read until a read method is called. |
+| `write(dest, input)`  | `(path, body) => Promise<number>`               | Writes any web body to `dest`; resolves to bytes written. Streams to disk if given a `ReadableStream`/`Response`. |
+| `readDir(path)`       | `(path) => Promise<DirEntry[]>`                 | Directory entries: `{ name, isFile, isDir, isSymlink }`.                     |
+| `stat(path)`          | `(path) => Promise<Stat>`                       | `{ size, isFile, isDir, isSymlink, mtimeMs }` (follows symlinks).           |
+| `exists(path)`        | `(path) => Promise<boolean>`                    | Whether the path exists (missing → `false`, not an error).                  |
+| `mkdir(path, opts?)`  | `(path, { recursive? }) => Promise<void>`       | Creates a directory; `recursive` creates parents.                           |
+| `remove(path, opts?)` | `(path, { recursive? }) => Promise<void>`       | Removes a file or (with `recursive`) a directory tree.                      |
+| `rename(from, to)`    | `(path, path) => Promise<void>`                 | Renames/moves an entry (both jailed).                                       |
+
+### `FsFile` (from `file(path)`)
+
+`text()`, `json()`, `bytes()` (`Uint8Array`), `arrayBuffer()`, `stream()`
+(`ReadableStream`), `exists()`, `stat()`, `write(data)`, `delete()`, and the
+`path` it points at — the Blob read surface plus convenience writes/deletes.
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

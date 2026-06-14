@@ -25,6 +25,7 @@ mod modules;
 mod net;
 mod node_modules;
 mod process;
+mod system_fs;
 mod task;
 mod timers;
 
@@ -39,5 +40,6 @@ pub use modules::{DenyModuleLoader, FsModuleLoader};
 pub use net::ReqwestTransport;
 pub use node_modules::NodeModuleLoader;
 pub use process::SystemProcess;
+pub use system_fs::SystemFileSystem;
 pub use task::TokioTaskSpawner;
 pub use timers::TokioTimers;

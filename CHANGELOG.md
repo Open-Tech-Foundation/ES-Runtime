@@ -8,6 +8,20 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`runtime:fs`** — modern, Blob-based file I/O, the third `runtime:` standard
+  module (SPEC §11, DECISIONS D25). `file(path)` is a lazy, Blob-like handle
+  (`text`/`json`/`bytes`/`arrayBuffer`/`stream`/`exists`/`stat`/`write`/`delete`,
+  plus `writable()` — a web-standard `WritableStream` for piped/incremental
+  writes). `write(dest, body, { append })` takes any web body
+  (string/Blob/ArrayBuffer/TypedArray/Response/ReadableStream/`file()`). Plus
+  `readDir`, `stat`, `exists`, `mkdir`, `remove`, `rename`, and a `Glob`
+  (`match` pure/sync, `scan` async over the jailed walk; `globset`/`walkdir`,
+  `**`/`{a,b}` semantics). All operations are **async** (no sync variants, no
+  callbacks). Backed by a new injectable `FileSystem` provider (tokio
+  `SystemFileSystem`) and ops gated on new `Capability::FileRead` /
+  `Capability::FileWrite`; every path is confined to the project **root jail**
+  (D25 — `..`/symlink escapes rejected). New `examples/modules/fs.mjs`.
+
 - **`runtime:path`** — modern, platform-aware path utilities, the second
   `runtime:` standard module (DECISIONS D26, SPEC §11). A pure-computation ES
   module that takes the host platform and `cwd()` from `runtime:process` (so it

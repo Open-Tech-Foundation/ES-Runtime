@@ -32,6 +32,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     // runtime:process ops, gated on Env; `exit` halts via the interrupt handle.
     let interrupt = engine.interrupt_handle();
     crate::process_ops::install(engine, providers.process(), interrupt)?;
+    // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
+    crate::fs_ops::install(engine, providers.file_system())?;
     Ok(())
 }
 

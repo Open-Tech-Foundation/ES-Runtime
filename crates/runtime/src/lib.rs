@@ -20,6 +20,7 @@ mod crypto_ops;
 mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
+mod fs_ops;
 mod prelude;
 mod process_ops;
 mod rsa_ops;
@@ -40,7 +41,7 @@ pub use es_runtime_engine::{
     V8Engine, Value,
 };
 pub use es_runtime_providers::{
-    Clock, Console, ConsoleLevel, Entropy, ModuleLoader, NetTransport, Process,
+    Clock, Console, ConsoleLevel, Entropy, FileSystem, ModuleLoader, NetTransport, Process,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -110,6 +111,7 @@ pub struct HostProviders {
     net: Arc<dyn NetTransport>,
     entropy: Arc<dyn Entropy>,
     process: Option<Arc<dyn Process>>,
+    file_system: Option<Arc<dyn FileSystem>>,
 }
 
 impl HostProviders {
@@ -129,6 +131,7 @@ impl HostProviders {
             net,
             entropy,
             process: None,
+            file_system: None,
         }
     }
 
@@ -137,6 +140,16 @@ impl HostProviders {
     #[must_use]
     pub fn with_process(mut self, process: Arc<dyn Process>) -> Self {
         self.process = Some(process);
+        self
+    }
+
+    /// Adds the [`FileSystem`] view backing `runtime:fs`. Reads are
+    /// capability-gated on [`Capability::FileRead`](es_runtime_common::Capability::FileRead)
+    /// and mutations on [`FileWrite`](es_runtime_common::Capability::FileWrite);
+    /// the provider confines all access to its root jail.
+    #[must_use]
+    pub fn with_file_system(mut self, file_system: Arc<dyn FileSystem>) -> Self {
+        self.file_system = Some(file_system);
         self
     }
 
@@ -158,6 +171,10 @@ impl HostProviders {
 
     fn process(&self) -> Option<Arc<dyn Process>> {
         self.process.clone()
+    }
+
+    fn file_system(&self) -> Option<Arc<dyn FileSystem>> {
+        self.file_system.clone()
     }
 }
 

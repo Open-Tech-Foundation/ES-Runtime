@@ -258,6 +258,46 @@ fn runtime_path_exposes_modern_surface() {
 }
 
 #[test]
+fn runtime_fs_read_write_stat_and_jail() {
+    // A scratch dir that becomes the jail root (no package.json there, so the
+    // detected root is the dir itself); run with cwd set to it.
+    let tmp = std::env::temp_dir().join(format!("esrun-fs-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).expect("mktemp");
+    let script = "import { file, write, readDir, stat, mkdir, remove, exists } from 'runtime:fs';\
+        await mkdir('sub', { recursive: true });\
+        console.log('WROTE=' + await write('sub/a.txt', 'hi'));\
+        console.log('TEXT=' + await file('sub/a.txt').text());\
+        const s = await stat('sub/a.txt');\
+        console.log('SIZE=' + s.size + ' ISFILE=' + s.isFile);\
+        console.log('DIR=' + (await readDir('sub')).map(e => e.name).join(','));\
+        console.log('EXISTS=' + await exists('sub/a.txt'));\
+        await remove('sub', { recursive: true });\
+        console.log('GONE=' + !(await exists('sub')));\
+        try { await file('../escape.txt').text(); console.log('JAIL=open'); }\
+        catch { console.log('JAIL=blocked'); }";
+    let out = esrun()
+        .current_dir(&tmp)
+        .arg("-e")
+        .arg(script)
+        .output()
+        .expect("spawn esrun");
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "WROTE=2",
+        "TEXT=hi",
+        "SIZE=2 ISFILE=true",
+        "DIR=a.txt",
+        "EXISTS=true",
+        "GONE=true",
+        "JAIL=blocked",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
+#[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()
         .arg("-e")
