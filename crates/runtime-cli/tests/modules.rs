@@ -348,6 +348,19 @@ fn unknown_runtime_builtin_module_errors() {
 }
 
 #[test]
+fn types_command_emits_declarations() {
+    let out = esrun().arg("types").output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for m in ["runtime:process", "runtime:path", "runtime:fs"] {
+        assert!(
+            s.contains(&format!("declare module \"{m}\"")),
+            "missing declaration for {m} in:\n{s}"
+        );
+    }
+}
+
+#[test]
 fn version_flag_succeeds() {
     let out = esrun().arg("--version").output().expect("spawn esrun");
     assert!(out.status.success());

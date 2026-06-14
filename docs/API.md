@@ -211,8 +211,8 @@ const cfg = resolve(here, "config", "app.json");
 
 ## `runtime:fs`
 
-Modern, **Blob-based** file I/O, modeled on the web `Blob` surface rather than
-the legacy Node `fs` API. Reads require `FileRead`, mutations require
+**Blob-based** file I/O, modeled on the web `Blob` surface — lazy file handles
+and writes that accept any web body. Reads require `FileRead`, mutations require
 `FileWrite`, and every path is confined to the project **root jail** (D25) — a
 path that escapes (via `..` or a symlink) is rejected. All operations are async
 (no sync variants); there are no callbacks.

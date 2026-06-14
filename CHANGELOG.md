@@ -12,7 +12,13 @@ pre-`0.1.0` and the public API is unstable.
   `runtime:` standard modules (`runtime:process`, `runtime:path`, `runtime:fs`),
   in [`types/`](types/), for editor completion and type-checking. Ambient
   `declare module` blocks; add via `tsconfig` `types` or a triple-slash
-  reference. Validated with `tsc --strict`.
+  reference. Validated with `tsc --strict`. Also emitted by **`esrun types`**
+  (`esrun types > esrun.d.ts`, Deno-style) and shipped under `types/` in the
+  release archive — the definitions are baked into the binary as a static
+  string, so they add nothing to startup or runtime cost.
+- **Benchmarks** — split the file-I/O workload into **read / write / append**
+  and added a **glob scan** workload (Deno has no built-in runtime glob → n/a),
+  all cross-runtime; numbers regenerated on the benchmarks page.
 
 - **`runtime:fs`** — modern, Blob-based file I/O, the third `runtime:` standard
   module (SPEC §11, DECISIONS D25). `file(path)` is a lazy, Blob-like handle

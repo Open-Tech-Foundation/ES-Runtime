@@ -45,6 +45,7 @@ USAGE:
     esrun <file>             Run a JavaScript module file
     esrun -e <code>          Run an inline module snippet
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
+    esrun types              Print the runtime: TypeScript definitions
     esrun -h, --help         Show this help
     esrun -v, --version      Show the version
 
@@ -59,6 +60,20 @@ All host capabilities are granted.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.
 static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
+
+/// Bundled TypeScript definitions for the `runtime:` modules, printed by
+/// `esrun types` (`esrun types > esrun.d.ts`) and also shipped in the release
+/// archive. This is a static `&str` baked into the binary — it is read only
+/// when `types` is invoked, so it adds nothing to startup or runtime cost
+/// (just a few KB of binary size). The canonical source is `types/` (published
+/// as `@opentf/esrun-types`); kept byte-identical.
+const TYPES: &str = concat!(
+    include_str!("../../../types/runtime-process.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-path.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-fs.d.ts"),
+);
 
 /// A console that prints to the process's stdout/stderr, like Node/Deno.
 struct StdoutConsole;
@@ -94,6 +109,10 @@ fn parse_args() -> Result<Config, String> {
         match arg.as_str() {
             "-h" | "--help" => {
                 println!("{USAGE}");
+                std::process::exit(0);
+            }
+            "types" => {
+                print!("{TYPES}");
                 std::process::exit(0);
             }
             "-v" | "-V" | "--version" => {

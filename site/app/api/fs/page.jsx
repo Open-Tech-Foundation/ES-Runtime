@@ -29,9 +29,9 @@ export default function FsDoc() {
         runtime:fs
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        Modern, Blob-based file I/O — modeled on the web Blob surface, not the
-        legacy Node fs API. All operations are async (no sync variants, no
-        callbacks), and every path is confined to the project root jail.
+        Blob-based file I/O, modeled on the web <code className="font-mono">Blob</code>{" "}
+        surface — lazy file handles and writes that accept any web body. Every
+        operation is async, and every path is confined to the project root jail.
       </p>
       <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-full bg-brand-50 px-3 py-1 font-medium text-brand-700">

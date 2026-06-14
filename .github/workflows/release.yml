@@ -77,9 +77,10 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           [ "$GITHUB_REF_TYPE" = tag ] || VERSION="dev-${GITHUB_SHA::8}"
           NAME="esrun-${VERSION}-${{ matrix.target }}"
-          mkdir -p "dist/$NAME"
+          mkdir -p "dist/$NAME/types"
           cp "target/${{ matrix.target }}/release/esrun" "dist/$NAME/"
           cp README.md LICENSE NOTICE "dist/$NAME/" 2>/dev/null || true
+          cp types/*.d.ts "dist/$NAME/types/" 2>/dev/null || true
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
           ( cd dist && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
 
@@ -89,9 +90,10 @@ jobs:
         run: |
           $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { "dev-$($env:GITHUB_SHA.Substring(0,8))" }
           $name = "esrun-$version-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist/$name/types" | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/esrun.exe" "dist/$name/"
           Copy-Item README.md,LICENSE,NOTICE "dist/$name/" -ErrorAction SilentlyContinue
+          Copy-Item types/*.d.ts "dist/$name/types/" -ErrorAction SilentlyContinue
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
           (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File "dist/$name.zip.sha256" -Encoding ascii
 

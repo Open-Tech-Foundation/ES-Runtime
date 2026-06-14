@@ -1,11 +1,9 @@
-// File I/O benchmark: write a small file and read it back in a tight loop —
-// measures whole-file write+read throughput. Unlike the other workloads, the
-// filesystem is not a shared Web API, so each runtime uses its own surface
-// (esrun: runtime:fs; Node: node:fs/promises; Bun: Bun.file/write; Deno: Deno).
+// File read benchmark: read a 4 KB file in a loop (written once, untimed). The
+// filesystem is not a shared Web API, so each runtime uses its own surface.
 (async () => {
   const N = 2000;
-  const data = "x".repeat(4096); // 4 KB payload
-  const tmp = "bench_fs_tmp.bin";
+  const data = "x".repeat(4096);
+  const tmp = "bench_fsread.bin";
 
   let write, read, cleanup;
   if (typeof Deno !== "undefined") {
@@ -30,16 +28,13 @@
     cleanup = (p) => fs.remove(p).catch(() => {});
   }
 
-  const cycle = async (n) => {
-    for (let i = 0; i < n; i++) {
-      await write(tmp, data);
-      await read(tmp);
-    }
+  await write(tmp, data); // setup, untimed
+  const run = async (n) => {
+    for (let i = 0; i < n; i++) await read(tmp);
   };
-
-  await cycle(N / 10); // untimed JIT/cache warmup
+  await run(N / 10); // untimed warmup
   const t0 = performance.now();
-  await cycle(N);
+  await run(N);
   const t1 = performance.now();
   await cleanup(tmp);
   console.log("RESULT_MS=" + (t1 - t0).toFixed(2));
