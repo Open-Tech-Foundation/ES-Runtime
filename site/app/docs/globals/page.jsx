@@ -132,7 +132,7 @@ export default function GlobalsDoc() {
                       <StatusIcon status={it.s} />
                     </td>
                     <td className="py-2.5 pr-4 font-mono text-[13px] text-zinc-800">
-                      {it.n}
+                      <span className="ml-3">{it.n}</span>
                     </td>
                     <td className="py-2.5 pr-4 text-zinc-500">
                       {it.note || ""}
@@ -157,7 +157,7 @@ export default function GlobalsDoc() {
                   <StatusIcon status="no" />
                 </td>
                 <td className="py-2.5 pr-4 font-mono text-[13px] text-zinc-700">
-                  {it.n}
+                  <span className="ml-3">{it.n}</span>
                 </td>
                 <td className="py-2.5 pr-4 text-zinc-500">{it.why}</td>
               </tr>

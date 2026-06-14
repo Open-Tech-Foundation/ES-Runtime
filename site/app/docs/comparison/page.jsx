@@ -5,14 +5,15 @@ import StatusIcon from "../../../components/StatusIcon.jsx";
 const rows = [
   { f: "ES Modules", esrun: "yes", node: "yes", bun: "yes", deno: "yes" },
   { f: "CommonJS (require)", esrun: "no", node: "yes", bun: "yes", deno: "partial" },
-  { f: "TypeScript (built-in)", esrun: "no", node: "partial", bun: "yes", deno: "yes" },
+  { f: "TypeScript (built-in)", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "JSX (built-in)", esrun: "no", node: "no", bun: "yes", deno: "yes" },
   { f: "JSON module imports", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "Web APIs (fetch/URL/streams/WebCrypto)", esrun: "yes", node: "yes", bun: "yes", deno: "yes" },
   { f: "Node compatibility (node: builtins)", esrun: "no", node: "yes", bun: "yes", deno: "partial" },
   { f: "Capability sandbox (deny by default)", esrun: "yes", node: "partial", bun: "no", deno: "yes" },
   { f: "Workers / multi-thread", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
-  { f: "FFI / native addons", esrun: "no", node: "partial", bun: "yes", deno: "yes" },
+  { f: "FFI (dlopen)", esrun: "no", node: "no", bun: "yes", deno: "yes" },
+  { f: "Native addons (N-API)", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "Package installer", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "Bundler / test runner", esrun: "no", node: "partial", bun: "yes", deno: "yes" },
   { f: "Embeddable as a library", esrun: "yes", node: "no", bun: "no", deno: "partial" },
@@ -74,13 +75,13 @@ export default function ComparisonDoc() {
 
       <div className="mt-4 flex flex-wrap items-center gap-5 text-xs text-zinc-500">
         <span className="inline-flex items-center gap-1.5">
-          <StatusIcon status="yes" /> supported
+          <StatusIcon status="yes" /> Supported
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <StatusIcon status="partial" /> partial / flagged / experimental
+          <StatusIcon status="partial" /> Partial / flagged / experimental
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <StatusIcon status="no" /> not supported (by design for esrun)
+          <StatusIcon status="no" /> Not supported
         </span>
       </div>
 

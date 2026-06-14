@@ -23,9 +23,18 @@ export default function DocsOverview() {
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
         esrun is a secure, standards-based JavaScript runtime for the server,
         built on V8 in Rust. It runs standard ES Modules with a deny-by-default
-        capability model and a sandboxed module system, and ships both as an
-        embeddable library and as a standalone CLI,{" "}
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">esrun</code>.
+        capability model and a sandboxed module system.
+      </p>
+
+      <div className="mt-6 rounded-xl border border-brand-200 bg-brand-50 p-5 leading-relaxed text-brand-900">
+        Ships in two shapes from one core: an{" "}
+        <strong>embeddable library</strong> and a{" "}
+        <strong>standalone CLI</strong> (
+        <code className="rounded bg-white/70 px-1.5 py-0.5 text-[13px]">esrun</code>
+        ).
+      </div>
+
+      <p className="mt-4 text-zinc-600">
         It is <strong>not</strong> Node-compatible — see{" "}
         <a href="/docs/scope" className="font-medium text-brand-600 hover:text-brand-700">
           Scope &amp; non-goals
