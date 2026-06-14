@@ -15,6 +15,7 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:process" => Some(include_str!("runtime_modules/process.js")),
         "runtime:path" => Some(include_str!("runtime_modules/path.js")),
         "runtime:fs" => Some(include_str!("runtime_modules/fs.js")),
+        "runtime:net" => Some(include_str!("runtime_modules/net.js")),
         _ => None,
     }
 }

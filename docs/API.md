@@ -17,6 +17,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:process`](#runtimeprocess)
 - [`runtime:path`](#runtimepath)
 - [`runtime:fs`](#runtimefs)
+- [`runtime:net`](#runtimenet)
 
 ---
 
@@ -86,7 +87,7 @@ the required capability has been granted.
 | `runtime:process` | Available   | `Env`      | [↓](#runtimeprocess)          |
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
-| `runtime:net`     | Planned     | `Net`      | —                             |
+| `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
 | `runtime:http`    | Planned     | `Net`      | —                             |
 
 ---
@@ -104,7 +105,8 @@ different module path.
 | `Env`       | Environment, arguments, cwd, platform — backs `runtime:process`.    |
 | `FileRead`  | Read files within the configured root jail.                         |
 | `FileWrite` | Write files within the configured root jail.                        |
-| `Net`       | Open outbound network connections.                                  |
+| `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`). |
+| `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen`). |
 | `HrTime`    | Access high-resolution timing.                                      |
 
 Filesystem access (including module resolution) is confined to a project **root
@@ -248,6 +250,46 @@ Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 `text()`, `json()`, `bytes()` (`Uint8Array`), `arrayBuffer()`, `stream()`
 (`ReadableStream`), `exists()`, `stat()`, `write(data)`, `delete()`, and the
 `path` it points at — the Blob read surface plus convenience writes/deletes.
+
+---
+
+## `runtime:net`
+
+TCP sockets (SPEC §12). `connect()` follows the **WinterTC Sockets API**:
+outbound TCP with web-stream `readable`/`writable`. `listen()` returns an
+async-iterable of inbound sockets. `connect` requires `Net`; `listen` requires
+`NetListen`. All I/O is async — nothing blocks. TLS is not supported yet
+(`secureTransport: "on"` errors).
+
+```js
+import { connect, listen } from "runtime:net";
+
+// Client (WinterTC connect()):
+const sock = connect({ hostname: "example.com", port: 80 });
+await sock.opened;
+const w = sock.writable.getWriter();
+await w.write(new TextEncoder().encode("GET / HTTP/1.0\r\n\r\n"));
+for await (const chunk of sock.readable) { /* … */ }
+
+// Server:
+const server = listen({ hostname: "127.0.0.1", port: 8080 });
+for await (const conn of server) {
+  conn.readable.pipeTo(conn.writable); // echo
+}
+```
+
+### Exports
+
+| Export                       | Type                                  | Description                                                        |
+| ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
+| `connect(address, options?)` | `(addr, { secureTransport? }) => Socket` | Open an outbound TCP connection; returns a `Socket` immediately (`opened` settles on connect). `Net`. |
+| `listen(options)`            | `({ hostname?, port }) => Listener`   | Bind a listening socket. `NetListen`.                              |
+
+**`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
+`closed: Promise<void>`, `close()`. Closing the writable half-closes (FIN).
+
+**`Listener`** — async-iterable of `Socket`; `addr: Promise<{ hostname, port }>`,
+`accept()`, `close()`.
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

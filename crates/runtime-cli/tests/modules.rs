@@ -333,6 +333,34 @@ fn runtime_fs_glob_covers_all_patterns() {
 }
 
 #[test]
+fn runtime_net_tcp_echo_roundtrip() {
+    // Loopback: a one-shot echo server + a client, exercising connect/listen/
+    // accept, the Socket read/write streams, half-close, and clean shutdown
+    // (the process must exit, not hang).
+    let script = "import { connect, listen } from 'runtime:net';\
+        const server = listen({ hostname: '127.0.0.1', port: 0 });\
+        const { port } = await server.addr;\
+        (async () => {\
+          for await (const conn of server) {\
+            const w = conn.writable.getWriter();\
+            for await (const chunk of conn.readable) await w.write(chunk);\
+            await w.close();\
+            await server.close();\
+          }\
+        })();\
+        const sock = connect({ hostname: '127.0.0.1', port });\
+        const w = sock.writable.getWriter();\
+        await w.write(new TextEncoder().encode('ping'));\
+        await w.close();\
+        let out = ''; const dec = new TextDecoder();\
+        for await (const chunk of sock.readable) out += dec.decode(chunk);\
+        console.log('NET:' + out);";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("NET:ping"), "{}", stdout(&out));
+}
+
+#[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()
         .arg("-e")

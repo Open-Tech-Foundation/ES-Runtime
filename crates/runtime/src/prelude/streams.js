@@ -124,6 +124,46 @@
       pipeTo(this, writable, options ?? {}).catch(() => {});
       return readable;
     }
+
+    // Async iteration (`for await (const chunk of stream)`): acquire a reader,
+    // read to completion, releasing the lock on return/throw. Spec-standard, so
+    // it works for fetch bodies, runtime:fs/net streams, and user streams alike.
+    values({ preventCancel = false } = {}) {
+      const reader = this.getReader();
+      return {
+        async next() {
+          try {
+            const { done, value } = await reader.read();
+            if (done) {
+              reader.releaseLock();
+              return { done: true, value: undefined };
+            }
+            return { done: false, value };
+          } catch (e) {
+            reader.releaseLock();
+            throw e;
+          }
+        },
+        async return(value) {
+          if (!preventCancel) {
+            try {
+              await reader.cancel(value);
+            } catch {
+              /* ignore cancel errors on early exit */
+            }
+          }
+          reader.releaseLock();
+          return { done: true, value };
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+    }
+
+    [Symbol.asyncIterator](options) {
+      return this.values(options);
+    }
   }
 
   class ReadableStreamDefaultController {

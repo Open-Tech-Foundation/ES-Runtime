@@ -34,6 +34,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::process_ops::install(engine, providers.process(), interrupt)?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
     crate::fs_ops::install(engine, providers.file_system())?;
+    // runtime:net ops: connect (Net), listen (NetListen); read/write/accept by id.
+    crate::net_ops::install(engine, providers.net_provider())?;
     Ok(())
 }
 

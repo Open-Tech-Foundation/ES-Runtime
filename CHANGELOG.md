@@ -8,13 +8,26 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`runtime:net`** — TCP sockets, the fourth `runtime:` standard module.
+  `connect(address, options?)` follows the WinterTC Sockets API (returns a
+  `Socket` synchronously; `.opened`/`.closed` promises, `.readable`/`.writable`
+  web streams, closing the writable half-closes with FIN). `listen(options)`
+  binds a server and yields inbound `Socket`s as an async-iterable `Listener`
+  (`addr`/`accept()`/`close()`; `port: 0` picks an ephemeral port). Backed by a
+  new injectable `NetProvider` (tokio `SystemNet`, spawned reader/writer tasks)
+  and ops gated on `Capability::Net` (connect) / new `Capability::NetListen`
+  (listen). TLS (`secureTransport`/`startTls`) is not supported yet. Also added
+  `ReadableStream` async iteration (`values()` / `[Symbol.asyncIterator]`). New
+  `examples/modules/net.mjs` and `runtime-net.d.ts`.
+
 - **`esrun upgrade`** — self-update built into the CLI: finds the latest GitHub
   release for the platform, downloads + extracts it, and replaces the running
   binary in place (rustls TLS, via `self_update`). The Installation page's
   Upgrade step now uses it.
 
 - **`@opentf/esrun-types`** — hand-written TypeScript definitions for the
-  `runtime:` standard modules (`runtime:process`, `runtime:path`, `runtime:fs`),
+  `runtime:` standard modules (`runtime:process`, `runtime:path`, `runtime:fs`,
+  `runtime:net`),
   in [`types/`](types/), for editor completion and type-checking. Ambient
   `declare module` blocks; add via `tsconfig` `types` or a triple-slash
   reference. Validated with `tsc --strict`. Also emitted by **`esrun types`**

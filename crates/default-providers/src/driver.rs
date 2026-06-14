@@ -58,9 +58,13 @@ impl Driver {
                     self.timers.sleep(delay).await;
                 }
                 None => {
-                    // Async work pending but no timer: let other tasks (e.g.
-                    // offloaded blocking work) progress, then re-poll next tick.
-                    tokio::task::yield_now().await;
+                    // Async work pending but no timer due (e.g. an open socket
+                    // awaiting bytes). Park briefly so the runtime's I/O reactor
+                    // can deliver network readiness before we re-poll — a busy
+                    // `yield_now` starves the reactor on a current-thread runtime
+                    // (sockets stall) and pegs a core. 1ms keeps latency low
+                    // while leaving the CPU near idle.
+                    self.timers.sleep(1).await;
                 }
             }
         }

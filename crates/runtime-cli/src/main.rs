@@ -32,8 +32,8 @@ use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime}
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemProcess,
-    TokioTimers, path,
+    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemNet,
+    SystemProcess, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -74,6 +74,8 @@ const TYPES: &str = concat!(
     include_str!("../../../types/runtime-path.d.ts"),
     "\n",
     include_str!("../../../types/runtime-fs.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-net.d.ts"),
 );
 
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
@@ -254,7 +256,8 @@ async fn run() -> Result<(), String> {
         Arc::new(OsEntropy),
     )
     .with_process(process.clone())
-    .with_file_system(file_system);
+    .with_file_system(file_system)
+    .with_net_provider(Arc::new(SystemNet::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project

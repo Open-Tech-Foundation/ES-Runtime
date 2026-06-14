@@ -21,6 +21,7 @@ mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
 mod fs_ops;
+mod net_ops;
 mod prelude;
 mod process_ops;
 mod rsa_ops;
@@ -41,7 +42,8 @@ pub use es_runtime_engine::{
     V8Engine, Value,
 };
 pub use es_runtime_providers::{
-    Clock, Console, ConsoleLevel, Entropy, FileSystem, ModuleLoader, NetTransport, Process,
+    Clock, Console, ConsoleLevel, Entropy, FileSystem, ModuleLoader, NetProvider, NetTransport,
+    Process,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -112,6 +114,7 @@ pub struct HostProviders {
     entropy: Arc<dyn Entropy>,
     process: Option<Arc<dyn Process>>,
     file_system: Option<Arc<dyn FileSystem>>,
+    net_provider: Option<Arc<dyn NetProvider>>,
 }
 
 impl HostProviders {
@@ -132,6 +135,7 @@ impl HostProviders {
             entropy,
             process: None,
             file_system: None,
+            net_provider: None,
         }
     }
 
@@ -150,6 +154,15 @@ impl HostProviders {
     #[must_use]
     pub fn with_file_system(mut self, file_system: Arc<dyn FileSystem>) -> Self {
         self.file_system = Some(file_system);
+        self
+    }
+
+    /// Adds the [`NetProvider`] backing `runtime:net` (TCP sockets + listeners).
+    /// `connect` is capability-gated on [`Capability::Net`](es_runtime_common::Capability::Net),
+    /// `listen` on [`NetListen`](es_runtime_common::Capability::NetListen).
+    #[must_use]
+    pub fn with_net_provider(mut self, net_provider: Arc<dyn NetProvider>) -> Self {
+        self.net_provider = Some(net_provider);
         self
     }
 
@@ -175,6 +188,10 @@ impl HostProviders {
 
     fn file_system(&self) -> Option<Arc<dyn FileSystem>> {
         self.file_system.clone()
+    }
+
+    fn net_provider(&self) -> Option<Arc<dyn NetProvider>> {
+        self.net_provider.clone()
     }
 }
 

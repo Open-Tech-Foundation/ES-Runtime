@@ -7,7 +7,8 @@
     "index.d.ts",
     "runtime-process.d.ts",
     "runtime-path.d.ts",
-    "runtime-fs.d.ts"
+    "runtime-fs.d.ts",
+    "runtime-net.d.ts"
   ],
   "keywords": ["esrun", "es-runtime", "opentf", "types", "runtime"],
   "license": "Apache-2.0",

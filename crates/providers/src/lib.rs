@@ -334,6 +334,61 @@ pub trait FileSystem: Send + Sync {
     ) -> BoxFuture<Result<Vec<String>, ProviderError>>;
 }
 
+/// Metadata about a socket, from [`NetProvider::connect`]/`accept`/`listen`.
+pub struct SocketInfo {
+    /// Remote peer address (empty for a listener).
+    pub remote_address: String,
+    /// Remote peer port (0 for a listener).
+    pub remote_port: u16,
+    /// Local address.
+    pub local_address: String,
+    /// Local (or bound) port.
+    pub local_port: u16,
+}
+
+/// Raw TCP sockets backing `runtime:net` (SPEC §12, the WinterTC `connect()`
+/// shape). The implementation owns every connection and listener, keyed by an
+/// opaque id it hands back; the runtime drives reads, writes, accepts, and
+/// closes by id. `connect` is capability-checked on `Capability::Net` and
+/// `listen` on `Capability::NetListen` before these are ever called; an embedder
+/// that installs no `NetProvider` has no `runtime:net` access at all.
+pub trait NetProvider: Send + Sync {
+    /// Opens an outbound TCP connection; resolves to (socket id, info). With
+    /// `tls`, negotiates TLS using `host` as the server name.
+    fn connect(
+        &self,
+        host: String,
+        port: u16,
+        tls: bool,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
+
+    /// Reads the next chunk from socket `id`; `None` signals end of stream.
+    fn read(&self, id: u64) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;
+
+    /// Writes `data` to socket `id`.
+    fn write(&self, id: u64, data: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Half-closes the write side of socket `id` (sends FIN); reads still work.
+    fn shutdown(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Closes socket `id` (idempotent).
+    fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Binds a listening socket; resolves to (listener id, bound-address info).
+    fn listen(
+        &self,
+        host: String,
+        port: u16,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
+
+    /// Accepts the next inbound connection on listener `id`; resolves to a new
+    /// (socket id, info), or `None` once the listener is closed.
+    fn accept(&self, id: u64) -> BoxFuture<Result<Option<(u64, SocketInfo)>, ProviderError>>;
+
+    /// Closes listener `id` (idempotent).
+    fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+}
+
 /// A sink for guest `console.*` output (SPEC.md §2.2).
 ///
 /// console output is the **guest program's** output, not the runtime's

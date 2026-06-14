@@ -7,7 +7,7 @@ const modules = [
   { name: "runtime:process", status: "Available", cap: "Env", href: "/api/process" },
   { name: "runtime:path", status: "Available", cap: "Env", href: "/api/path" },
   { name: "runtime:fs", status: "Available", cap: "FileRead / FileWrite", href: "/api/fs" },
-  { name: "runtime:net", status: "Planned", cap: "Net", href: null },
+  { name: "runtime:net", status: "Available", cap: "Net / NetListen", href: "/api/net" },
   { name: "runtime:http", status: "Planned", cap: "Net", href: null },
 ];
 
