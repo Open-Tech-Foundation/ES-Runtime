@@ -34,6 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      # Build first so the `v8` crate fetches its prebuilt static lib. Clippy
+      # runs in check mode, which doesn't trigger that download on a cold cache;
+      # deps build with normal rustc (only workspace crates use clippy-driver),
+      # so clippy then reuses the v8 artifact.
+      - run: cargo build --workspace --all-features
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:

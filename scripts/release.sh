@@ -33,17 +33,20 @@ err() { red "error: $*"; exit 1; }
 git diff --quiet && git diff --cached --quiet || err "working tree is dirty — commit or stash first"
 
 # --- local quality gate (before touching anything) -------------------------
-# CI re-runs all of this after the tag is pushed, but verify locally first so a
-# release is never started on code that doesn't format, lint, or test clean.
-# `cargo test --workspace` includes the CLI end-to-end test
-# (crates/runtime-cli/tests) that spawns the real `esrun` binary.
-# Reuses the existing target/ cache (no clean) — incremental on a warm tree.
-# A cold tree is slow once (downloads/links the prebuilt V8 static lib).
-bold "Running fmt, clippy, and the full test suite…"
+# Verify locally first so a release is never started on code that doesn't
+# format, test, or lint clean. `cargo test --workspace` includes the CLI
+# end-to-end test (crates/runtime-cli/tests) that spawns the real `esrun`.
+# Reuses the existing target/ cache (no clean) — incremental on a warm tree;
+# a cold tree is slow once (downloads/links the prebuilt V8 static lib).
+#
+# Order matters: tests compile + link (which fetches the v8 prebuilt lib), so
+# they run before clippy — clippy runs in check mode and won't fetch it on a
+# cold tree.
+bold "Running fmt, the full test suite, and clippy…"
 cargo fmt --all --check || err "formatting check failed — run 'cargo fmt' and retry"
+cargo test --workspace --locked || err "tests failed — fix them and retry"
 cargo clippy --workspace --all-targets --locked -- -D warnings ||
   err "clippy failed — fix the warnings and retry"
-cargo test --workspace --locked || err "tests failed — fix them and retry"
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
 
