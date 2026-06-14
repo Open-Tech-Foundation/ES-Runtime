@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-14
+
 ### Project
 
 - **API versioning starts at 0.1.0** (was `0.0.0`). Semver from here; the public
