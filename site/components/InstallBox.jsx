@@ -1,20 +1,19 @@
-// A terminal-style install command with a copy button. On copy the command
-// turns green and the button shows a tick. The command wraps instead of
-// scrolling so the full line stays readable.
-import { signal } from "@preact/signals-core";
-
+// A terminal-style install command with a copy button. The command wraps
+// instead of scrolling so it stays readable. On copy it turns green and the
+// button shows a ✓ — driven by the framework's component-local reactivity
+// ($state compiles to a signal; the compiler wraps the className/child reads in
+// effects). Reactive primitives must come from the framework, never another
+// signals package (single-source-of-truth rule in the @opentf/web SPEC).
 const CMD =
   "curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash";
 
 export default function InstallBox() {
-  const copied = signal(false);
+  let copied = $state(false);
 
   function copy() {
     navigator.clipboard?.writeText(CMD);
-    copied.value = true;
-    setTimeout(() => {
-      copied.value = false;
-    }, 1600);
+    copied = true;
+    setTimeout(() => (copied = false), 1600);
   }
 
   return (
@@ -29,7 +28,7 @@ export default function InstallBox() {
         <code
           className={
             "flex-1 break-all text-[13px] leading-relaxed transition-colors " +
-            (copied.value ? "text-emerald-400" : "text-zinc-100")
+            (copied ? "text-emerald-400" : "text-zinc-100")
           }
         >
           <span className="select-none text-brand-400">$ </span>
@@ -40,30 +39,12 @@ export default function InstallBox() {
           onclick={copy}
           className={
             "inline-flex shrink-0 items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors " +
-            (copied.value
+            (copied
               ? "border-emerald-500 text-emerald-400"
               : "border-zinc-700 text-zinc-300 hover:border-brand-500 hover:text-brand-400")
           }
         >
-          {copied.value ? (
-            <>
-              <svg
-                viewBox="0 0 20 20"
-                fill="currentColor"
-                className="h-3.5 w-3.5"
-                aria-hidden="true"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M16.7 5.3a1 1 0 010 1.4l-7.5 7.5a1 1 0 01-1.4 0L3.3 9.7a1 1 0 011.4-1.4l3.8 3.8 6.8-6.8a1 1 0 011.4 0z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              Copied
-            </>
-          ) : (
-            "Copy"
-          )}
+          {copied ? "✓ Copied" : "Copy"}
         </button>
       </div>
     </div>

@@ -1,141 +1,138 @@
-import DocsShell from "../../components/DocsShell.jsx";
+import ApiShell from "../../components/ApiShell.jsx";
 import CodeBlock from "../../components/CodeBlock.jsx";
 
-const IMPORT = `import { env, args, platform, arch, cwd, exit } from "runtime:process";
+const IMPORT = `import { env, args } from "runtime:process";`;
 
-// Or the default aggregate:
-import process from "runtime:process";`;
-
-const ENV_EX = `import { env } from "runtime:process";
-
-console.log(env.HOME);      // read
-env.FEATURE_FLAG = "on";    // write (in-process only)
-delete env.SECRET;          // delete (in-process only)`;
-
-const ARGS_EX = `// esrun app.mjs build --watch
-import { args } from "runtime:process";
-
-console.log(args); // ["build", "--watch"]`;
-
-const EXIT_EX = `import { exit } from "runtime:process";
-
-if (failed) exit(1); // records the code and halts immediately
-exit();              // defaults to 0`;
-
-const exports = [
-  {
-    sig: "env",
-    type: "object",
-    desc: "Environment variables as a mutable plain object, seeded from a host snapshot taken when the module is evaluated. Reads, writes, and deletes work in-process; they do not propagate to the host process or to child processes.",
-  },
-  {
-    sig: "args",
-    type: "readonly string[]",
-    desc: "Program arguments after the runtime binary and the script (or -e snippet). Frozen. Does not include the executable or script path.",
-  },
-  {
-    sig: "platform",
-    type: "string",
-    desc: 'Host operating system: "linux", "macos", "windows", etc. (the OS-native std value).',
-  },
-  {
-    sig: "arch",
-    type: "string",
-    desc: 'Host CPU architecture: "x86_64", "aarch64", "arm", etc. (the OS-native std value).',
-  },
-  {
-    sig: "cwd()",
-    type: "() => string",
-    desc: "Returns the current working directory. A function, not a value, because the directory can change during a run.",
-  },
-  {
-    sig: "exit(code = 0)",
-    type: "(code?: number) => never",
-    desc: "Records the exit code and halts execution immediately — code after the call does not run. The embedder reads the recorded code and treats the result as a clean exit, not an error.",
-  },
+const capabilities = [
+  { cap: "Env", grants: "Environment, arguments, cwd, platform — backs runtime:process." },
+  { cap: "FileRead", grants: "Read files within the configured root jail." },
+  { cap: "FileWrite", grants: "Write files within the configured root jail." },
+  { cap: "Net", grants: "Open outbound network connections." },
+  { cap: "HrTime", grants: "Access high-resolution timing." },
 ];
 
-export default function ApiDoc() {
+const modules = [
+  { name: "runtime:process", status: "Available", cap: "Env", href: "/api/process" },
+  { name: "runtime:path", status: "Planned", cap: "—", href: null },
+  { name: "runtime:fs", status: "Planned", cap: "FileRead / FileWrite", href: null },
+  { name: "runtime:net", status: "Planned", cap: "Net", href: null },
+  { name: "runtime:http", status: "Planned", cap: "Net", href: null },
+];
+
+export default function ApiOverview() {
   return (
-    <DocsShell active="/api">
+    <ApiShell active="/api">
       <p className="text-sm font-medium text-brand-600">API reference</p>
-      <h1 className="mt-2 font-mono text-3xl font-bold tracking-tight text-zinc-900 sm:text-4xl">
-        runtime:process
+      <h1 className="mt-2 text-4xl font-bold tracking-tight text-zinc-900">
+        Overview
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        Host process information: environment, arguments, working directory,
-        platform, and exit. Aligned in spirit with the WinterTC CLI-API
-        proposal.
-      </p>
-      <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
-        <span className="rounded-full bg-brand-50 px-3 py-1 font-medium text-brand-700">
-          Capability: Env
-        </span>
-        <span className="rounded-full bg-zinc-100 px-3 py-1 font-medium text-zinc-600">
-          ES module · runtime: scheme
-        </span>
-        <span className="rounded-full bg-emerald-50 px-3 py-1 font-medium text-emerald-700">
-          Available
-        </span>
-      </div>
-
-      <p className="mt-8 text-zinc-600">
-        Every member requires the <strong>Env</strong> capability; the check
-        lives on the host op. Values are snapshotted when the module is
-        evaluated, and the module is loaded on demand — importing it adds no cost
-        to startup if you never use it.
+        ES Runtime is ESM-only and deny-by-default. Host functionality is exposed
+        as ES modules under the{" "}
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[0.9em]">
+          runtime:
+        </code>{" "}
+        scheme — never as ambient globals — and every operation is gated on an
+        explicit capability.
       </p>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Import</h2>
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        The <span className="font-mono">runtime:</span> scheme
+      </h2>
+      <p className="mt-3 text-zinc-600">
+        Built-in modules are imported with a <code className="font-mono">runtime:</code>{" "}
+        specifier. They are served from a baked, in-binary registry before any
+        injected loader runs, and never touch the filesystem. The security
+        boundary is the <strong>op</strong>, not the module: importing always
+        succeeds, but an operation throws unless its capability has been granted.
+      </p>
       <div className="mt-4">
-        <CodeBlock code={IMPORT} title="runtime:process" lang="js" />
-      </div>
-
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Exports</h2>
-      <div className="mt-5 space-y-4">
-        {exports.map((e) => (
-          <div className="rounded-xl border border-zinc-200 p-5">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <code className="font-mono text-[15px] font-semibold text-zinc-900">
-                {e.sig}
-              </code>
-              <code className="font-mono text-[13px] text-zinc-400">
-                {e.type}
-              </code>
-            </div>
-            <p className="mt-2 text-sm leading-relaxed text-zinc-600">
-              {e.desc}
-            </p>
-          </div>
-        ))}
+        <CodeBlock code={IMPORT} title="import" lang="js" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
-        env — reading and writing
+        Built-in modules
       </h2>
-      <div className="mt-4">
-        <CodeBlock code={ENV_EX} title="env.mjs" lang="js" />
+      <div className="mt-5 overflow-hidden rounded-xl border border-zinc-200">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500">
+            <tr>
+              <th className="px-4 py-3 font-semibold">Module</th>
+              <th className="px-4 py-3 font-semibold">Status</th>
+              <th className="px-4 py-3 font-semibold">Capability</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {modules.map((m) => (
+              <tr>
+                <td className="px-4 py-3 font-mono text-zinc-900">
+                  {m.href ? (
+                    <a href={m.href} className="text-brand-600 hover:text-brand-700">
+                      {m.name}
+                    </a>
+                  ) : (
+                    m.name
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  <span
+                    className={
+                      "rounded-full px-2.5 py-0.5 text-xs font-medium " +
+                      (m.status === "Available"
+                        ? "bg-emerald-50 text-emerald-700"
+                        : "bg-zinc-100 text-zinc-500")
+                    }
+                  >
+                    {m.status}
+                  </span>
+                </td>
+                <td className="px-4 py-3 font-mono text-zinc-600">{m.cap}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
-        args — program arguments
-      </h2>
-      <div className="mt-4">
-        <CodeBlock code={ARGS_EX} title="args.mjs" lang="js" />
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Capabilities</h2>
+      <p className="mt-3 text-zinc-600">
+        A fresh runtime can compute but cannot reach the host until the embedder
+        grants the relevant capability. The check lives on the native op, so it
+        cannot be bypassed by reaching a different module path.
+      </p>
+      <div className="mt-5 overflow-hidden rounded-xl border border-zinc-200">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500">
+            <tr>
+              <th className="px-4 py-3 font-semibold">Capability</th>
+              <th className="px-4 py-3 font-semibold">Grants</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {capabilities.map((c) => (
+              <tr>
+                <td className="px-4 py-3 font-mono font-medium text-zinc-900">
+                  {c.cap}
+                </td>
+                <td className="px-4 py-3 text-zinc-600">{c.grants}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
-        exit — stopping the run
-      </h2>
-      <div className="mt-4">
-        <CodeBlock code={EXIT_EX} title="exit.mjs" lang="js" />
-      </div>
-
-      <div className="mt-12 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-600">
-        <strong className="text-zinc-900">Note.</strong> The default export is an
-        object bundling all named exports — useful for a single import binding —
-        but named imports are preferred for clarity and tree-shaking.
-      </div>
-    </DocsShell>
+      <a
+        href="/api/process"
+        className="mt-10 flex items-center justify-between rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
+      >
+        <span>
+          <span className="font-mono font-semibold text-zinc-900">
+            runtime:process →
+          </span>
+          <span className="mt-1 block text-sm text-zinc-600">
+            Environment, arguments, working directory, platform, and exit.
+          </span>
+        </span>
+      </a>
+    </ApiShell>
   );
 }

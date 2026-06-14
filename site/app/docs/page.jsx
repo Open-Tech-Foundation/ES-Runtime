@@ -105,7 +105,7 @@ export default function DocsOverview() {
           </p>
         </a>
         <a
-          href="/api"
+          href="/api/process"
           className="rounded-xl border border-zinc-200 p-5 transition-shadow hover:shadow-sm"
         >
           <div className="font-semibold text-zinc-900">runtime:process →</div>

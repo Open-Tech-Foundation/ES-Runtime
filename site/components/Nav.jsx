@@ -19,7 +19,7 @@ function isActive(href) {
 
 export default function Nav() {
   return (
-    <header className="sticky top-0 z-40 border-b border-zinc-200/80 bg-white/80 backdrop-blur">
+    <header className="fixed inset-x-0 top-0 z-40 border-b border-zinc-200/80 bg-white/80 backdrop-blur">
       <nav className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
         <a href="/" className="flex items-baseline gap-2">
           <span className="text-[17px] font-bold tracking-tight text-zinc-900">

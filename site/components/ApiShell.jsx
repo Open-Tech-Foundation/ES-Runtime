@@ -1,39 +1,26 @@
-// Shared docs chrome: a left sidebar + a centered prose column. Each docs page
-// wraps its body in <DocsShell active="/docs/...">. Self-contained so it does
-// not depend on nested-layout behaviour in the router.
+// Shared chrome for the API reference: a left sidebar + a centered prose
+// column, mirroring DocsShell. Each API page wraps its body in
+// <ApiShell active="/api/...">.
 
 const NAV = [
   {
-    group: "Getting started",
+    group: "Reference",
     items: [
-      { href: "/docs", label: "Overview" },
-      { href: "/docs/scope", label: "Scope & non-goals" },
-    ],
-  },
-  {
-    group: "Comparisons",
-    items: [
-      { href: "/docs/comparison", label: "vs Node · Bun · Deno" },
-      { href: "/docs/benchmarks", label: "Benchmarks" },
-    ],
-  },
-  {
-    group: "Web standard APIs",
-    items: [
-      { href: "/docs/globals", label: "Global objects" },
-    ],
-  },
-  {
-    group: "Runtime APIs",
-    items: [
-      { href: "/docs/modules", label: "Module system" },
-      { href: "/docs/security", label: "Security model" },
+      { href: "/api", label: "Overview" },
       { href: "/api/process", label: "runtime:process" },
+    ],
+  },
+  {
+    group: "Concepts",
+    items: [
+      { href: "/docs/security", label: "Capabilities" },
+      { href: "/docs/globals", label: "Web-standard globals" },
+      { href: "/docs/modules", label: "Module system" },
     ],
   },
 ];
 
-export default function DocsShell({ active, children }) {
+export default function ApiShell({ active, children }) {
   return (
     <div className="mx-auto flex max-w-6xl gap-10 px-6 py-12">
       <aside className="hidden w-56 shrink-0 lg:block">
