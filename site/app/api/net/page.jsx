@@ -1,5 +1,6 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
+import MemberTable from "../../../components/MemberTable.jsx";
 
 const CLIENT = `import { connect } from "runtime:net";
 
@@ -52,31 +53,6 @@ const listenerMembers = [
   { m: "close()", t: "Promise<void>", d: "Stop listening." },
   { m: "[Symbol.asyncIterator]", t: "AsyncIterable<Socket>", d: "for await (const conn of server) { … }" },
 ];
-
-function MemberTable({ rows }) {
-  return (
-    <div className="mt-4 overflow-hidden rounded-xl border border-zinc-200">
-      <table className="w-full text-left text-sm">
-        <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500">
-          <tr>
-            <th className="px-4 py-3 font-semibold">Member</th>
-            <th className="px-4 py-3 font-semibold">Type</th>
-            <th className="px-4 py-3 font-semibold">Description</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-zinc-100">
-          {rows.map((x) => (
-            <tr>
-              <td className="px-4 py-3 font-mono text-[13px] font-medium text-zinc-900">{x.m}</td>
-              <td className="px-4 py-3 font-mono text-[13px] text-zinc-500">{x.t}</td>
-              <td className="px-4 py-3 text-zinc-600">{x.d}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 export default function NetDoc() {
   return (
