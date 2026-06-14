@@ -46,31 +46,6 @@ export default function DocsOverview() {
         .
       </p>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Install</h2>
-      <p className="mt-3 text-zinc-600">
-        Download a prebuilt, checksum-verified binary for your platform:
-      </p>
-      <div className="mt-4">
-        <InstallBox />
-      </div>
-      <p className="mt-3 text-sm text-zinc-500">
-        Prefer to build from source? See the{" "}
-        <a
-          href={GITHUB}
-          target="_blank"
-          rel="noreferrer"
-          className="font-medium text-brand-600 hover:text-brand-700"
-        >
-          README
-        </a>
-        .
-      </p>
-
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Run a script</h2>
-      <div className="mt-4">
-        <CodeBlock code={RUN} title="Terminal" lang="sh" />
-      </div>
-
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Principles
       </h2>
@@ -100,6 +75,31 @@ export default function DocsOverview() {
           </span>
         </li>
       </ul>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Install</h2>
+      <p className="mt-3 text-zinc-600">
+        Download a prebuilt, checksum-verified binary for your platform:
+      </p>
+      <div className="mt-4">
+        <InstallBox />
+      </div>
+      <p className="mt-3 text-sm text-zinc-500">
+        Prefer to build from source? See the{" "}
+        <a
+          href={GITHUB}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-brand-600 hover:text-brand-700"
+        >
+          README
+        </a>
+        .
+      </p>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Run a script</h2>
+      <div className="mt-4">
+        <CodeBlock code={RUN} title="Terminal" lang="sh" />
+      </div>
     </DocsShell>
   );
 }

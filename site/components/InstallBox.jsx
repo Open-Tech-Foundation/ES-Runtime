@@ -9,7 +9,7 @@ const UNIX = `curl -fsSL ${RAW}/install.sh | bash`;
 const WIN = `irm ${RAW}/install.ps1 | iex`;
 
 const CODE_BASE = "flex-1 break-all text-[13px] leading-relaxed transition-colors ";
-const TAB_BASE = "rounded-t-md px-3 py-1.5 text-xs font-medium transition-colors ";
+const TAB_BASE = "-mb-px border-b-2 px-3 py-2 text-xs font-semibold transition-colors ";
 
 export default function InstallBox() {
   let active = $state("unix"); // "unix" | "win"
@@ -36,8 +36,8 @@ export default function InstallBox() {
           className={
             TAB_BASE +
             (active === "unix"
-              ? "bg-zinc-900 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300")
+              ? "border-brand-500 text-white"
+              : "border-transparent text-zinc-400 hover:text-zinc-200")
           }
         >
           Linux / macOS
@@ -48,8 +48,8 @@ export default function InstallBox() {
           className={
             TAB_BASE +
             (active === "win"
-              ? "bg-zinc-900 text-zinc-100"
-              : "text-zinc-500 hover:text-zinc-300")
+              ? "border-brand-500 text-white"
+              : "border-transparent text-zinc-400 hover:text-zinc-200")
           }
         >
           Windows (PowerShell)

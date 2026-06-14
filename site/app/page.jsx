@@ -67,7 +67,7 @@ export default function HomePage() {
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a
                 href="/docs"
-                className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-zinc-800"
+                className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-brand-700"
               >
                 <span>🚀</span> Get started
               </a>
@@ -164,9 +164,8 @@ export default function HomePage() {
             Ship a runtime you can trust.
           </h2>
           <p className="mx-auto mt-4 max-w-xl text-lg text-zinc-400">
-            Embed esrun, or explore the standard{" "}
-            <span className="font-mono text-zinc-200">runtime:</span> module
-            APIs.
+            Run untrusted JavaScript with only the capabilities you grant —
+            embed the library, or use the <span className="font-mono text-zinc-200">esrun</span> CLI.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <a
