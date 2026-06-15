@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-15
+
 ### Changed
 
 - **`runtime:http` throughput — per-request cost cut ~30% (≈35k → ≈49k req/s,
