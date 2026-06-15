@@ -55,3 +55,49 @@ button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {
   cursor: pointer;
 }
+
+/* Benchmark roller (home page): a seamless vertical marquee. The track holds the
+   card set twice and scrolls up by exactly half its height, so the loop is
+   continuous. Pause on hover; honor reduced-motion (becomes a normal scroll). */
+@keyframes bench-roll {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-50%);
+  }
+}
+.bench-roll-track {
+  animation: bench-roll var(--bench-roll-duration, 55s) linear infinite;
+  will-change: transform;
+}
+.bench-roll-container:hover .bench-roll-track {
+  animation-play-state: paused;
+}
+/* Fade the top/bottom edges so cards enter and leave softly. */
+.bench-roll-container {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 7%,
+    #000 93%,
+    transparent
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 7%,
+    #000 93%,
+    transparent
+  );
+}
+@media (prefers-reduced-motion: reduce) {
+  .bench-roll-track {
+    animation: none;
+  }
+  .bench-roll-container {
+    overflow-y: auto;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}

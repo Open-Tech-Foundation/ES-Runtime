@@ -1,19 +1,7 @@
-import BenchChart from "../components/BenchChart.jsx";
+import BenchRoller from "../components/BenchRoller.jsx";
 import RpsChart from "../components/RpsChart.jsx";
 import InstallBox from "../components/InstallBox.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
-
-// A balanced, honest slice of the benchmarks — all top-priority for server
-// runtimes. Three where we lead (startup, memory, crypto) and two where we
-// don't (HTTP throughput, CPU compute). The chart greens the real winner per
-// row, so the trade-offs show plainly. Full set lives on /docs/benchmarks.
-const HERO_METRICS = [
-  { key: "startup", label: "Cold start", unit: "ms" },
-  { key: "rss", label: "Peak memory", unit: "MB" },
-  { key: "crypto", label: "WebCrypto", unit: "ms" },
-  { key: "fetch", label: "HTTP fetch", unit: "ms" },
-  { key: "compute", label: "CPU compute", unit: "ms" },
-];
 
 const features = [
   {
@@ -89,9 +77,9 @@ export default function HomePage() {
                   vs Node.js · Bun · Deno
                 </span>
               </div>
-              <BenchChart metrics={HERO_METRICS} />
+              <RpsChart />
               <div className="mt-5 border-t border-zinc-100 pt-5">
-                <RpsChart />
+                <BenchRoller />
               </div>
               <a
                 href="/docs/benchmarks"
