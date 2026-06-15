@@ -3,133 +3,155 @@
     "node": "v24.14.0",
     "bun": "1.3.12",
     "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
-    "esrun": "esrun 0.1.0"
+    "llrt": "LLRT v0.8.0-beta (linux, x64)",
+    "esrun": "esrun 0.2.0"
   },
   "results_ms": {
     "startup": {
-      "node": 18.1,
-      "bun": 9.2,
-      "deno": 25.8,
-      "esrun": 7.2
+      "node": 24.3,
+      "bun": 9.0,
+      "deno": 25.0,
+      "llrt": 3.4,
+      "esrun": 6.7
     },
     "bigscript": {
-      "node": 30.3,
-      "bun": 22.9,
-      "deno": 36.1,
-      "esrun": 20.0
+      "node": 31.7,
+      "bun": 23.7,
+      "deno": 34.0,
+      "llrt": 11.6,
+      "esrun": 20.1
     },
     "compute": {
-      "node": 214.4,
-      "bun": 157.8,
-      "deno": 244.1,
-      "esrun": 267.7
+      "node": 219.1,
+      "bun": 141.6,
+      "deno": 229.2,
+      "llrt": 2450.9,
+      "esrun": 259.3
     },
     "json": {
-      "node": 317.1,
-      "bun": 253.6,
-      "deno": 271.7,
-      "esrun": 250.1
+      "node": 323.1,
+      "bun": 244.8,
+      "deno": 249.7,
+      "llrt": 784.2,
+      "esrun": 233.5
     },
     "jsonbig": {
-      "node": 756.1,
-      "bun": 738.1,
-      "deno": 671.8,
-      "esrun": 755.3
+      "node": 785.8,
+      "bun": 708.4,
+      "deno": 626.6,
+      "llrt": 2003.7,
+      "esrun": 684.9
     },
     "sha256": {
-      "node": 729.1,
-      "bun": 566.7,
-      "deno": 664.6,
-      "esrun": 381.5
+      "node": 732.9,
+      "bun": 543.9,
+      "deno": 620.7,
+      "llrt": 368.0,
+      "esrun": 368.9
     },
     "crypto": {
-      "node": 265.8,
-      "bun": 127.2,
-      "deno": 190.8,
-      "esrun": 39.6
+      "node": 237.5,
+      "bun": 112.3,
+      "deno": 182.5,
+      "llrt": 30.7,
+      "esrun": 39.7
     },
     "url": {
-      "node": 67.1,
-      "bun": 96.5,
-      "deno": 126.2,
-      "esrun": 115.7
+      "node": 61.0,
+      "bun": 94.0,
+      "deno": 126.1,
+      "llrt": 128.5,
+      "esrun": 102.1
     },
     "encoding": {
-      "node": 88.1,
-      "bun": 27.8,
-      "deno": 92.6,
-      "esrun": 97.7
+      "node": 81.8,
+      "bun": 26.4,
+      "deno": 85.7,
+      "llrt": 88.1,
+      "esrun": 95.0
     },
     "base64": {
-      "node": 10.5,
-      "bun": 15.4,
-      "deno": 9.7,
-      "esrun": 88.7
+      "node": 8.0,
+      "bun": 16.4,
+      "deno": 9.8,
+      "llrt": 36.3,
+      "esrun": 74.0
     },
     "structured": {
-      "node": 265.4,
-      "bun": 318.2,
-      "deno": 324.4,
-      "esrun": 370.5
+      "node": 251.5,
+      "bun": 307.6,
+      "deno": 299.3,
+      "llrt": 383.8,
+      "esrun": 349.3
     },
     "async": {
-      "node": 73.9,
-      "bun": 61.6,
-      "deno": 38.8,
-      "esrun": 36.8
+      "node": 66.2,
+      "bun": 58.7,
+      "deno": 38.2,
+      "llrt": 801.6,
+      "esrun": 37.0
     },
     "timers": {
-      "node": 7.2,
-      "bun": 9.3,
-      "deno": 30.7,
-      "esrun": 5.4
+      "node": 6.8,
+      "bun": 9.5,
+      "deno": 29.2,
+      "llrt": 6.2,
+      "esrun": 5.6
     },
     "streams": {
-      "node": 31.4,
-      "bun": 26.8,
-      "deno": 17.4,
-      "esrun": 12.7
+      "node": 32.9,
+      "bun": 23.7,
+      "deno": 17.0,
+      "llrt": null,
+      "esrun": 12.8
     },
     "fetch": {
-      "node": 123.9,
-      "bun": 25.4,
-      "deno": 47.5,
-      "esrun": 47.7
+      "node": 115.7,
+      "bun": 27.0,
+      "deno": 50.3,
+      "llrt": 29.3,
+      "esrun": 48.4
     },
     "http": {
-      "node": 514.7,
-      "bun": 75.7,
-      "deno": 136.6,
-      "esrun": 159.3
+      "node": 460.6,
+      "bun": 58.1,
+      "deno": 131.3,
+      "llrt": null,
+      "esrun": 107.5
     },
     "fsread": {
-      "node": 168.7,
-      "bun": 45.0,
-      "deno": 55.2,
-      "esrun": 82.0
+      "node": 160.3,
+      "bun": 43.7,
+      "deno": 52.9,
+      "llrt": null,
+      "esrun": 84.3
     },
     "fswrite": {
-      "node": 235.4,
-      "bun": 13.9,
-      "deno": 114.8,
-      "esrun": 110.8
+      "node": 217.9,
+      "bun": 13.8,
+      "deno": 105.3,
+      "llrt": null,
+      "esrun": 108.6
     },
     "fsappend": {
-      "node": 151.9,
-      "bun": 48.6,
-      "deno": 55.9,
-      "esrun": 74.9
+      "node": 146.2,
+      "bun": 46.5,
+      "deno": 56.3,
+      "llrt": null,
+      "esrun": 75.9
     },
     "glob": {
-      "node": 286.4,
-      "bun": 43.7,
+      "node": 278.0,
+      "bun": 43.6,
       "deno": null,
-      "esrun": 57.4
+      "llrt": null,
+      "esrun": 58.6
     },
     "rss": {
-      "node": 40,
-      "bun": 29,
+      "node": 41,
+      "bun": 30,
       "deno": 53,
+      "llrt": 11,
       "esrun": 19
     }
   }

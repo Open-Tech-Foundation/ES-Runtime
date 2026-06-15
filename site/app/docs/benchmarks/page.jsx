@@ -29,7 +29,7 @@ const workloads = [
   { key: "glob", label: "Glob scan", unit: "ms" },
 ];
 
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
+const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 
 const versions = Object.keys(bench.runtimes).map((k) => ({
   k: LABELS[k] || k,
@@ -44,10 +44,10 @@ export default function BenchmarksDoc() {
         Benchmarks
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        All workloads use only Web APIs common to every runtime, so the same
-        script runs unmodified on each. Lower is better. esrun leads on startup,
-        memory, and crypto; it is honestly behind on a few raw-throughput
-        workloads — the numbers are shown as measured.
+        Standard Web APIs, the same script on each runtime (n/a where a runtime
+        lacks one). Lower is better. esrun pairs near-instant startup with full
+        WinterTC coverage and a JIT engine; LLRT (QuickJS) edges it on cold start
+        and memory but has no JIT, server, or fs APIs. Numbers shown as measured.
       </p>
 
       <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600">

@@ -7,8 +7,8 @@
 // so dynamic styles must be objects (a style string becomes Object.assign).
 import bench from "../src/benchmarks.json";
 
-const ORDER = ["esrun", "bun", "node", "deno"];
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
+const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
+const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 
 function maxOf(row, runtimes) {
   let max = 0;
