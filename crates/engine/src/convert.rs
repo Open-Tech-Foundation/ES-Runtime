@@ -85,6 +85,38 @@ pub(crate) fn build_exception<'s>(
     err: &dyn IntoException,
 ) -> v8::Local<'s, v8::Value> {
     let class = err.exception_class();
+
+    // Fallback/dynamic constructor lookup for classes V8 doesn't provide natively.
+    let try_construct = |scope: &mut v8::PinScope<'s, '_>, class_name: &str, args: &[v8::Local<'s, v8::Value>]| -> Option<v8::Local<'s, v8::Value>> {
+        let context = scope.get_current_context();
+        let global = context.global(scope);
+        let key = v8::String::new(scope, class_name)?;
+        let constructor = global.get(scope, key.into())?;
+        if constructor.is_function() {
+            let constructor = v8::Local::<v8::Function>::try_from(constructor).ok()?;
+            let exception = constructor.new_instance(scope, args)?;
+            Some(exception.into())
+        } else {
+            None
+        }
+    };
+
+    if let ExceptionClass::DomException(name) = class {
+        if let Some(msg_val) = v8::String::new(scope, &err.exception_message()) {
+            if let Some(name_val) = v8::String::new(scope, name) {
+                if let Some(ex) = try_construct(scope, "DOMException", &[msg_val.into(), name_val.into()]) {
+                    return ex;
+                }
+            }
+        }
+    } else if let ExceptionClass::UriError = class {
+        if let Some(msg_val) = v8::String::new(scope, &err.exception_message()) {
+            if let Some(ex) = try_construct(scope, "URIError", &[msg_val.into()]) {
+                return ex;
+            }
+        }
+    }
+
     let text = match class.dom_exception_name() {
         Some(name) => format!("{name}: {}", err.exception_message()),
         None => err.exception_message(),
@@ -95,8 +127,7 @@ pub(crate) fn build_exception<'s>(
         ExceptionClass::ReferenceError => v8::Exception::reference_error(scope, message),
         ExceptionClass::SyntaxError => v8::Exception::syntax_error(scope, message),
         ExceptionClass::TypeError => v8::Exception::type_error(scope, message),
-        // `Error`, plus `URIError`/`DOMException` (no bare-V8 constructor) and
-        // any future class: default to a plain `Error`.
+        // `Error` and any future class: default to a plain `Error`.
         _ => v8::Exception::error(scope, message),
     }
 }

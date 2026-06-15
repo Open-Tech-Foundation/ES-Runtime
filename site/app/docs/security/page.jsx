@@ -43,7 +43,8 @@ export default function SecurityDoc() {
       <p className="mt-3 text-zinc-600">
         Every host operation declares the capability it requires. The check
         lives on the native op, not in JavaScript, so it cannot be bypassed by
-        reaching a different module path.
+        reaching a different module path. A denied capability will instantly
+        throw a standard <code>DOMException</code> with the <code>NotAllowedError</code> name.
       </p>
       <div className="mt-5 overflow-hidden rounded-xl border border-zinc-200">
         <table className="w-full text-left text-sm">

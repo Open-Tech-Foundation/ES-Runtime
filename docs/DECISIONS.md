@@ -58,14 +58,13 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 > - **Engine trait now extracted** (resolving the Phase 1 "concrete only" note).
 >   `engine::Engine` is object-safe and names no V8 type; `runtime` holds a
 >   `Box<dyn Engine>`. The boundary held — no V8 type appears in `runtime`.
-> - **`DOMException` is partially real (updated Phase 4).** The prelude now
->   defines a real `globalThis.DOMException` class, so prelude APIs (atob/btoa,
->   structuredClone, Abort) throw the correct type with `instanceof Error`. The
->   remaining gap: errors thrown from the **engine** (Rust side, e.g. a capability
->   denial → `NotAllowedError`) still surface as a plain `Error` with a
->   name-prefixed message, because the engine has no handle to the JS class. A
->   later phase reconciles the two paths (engine throws the prelude's
->   `DOMException`).
+> - **`DOMException` is fully real.** The prelude defines a real
+>   `globalThis.DOMException` class, so prelude APIs (atob/btoa,
+>   structuredClone, Abort) throw the correct type with `instanceof Error`.
+>   Errors thrown natively from the **engine** (Rust side, e.g. a capability
+>   denial → `NotAllowedError`) now correctly resolve this class from
+>   `globalThis` during construction, surfacing as true `DOMException` instances
+>   to JS.
 > - **Async readiness is observed only on `tick`.** With no reactor (std-only,
 >   `Waker::noop`), a pending op's future is polled when the embedder ticks, not
 >   when its work actually becomes ready. *Reason:* the driven model (D4); a real
