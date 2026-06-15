@@ -6,9 +6,10 @@
 #
 # Asks for a major / minor / patch bump, then:
 #   1. bumps the version (workspace Cargo.toml — package version + the internal
-#      es-runtime* dep pins — and Cargo.lock). The site
-#      (site/package.json) is versioned independently — docs change far more
-#      often than the runtime — so it is intentionally left alone.
+#      es-runtime* dep pins — Cargo.lock, and the site's displayed runtime
+#      version in site/src/runtime-version.js). The site's own package.json
+#      version is independent — docs change far more often than the runtime — so
+#      it is intentionally left alone.
 #   2. promotes CHANGELOG.md's [Unreleased] section to the new version + date,
 #   3. shows the diff and asks you to confirm,
 #   4. commits + creates an annotated git tag,
@@ -24,6 +25,9 @@ cd "$ROOT"
 
 CARGO_TOML="Cargo.toml"
 CHANGELOG="CHANGELOG.md"
+# Committed module the site imports to display the runtime version (kept in sync
+# here so vite.config.js needs no build-time file read — portable to any host).
+SITE_VERSION="site/src/runtime-version.js"
 
 red() { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -109,6 +113,9 @@ cargo update --workspace --offline >/dev/null 2>&1 ||
     git checkout -- "$CARGO_TOML" 2>/dev/null || true
     err "could not update Cargo.lock (run 'cargo update --workspace' and retry)"
   }
+# Sync the site's displayed runtime version (string-replace, preserving comments).
+[ -f "$SITE_VERSION" ] && NEW="$new" perl -i -pe \
+  's/(RUNTIME_VERSION = ")[^"]+(")/${1}$ENV{NEW}${2}/' "$SITE_VERSION"
 
 # --- 2. changelog: promote [Unreleased] -> [new] - date, keep a fresh one ---
 grep -q '^## \[Unreleased\]' "$CHANGELOG" || err "no '## [Unreleased]' section in $CHANGELOG"
@@ -119,7 +126,7 @@ NEW="$new" DATE="$date" perl -0777 -i -pe \
 # --- 3. review + confirm ----------------------------------------------------
 echo
 bold "Changes for $tag:"
-git --no-pager diff -- "$CARGO_TOML" "$CHANGELOG"
+git --no-pager diff -- "$CARGO_TOML" "$CHANGELOG" "$SITE_VERSION"
 echo
 printf "Commit these and tag %s? [y/N] " "$tag"
 read -r confirm
@@ -127,13 +134,13 @@ case "$confirm" in
   y | Y) ;;
   *)
     bold "Aborted — reverting changes."
-    git checkout -- "$CARGO_TOML" "$CHANGELOG" Cargo.lock 2>/dev/null || true
+    git checkout -- "$CARGO_TOML" "$CHANGELOG" Cargo.lock "$SITE_VERSION" 2>/dev/null || true
     exit 1
     ;;
 esac
 
 # --- 4. commit + tag --------------------------------------------------------
-git add "$CARGO_TOML" "$CHANGELOG" Cargo.lock
+git add "$CARGO_TOML" "$CHANGELOG" Cargo.lock "$SITE_VERSION"
 git commit -m "release: $tag"
 git tag -a "$tag" -m "$tag"
 bold "Committed and tagged $tag."

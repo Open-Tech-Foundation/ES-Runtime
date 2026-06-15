@@ -1,18 +1,12 @@
 import { defineConfig } from 'vite'
 import { babel } from '@rollup/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
-import { readFileSync } from 'node:fs'
 
-// The displayed runtime version comes from the workspace Cargo.toml (the single
-// source of truth, bumped by scripts/release.sh). This site's own package.json
-// version is unrelated — docs change far more often than the runtime.
-const cargoToml = readFileSync(new URL('../Cargo.toml', import.meta.url), 'utf8')
-const runtimeVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1] ?? '0.0.0'
-
+// The displayed runtime version lives in src/runtime-version.js (a committed
+// module synced from the workspace Cargo.toml by scripts/release.sh) — imported
+// like any source, so this config reads no files at build time and stays
+// portable to any static host.
 export default defineConfig({
-  define: {
-    __RUNTIME_VERSION__: JSON.stringify(runtimeVersion),
-  },
   esbuild: {
     jsx: 'preserve'
   },

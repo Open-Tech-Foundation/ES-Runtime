@@ -1,10 +1,11 @@
 import { router } from "@opentf/web/router";
+import { RUNTIME_VERSION } from "../src/runtime-version.js";
 
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
-// Injected from the workspace Cargo.toml at build time (see vite.config.js) —
-// the released runtime version, not this site's package.json.
-const VERSION = __RUNTIME_VERSION__;
+// The released runtime version (not this site's package.json). Kept in
+// src/runtime-version.js, synced from the workspace Cargo.toml by release.sh.
+const VERSION = RUNTIME_VERSION;
 
 const LINKS = [
   { href: "/", label: "Home" },
