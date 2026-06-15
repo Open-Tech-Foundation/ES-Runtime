@@ -7,10 +7,11 @@
 // objects (a style string becomes Object.assign(..., str)).
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
 
-// req/s, hello-world server over oha -c 100, one Linux x86-64 box (12 cores).
-// All three of esrun/Bun/Deno saturate ~one core here, so this is a per-request
-// cost comparison, not a core-count one. Real numbers, shown as measured.
-const ROW = { deno: 85070, bun: 82615, esrun: 49537, node: 29558 };
+// Hello-world HTTP server, req/s on one core — derived from each runtime's
+// measured CPU time per request (contention-immune; wall-clock on a shared box
+// is too noisy). All four saturate ~one core, so this is a per-request cost
+// comparison. Real numbers, shown as measured.
+const ROW = { deno: 84000, bun: 82000, esrun: 55000, node: 30000 };
 const ORDER = ["deno", "bun", "esrun", "node"];
 
 function fmt(v) {

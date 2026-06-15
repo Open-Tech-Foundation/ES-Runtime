@@ -6,6 +6,20 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Changed
+
+- **`runtime:http` per-request cost trimmed further (~20.8 → ~18.2 µs CPU/req).**
+  Two prelude refinements: a string `Response`/`Request` body is kept as a string
+  and encoded lazily — the server hands it straight to `http_respond`, which
+  encodes it Rust-side, dropping a per-request `utf8_encode` op crossing and an
+  intermediate JS `Uint8Array`; and the trusted server `Request` builds its
+  `Headers` object only when a handler reads `req.headers`. Behavior unchanged
+  (`text()`/`arrayBuffer()`/`content-type` and header-reading handlers verified).
+  Measured by **server CPU-time per request** (contention-immune; wall-clock
+  req/s on a shared box is too noisy to compare). The residual gap to Bun/Deno
+  (~12 µs) is the injectable-provider + driven-loop seam — a channel handoff and
+  op/promise round-trip per request, by design.
+
 ## [0.2.0] - 2026-06-15
 
 ### Changed

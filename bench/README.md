@@ -177,17 +177,36 @@ esrun   |      49,537                   esrun   |      47,722
 node    |      29,558                   node    |      28,217
 ```
 
-esrun beats Node comfortably and reaches ~60% of Bun/Deno on the bare server,
-~75% through Hono. **All three (esrun, Bun, Deno) saturate ~one core** under this
-load — so this is not a core-count gap but a per-request one: esrun's
-JS↔Rust op boundary costs more per request than Bun's/Deno's tightly-integrated
-native path. The `runtime:http` request path was tuned for it (batched accept
-draining many requests per op crossing; structured request metadata instead of a
-per-request JSON round-trip; a synchronous response-body path; and reusing the
-host-validated URL instead of re-parsing it), which roughly cut the per-request
-cost from ~29µs to ~20µs (≈35k → ≈49k req/s). A single V8 isolate on a
-current-thread tokio runtime is the remaining ceiling — by design (it's an
-embeddable runtime, not a multi-core web server).
+esrun beats Node comfortably and reaches roughly two-thirds of Bun/Deno on the
+bare server. **All three (esrun, Bun, Deno) saturate ~one core** under this load,
+so this is not a core-count gap but a per-request one.
+
+Wall-clock req/s is noisy on a shared box, though (a busy machine throttles the
+single-threaded server unpredictably). The **contention-immune** measure is the
+server's **CPU time per request** — what it actually computes, independent of how
+long it waited for a core — and it's stable across runs:
+
+```
+                 CPU µs/req   ~req/s on 1 core
+bare hyper (Rust)    ~10.4         —   (transport floor, no JS)
+deno                 ~11.9       ~84k
+bun                  ~12.2       ~82k
+esrun                ~18.2       ~55k
+node                 ~33.8       ~30k
+```
+
+The story is in the gap over bare hyper: Bun/Deno add only ~2µs of JS-handler
+overhead (their HTTP server calls JS natively); esrun adds ~8µs — the
+**injectable-provider + driven-loop seam** (hyper hands each request over a
+channel, the JS loop pulls it via an async op/promise, and the response crosses
+back the same way). That seam is what makes esrun embeddable and
+capability-secured; it isn't waste, it's the boundary. The request path was tuned
+hard against it — batched accept (many requests per op crossing), structured
+request metadata (no per-request JSON), a synchronous + lazily-encoded response
+body, lazy `Headers`, and reusing the host-validated URL — taking esrun from
+~29µs to ~18µs CPU/req. The remaining floor is that seam plus the single
+V8 isolate on a current-thread tokio runtime — by design (an embeddable runtime,
+not a multi-core web server).
 
 ### Through a framework (Hono)
 
