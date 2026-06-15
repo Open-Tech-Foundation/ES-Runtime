@@ -1,4 +1,5 @@
 import BenchChart from "../components/BenchChart.jsx";
+import RpsChart from "../components/RpsChart.jsx";
 import InstallBox from "../components/InstallBox.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
 
@@ -89,6 +90,9 @@ export default function HomePage() {
                 </span>
               </div>
               <BenchChart metrics={HERO_METRICS} />
+              <div className="mt-5 border-t border-zinc-100 pt-5">
+                <RpsChart />
+              </div>
               <a
                 href="/docs/benchmarks"
                 className="mt-5 inline-block text-xs font-medium text-brand-600 hover:text-brand-700"

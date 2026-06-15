@@ -11,14 +11,17 @@
 # Needs `autocannon` (used via `bunx autocannon`, or a global install). If
 # neither is available the script explains and exits.
 #
-# Usage:  bench/rps.sh                       (auto-detects installed runtimes)
-#         CONN=250 PIPELINE=20 bench/rps.sh  (higher load / HTTP pipelining)
+# Usage:  bench/rps.sh                        (auto-detects installed runtimes)
+#         CONN=250 PIPELINE=20 bench/rps.sh   (higher load / HTTP pipelining)
 #         DURATION=10 bench/rps.sh
+#         SERVER=scripts/hono.js bench/rps.sh (serve through the Hono framework;
+#                                              run `bun add hono @hono/node-server` first)
 set -uo pipefail
 cd "$(dirname "$0")"
 
 ESRUN="${ESRUN:-../target/release/esrun}"
-PORT=3000   # scripts/helloserver.js binds this fixed port
+SERVER="${SERVER:-scripts/helloserver.js}"  # the hello-world server to run
+PORT=3000   # the server scripts bind this fixed port
 CONN="${CONN:-100}"
 PIPELINE="${PIPELINE:-1}"
 DURATION="${DURATION:-10}"
@@ -56,7 +59,7 @@ trap cleanup EXIT
 # Pulls req/s + latency out of autocannon's JSON for one runtime.
 measure() {
   local cmd="$1" j
-  $cmd scripts/helloserver.js >/dev/null 2>&1 &
+  $cmd "$SERVER" >/dev/null 2>&1 &
   SERVER_PID=$!
   # Wait for the port to accept connections (up to ~5s).
   for _ in $(seq 50); do
@@ -73,6 +76,7 @@ print(f\"{d['requests']['average']:.0f} {d['latency']['average']} {d['latency'][
 }
 
 echo "HTTP requests/sec — hello-world plaintext (\"Hello, World!\")"
+echo "server: $SERVER"
 echo "load: autocannon -c $CONN -p $PIPELINE -d ${DURATION}s on 127.0.0.1:$PORT"
 echo
 printf "%-7s | %12s | %11s | %11s\n" "runtime" "req/sec" "avg lat" "p99 lat"

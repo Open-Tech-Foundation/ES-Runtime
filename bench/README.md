@@ -179,7 +179,36 @@ earlier "2× slower" reading came from the in-process `http` workload, where esr
 pays for the client and the server on the same thread; measured server-to-client
 it isn't there.
 
+### Through a framework (Hono)
+
+The same shape served through [Hono] — a real, third-party web framework —
+instead of each runtime's bare server. This is the framework counterpart to the
+Bun framework charts: it shows esrun runs **unmodified npm ESM packages** off
+`node_modules`, not just its own server. Hono is Web-standard
+(`app.fetch(request) -> Response`), so it plugs straight into `runtime:http`,
+`Bun.serve`, and `Deno.serve`; Node uses Hono's `@hono/node-server` adapter.
+
+```sh
+cd bench && bun install               # hono + @hono/node-server
+SERVER=scripts/hono.js bench/rps.sh   # -c 100 -p 1
+```
+
+```
+runtime |      req/sec
+--------+------------
+node    |      33,358
+bun     |      39,686
+deno    |      40,150
+esrun   |      40,220
+```
+
+esrun is again at parity (marginally highest), and the framework layer costs all
+four about the same as the bare server — Express, by contrast, cannot run on
+esrun at all (it is CommonJS and needs `node:http`'s `(req, res)` API; esrun is
+ESM-only and rejects `node:` builtins).
+
 [autocannon]: https://github.com/mcollina/autocannon
+[Hono]: https://hono.dev
 
 ## Caveats
 
