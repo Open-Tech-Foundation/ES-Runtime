@@ -5,6 +5,7 @@
 //! gated on `Capability::FileRead` and mutations on `Capability::FileWrite` by
 //! `runtime` before any method here runs.
 
+use dashmap::DashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -43,6 +44,7 @@ fn parse_glob(pattern: &str) -> Result<(globset::GlobMatcher, bool), ProviderErr
 pub struct SystemFileSystem {
     base: PathBuf,
     root: PathBuf,
+    jail_cache: DashMap<String, PathBuf>,
 }
 
 impl SystemFileSystem {
@@ -54,6 +56,7 @@ impl SystemFileSystem {
         SystemFileSystem {
             base: base.as_ref().to_path_buf(),
             root,
+            jail_cache: DashMap::new(),
         }
     }
 
@@ -62,13 +65,18 @@ impl SystemFileSystem {
     /// path, the deepest existing ancestor is canonicalized and checked, then the
     /// remaining (literal, `..`-free) components are reattached.
     fn jailed(&self, p: &str) -> Result<PathBuf, ProviderError> {
+        if let Some(cached) = self.jail_cache.get(p) {
+            return Ok(cached.clone());
+        }
         let raw = Path::new(p);
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        confine(&abs, &self.root)
+        let resolved = confine(&abs, &self.root)?;
+        self.jail_cache.insert(p.to_string(), resolved.clone());
+        Ok(resolved)
     }
 }
 
@@ -129,6 +137,13 @@ fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
 impl FileSystem for SystemFileSystem {
     fn read(&self, path: String) -> BoxFuture<Result<Vec<u8>, ProviderError>> {
         let resolved = self.jailed(&path);
+        if let Ok(p) = &resolved
+            && let Ok(md) = std::fs::metadata(p)
+                && md.len() < 64 * 1024 {
+                    return Box::pin(std::future::ready(
+                        std::fs::read(p).map_err(|e| other(&path, e)),
+                    ));
+                }
         Box::pin(async move {
             let p = resolved?;
             tokio::fs::read(&p).await.map_err(|e| other(&path, e))
@@ -142,9 +157,29 @@ impl FileSystem for SystemFileSystem {
         append: bool,
     ) -> BoxFuture<Result<u64, ProviderError>> {
         let resolved = self.jailed(&path);
+        let len = data.len() as u64;
+
+        if let Ok(p) = &resolved
+            && len < 64 * 1024 {
+                let res = (|| -> std::io::Result<()> {
+                    let mut opts = std::fs::OpenOptions::new();
+                    opts.write(true).create(true);
+                    if append {
+                        opts.append(true);
+                    } else {
+                        opts.truncate(true);
+                    }
+                    use std::io::Write;
+                    let mut f = opts.open(p)?;
+                    f.write_all(&data)?;
+                    Ok(())
+                })();
+                return Box::pin(std::future::ready(
+                    res.map(|_| len).map_err(|e| other(&path, e)),
+                ));
+            }
         Box::pin(async move {
             let p = resolved?;
-            let len = data.len() as u64;
             let mut opts = tokio::fs::OpenOptions::new();
             opts.write(true).create(true);
             if append {
@@ -160,6 +195,19 @@ impl FileSystem for SystemFileSystem {
 
     fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>> {
         let resolved = self.jailed(&path);
+        if let Ok(p) = &resolved
+            && let Ok(md) = std::fs::metadata(p) {
+                let is_symlink = std::fs::symlink_metadata(p)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false);
+                return Box::pin(std::future::ready(Ok(FileStat {
+                    size: md.len(),
+                    is_file: md.is_file(),
+                    is_dir: md.is_dir(),
+                    is_symlink,
+                    mtime_ms: mtime_ms(&md),
+                })));
+            }
         Box::pin(async move {
             let p = resolved?;
             let md = tokio::fs::metadata(&p).await.map_err(|e| other(&path, e))?;
@@ -179,33 +227,37 @@ impl FileSystem for SystemFileSystem {
 
     fn exists(&self, path: String) -> BoxFuture<Result<bool, ProviderError>> {
         let resolved = self.jailed(&path);
-        Box::pin(async move {
-            match resolved {
-                Ok(p) => tokio::fs::try_exists(&p).await.map_err(|e| other(&path, e)),
-                // A path that cannot be resolved within the jail simply does not
-                // exist from the guest's point of view.
-                Err(_) => Ok(false),
-            }
-        })
+        if let Ok(p) = &resolved {
+            return Box::pin(std::future::ready(
+                p.try_exists().map_err(|e| other(&path, e)),
+            ));
+        }
+        Box::pin(std::future::ready(Ok(false)))
     }
 
     fn read_dir(&self, path: String) -> BoxFuture<Result<Vec<DirEntry>, ProviderError>> {
         let resolved = self.jailed(&path);
-        Box::pin(async move {
-            let p = resolved?;
-            let mut rd = tokio::fs::read_dir(&p).await.map_err(|e| other(&path, e))?;
-            let mut out = Vec::new();
-            while let Some(entry) = rd.next_entry().await.map_err(|e| other(&path, e))? {
-                let ft = entry.file_type().await.map_err(|e| other(&path, e))?;
-                out.push(DirEntry {
-                    name: entry.file_name().to_string_lossy().into_owned(),
-                    is_file: ft.is_file(),
-                    is_dir: ft.is_dir(),
-                    is_symlink: ft.is_symlink(),
-                });
-            }
-            Ok(out)
-        })
+        if let Ok(p) = &resolved {
+            let res = (|| -> std::io::Result<Vec<DirEntry>> {
+                let mut out = Vec::new();
+                for entry in std::fs::read_dir(p)? {
+                    let entry = entry?;
+                    let ft = entry.file_type()?;
+                    out.push(DirEntry {
+                        name: entry.file_name().to_string_lossy().into_owned(),
+                        is_file: ft.is_file(),
+                        is_dir: ft.is_dir(),
+                        is_symlink: ft.is_symlink(),
+                    });
+                }
+                Ok(out)
+            })();
+            return Box::pin(std::future::ready(res.map_err(|e| other(&path, e))));
+        }
+        Box::pin(std::future::ready(Err(other(
+            &path,
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        ))))
     }
 
     fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {

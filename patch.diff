@@ -1,0 +1,81 @@
+--- crates/default-providers/src/system_fs.rs
++++ crates/default-providers/src/system_fs.rs
+@@ -10,6 +10,7 @@
+ use std::ffi::OsString;
+ use std::path::{Path, PathBuf};
+ use std::time::UNIX_EPOCH;
++use dashmap::DashMap;
+ 
+ use es_runtime_providers::{
+     BoxFuture, DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError,
+@@ -43,6 +44,7 @@
+ pub struct SystemFileSystem {
+     base: PathBuf,
+     root: PathBuf,
++    jail_cache: DashMap<String, PathBuf>,
+ }
+ 
+ impl SystemFileSystem {
+@@ -53,6 +55,7 @@
+         SystemFileSystem {
+             base: base.as_ref().to_path_buf(),
+             root,
++            jail_cache: DashMap::new(),
+         }
+     }
+ 
+@@ -61,6 +64,9 @@
+     /// path, the deepest existing ancestor is canonicalized and checked, then the
+     /// remaining (literal, `..`-free) components are reattached.
+     fn jailed(&self, p: &str) -> Result<PathBuf, ProviderError> {
++        if let Some(cached) = self.jail_cache.get(p) {
++            return Ok(cached.clone());
++        }
+         let raw = Path::new(p);
+         let abs = if raw.is_absolute() {
+             raw.to_path_buf()
+@@ -68,7 +74,9 @@
+         } else {
+             self.base.join(raw)
+         };
+-        confine(&abs, &self.root)
++        let resolved = confine(&abs, &self.root)?;
++        self.jail_cache.insert(p.to_string(), resolved.clone());
++        Ok(resolved)
+     }
+ }
+ 
+@@ -128,6 +136,13 @@
+ impl FileSystem for SystemFileSystem {
+     fn read(&self, path: String) -> BoxFuture<Result<Vec<u8>, ProviderError>> {
+         let resolved = self.jailed(&path);
++        if let Ok(p) = &resolved {
++            // Synchronous fast path for small files.
++            if let Ok(md) = std::fs::metadata(p) {
++                if md.len() < 64 * 1024 {
++                    return Box::pin(std::future::ready(std::fs::read(p).map_err(|e| other(&path, e))));
++                }
++            }
++        }
+         Box::pin(async move {
+             let p = resolved?;
+             tokio::fs::read(&p).await.map_err(|e| other(&path, e))
+@@ -160,6 +175,18 @@
+ 
+     fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>> {
+         let resolved = self.jailed(&path);
++        if let Ok(p) = &resolved {
++            if let Ok(md) = std::fs::metadata(p) {
++                let is_symlink = std::fs::symlink_metadata(p).map(|m| m.file_type().is_symlink()).unwrap_or(false);
++                return Box::pin(std::future::ready(Ok(FileStat {
++                    size: md.len(),
++                    is_file: md.is_file(),
++                    is_dir: md.is_dir(),
++                    is_symlink,
++                    mtime_ms: mtime_ms(&md),
++                })));
++            }
++        }
+         Box::pin(async move {
+             let p = resolved?;
+             let md = tokio::fs::metadata(&p).await.map_err(|e| other(&path, e))?;
