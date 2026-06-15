@@ -54,6 +54,9 @@ DENO="$(command -v deno 2>/dev/null)"
   [ -x "$d" ] && { DENO="$d"; break; }
 done
 [ -n "$DENO" ] && { CMD[deno]="$DENO run -A --quiet"; ORDER+=(deno); }
+# LLRT (in run.sh's workload bench) is intentionally absent here: it has no
+# general HTTP server (it targets Lambda handlers), so there is no hello-world
+# server to drive.
 if [ -x "$ESRUN" ]; then CMD[esrun]="$ESRUN"; ORDER+=(esrun); else
   echo "esrun not found at $ESRUN — build it: cargo build --release -p es-runtime-cli" >&2; exit 1
 fi

@@ -1,21 +1,32 @@
 # Cross-runtime benchmark
 
-Compares **esrun** (the ES-Runtime CLI) against **Node.js**, **Bun**, and
-**Deno** on a spread of Web-API workloads. Every workload uses only APIs common
-to all four runtimes, so the same script (`scripts/*.js`) runs unmodified on each.
+Compares **esrun** (the ES-Runtime CLI) against **Node.js**, **Bun**, **Deno**,
+and **LLRT** on a spread of Web-API workloads. Each workload uses only standard
+Web APIs, so the same script (`scripts/*.js`) runs unmodified on each runtime;
+where a runtime lacks an API the cell is **n/a** (e.g. Deno has no built-in glob;
+LLRT has no general HTTP server and only partial `fs`/streams).
+
+[LLRT](https://github.com/awslabs/llrt) (AWS Low Latency Runtime) is QuickJS-based
+and built for cold-start and low memory — a deliberate foil for esrun's startup
+and footprint numbers, and a different engine (QuickJS, vs V8 for
+esrun/Node/Deno and JavaScriptCore for Bun). It runs the engine + Web-API
+workloads it supports; `http`/`streams`/`fs`/`glob` fall through to n/a.
 
 ## Running
 
 ```sh
 cargo build --release -p es-runtime-cli   # build esrun first
-bench/run.sh                              # auto-detects node / bun / deno / esrun
+bench/run.sh                              # auto-detects node / bun / deno / llrt / esrun
 ```
 
 Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 25),
-`WORKLOAD_RUNS` (default 5), `WORKLOADS="url encoding"` (run a subset),
-`BENCH_JSON=1` (machine-readable output for diffing runs over time). A runtime
-that isn't installed is skipped; Deno is also looked for at `~/.deno/bin/deno`
-and `/tmp/deno/bin/deno` if not on `PATH`.
+`WORKLOAD_RUNS` (default 5), `WORKLOAD_TIMEOUT` (per-workload cap, default 60s, so
+an unsupported workload yields n/a instead of hanging), `WORKLOADS="url encoding"`
+(run a subset), `BENCH_JSON=1` (machine-readable output for diffing runs over
+time). A runtime that isn't installed is skipped; Deno is also looked for at
+`~/.deno/bin/deno` and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`,
+`~/.local/bin/llrt`, or `/tmp/llrt/llrt` if not on `PATH`. Install LLRT by
+unzipping the `llrt-linux-x64.zip` release asset onto your `PATH`.
 
 ## What each workload measures
 
@@ -52,67 +63,73 @@ Times in **milliseconds, lower is better** (`rss` in MB). One Linux x86-64 box;
 numbers are indicative and will vary by machine — re-run locally for your own.
 
 ```
-workload    |      node |       bun |      deno |     esrun
------------+-----------+-----------+-----------+-----------
-startup     |      18.1 |       9.2 |      25.8 |       7.2
-bigscript   |      30.3 |      22.9 |      36.1 |      20.0
-compute     |     214.4 |     157.8 |     244.1 |     267.7
-json        |     317.1 |     253.6 |     271.7 |     250.1
-jsonbig     |     756.1 |     738.1 |     671.8 |     755.3
-sha256      |     729.1 |     566.7 |     664.6 |     381.5
-crypto      |     265.8 |     127.2 |     190.8 |      39.6
-url         |      67.1 |      96.5 |     126.2 |     115.7
-encoding    |      88.1 |      27.8 |      92.6 |      97.7
-base64      |      10.5 |      15.4 |       9.7 |      88.7
-structured  |     265.4 |     318.2 |     324.4 |     370.5
-async       |      73.9 |      61.6 |      38.8 |      36.8
-timers      |       7.2 |       9.3 |      30.7 |       5.4
-streams     |      31.4 |      26.8 |      17.4 |      12.7
-fetch       |     123.9 |      25.4 |      47.5 |      47.7
-http        |     514.7 |      75.7 |     136.6 |     159.3
-fsread      |     168.7 |      45.0 |      55.2 |      82.0
-fswrite     |     235.4 |      13.9 |     114.8 |     110.8
-fsappend    |     151.9 |      48.6 |      55.9 |      74.9
-glob        |     286.4 |      43.7 |       n/a |      57.4
-rss         |        40 |        29 |        53 |        19
+workload    |      node |       bun |      deno |      llrt |     esrun
+-----------+-----------+-----------+-----------+-----------+-----------
+startup     |      24.3 |       9.0 |      25.0 |       3.4 |       6.7
+bigscript   |      31.7 |      23.7 |      34.0 |      11.6 |      20.1
+compute     |     219.1 |     141.6 |     229.2 |    2450.9 |     259.3
+json        |     323.1 |     244.8 |     249.7 |     784.2 |     233.5
+jsonbig     |     785.8 |     708.4 |     626.6 |    2003.7 |     684.9
+sha256      |     732.9 |     543.9 |     620.7 |     368.0 |     368.9
+crypto      |     237.5 |     112.3 |     182.5 |      30.7 |      39.7
+url         |      61.0 |      94.0 |     126.1 |     128.5 |     102.1
+encoding    |      81.8 |      26.4 |      85.7 |      88.1 |      95.0
+base64      |       8.0 |      16.4 |       9.8 |      36.3 |      74.0
+structured  |     251.5 |     307.6 |     299.3 |     383.8 |     349.3
+async       |      66.2 |      58.7 |      38.2 |     801.6 |      37.0
+timers      |       6.8 |       9.5 |      29.2 |       6.2 |       5.6
+streams     |      32.9 |      23.7 |      17.0 |       n/a |      12.8
+fetch       |     115.7 |      27.0 |      50.3 |      29.3 |      48.4
+http        |     460.6 |      58.1 |     131.3 |       n/a |     107.5
+fsread      |     160.3 |      43.7 |      52.9 |       n/a |      84.3
+fswrite     |     217.9 |      13.8 |     105.3 |       n/a |     108.6
+fsappend    |     146.2 |      46.5 |      56.3 |       n/a |      75.9
+glob        |     278.0 |      43.6 |       n/a |       n/a |      58.6
+rss         |        41 |        30 |        53 |        11 |        19
 ```
 
-(node v24, bun 1.3, deno 2.8, esrun 0.1.)
+(node v24, bun 1.3, deno 2.8, llrt 0.8-beta, esrun 0.2; n/a = API the runtime
+lacks. LLRT's QuickJS has no JIT — hence `compute`/`json`/`async` — and no
+streams/HTTP-server/`fs` here.)
 
 ## Interpretation
 
+**Reading the LLRT column.** LLRT is the cold-start/footprint specialist —
+QuickJS, no JIT, trimmed surface — so it leads `startup` and `rss` and stays in
+the pack on the synchronous-crypto workloads, but its lack of a JIT shows starkly
+on `compute`/`json`/`jsonbig`/`async` (often 5–30×), and it has no streams, HTTP
+server, or `fs` here. It's the honest yardstick for esrun's startup/memory
+claims: esrun's pitch is **near-LLRT boot with a full JIT engine and the complete
+WinterTC surface**, not "fastest at everything."
+
 **Where esrun wins or ties:**
 
-- **startup (6.6 ms) — fastest**, despite being a single ~70 MB statically-linked
-  binary. Two things pay for it: the **V8 startup snapshot baked into the binary**
-  at build time (`build.rs`; the whole prelude pre-executed, restored instead of
-  recompiled — ~7 ms off `Runtime::new`'s old cost) and **lazy HTTP-client
-  build-out** (the reqwest client, TLS config and root store, is built on first
-  `fetch`, not at boot; isolated, the eager client cost ~5.5 ms of startup).
-- **bigscript (18.8 ms) — fastest.** The snapshot covers the prelude, not user
-  source, so this is real parse work on ~100 KB; the fast process floor carries.
-- **sha256, crypto — fastest, by a wide margin on crypto** (37 ms vs Bun's 116).
-  In esrun `crypto.subtle.*` is a synchronous RustCrypto op wrapped in an
-  already-resolved promise, so the `await`s drain in microtask checkpoints with
-  little scheduling cost; Node/Deno/Bun run genuinely-async WebCrypto that pays
-  per-call scheduling. A real, explainable win **for this access pattern** — not
-  a claim that RustCrypto beats BoringSSL raw.
-- **timers, streams — fastest.** The driven loop's timer queue and the pure-JS
-  streams prelude both hold up well; nothing pathological in the seam the loop
-  exposes.
-- **async — second, ahead of Node and Bun.** The microtask-checkpoint
-  integration of the *driven* loop (esrun's distinctive risk) is competitive.
-- **http — ahead of Node, behind Bun/Deno.** `runtime:http` (hyper) serving 64-byte
-  responses under concurrent load lands ~3× Bun and ~1.2× Deno but comfortably
-  past Node. This is the workload that motivated wiring a **real waker** into the
-  driven loop: a ready (or just-dispatched) async op now wakes the loop at once
-  instead of waiting out a fixed re-poll interval, which also restored `fetch`
-  and the `fs` workloads to their proper latency. Sequential round-trip latency
-  fell from ~13 ms to ~0.14 ms/request.
-- **rss (18 MB) — lowest footprint** of the four, the 70 MB on-disk binary
-  notwithstanding.
+- **startup (6.7 ms) — fastest of the JIT runtimes** (~3.6× under Node/Deno),
+  beaten only by LLRT's no-JIT QuickJS (3.4 ms). Two things pay for esrun's:
+  the **V8 startup snapshot baked into the binary** at build time (`build.rs`;
+  the whole prelude pre-executed, restored instead of recompiled) and **lazy
+  HTTP-client build-out** (the reqwest client/TLS/root store is built on first
+  `fetch`, not at boot — isolated, the eager client cost ~5.5 ms of startup).
+- **bigscript (20 ms) — fastest of the JIT runtimes** (LLRT parses faster, having
+  no JIT to feed). Real parse work on ~100 KB; the fast process floor carries it.
+- **async, timers, streams — fastest.** The driven loop's microtask-checkpoint
+  integration (esrun's distinctive risk), its timer queue, and the pure-JS
+  streams prelude all hold up; LLRT's QuickJS microtask path is ~20× slower on
+  `async`, and it has no streams.
+- **crypto, sha256 — fastest among the JIT runtimes, by a wide margin on crypto**
+  (40 ms vs Bun's 112). `crypto.subtle.*` is a synchronous RustCrypto op wrapped
+  in an already-resolved promise, so the `await`s drain in microtask checkpoints
+  with little scheduling cost; Node/Deno/Bun run genuinely-async WebCrypto that
+  pays per-call scheduling. LLRT (also a native synchronous crypto path) lands
+  alongside. A real win **for this access pattern** — not a claim that RustCrypto
+  beats BoringSSL raw.
+- **http — ahead of Node, behind Bun/Deno** (and LLRT has no HTTP server). See
+  the **HTTP requests/sec** section below for the server-throughput story
+  (per-request CPU cost) — the in-process `http` micro-workload here just exercises
+  the warm request/response path.
+- **rss (19 MB) — lowest among the JIT runtimes**, under LLRT's 11 MB QuickJS.
 - **json, jsonbig — mid-pack and competitive**; pure-engine baselines confirming
-  the engine itself isn't a bottleneck in the workloads that wrap it.
+  the engine itself isn't a bottleneck (and where LLRT's missing JIT bites hardest).
 
 **Where esrun trails, and why:**
 

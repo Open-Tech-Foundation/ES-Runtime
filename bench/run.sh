@@ -30,6 +30,11 @@ ALL_WORKLOADS="compute json jsonbig sha256 crypto url encoding base64 structured
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923
+# Per-workload wall-clock cap so a runtime that can't run a workload (or stalls
+# trying — e.g. a partial server API that never responds) yields a clean n/a
+# instead of hanging the whole run. Applied via `timeout` if available.
+TIMEOUT_BIN=""
+command -v timeout >/dev/null 2>&1 && TIMEOUT_BIN="timeout ${WORKLOAD_TIMEOUT:-60}"
 
 # Resolve each runtime's invocation, in display order. Skipped if not found.
 declare -A CMD VER
@@ -45,6 +50,15 @@ DENO="$(command -v deno 2>/dev/null)"
   [ -x "$d" ] && { DENO="$d"; break; }
 done
 [ -n "$DENO" ] && { add deno "$DENO run -A --quiet" "$DENO --version"; ORDER+=(deno); }
+# LLRT (AWS Low Latency Runtime): QuickJS-based, cold-start/memory focused. Runs
+# the engine + Web-API workloads it supports; the fs/streams/glob/http workloads
+# fall through to n/a (it has no general HTTP server and only partial fs). Looked
+# for on PATH, then the usual install spots.
+LLRT="$(command -v llrt 2>/dev/null)"
+[ -z "$LLRT" ] && for d in "$HOME/.llrt/bin/llrt" "$HOME/.local/bin/llrt" /tmp/llrt/llrt; do
+  [ -x "$d" ] && { LLRT="$d"; break; }
+done
+[ -n "$LLRT" ] && { add llrt "$LLRT" "$LLRT --version"; ORDER+=(llrt); }
 if [ -x "$ESRUN" ]; then add esrun "$ESRUN" "$ESRUN --version"; ORDER+=(esrun); else
   echo "esrun not found at $ESRUN — build it: cargo build --release -p es-runtime-cli" >&2; exit 1
 fi
@@ -126,7 +140,7 @@ measure_workload() {
   local cmd="$1" script="$2" out
   local results=()
   for _ in $(seq "$WORKLOAD_RUNS"); do
-    out=$($cmd "scripts/$script" 2>/dev/null | grep -oE 'RESULT_MS=[0-9.]+' | head -1 | cut -d= -f2)
+    out=$($TIMEOUT_BIN $cmd "scripts/$script" 2>/dev/null | grep -oE 'RESULT_MS=[0-9.]+' | head -1 | cut -d= -f2)
     [ -z "$out" ] && { echo "ERR"; return; }
     results+=("$out")
   done
@@ -223,6 +237,10 @@ for _ in "${ORDER[@]}"; do printf -- "+-----------"; done
 printf "\n"
 for row in "${ROWS[@]}"; do
   printf "%-11s" "$row"
-  for r in "${ORDER[@]}"; do printf " | %9s" "${RES[$row,$r]:--}"; done
+  for r in "${ORDER[@]}"; do
+    v="${RES[$row,$r]:--}"
+    [ "$v" = ERR ] && v="n/a" # workload the runtime doesn't support
+    printf " | %9s" "$v"
+  done
   printf "\n"
 done
