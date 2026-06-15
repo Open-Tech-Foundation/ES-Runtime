@@ -19,8 +19,11 @@ export default defineConfig({
   },
   plugins: [
     tailwindcss(),
-    {
-      ...babel({
+    // Object.assign (not object spread): wrangler's autoconfig parses this file
+    // with esprima, which doesn't understand spread — so avoid it here.
+    Object.assign(
+      {},
+      babel({
         babelHelpers: 'bundled',
         extensions: ['.js', '.jsx', '.ts', '.tsx'],
         exclude: 'node_modules/**',
@@ -30,7 +33,7 @@ export default defineConfig({
           ["@opentf/web/compiler"]
         ]
       }),
-      enforce: 'pre'
-    }
+      { enforce: 'pre' }
+    )
   ]
 })
