@@ -66,7 +66,7 @@
             "codeRepository": "https://github.com/Open-Tech-Foundation/ES-Runtime",
             "programmingLanguage": ["Rust", "JavaScript"],
             "license": "https://www.apache.org/licenses/LICENSE-2.0",
-            "description": "A secure, embeddable, V8-based JavaScript runtime: WinterTC-compliant Web APIs, ESM-only, capability-secured I/O exposed as runtime: modules.",
+            "description": "A secure, standards-based JavaScript runtime: V8-based, WinterTC-compliant Web APIs, ESM-only, built on Rust. Host features are exposed as asynchronous runtime: modules.",
             "author": { "@id": "https://opentechf.org/#org" },
             "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
           },
@@ -102,15 +102,13 @@
       <main style="max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem; font-family: system-ui, sans-serif; line-height: 1.6;">
         <h1>ES-Runtime — a secure, standards-based server runtime</h1>
         <p>
-          ES-Runtime (<code>esrun</code>) is a V8-based ECMAScript runtime that is
-          WinterTC-compliant, I/O-injectable, and capability-secured. It is
-          ESM-only and built on Rust, available both as the <code>esrun</code> CLI
-          and as an embeddable Rust library. Code runs against the standard
-          Web-platform APIs (fetch, URL, streams, WebCrypto, encoding, timers,
-          events); host capabilities — filesystem, network, HTTP server,
-          processes — are exposed as asynchronous <code>runtime:</code> modules
-          and gated by an explicit capability model. No CommonJS, no Node.js
-          compatibility layer.
+          ES-Runtime (<code>esrun</code>) is a V8-based, standards-first
+          JavaScript runtime: it runs ES modules against the WinterTC
+          Web-platform APIs — fetch, URL, streams, WebCrypto, encoding, timers,
+          events — with notably fast startup and a low memory footprint. Host
+          features (filesystem, network, HTTP server, processes) are exposed as
+          asynchronous <code>runtime:</code> modules. It is ESM-only and built on
+          Rust; no CommonJS and no Node.js compatibility layer.
         </p>
         <!-- Full site map, mirroring /llms.txt as HTML so crawlers and AI
              fetchers reading this page (no JS) get the complete, described

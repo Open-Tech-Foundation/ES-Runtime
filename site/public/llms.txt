@@ -1,8 +1,8 @@
 # ES-Runtime
 
-> A secure, V8-based, WinterTC-compliant, capability-secured embeddable JavaScript runtime. ESM-only, built on Rust. Available as the `esrun` CLI and as an embeddable Rust library.
+> esrun — a secure, V8-based, WinterTC-compliant JavaScript runtime. ESM-only, built on Rust.
 
-ES-Runtime (`esrun`) executes standard ECMAScript modules with only the Web-platform APIs of the WinterTC Minimum Common API — `fetch`, `URL`, streams, WebCrypto, encoding, timers, events — and no bespoke globals. Host capabilities (filesystem, network, HTTP server, processes) are not ambient: they are exposed as asynchronous `runtime:` standard modules and gated by an explicit capability model, so embedders grant exactly the powers code needs. It is ESM-only and permanently so — no CommonJS, no Node.js compatibility layer, no transpilation. The engine is V8 (with a baked startup snapshot); the host is Rust, so it stays memory-safe and crash-resistant under hostile input. The event loop is *driven* — the runtime owns no thread, so a host ticks it and keeps full control of scheduling and lifetime.
+ES-Runtime (`esrun`) runs standard ECMAScript modules with only the Web-platform APIs of the WinterTC Minimum Common API — `fetch`, `URL`, streams, WebCrypto, encoding, timers, events — and no bespoke globals. Host features (filesystem, network, HTTP server, processes) are exposed as asynchronous `runtime:` standard modules. It is ESM-only and permanently so — no CommonJS, no Node.js compatibility layer, no transpilation. The engine is V8 (with a baked startup snapshot); the host is Rust, so the runtime stays memory-safe and crash-resistant. Startup is fast and the memory footprint is low.
 
 ## Documentation
 
@@ -10,7 +10,7 @@ ES-Runtime (`esrun`) executes standard ECMAScript modules with only the Web-plat
 - [Installation](https://esrun.opentechf.org/docs/install): install the `esrun` CLI (install script, `esrun upgrade` self-update) and run a first module.
 - [Module system](https://esrun.opentechf.org/docs/modules): ESM-only loading — static/dynamic `import`, top-level await, `import.meta`, and the `runtime:` built-in module scheme.
 - [Global objects](https://esrun.opentechf.org/docs/globals): the Web-standard globals available (fetch, URL, streams, WebCrypto, encoding, timers, events) and what is intentionally absent.
-- [Security model](https://esrun.opentechf.org/docs/security): the capability model — deny-by-default in the embeddable library, capabilities granted by the host, checked at the op boundary.
+- [Security model](https://esrun.opentechf.org/docs/security): how host I/O is mediated — capability checks enforced at the op boundary.
 - [Scope & non-goals](https://esrun.opentechf.org/docs/scope): a runtime, not a toolchain — explicitly no Node.js compatibility, CommonJS, TypeScript, JSX, bundler, package installer, test runner, FFI, or workers.
 
 ## API reference
