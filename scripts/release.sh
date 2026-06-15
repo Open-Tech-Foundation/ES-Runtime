@@ -5,7 +5,8 @@
 #   scripts/release.sh
 #
 # Asks for a major / minor / patch bump, then:
-#   1. bumps the version (workspace Cargo.toml + Cargo.lock). The site
+#   1. bumps the version (workspace Cargo.toml — package version + the internal
+#      es-runtime* dep pins — and Cargo.lock). The site
 #      (site/package.json) is versioned independently — docs change far more
 #      often than the runtime — so it is intentionally left alone.
 #   2. promotes CHANGELOG.md's [Unreleased] section to the new version + date,
@@ -93,10 +94,21 @@ bold "Preparing $tag ($date)"
 # --- 1. bump versions -------------------------------------------------------
 # workspace.package.version — the first `version = "..."` line in the root manifest.
 NEW="$new" perl -0777 -i -pe 'BEGIN{$v=$ENV{NEW}} s/^(version = ")[^"]+(")/${1}$v${2}/m' "$CARGO_TOML"
+# Internal-crate dep pins in [workspace.dependencies]: each `es-runtime*` path
+# dep also carries an explicit `version = "..."` that must track the workspace
+# version (a path dep still has to satisfy its own version requirement, or
+# `cargo update` can't resolve). Bump every internal pin in lockstep — these are
+# single-line entries (`es-runtime-x = { path = "crates/x", version = "..." }`).
+NEW="$new" perl -i -pe \
+  'BEGIN{$v=$ENV{NEW}} s/(version = ")[^"]+(")/${1}$v${2}/ if /^es-runtime[\w-]* = .*\bpath = "crates\//;' \
+  "$CARGO_TOML"
 # Cargo.lock — refresh only the workspace members' recorded versions (no build).
+# On failure, restore the manifest so a half-done bump never strands a dirty tree.
 cargo update --workspace --offline >/dev/null 2>&1 ||
-  cargo update --workspace >/dev/null 2>&1 ||
-  err "could not update Cargo.lock (run 'cargo update --workspace' and retry)"
+  cargo update --workspace >/dev/null 2>&1 || {
+    git checkout -- "$CARGO_TOML" 2>/dev/null || true
+    err "could not update Cargo.lock (run 'cargo update --workspace' and retry)"
+  }
 
 # --- 2. changelog: promote [Unreleased] -> [new] - date, keep a fresh one ---
 grep -q '^## \[Unreleased\]' "$CHANGELOG" || err "no '## [Unreleased]' section in $CHANGELOG"
