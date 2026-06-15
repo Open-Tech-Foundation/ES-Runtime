@@ -142,6 +142,45 @@ rss         |        40 |        29 |        53 |        19
   same reason a faster `base64`/`url`/`encoding` eventually wants a zero-copy
   structured path rather than more per-call cleverness.
 
+## HTTP requests/sec
+
+`run.sh`'s `http` workload runs the client *and* the server in one process, so on
+esrun a single thread does both jobs — useful for the warm request/response path,
+but not a server-throughput number. For that, `bench/rps.sh` runs a hello-world
+server per runtime (`scripts/helloserver.js`, plaintext `"Hello, World!"` on
+:3000) and points an **external** load generator ([autocannon]) at it — the
+classic plaintext req/s shape.
+
+```sh
+cargo build --release -p es-runtime-cli
+bench/rps.sh                       # autocannon -c 100, one connection/req
+CONN=250 PIPELINE=20 bench/rps.sh  # higher concurrency + HTTP pipelining
+```
+
+Needs `autocannon` (used via `bunx`/`npx` if not installed globally). Indicative
+numbers on one Linux x86-64 box:
+
+```
+# bench/rps.sh           (-c 100 -p 1)        # CONN=250 PIPELINE=20
+runtime |      req/sec                        runtime |      req/sec
+--------+------------                         --------+------------
+node    |      32,924                         deno    |     125,715
+bun     |      35,644                         node    |      54,884
+deno    |      35,822                         esrun   |      35,156
+esrun   |      36,641                         bun     |      19,226
+```
+
+At ordinary concurrency (one in-flight request per connection) all four sit
+around ~35k req/s — esrun is at parity, marginally highest here. Under heavy
+HTTP pipelining the spread reflects each server's I/O model; esrun holds ~35k,
+which is its **single-thread ceiling** — one V8 isolate on a current-thread tokio
+runtime, by design (it's an embeddable runtime, not a multi-core web server). The
+earlier "2× slower" reading came from the in-process `http` workload, where esrun
+pays for the client and the server on the same thread; measured server-to-client
+it isn't there.
+
+[autocannon]: https://github.com/mcollina/autocannon
+
 ## Caveats
 
 - These are **microbenchmarks** — they isolate one thing each and don't predict
