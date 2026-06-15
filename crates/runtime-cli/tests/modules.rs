@@ -87,8 +87,9 @@ fn top_level_throw_fails_with_uncaught_report() {
     assert!(stdout(&out).contains("before throw"), "{}", stdout(&out));
     // ...and the throw is reported once as Uncaught.
     let stderr = stderr(&out);
-    assert!(stderr.contains("Uncaught"), "{stderr}");
+    assert!(stderr.contains("error: uncaught exception"), "{stderr}");
     assert!(stderr.contains("fixture boom"), "{stderr}");
+    assert!(stderr.contains("at file://"), "{stderr}");
 }
 
 #[test]
@@ -418,4 +419,21 @@ fn version_flag_succeeds() {
     let out = esrun().arg("--version").output().expect("spawn esrun");
     assert!(out.status.success());
     assert!(stdout(&out).contains("esrun"), "{}", stdout(&out));
+}
+
+#[test]
+fn unhandled_rejection_reports_stack_trace() {
+    let out = esrun()
+        .arg("-e")
+        .arg("setTimeout(() => { Promise.reject(new TypeError('async boom')); }, 0);")
+        .output()
+        .expect("spawn esrun");
+    assert!(!out.status.success(), "should exit non-zero");
+    let stderr = stderr(&out);
+    assert!(
+        stderr.contains("error: 1 unhandled promise rejection(s)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("TypeError: async boom"), "{stderr}");
+    assert!(stderr.contains("at file://"), "{stderr}");
 }

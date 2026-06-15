@@ -87,7 +87,10 @@ pub(crate) fn build_exception<'s>(
     let class = err.exception_class();
 
     // Fallback/dynamic constructor lookup for classes V8 doesn't provide natively.
-    let try_construct = |scope: &mut v8::PinScope<'s, '_>, class_name: &str, args: &[v8::Local<'s, v8::Value>]| -> Option<v8::Local<'s, v8::Value>> {
+    let try_construct = |scope: &mut v8::PinScope<'s, '_>,
+                         class_name: &str,
+                         args: &[v8::Local<'s, v8::Value>]|
+     -> Option<v8::Local<'s, v8::Value>> {
         let context = scope.get_current_context();
         let global = context.global(scope);
         let key = v8::String::new(scope, class_name)?;
@@ -102,19 +105,18 @@ pub(crate) fn build_exception<'s>(
     };
 
     if let ExceptionClass::DomException(name) = class {
-        if let Some(msg_val) = v8::String::new(scope, &err.exception_message()) {
-            if let Some(name_val) = v8::String::new(scope, name) {
-                if let Some(ex) = try_construct(scope, "DOMException", &[msg_val.into(), name_val.into()]) {
-                    return ex;
-                }
-            }
+        if let Some(msg_val) = v8::String::new(scope, &err.exception_message())
+            && let Some(name_val) = v8::String::new(scope, name)
+            && let Some(ex) =
+                try_construct(scope, "DOMException", &[msg_val.into(), name_val.into()])
+        {
+            return ex;
         }
-    } else if let ExceptionClass::UriError = class {
-        if let Some(msg_val) = v8::String::new(scope, &err.exception_message()) {
-            if let Some(ex) = try_construct(scope, "URIError", &[msg_val.into()]) {
-                return ex;
-            }
-        }
+    } else if let ExceptionClass::UriError = class
+        && let Some(msg_val) = v8::String::new(scope, &err.exception_message())
+        && let Some(ex) = try_construct(scope, "URIError", &[msg_val.into()])
+    {
+        return ex;
     }
 
     let text = match class.dom_exception_name() {
@@ -145,10 +147,56 @@ pub(crate) fn describe_exception(
     scope: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
     fallback: &str,
 ) -> String {
-    match scope.exception() {
-        Some(exception) => js_to_string(scope, exception),
-        None => fallback.to_string(),
+    let exception = match scope.exception() {
+        Some(e) => e,
+        None => return fallback.to_string(),
+    };
+
+    if let Ok(obj) = v8::Local::<v8::Object>::try_from(exception) {
+        let key = v8::String::new(scope, "stack").unwrap();
+        if let Some(stack_val) = obj.get(scope, key.into())
+            && stack_val.is_string()
+        {
+            return stack_val.to_rust_string_lossy(scope);
+        }
     }
+
+    if let Some(msg) = scope.message() {
+        let text = msg.get(scope).to_rust_string_lossy(scope);
+        // Fallback to building a minimal trace from v8::Message if .stack is missing
+        if let Some(trace) = msg.get_stack_trace(scope)
+            && trace.get_frame_count() > 0
+            && let Some(frame) = trace.get_frame(scope, 0)
+        {
+            let file = frame
+                .get_script_name_or_source_url(scope)
+                .map(|s| s.to_rust_string_lossy(scope))
+                .unwrap_or_else(|| "<unknown>".to_string());
+            let line = frame.get_line_number();
+            let col = frame.get_column();
+            return format!("{text}\n    at {file}:{line}:{col}");
+        }
+        return text;
+    }
+
+    js_to_string(scope, exception)
+}
+
+/// Formats an exception value (e.g. from an unhandled promise rejection) by
+/// extracting its `.stack` property if available, otherwise stringifying it.
+pub(crate) fn format_exception(
+    scope: &mut v8::PinScope<'_, '_>,
+    exception: v8::Local<v8::Value>,
+) -> String {
+    if let Ok(obj) = v8::Local::<v8::Object>::try_from(exception) {
+        let key = v8::String::new(scope, "stack").unwrap();
+        if let Some(stack_val) = obj.get(scope, key.into())
+            && stack_val.is_string()
+        {
+            return stack_val.to_rust_string_lossy(scope);
+        }
+    }
+    js_to_string(scope, exception)
 }
 
 /// Coerces any V8 value to a Rust `String` via JS `String(value)` semantics.

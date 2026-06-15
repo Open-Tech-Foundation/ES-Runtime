@@ -24,7 +24,7 @@ use es_runtime_common::{
     Capability, CapabilitySet, Error as CommonError, ExceptionClass, IntoException,
 };
 
-use crate::convert::{build_exception, js_to_string, marshal, throw, value_to_js};
+use crate::convert::{build_exception, marshal, throw, value_to_js};
 use crate::error::{Error, Result};
 use crate::value::Value;
 
@@ -696,7 +696,7 @@ pub(crate) fn take_unhandled_rejections(
         .iter()
         .map(|value| {
             let value = v8::Local::new(scope, value);
-            js_to_string(scope, value)
+            crate::convert::format_exception(scope, value)
         })
         .collect()
 }

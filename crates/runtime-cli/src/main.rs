@@ -186,13 +186,34 @@ fn parse_args() -> Result<Config, String> {
     }
     Err(format!("missing script argument\n\n{USAGE}"))
 }
+use std::io::IsTerminal;
+
+fn print_error(err: &str) {
+    let use_color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    if !use_color {
+        eprintln!("error: {}", err);
+        return;
+    }
+
+    let mut lines = err.lines();
+    if let Some(first) = lines.next() {
+        eprintln!("\x1b[1;31merror\x1b[0m: {}", first);
+    }
+    for line in lines {
+        if line.starts_with("    at ") {
+            eprintln!("\x1b[2m{}\x1b[0m", line);
+        } else {
+            eprintln!("{}", line);
+        }
+    }
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     match run().await {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("esrun: {err}");
+            print_error(&err);
             ExitCode::FAILURE
         }
     }
@@ -347,18 +368,18 @@ async fn run() -> Result<(), String> {
     // evaluation. Report it as the primary error — its rejection also shows up
     // in `rejections`, so it is the one uncaught-rejection we don't re-report.
     if let ModuleEvalState::Failed(message) = runtime.module_eval_state() {
-        eprintln!("Uncaught: {message}");
-        return Err(format!("{label}: module evaluation failed"));
+        return Err(format!("uncaught exception in {label}\n{message}"));
     }
 
     if !rejections.is_empty() {
-        for message in &rejections {
-            eprintln!("Uncaught (in promise): {message}");
+        let mut msg = format!("{} unhandled promise rejection(s)\n", rejections.len());
+        for (i, message) in rejections.iter().enumerate() {
+            if i > 0 {
+                msg.push('\n');
+            }
+            msg.push_str(message);
         }
-        return Err(format!(
-            "{} unhandled promise rejection(s)",
-            rejections.len()
-        ));
+        return Err(msg);
     }
     Ok(())
 }

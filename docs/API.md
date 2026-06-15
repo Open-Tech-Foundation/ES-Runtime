@@ -331,3 +331,7 @@ await server.stop();
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md
+
+## Error Diagnostics
+
+When exceptions are thrown by ES-Runtime during module evaluation or unhandled promise rejections, the original `Error` subclasses and their stack traces are preserved. The CLI automatically extracts these diagnostics and prints them elegantly with ANSI colors. The stack trace will highlight exact lines and columns of errors: `TypeError: message \n    at fn (file:line:col)`.

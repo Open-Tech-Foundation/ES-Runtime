@@ -35,6 +35,7 @@ const NAV = [
     items: [
       { href: "/docs/modules", label: "Module system" },
       { href: "/docs/security", label: "Security model" },
+      { href: "/docs/errors", label: "Error diagnostics" },
     ],
   },
 ];

@@ -293,7 +293,7 @@ pub(crate) fn eval_state(
         v8::PromiseState::Fulfilled => ModuleEvalState::Completed,
         v8::PromiseState::Rejected => {
             let reason = promise.result(scope);
-            ModuleEvalState::Failed(js_to_string(scope, reason))
+            ModuleEvalState::Failed(crate::convert::format_exception(scope, reason))
         }
     }
 }

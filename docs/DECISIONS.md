@@ -35,12 +35,7 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 >   deferred to Phase 2, when the op system gives a second consumer to design it
 >   against; extracting it then must not change the public types. *Reason:*
 >   avoid speculative abstraction before there is a second implementor/consumer.
-> - **Uncaught-exception JS class not preserved.** `engine::Error::Execution`
->   carries only the stringified exception message, so it maps to a generic JS
->   `Error` rather than the original subclass (`TypeError`, etc.). *Reason:*
->   reconstructing the class requires reading the thrown object's constructor and
->   re-mapping; deferred to Phase 2 when ops re-enter JS. *Impact:* lossy error
->   class on the JS round-trip.
+> - ~~**Uncaught-exception JS class not preserved.**~~ *Resolved (Phase 8):* Exception classes (including `DOMException` names) and JS stack traces (`at fn (file:line:col)`) are now preserved and surfaced through `engine::Error` into the CLI.
 > - **Primitive-only value marshaling.** `engine::Value` marshals JS primitives
 >   plus, since Phase 6, `Value::Bytes` (`Uint8Array`/typed-array views, **copied**
 >   to/from `Vec<u8>`). Every other value still collapses to
