@@ -1,5 +1,6 @@
 import DocsShell from "../../../components/DocsShell.jsx";
 import BenchChart from "../../../components/BenchChart.jsx";
+import BenchStandings from "../../../components/BenchStandings.jsx";
 import bench from "../../../src/benchmarks.json";
 
 const startup = [
@@ -60,6 +61,17 @@ export default function BenchmarksDoc() {
             </li>
           ))}
         </ul>
+      </div>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        Standings at a glance
+      </h2>
+      <p className="mt-2 text-sm text-zinc-500">
+        Who placed where across every metric — and a quick, neutral take on
+        where each runtime fits in production. Pick by fit, not by medal count.
+      </p>
+      <div className="mt-5">
+        <BenchStandings />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
