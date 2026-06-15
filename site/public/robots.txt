@@ -1,0 +1,16 @@
+# ES-Runtime — https://esrun.opentechf.org
+# Open-source project: search indexing and AI ingestion are welcome, so
+# everything is allowed by default. To opt a specific AI crawler out later,
+# add a block like:  User-agent: GPTBot \n Disallow: /
+#
+# Known AI crawler user-agents (for reference, all currently allowed via *):
+#   OpenAI:     GPTBot, OAI-SearchBot, ChatGPT-User
+#   Anthropic:  ClaudeBot, Claude-User, Claude-SearchBot
+#   Google:     Googlebot (search), Google-Extended (Gemini training)
+#   Perplexity: PerplexityBot, Perplexity-User
+#   Others:     CCBot (Common Crawl), Applebot-Extended, meta-externalagent, bingbot
+
+User-agent: *
+Allow: /
+
+Sitemap: https://esrun.opentechf.org/sitemap.xml

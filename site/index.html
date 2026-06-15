@@ -8,13 +8,78 @@
       name="description"
       content="V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust."
     />
+    <link rel="canonical" href="https://esrun.opentechf.org/" />
+    <meta name="theme-color" content="#ff7a00" />
+
+    <!-- Open Graph (link unfurls: Slack, Discord, iMessage, LinkedIn, Facebook).
+         These read the served HTML head and do NOT run JavaScript, so they must
+         live here. og:image must be an absolute URL to a ~1200x630 PNG — add the
+         asset at site/public/og.png (referenced below) before relying on it. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ES-Runtime" />
     <meta property="og:title" content="ES Runtime — a secure, standards-based server runtime" />
     <meta
       property="og:description"
       content="V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust."
     />
-    <meta property="og:type" content="website" />
-    <meta name="theme-color" content="#ff7a00" />
+    <meta property="og:url" content="https://esrun.opentechf.org/" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:image" content="https://esrun.opentechf.org/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="ES-Runtime — a secure, standards-based server runtime" />
+
+    <!-- Twitter / X card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ES Runtime — a secure, standards-based server runtime" />
+    <meta
+      name="twitter:description"
+      content="V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust."
+    />
+    <meta name="twitter:image" content="https://esrun.opentechf.org/og.png" />
+
+    <!-- Structured data (schema.org). Static in the head, so search and AI
+         crawlers that don't execute JS still get a machine-readable summary. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://esrun.opentechf.org/#website",
+            "name": "ES-Runtime",
+            "url": "https://esrun.opentechf.org/",
+            "description": "V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured. ESM-only, built on Rust.",
+            "inLanguage": "en",
+            "publisher": { "@id": "https://opentechf.org/#org" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://esrun.opentechf.org/#software",
+            "name": "ES-Runtime",
+            "alternateName": "esrun",
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "Linux, macOS",
+            "url": "https://esrun.opentechf.org/",
+            "downloadUrl": "https://esrun.opentechf.org/docs/install",
+            "softwareHelp": "https://esrun.opentechf.org/docs",
+            "codeRepository": "https://github.com/Open-Tech-Foundation/ES-Runtime",
+            "programmingLanguage": ["Rust", "JavaScript"],
+            "license": "https://www.apache.org/licenses/LICENSE-2.0",
+            "description": "A secure, embeddable, V8-based JavaScript runtime: WinterTC-compliant Web APIs, ESM-only, capability-secured I/O exposed as runtime: modules.",
+            "author": { "@id": "https://opentechf.org/#org" },
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+          },
+          {
+            "@type": "Organization",
+            "@id": "https://opentechf.org/#org",
+            "name": "Open Tech Foundation",
+            "url": "https://opentechf.org",
+            "sameAs": ["https://github.com/Open-Tech-Foundation"]
+          }
+        ]
+      }
+    </script>
     <link
       rel="preconnect"
       href="https://fonts.googleapis.com"
@@ -29,6 +94,62 @@
   </head>
   <body>
     <div id="app"></div>
+    <!-- Static fallback for clients that don't execute JavaScript (most AI
+         crawlers, link unfurlers, and readers). The app renders client-side, so
+         without this the body is empty to non-JS consumers. Keep the key facts
+         and links here until the framework supports SSG/prerendering. -->
+    <noscript>
+      <main style="max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem; font-family: system-ui, sans-serif; line-height: 1.6;">
+        <h1>ES-Runtime — a secure, standards-based server runtime</h1>
+        <p>
+          ES-Runtime (<code>esrun</code>) is a V8-based ECMAScript runtime that is
+          WinterTC-compliant, I/O-injectable, and capability-secured. It is
+          ESM-only and built on Rust, available both as the <code>esrun</code> CLI
+          and as an embeddable Rust library. Code runs against the standard
+          Web-platform APIs (fetch, URL, streams, WebCrypto, encoding, timers,
+          events); host capabilities — filesystem, network, HTTP server,
+          processes — are exposed as asynchronous <code>runtime:</code> modules
+          and gated by an explicit capability model. No CommonJS, no Node.js
+          compatibility layer.
+        </p>
+        <!-- Full site map, mirroring /llms.txt as HTML so crawlers and AI
+             fetchers reading this page (no JS) get the complete, described
+             navigation. Keep in sync with public/llms.txt until SSG can
+             generate both from one source. -->
+        <h2>Documentation</h2>
+        <ul>
+          <li><a href="/docs">Overview</a> — what ES-Runtime is, its design, and how the pieces fit together.</li>
+          <li><a href="/docs/install">Installation</a> — install the <code>esrun</code> CLI and run a first module.</li>
+          <li><a href="/docs/modules">Module system</a> — ESM-only loading and the <code>runtime:</code> built-in module scheme.</li>
+          <li><a href="/docs/globals">Global objects</a> — the Web-standard globals available, and what is intentionally absent.</li>
+          <li><a href="/docs/security">Security model</a> — capability-based I/O, checked at the op boundary.</li>
+          <li><a href="/docs/scope">Scope &amp; non-goals</a> — a runtime, not a toolchain; no Node.js compatibility.</li>
+        </ul>
+        <h2>API reference</h2>
+        <ul>
+          <li><a href="/api">API overview</a> — the <code>runtime:</code> standard modules and the CLI.</li>
+          <li><a href="/api/cli">esrun CLI</a> — running a module, <code>-e</code> snippets, <code>--timeout</code>, <code>esrun types</code>, <code>esrun upgrade</code>.</li>
+          <li><a href="/api/process">runtime:process</a> — <code>env</code>, <code>args</code>, <code>cwd()</code>, <code>platform</code>, <code>arch</code>, <code>exit()</code>.</li>
+          <li><a href="/api/path">runtime:path</a> — platform-aware path utilities and <code>file:</code> URL interop.</li>
+          <li><a href="/api/fs">runtime:fs</a> — Blob-based async file I/O, jailed to a root. Gated on FileRead/FileWrite.</li>
+          <li><a href="/api/net">runtime:net</a> — TCP sockets (WinterTC Sockets API). Gated on Net/NetListen.</li>
+          <li><a href="/api/http">runtime:http</a> — an HTTP/1.1 server, <code>serve((request) =&gt; response)</code>. Gated on NetListen.</li>
+        </ul>
+        <h2>Comparisons</h2>
+        <ul>
+          <li><a href="/docs/comparison">esrun vs Node.js, Bun, Deno</a> — differences in goals, API surface, modules, and security.</li>
+          <li><a href="/docs/benchmarks">Benchmarks</a> — cross-runtime results vs Node.js, Bun, Deno, and LLRT, with methodology.</li>
+        </ul>
+        <h2>Guides</h2>
+        <ul>
+          <li><a href="/docs/guides/file-handling">File handling</a> — reading, writing, streaming, and globbing files with <code>runtime:fs</code>.</li>
+        </ul>
+        <h2>Source</h2>
+        <ul>
+          <li><a href="https://github.com/Open-Tech-Foundation/ES-Runtime">GitHub repository</a> — source, issues, releases, and the canonical API docs.</li>
+        </ul>
+      </main>
+    </noscript>
     <script type="module" src="/main.js"></script>
   </body>
 </html>

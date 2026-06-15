@@ -1,0 +1,41 @@
+# ES-Runtime
+
+> A secure, V8-based, WinterTC-compliant, capability-secured embeddable JavaScript runtime. ESM-only, built on Rust. Available as the `esrun` CLI and as an embeddable Rust library.
+
+ES-Runtime (`esrun`) executes standard ECMAScript modules with only the Web-platform APIs of the WinterTC Minimum Common API — `fetch`, `URL`, streams, WebCrypto, encoding, timers, events — and no bespoke globals. Host capabilities (filesystem, network, HTTP server, processes) are not ambient: they are exposed as asynchronous `runtime:` standard modules and gated by an explicit capability model, so embedders grant exactly the powers code needs. It is ESM-only and permanently so — no CommonJS, no Node.js compatibility layer, no transpilation. The engine is V8 (with a baked startup snapshot); the host is Rust, so it stays memory-safe and crash-resistant under hostile input. The event loop is *driven* — the runtime owns no thread, so a host ticks it and keeps full control of scheduling and lifetime.
+
+## Documentation
+
+- [Overview](https://esrun.opentechf.org/docs): what ES-Runtime is, its design, and how the pieces fit together.
+- [Installation](https://esrun.opentechf.org/docs/install): install the `esrun` CLI (install script, `esrun upgrade` self-update) and run a first module.
+- [Module system](https://esrun.opentechf.org/docs/modules): ESM-only loading — static/dynamic `import`, top-level await, `import.meta`, and the `runtime:` built-in module scheme.
+- [Global objects](https://esrun.opentechf.org/docs/globals): the Web-standard globals available (fetch, URL, streams, WebCrypto, encoding, timers, events) and what is intentionally absent.
+- [Security model](https://esrun.opentechf.org/docs/security): the capability model — deny-by-default in the embeddable library, capabilities granted by the host, checked at the op boundary.
+- [Scope & non-goals](https://esrun.opentechf.org/docs/scope): a runtime, not a toolchain — explicitly no Node.js compatibility, CommonJS, TypeScript, JSX, bundler, package installer, test runner, FFI, or workers.
+
+## API reference
+
+- [API overview](https://esrun.opentechf.org/api): the surface area — the `runtime:` standard modules and the CLI.
+- [esrun CLI](https://esrun.opentechf.org/api/cli): command-line usage — running a module, `-e` inline snippets, `--timeout`, `esrun types`, `esrun upgrade`.
+- [runtime:process](https://esrun.opentechf.org/api/process): `env`, `args`, `cwd()`, `platform`, `arch`, `exit()`.
+- [runtime:path](https://esrun.opentechf.org/api/path): platform-aware path utilities — `join`, `resolve`, `dirname`, `basename`, `parse`, and `file:` URL interop.
+- [runtime:fs](https://esrun.opentechf.org/api/fs): Blob-based async file I/O — `file()` handles, `write()`, `readDir`, `stat`, `mkdir`, `remove`, `rename`, and `Glob`; confined to a root jail. Gated on FileRead/FileWrite.
+- [runtime:net](https://esrun.opentechf.org/api/net): TCP sockets following the WinterTC Sockets API — `connect()` and `listen()`. Gated on Net/NetListen.
+- [runtime:http](https://esrun.opentechf.org/api/http): an HTTP/1.1 server, `serve((request) => response)`, using the Web `Request`/`Response` objects. Gated on NetListen.
+
+## Comparisons
+
+- [esrun vs Node.js, Bun, Deno](https://esrun.opentechf.org/docs/comparison): how esrun differs in goals, API surface, module system, and security posture.
+- [Benchmarks](https://esrun.opentechf.org/docs/benchmarks): cross-runtime benchmarks (startup, memory, crypto, JSON, HTTP, fs, and more) against Node.js, Bun, Deno, and LLRT, with the methodology and honest trade-offs.
+
+## Guides
+
+- [File handling](https://esrun.opentechf.org/docs/guides/file-handling): reading, writing, streaming, and globbing files with `runtime:fs`.
+
+## Source
+
+- [GitHub repository](https://github.com/Open-Tech-Foundation/ES-Runtime): source code, issues, releases, and the canonical API docs.
+
+## Full content
+
+- [llms-full.txt](https://esrun.opentechf.org/llms-full.txt): the full documentation (README + API reference) inlined as a single markdown file for one-fetch ingestion.
