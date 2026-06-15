@@ -44,13 +44,21 @@ async function handleRequest(entry, handler) {
     response = new Response("Internal Server Error", { status: 500 });
   }
 
-  // Fast path: pull the buffered body bytes synchronously (no async
-  // arrayBuffer() round-trip). Streaming bodies fall back to draining async.
+  // Fast path: hand the body to http_respond without an async round-trip. A
+  // deferred string body crosses as-is (encoded Rust-side — no utf8_encode op
+  // and no intermediate JS byte buffer); already-materialized bytes pass
+  // through; only a streaming body needs the async arrayBuffer() drain.
   const parts = response._parts();
-  let out = parts.bytes;
-  if (out === null && parts.stream) {
+  let out;
+  if (parts.str !== null && parts.str !== undefined) {
+    out = parts.str;
+  } else if (parts.bytes !== null) {
+    out = parts.bytes;
+  } else if (parts.stream) {
     const buf = await response.arrayBuffer();
     out = buf.byteLength > 0 ? new Uint8Array(buf) : null;
+  } else {
+    out = null;
   }
   const args = [requestId, parts.status, out];
   for (const [name, value] of parts.headers) args.push(name, value);

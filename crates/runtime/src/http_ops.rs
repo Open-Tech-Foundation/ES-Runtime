@@ -105,13 +105,20 @@ pub(crate) fn install(
         let h = h.clone();
         let rid = arg_u64(&args, 0);
         let status = arg_u16(&args, 1);
-        let body = args.get(2).and_then(Value::as_bytes).map(<[u8]>::to_vec);
+        // The body is either a string (deferred from the JS Response — encoded
+        // to UTF-8 here, saving a utf8_encode op crossing on the JS side), raw
+        // bytes, or absent.
+        let body = match args.get(2) {
+            Some(Value::String(s)) => s.as_bytes().to_vec(),
+            Some(Value::Bytes(b)) => b.clone(),
+            _ => Vec::new(),
+        };
         let headers = parse_headers(&args, 3);
         Box::pin(async move {
             let response = HttpServerResponse {
                 status,
                 headers,
-                body: body.unwrap_or_default(),
+                body,
             };
             require(&h)?.respond(rid, response).await.map_err(map_err)?;
             Ok(Value::Undefined)

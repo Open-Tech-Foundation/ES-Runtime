@@ -100,13 +100,30 @@
   // ---- Body ---------------------------------------------------------------
 
   function makeBodyState(source) {
-    // source: { bytes, stream, type } — at most one of bytes/stream.
-    return { bytes: source.bytes ?? null, stream: source.stream ?? null, used: false };
+    // source: { bytes, str, stream, type } — at most one of bytes/str/stream.
+    // `str` defers UTF-8 encoding (the utf8_encode op) until the body is read,
+    // so a string body that is never consumed as bytes — or that crosses
+    // straight to a host op that encodes Rust-side — pays nothing here.
+    return {
+      bytes: source.bytes ?? null,
+      str: source.str ?? null,
+      stream: source.stream ?? null,
+      used: false,
+    };
+  }
+  // Materializes a body state's bytes, encoding a deferred string on first read.
+  function bodyBytes(state) {
+    if (state.bytes === null && state.str !== null) {
+      state.bytes = encoder.encode(state.str);
+      state.str = null;
+    }
+    return state.bytes;
   }
   function extractBody(input) {
     if (input === null || input === undefined) return { bytes: null, stream: null, type: null };
     if (typeof input === "string") {
-      return { bytes: encoder.encode(input), type: "text/plain;charset=UTF-8" };
+      // Deferred: keep the string; encode lazily (see bodyBytes).
+      return { str: input, type: "text/plain;charset=UTF-8" };
     }
     if (input instanceof Uint8Array) return { bytes: input };
     if (input instanceof ArrayBuffer) return { bytes: new Uint8Array(input) };
@@ -133,7 +150,8 @@
   async function consumeBody(state) {
     if (state.used) throw new TypeError("Body has already been consumed");
     state.used = true;
-    if (state.bytes !== null) return state.bytes;
+    const bytes = bodyBytes(state);
+    if (bytes !== null) return bytes;
     if (state.stream) {
       const reader = state.stream.getReader();
       const chunks = [];
@@ -167,8 +185,8 @@
         get() {
           const state = this[BODY];
           if (state.stream) return state.stream;
-          if (state.bytes === null) return null;
-          const bytes = state.bytes;
+          const bytes = bodyBytes(state);
+          if (bytes === null) return null;
           let done = false;
           state.stream = new ReadableStream({
             pull(c) {
@@ -227,18 +245,25 @@
     #method;
     #url;
     #headers;
+    // Deferred header init: in the trusted server path the headers are kept as a
+    // raw [name, value] list and the Headers object is built only on first
+    // access (#ensureHeaders) — a handler that never reads req.headers (e.g. a
+    // plain hello-world) pays nothing for header normalization.
+    #rawHeaders = null;
     constructor(input, init = {}) {
       const options = init ?? {};
       if (input instanceof Request) {
         this.#method = options.method ? String(options.method).toUpperCase() : input.#method;
         this.#url = input.#url;
-        this.#headers = new Headers(options.headers ?? input.#headers);
+        this.#headers = new Headers(options.headers ?? input.headers);
       } else if (options[TRUSTED_URL]) {
         // Internal server path (runtime:http): `input` is an absolute URL the
-        // host already parsed and validated, so skip re-parsing it (the URL op).
+        // host already parsed and validated, so skip re-parsing it (the URL op);
+        // defer building the Headers object until something reads it.
         this.#url = input;
         this.#method = options.method ? String(options.method).toUpperCase() : "GET";
-        this.#headers = new Headers(options.headers);
+        this.#headers = null;
+        this.#rawHeaders = options.headers ?? null;
       } else {
         this.#url = new URL(String(input)).href;
         this.#method = options.method ? String(options.method).toUpperCase() : "GET";
@@ -248,10 +273,19 @@
         options.body !== undefined && options.body !== null
           ? extractBody(options.body)
           : { bytes: null, stream: null, type: null };
-      if (extracted.type && !this.#headers.has("content-type")) {
-        this.#headers.set("content-type", extracted.type);
+      if (extracted.type) {
+        this.#ensureHeaders();
+        if (!this.#headers.has("content-type")) {
+          this.#headers.set("content-type", extracted.type);
+        }
       }
       this[BODY] = makeBodyState(extracted);
+    }
+    #ensureHeaders() {
+      if (this.#headers === null) {
+        this.#headers = new Headers(this.#rawHeaders ?? undefined);
+        this.#rawHeaders = null;
+      }
     }
     get method() {
       return this.#method;
@@ -260,6 +294,7 @@
       return this.#url;
     }
     get headers() {
+      this.#ensureHeaders();
       return this.#headers;
     }
     clone() {
@@ -267,6 +302,7 @@
     }
     // Internal accessors for fetch.
     _headers() {
+      this.#ensureHeaders();
       return this.#headers._list();
     }
   }
@@ -344,6 +380,9 @@
       return {
         status: this.#status,
         headers: this.#headers._list(),
+        // A deferred string body crosses to http_respond as-is (encoded
+        // Rust-side); otherwise hand over already-materialized bytes or a stream.
+        str: s.str,
         bytes: s.bytes,
         stream: s.stream,
       };
