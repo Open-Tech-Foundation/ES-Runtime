@@ -44,6 +44,11 @@ pub(crate) fn install(
         .requires(Capability::NetListen),
     )?;
 
+    // How many already-queued requests one `http_next_request` crossing may
+    // drain. Amortizes the op dispatch + promise resolution + microtask
+    // checkpoint over a batch; bounded so responses still flush promptly.
+    const MAX_BATCH: usize = 64;
+
     let h = http.clone();
     let bodies_for_next = bodies.clone();
     engine.register_op(OpDecl::r#async("http_next_request", move |args| {
@@ -51,22 +56,35 @@ pub(crate) fn install(
         let bodies = bodies_for_next.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
-            match require(&h)?.next_request(id).await.map_err(map_err)? {
-                Some((rid, req)) => {
-                    let has_body = !req.body.is_empty();
-                    if has_body {
-                        bodies.borrow_mut().insert(rid, req.body);
-                    }
-                    Ok(Value::String(request_json(
-                        rid,
-                        &req.method,
-                        &req.url,
-                        &req.headers,
-                        has_body,
-                    )))
-                }
-                None => Ok(Value::Null),
+            let reqs = require(&h)?
+                .next_requests(id, MAX_BATCH)
+                .await
+                .map_err(map_err)?;
+            if reqs.is_empty() {
+                return Ok(Value::Null); // server closed
             }
+            // A batch of structured entries (no per-request JSON string build /
+            // parse): [requestId, method, url, hasBody, [[name, value], …]].
+            let mut entries = Vec::with_capacity(reqs.len());
+            for (rid, req) in reqs {
+                let has_body = !req.body.is_empty();
+                if has_body {
+                    bodies.borrow_mut().insert(rid, req.body);
+                }
+                let headers = req
+                    .headers
+                    .into_iter()
+                    .map(|(n, v)| Value::Array(vec![Value::String(n), Value::String(v)]))
+                    .collect();
+                entries.push(Value::Array(vec![
+                    Value::Number(rid as f64),
+                    Value::String(req.method),
+                    Value::String(req.url),
+                    Value::Bool(has_body),
+                    Value::Array(headers),
+                ]));
+            }
+            Ok(Value::Array(entries))
         })
     }))?;
 
@@ -160,34 +178,6 @@ fn server_json(id: u64, info: &SocketInfo) -> String {
     let mut out = format!("{{\"id\":{id},\"localAddress\":");
     push_json_string(&mut out, &info.local_address);
     out.push_str(&format!(",\"localPort\":{}}}", info.local_port));
-    out
-}
-
-/// Request metadata as a JSON object (headers as `[name, value]` pairs); the
-/// body, if any, is fetched separately via `http_body_read`.
-fn request_json(
-    rid: u64,
-    method: &str,
-    url: &str,
-    headers: &[(String, String)],
-    has_body: bool,
-) -> String {
-    let mut out = format!("{{\"requestId\":{rid},\"method\":");
-    push_json_string(&mut out, method);
-    out.push_str(",\"url\":");
-    push_json_string(&mut out, url);
-    out.push_str(&format!(",\"hasBody\":{has_body},\"headers\":["));
-    for (i, (name, value)) in headers.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push('[');
-        push_json_string(&mut out, name);
-        out.push(',');
-        push_json_string(&mut out, value);
-        out.push(']');
-    }
-    out.push_str("]}");
     out
 }
 

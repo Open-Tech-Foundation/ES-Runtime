@@ -8,6 +8,19 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Changed
 
+- **`runtime:http` throughput — per-request cost cut ~30% (≈35k → ≈49k req/s,
+  hello-world plaintext).** Four changes to the request path, all under the hood:
+  the accept loop **batches** — one `http_next_request` crossing now drains many
+  already-queued requests (`HttpServerProvider::next_request` → `next_requests(id,
+  max)`, an embedder-visible trait change); request metadata crosses as a
+  **structured array** instead of a per-request JSON string built in Rust and
+  `JSON.parse`d in JS; the response body is read **synchronously** from the
+  `Response` (no `await arrayBuffer()` round-trip) via an internal `_parts()`
+  accessor; and a server `Request` reuses the **host-validated URL** instead of
+  re-parsing it (internal `__serverRequest`, gated by a closure-private symbol so
+  the public `Request` constructor's eager validation is unchanged). Measured
+  with an external load generator (`oha`); see `bench/README.md`.
+
 - **Driven loop now wakes on readiness, not on a fixed interval.** The standalone
   `Driver` injects a real `Waker` (`Runtime::set_async_waker` / `Engine::set_async_waker`)
   into the engine's async-op polling, and a newly-dispatched op wakes the loop
@@ -33,7 +46,7 @@ pre-`0.1.0` and the public API is unstable.
   `port: 0` picks an ephemeral one), `finished`, and `stop()`. Backed by a new
   injectable `HttpServerProvider` (vetted **hyper** 1.x, `SystemHttpServer`;
   each connection served on its own task, requests handed to the single-threaded
-  isolate one at a time) and gated on `Capability::NetListen` (like `runtime:net`
+  isolate in batches) and gated on `Capability::NetListen` (like `runtime:net`
   `listen`). Request/response bodies are buffered; TLS is not supported yet. New
   `examples/modules/http.mjs` and `runtime-http.d.ts`.
 

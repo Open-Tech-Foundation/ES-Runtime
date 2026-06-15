@@ -148,66 +148,69 @@ rss         |        40 |        29 |        53 |        19
 esrun a single thread does both jobs — useful for the warm request/response path,
 but not a server-throughput number. For that, `bench/rps.sh` runs a hello-world
 server per runtime (`scripts/helloserver.js`, plaintext `"Hello, World!"` on
-:3000) and points an **external** load generator ([autocannon]) at it — the
-classic plaintext req/s shape.
+:3000) and points an **external** load generator at it — the classic plaintext
+req/s shape.
+
+The generator is [oha] (or [bombardier]) — **not** autocannon: Bun's own
+`bench/express` README notes autocannon's node:http client can't push a fast
+server hard enough to measure it, and indeed autocannon capped *every* runtime at
+~35–40k here, hiding the real spread. Following Bun's setup, we send
+`-H "Accept-Encoding: identity"` (so Deno doesn't gzip the body) and a fixed
+request count.
 
 ```sh
 cargo build --release -p es-runtime-cli
-bench/rps.sh                       # autocannon -c 100, one connection/req
-CONN=250 PIPELINE=20 bench/rps.sh  # higher concurrency + HTTP pipelining
+cargo install oha                        # or: go install github.com/codesenberg/bombardier@latest
+bench/rps.sh                             # oha -c 100 -n 500000
+CONN=250 REQUESTS=1000000 bench/rps.sh   # heavier load
 ```
 
-Needs `autocannon` (used via `bunx`/`npx` if not installed globally). Indicative
-numbers on one Linux x86-64 box:
+Indicative numbers on one Linux x86-64 box (12 cores):
 
 ```
-# bench/rps.sh           (-c 100 -p 1)        # CONN=250 PIPELINE=20
-runtime |      req/sec                        runtime |      req/sec
---------+------------                         --------+------------
-node    |      32,924                         deno    |     125,715
-bun     |      35,644                         node    |      54,884
-deno    |      35,822                         esrun   |      35,156
-esrun   |      36,641                         bun     |      19,226
+# bare server (runtime:http)            # through Hono (framework)
+runtime |      req/sec                  runtime |      req/sec
+--------+------------                   --------+------------
+deno    |      85,070                   deno    |      71,531
+bun     |      82,615                   bun     |      62,894
+esrun   |      49,537                   esrun   |      47,722
+node    |      29,558                   node    |      28,217
 ```
 
-At ordinary concurrency (one in-flight request per connection) all four sit
-around ~35k req/s — esrun is at parity, marginally highest here. Under heavy
-HTTP pipelining the spread reflects each server's I/O model; esrun holds ~35k,
-which is its **single-thread ceiling** — one V8 isolate on a current-thread tokio
-runtime, by design (it's an embeddable runtime, not a multi-core web server). The
-earlier "2× slower" reading came from the in-process `http` workload, where esrun
-pays for the client and the server on the same thread; measured server-to-client
-it isn't there.
+esrun beats Node comfortably and reaches ~60% of Bun/Deno on the bare server,
+~75% through Hono. **All three (esrun, Bun, Deno) saturate ~one core** under this
+load — so this is not a core-count gap but a per-request one: esrun's
+JS↔Rust op boundary costs more per request than Bun's/Deno's tightly-integrated
+native path. The `runtime:http` request path was tuned for it (batched accept
+draining many requests per op crossing; structured request metadata instead of a
+per-request JSON round-trip; a synchronous response-body path; and reusing the
+host-validated URL instead of re-parsing it), which roughly cut the per-request
+cost from ~29µs to ~20µs (≈35k → ≈49k req/s). A single V8 isolate on a
+current-thread tokio runtime is the remaining ceiling — by design (it's an
+embeddable runtime, not a multi-core web server).
 
 ### Through a framework (Hono)
 
-The same shape served through [Hono] — a real, third-party web framework —
-instead of each runtime's bare server. This is the framework counterpart to the
-Bun framework charts: it shows esrun runs **unmodified npm ESM packages** off
-`node_modules`, not just its own server. Hono is Web-standard
-(`app.fetch(request) -> Response`), so it plugs straight into `runtime:http`,
-`Bun.serve`, and `Deno.serve`; Node uses Hono's `@hono/node-server` adapter.
+The right-hand column above is the same shape served through [Hono] — a real,
+third-party web framework — instead of each runtime's bare server. It shows esrun
+runs **unmodified npm ESM packages** off `node_modules`, not just its own server.
+Hono is Web-standard (`app.fetch(request) -> Response`), so it plugs straight into
+`runtime:http`, `Bun.serve`, and `Deno.serve`; Node uses Hono's `@hono/node-server`
+adapter.
 
 ```sh
 cd bench && bun install               # hono + @hono/node-server
-SERVER=scripts/hono.js bench/rps.sh   # -c 100 -p 1
+SERVER=scripts/hono.js bench/rps.sh
 ```
 
-```
-runtime |      req/sec
---------+------------
-node    |      33,358
-bun     |      39,686
-deno    |      40,150
-esrun   |      40,220
-```
+The framework narrows the gap (esrun is within ~25% of Bun here), because
+`runtime:http` is already esrun's native path while Bun/Deno pay Hono's adapter
+cost on top of their fast servers. Express, by contrast, cannot run on esrun at
+all (it is CommonJS and needs `node:http`'s `(req, res)` API; esrun is ESM-only
+and rejects `node:` builtins).
 
-esrun is again at parity (marginally highest), and the framework layer costs all
-four about the same as the bare server — Express, by contrast, cannot run on
-esrun at all (it is CommonJS and needs `node:http`'s `(req, res)` API; esrun is
-ESM-only and rejects `node:` builtins).
-
-[autocannon]: https://github.com/mcollina/autocannon
+[oha]: https://github.com/hatoo/oha
+[bombardier]: https://github.com/codesenberg/bombardier
 [Hono]: https://hono.dev
 
 ## Caveats

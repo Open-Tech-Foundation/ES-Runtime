@@ -147,7 +147,10 @@ impl HttpServerProvider for SystemHttpServer {
                 .map_err(err)?;
             let local = listener.local_addr().ok();
             let authority = local.map(|a| a.to_string()).unwrap_or_default();
-            let (tx, rx) = mpsc::channel::<Pending>(64);
+            // Roomy buffer so many connections can have a request queued for the
+            // consumer to drain in one batch (see `next_requests`), rather than
+            // stalling on backpressure between crossings.
+            let (tx, rx) = mpsc::channel::<Pending>(1024);
 
             let acceptor = tokio::spawn(async move {
                 while let Ok((stream, _peer)) = listener.accept().await {
@@ -194,10 +197,11 @@ impl HttpServerProvider for SystemHttpServer {
         })
     }
 
-    fn next_request(
+    fn next_requests(
         &self,
         id: u64,
-    ) -> BoxFuture<Result<Option<(u64, HttpServerRequest)>, ProviderError>> {
+        max: usize,
+    ) -> BoxFuture<Result<Vec<(u64, HttpServerRequest)>, ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
             // Take the receiver out so no lock is held across the await, then
@@ -205,7 +209,7 @@ impl HttpServerProvider for SystemHttpServer {
             // signal lives in a side map `close` can still reach meanwhile.
             let mut rx = match this.requests.lock().unwrap().remove(&id) {
                 Some(rx) => rx,
-                None => return Ok(None), // closed
+                None => return Ok(Vec::new()), // closed
             };
             let shutdown = this
                 .controls
@@ -213,7 +217,8 @@ impl HttpServerProvider for SystemHttpServer {
                 .unwrap()
                 .get(&id)
                 .map(|c| c.shutdown.clone());
-            let got = match shutdown {
+            // Await the first request (parking until one arrives or close fires)…
+            let first = match shutdown {
                 Some(notify) => tokio::select! {
                     biased;
                     () = notify.notified() => None, // close() asked us to stop
@@ -221,15 +226,33 @@ impl HttpServerProvider for SystemHttpServer {
                 },
                 None => rx.recv().await,
             };
-            this.requests.lock().unwrap().insert(id, rx);
-            match got {
-                Some((req, sender)) => {
-                    let rid = this.id();
-                    this.pending.lock().unwrap().insert(rid, sender);
-                    Ok(Some((rid, req)))
+            let mut batch = Vec::new();
+            if let Some(pending) = first {
+                batch.push(pending);
+                // …then drain whatever else is already queued, without parking,
+                // up to `max` — this is the amortization: one await, many
+                // requests handed to the single-threaded consumer per crossing.
+                while batch.len() < max {
+                    match rx.try_recv() {
+                        Ok(pending) => batch.push(pending),
+                        Err(_) => break, // empty (or disconnected) — stop draining
+                    }
                 }
-                None => Ok(None), // closed, or all connections gone
             }
+            this.requests.lock().unwrap().insert(id, rx);
+
+            // Assign a request id to each and stash its response sender. (Empty
+            // batch ⇒ closed/shutting down.)
+            let mut out = Vec::with_capacity(batch.len());
+            if !batch.is_empty() {
+                let mut pending = this.pending.lock().unwrap();
+                for (req, sender) in batch {
+                    let rid = this.id();
+                    pending.insert(rid, sender);
+                    out.push((rid, req));
+                }
+            }
+            Ok(out)
         })
     }
 

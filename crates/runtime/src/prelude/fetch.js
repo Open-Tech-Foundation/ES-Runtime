@@ -8,6 +8,10 @@
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const BODY = Symbol("bodyState");
+  // Closure-private marker: a Request built from an already-validated absolute
+  // URL (the runtime:http server path) may skip re-parsing it. Not reachable
+  // from guest code, so the public constructor's eager validation is unaffected.
+  const TRUSTED_URL = Symbol("trustedUrl");
 
   // ---- Headers ------------------------------------------------------------
 
@@ -229,6 +233,12 @@
         this.#method = options.method ? String(options.method).toUpperCase() : input.#method;
         this.#url = input.#url;
         this.#headers = new Headers(options.headers ?? input.#headers);
+      } else if (options[TRUSTED_URL]) {
+        // Internal server path (runtime:http): `input` is an absolute URL the
+        // host already parsed and validated, so skip re-parsing it (the URL op).
+        this.#url = input;
+        this.#method = options.method ? String(options.method).toUpperCase() : "GET";
+        this.#headers = new Headers(options.headers);
       } else {
         this.#url = new URL(String(input)).href;
         this.#method = options.method ? String(options.method).toUpperCase() : "GET";
@@ -325,6 +335,19 @@
     static error() {
       return new Response(null, { status: 0 });
     }
+    // Internal (runtime:http): synchronous response parts, so the server can
+    // skip the async arrayBuffer() round-trip for the common buffered body.
+    // `bytes` is the body Uint8Array, or null for an absent body or a streaming
+    // body (in which case `stream` is set and the caller drains it async).
+    _parts() {
+      const s = this[BODY];
+      return {
+        status: this.#status,
+        headers: this.#headers._list(),
+        bytes: s.bytes,
+        stream: s.stream,
+      };
+    }
   }
   defineBodyMixin(Response.prototype);
 
@@ -362,4 +385,10 @@
   globalThis.Request = Request;
   globalThis.Response = Response;
   globalThis.fetch = fetch;
+  // Internal bridge for runtime:http: build a server-side Request from a
+  // host-validated absolute URL without the URL re-parse. Keyed by a private
+  // symbol so only the prelude can grant the trust.
+  Object.defineProperty(globalThis, "__serverRequest", {
+    value: (url, init) => new Request(url, { ...init, [TRUSTED_URL]: true }),
+  });
 })();

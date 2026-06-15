@@ -5,6 +5,8 @@
 // response bodies are buffered (streaming bodies are a follow-up).
 
 const ops = globalThis.__ops;
+// Builds a Request from the host-validated absolute URL without re-parsing it.
+const makeServerRequest = globalThis.__serverRequest;
 
 function parseAddress(options) {
   const o = options ?? {};
@@ -15,20 +17,26 @@ function parseAddress(options) {
 }
 
 // Runs one request through the handler and writes the response back. Never
-// throws: a handler error or a non-Response return becomes a 500.
-async function handleRequest(meta, handler) {
-  const { requestId } = meta;
+// throws: a handler error or a non-Response return becomes a 500. `entry` is the
+// structured tuple from http_next_request: [requestId, method, url, hasBody,
+// headers] (headers as [name, value] pairs) — no per-request JSON parse.
+async function handleRequest(entry, handler) {
+  const requestId = entry[0];
+  const method = entry[1];
+  const url = entry[2];
+  const hasBody = entry[3];
+  const headers = entry[4];
   let response;
   try {
     let body = null;
-    if (meta.hasBody) {
+    if (hasBody) {
       // The body is fully buffered host-side; one read drains it.
       body = await ops.http_body_read(requestId);
     }
-    const init = { method: meta.method, headers: meta.headers };
+    const init = { method, headers };
     // GET/HEAD must not carry a body in the Request constructor.
-    if (body && meta.method !== "GET" && meta.method !== "HEAD") init.body = body;
-    response = await handler(new Request(meta.url, init));
+    if (body && method !== "GET" && method !== "HEAD") init.body = body;
+    response = await handler(makeServerRequest(url, init));
     if (!(response instanceof Response)) {
       response = new Response(response == null ? "" : String(response));
     }
@@ -36,11 +44,20 @@ async function handleRequest(meta, handler) {
     response = new Response("Internal Server Error", { status: 500 });
   }
 
-  const buf = await response.arrayBuffer();
-  const out = buf.byteLength > 0 ? new Uint8Array(buf) : null;
-  const args = [requestId, response.status, out];
-  for (const [name, value] of response.headers) args.push(name, value);
-  await ops.http_respond(...args);
+  // Fast path: pull the buffered body bytes synchronously (no async
+  // arrayBuffer() round-trip). Streaming bodies fall back to draining async.
+  const parts = response._parts();
+  let out = parts.bytes;
+  if (out === null && parts.stream) {
+    const buf = await response.arrayBuffer();
+    out = buf.byteLength > 0 ? new Uint8Array(buf) : null;
+  }
+  const args = [requestId, parts.status, out];
+  for (const [name, value] of parts.headers) args.push(name, value);
+  // Fire-and-forget: the response is dispatched on this op; not awaiting saves a
+  // microtask/tick per request. http_respond only sends on a oneshot (never
+  // rejects), so there is no rejection to surface.
+  ops.http_respond(...args);
 }
 
 // The handle returned by serve(): `addr` resolves to the bound address,
@@ -69,11 +86,12 @@ class Server {
       resolveAddr({ hostname: info.localAddress, port: info.localPort });
 
       while (!this._stopped) {
-        const metaJson = await ops.http_next_request(this._id);
-        if (metaJson === null) break; // server closed
-        // Handle concurrently: don't await, so one slow handler can't block the
+        const batch = await ops.http_next_request(this._id);
+        if (batch === null) break; // server closed
+        // A batch of structured request tuples (drained in one crossing). Handle
+        // each concurrently: don't await, so one slow handler can't block the
         // accept loop. Errors are swallowed inside handleRequest.
-        handleRequest(JSON.parse(metaJson), handler);
+        for (let i = 0; i < batch.length; i++) handleRequest(batch[i], handler);
       }
       resolveFinished();
     })();

@@ -422,10 +422,11 @@ pub struct HttpServerResponse {
 /// The implementation owns the listener and every accepted connection, parsing
 /// requests and writing responses; the runtime only supplies the response for
 /// each request. The flow is a handoff: [`serve`](Self::serve) binds and starts
-/// accepting, [`next_request`](Self::next_request) pulls the next parsed request
-/// (with an opaque id), and [`respond`](Self::respond) completes that id. This
-/// lets a multi-threaded HTTP backend feed the single-threaded JS isolate one
-/// request at a time. `serve` is capability-checked on `Capability::NetListen`
+/// accepting, [`next_requests`](Self::next_requests) drains a batch of parsed
+/// requests (each with an opaque id), and [`respond`](Self::respond) completes
+/// an id. This lets a multi-threaded HTTP backend feed the single-threaded JS
+/// isolate, amortizing the crossing over a batch. `serve` is capability-checked
+/// on `Capability::NetListen`
 /// (like `runtime:net` `listen`) before this is ever called; an embedder that
 /// installs no `HttpServerProvider` has no `runtime:http` access at all.
 pub trait HttpServerProvider: Send + Sync {
@@ -434,12 +435,17 @@ pub trait HttpServerProvider: Send + Sync {
     fn serve(&self, host: String, port: u16)
     -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
 
-    /// Waits for the next inbound request on server `id`; resolves to a new
-    /// (request id, request), or `None` once the server is closed.
-    fn next_request(
+    /// Waits for inbound requests on server `id`, then drains any others already
+    /// queued (up to `max`) so the single-threaded consumer can amortize the
+    /// per-request crossing over a whole batch. Resolves to one-or-more
+    /// `(request id, request)` pairs, or an **empty** vec once the server is
+    /// closed. `max` bounds the batch (caller picks the cap); at least one
+    /// request is awaited before returning.
+    fn next_requests(
         &self,
         id: u64,
-    ) -> BoxFuture<Result<Option<(u64, HttpServerRequest)>, ProviderError>>;
+        max: usize,
+    ) -> BoxFuture<Result<Vec<(u64, HttpServerRequest)>, ProviderError>>;
 
     /// Completes request `request_id` by sending `response` to its client
     /// (idempotent; a stale/unknown id is ignored).

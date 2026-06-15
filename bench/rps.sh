@@ -1,40 +1,46 @@
 #!/usr/bin/env bash
 #
 # HTTP requests/sec benchmark: a hello-world server per runtime, driven by an
-# external load generator (autocannon) — the classic "req/s" plaintext shape
-# (à la the Bun/TechEmpower charts). This is the *right* way to measure server
-# throughput: a separate client hammers the server over a real socket, so the
-# number reflects the server alone (unlike bench/run.sh's in-process `http`
-# workload, where the same single thread runs both the client fetch and the
-# server). Each runtime runs scripts/helloserver.js with its own native server.
+# external load generator — the classic "req/s" plaintext shape (à la the
+# Bun/TechEmpower charts). A separate client hammers the server over a real
+# socket, so the number reflects the server alone (unlike bench/run.sh's
+# in-process `http` workload, where one thread runs both client and server).
+# Each runtime runs $SERVER (scripts/helloserver.js by default) with its own
+# native server.
 #
-# Needs `autocannon` (used via `bunx autocannon`, or a global install). If
-# neither is available the script explains and exits.
+# Load generator: `oha` (preferred) or `bombardier` — NOT autocannon. Bun's own
+# bench/express README warns autocannon's node:http client can't push a fast
+# server hard enough to measure it, so we follow their setup: oha/bombardier
+# plus `-H "Accept-Encoding: identity"` (stops Deno gzipping the response) and a
+# fixed request count. Install: `cargo install oha`, or
+# `go install github.com/codesenberg/bombardier@latest`.
 #
-# Usage:  bench/rps.sh                        (auto-detects installed runtimes)
-#         CONN=250 PIPELINE=20 bench/rps.sh   (higher load / HTTP pipelining)
-#         DURATION=10 bench/rps.sh
-#         SERVER=scripts/hono.js bench/rps.sh (serve through the Hono framework;
-#                                              run `bun add hono @hono/node-server` first)
+# Usage:  bench/rps.sh                         (auto-detects installed runtimes)
+#         CONN=250 bench/rps.sh                (higher concurrency)
+#         REQUESTS=1000000 bench/rps.sh        (more requests per runtime)
+#         SERVER=scripts/hono.js bench/rps.sh  (serve through the Hono framework;
+#                                               run `bun install` in bench/ first)
 set -uo pipefail
 cd "$(dirname "$0")"
 
 ESRUN="${ESRUN:-../target/release/esrun}"
 SERVER="${SERVER:-scripts/helloserver.js}"  # the hello-world server to run
-PORT=3000   # the server scripts bind this fixed port
+PORT=3000           # the server scripts bind this fixed port
 CONN="${CONN:-100}"
-PIPELINE="${PIPELINE:-1}"
-DURATION="${DURATION:-10}"
+REQUESTS="${REQUESTS:-500000}"
 
-# Resolve autocannon: a global binary, else `bunx autocannon`.
-if command -v autocannon >/dev/null 2>&1; then
-  AC=(autocannon)
-elif command -v bunx >/dev/null 2>&1; then
-  AC=(bunx autocannon)
-elif command -v npx >/dev/null 2>&1; then
-  AC=(npx --yes autocannon)
+# Resolve the load generator: prefer oha, then bombardier (also check the usual
+# cargo/go install dirs even if they aren't on PATH). Sets TOOL + LOADER array.
+OHA="$(command -v oha 2>/dev/null || true)"; [ -z "$OHA" ] && [ -x "$HOME/.cargo/bin/oha" ] && OHA="$HOME/.cargo/bin/oha"
+BOMB="$(command -v bombardier 2>/dev/null || true)"; [ -z "$BOMB" ] && [ -x "$HOME/.local/bin/bombardier" ] && BOMB="$HOME/.local/bin/bombardier"
+if [ -n "$OHA" ]; then
+  TOOL="oha"
+elif [ -n "$BOMB" ]; then
+  TOOL="bombardier"
 else
-  echo "rps.sh needs autocannon (install it, or have bunx/npx available)." >&2
+  echo "rps.sh needs a load generator. Install one:" >&2
+  echo "  cargo install oha     # preferred" >&2
+  echo "  go install github.com/codesenberg/bombardier@latest" >&2
   exit 1
 fi
 
@@ -56,32 +62,49 @@ SERVER_PID=""
 cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; }
 trap cleanup EXIT
 
-# Pulls req/s + latency out of autocannon's JSON for one runtime.
+URL="http://127.0.0.1:$PORT/"
+HDR="Accept-Encoding: identity"
+OUT="$(mktemp)"
+trap 'cleanup; rm -f "$OUT"' EXIT
+
+# Runs the load generator against the already-running server, writes JSON to
+# $OUT, then prints "<req/s> <avg-latency-ms>" parsed from it.
+load() {
+  if [ "$TOOL" = "oha" ]; then
+    "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+    python3 -c "
+import json
+d=json.load(open('$OUT'))['summary']
+print(f\"{d['requestsPerSec']:.0f} {d['average']*1000:.2f}\")" 2>/dev/null || echo "ERR ERR"
+  else
+    "$BOMB" -c "$CONN" -n "$REQUESTS" -H "$HDR" -o json -p result "$URL" >"$OUT" 2>/dev/null
+    python3 -c "
+import json
+d=json.load(open('$OUT'))['result']
+print(f\"{d['rps']['mean']:.0f} {d['latency']['mean']/1000:.2f}\")" 2>/dev/null || echo "ERR ERR"
+  fi
+}
+
+# Boots one runtime's server, waits for the port, loads it, tears it down.
 measure() {
-  local cmd="$1" j
+  local cmd="$1"
   $cmd "$SERVER" >/dev/null 2>&1 &
   SERVER_PID=$!
-  # Wait for the port to accept connections (up to ~5s).
   for _ in $(seq 50); do
     (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break
     sleep 0.1
   done
-  j=$("${AC[@]}" -c "$CONN" -p "$PIPELINE" -d "$DURATION" -j "http://127.0.0.1:$PORT/" 2>/dev/null)
+  load
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
-  python3 -c "
-import json,sys
-d=json.loads(sys.argv[1])
-print(f\"{d['requests']['average']:.0f} {d['latency']['average']} {d['latency']['p99']}\")
-" "$j" 2>/dev/null || echo "ERR ERR ERR"
 }
 
 echo "HTTP requests/sec — hello-world plaintext (\"Hello, World!\")"
 echo "server: $SERVER"
-echo "load: autocannon -c $CONN -p $PIPELINE -d ${DURATION}s on 127.0.0.1:$PORT"
+echo "load: $TOOL -c $CONN -n $REQUESTS -H \"$HDR\" $URL"
 echo
-printf "%-7s | %12s | %11s | %11s\n" "runtime" "req/sec" "avg lat" "p99 lat"
-printf -- "--------+--------------+-------------+------------\n"
+printf "%-7s | %12s | %11s\n" "runtime" "req/sec" "avg lat"
+printf -- "--------+--------------+------------\n"
 for r in "${ORDER[@]}"; do
-  read -r rps avg p99 <<<"$(measure "${CMD[$r]}")"
-  printf "%-7s | %12s | %9s ms | %8s ms\n" "$r" "$rps" "$avg" "$p99"
+  read -r rps avg <<<"$(measure "${CMD[$r]}")"
+  printf "%-7s | %12s | %9s ms\n" "$r" "$rps" "$avg"
 done
