@@ -31,6 +31,9 @@ class Socket {
   constructor(conn) {
     this._conn = conn;
     this.opened = conn;
+    // WinterTC Socket.upgraded — true only after a startTls() upgrade, which is
+    // not yet supported (see startTls() below).
+    this.upgraded = false;
     let done;
     this.closed = new Promise((resolve) => (done = resolve));
     this._done = done;
@@ -94,7 +97,11 @@ function connect(address, options = {}) {
     throw new Error("secureTransport 'starttls' is not supported yet");
   }
   const tls = options.secureTransport === "on";
-  const conn = ops.net_connect(hostname, port, tls).then((s) => JSON.parse(s));
+  // WinterTC SocketOptions: sni (server name override) + alpn (offered protocols;
+  // the negotiated one comes back as SocketInfo.alpn). Empty string == no SNI.
+  const sni = options.sni == null ? "" : String(options.sni);
+  const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
+  const conn = ops.net_connect(hostname, port, tls, sni, alpn).then((s) => JSON.parse(s));
   return new Socket(conn);
 }
 

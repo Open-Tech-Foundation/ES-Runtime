@@ -72,6 +72,7 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
         remote_port: 0,
         local_address: local.map(|a| a.ip().to_string()).unwrap_or_default(),
         local_port: local.map(|a| a.port()).unwrap_or(0),
+        alpn: None,
     }
 }
 

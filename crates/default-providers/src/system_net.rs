@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use es_runtime_providers::{BoxFuture, NetProvider, ProviderError, SocketInfo};
+use es_runtime_providers::{BoxFuture, ConnectOptions, NetProvider, ProviderError, SocketInfo};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -98,6 +98,7 @@ fn info_of(local: Option<SocketAddr>, remote: Option<SocketAddr>) -> SocketInfo 
         remote_port: remote.map(|a| a.port()).unwrap_or(0),
         local_address: local.map(|a| a.ip().to_string()).unwrap_or_default(),
         local_port: local.map(|a| a.port()).unwrap_or(0),
+        alpn: None,
     }
 }
 
@@ -106,11 +107,11 @@ impl NetProvider for SystemNet {
         &self,
         host: String,
         port: u16,
-        tls: bool,
+        opts: ConnectOptions,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            if tls {
+            if opts.secure {
                 return Err(err(
                     "runtime:net TLS is not supported yet (plaintext TCP only)",
                 ));

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{NetProvider, ProviderError, SocketInfo};
+use es_runtime_providers::{ConnectOptions, NetProvider, ProviderError, SocketInfo};
 
 use crate::Result;
 
@@ -21,10 +21,16 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
             let n = n.clone();
             let host = arg_str(&args, 0);
             let port = arg_u16(&args, 1);
-            let tls = arg_bool(&args, 2);
+            // (secure, sni, alpn) mirror the WinterTC SocketOptions (D28).
+            let sni = arg_str(&args, 3);
+            let opts = ConnectOptions {
+                secure: arg_bool(&args, 2),
+                sni: (!sni.is_empty()).then_some(sni),
+                alpn: arg_str_vec(&args, 4),
+            };
             Box::pin(async move {
                 let (id, info) = require(&n)?
-                    .connect(host, port, tls)
+                    .connect(host, port, opts)
                     .await
                     .map_err(map_err)?;
                 Ok(Value::String(socket_json(id, &info)))
@@ -137,6 +143,17 @@ fn arg_bool(args: &[Value], i: usize) -> bool {
     matches!(args.get(i), Some(Value::Bool(true)))
 }
 
+/// Collects a JS string array argument (non-strings skipped); `[]` if absent.
+fn arg_str_vec(args: &[Value], i: usize) -> Vec<String> {
+    match args.get(i) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 fn require(
     net: &Option<Arc<dyn NetProvider>>,
 ) -> std::result::Result<Arc<dyn NetProvider>, OpError> {
@@ -160,7 +177,12 @@ fn socket_json(id: u64, info: &SocketInfo) -> String {
         info.remote_port
     ));
     push_json_string(&mut out, &info.local_address);
-    out.push_str(&format!(",\"localPort\":{}}}", info.local_port));
+    out.push_str(&format!(",\"localPort\":{},\"alpn\":", info.local_port));
+    match &info.alpn {
+        Some(p) => push_json_string(&mut out, p),
+        None => out.push_str("null"),
+    }
+    out.push('}');
     out
 }
 

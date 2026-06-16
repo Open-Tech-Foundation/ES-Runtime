@@ -335,6 +335,7 @@ pub trait FileSystem: Send + Sync {
 }
 
 /// Metadata about a socket, from [`NetProvider::connect`]/`accept`/`listen`.
+#[derive(Default)]
 pub struct SocketInfo {
     /// Remote peer address (empty for a listener).
     pub remote_address: String,
@@ -344,6 +345,21 @@ pub struct SocketInfo {
     pub local_address: String,
     /// Local (or bound) port.
     pub local_port: u16,
+    /// Negotiated ALPN protocol for a TLS connection (`None` for plaintext, a
+    /// failed negotiation, or a listener). Surfaces as WinterTC `SocketInfo.alpn`.
+    pub alpn: Option<String>,
+}
+
+/// Options for [`NetProvider::connect`], mirroring the TLS-relevant members of
+/// the WinterTC `SocketOptions` (DECISIONS D28).
+#[derive(Default)]
+pub struct ConnectOptions {
+    /// Negotiate TLS (`secureTransport: "on"`). When false, plain TCP.
+    pub secure: bool,
+    /// TLS Server Name Indication. `None` ⇒ use the connect host.
+    pub sni: Option<String>,
+    /// ALPN protocols to offer, in preference order (empty ⇒ none).
+    pub alpn: Vec<String>,
 }
 
 /// Raw TCP sockets backing `runtime:net` (SPEC §12, the WinterTC `connect()`
@@ -353,13 +369,15 @@ pub struct SocketInfo {
 /// `listen` on `Capability::NetListen` before these are ever called; an embedder
 /// that installs no `NetProvider` has no `runtime:net` access at all.
 pub trait NetProvider: Send + Sync {
-    /// Opens an outbound TCP connection; resolves to (socket id, info). With
-    /// `tls`, negotiates TLS using `host` as the server name.
+    /// Opens an outbound TCP connection; resolves to (socket id, info). When
+    /// `opts.secure`, negotiates TLS using `opts.sni` (or `host`) as the server
+    /// name and offering `opts.alpn`; the negotiated protocol is returned in
+    /// [`SocketInfo::alpn`].
     fn connect(
         &self,
         host: String,
         port: u16,
-        tls: bool,
+        opts: ConnectOptions,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
 
     /// Reads the next chunk from socket `id`; `None` signals end of stream.
