@@ -13,16 +13,20 @@ for await (const path of ts.scan("src")) {
 
 const GLOB_PATTERNS = `import { Glob } from "runtime:fs";
 
-// Match specific extensions
+// Match specific extensions with a brace group
 const webFiles = new Glob("**/*.{html,css,js}");
 
-// Exclude directories
-const nonModules = new Glob("**/*.js", { exclude: ["**/node_modules/**"] });
+// There's no "exclude" option — scan a narrower root to skip a subtree,
+// or filter the results yourself:
+const js = new Glob("**/*.js");
+for await (const path of js.scan("src")) {   // walks only ./src
+  if (path.includes("/vendor/")) continue;   // ...and filter in JS
+  console.log(path);
+}
 
-// Cross-OS behavior:
-// Glob paths always use '/' separators, even on Windows.
-// The matching is consistent across environments.
-const winGlob = new Glob("C:/project/**/*.ts");
+// Patterns always use '/' separators — matching is consistent across
+// Linux, macOS, and Windows.
+const types = new Glob("**/*.ts");
 `;
 
 export default function GlobGuide() {

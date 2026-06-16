@@ -3,11 +3,9 @@ import CodeBlock from "../../../components/CodeBlock.jsx";
 
 const HTTP = `import { serve } from "runtime:http";
 
-serve({
-  port: 8080,
-  fetch(req) {
-    return new Response("Hello from esrun!");
-  }
+// serve(options, handler) — the handler takes a Request, returns a Response.
+serve({ port: 8080 }, (req) => {
+  return new Response("Hello from esrun!");
 });
 
 console.log("Server listening on port 8080");`;
@@ -39,10 +37,7 @@ import { Hono } from "hono";
 const app = new Hono();
 app.get("/", (c) => c.text("Hello from Hono on ESRun!"));
 
-serve({
-  port: 8080,
-  fetch: app.fetch
-});
+serve({ port: 8080 }, app.fetch);
 
 console.log("Hono listening on port 8080");`} title="hono.js" lang="js" />
       </div>

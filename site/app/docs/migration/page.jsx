@@ -10,7 +10,7 @@ const cwd = process.cwd();
 import { env, args, cwd } from "runtime:process";
 
 const port = env.PORT;
-const args = args;
+const cliArgs = args;   // already the parsed argument list
 const dir = cwd();`;
 
 const NODE_FS = `// Node.js
