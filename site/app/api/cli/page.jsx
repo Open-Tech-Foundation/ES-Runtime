@@ -6,6 +6,7 @@ esrun -e <code>          Run an inline module snippet
 esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
 esrun upgrade            Update esrun to the latest release
 esrun types              Print the runtime: TypeScript definitions
+esrun types --install    Install the definitions + wire up tsconfig.json
 esrun -h, --help         Show this help
 esrun -v, --version      Show the version`;
 
@@ -40,7 +41,11 @@ const options = [
   },
   {
     flag: "types",
-    desc: "Print the runtime: TypeScript definitions to stdout (esrun types > esrun.d.ts) — version-matched and offline.",
+    desc: "Print the runtime: TypeScript definitions to stdout (esrun types > runtime.d.ts) — version-matched and offline.",
+  },
+  {
+    flag: "types --install",
+    desc: "Install the definitions into node_modules/@opentf/esrun and wire up tsconfig.json (typeRoots + types) so editors resolve the runtime:* modules automatically.",
   },
   {
     flag: "-h, --help",
