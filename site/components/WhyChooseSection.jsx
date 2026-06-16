@@ -112,7 +112,7 @@ export default function WhyChooseSection() {
               <ul className="mt-2 text-[13px] text-zinc-300 space-y-3 relative z-10 leading-relaxed">
                 <li className="flex items-start gap-2">
                   <span className="text-brand-500 font-bold shrink-0">✓</span> 
-                  <span><strong className="text-zinc-100">WinterTC Standard</strong> – Pure Web APIs without custom namespace lock-in.</span>
+                  <span><strong className="text-zinc-100">WinterTC Standard</strong> – Web APIs without custom namespace lock-in.</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-brand-500 font-bold shrink-0">✓</span> 
@@ -124,7 +124,7 @@ export default function WhyChooseSection() {
                 </li>
                 <li className="flex items-start gap-2">
                   <span className="text-brand-500 font-bold shrink-0">✓</span> 
-                  <span><strong className="text-zinc-100">Fast Initialization</strong> – Boots in ~7ms without V8 snapshot bloat.</span>
+                  <span><strong className="text-zinc-100">Fast Initialization</strong> – Boots up to 5x faster than Node.js.</span>
                 </li>
               </ul>
             </div>
