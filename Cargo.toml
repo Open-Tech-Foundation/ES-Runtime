@@ -67,6 +67,15 @@ futures-util = { version = "0.3.32", default-features = false }
 hyper = { version = "1.10.1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
 http-body-util = "0.1.3"
+# TLS for `runtime:net` client sockets (`secureTransport: "on"`, DECISIONS D28).
+# rustls via tokio-rustls with the `aws-lc-rs` provider (selected explicitly —
+# both ring and aws-lc-rs are in the tree, so the process default is ambiguous);
+# trust anchors from the bundled Mozilla set (webpki-roots, no platform I/O).
+# Both already present transitively via reqwest. Confined to `default-providers`.
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws-lc-rs", "tls12"] }
+webpki-roots = "1.0.7"
+# Dev-only: self-signed certs for the hermetic net-TLS test.
+rcgen = "0.14"
 bytes = "1.11.1"
 # WebCrypto backend: the RustCrypto suite (DECISIONS.md D9). Used by `runtime`.
 # Two version generations coexist intentionally: `aes-gcm` 0.10 (+ `aes` 0.8,
@@ -129,13 +138,6 @@ es-runtime-engine = { path = "crates/engine", version = "0.3.0" }
 es-runtime-providers = { path = "crates/providers", version = "0.3.0" }
 es-runtime = { path = "crates/runtime", version = "0.3.0" }
 es-runtime-default-providers = { path = "crates/default-providers", version = "0.3.0" }
-
-# Optimize the big-integer/RSA math even in dev+test: unoptimized RSA key
-# generation is ~30s/key, which would dominate the test suite. These crates are
-# pure computation with no debugging value here, so building them at opt-level 3
-# keeps `cargo test` fast while our own crates stay in debug.
-[profile.dev.package.num-bigint-dig]
-opt-level = 3
 [profile.dev.package.rsa]
 opt-level = 3
 

@@ -5,17 +5,24 @@
 //! This is the same shape the HTTP client uses: the actual I/O is driven by the
 //! runtime's reactor (via spawned tasks), so reads that must wait for bytes make
 //! progress — polling the raw socket future inline from the op loop would not.
-//! TLS is a follow-up; `connect(tls = true)` errors rather than downgrading.
+//!
+//! `connect({ secureTransport: "on" })` negotiates TLS (rustls via tokio-rustls,
+//! the `aws-lc-rs` provider, `webpki-roots` trust anchors) with SNI + ALPN before
+//! the same reader/writer tasks take over the encrypted stream (DECISIONS D28).
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use es_runtime_providers::{BoxFuture, ConnectOptions, NetProvider, ProviderError, SocketInfo};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::crypto::aws_lc_rs;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
@@ -35,6 +42,9 @@ pub struct SystemNet {
     sockets: Arc<Mutex<HashMap<u64, Slot>>>,
     listeners: Arc<Mutex<HashMap<u64, AcceptRx>>>,
     next_id: Arc<AtomicU64>,
+    /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
+    /// tests inject a custom store via [`SystemNet::with_tls_roots`].
+    tls_roots: Option<Arc<RootCertStore>>,
 }
 
 impl SystemNet {
@@ -43,14 +53,62 @@ impl SystemNet {
         Self::default()
     }
 
+    /// Like [`new`](Self::new), but trusting `roots` for TLS instead of the
+    /// bundled Mozilla set. Test seam for hermetic TLS against a self-signed
+    /// server (no public CA involved).
+    #[cfg(test)]
+    fn with_tls_roots(roots: Arc<RootCertStore>) -> Self {
+        Self {
+            tls_roots: Some(roots),
+            ..Self::default()
+        }
+    }
+
     fn id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed) + 1
     }
 
+    /// TLS trust anchors: the test override if set, else the bundled Mozilla
+    /// roots (built once). webpki-roots needs no platform I/O, so runs are
+    /// portable and deterministic.
+    fn tls_roots(&self) -> Arc<RootCertStore> {
+        if let Some(roots) = &self.tls_roots {
+            return roots.clone();
+        }
+        static WEBPKI: OnceLock<Arc<RootCertStore>> = OnceLock::new();
+        WEBPKI
+            .get_or_init(|| {
+                let mut store = RootCertStore::empty();
+                store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+                Arc::new(store)
+            })
+            .clone()
+    }
+
+    /// A TLS client connector trusting [`tls_roots`](Self::tls_roots) and
+    /// offering `alpn`. The `aws-lc-rs` provider is chosen explicitly because the
+    /// process-default crypto provider is ambiguous (both ring and aws-lc-rs are
+    /// linked, so `ClientConfig::builder()` would panic). Built per connect —
+    /// fine at connection rates; cacheable later if it shows up in a profile.
+    fn tls_connector(&self, alpn: &[String]) -> Result<TlsConnector, ProviderError> {
+        let provider = Arc::new(aws_lc_rs::default_provider());
+        let mut config = ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(err)?
+            .with_root_certificates(self.tls_roots())
+            .with_no_client_auth();
+        config.alpn_protocols = alpn.iter().map(|p| p.as_bytes().to_vec()).collect();
+        Ok(TlsConnector::from(Arc::new(config)))
+    }
+
     /// Splits `stream` and spawns its reader + writer tasks, returning the
-    /// channel ends to register.
-    fn spawn_socket(stream: TcpStream) -> Slot {
-        let (mut r, mut w) = stream.into_split();
+    /// channel ends to register. Generic over the stream so the same machinery
+    /// drives a plain [`TcpStream`] or a TLS stream.
+    fn spawn_socket<S>(stream: S) -> Slot
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+    {
+        let (mut r, mut w) = tokio::io::split(stream);
         let (read_tx, read_rx) = mpsc::channel::<Result<Vec<u8>, String>>(8);
         let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(8);
 
@@ -111,21 +169,34 @@ impl NetProvider for SystemNet {
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            if opts.secure {
-                return Err(err(
-                    "runtime:net TLS is not supported yet (plaintext TCP only)",
-                ));
-            }
-            let stream = TcpStream::connect((host.as_str(), port))
+            let tcp = TcpStream::connect((host.as_str(), port))
                 .await
                 .map_err(err)?;
-            let _ = stream.set_nodelay(true);
-            let info = info_of(stream.local_addr().ok(), stream.peer_addr().ok());
+            let _ = tcp.set_nodelay(true);
+            // Addresses come off the raw TCP stream before the TLS handshake
+            // consumes it.
+            let mut info = info_of(tcp.local_addr().ok(), tcp.peer_addr().ok());
             let id = this.id();
-            this.sockets
-                .lock()
-                .unwrap()
-                .insert(id, SystemNet::spawn_socket(stream));
+            let slot = if opts.secure {
+                // SNI defaults to the connect host (WinterTC: `sni` overrides it).
+                let name = opts.sni.unwrap_or_else(|| host.clone());
+                let server_name =
+                    ServerName::try_from(name).map_err(|_| err("invalid TLS server name"))?;
+                let tls = this
+                    .tls_connector(&opts.alpn)?
+                    .connect(server_name, tcp)
+                    .await
+                    .map_err(err)?;
+                info.alpn = tls
+                    .get_ref()
+                    .1
+                    .alpn_protocol()
+                    .map(|p| String::from_utf8_lossy(p).into_owned());
+                SystemNet::spawn_socket(tls)
+            } else {
+                SystemNet::spawn_socket(tcp)
+            };
+            this.sockets.lock().unwrap().insert(id, slot);
             Ok((id, info))
         })
     }
@@ -247,5 +318,128 @@ impl NetProvider for SystemNet {
             listeners.lock().unwrap().remove(&id);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_rustls::TlsAcceptor;
+    use tokio_rustls::rustls::ServerConfig;
+    use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
+    /// A throwaway self-signed cert for `localhost`: (cert DER, PKCS#8 key DER).
+    fn self_signed() -> (CertificateDer<'static>, PrivateKeyDer<'static>) {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = ck.cert.der().clone();
+        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(ck.signing_key.serialize_der()));
+        (cert, key)
+    }
+
+    /// A `SystemNet` trusting only `cert` (so the self-signed server verifies).
+    fn net_trusting(cert: CertificateDer<'static>) -> SystemNet {
+        let mut roots = RootCertStore::empty();
+        roots.add(cert).unwrap();
+        SystemNet::with_tls_roots(Arc::new(roots))
+    }
+
+    // A real TLS handshake over loopback: SNI + ALPN negotiation and an
+    // encrypted write/read round-trip, all against a hermetic self-signed server.
+    #[tokio::test]
+    async fn tls_connect_negotiates_alpn_and_roundtrips() {
+        let (cert, key) = self_signed();
+
+        let mut server_cfg =
+            ServerConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert.clone()], key)
+                .unwrap();
+        server_cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+        let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // One connection: accept, read a chunk, echo it back uppercased.
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = acceptor.accept(tcp).await.unwrap();
+            let mut buf = [0u8; 32];
+            let n = tls.read(&mut buf).await.unwrap();
+            let up: Vec<u8> = buf[..n].iter().map(u8::to_ascii_uppercase).collect();
+            tls.write_all(&up).await.unwrap();
+            tls.flush().await.unwrap();
+        });
+
+        let net = net_trusting(cert);
+        let opts = ConnectOptions {
+            secure: true,
+            sni: Some("localhost".to_string()),
+            alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+        };
+        let (id, info) = net
+            .connect("localhost".to_string(), port, opts)
+            .await
+            .unwrap();
+        // Both sides offer h2 first, so it must be the negotiated protocol.
+        assert_eq!(info.alpn.as_deref(), Some("h2"));
+
+        net.write(id, b"ping".to_vec()).await.unwrap();
+        let echoed = net.read(id).await.unwrap().expect("an echoed chunk");
+        assert_eq!(echoed, b"PING");
+
+        net.close(id).await.unwrap();
+        server.await.unwrap();
+    }
+
+    // A secure connect to a server that never speaks TLS must fail the handshake,
+    // not hang or silently downgrade.
+    #[tokio::test]
+    async fn tls_connect_rejects_a_plaintext_server() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((mut tcp, _)) = listener.accept().await {
+                let mut b = [0u8; 8];
+                let _ = tcp.read(&mut b).await; // read the ClientHello, then drop
+            }
+        });
+
+        let (cert, _key) = self_signed();
+        let net = net_trusting(cert);
+        let opts = ConnectOptions {
+            secure: true,
+            sni: Some("localhost".to_string()),
+            ..Default::default()
+        };
+        let res = net.connect("localhost".to_string(), port, opts).await;
+        assert!(res.is_err(), "TLS to a plaintext server must error");
+    }
+
+    // Plaintext connect still works unchanged through the generic spawn path.
+    #[tokio::test]
+    async fn plaintext_connect_still_roundtrips() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 32];
+            let n = tcp.read(&mut buf).await.unwrap();
+            tcp.write_all(&buf[..n]).await.unwrap();
+            tcp.flush().await.unwrap();
+        });
+
+        let net = SystemNet::new();
+        let (id, info) = net
+            .connect("127.0.0.1".to_string(), port, ConnectOptions::default())
+            .await
+            .unwrap();
+        assert!(info.alpn.is_none());
+        net.write(id, b"hi".to_vec()).await.unwrap();
+        assert_eq!(net.read(id).await.unwrap().unwrap(), b"hi");
+        net.close(id).await.unwrap();
+        server.await.unwrap();
     }
 }

@@ -22,6 +22,8 @@ reqwest.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros"] }
@@ -31,6 +33,8 @@ url.workspace = true
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime.
 tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }
+# Test-only: self-signed certs for the hermetic net-TLS round-trip test.
+rcgen.workspace = true
 
 [lints]
 workspace = true

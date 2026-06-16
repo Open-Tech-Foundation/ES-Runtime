@@ -259,8 +259,10 @@ Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 TCP sockets (SPEC §12). `connect()` follows the **WinterTC Sockets API**:
 outbound TCP with web-stream `readable`/`writable`. `listen()` returns an
 async-iterable of inbound sockets. `connect` requires `Net`; `listen` requires
-`NetListen`. All I/O is async — nothing blocks. TLS is not supported yet
-(`secureTransport: "on"` errors).
+`NetListen`. All I/O is async — nothing blocks. **TLS** client connections are
+supported via `secureTransport: "on"` (certificate verification on, with `sni`
+and `alpn`); `secureTransport: "starttls"` / `Socket.startTls()` and TLS on
+`listen` are not yet supported.
 
 ```js
 import { connect, listen } from "runtime:net";
@@ -271,6 +273,13 @@ await sock.opened;
 const w = sock.writable.getWriter();
 await w.write(new TextEncoder().encode("GET / HTTP/1.0\r\n\r\n"));
 for await (const chunk of sock.readable) { /* … */ }
+
+// TLS client (secureTransport: "on") with ALPN:
+const tls = connect({ hostname: "example.com", port: 443 }, {
+  secureTransport: "on",
+  alpn: ["h2", "http/1.1"],
+});
+const { alpn } = await tls.opened; // negotiated protocol, e.g. "h2" (or null)
 
 // Server:
 const server = listen({ hostname: "127.0.0.1", port: 8080 });
@@ -283,11 +292,14 @@ for await (const conn of server) {
 
 | Export                       | Type                                  | Description                                                        |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| `connect(address, options?)` | `(addr, { secureTransport? }) => Socket` | Open an outbound TCP connection; returns a `Socket` immediately (`opened` settles on connect). `Net`. |
+| `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list. `Net`. |
 | `listen(options)`            | `({ hostname?, port }) => Listener`   | Bind a listening socket. `NetListen`.                              |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
-`closed: Promise<void>`, `close()`. Closing the writable half-closes (FIN).
+`closed: Promise<void>`, `close()`, `upgraded` (always `false` until `startTls`
+lands). Closing the writable half-closes (FIN). **`SocketInfo`** (from `opened`):
+`{ remoteAddress, remotePort, localAddress, localPort, alpn }` — `alpn` is the
+negotiated protocol for a TLS socket, else `null`.
 
 **`Listener`** — async-iterable of `Socket`; `addr: Promise<{ hostname, port }>`,
 `accept()`, `close()`.
