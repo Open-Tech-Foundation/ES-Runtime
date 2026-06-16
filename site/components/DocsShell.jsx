@@ -34,6 +34,7 @@ const NAV = [
     group: "Web standard APIs",
     items: [
       { href: "/docs/globals", label: "Global objects" },
+      { href: "/docs/urlpattern", label: "URLPattern" },
     ],
   },
   {
