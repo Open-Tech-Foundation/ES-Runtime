@@ -20,6 +20,7 @@ pub(crate) fn source() -> String {
         include_str!("prelude/base64.js"),
         include_str!("prelude/structured-clone.js"),
         include_str!("prelude/url.js"),
+        include_str!("prelude/urlpattern.js"),
         // events before abort: AbortSignal extends EventTarget.
         include_str!("prelude/events.js"),
         include_str!("prelude/abort.js"),

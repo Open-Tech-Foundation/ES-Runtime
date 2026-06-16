@@ -28,6 +28,7 @@ const groups = [
     items: [
       { n: "URL", s: "yes" },
       { n: "URLSearchParams", s: "yes" },
+      { n: "URLPattern", s: "yes" },
     ],
   },
   {
