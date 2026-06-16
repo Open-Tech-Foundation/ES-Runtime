@@ -5,7 +5,6 @@
 //! gated on `Capability::FileRead` and mutations on `Capability::FileWrite` by
 //! `runtime` before any method here runs.
 
-use dashmap::DashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -44,7 +43,6 @@ fn parse_glob(pattern: &str) -> Result<(globset::GlobMatcher, bool), ProviderErr
 pub struct SystemFileSystem {
     base: PathBuf,
     root: PathBuf,
-    jail_cache: DashMap<String, PathBuf>,
 }
 
 impl SystemFileSystem {
@@ -56,7 +54,6 @@ impl SystemFileSystem {
         SystemFileSystem {
             base: base.as_ref().to_path_buf(),
             root,
-            jail_cache: DashMap::new(),
         }
     }
 
@@ -64,19 +61,19 @@ impl SystemFileSystem {
     /// real, jailed path. Existing paths are canonicalized; for a not-yet-created
     /// path, the deepest existing ancestor is canonicalized and checked, then the
     /// remaining (literal, `..`-free) components are reattached.
+    ///
+    /// This re-canonicalizes on every call by design: the jail's safety against
+    /// symlink swaps depends on it, so the result must never be cached across
+    /// calls (the filesystem is mutable, and a path validated once can later
+    /// become a symlink escape).
     fn jailed(&self, p: &str) -> Result<PathBuf, ProviderError> {
-        if let Some(cached) = self.jail_cache.get(p) {
-            return Ok(cached.clone());
-        }
         let raw = Path::new(p);
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        let resolved = confine(&abs, &self.root)?;
-        self.jail_cache.insert(p.to_string(), resolved.clone());
-        Ok(resolved)
+        confine(&abs, &self.root)
     }
 }
 
@@ -236,28 +233,26 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn read_dir(&self, path: String) -> BoxFuture<Result<Vec<DirEntry>, ProviderError>> {
-        let resolved = self.jailed(&path);
-        if let Ok(p) = &resolved {
-            let res = (|| -> std::io::Result<Vec<DirEntry>> {
-                let mut out = Vec::new();
-                for entry in std::fs::read_dir(p)? {
-                    let entry = entry?;
-                    let ft = entry.file_type()?;
-                    out.push(DirEntry {
-                        name: entry.file_name().to_string_lossy().into_owned(),
-                        is_file: ft.is_file(),
-                        is_dir: ft.is_dir(),
-                        is_symlink: ft.is_symlink(),
-                    });
-                }
-                Ok(out)
-            })();
-            return Box::pin(std::future::ready(res.map_err(|e| other(&path, e))));
-        }
-        Box::pin(std::future::ready(Err(other(
-            &path,
-            std::io::Error::from(std::io::ErrorKind::NotFound),
-        ))))
+        let p = match self.jailed(&path) {
+            Ok(p) => p,
+            // Propagate the jail-escape error, like read/write/stat.
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        };
+        let res = (|| -> std::io::Result<Vec<DirEntry>> {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(&p)? {
+                let entry = entry?;
+                let ft = entry.file_type()?;
+                out.push(DirEntry {
+                    name: entry.file_name().to_string_lossy().into_owned(),
+                    is_file: ft.is_file(),
+                    is_dir: ft.is_dir(),
+                    is_symlink: ft.is_symlink(),
+                });
+            }
+            Ok(out)
+        })();
+        Box::pin(std::future::ready(res.map_err(|e| other(&path, e))))
     }
 
     fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
@@ -353,5 +348,41 @@ impl FileSystem for SystemFileSystem {
             }
             Ok(out)
         })
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Resolution must re-canonicalize on every call: a path that resolves
+    /// safely while it does not yet exist must be rejected once it becomes a
+    /// symlink that escapes the jail. (Guards against caching resolved paths,
+    /// which would silently defeat the symlink re-check.)
+    #[test]
+    fn jailed_rechecks_symlink_escape_on_every_call() {
+        let tmp = std::env::temp_dir().join(format!("esrun-fsjail-{}", std::process::id()));
+        let root = tmp.join("root");
+        let outside = tmp.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let fs = SystemFileSystem::new(&root, &root);
+
+        // "link" does not exist yet -> resolves under the (existing) root.
+        let first = fs.jailed("link");
+        assert!(first.is_ok(), "should resolve before the symlink exists");
+
+        // Now "link" becomes a symlink pointing outside the jail.
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        // A second resolution must re-canonicalize and reject the escape.
+        let second = fs.jailed("link");
+        assert!(
+            second.is_err(),
+            "symlink escape must be re-checked, got {second:?}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

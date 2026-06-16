@@ -152,13 +152,8 @@ pub(crate) fn describe_exception(
         None => return fallback.to_string(),
     };
 
-    if let Ok(obj) = v8::Local::<v8::Object>::try_from(exception) {
-        let key = v8::String::new(scope, "stack").unwrap();
-        if let Some(stack_val) = obj.get(scope, key.into())
-            && stack_val.is_string()
-        {
-            return stack_val.to_rust_string_lossy(scope);
-        }
+    if let Some(stack) = exception_stack(scope, exception) {
+        return stack;
     }
 
     if let Some(msg) = scope.message() {
@@ -182,21 +177,27 @@ pub(crate) fn describe_exception(
     js_to_string(scope, exception)
 }
 
+/// Returns the `.stack` string of an exception value, if it is an object with a
+/// string `stack` property (i.e. an `Error`). Returns `None` otherwise.
+fn exception_stack(
+    scope: &mut v8::PinScope<'_, '_>,
+    exception: v8::Local<v8::Value>,
+) -> Option<String> {
+    let obj = v8::Local::<v8::Object>::try_from(exception).ok()?;
+    let key = v8::String::new(scope, "stack")?;
+    let stack_val = obj.get(scope, key.into())?;
+    stack_val
+        .is_string()
+        .then(|| stack_val.to_rust_string_lossy(scope))
+}
+
 /// Formats an exception value (e.g. from an unhandled promise rejection) by
 /// extracting its `.stack` property if available, otherwise stringifying it.
 pub(crate) fn format_exception(
     scope: &mut v8::PinScope<'_, '_>,
     exception: v8::Local<v8::Value>,
 ) -> String {
-    if let Ok(obj) = v8::Local::<v8::Object>::try_from(exception) {
-        let key = v8::String::new(scope, "stack").unwrap();
-        if let Some(stack_val) = obj.get(scope, key.into())
-            && stack_val.is_string()
-        {
-            return stack_val.to_rust_string_lossy(scope);
-        }
-    }
-    js_to_string(scope, exception)
+    exception_stack(scope, exception).unwrap_or_else(|| js_to_string(scope, exception))
 }
 
 /// Coerces any V8 value to a Rust `String` via JS `String(value)` semantics.
