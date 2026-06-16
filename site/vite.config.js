@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import { babel } from '@rollup/plugin-babel'
 import tailwindcss from '@tailwindcss/vite'
+import discoverability from './vite-discoverability.mjs'
 
 // The displayed runtime version lives in src/runtime-version.js (a committed
 // module synced from the workspace Cargo.toml by scripts/release.sh) — imported
@@ -19,6 +20,8 @@ export default defineConfig({
   },
   plugins: [
     tailwindcss(),
+    // Regenerates public/sitemap.xml + public/llms.txt from the routes on disk.
+    discoverability(),
     // Object.assign (not object spread): wrangler's autoconfig parses this file
     // with esprima, which doesn't understand spread — so avoid it here.
     Object.assign(
