@@ -12,11 +12,14 @@ ES-Runtime (`esrun`) runs standard ECMAScript modules with only the Web-platform
 - [Global objects](https://esrun.opentechf.org/docs/globals): the Web-standard globals available (fetch, URL, streams, WebCrypto, encoding, timers, events) and what is intentionally absent.
 - [Security model](https://esrun.opentechf.org/docs/security): how host I/O is mediated — capability checks enforced at the op boundary.
 - [Scope & non-goals](https://esrun.opentechf.org/docs/scope): a runtime, not a toolchain — explicitly no Node.js compatibility, CommonJS, TypeScript, JSX, bundler, package installer, test runner, FFI, or workers.
+- [Migration guide](https://esrun.opentechf.org/docs/migration): moving from Node.js, Bun, or Deno — equivalents for `process`/env, the filesystem, and the explicit `runtime:` import model (no ambient globals).
+- [TypeScript setup](https://esrun.opentechf.org/docs/typescript): editor types for the `runtime:*` modules via `esrun types --install` (writes the definitions into `node_modules` and wires `tsconfig.json`).
+- [Error diagnostics](https://esrun.opentechf.org/docs/errors): how uncaught exceptions and unhandled rejections are reported — stack traces, source positions, and the CLI error format.
 
 ## API reference
 
 - [API overview](https://esrun.opentechf.org/api): the surface area — the `runtime:` standard modules and the CLI.
-- [esrun CLI](https://esrun.opentechf.org/api/cli): command-line usage — running a module, `-e` inline snippets, `--timeout`, `esrun types`, `esrun upgrade`.
+- [esrun CLI](https://esrun.opentechf.org/api/cli): command-line usage — running a module, `-e` inline snippets, `--timeout`, `esrun types` (and `types --install`), `esrun upgrade`.
 - [runtime:process](https://esrun.opentechf.org/api/process): `env`, `args`, `cwd()`, `platform`, `arch`, `exit()`.
 - [runtime:path](https://esrun.opentechf.org/api/path): platform-aware path utilities — `join`, `resolve`, `dirname`, `basename`, `parse`, and `file:` URL interop.
 - [runtime:fs](https://esrun.opentechf.org/api/fs): Blob-based async file I/O — `file()` handles, `write()`, `readDir`, `stat`, `mkdir`, `remove`, `rename`, and `Glob`; confined to a root jail. Gated on FileRead/FileWrite.
@@ -31,6 +34,10 @@ ES-Runtime (`esrun`) runs standard ECMAScript modules with only the Web-platform
 ## Guides
 
 - [File handling](https://esrun.opentechf.org/docs/guides/file-handling): reading, writing, streaming, and globbing files with `runtime:fs`.
+- [Glob matching](https://esrun.opentechf.org/docs/glob): match and scan paths with the `Glob` API — every supported pattern token (`*`, `**`, `?`, `[abc]`, `{a,b}`, `!`).
+- [Process & Env](https://esrun.opentechf.org/docs/process): reading environment variables, arguments, and the working directory via `runtime:process`.
+- [Path handling](https://esrun.opentechf.org/docs/path): building and parsing paths with `runtime:path` — `join`, `resolve`, `dirname`, `basename`, `extname`.
+- [HTTP server](https://esrun.opentechf.org/docs/http): serving requests with `runtime:http` `serve(options, handler)` and web `Request`/`Response`; frameworks like Hono work out of the box.
 
 ## Source
 
