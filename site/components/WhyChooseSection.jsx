@@ -6,7 +6,7 @@ export default function WhyChooseSection() {
           Why ESRun?
         </h2>
         <p className="mt-4 text-lg text-zinc-600 max-w-2xl mx-auto">
-          Compare how different runtimes behave when deployed to your server instance.
+          A transparent look at the strengths and architectural compromises of the JS server-side ecosystem.
         </p>
       </div>
 
@@ -37,8 +37,7 @@ export default function WhyChooseSection() {
                 <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Largest package ecosystem</li>
                 <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Deep native addon support</li>
                 <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Battle-tested stability</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Elevated idle memory footprint</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Legacy API (CommonJS) baggage</li>
+                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Lower baseline throughput</li>
               </ul>
             </div>
           </div>
@@ -62,10 +61,9 @@ export default function WhyChooseSection() {
               </div>
               <ul className="mt-2 text-[13px] text-zinc-400 space-y-3 relative z-10 leading-relaxed">
                 <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Secure by default</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Built-in TypeScript support</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Native standard library</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Custom namespace fragmentation</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Heavy isolate initialization</li>
+                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Native capability gating</li>
+                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Unified standard library</li>
+                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Smaller ecosystem and adoption</li>
               </ul>
             </div>
           </div>
@@ -87,10 +85,9 @@ export default function WhyChooseSection() {
               </div>
               <ul className="mt-2 text-[13px] text-zinc-400 space-y-3 relative z-10 leading-relaxed">
                 <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Exceptional JIT performance</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Integrated bundler & test runner</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Node.js API compatibility</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Aggressive memory peaks</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Memory safety regressions</li>
+                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> High-throughput HTTP engine</li>
+                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Deep Node.js API compatibility</li>
+                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Memory quirks</li>
               </ul>
             </div>
           </div>

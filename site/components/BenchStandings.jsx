@@ -13,34 +13,6 @@ import { isHigherBetter } from "../src/metric-direction.js";
 const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 
-// Short, neutral production notes so devs can pick for their needs.
-const NOTES = [
-  {
-    rt: "esrun",
-    best: "A standards-first runtime (V8, built on Rust): runs ESM against the full WinterTC Web-platform API (fetch, URL, streams, WebCrypto, encoding, timers). Notably fast cold start, low memory, and strong WebCrypto — a good fit for quick-starting, standards-based scripts and services.",
-    watch: "ESM-only — no CommonJS, no node: builtins, no Node API — so it's not a drop-in for npm/Node apps. Single-threaded HTTP, and it's a runner, not a toolchain (no bundler/installer/test runner). Young.",
-  },
-  {
-    rt: "bun",
-    best: "Speed-first all-in-one (runtime + bundler + test + package manager) on JavaScriptCore. High HTTP/script throughput, great dev velocity, largely Node-compatible.",
-    watch: "Younger ecosystem with occasional Node-compat edge cases; maturing fast but less battle-proven than Node for the long tail.",
-  },
-  {
-    rt: "node",
-    best: "The mature default: vast npm ecosystem, full Node API, proven at every scale, the deepest tooling/observability and hiring pool.",
-    watch: "Heavier cold start and memory; not ideal for ultra-low-latency serverless or minimal edge footprints.",
-  },
-  {
-    rt: "deno",
-    best: "Secure-by-default and TypeScript-native, Web-standard APIs with batteries-included tooling (fmt/lint/test). Strong for edge (Deno Deploy) and greenfield TS.",
-    watch: "Some npm packages need compat shims; ecosystem smaller than Node's.",
-  },
-  {
-    rt: "llrt",
-    best: "AWS's QuickJS runtime tuned for Lambda: tiny memory and near-instant cold start where per-invocation cost dominates.",
-    watch: "No JIT (slow on compute/JSON/long-running work), partial Web/Node APIs, no general HTTP server; experimental. A serverless specialist, not a server.",
-  },
-];
 
 function medalHead(p) {
   if (p === 1) return "🥇";
@@ -128,25 +100,9 @@ export default function BenchStandings() {
         Across {metrics.length} comparable metrics, each ranked by its own better
         direction. Each runtime is ranked only on metrics it can run, so totals
         differ — e.g. LLRT has no HTTP server or filesystem here. Place counts are
-        not a ranking: more 1st-place finishes does not mean “best overall.” Pick
-        by fit (see below).
+        not a ranking: more 1st-place finishes does not mean “best overall.”
       </p>
 
-      <div className="mt-6 space-y-4">
-        {NOTES.map((note) => (
-          <div className="rounded-xl border border-zinc-200 bg-white p-5">
-            <div className="text-base font-semibold text-zinc-900">{LABELS[note.rt]}</div>
-            <p className="mt-2 text-[15px] leading-relaxed text-zinc-700">
-              <span className="font-semibold text-emerald-700">✅ Best for: </span>
-              {note.best}
-            </p>
-            <p className="mt-2 text-[15px] leading-relaxed text-zinc-700">
-              <span className="font-semibold text-amber-700">⚠️ Watch out: </span>
-              {note.watch}
-            </p>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
