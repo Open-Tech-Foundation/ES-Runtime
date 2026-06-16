@@ -415,6 +415,45 @@ fn types_command_emits_declarations() {
 }
 
 #[test]
+fn types_install_writes_package_and_wires_tsconfig() {
+    let dir = std::env::temp_dir().join(format!("esrun-types-install-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let out = esrun()
+        .arg("types")
+        .arg("--install")
+        .current_dir(&dir)
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    // A type package is written under node_modules/@opentf/esrun.
+    let dts = dir.join("node_modules/@opentf/esrun/index.d.ts");
+    assert!(dts.exists(), "index.d.ts not written");
+    assert!(dir.join("node_modules/@opentf/esrun/package.json").exists());
+    assert!(std::fs::read_to_string(&dts).unwrap().contains("declare module \"runtime:fs\""));
+
+    // tsconfig.json is created and wired up (typeRoots + types).
+    let ts = std::fs::read_to_string(dir.join("tsconfig.json")).unwrap();
+    assert!(ts.contains("node_modules/@opentf"), "typeRoots missing:\n{ts}");
+    assert!(ts.contains("\"esrun\""), "types entry missing:\n{ts}");
+
+    // Re-running is idempotent — `esrun` isn't duplicated in `types`.
+    let out2 = esrun()
+        .arg("types")
+        .arg("--install")
+        .current_dir(&dir)
+        .output()
+        .expect("spawn esrun");
+    assert!(out2.status.success());
+    let ts2 = std::fs::read_to_string(dir.join("tsconfig.json")).unwrap();
+    assert_eq!(ts2.matches("\"esrun\"").count(), 1, "esrun duplicated:\n{ts2}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn version_flag_succeeds() {
     let out = esrun().arg("--version").output().expect("spawn esrun");
     assert!(out.status.success());

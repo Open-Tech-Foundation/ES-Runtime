@@ -47,6 +47,7 @@ USAGE:
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun upgrade            Update esrun to the latest release
     esrun types              Print the runtime: TypeScript definitions
+    esrun types --install    Install the definitions + wire up tsconfig.json
     esrun -h, --help         Show this help
     esrun -v, --version      Show the version
 
@@ -99,6 +100,110 @@ fn upgrade() -> Result<String, Box<dyn std::error::Error>> {
     })
 }
 
+/// `esrun types --install` — write the bundled definitions into
+/// `node_modules/@opentf/esrun` as a type package and wire them into
+/// `tsconfig.json`, so editors and `tsc` resolve the `runtime:*` modules with no
+/// manual steps. (TypeScript only auto-loads ambient module declarations that a
+/// `tsconfig` actually references, so we set `typeRoots` + `types` — the form
+/// language servers honor globally — rather than leaving a loose `.d.ts`.)
+fn install_types() -> Result<String, Box<dyn std::error::Error>> {
+    use std::fs;
+    use std::path::Path;
+
+    let pkg_dir = Path::new("node_modules").join("@opentf").join("esrun");
+    fs::create_dir_all(&pkg_dir)?;
+    // index.d.ts (so typeRoots resolves the package by convention) + a minimal
+    // package.json pointing at it.
+    fs::write(pkg_dir.join("index.d.ts"), TYPES)?;
+    fs::write(
+        pkg_dir.join("package.json"),
+        format!(
+            "{{\n  \"name\": \"@opentf/esrun\",\n  \"version\": \"{}\",\n  \"types\": \"index.d.ts\"\n}}\n",
+            env!("CARGO_PKG_VERSION")
+        ),
+    )?;
+
+    let mut out = String::from("Installed runtime: types → node_modules/@opentf/esrun\n");
+    out.push_str(&update_tsconfig()?);
+    out.push('\n');
+    Ok(out)
+}
+
+/// Ensures `tsconfig.json` resolves the installed type package: adds
+/// `node_modules/@opentf` to `typeRoots` and `esrun` to `types`, preserving any
+/// existing entries. Creates a sensible config if none exists; if the file is
+/// JSONC (comments / trailing commas) it can't be parsed safely, so the lines to
+/// add are printed instead of clobbering it.
+fn update_tsconfig() -> Result<String, Box<dyn std::error::Error>> {
+    use serde_json::{Value, json};
+    use std::fs;
+    use std::path::Path;
+
+    let path = Path::new("tsconfig.json");
+    let manual = "  add to compilerOptions:\n    \"typeRoots\": [\"node_modules/@types\", \"node_modules/@opentf\"],\n    \"types\": [\"esrun\"]";
+
+    if !path.exists() {
+        let cfg = json!({
+            "compilerOptions": {
+                "target": "ESNext",
+                "module": "ESNext",
+                "moduleResolution": "bundler",
+                "strict": true,
+                "typeRoots": ["node_modules/@types", "node_modules/@opentf"],
+                "types": ["esrun"]
+            },
+            "include": ["**/*.ts"]
+        });
+        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&cfg)?))?;
+        return Ok("Created tsconfig.json (typeRoots + types).".into());
+    }
+
+    let text = fs::read_to_string(path)?;
+    let mut cfg: Value = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(_) => {
+            return Ok(format!(
+                "tsconfig.json looks like JSONC (comments/trailing commas) — left it untouched.\n{manual}"
+            ));
+        }
+    };
+    let Some(obj) = cfg.as_object_mut() else {
+        return Ok(format!(
+            "tsconfig.json is not a JSON object — left it untouched.\n{manual}"
+        ));
+    };
+    let co = obj
+        .entry("compilerOptions")
+        .or_insert_with(|| json!({}));
+    let Some(co) = co.as_object_mut() else {
+        return Ok(format!(
+            "tsconfig.json compilerOptions is not an object — left it untouched.\n{manual}"
+        ));
+    };
+    merge_str_array(co, "typeRoots", &["node_modules/@types", "node_modules/@opentf"]);
+    merge_str_array(co, "types", &["esrun"]);
+    fs::write(path, format!("{}\n", serde_json::to_string_pretty(&cfg)?))?;
+    Ok("Updated tsconfig.json (typeRoots + types).".into())
+}
+
+/// Appends any missing `values` to the string array at `key`, creating it if
+/// absent. Existing entries (e.g. other `@types` packages) are preserved.
+fn merge_str_array(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    values: &[&str],
+) {
+    use serde_json::Value;
+    let arr = obj.entry(key).or_insert_with(|| Value::Array(vec![]));
+    if let Value::Array(items) = arr {
+        for v in values {
+            if !items.iter().any(|x| x.as_str() == Some(*v)) {
+                items.push(Value::String((*v).to_string()));
+            }
+        }
+    }
+}
+
 /// A console that prints to the process's stdout/stderr, like Node/Deno.
 struct StdoutConsole;
 
@@ -136,7 +241,17 @@ fn parse_args() -> Result<Config, String> {
                 std::process::exit(0);
             }
             "types" => {
-                print!("{TYPES}");
+                if args.next().as_deref() == Some("--install") {
+                    match install_types() {
+                        Ok(msg) => print!("{msg}"),
+                        Err(e) => {
+                            eprintln!("error: types --install failed: {e}");
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    print!("{TYPES}");
+                }
                 std::process::exit(0);
             }
             "upgrade" => {

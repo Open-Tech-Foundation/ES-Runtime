@@ -684,6 +684,7 @@ dependencies = [
  "es-runtime-default-providers",
  "es-runtime-providers",
  "self_update",
+ "serde_json",
  "tokio",
  "url",
 ]
