@@ -68,6 +68,7 @@ supported yet.
 | Build everything (lib + CLI) | `cargo build-all` |
 | Install `esrun` on `PATH` | `cargo install --path crates/runtime-cli` |
 | Run a JS file | `esrun <file.js>` (or `./target/release/esrun <file.js>`) |
+| Set up editor TypeScript types | `esrun types --install` (writes the `runtime:*` defs into `node_modules/@opentf/esrun` and wires `tsconfig.json`; `esrun types` alone prints them to stdout) |
 | Run tests | `cargo test --workspace` |
 | Lints + format check | `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --check` |
 | Supply-chain gates | `cargo deny check` · `cargo audit` |
