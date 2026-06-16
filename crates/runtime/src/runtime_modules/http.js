@@ -94,12 +94,25 @@ class Server {
       resolveAddr({ hostname: info.localAddress, port: info.localPort });
 
       while (!this._stopped) {
-        const batch = await ops.http_next_request(this._id);
-        if (batch === null) break; // server closed
-        // A batch of structured request tuples (drained in one crossing). Handle
-        // each concurrently: don't await, so one slow handler can't block the
-        // accept loop. Errors are swallowed inside handleRequest.
-        for (let i = 0; i < batch.length; i++) handleRequest(batch[i], handler);
+        const flat = await ops.http_next_request(this._id);
+        if (flat === null) break; // server closed
+        
+        let i = 0;
+        while (i < flat.length) {
+          const requestId = flat[i++];
+          const method = flat[i++];
+          const url = flat[i++];
+          const hasBody = flat[i++];
+          const numHeaders = flat[i++];
+          
+          const headers = [];
+          for (let j = 0; j < numHeaders; j++) {
+            headers.push([flat[i++], flat[i++]]);
+          }
+          
+          // Handle each concurrently
+          handleRequest([requestId, method, url, hasBody, headers], handler);
+        }
       }
       resolveFinished();
     })();

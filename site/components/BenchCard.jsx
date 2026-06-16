@@ -23,6 +23,7 @@ function maxOf(row, runtimes) {
 export default function BenchCard({ metric }) {
   const runtimes = ORDER.filter((rt) => bench.runtimes[rt]);
   const row = bench.results_ms[metric.key] || {};
+  const rssRow = bench.results_rss ? bench.results_rss[metric.key] : null;
   const max = maxOf(row, runtimes);
   const winner = winnerOf(row, runtimes, metric.key);
   const unit = metric.unit || "ms";
@@ -40,6 +41,7 @@ export default function BenchCard({ metric }) {
           const v = row[rt];
           const pct = typeof v === "number" ? Math.max((v / max) * 100, 2) : 0;
           const isWin = rt === winner;
+          const mem = rssRow && rssRow[rt] ? ` / ${rssRow[rt]}MB` : "";
           return (
             <div className="flex items-center gap-2.5">
               <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
@@ -58,11 +60,12 @@ export default function BenchCard({ metric }) {
               <span
                 className={
                   isWin
-                    ? "w-16 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
-                    : "w-16 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
+                    ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                    : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                 }
               >
                 {typeof v === "number" ? v + unit : "—"}
+                {mem}
               </span>
             </div>
           );

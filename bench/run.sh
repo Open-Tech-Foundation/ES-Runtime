@@ -39,7 +39,7 @@ STARTUP_RUNS="${STARTUP_RUNS:-25}"
 WORKLOAD_RUNS="${WORKLOAD_RUNS:-9}"
 # Coefficient-of-variation (%) above which a measured cell is flagged as noisy.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
-ALL_WORKLOADS="compute json jsonbig sha256 crypto url encoding base64 structured async timers streams fetch http fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob"
+ALL_WORKLOADS="compute json jsonbig sha256 crypto url urlpattern encoding base64 structured async timers streams fetch http fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923
@@ -247,7 +247,17 @@ for row in "${ROWS[@]}"; do
 done
 
 # RSS is a memory floor (contention doesn't inflate peak RSS): one sample each.
-for r in "${ORDER[@]}"; do RES[rss,$r]=$(measure_rss "${CMD[$r]}" scripts/startup.js); done
+declare -A RSS
+for row in "${ROWS[@]}"; do
+  for r in "${ORDER[@]}"; do
+    if [ "${RES[$row,$r]:-}" != ERR ] && [ -n "${RES[$row,$r]:-}" ]; then
+      RSS[$row,$r]=$(measure_rss "${CMD[$r]}" "${PATHS[$row]}")
+    fi
+  done
+done
+
+# Restoring 'rss' row for site compatibility (represents startup memory floor)
+for r in "${ORDER[@]}"; do RES[rss,$r]="${RSS[startup,$r]:-}"; done
 [ -n "${RES[rss,${ORDER[0]}]:-}" ] && ROWS+=(rss)
 
 [ "${#NOISY[@]}" -gt 0 ] &&
@@ -279,6 +289,22 @@ if [ -n "$BENCH_JSON" ]; then
     done
     printf '\n    }'
   done
+  printf '\n  },\n  "results_rss": {'
+  firstrow=1
+  for row in "${ROWS[@]}"; do
+    [ -z "$firstrow" ] && printf ','
+    firstrow=
+    printf '\n    "%s": {' "$row"
+    first=1
+    for r in "${ORDER[@]}"; do
+      [ -z "$first" ] && printf ','
+      first=
+      v="${RSS[$row,$r]:-null}"
+      case "$v" in ''|ERR) v=null ;; esac
+      printf '\n      "%s": %s' "$r" "$v"
+    done
+    printf '\n    }'
+  done
   printf '\n  }\n}\n'
   exit 0
 fi
@@ -290,18 +316,19 @@ echo
 echo "Interleaved + randomized runs; min of N (the contention-free floor), after a"
 echo "discarded warmup. startup/bigscript: process wall-time, min of $STARTUP_RUNS."
 echo "Other workloads: self-timed after an in-process warmup, min of $WORKLOAD_RUNS."
-echo "rss: peak resident set (MB) on the near-empty script."
-echo "All times in milliseconds, lower is better. ~ marks a noisy cell (CoV > ${NOISE_THRESHOLD}%)."
+echo "Memory: peak resident set (MB) sampled once per workload."
+echo "All times in milliseconds, lower is better. Format: time / memory."
+echo "~ marks a noisy cell (CoV > ${NOISE_THRESHOLD}%)."
 echo
 
-printf "%-11s" "workload"
-for r in "${ORDER[@]}"; do printf " | %9s" "$r"; done
+printf "%-15s" "workload"
+for r in "${ORDER[@]}"; do printf " | %13s" "$r"; done
 printf "\n"
-printf -- "-----------"
-for _ in "${ORDER[@]}"; do printf -- "+-----------"; done
+printf -- "---------------"
+for _ in "${ORDER[@]}"; do printf -- "+--------------"; done
 printf "\n"
 for row in "${ROWS[@]}"; do
-  printf "%-11s" "$row"
+  printf "%-15s" "$row"
   for r in "${ORDER[@]}"; do
     v="${RES[$row,$r]:--}"
     if [ "$v" = ERR ]; then
@@ -310,8 +337,11 @@ for row in "${ROWS[@]}"; do
       # Flag a noisy cell so a wobbly number isn't read as precise.
       c="${COV[$row,$r]:-0}"
       awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && v="${v}~"
+      if [ -n "${RSS[$row,$r]:-}" ]; then
+        v="${v} / ${RSS[$row,$r]}M"
+      fi
     fi
-    printf " | %9s" "$v"
+    printf " | %13s" "$v"
   done
   printf "\n"
 done

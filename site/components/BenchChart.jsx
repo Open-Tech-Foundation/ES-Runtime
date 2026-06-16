@@ -28,6 +28,7 @@ export default function BenchChart({ metrics }) {
     <div className="space-y-5">
       {metrics.map((m) => {
         const row = bench.results_ms[m.key] || {};
+        const rssRow = bench.results_rss ? bench.results_rss[m.key] : null;
         const max = maxOf(row, runtimes);
         const winner = winnerOf(row, runtimes, m.key);
         const unit = m.unit || "ms";
@@ -46,6 +47,7 @@ export default function BenchChart({ metrics }) {
                 const pct =
                   typeof v === "number" ? Math.max((v / max) * 100, 2) : 0;
                 const isWin = rt === winner;
+                const mem = rssRow && rssRow[rt] ? ` / ${rssRow[rt]}MB` : "";
                 return (
                   <div className="flex items-center gap-2.5">
                     <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
@@ -64,11 +66,12 @@ export default function BenchChart({ metrics }) {
                     <span
                       className={
                         isWin
-                          ? "w-14 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
-                          : "w-14 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
+                          ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                          : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                       }
                     >
                       {typeof v === "number" ? v + unit : "—"}
+                      {mem}
                     </span>
                   </div>
                 );

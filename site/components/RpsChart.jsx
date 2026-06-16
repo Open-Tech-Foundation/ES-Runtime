@@ -7,6 +7,8 @@
 // objects (a style string becomes Object.assign(..., str)).
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
 
+import bench from "../src/benchmarks.js";
+
 // Hello-world HTTP server, req/s on one core — derived from each runtime's
 // measured CPU time per request (contention-immune; wall-clock on a shared box
 // is too noisy). All four saturate ~one core, so this is a per-request cost
@@ -28,6 +30,8 @@ export default function RpsChart() {
     }
   }
 
+  const httpRss = bench.results_rss?.http || {};
+
   return (
     <div>
       <div className="mb-1.5 flex items-baseline justify-between">
@@ -40,6 +44,7 @@ export default function RpsChart() {
         {ORDER.map((rt) => {
           const pct = Math.max((ROW[rt] / max) * 100, 2);
           const isWin = rt === winner;
+          const mem = httpRss[rt] ? ` / ${httpRss[rt]}MB` : "";
           return (
             <div className="flex items-center gap-2.5">
               <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
@@ -58,11 +63,12 @@ export default function RpsChart() {
               <span
                 className={
                   isWin
-                    ? "w-14 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
-                    : "w-14 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
+                    ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                    : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                 }
               >
                 {fmt(ROW[rt])}
+                {mem}
               </span>
             </div>
           );

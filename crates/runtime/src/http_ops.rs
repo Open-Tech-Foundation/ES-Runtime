@@ -63,28 +63,25 @@ pub(crate) fn install(
             if reqs.is_empty() {
                 return Ok(Value::Null); // server closed
             }
-            // A batch of structured entries (no per-request JSON string build /
-            // parse): [requestId, method, url, hasBody, [[name, value], …]].
-            let mut entries = Vec::with_capacity(reqs.len());
+            // A flat array to avoid recursive v8::Array allocations.
+            // Format: [requestId, method, url, hasBody, numHeaders, name1, val1, ...]
+            let mut flat = Vec::new();
             for (rid, req) in reqs {
                 let has_body = !req.body.is_empty();
                 if has_body {
                     bodies.borrow_mut().insert(rid, req.body);
                 }
-                let headers = req
-                    .headers
-                    .into_iter()
-                    .map(|(n, v)| Value::Array(vec![Value::String(n), Value::String(v)]))
-                    .collect();
-                entries.push(Value::Array(vec![
-                    Value::Number(rid as f64),
-                    Value::String(req.method),
-                    Value::String(req.url),
-                    Value::Bool(has_body),
-                    Value::Array(headers),
-                ]));
+                flat.push(Value::Number(rid as f64));
+                flat.push(Value::String(req.method));
+                flat.push(Value::String(req.url));
+                flat.push(Value::Bool(has_body));
+                flat.push(Value::Number(req.headers.len() as f64));
+                for (n, v) in req.headers {
+                    flat.push(Value::String(n));
+                    flat.push(Value::String(v));
+                }
             }
-            Ok(Value::Array(entries))
+            Ok(Value::Array(flat))
         })
     }))?;
 
@@ -103,17 +100,24 @@ pub(crate) fn install(
     let h = http.clone();
     engine.register_op(OpDecl::r#async("http_respond", move |args| {
         let h = h.clone();
-        let rid = arg_u64(&args, 0);
-        let status = arg_u16(&args, 1);
-        // The body is either a string (deferred from the JS Response — encoded
-        // to UTF-8 here, saving a utf8_encode op crossing on the JS side), raw
-        // bytes, or absent.
-        let body = match args.get(2) {
-            Some(Value::String(s)) => s.as_bytes().to_vec(),
-            Some(Value::Bytes(b)) => b.clone(),
+        let mut it = args.into_iter();
+        let rid = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u64;
+        let status = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u16;
+        
+        let body = match it.next() {
+            Some(Value::String(s)) => s.into_bytes(),
+            Some(Value::Bytes(b)) => b,
+            Some(Value::Other(s)) => s.into_bytes(),
             _ => Vec::new(),
         };
-        let headers = parse_headers(&args, 3);
+
+        let mut headers = Vec::new();
+        while let (Some(name_val), Some(value_val)) = (it.next(), it.next()) {
+            if let (Value::String(name), Value::String(value)) = (name_val, value_val) {
+                headers.push((name, value));
+            }
+        }
+
         Box::pin(async move {
             let response = HttpServerResponse {
                 status,
@@ -152,18 +156,7 @@ fn arg_u64(args: &[Value], i: usize) -> u64 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u64
 }
 
-/// Reads `[name0, value0, name1, value1, …]` from `args` starting at `start`.
-fn parse_headers(args: &[Value], start: usize) -> Vec<(String, String)> {
-    let mut headers = Vec::new();
-    let mut i = start;
-    while i + 1 < args.len() {
-        if let (Some(name), Some(value)) = (args[i].as_str(), args[i + 1].as_str()) {
-            headers.push((name.to_string(), value.to_string()));
-        }
-        i += 2;
-    }
-    headers
-}
+
 
 fn require(
     http: &Option<Arc<dyn HttpServerProvider>>,
