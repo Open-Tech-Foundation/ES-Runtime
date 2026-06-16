@@ -6,7 +6,38 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`esrun types --install`.** Writes the `runtime:` TypeScript definitions into
+  `node_modules/@opentf/esrun` (as a type package) and wires them into
+  `tsconfig.json` (`typeRoots` + `types`) so editors and `tsc` resolve the
+  `runtime:*` modules with no manual steps. Merges an existing config
+  non-destructively, creates one if absent, and leaves JSONC configs untouched
+  (printing the lines to add).
+
+- **Standard error diagnostics.** Uncaught exceptions and unhandled promise
+  rejections now report a JS **stack trace** with source position, printed as one
+  coherent CLI error block with optional color (`NO_COLOR` honored).
+
+- **Install script** can offer to add `esrun` to your `PATH`.
+
 ### Changed
+
+- **`runtime:fs` small-file fast paths.** `read`/`write`/`stat`/`exists`/
+  `readDir` on files under 64 KB run synchronously, skipping the async task
+  hand-off; root-jail path resolution is fast-pathed — and re-canonicalized on
+  every call, so a path that later becomes a symlink escape is always re-checked.
+
+- **`runtime:fs` writes avoid redundant copies.** A `Uint8Array` is moved across
+  the boundary instead of copied twice, and a string is encoded to UTF-8 once on
+  the Rust side (no intermediate JS `TextEncoder` buffer). Large writes are
+  measurably faster.
+
+- **Benchmarks.** Added **LLRT** as a fifth runtime and reworked the harness for
+  fair, contention-resistant numbers: runtimes run interleaved in randomized
+  order, each cell is the **min** over repetitions (the contention-free floor)
+  after a discarded warmup, noisy cells are flagged, and an opt-in `QUIET=1` mode
+  pins the CPU and disables ASLR. Numbers regenerated.
 
 - **`runtime:http` per-request cost trimmed further (~20.8 → ~18.2 µs CPU/req).**
   Two prelude refinements: a string `Response`/`Request` body is kept as a string
