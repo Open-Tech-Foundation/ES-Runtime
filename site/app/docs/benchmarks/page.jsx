@@ -1,7 +1,7 @@
 import DocsShell from "../../../components/DocsShell.jsx";
 import BenchChart from "../../../components/BenchChart.jsx";
 import BenchStandings from "../../../components/BenchStandings.jsx";
-import bench from "../../../src/benchmarks.json";
+import bench from "../../../src/benchmarks.js";
 
 const startup = [
   { key: "startup", label: "Cold start (near-empty script)", unit: "ms" },
@@ -24,9 +24,16 @@ const workloads = [
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
   { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
-  { key: "fsread", label: "File read", unit: "ms" },
-  { key: "fswrite", label: "File write", unit: "ms" },
-  { key: "fsappend", label: "File append", unit: "ms" },
+  { key: "fsread_small", label: "File read (small)", unit: "ms" },
+  { key: "fsread_large", label: "File read (large)", unit: "ms" },
+  { key: "fswrite_small", label: "File write (small)", unit: "ms" },
+  { key: "fswrite_large", label: "File write (large)", unit: "ms" },
+  { key: "fsappend_small", label: "File append (small)", unit: "ms" },
+  { key: "fsappend_large", label: "File append (large)", unit: "ms" },
+  { key: "fsstat_small", label: "File stat (small)", unit: "ms" },
+  { key: "fsstat_large", label: "File stat (large)", unit: "ms" },
+  { key: "fsexists_small", label: "File exists (small)", unit: "ms" },
+  { key: "fsexists_large", label: "File exists (large)", unit: "ms" },
   { key: "glob", label: "Glob scan", unit: "ms" },
 ];
 
@@ -103,7 +110,7 @@ export default function BenchmarksDoc() {
       </p>
       <div className="mt-4 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
         <pre className="overflow-x-auto px-4 py-4 text-[13px] leading-relaxed text-zinc-100">
-          <code>{"# human-readable table\nbench/run.sh\n\n# machine-readable (what this page renders)\nBENCH_JSON=1 bench/run.sh > site/src/benchmarks.json"}</code>
+          <code>{"# human-readable table\nbench/run.sh\n\n# regenerate the data module this page renders\nbench/gen-bench-data.sh"}</code>
         </pre>
       </div>
       <p className="mt-4 text-sm text-zinc-500">

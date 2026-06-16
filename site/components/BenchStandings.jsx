@@ -1,13 +1,14 @@
-// A quick-glance standings table computed from src/benchmarks.json: for each
-// comparable metric (lower is better) the runtimes are ranked, and we tally how
-// many 1st/2nd/3rd/… places each took. A runtime is ranked only on metrics it
-// can actually run, so the "Tests" totals differ (e.g. LLRT has no HTTP server
-// or fs here) — that's shown, not hidden. Unbiased by construction: it's just
-// the measured numbers, sorted.
+// A quick-glance standings table computed from src/benchmarks.js: for each
+// comparable metric the runtimes are ranked (by that metric's better direction),
+// and we tally how many 1st/2nd/3rd/… places each took. A runtime is ranked only
+// on metrics it can actually run, so the "Tests" totals differ (e.g. LLRT has no
+// HTTP server or fs here) — that's shown, not hidden. Unbiased by construction:
+// it's just the measured numbers, sorted.
 //
 // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so all of the tallying below uses plain loops; `.map` appears only in render.
-import bench from "../src/benchmarks.json";
+import bench from "../src/benchmarks.js";
+import { isHigherBetter } from "../src/metric-direction.js";
 
 const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
@@ -64,16 +65,14 @@ export default function BenchStandings() {
       const v = row[r];
       if (typeof v === "number") ranked.push([r, v]);
     }
-    ranked.sort((a, b) => a[1] - b[1]); // lower is better
+    const higher = isHigherBetter(m);
+    ranked.sort((a, b) => (higher ? b[1] - a[1] : a[1] - b[1]));
     for (let i = 0; i < ranked.length; i++) {
       const r = ranked[i][0];
       tally[r].tests += 1;
       tally[r].pos[i + 1] += 1;
     }
   }
-
-  let maxWins = 0;
-  for (const r of runtimes) if (tally[r].pos[1] > maxWins) maxWins = tally[r].pos[1];
 
   const positions = [];
   for (let i = 1; i <= n; i++) positions.push(i);
@@ -98,12 +97,10 @@ export default function BenchStandings() {
           <tbody>
             {runtimes.map((r) => {
               const t = tally[r];
-              const isTopWinner = t.pos[1] === maxWins && maxWins > 0;
               return (
                 <tr className="border-t border-zinc-100">
                   <td className="px-3 py-2 font-semibold text-zinc-900">
                     {LABELS[r]}
-                    {isTopWinner ? <span title="Most 1st-place finishes"> 🏆</span> : null}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-zinc-500">{t.tests}</td>
                   {positions.map((p) => {
@@ -128,10 +125,11 @@ export default function BenchStandings() {
         </table>
       </div>
       <p className="mt-2 text-xs text-zinc-400">
-        Across {metrics.length} comparable metrics (lower is better). Each runtime
-        is ranked only on metrics it can run, so totals differ — e.g. LLRT has no
-        HTTP server or filesystem here. 🏆 = most 1st-place finishes, not “best
-        overall”; pick by fit (see below).
+        Across {metrics.length} comparable metrics, each ranked by its own better
+        direction. Each runtime is ranked only on metrics it can run, so totals
+        differ — e.g. LLRT has no HTTP server or filesystem here. Place counts are
+        not a ranking: more 1st-place finishes does not mean “best overall.” Pick
+        by fit (see below).
       </p>
 
       <div className="mt-6 space-y-4">

@@ -1,12 +1,13 @@
 // A dependency-free horizontal bar chart driven by bench/run.sh JSON output
-// (site/src/benchmarks.json). Lower is better; the winner of each row (the
-// fastest/smallest value) is drawn in green, everyone else in neutral grey.
+// (site/src/benchmarks.js). The winner of each row (the best value in that
+// metric's better direction) is drawn in green, everyone else in neutral grey.
 // Pass `metrics` as [{ key, label, unit? }] selecting rows to show.
 //
 // NOTE: the @opentf/web compiler rewrites every `.map()` into a reactive list
 // helper, so non-render computations must use plain loops (never `.map`), and
 // dynamic styles must be objects (a style string becomes Object.assign(...,str)).
-import bench from "../src/benchmarks.json";
+import bench from "../src/benchmarks.js";
+import { betterLabel, winnerOf } from "../src/metric-direction.js";
 
 const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
@@ -20,21 +21,6 @@ function maxOf(row, runtimes) {
   return max || 1;
 }
 
-// The winning runtime for a row: the one with the lowest value (lower is
-// better). Returns its key, or null if the row has no numeric values.
-function winnerOf(row, runtimes) {
-  let best = null;
-  let bestV = Infinity;
-  for (const rt of runtimes) {
-    const v = row[rt];
-    if (typeof v === "number" && v < bestV) {
-      bestV = v;
-      best = rt;
-    }
-  }
-  return best;
-}
-
 export default function BenchChart({ metrics }) {
   const runtimes = ORDER.filter((rt) => bench.runtimes[rt]);
 
@@ -43,7 +29,7 @@ export default function BenchChart({ metrics }) {
       {metrics.map((m) => {
         const row = bench.results_ms[m.key] || {};
         const max = maxOf(row, runtimes);
-        const winner = winnerOf(row, runtimes);
+        const winner = winnerOf(row, runtimes, m.key);
         const unit = m.unit || "ms";
 
         return (
@@ -52,7 +38,7 @@ export default function BenchChart({ metrics }) {
               <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
                 {m.label}
               </span>
-              <span className="text-[10px] text-zinc-400">lower is better</span>
+              <span className="text-[10px] text-zinc-400">{betterLabel(m.key)}</span>
             </div>
             <div className="space-y-1.5">
               {runtimes.map((rt) => {

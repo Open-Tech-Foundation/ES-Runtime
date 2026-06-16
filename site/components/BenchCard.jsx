@@ -1,11 +1,12 @@
 // One benchmark as a self-contained card: the metric label + a horizontal bar
-// per runtime, the fastest (lowest) drawn green — same convention as BenchChart.
+// per runtime, the best value drawn green — same convention as BenchChart.
 // Used by BenchRoller for the home-page marquee. Pass `metric` as { key, label,
-// unit? }; data comes from src/benchmarks.json.
+// unit? }; data comes from src/benchmarks.js.
 //
 // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so dynamic styles must be objects (a style string becomes Object.assign).
-import bench from "../src/benchmarks.json";
+import bench from "../src/benchmarks.js";
+import { betterLabel, winnerOf } from "../src/metric-direction.js";
 
 const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
@@ -19,24 +20,11 @@ function maxOf(row, runtimes) {
   return max || 1;
 }
 
-function winnerOf(row, runtimes) {
-  let best = null;
-  let bestV = Infinity;
-  for (const rt of runtimes) {
-    const v = row[rt];
-    if (typeof v === "number" && v < bestV) {
-      bestV = v;
-      best = rt;
-    }
-  }
-  return best;
-}
-
 export default function BenchCard({ metric }) {
   const runtimes = ORDER.filter((rt) => bench.runtimes[rt]);
   const row = bench.results_ms[metric.key] || {};
   const max = maxOf(row, runtimes);
-  const winner = winnerOf(row, runtimes);
+  const winner = winnerOf(row, runtimes, metric.key);
   const unit = metric.unit || "ms";
 
   return (
@@ -45,7 +33,7 @@ export default function BenchCard({ metric }) {
         <span className="text-xs font-semibold uppercase tracking-wider text-zinc-700">
           {metric.label}
         </span>
-        <span className="text-[10px] text-zinc-400">lower is better</span>
+        <span className="text-[10px] text-zinc-400">{betterLabel(metric.key)}</span>
       </div>
       <div className="space-y-1.5">
         {runtimes.map((rt) => {
