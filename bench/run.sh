@@ -1,16 +1,25 @@
 #!/usr/bin/env bash
 #
-# Cross-runtime benchmark: esrun vs Node.js vs Bun vs Deno.
+# Cross-runtime benchmark: esrun vs Node.js vs Bun vs Deno vs LLRT.
 #
-# All workloads use only Web APIs common to every runtime, so the same script
-# runs unmodified on each. Startup is measured as process wall-time (min of N —
-# the floor is the launch cost) on a near-empty script and on a generated
-# ~100 KB script (parse cost; the startup snapshot only pre-bakes the prelude,
-# not user code). The other workloads run an untimed JIT warmup, time
-# themselves with performance.now(), and print RESULT_MS, which this harness
-# parses (isolating engine/runtime cost from process launch); the harness
-# reports the *median* of WORKLOAD_RUNS runs so a single noisy run can't set
-# the number. Peak RSS is sampled per runtime (GNU time, skipped if absent).
+# Methodology (see bench/README.md for the rationale and sources):
+#  * All workloads use only Web APIs common to every runtime, so the same script
+#    runs unmodified on each.
+#  * Each script does an untimed in-process warmup (JIT steady state) and times
+#    itself with performance.now(), printing RESULT_MS — isolating engine cost
+#    from process launch. Startup/bigscript instead measure process wall-time
+#    (the launch + parse cost is the metric).
+#  * INTERLEAVED + RANDOMIZED: every repetition samples each runtime once per
+#    row back-to-back, with the runtime order shuffled, so all candidates share
+#    the same contention window. Relative ranking then reflects real differences
+#    — not which minute a runtime happened to be measured in.
+#  * PROCESS WARMUP: the first repetition is discarded (fills caches, lets the
+#    JIT/OS settle) on top of each script's in-process warmup.
+#  * AGGREGATION = MIN over repetitions: interference only ever *adds* time, so
+#    the minimum is the contention-free floor — the stable, fair comparator.
+#  * NOISE is disclosed, not hidden: the coefficient of variation per cell is
+#    computed; cells above NOISE_THRESHOLD% are flagged (`~`) and listed.
+#  * Peak RSS is sampled per runtime (GNU time, skipped if absent).
 #
 # The fetch workload runs against a local HTTP server on 127.0.0.1:18923
 # (started here with Node; the workload is skipped if Node is missing or the
@@ -19,13 +28,17 @@
 # Usage:  bench/run.sh                      (auto-detects installed runtimes)
 #         ESRUN=/path/to/esrun bench/run.sh
 #         WORKLOADS="url encoding" bench/run.sh   (subset of workloads)
+#         WORKLOAD_RUNS=15 bench/run.sh           (more samples per workload)
+#         QUIET=1 bench/run.sh                    (pin CPU + disable ASLR, etc.)
 #         BENCH_JSON=1 bench/run.sh > results.json (machine-readable output)
 set -uo pipefail
 cd "$(dirname "$0")"
 
 ESRUN="${ESRUN:-../target/release/esrun}"
 STARTUP_RUNS="${STARTUP_RUNS:-25}"
-WORKLOAD_RUNS="${WORKLOAD_RUNS:-5}"
+WORKLOAD_RUNS="${WORKLOAD_RUNS:-9}"
+# Coefficient-of-variation (%) above which a measured cell is flagged as noisy.
+NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
 ALL_WORKLOADS="compute json jsonbig sha256 crypto url encoding base64 structured async timers streams fetch http fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
@@ -121,31 +134,43 @@ gen_bigscript() {
 now() { date +%s.%N; }
 to_ms() { awk "BEGIN{printf \"%.1f\", $1*1000}"; }
 
-# Min process wall-time over STARTUP_RUNS runs (plus one discarded warmup).
-measure_startup() {
-  local cmd="$1" script="$2" best="" s e d
-  $cmd "$script" >/dev/null 2>&1   # warmup
-  for _ in $(seq "$STARTUP_RUNS"); do
-    s=$(now); $cmd "$script" >/dev/null 2>&1; e=$(now)
-    d=$(awk "BEGIN{print $e-$s}")
-    [ -z "$best" ] && best=$d
-    awk "BEGIN{exit !($d < $best)}" && best=$d
-  done
-  to_ms "$best"
+# Optional environment hardening (opt-in: QUIET=1). Pins every runtime to the
+# same CPU and disables ASLR so all candidates face identical conditions; `nice`
+# is applied only as root. Governor/turbo need sudo and are printed as a hint.
+# The wrapper prefixes every timed launch (but not RSS sampling, where it would
+# confuse the resident-set reading of the immediate child).
+WRAP=""
+if [ -n "${QUIET:-}" ]; then
+  command -v taskset >/dev/null 2>&1 && WRAP="taskset -c ${BENCH_CPU:-0} "
+  [ "$(id -u)" = 0 ] && WRAP="${WRAP}nice -n -20 "
+  setarch -R true >/dev/null 2>&1 && WRAP="${WRAP}setarch -R "
+  note "QUIET: launches wrapped with: ${WRAP:-<none available>}"
+  note "QUIET: for lowest variance also run (sudo): cpupower frequency-set -g performance; echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost — and close background apps"
+fi
+
+# A single timed launch → one ms sample (or "ERR" if the runtime can't run it).
+#   startup: process wall-time.   workload: the script's self-reported RESULT_MS.
+sample_once() {  # kind cmd script
+  local kind="$1" cmd="$2" script="$3" s e out
+  if [ "$kind" = startup ]; then
+    s=$(now); $WRAP $cmd "$script" >/dev/null 2>&1; e=$(now)
+    to_ms "$(awk "BEGIN{print $e-$s}")"
+  else
+    out=$($TIMEOUT_BIN $WRAP $cmd "$script" 2>/dev/null | grep -oE 'RESULT_MS=[0-9.]+' | head -1 | cut -d= -f2)
+    [ -z "$out" ] && { echo ERR; return; }
+    awk "BEGIN{printf \"%.1f\", $out}"
+  fi
 }
 
-# Median self-timed RESULT_MS over WORKLOAD_RUNS runs (lower median index for
-# even counts).
-measure_workload() {
-  local cmd="$1" script="$2" out
-  local results=()
-  for _ in $(seq "$WORKLOAD_RUNS"); do
-    out=$($TIMEOUT_BIN $cmd "scripts/$script" 2>/dev/null | grep -oE 'RESULT_MS=[0-9.]+' | head -1 | cut -d= -f2)
-    [ -z "$out" ] && { echo "ERR"; return; }
-    results+=("$out")
-  done
-  printf "%s\n" "${results[@]}" | sort -g |
-    awk -v n="${#results[@]}" 'NR == int((n + 1) / 2) { printf "%.1f", $1 }'
+# Reduces a list of samples to "min cov%": min is the contention-free floor
+# (interference only ever adds time); cov is the coefficient of variation, used
+# to flag noisy cells.
+aggregate() {  # "s1 s2 ..."
+  awk '{ for (i=1;i<=NF;i++){ x=$i; sum+=x; sq+=x*x; n++; if (n==1 || x<min) min=x } }
+       END{ if (n==0){ print "ERR 0"; exit }
+            mean=sum/n; var=(n>1)?(sq-n*mean*mean)/(n-1):0; if (var<0) var=0;
+            cov=(mean>0)?100*sqrt(var)/mean:0;
+            printf "%.1f %.1f", min, cov }' <<<"$1"
 }
 
 # Peak RSS (MB) of one run, via GNU time or a python3 getrusage fallback.
@@ -168,26 +193,65 @@ EOF
 
 note() { [ -z "$BENCH_JSON" ] && echo "$*" >&2; }
 
+shuffle() {  # randomize runtime order each repetition (falls back to fixed)
+  if command -v shuf >/dev/null 2>&1; then shuf -e "$@"; else printf '%s\n' "$@"; fi
+}
+
 # --- run --------------------------------------------------------------------
 
 start_fetch_server
 BIGSCRIPT="$(gen_bigscript)"
 
-declare -A RES
+# Rows and their (kind, script path).
+declare -A KIND PATHS
+KIND[startup]=startup;   PATHS[startup]="scripts/startup.js"
+KIND[bigscript]=startup; PATHS[bigscript]="$BIGSCRIPT"
 ROWS=(startup bigscript)
-for w in $WORKLOADS; do ROWS+=("$w"); done
+for w in $WORKLOADS; do KIND[$w]=workload; PATHS[$w]="scripts/$w.js"; ROWS+=("$w"); done
 
-for r in "${ORDER[@]}"; do
-  RES["startup,$r"]=$(measure_startup "${CMD[$r]}" scripts/startup.js)
-  RES["bigscript,$r"]=$(measure_startup "${CMD[$r]}" "$BIGSCRIPT")
-  for w in $WORKLOADS; do
-    RES["$w,$r"]=$(measure_workload "${CMD[$r]}" "$w.js")
+declare -A SAMPLES RES COV DEAD
+
+# Interleaved + randomized collection (see header). Repetition 0 is the
+# discarded process-level warmup; a row a runtime can't run errors on that warmup
+# and is then skipped entirely (marked DEAD), so unsupported workloads cost one
+# launch instead of N.
+collect() {  # row reps
+  local row="$1" reps="$2" rep r s
+  for rep in $(seq 0 "$reps"); do
+    while read -r r; do
+      [ -n "${DEAD[$row,$r]:-}" ] && continue
+      s=$(sample_once "${KIND[$row]}" "${CMD[$r]}" "${PATHS[$row]}")
+      if [ "$s" = ERR ]; then
+        [ "$rep" -eq 0 ] && DEAD[$row,$r]=1
+        continue
+      fi
+      [ "$rep" -eq 0 ] && continue   # discard warmup repetition
+      SAMPLES[$row,$r]="${SAMPLES[$row,$r]:-} $s"
+    done < <(shuffle "${ORDER[@]}")
   done
-  RES["rss,$r"]=$(measure_rss "${CMD[$r]}" scripts/startup.js)
+}
+
+for row in "${ROWS[@]}"; do
+  if [ "${KIND[$row]}" = startup ]; then collect "$row" "$STARTUP_RUNS"; else collect "$row" "$WORKLOAD_RUNS"; fi
 done
 
-# Include the rss row only when a sampler was available.
+# Aggregate each cell to its min + CoV; collect the noisy ones to disclose.
+NOISY=()
+for row in "${ROWS[@]}"; do
+  for r in "${ORDER[@]}"; do
+    if [ -z "${SAMPLES[$row,$r]:-}" ]; then RES[$row,$r]=ERR; continue; fi
+    read -r m c < <(aggregate "${SAMPLES[$row,$r]}")
+    RES[$row,$r]=$m; COV[$row,$r]=$c
+    awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && NOISY+=("$row/$r ${c}%")
+  done
+done
+
+# RSS is a memory floor (contention doesn't inflate peak RSS): one sample each.
+for r in "${ORDER[@]}"; do RES[rss,$r]=$(measure_rss "${CMD[$r]}" scripts/startup.js); done
 [ -n "${RES[rss,${ORDER[0]}]:-}" ] && ROWS+=(rss)
+
+[ "${#NOISY[@]}" -gt 0 ] &&
+  note "noisy cells (CoV > ${NOISE_THRESHOLD}%; min floor still shown, marked ~): ${NOISY[*]}"
 
 # --- output -----------------------------------------------------------------
 
@@ -223,10 +287,11 @@ echo "ES-Runtime cross-runtime benchmark"
 echo "=================================="
 for r in "${ORDER[@]}"; do printf "  %-6s %s\n" "$r" "${VER[$r]}"; done
 echo
-echo "startup/bigscript: process wall-time (near-empty / ~100 KB script), min of $STARTUP_RUNS."
-echo "Other workloads: self-timed after an untimed warmup, median of $WORKLOAD_RUNS."
+echo "Interleaved + randomized runs; min of N (the contention-free floor), after a"
+echo "discarded warmup. startup/bigscript: process wall-time, min of $STARTUP_RUNS."
+echo "Other workloads: self-timed after an in-process warmup, min of $WORKLOAD_RUNS."
 echo "rss: peak resident set (MB) on the near-empty script."
-echo "All times in milliseconds, lower is better. See scripts/*.js for shapes."
+echo "All times in milliseconds, lower is better. ~ marks a noisy cell (CoV > ${NOISE_THRESHOLD}%)."
 echo
 
 printf "%-11s" "workload"
@@ -239,7 +304,13 @@ for row in "${ROWS[@]}"; do
   printf "%-11s" "$row"
   for r in "${ORDER[@]}"; do
     v="${RES[$row,$r]:--}"
-    [ "$v" = ERR ] && v="n/a" # workload the runtime doesn't support
+    if [ "$v" = ERR ]; then
+      v="n/a" # workload the runtime doesn't support
+    else
+      # Flag a noisy cell so a wobbly number isn't read as precise.
+      c="${COV[$row,$r]:-0}"
+      awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && v="${v}~"
+    fi
     printf " | %9s" "$v"
   done
   printf "\n"
