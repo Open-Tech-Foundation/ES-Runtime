@@ -65,6 +65,13 @@ export default {
       "llrt": 123.2,
       "esrun": 99.3
     },
+    "urlpattern": {
+      "node": 461.9,
+      "bun": 815.6,
+      "deno": 5666.9,
+      "llrt": null,
+      "esrun": 187.6
+    },
     "encoding": {
       "node": 77.2,
       "bun": 24.9,
