@@ -2,6 +2,7 @@ import BenchRoller from "../components/BenchRoller.jsx";
 import RpsChart from "../components/RpsChart.jsx";
 import InstallBox from "../components/InstallBox.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
+import WhyChooseSection from "../components/WhyChooseSection.jsx";
 
 const features = [
   {
@@ -89,6 +90,9 @@ export default function HomePage() {
           </div>
         </div>
       </section>
+
+      {/* Why Choose Section */}
+      <WhyChooseSection />
 
       {/* Builtin Core Features */}
       <section className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
