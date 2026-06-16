@@ -487,3 +487,45 @@ fn unhandled_rejection_reports_stack_trace() {
     assert!(stderr.contains("TypeError: async boom"), "{stderr}");
     assert!(stderr.contains("at file://"), "{stderr}");
 }
+
+#[test]
+fn runtime_urlpattern_works_globally() {
+    let script = "
+        // Test 1: Basic string pattern with base
+        const p1 = new URLPattern('/api/users/:id', 'https://api.example.com');
+        console.log('MATCH1=' + p1.test('https://api.example.com/api/users/123'));
+        console.log('MATCH2=' + p1.test('https://api.example.com/api/posts/123'));
+        console.log('ID1=' + p1.exec('https://api.example.com/api/users/456').pathname.groups.id);
+
+        // Test 2: Absolute pattern string
+        const p2 = new URLPattern('https://api.example.com/api/users/:id');
+        console.log('MATCH3=' + p2.test('https://api.example.com/api/users/123'));
+
+        // Test 3: Object pattern with wildcards
+        const p3 = new URLPattern({ protocol: 'http*', hostname: '*.example.com', pathname: '/data/*' });
+        console.log('MATCH4=' + p3.test('https://sub.example.com/data/123/456'));
+        console.log('MATCH5=' + p3.test('ftp://sub.example.com/data/123'));
+
+        // Test 4: Parameter mapping in different parts
+        const p4 = new URLPattern({ hostname: ':sub.example.com', pathname: '/files/:file' });
+        const exec4 = p4.exec('https://test.example.com/files/document.txt');
+        console.log('SUB=' + exec4.hostname.groups.sub);
+        console.log('FILE=' + exec4.pathname.groups.file);
+
+        // Test 5: Ignored case
+        const p5 = new URLPattern({ pathname: '/API/:id' }, 'https://api.example.com', { ignoreCase: true });
+        console.log('MATCH6=' + p5.test('https://api.example.com/api/123'));
+    ";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("MATCH1=true"), "{}", s);
+    assert!(s.contains("MATCH2=false"), "{}", s);
+    assert!(s.contains("ID1=456"), "{}", s);
+    assert!(s.contains("MATCH3=true"), "{}", s);
+    assert!(s.contains("MATCH4=true"), "{}", s);
+    assert!(s.contains("MATCH5=false"), "{}", s);
+    assert!(s.contains("SUB=test"), "{}", s);
+    assert!(s.contains("FILE=document.txt"), "{}", s);
+    assert!(s.contains("MATCH6=true"), "{}", s);
+}

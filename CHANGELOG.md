@@ -616,7 +616,7 @@ system, with world-touching parts as host ops.
 
 - **D17** (Console = injectable output-sink provider; default forwards to
   tracing) and **D18** (URL via the `url` crate) locked. Deferrals (SPEC §7):
-  `TextEncoderStream`/`TextDecoderStream` → Phase 5 (need Streams); `URLPattern`
+  `TextEncoderStream`/`TextDecoderStream` → Phase 5 (need Streams)
   → later; full WHATWG-URL conformance gaps tracked vs WPT.
 
 ### Phase 3 — Provider traits + default tokio providers

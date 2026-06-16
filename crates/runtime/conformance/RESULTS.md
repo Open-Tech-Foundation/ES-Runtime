@@ -35,7 +35,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 ## Not yet covered
 
 Deferred surface (tracked in SPEC §7), so deliberately untested here: streaming
-`fetch` request bodies, `URLPattern`, and the asymmetric
+`fetch` request bodies, and the asymmetric
 `crypto.subtle` JWK edge cases. `fetch` itself is exercised by the Rust
 integration tests (it needs a mock transport, not available in this pure-JS
 harness). Adding assertions here as features land is how the pass count grows.
