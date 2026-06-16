@@ -77,6 +77,46 @@ export default function SecurityDoc() {
         is on by default and is not currently optional.
       </p>
 
+      <div className="mt-10 mb-8 rounded-2xl bg-zinc-950 p-8 shadow-inner border border-zinc-800">
+        <div className="flex flex-col items-center gap-6">
+          <div className="relative flex w-full max-w-lg flex-col sm:flex-row items-center justify-between rounded-lg border-2 border-dashed border-rose-500/50 bg-rose-500/10 p-6 text-center gap-4 sm:gap-0">
+            <span className="absolute -top-3 left-4 bg-zinc-950 px-2 text-xs font-semibold uppercase tracking-wider text-rose-400">
+              JS Runtime (Untrusted)
+            </span>
+            <div className="text-sm font-medium text-zinc-300 text-left">
+              Your Code
+              <div className="mt-1 rounded bg-zinc-900 px-2 py-1">
+                <code className="text-rose-300">file("../../etc/passwd")</code>
+              </div>
+            </div>
+            <div className="hidden sm:block text-2xl text-zinc-500">→</div>
+            <div className="block sm:hidden text-2xl text-zinc-500">↓</div>
+            <div className="flex flex-col gap-2 text-xs w-full sm:w-auto">
+              <div className="rounded border border-brand-500/30 bg-brand-500/20 px-3 py-1.5 font-mono text-brand-300">
+                Capability: FileRead
+              </div>
+              <div className="rounded border border-emerald-500/30 bg-emerald-500/20 px-3 py-1.5 font-mono text-emerald-300">
+                Root Jail Check
+              </div>
+            </div>
+          </div>
+          
+          <div className="h-6 border-l-2 border-dashed border-zinc-700"></div>
+          
+          <div className="w-full max-w-lg rounded-lg border border-zinc-700 bg-zinc-900 p-6 text-center shadow-lg">
+            <span className="mb-3 block text-xs font-semibold uppercase tracking-wider text-emerald-400">
+              Rust Host (Trusted)
+            </span>
+            <div className="text-sm font-medium text-zinc-400">
+              Path canonicalized to: <code className="text-zinc-200">/etc/passwd</code>
+            </div>
+            <div className="mt-4 rounded bg-rose-500/20 px-4 py-2 text-sm font-semibold text-rose-400 border border-rose-500/30">
+              DENIED: Path escapes project root (/home/user/project)
+            </div>
+          </div>
+        </div>
+      </div>
+
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Engine confinement
       </h2>
