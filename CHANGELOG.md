@@ -6,6 +6,16 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:net` TLS client.** `connect(address, { secureTransport: "on" })`
+  now negotiates TLS (rustls via tokio-rustls, `aws-lc-rs`, bundled Mozilla
+  roots) with certificate verification. Follows the WinterTC Sockets API: `sni`
+  overrides the server name (default: the host), `alpn` offers protocols and the
+  negotiated one is surfaced as `SocketInfo.alpn`; `Socket.upgraded` is exposed.
+  `secureTransport: "starttls"` / `startTls()` and TLS on `listen` remain
+  unsupported (DECISIONS D28).
+
 ### Fixed
 
 - **`esrun upgrade`.** Release archives nest the binary under a versioned
