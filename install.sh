@@ -85,9 +85,42 @@ bold "esrun was installed to $BIN_DIR/esrun"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *)
-    echo
-    echo "Add esrun to your PATH by adding this to your shell profile:"
-    bold "  export PATH=\"$BIN_DIR:\$PATH\""
+    if [ -t 0 ] || [ -c /dev/tty ]; then
+      echo
+      printf "Would you like to add esrun to your shell profile automatically? [y/N] "
+      if read -r ans < /dev/tty && { [ "$ans" = "y" ] || [ "$ans" = "Y" ]; }; then
+        shell_profile=""
+        case "${SHELL:-}" in
+          */zsh) shell_profile="$HOME/.zshrc" ;;
+          */bash) shell_profile="$HOME/.bashrc" ;;
+          *) 
+            if [ -f "$HOME/.bashrc" ]; then shell_profile="$HOME/.bashrc"
+            elif [ -f "$HOME/.zshrc" ]; then shell_profile="$HOME/.zshrc"
+            elif [ -f "$HOME/.profile" ]; then shell_profile="$HOME/.profile"
+            fi
+            ;;
+        esac
+        if [ -n "$shell_profile" ]; then
+          echo "" >> "$shell_profile"
+          echo "# esrun" >> "$shell_profile"
+          echo "export PATH=\"$BIN_DIR:\$PATH\"" >> "$shell_profile"
+          echo
+          bold "Added PATH to $shell_profile"
+          dim "Restart your terminal or run: source $shell_profile"
+        else
+          echo
+          echo "Could not determine shell profile. Please add it manually:"
+          bold "  export PATH=\"$BIN_DIR:\$PATH\""
+        fi
+      else
+        echo
+        echo "Please add it manually:"
+        bold "  export PATH=\"$BIN_DIR:\$PATH\""
+      fi
+    else
+      echo "Please add it manually:"
+      bold "  export PATH=\"$BIN_DIR:\$PATH\""
+    fi
     ;;
 esac
 echo
