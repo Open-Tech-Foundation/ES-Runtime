@@ -8,7 +8,7 @@ const TSCONFIG = `{
     "moduleResolution": "bundler",
     "strict": true
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts", "node_modules/@opentf/esrun/types.d.ts"]
 }`;
 
 export default function TypescriptDoc() {
@@ -24,15 +24,15 @@ export default function TypescriptDoc() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">1. Generate types</h2>
       <p className="mt-3 text-zinc-600">
-        The esrun binary ships with its own TypeScript definitions built-in. Write them to a <code className="font-mono bg-zinc-100 px-1 rounded">.d.ts</code> file in your project — TypeScript picks up any <code className="font-mono bg-zinc-100 px-1 rounded">.d.ts</code> automatically:
+        The esrun binary ships with its own TypeScript definitions built-in. Write them into <code className="font-mono bg-zinc-100 px-1 rounded">node_modules</code> so they sit alongside your other type packages — no clutter in your project tree:
       </p>
       <div className="mt-4">
-        <CodeBlock code="esrun types > esrun.d.ts" lang="sh" />
+        <CodeBlock code="mkdir -p node_modules/@opentf/esrun && esrun types > node_modules/@opentf/esrun/types.d.ts" lang="sh" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">2. Configure tsconfig.json</h2>
       <p className="mt-3 text-zinc-600">
-        A modern, web-standard <code className="font-mono bg-zinc-100 px-1 rounded">tsconfig.json</code>. The <code className="font-mono bg-zinc-100 px-1 rounded">include</code> glob matches your sources and the generated <code className="font-mono bg-zinc-100 px-1 rounded">esrun.d.ts</code> (<code className="font-mono bg-zinc-100 px-1 rounded">**/*.ts</code> covers <code className="font-mono bg-zinc-100 px-1 rounded">.d.ts</code> too):
+        Add the generated declarations to <code className="font-mono bg-zinc-100 px-1 rounded">include</code> so your editor resolves the <code className="font-mono bg-zinc-100 px-1 rounded">runtime:*</code> modules. The explicit path is needed because TypeScript skips <code className="font-mono bg-zinc-100 px-1 rounded">node_modules</code> otherwise:
       </p>
       <div className="mt-4">
         <CodeBlock code={TSCONFIG} title="tsconfig.json" lang="json" />
