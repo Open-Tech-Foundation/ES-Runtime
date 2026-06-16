@@ -136,11 +136,12 @@ impl FileSystem for SystemFileSystem {
         let resolved = self.jailed(&path);
         if let Ok(p) = &resolved
             && let Ok(md) = std::fs::metadata(p)
-                && md.len() < 64 * 1024 {
-                    return Box::pin(std::future::ready(
-                        std::fs::read(p).map_err(|e| other(&path, e)),
-                    ));
-                }
+            && md.len() < 64 * 1024
+        {
+            return Box::pin(std::future::ready(
+                std::fs::read(p).map_err(|e| other(&path, e)),
+            ));
+        }
         Box::pin(async move {
             let p = resolved?;
             tokio::fs::read(&p).await.map_err(|e| other(&path, e))
@@ -157,24 +158,25 @@ impl FileSystem for SystemFileSystem {
         let len = data.len() as u64;
 
         if let Ok(p) = &resolved
-            && len < 64 * 1024 {
-                let res = (|| -> std::io::Result<()> {
-                    let mut opts = std::fs::OpenOptions::new();
-                    opts.write(true).create(true);
-                    if append {
-                        opts.append(true);
-                    } else {
-                        opts.truncate(true);
-                    }
-                    use std::io::Write;
-                    let mut f = opts.open(p)?;
-                    f.write_all(&data)?;
-                    Ok(())
-                })();
-                return Box::pin(std::future::ready(
-                    res.map(|_| len).map_err(|e| other(&path, e)),
-                ));
-            }
+            && len < 64 * 1024
+        {
+            let res = (|| -> std::io::Result<()> {
+                let mut opts = std::fs::OpenOptions::new();
+                opts.write(true).create(true);
+                if append {
+                    opts.append(true);
+                } else {
+                    opts.truncate(true);
+                }
+                use std::io::Write;
+                let mut f = opts.open(p)?;
+                f.write_all(&data)?;
+                Ok(())
+            })();
+            return Box::pin(std::future::ready(
+                res.map(|_| len).map_err(|e| other(&path, e)),
+            ));
+        }
         Box::pin(async move {
             let p = resolved?;
             let mut opts = tokio::fs::OpenOptions::new();
@@ -193,18 +195,19 @@ impl FileSystem for SystemFileSystem {
     fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>> {
         let resolved = self.jailed(&path);
         if let Ok(p) = &resolved
-            && let Ok(md) = std::fs::metadata(p) {
-                let is_symlink = std::fs::symlink_metadata(p)
-                    .map(|m| m.file_type().is_symlink())
-                    .unwrap_or(false);
-                return Box::pin(std::future::ready(Ok(FileStat {
-                    size: md.len(),
-                    is_file: md.is_file(),
-                    is_dir: md.is_dir(),
-                    is_symlink,
-                    mtime_ms: mtime_ms(&md),
-                })));
-            }
+            && let Ok(md) = std::fs::metadata(p)
+        {
+            let is_symlink = std::fs::symlink_metadata(p)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            return Box::pin(std::future::ready(Ok(FileStat {
+                size: md.len(),
+                is_file: md.is_file(),
+                is_dir: md.is_dir(),
+                is_symlink,
+                mtime_ms: mtime_ms(&md),
+            })));
+        }
         Box::pin(async move {
             let p = resolved?;
             let md = tokio::fs::metadata(&p).await.map_err(|e| other(&path, e))?;

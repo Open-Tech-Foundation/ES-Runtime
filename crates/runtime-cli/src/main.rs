@@ -172,15 +172,17 @@ fn update_tsconfig() -> Result<String, Box<dyn std::error::Error>> {
             "tsconfig.json is not a JSON object — left it untouched.\n{manual}"
         ));
     };
-    let co = obj
-        .entry("compilerOptions")
-        .or_insert_with(|| json!({}));
+    let co = obj.entry("compilerOptions").or_insert_with(|| json!({}));
     let Some(co) = co.as_object_mut() else {
         return Ok(format!(
             "tsconfig.json compilerOptions is not an object — left it untouched.\n{manual}"
         ));
     };
-    merge_str_array(co, "typeRoots", &["node_modules/@types", "node_modules/@opentf"]);
+    merge_str_array(
+        co,
+        "typeRoots",
+        &["node_modules/@types", "node_modules/@opentf"],
+    );
     merge_str_array(co, "types", &["esrun"]);
     fs::write(path, format!("{}\n", serde_json::to_string_pretty(&cfg)?))?;
     Ok("Updated tsconfig.json (typeRoots + types).".into())
