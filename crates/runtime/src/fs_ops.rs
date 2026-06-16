@@ -69,15 +69,20 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
 
     let f = fs.clone();
     engine.register_op(
-        OpDecl::r#async("fs_write", move |args| {
+        OpDecl::r#async("fs_write", move |mut args| {
             let f = f.clone();
             let path = arg_str(&args, 0);
-            let data = args
-                .get(1)
-                .and_then(Value::as_bytes)
-                .map(<[u8]>::to_vec)
-                .unwrap_or_default();
             let append = arg_bool(&args, 2);
+            // Move the payload out instead of borrowing + `to_vec`: a Uint8Array
+            // arrives as `Value::Bytes` (marshal's one copy) and we take that Vec;
+            // a string arrives as `Value::String` and we take its already-UTF-8
+            // bytes — so writing a string costs no JS-side `TextEncoder` buffer
+            // and no second copy here.
+            let data = args
+                .get_mut(1)
+                .map(|v| std::mem::replace(v, Value::Undefined))
+                .and_then(Value::into_bytes)
+                .unwrap_or_default();
             Box::pin(async move {
                 let n = require(&f)?
                     .write(path, data, append)

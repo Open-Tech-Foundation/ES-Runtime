@@ -60,6 +60,19 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Consumes the value into an owned byte buffer when it carries bytes —
+    /// moving a [`Value::Bytes`] `Vec` out without copying, or taking a
+    /// [`Value::String`]'s already-UTF-8 bytes. Returns `None` for other
+    /// variants. Lets byte sinks (e.g. file writes) avoid re-copying what
+    /// marshaling already produced.
+    pub fn into_bytes(self) -> Option<Vec<u8>> {
+        match self {
+            Value::Bytes(b) => Some(b),
+            Value::String(s) => Some(s.into_bytes()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

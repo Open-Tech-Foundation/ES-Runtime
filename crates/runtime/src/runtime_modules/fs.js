@@ -155,8 +155,13 @@ async function drain(stream) {
 
 // Writes any web body to `dest`; resolves to the number of bytes written. Pass
 // { append: true } to add to the end instead of truncating.
+//
+// A string is passed through untouched: the op encodes it to UTF-8 on the Rust
+// side in one pass, avoiding a `TextEncoder` round-trip and an extra buffer copy
+// across the boundary. Everything else is normalized to bytes first.
 async function write(dest, input, options = {}) {
-  return ops.fs_write(pathOf(dest), await toBytes(input), !!options.append);
+  const payload = typeof input === "string" ? input : await toBytes(input);
+  return ops.fs_write(pathOf(dest), payload, !!options.append);
 }
 
 async function readDir(path) {
