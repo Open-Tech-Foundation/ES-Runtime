@@ -15,6 +15,15 @@ await writer.close();
 let body = ""; const dec = new TextDecoder();
 for await (const chunk of sock.readable) body += dec.decode(chunk);`;
 
+const TLS = `import { connect } from "runtime:net";
+
+// TLS client — secureTransport "on" (certificate verification on), offering ALPN.
+const sock = connect({ hostname: "example.com", port: 443 }, {
+  secureTransport: "on",
+  alpn: ["h2", "http/1.1"],
+});
+const { alpn } = await sock.opened; // negotiated protocol, e.g. "h2" (or null)`;
+
 const SERVER = `import { listen } from "runtime:net";
 
 const server = listen({ hostname: "127.0.0.1", port: 8080 });
@@ -27,8 +36,8 @@ for await (const conn of server) {
 const fns = [
   {
     sig: "connect(address, options?)",
-    type: "(Address, { secureTransport? }) => Socket",
-    desc: "Open an outbound TCP connection (the WinterTC Sockets API). Returns a Socket synchronously; .opened settles once connected. address is \"host:port\" or { hostname, port }.",
+    type: "(Address, { secureTransport?, sni?, alpn? }) => Socket",
+    desc: "Open an outbound TCP or TLS connection (the WinterTC Sockets API). Returns a Socket synchronously; .opened settles once connected. address is \"host:port\" or { hostname, port }. secureTransport: \"on\" negotiates TLS; sni overrides the server name (default: the host); alpn offers protocols (the negotiated one is SocketInfo.alpn).",
     ex: `const sock = connect({ hostname: "db.internal", port: 5432 });`,
   },
   {
@@ -42,9 +51,10 @@ const fns = [
 const socketMembers = [
   { m: "readable", t: "ReadableStream<Uint8Array>", d: "Incoming bytes." },
   { m: "writable", t: "WritableStream<Uint8Array>", d: "Outgoing bytes; closing the writer half-closes (FIN)." },
-  { m: "opened", t: "Promise<SocketInfo>", d: "Resolves once connected, with the address info." },
+  { m: "opened", t: "Promise<SocketInfo>", d: "Resolves once connected: { remoteAddress, remotePort, localAddress, localPort, alpn }. alpn is the negotiated TLS protocol, else null." },
   { m: "closed", t: "Promise<void>", d: "Resolves when the socket is fully closed." },
   { m: "close()", t: "Promise<void>", d: "Fully close the socket." },
+  { m: "upgraded", t: "boolean", d: "True only after a startTls() upgrade (not yet supported)." },
 ];
 
 const listenerMembers = [
@@ -83,7 +93,7 @@ export default function NetDoc() {
         <span>
           <strong>All I/O is async</strong> over web streams — nothing blocks the
           event loop. Closing a socket's <code className="font-mono">writable</code>{" "}
-          half-closes (sends FIN) while reads continue. TLS is not supported yet.
+          half-closes (sends FIN) while reads continue.
         </span>
       </div>
 
@@ -109,6 +119,11 @@ export default function NetDoc() {
       </div>
       <h3 className="mt-8 text-base font-semibold text-zinc-900">Socket</h3>
       <MemberTable rows={socketMembers} />
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">TLS</h2>
+      <div className="mt-4">
+        <CodeBlock code={TLS} title="tls.js" lang="js" />
+      </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Server</h2>
       <div className="mt-4">
