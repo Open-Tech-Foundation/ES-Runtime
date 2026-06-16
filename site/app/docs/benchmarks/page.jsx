@@ -70,6 +70,22 @@ export default function BenchmarksDoc() {
         </ul>
       </div>
 
+      <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-600">
+        <div className="font-medium text-zinc-900">How it's measured</div>
+        <ul className="mt-2 list-disc space-y-1 pl-5">
+          <li>
+            Runtimes run <strong>interleaved, in randomized order</strong> each
+            repetition — so they share one contention window and the ranking is
+            fair, not decided by which ran first.
+          </li>
+          <li>
+            Each cell is the <strong>minimum</strong> over repetitions (the
+            contention-free floor), after a discarded warmup.
+          </li>
+          <li>Cells with high run-to-run variance are flagged in the raw output.</li>
+        </ul>
+      </div>
+
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Standings at a glance
       </h2>
@@ -95,8 +111,8 @@ export default function BenchmarksDoc() {
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Workloads</h2>
       <p className="mt-2 text-sm text-zinc-500">
         Self-timed with <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">performance.now()</code>{" "}
-        after an untimed JIT warmup; median of N runs, isolating engine cost from
-        process launch.
+        after an untimed JIT warmup; min of N interleaved runs, isolating engine
+        cost from process launch.
       </p>
       <div className="mt-5">
         <BenchChart metrics={workloads} />

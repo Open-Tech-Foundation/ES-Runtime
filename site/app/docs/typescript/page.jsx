@@ -8,9 +8,7 @@ const TSCONFIG = `{
     "moduleResolution": "bundler",
     "strict": true
   },
-  // The ambient runtime:* declarations are loaded by including the .d.ts
-  // (an explicit path under node_modules is still picked up).
-  "include": ["**/*.ts", "node_modules/@opentf/esrun/types.d.ts"]
+  "include": ["**/*.ts"]
 }`;
 
 export default function TypescriptDoc() {
@@ -26,15 +24,15 @@ export default function TypescriptDoc() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">1. Generate types</h2>
       <p className="mt-3 text-zinc-600">
-        The esrun binary ships with its own TypeScript definitions built-in. You can extract them into your <code className="font-mono bg-zinc-100 px-1 rounded">node_modules</code> so your IDE picks them up:
+        The esrun binary ships with its own TypeScript definitions built-in. Write them to a <code className="font-mono bg-zinc-100 px-1 rounded">.d.ts</code> file in your project — TypeScript picks up any <code className="font-mono bg-zinc-100 px-1 rounded">.d.ts</code> automatically:
       </p>
       <div className="mt-4">
-        <CodeBlock code="mkdir -p node_modules/@opentf/esrun && esrun types > node_modules/@opentf/esrun/types.d.ts" lang="sh" />
+        <CodeBlock code="esrun types > esrun.d.ts" lang="sh" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">2. Configure tsconfig.json</h2>
       <p className="mt-3 text-zinc-600">
-        Update your <code className="font-mono bg-zinc-100 px-1 rounded">tsconfig.json</code> to include the types. Since esrun uses modern web standards, you should also ensure your target and module resolution are set to modern ES standards.
+        A modern, web-standard <code className="font-mono bg-zinc-100 px-1 rounded">tsconfig.json</code>. The <code className="font-mono bg-zinc-100 px-1 rounded">include</code> glob matches your sources and the generated <code className="font-mono bg-zinc-100 px-1 rounded">esrun.d.ts</code> (<code className="font-mono bg-zinc-100 px-1 rounded">**/*.ts</code> covers <code className="font-mono bg-zinc-100 px-1 rounded">.d.ts</code> too):
       </p>
       <div className="mt-4">
         <CodeBlock code={TSCONFIG} title="tsconfig.json" lang="json" />
