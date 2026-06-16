@@ -40,7 +40,7 @@ const options = [
   },
   {
     flag: "types",
-    desc: "Print the runtime: TypeScript definitions to stdout (esrun types > esrun.d.ts) — version-matched and offline. Also published as @opentf/esrun-types.",
+    desc: "Print the runtime: TypeScript definitions to stdout (esrun types > esrun.d.ts) — version-matched and offline.",
   },
   {
     flag: "-h, --help",

@@ -62,6 +62,7 @@ export default function HomePage() {
               </a>
             </div>
             <div className="mt-6 max-w-xl">
+              <h3 className="mb-3 text-sm font-semibold text-zinc-900 uppercase tracking-wider">Install</h3>
               <InstallBox />
             </div>
           </div>
@@ -73,9 +74,6 @@ export default function HomePage() {
                 <h2 className="text-sm font-semibold text-zinc-900">
                   Benchmarks
                 </h2>
-                <span className="text-xs text-zinc-400">
-                  vs Node.js · Bun · Deno
-                </span>
               </div>
               <RpsChart />
               <div className="mt-5 border-t border-zinc-100 pt-5">
@@ -151,27 +149,39 @@ export default function HomePage() {
 
       {/* CTA */}
       <section className="border-t border-zinc-200 bg-zinc-950">
-        <div className="mx-auto max-w-6xl px-6 py-16 text-center lg:py-20">
-          <h2 className="text-3xl font-bold tracking-tight text-white">
+        <div className="mx-auto max-w-6xl px-6 py-16 lg:py-20">
+          <h2 className="text-center text-3xl font-bold tracking-tight text-white">
             Ship a runtime you can trust.
           </h2>
-          <p className="mx-auto mt-4 max-w-xl text-lg text-zinc-400">
-            Run untrusted JavaScript with only the capabilities you grant —
-            embed the library, or use the <span className="font-mono text-zinc-200">esrun</span> CLI.
-          </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <a
-              href="/docs"
-              className="rounded-lg bg-white px-5 py-3 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-100"
-            >
-              Read the docs
-            </a>
-            <a
-              href="/api"
-              className="rounded-lg border border-zinc-700 px-5 py-3 text-sm font-semibold text-zinc-200 transition-colors hover:bg-zinc-900"
-            >
-              API reference
-            </a>
+          <div className="mt-12 grid gap-10 sm:grid-cols-2 text-left">
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-8">
+              <h3 className="text-xl font-bold text-white">Standard Server Runtime</h3>
+              <p className="mt-3 text-zinc-400">
+                A standard-based, full-capability, fast and optimal runtime for general workloads.
+              </p>
+              <div className="mt-6">
+                <a
+                  href="/docs"
+                  className="inline-flex items-center rounded-lg bg-white px-5 py-3 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-100"
+                >
+                  Read ESRun Docs
+                </a>
+              </div>
+            </div>
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-8">
+              <h3 className="text-xl font-bold text-white">Embeddable Engine</h3>
+              <p className="mt-3 text-zinc-400">
+                Embedded for ultimate control & untrusted code execution. Inject standard APIs or create your own custom capabilities from Rust.
+              </p>
+              <div className="mt-6">
+                <a
+                  href="/docs/embed"
+                  className="inline-flex items-center rounded-lg border border-zinc-700 bg-transparent px-5 py-3 text-sm font-semibold text-zinc-200 transition-colors hover:bg-zinc-800"
+                >
+                  Embeddable Guide
+                </a>
+              </div>
+            </div>
           </div>
         </div>
       </section>

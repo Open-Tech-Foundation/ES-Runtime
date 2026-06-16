@@ -58,7 +58,7 @@ export default function InstallBox() {
 
       {/* Command */}
       <div className="flex items-start gap-3 px-4 py-3.5">
-        <code className={CODE_BASE + (copied ? "text-emerald-400" : "text-zinc-100")}>
+        <code className={CODE_BASE + " whitespace-pre-wrap " + (copied ? "text-emerald-400" : "text-zinc-100")}>
           <span className="select-none text-brand-400">
             {active === "win" ? "> " : "$ "}
           </span>

@@ -1,3 +1,6 @@
+"use client";
+
+
 // A dark code panel with lightweight, dependency-free syntax highlighting.
 // Pass `code` as a string, an optional `title`, and `lang` ("js"/"ts"/"sh"/…).
 // A tiny tokenizer colors comments, strings, keywords, and numbers — no
@@ -43,18 +46,39 @@ function tokenize(code, lang) {
 
 export default function CodeBlock({ code, title, lang }) {
   const tokens = tokenize(code, lang);
+  let copied = $state(false);
+
+  const copy = () => {
+    navigator.clipboard?.writeText(code);
+    copied = true;
+    setTimeout(() => (copied = false), 2000);
+  };
+
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-sm">
-      {title && (
-        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
-          <span className="text-xs font-medium text-zinc-400">{title}</span>
+    <div className="group relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 shadow-sm">
+      <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
+        <div className="flex items-center gap-3">
           {lang && (
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+            <span className="rounded bg-zinc-800/50 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-zinc-400">
               {lang}
             </span>
           )}
+          {title && <span className="text-xs font-medium text-zinc-300">{title}</span>}
         </div>
-      )}
+        <button
+          onclick={copy}
+          className="flex items-center gap-1.5 rounded text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-100"
+        >
+          {copied ? (
+            <span className="text-emerald-400 flex items-center gap-1">
+              <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5"><path fillRule="evenodd" d="M12.416 3.376a.75.75 0 0 1 .208 1.04l-5 7.5a.75.75 0 0 1-1.154.114l-3-3a.75.75 0 0 1 1.06-1.06l2.353 2.353 4.493-6.74a.75.75 0 0 1 1.04-.207Z" clipRule="evenodd"/></svg>
+              Copied
+            </span>
+          ) : (
+            "Copy"
+          )}
+        </button>
+      </div>
       <pre className="overflow-x-auto px-4 py-4 text-[13px] leading-relaxed text-zinc-100">
         <code>
           {tokens.map((tok) => (

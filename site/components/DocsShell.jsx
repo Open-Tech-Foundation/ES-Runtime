@@ -9,12 +9,18 @@ const NAV = [
       { href: "/docs", label: "Overview" },
       { href: "/docs/install", label: "Installation" },
       { href: "/docs/scope", label: "Scope & non-goals" },
+      { href: "/docs/migration", label: "Migration guide" },
+      { href: "/docs/typescript", label: "TypeScript setup" },
     ],
   },
   {
     group: "Guides",
     items: [
       { href: "/docs/guides/file-handling", label: "File handling" },
+      { href: "/docs/glob", label: "Glob matching" },
+      { href: "/docs/process", label: "Process & Env" },
+      { href: "/docs/path", label: "Path handling" },
+      { href: "/docs/http", label: "HTTP server" },
     ],
   },
   {
@@ -41,6 +47,9 @@ const NAV = [
 ];
 
 export default function DocsShell({ active, children }) {
+  const allItems = NAV.flatMap(section => section.items);
+  const currentIndex = allItems.findIndex(item => item.href === active);
+  const nextItem = currentIndex !== -1 && currentIndex < allItems.length - 1 ? allItems[currentIndex + 1] : null;
   return (
     <div className="mx-auto flex max-w-6xl gap-10 px-6 py-12">
       <aside className="hidden w-56 shrink-0 lg:block">
@@ -72,7 +81,22 @@ export default function DocsShell({ active, children }) {
         </nav>
       </aside>
 
-      <article className="min-w-0 flex-1 pb-8">{children}</article>
+      <article className="min-w-0 flex-1 pb-8">
+        {children}
+        {nextItem && (
+          <div className="mt-16 flex justify-end border-t border-zinc-200 pt-8">
+            <a
+              href={nextItem.href}
+              className="group flex items-center text-sm font-medium text-zinc-900 hover:text-brand-600"
+            >
+              {nextItem.label}
+              <span className="ml-2 block transition-transform group-hover:translate-x-1">
+                →
+              </span>
+            </a>
+          </div>
+        )}
+      </article>
     </div>
   );
 }

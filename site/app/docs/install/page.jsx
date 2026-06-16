@@ -21,8 +21,7 @@ export default function InstallDoc() {
         Installation
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        A prebuilt, checksum-verified <code className="font-mono">esrun</code>{" "}
-        binary installs to <code className="font-mono">~/.esrun/bin</code>.
+        A prebuilt, checksum-verified <code className="font-mono">esrun</code> binary is downloaded and installed automatically.
       </p>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Install</h2>

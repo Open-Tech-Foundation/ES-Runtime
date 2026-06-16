@@ -12,40 +12,38 @@ const rs     = f.stream();               // ReadableStream
 const ok     = await f.exists();         // boolean
 const info   = await f.stat();           // { size, isFile, isDir, mtimeMs }`;
 
-const WRITE = `import { file, write } from "runtime:fs";
+const WRITE = `import { write } from "runtime:fs";
 
 await write("./out/result.txt", "done");                  // string
-await write("/srv/app/cache.bin", new Uint8Array([1, 2])); // bytes
-await write("./app.log", "started\\n", { append: true });  // append
+await write("/srv/app/cache.bin", new Uint8Array([1, 2])); // bytes`;
+
+const APPEND = `import { write } from "runtime:fs";
+
+await write("./app.log", "started\\n", { append: true });  // append`;
+
+const STREAM = `import { file } from "runtime:fs";
 
 // Any web body works — and you can stream straight to disk:
 const res = await fetch("https://example.com/big.bin");
 await res.body.pipeTo(file("./big.bin").writable());`;
 
-const FOLDERS = `import { mkdir, readDir, remove, rename } from "runtime:fs";
+const CREATE_DIR = `import { mkdir } from "runtime:fs";
 
-await mkdir("./logs/2026", { recursive: true });
+await mkdir("./logs/2026", { recursive: true });`;
+
+const READ_DIR = `import { readDir } from "runtime:fs";
 
 for (const entry of await readDir("./logs")) {
   console.log(entry.name, entry.isDir);
-}
-
-await rename("./logs/app.log", "./logs/app.1.log");
-await remove("./logs", { recursive: true });`;
-
-const GLOB = `import { Glob } from "runtime:fs";
-
-const ts = new Glob("**/*.ts");
-ts.match("src/index.ts"); // true (pure, no I/O)
-
-for await (const path of ts.scan("src")) {
-  console.log(path);
 }`;
 
-const PATHS = `import { join, dirname, fromFileURL } from "runtime:path";
+const RENAME = `import { rename } from "runtime:fs";
 
-const here = dirname(fromFileURL(import.meta.url)); // the modern __dirname
-const cfg  = join(here, "config", "app.json");      // OS-correct separators`;
+await rename("./logs/app.log", "./logs/app.1.log");`;
+
+const REMOVE = `import { remove } from "runtime:fs";
+
+await remove("./logs", { recursive: true });`;
 
 export default function FileHandlingGuide() {
   return (
@@ -79,44 +77,50 @@ export default function FileHandlingGuide() {
         <CodeBlock code={READ} title="read.js" lang="js" />
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Writing files</h2>
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Write file</h2>
       <p className="mt-3 text-zinc-600">
-        <code className="font-mono">write()</code> accepts any web body;{" "}
-        <code className="font-mono">{"{ append: true }"}</code> adds to the end.
+        <code className="font-mono">write()</code> accepts any web body (string, bytes, etc.).
       </p>
       <div className="mt-4">
         <CodeBlock code={WRITE} title="write.js" lang="js" />
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Folders</h2>
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Append file</h2>
       <p className="mt-3 text-zinc-600">
-        Create, list, move, and remove directories and entries.
+        Pass <code className="font-mono">{"{ append: true }"}</code> to add to the end of the file.
       </p>
       <div className="mt-4">
-        <CodeBlock code={FOLDERS} title="folders.js" lang="js" />
+        <CodeBlock code={APPEND} title="append.js" lang="js" />
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Finding files</h2>
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Stream to write</h2>
       <p className="mt-3 text-zinc-600">
-        <code className="font-mono">Glob</code> matches strings and scans the
-        tree (<code className="font-mono">*</code>, <code className="font-mono">**</code>,{" "}
-        <code className="font-mono">{"{a,b}"}</code>, …).
+        You can stream data straight to disk using standard web streams.
       </p>
       <div className="mt-4">
-        <CodeBlock code={GLOB} title="glob.js" lang="js" />
+        <CodeBlock code={STREAM} title="stream.js" lang="js" />
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Paths across operating systems</h2>
-      <p className="mt-3 text-zinc-600">
-        Separators differ (<code className="font-mono">/</code> vs{" "}
-        <code className="font-mono">\\</code> + drive letters) — build paths with{" "}
-        <a href="/api/path" className="font-medium text-brand-600 hover:text-brand-700">
-          <code className="font-mono">runtime:path</code>
-        </a>
-        , not string concatenation.
-      </p>
+      <h2 className="mt-12 text-2xl font-bold text-zinc-900">Folders</h2>
+
+      <h3 className="mt-8 text-lg font-semibold text-zinc-900">Create directory</h3>
       <div className="mt-4">
-        <CodeBlock code={PATHS} title="paths.js" lang="js" />
+        <CodeBlock code={CREATE_DIR} title="mkdir.js" lang="js" />
+      </div>
+
+      <h3 className="mt-8 text-lg font-semibold text-zinc-900">Read directory</h3>
+      <div className="mt-4">
+        <CodeBlock code={READ_DIR} title="readdir.js" lang="js" />
+      </div>
+
+      <h3 className="mt-8 text-lg font-semibold text-zinc-900">Rename</h3>
+      <div className="mt-4">
+        <CodeBlock code={RENAME} title="rename.js" lang="js" />
+      </div>
+
+      <h3 className="mt-8 text-lg font-semibold text-zinc-900">Remove</h3>
+      <div className="mt-4">
+        <CodeBlock code={REMOVE} title="remove.js" lang="js" />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Capabilities & the jail</h2>
