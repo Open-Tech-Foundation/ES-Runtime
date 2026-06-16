@@ -31,12 +31,6 @@ export default function URLPatternDoc() {
         and extract data (like route parameters and wildcards) cleanly and efficiently.
       </p>
 
-      <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm leading-relaxed text-zinc-600">
-        <strong className="text-zinc-900">Performance edge:</strong>{" "}
-        Our implementation caches native JavaScript <code className="rounded bg-white px-1.5 py-0.5 text-[12px]">RegExp</code>{" "}
-        instances per component, allowing 50,000 instantiations to execute in <strong>~187ms</strong>, drastically
-        outperforming both Node.js (C++) and Bun (Zig).
-      </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Basic Usage</h2>
       <p className="mt-3 text-zinc-600">

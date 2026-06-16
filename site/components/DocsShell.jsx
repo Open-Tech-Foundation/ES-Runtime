@@ -21,6 +21,7 @@ const NAV = [
       { href: "/docs/process", label: "Process & Env" },
       { href: "/docs/path", label: "Path handling" },
       { href: "/docs/http", label: "HTTP server" },
+      { href: "/docs/urlpattern", label: "URLPattern" },
     ],
   },
   {
@@ -34,7 +35,6 @@ const NAV = [
     group: "Web standard APIs",
     items: [
       { href: "/docs/globals", label: "Global objects" },
-      { href: "/docs/urlpattern", label: "URLPattern" },
     ],
   },
   {
