@@ -20,13 +20,16 @@ bench/run.sh                              # auto-detects node / bun / deno / llr
 ```
 
 Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 25),
-`WORKLOAD_RUNS` (default 5), `WORKLOAD_TIMEOUT` (per-workload cap, default 60s, so
+`WORKLOAD_RUNS` (default 9), `NOISE_THRESHOLD` (CoV % above which a cell is
+flagged noisy, default 5), `WORKLOAD_TIMEOUT` (per-workload cap, default 60s, so
 an unsupported workload yields n/a instead of hanging), `WORKLOADS="url encoding"`
-(run a subset), `BENCH_JSON=1` (machine-readable output for diffing runs over
-time). A runtime that isn't installed is skipped; Deno is also looked for at
-`~/.deno/bin/deno` and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`,
-`~/.local/bin/llrt`, or `/tmp/llrt/llrt` if not on `PATH`. Install LLRT by
-unzipping the `llrt-linux-x64.zip` release asset onto your `PATH`.
+(run a subset), `QUIET=1` (pin to one CPU + disable ASLR for lower variance; see
+Methodology), `BENCH_CPU` (the core to pin under `QUIET`, default 0),
+`BENCH_JSON=1` (machine-readable output for diffing runs over time). A runtime
+that isn't installed is skipped; Deno is also looked for at `~/.deno/bin/deno`
+and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, or
+`/tmp/llrt/llrt` if not on `PATH`. Install LLRT by unzipping the
+`llrt-linux-x64.zip` release asset onto your `PATH`.
 
 ## What each workload measures
 
@@ -50,12 +53,42 @@ unzipping the `llrt-linux-x64.zip` release asset onto your `PATH`.
 | **http** | 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
 | **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory floor. |
 
-Methodology: `startup`/`bigscript` report the **min** over `STARTUP_RUNS` (the
-floor is the launch/parse cost); the other workloads run an untimed JIT warmup,
-time themselves with `performance.now()`, and report the **median** of
-`WORKLOAD_RUNS` self-timed runs, so a single noisy run can't set the number.
-`rss` is sampled with GNU `time` or a `python3` `getrusage` fallback (the row is
-omitted if neither is available).
+### Methodology
+
+Designed so contention can't bias the *relative* ranking — the real winner wins
+run to run (see Sources for the rationale):
+
+- **Interleaved + randomized.** Each repetition samples every runtime once per
+  row back-to-back, with the runtime order shuffled. All candidates therefore
+  share the same contention window, instead of one runtime being measured
+  minutes after another. This is the key fix: it makes interference hit every
+  runtime equally, so close calls aren't decided by *when* a runtime ran.
+- **Warmup.** Each script does an untimed in-process warmup so the JIT reaches
+  steady state; on top of that the first whole repetition is discarded
+  (process-level warmup — fills caches, lets the OS settle).
+- **Min, not median/mean.** Interference only ever *adds* time, so the minimum
+  over repetitions is the contention-free floor — the stablest, fairest
+  comparator. `startup`/`bigscript` use process wall-time (the launch/parse cost
+  is the metric); the other workloads time themselves with `performance.now()`
+  and report `RESULT_MS`, isolating engine cost from process launch.
+- **Noise is disclosed, not hidden.** The coefficient of variation (CoV) per
+  cell is computed; cells above `NOISE_THRESHOLD%` are marked `~` and listed, so
+  a wobbly number is never read as precise.
+- **Optional hardening (`QUIET=1`).** Pins every runtime to the same CPU
+  (`taskset`), disables ASLR (`setarch -R`), and raises priority as root, so all
+  candidates face identical conditions. For the lowest variance also set the
+  `performance` governor and disable turbo/boost (needs sudo; printed as a hint),
+  and close background apps.
+
+`rss` is the memory floor: one sample per runtime via GNU `time` or a `python3`
+`getrusage` fallback (the row is omitted if neither is available).
+
+#### Sources
+
+- Kalibera & Jones, [*Rigorous Benchmarking in Reasonable Time*](https://kar.kent.ac.uk/33611/45/p63-kaliber.pdf) (2013) — multi-level repetition, steady state.
+- Barrett et al., [*Virtual Machine Warmup Blows Hot and Cold*](https://arxiv.org/pdf/1602.00602) — JIT VMs may never reach a stable steady state.
+- [hyperfine](https://github.com/sharkdp/hyperfine) — warmup runs, min/mean/stddev, outlier detection.
+- [google/benchmark — *Reducing Variance*](https://github.com/google/benchmark/blob/main/docs/reducing_variance.md) and [pyperf — *Tune the system*](https://pyperf.readthedocs.io/en/latest/system.html) — governor, turbo, pinning, ASLR.
 
 ## Representative results
 
@@ -65,34 +98,34 @@ numbers are indicative and will vary by machine — re-run locally for your own.
 ```
 workload    |      node |       bun |      deno |      llrt |     esrun
 -----------+-----------+-----------+-----------+-----------+-----------
-startup     |      22.5 |       9.8 |      26.1 |       3.3 |       6.8
-bigscript   |      31.6 |      22.5 |      35.4 |      12.0 |      19.5
-compute     |     232.6 |     134.6 |     246.9 |    2465.0 |     258.6
-json        |     319.7 |     248.4 |     254.2 |     789.9 |     251.2
-jsonbig     |     792.1 |     686.4 |     636.4 |    1992.0 |     693.3
-sha256      |     718.7 |     554.8 |     672.9 |     375.8 |     383.6
-crypto      |     249.1 |     125.0 |     185.1 |      28.9 |      39.1
-url         |      57.8 |      97.1 |     129.7 |     129.6 |     102.2
-encoding    |      86.2 |      29.8 |      86.9 |      84.7 |      86.3
-base64      |       9.8 |      18.4 |       9.8 |      36.9 |      72.8
-structured  |     266.9 |     309.7 |     312.8 |     363.9 |     342.5
-async       |      71.2 |      56.3 |      40.6 |     792.2 |      41.2
-timers      |       8.2 |       9.1 |      30.4 |       5.6 |       6.2
-streams     |      30.1 |      24.2 |      18.3 |       n/a |      12.8
-fetch       |     118.3 |      26.3 |      47.6 |      28.6 |      45.9
-http        |     452.2 |      75.5 |     134.6 |       n/a |     110.2
-fsread_small |     175.2 |      54.8 |      67.2 |       n/a |      55.0
-fsread_large |      25.1 |      12.5 |      29.3 |       n/a |      34.2
-fswrite_small |     237.3 |      20.7 |     120.4 |       n/a |     112.7
-fswrite_large |      66.8 |      32.5 |      50.0 |       n/a |      47.6
-fsappend_small |     186.6 |      57.3 |      65.7 |       n/a |      51.2
-fsappend_large |      58.6 |      27.6 |      42.8 |       n/a |      35.5
-fsstat_small |      98.3 |      80.8 |     129.8 |       n/a |      80.2
-fsstat_large |       1.1 |       0.3 |       1.2 |       n/a |       0.4
-fsexists_small |     101.4 |      83.8 |     132.6 |       n/a |      66.2
-fsexists_large |       1.1 |       0.3 |       1.0 |       n/a |       0.3
-glob        |     289.1 |      47.4 |       n/a |       n/a |      63.6
-rss         |        40 |        29 |        53 |        11 |        19
+startup     |      18.8 |       9.5 |      25.2 |       3.5 |       6.9
+bigscript   |      32.6 |      22.9 |      36.1 |      11.6 |      19.5
+compute     |     213.2 |     128.3 |     224.3 |    2390.8 |     253.9
+json        |     317.6 |     234.3 |     247.0 |     756.0 |     227.0
+jsonbig     |     768.9 |     669.5 |     603.9 |    1894.8 |     681.0
+sha256      |     708.4 |     543.6 |     614.6 |     365.5 |     364.4
+crypto      |     238.3 |     113.2 |     174.9 |      27.9 |      35.2
+url         |      55.0 |      84.4 |     115.4 |     123.2 |      99.3
+encoding    |      77.2 |      24.9 |      79.7 |      77.2 |      85.2
+base64      |       7.5 |      15.2 |       8.3 |      35.5 |      71.5
+structured  |     242.5 |     298.2 |     292.3 |     358.1 |     335.9
+async       |      65.3 |      58.4 |      39.4 |     768.9 |      33.6
+timers      |       7.4 |       8.3 |      27.0 |       4.9 |       5.5
+streams     |      25.3 |      22.5 |      15.8 |       n/a |      11.9
+fetch       |     101.7 |      22.0 |      42.2 |      24.3 |      42.9
+http        |     439.8 |      60.0 |     126.4 |       n/a |     103.4
+fsread_small |     169.5 |      49.2 |      54.3 |       n/a |      53.9
+fsread_large |      24.8 |       9.4 |      29.2 |       n/a |      33.3
+fswrite_small |     235.9 |      22.0 |     131.0 |       n/a |     103.8
+fswrite_large |      70.3 |      28.3 |      54.8 |       n/a |      28.8
+fsappend_small |     178.7 |      54.2 |      71.6 |       n/a |      44.5
+fsappend_large |      57.8 |      23.2 |      41.5 |       n/a |      21.2
+fsstat_small |     105.2 |      68.8 |     121.5 |       n/a |      79.6
+fsstat_large |       0.7 |       0.2 |       0.6 |       n/a |       0.3
+fsexists_small |      98.1 |      64.1 |     127.0 |       n/a |      59.7
+fsexists_large |       0.7 |       0.2 |       0.9 |       n/a |       0.2
+glob        |     306.0 |      43.1 |       n/a |       n/a |      68.1
+rss         |        41 |        29 |        54 |        11 |        19
 ```
 
 (node v24, bun 1.3, deno 2.8, llrt 0.8-beta, esrun 0.2; n/a = API the runtime
