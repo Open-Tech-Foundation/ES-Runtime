@@ -25,7 +25,7 @@ members = [
 # (engine `Engine`/`Value`, `Runtime`, provider traits) and the `runtime:`
 # standard-module namespace are the versioned contract.
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -124,11 +124,11 @@ self_update = { version = "0.42.0", default-features = false, features = [
 
 # Internal crates, referenced by path so the dependency graph is the boundary
 # (DECISIONS.md D11).
-es-runtime-common = { path = "crates/common", version = "0.2.0" }
-es-runtime-engine = { path = "crates/engine", version = "0.2.0" }
-es-runtime-providers = { path = "crates/providers", version = "0.2.0" }
-es-runtime = { path = "crates/runtime", version = "0.2.0" }
-es-runtime-default-providers = { path = "crates/default-providers", version = "0.2.0" }
+es-runtime-common = { path = "crates/common", version = "0.3.0" }
+es-runtime-engine = { path = "crates/engine", version = "0.3.0" }
+es-runtime-providers = { path = "crates/providers", version = "0.3.0" }
+es-runtime = { path = "crates/runtime", version = "0.3.0" }
+es-runtime-default-providers = { path = "crates/default-providers", version = "0.3.0" }
 
 # Optimize the big-integer/RSA math even in dev+test: unoptimized RSA key
 # generation is ~30s/key, which would dominate the test suite. These crates are

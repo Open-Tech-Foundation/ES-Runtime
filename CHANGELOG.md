@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-16
+
 ### Added
 
 - **`esrun types --install`.** Writes the `runtime:` TypeScript definitions into
