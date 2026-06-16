@@ -84,7 +84,7 @@ export default {
       "bun": 15.2,
       "deno": 8.3,
       "llrt": 35.5,
-      "esrun": 71.5
+      "esrun": 42.6
     },
     "structured": {
       "node": 242.5,

@@ -722,6 +722,7 @@ version = "0.3.0"
 dependencies = [
  "aes",
  "aes-gcm",
+ "base64",
  "cbc",
  "ctr",
  "es-runtime-common",

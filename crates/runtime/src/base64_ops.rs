@@ -15,18 +15,7 @@ use es_runtime_engine::{Engine, OpDecl, Value};
 
 use crate::Result;
 
-const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// `ALPHABET` inverted: sextet value per byte, or -1 for non-alphabet bytes.
-const LOOKUP: [i8; 256] = {
-    let mut table = [-1i8; 256];
-    let mut i = 0;
-    while i < ALPHABET.len() {
-        table[ALPHABET[i] as usize] = i as i8;
-        i += 1;
-    }
-    table
-};
 
 /// Registers `base64_encode` / `base64_decode`.
 pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
@@ -48,8 +37,15 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     Ok(())
 }
 
+use base64::{engine::general_purpose::STANDARD_NO_PAD, engine::general_purpose::STANDARD, Engine as _};
+
 /// `btoa`: base64 of a Latin-1 string. `None` if any code point exceeds U+00FF.
 fn encode(s: &str) -> Option<String> {
+    // Fast path: ASCII means UTF-8 matches Latin-1 byte for byte.
+    if s.is_ascii() {
+        return Some(STANDARD.encode(s.as_bytes()));
+    }
+
     let mut bytes = Vec::with_capacity(s.len());
     for c in s.chars() {
         let cp = c as u32;
@@ -58,41 +54,20 @@ fn encode(s: &str) -> Option<String> {
         }
         bytes.push(cp as u8);
     }
-
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b1 = u32::from(*chunk.get(1).unwrap_or(&0));
-        let b2 = u32::from(*chunk.get(2).unwrap_or(&0));
-        let triple = (u32::from(chunk[0]) << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[(triple >> 18) as usize & 0x3f] as char);
-        out.push(ALPHABET[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(triple >> 6) as usize & 0x3f] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[triple as usize & 0x3f] as char
-        } else {
-            '='
-        });
-    }
-    Some(out)
+    Some(STANDARD.encode(&bytes))
 }
 
 /// `atob`: decode to a string of U+0000–U+00FF code points. `None` on invalid
 /// input.
-///
-/// Whitespace stripping and the `len % 4 == 1` check operate on *bytes* where
-/// the spec speaks of code units; they only disagree for non-ASCII input, which
-/// always fails (here as an invalid character, in the spec sometimes as a
-/// length error) — same exception either way, so the difference is unobservable.
 fn decode(s: &str) -> Option<String> {
     // Strip ASCII whitespace, which the spec ignores.
-    let cleaned: Vec<u8> = s
-        .bytes()
-        .filter(|b| !matches!(b, b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
-        .collect();
+    let mut cleaned = Vec::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if !matches!(b, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ') {
+            cleaned.push(b);
+        }
+    }
+    
     if cleaned.len() % 4 == 1 {
         return None;
     }
@@ -101,21 +76,21 @@ fn decode(s: &str) -> Option<String> {
         end -= 1;
     }
 
-    let mut out = String::with_capacity(end * 3 / 4 + 1);
-    let (mut acc, mut bits) = (0u32, 0u32);
-    for &b in &cleaned[..end] {
-        let v = LOOKUP[b as usize];
-        if v < 0 {
-            return None;
-        }
-        acc = (acc << 6) | v as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push(((acc >> bits) & 0xff) as u8 as char);
+    let decoded = STANDARD_NO_PAD.decode(&cleaned[..end]).ok()?;
+
+    // Fast path: if the output is valid UTF-8 (e.g. pure ASCII), this is zero-copy.
+    match String::from_utf8(decoded) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            // Slow path: convert Latin-1 (u8 > 127) to UTF-8
+            let decoded = e.into_bytes();
+            let mut out = String::with_capacity(decoded.len() + decoded.len() / 4);
+            for b in decoded {
+                out.push(b as char);
+            }
+            Some(out)
         }
     }
-    Some(out)
 }
 
 #[cfg(test)]

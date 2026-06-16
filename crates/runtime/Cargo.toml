@@ -31,6 +31,7 @@ p384.workspace = true
 p521.workspace = true
 rsa.workspace = true
 sha1_rsa.workspace = true
+base64 = "0.22"
 
 [lints]
 workspace = true
