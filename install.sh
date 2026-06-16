@@ -62,7 +62,11 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fSL --progress-bar "$url" -o "$tmp/$name.tar.gz" ||
   err "download failed — is there a release asset for $target?"
 
-if curl -fsSL "$url.sha256" -o "$tmp/$name.tar.gz.sha256" 2>/dev/null; then
+# Checksums live in one `checksums.txt` per release (`<hash>  <archive>` lines);
+# pull out the line for our archive and verify it.
+sums_url="https://github.com/$REPO/releases/download/${version}/checksums.txt"
+if curl -fsSL "$sums_url" -o "$tmp/checksums.txt" 2>/dev/null &&
+  grep " ${name}.tar.gz\$" "$tmp/checksums.txt" > "$tmp/$name.tar.gz.sha256"; then
   if command -v shasum >/dev/null 2>&1; then
     (cd "$tmp" && shasum -a 256 -c "$name.tar.gz.sha256" >/dev/null) ||
       err "checksum verification failed"

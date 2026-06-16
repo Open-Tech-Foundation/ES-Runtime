@@ -82,7 +82,6 @@ jobs:
           cp README.md LICENSE NOTICE "dist/$NAME/" 2>/dev/null || true
           cp types/*.d.ts "dist/$NAME/types/" 2>/dev/null || true
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
-          ( cd dist && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
 
       - name: Package (Windows)
         if: matrix.archive == 'zip'
@@ -95,7 +94,6 @@ jobs:
           Copy-Item README.md,LICENSE,NOTICE "dist/$name/" -ErrorAction SilentlyContinue
           Copy-Item types/*.d.ts "dist/$name/types/" -ErrorAction SilentlyContinue
           Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
-          (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File "dist/$name.zip.sha256" -Encoding ascii
 
       - uses: actions/upload-artifact@v4
         with:
@@ -103,7 +101,6 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.zip
-            dist/*.sha256
           if-no-files-found: error
 
   publish:
@@ -116,12 +113,19 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # One combined checksum file (`<hash>  <archive>` per line) instead of a
+      # per-archive `.sha256` sidecar. The sidecars shared the platform target
+      # string with their archive, which made release-asset selection ambiguous
+      # for `esrun upgrade` (self_update matches assets by substring); a single
+      # `checksums.txt` keeps the archive the only target-named asset.
+      - name: Checksums
+        run: (cd dist && sha256sum esrun-*.tar.gz esrun-*.zip > checksums.txt && cat checksums.txt)
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.tar.gz
             dist/*.zip
-            dist/*.sha256
+            dist/checksums.txt
           generate_release_notes: true
           fail_on_unmatched_files: true

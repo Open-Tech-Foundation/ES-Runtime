@@ -47,11 +47,17 @@ try {
     throw "download failed - is there a release asset for $target?"
   }
 
-  $sumFile = "$zip.sha256"
-  $haveSum = $true
-  try { Invoke-WebRequest -Uri "$url.sha256" -OutFile $sumFile } catch { $haveSum = $false }
-  if ($haveSum) {
-    $expected = (((Get-Content $sumFile) -split '\s+')[0]).ToLower()
+  # Checksums live in one `checksums.txt` per release (`<hash>  <archive>`
+  # lines); pull out the line for our archive and verify it.
+  $sumFile = Join-Path $tmp 'checksums.txt'
+  $sumsUrl = "https://github.com/$Repo/releases/download/$version/checksums.txt"
+  $line = $null
+  try {
+    Invoke-WebRequest -Uri $sumsUrl -OutFile $sumFile
+    $line = Get-Content $sumFile | Where-Object { $_ -match "  $([regex]::Escape($name)).zip$" } | Select-Object -First 1
+  } catch {}
+  if ($line) {
+    $expected = (($line -split '\s+')[0]).ToLower()
     $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     if ($expected -ne $actual) { throw 'checksum verification failed' }
     Write-Host '  checksum verified' -ForegroundColor DarkGray

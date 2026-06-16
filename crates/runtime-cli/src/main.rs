@@ -89,6 +89,18 @@ fn upgrade() -> Result<String, Box<dyn std::error::Error>> {
         .repo_owner("Open-Tech-Foundation")
         .repo_name("ES-Runtime")
         .bin_name("esrun")
+        // Release archives nest the binary under a versioned directory
+        // (`esrun-<version>-<target>/esrun`, see .github/workflows/release.yml),
+        // so point self_update at that path instead of the archive root. The
+        // `{{ version }}` / `{{ target }}` / `{{ bin }}` placeholders are filled
+        // in by self_update (version has its leading `v` stripped; `bin` gains the
+        // platform `.exe` suffix on Windows).
+        .bin_path_in_archive("esrun-{{ version }}-{{ target }}/{{ bin }}")
+        // self_update picks the release asset whose name contains the target
+        // triple; the archive extension disambiguates it from any same-target
+        // sidecar (the release ships a single `checksums.txt`, but this keeps
+        // selection deterministic regardless of asset order).
+        .identifier(if cfg!(windows) { ".zip" } else { ".tar.gz" })
         .current_version(env!("CARGO_PKG_VERSION"))
         .show_download_progress(true)
         .build()?

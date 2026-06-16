@@ -6,6 +6,21 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`esrun upgrade`.** Release archives nest the binary under a versioned
+  directory (`esrun-<version>-<target>/esrun`), but the updater looked for it at
+  the archive root, so every upgrade failed after the download. It now points at
+  the correct in-archive path, and selects the archive by extension so the choice
+  no longer depends on release-asset order.
+
+### Changed
+
+- **Release checksums.** Replaced the per-archive `.sha256` sidecars with a
+  single `checksums.txt` per release. The sidecars shared the platform target
+  string with their archive, making `esrun upgrade`'s asset selection ambiguous;
+  the install scripts now verify against the combined file.
+
 ## [0.3.0] - 2026-06-16
 
 ### Added
