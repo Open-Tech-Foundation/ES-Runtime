@@ -56,7 +56,7 @@ export default function HomePage() {
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a
                 href="/docs"
-                className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 bg-white px-5 py-3 text-sm font-semibold text-zinc-900 shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
+                className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-5 py-3 text-sm font-semibold text-zinc-900 shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50"
               >
                 <span>🚀</span> Get started
               </a>
@@ -99,6 +99,53 @@ export default function HomePage() {
               >
                 See full benchmarks →
               </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Architecture Section */}
+      <section className="border-t border-zinc-200 bg-zinc-50">
+        <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
+          <div className="mb-12 text-center">
+            <h2 className="text-3xl font-bold tracking-tight text-zinc-900">
+              Simple Runtime Architecture
+            </h2>
+            <p className="mt-4 text-lg text-zinc-600">
+              How your JavaScript code interacts with the system.
+            </p>
+          </div>
+          <div className="mx-auto flex max-w-4xl flex-col items-center justify-between gap-8 rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm md:flex-row">
+            <div className="flex-1 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-brand-100 text-xl font-black text-brand-700">V8</div>
+              <h3 className="mt-4 font-semibold text-zinc-900">JavaScript</h3>
+              <p className="mt-2 text-sm text-zinc-600">Executes your JS/ESM code at lightning speed.</p>
+            </div>
+            <div className="hidden text-brand-400 md:block">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </div>
+            <div className="flex-1 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-100 text-2xl">🦀</div>
+              <h3 className="mt-4 font-semibold text-zinc-900">Op Layer</h3>
+              <p className="mt-2 text-sm text-zinc-600">Drives the event loop and low-cost boundary calls.</p>
+            </div>
+            <div className="hidden text-brand-400 md:block">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </div>
+            <div className="flex-1 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 text-2xl">🧩</div>
+              <h3 className="mt-4 font-semibold text-zinc-900">Runtime Modules</h3>
+              <p className="mt-2 text-sm text-zinc-600">Standard Web APIs like fetch, crypto, and streams.</p>
+            </div>
+            <div className="hidden text-brand-400 md:block">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            </div>
+            <div className="flex-1 text-center">
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-zinc-100 text-2xl">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-600"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              </div>
+              <h3 className="mt-4 font-semibold text-zinc-900">OS Level</h3>
+              <p className="mt-2 text-sm text-zinc-600">Kernel networking, file system, and raw system I/O.</p>
             </div>
           </div>
         </div>
