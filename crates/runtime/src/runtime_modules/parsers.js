@@ -34,10 +34,21 @@ export class XMLBuilder {
 
 export class XMLDecoderStream extends TransformStream {
   constructor(options = {}) {
+    let streamId = null;
+
     super({
+      start(controller) {
+        streamId = globalThis.__ops.xml_stream_new();
+      },
       transform(chunk, controller) {
-        // stream stub
-        controller.enqueue(chunk);
+        const text = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+        const parsedObjects = globalThis.__ops.xml_stream_push(streamId, text);
+        for (const obj of parsedObjects) {
+          controller.enqueue(obj);
+        }
+      },
+      flush(controller) {
+        globalThis.__ops.xml_stream_close(streamId);
       }
     });
   }

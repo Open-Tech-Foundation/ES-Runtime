@@ -658,11 +658,11 @@ mod tests {
     }
 
     #[test]
-    fn non_primitive_falls_back_to_other() {
+    fn unsupported_non_primitive_falls_back_to_other() {
         let _v8 = crate::v8_test_guard();
         let mut engine = engine();
-        match engine.eval("({})").unwrap() {
-            Value::Other(s) => assert_eq!(s, "[object Object]"),
+        match engine.eval("new Promise(() => {})").unwrap() {
+            Value::Other(s) => assert_eq!(s, "[object Promise]"),
             other => panic!("expected Other, got {other:?}"),
         }
     }

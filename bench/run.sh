@@ -39,7 +39,7 @@ STARTUP_RUNS="${STARTUP_RUNS:-25}"
 WORKLOAD_RUNS="${WORKLOAD_RUNS:-9}"
 # Coefficient-of-variation (%) above which a measured cell is flagged as noisy.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
-ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch http fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob"
+ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch http fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923

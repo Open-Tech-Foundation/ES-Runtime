@@ -16,7 +16,7 @@ export default function ParsersDoc() {
         XML Processing
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:parsers</code> module exposes <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLParser</code>, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLBuilder</code>, and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLValidator</code>. These classes use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">quick-xml</code> under the hood to perform ultra-fast XML-to-JSON and JSON-to-XML conversion.
+        The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:parsers</code> module exposes <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLParser</code>, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLBuilder</code>, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLValidator</code>, and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLDecoderStream</code>. These utilities use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">quick-xml</code> under the hood to perform ultra-fast XML-to-JSON and JSON-to-XML conversion.
       </p>
 
       <div className="mt-6">
@@ -36,6 +36,25 @@ console.log(parsed.name.$text); // "Alice"
 // 3. Building (JS Object to XML)
 const built = XMLBuilder.build({ user: { "@id": "1", name: "Alice" } });
 console.log(built); // <user id="1"><name>Alice</name></user>`} title="parsers.js" lang="js" />
+      </div>
+
+      <h3 className="mt-8 text-xl font-semibold text-zinc-900">Streaming (XMLDecoderStream)</h3>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        For massive multi-gigabyte XML datasets, ES-Runtime provides the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLDecoderStream</code>. This is a standard Web <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TransformStream</code> that consumes XML string chunks and incrementally yields fully-parsed JavaScript objects, achieving a near-zero memory footprint.
+      </p>
+
+      <div className="mt-6">
+        <CodeBlock code={`import { XMLDecoderStream } from "runtime:parsers";
+
+async function processMassiveFeed(fileStream) {
+  // Pipe the chunks directly into the native streaming parser
+  const objectStream = fileStream.pipeThrough(new XMLDecoderStream());
+
+  // Use async iteration to consume parsed top-level element objects natively
+  for await (const value of objectStream) {
+    console.log(value);
+  }
+}`} title="streaming.js" lang="js" />
       </div>
 
       <h3 className="mt-8 text-xl font-semibold text-zinc-900">Performance</h3>
