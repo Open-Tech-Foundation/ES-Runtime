@@ -29,6 +29,8 @@ pub enum Value {
     /// JS arrays crossing **into** Rust still marshal as [`Value::Other`] —
     /// full structural marshaling remains later work (D3a).
     Array(Vec<Value>),
+    /// A structured JS object, marshaled to a JS object.
+    Object(Vec<(String, Value)>),
     /// A JS value not yet marshaled structurally. Carries the value's
     /// `String(value)` coercion so it is still inspectable; later phases replace
     /// this with structured variants.

@@ -15,17 +15,17 @@ export class XMLValidator {
 export class XMLParser {
   static parse(xml, options = {}) {
     const result = xml_parse(xml);
-    if (result.startsWith("Parse failed:")) {
+    if (typeof result === 'string' && result.startsWith("Parse failed:")) {
       throw new Error(result);
     }
-    return JSON.parse(result);
+    return result;
   }
 }
 
 export class XMLBuilder {
   static build(obj, options = {}) {
-    const result = xml_build(JSON.stringify(obj));
-    if (result.startsWith("Parse failed:") || result.startsWith("Build failed:")) {
+    const result = xml_build(obj);
+    if (typeof result === 'string' && (result.startsWith("Parse failed:") || result.startsWith("Build failed:"))) {
       throw new Error(result);
     }
     return result;

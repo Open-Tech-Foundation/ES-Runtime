@@ -34,7 +34,7 @@ if (isLlrt) {
 
 function parseXML() {
   if (isEsrun) {
-    JSON.parse(esrunParser(xmlDoc));
+    esrunParser(xmlDoc);
   } else if (isLlrt) {
     llrtParse(xmlDoc);
   } else {

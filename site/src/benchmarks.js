@@ -224,7 +224,7 @@ export default {
       "bun": 973.2,
       "deno": 1052.3,
       "llrt": 135.7,
-      "esrun": 975.4
+      "esrun": 350.4
     },
     "rss": {
       "node": 43,
@@ -450,7 +450,7 @@ export default {
       "bun": 241,
       "deno": 225,
       "llrt": 23,
-      "esrun": 91
+      "esrun": 61
     },
     "rss": {
       "node": null,
