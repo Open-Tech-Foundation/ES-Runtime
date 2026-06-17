@@ -101,7 +101,7 @@ function connect(address, options = {}) {
   // the negotiated one comes back as SocketInfo.alpn). Empty string == no SNI.
   const sni = options.sni == null ? "" : String(options.sni);
   const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
-  const conn = ops.net_connect(hostname, port, tls, sni, alpn).then((s) => JSON.parse(s));
+  const conn = ops.net_connect(hostname, port, tls, sni, alpn);
   return new Socket(conn);
 }
 
@@ -115,7 +115,7 @@ class Listener {
   async accept() {
     const { id } = await this._ready;
     const s = await ops.net_accept(id);
-    return s === null ? null : new Socket(Promise.resolve(JSON.parse(s)));
+    return s === null ? null : new Socket(Promise.resolve(s));
   }
 
   async close() {
@@ -135,7 +135,7 @@ class Listener {
 function listen(options = {}) {
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
   const port = Number(options.port) || 0;
-  const ready = ops.net_listen(hostname, port).then((s) => JSON.parse(s));
+  const ready = ops.net_listen(hostname, port);
   return new Listener(ready);
 }
 

@@ -33,7 +33,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
                     .connect(host, port, opts)
                     .await
                     .map_err(map_err)?;
-                Ok(Value::String(socket_json(id, &info)))
+                Ok(socket_value(id, &info))
             })
         })
         .requires(Capability::Net),
@@ -94,7 +94,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
             let port = arg_u16(&args, 1);
             Box::pin(async move {
                 let (id, info) = require(&n)?.listen(host, port).await.map_err(map_err)?;
-                Ok(Value::String(socket_json(id, &info)))
+                Ok(socket_value(id, &info))
             })
         })
         .requires(Capability::NetListen),
@@ -106,7 +106,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
         let id = arg_u64(&args, 0);
         Box::pin(async move {
             match require(&n)?.accept(id).await.map_err(map_err)? {
-                Some((sid, info)) => Ok(Value::String(socket_json(sid, &info))),
+                Some((sid, info)) => Ok(socket_value(sid, &info)),
                 None => Ok(Value::Null),
             }
         })
@@ -169,32 +169,13 @@ fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message())
 }
 
-fn socket_json(id: u64, info: &SocketInfo) -> String {
-    let mut out = format!("{{\"id\":{id},\"remoteAddress\":");
-    push_json_string(&mut out, &info.remote_address);
-    out.push_str(&format!(
-        ",\"remotePort\":{},\"localAddress\":",
-        info.remote_port
-    ));
-    push_json_string(&mut out, &info.local_address);
-    out.push_str(&format!(",\"localPort\":{},\"alpn\":", info.local_port));
-    match &info.alpn {
-        Some(p) => push_json_string(&mut out, p),
-        None => out.push_str("null"),
-    }
-    out.push('}');
-    out
-}
-
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+fn socket_value(id: u64, info: &SocketInfo) -> Value {
+    Value::Object(vec![
+        ("id".to_string(), Value::Number(id as f64)),
+        ("remoteAddress".to_string(), Value::String(info.remote_address.clone())),
+        ("remotePort".to_string(), Value::Number(info.remote_port as f64)),
+        ("localAddress".to_string(), Value::String(info.local_address.clone())),
+        ("localPort".to_string(), Value::Number(info.local_port as f64)),
+        ("alpn".to_string(), info.alpn.clone().map(Value::String).unwrap_or(Value::Null)),
+    ])
 }

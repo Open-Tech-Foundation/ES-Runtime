@@ -35,7 +35,7 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
             let path = arg_str(&args, 0);
             Box::pin(async move {
                 let s = require(&f)?.stat(path).await.map_err(map_err)?;
-                Ok(Value::String(stat_json(&s)))
+                Ok(stat_value(&s))
             })
         })
         .requires(Capability::FileRead),
@@ -61,7 +61,7 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
             let path = arg_str(&args, 0);
             Box::pin(async move {
                 let entries = require(&f)?.read_dir(path).await.map_err(map_err)?;
-                Ok(Value::String(dir_json(&entries)))
+                Ok(dir_value(&entries))
             })
         })
         .requires(Capability::FileRead),
@@ -153,7 +153,7 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
                     .glob_scan(base, pattern, opts)
                     .await
                     .map_err(map_err)?;
-                Ok(Value::String(strings_json(&paths)))
+                Ok(strings_value(&paths))
             })
         })
         .requires(Capability::FileRead),
@@ -199,58 +199,27 @@ fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message())
 }
 
-fn stat_json(s: &FileStat) -> String {
-    let mtime = s
-        .mtime_ms
-        .map(|m| m.to_string())
-        .unwrap_or_else(|| "null".to_string());
-    format!(
-        "{{\"size\":{},\"isFile\":{},\"isDir\":{},\"isSymlink\":{},\"mtimeMs\":{}}}",
-        s.size, s.is_file, s.is_dir, s.is_symlink, mtime
-    )
+fn stat_value(s: &FileStat) -> Value {
+    Value::Object(vec![
+        ("size".to_string(), Value::Number(s.size as f64)),
+        ("isFile".to_string(), Value::Bool(s.is_file)),
+        ("isDir".to_string(), Value::Bool(s.is_dir)),
+        ("isSymlink".to_string(), Value::Bool(s.is_symlink)),
+        ("mtimeMs".to_string(), s.mtime_ms.map(|m| Value::Number(m as f64)).unwrap_or(Value::Null)),
+    ])
 }
 
-fn strings_json(items: &[String]) -> String {
-    let mut out = String::from("[");
-    for (i, s) in items.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        push_json_string(&mut out, s);
-    }
-    out.push(']');
-    out
+fn strings_value(items: &[String]) -> Value {
+    Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
 }
 
-fn dir_json(entries: &[DirEntry]) -> String {
-    let mut out = String::from("[");
-    for (i, e) in entries.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push_str("{\"name\":");
-        push_json_string(&mut out, &e.name);
-        out.push_str(&format!(
-            ",\"isFile\":{},\"isDir\":{},\"isSymlink\":{}}}",
-            e.is_file, e.is_dir, e.is_symlink
-        ));
-    }
-    out.push(']');
-    out
-}
-
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+fn dir_value(entries: &[DirEntry]) -> Value {
+    Value::Array(entries.iter().map(|e| {
+        Value::Object(vec![
+            ("name".to_string(), Value::String(e.name.clone())),
+            ("isFile".to_string(), Value::Bool(e.is_file)),
+            ("isDir".to_string(), Value::Bool(e.is_dir)),
+            ("isSymlink".to_string(), Value::Bool(e.is_symlink)),
+        ])
+    }).collect())
 }

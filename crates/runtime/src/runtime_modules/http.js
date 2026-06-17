@@ -84,7 +84,7 @@ class Server {
     (async () => {
       let info;
       try {
-        info = JSON.parse(await ops.http_serve(hostname, port));
+        info = await ops.http_serve(hostname, port);
       } catch (e) {
         rejectAddr(e);
         resolveFinished();

@@ -48,7 +48,7 @@ class FsFile {
     return ops.fs_exists(this.path);
   }
   async stat() {
-    return JSON.parse(await ops.fs_stat(this.path));
+    return await ops.fs_stat(this.path);
   }
   async write(data, options) {
     return write(this.path, data, options);
@@ -126,7 +126,7 @@ class Glob {
       opts.onlyFiles !== false, // default: files only, like the prior art
       !!opts.followSymlinks,
     );
-    for (const p of JSON.parse(json)) yield p;
+    for (const p of json) yield p;
   }
 }
 
@@ -165,11 +165,11 @@ async function write(dest, input, options = {}) {
 }
 
 async function readDir(path) {
-  return JSON.parse(await ops.fs_read_dir(pathOf(path)));
+  return await ops.fs_read_dir(pathOf(path));
 }
 
 async function stat(path) {
-  return JSON.parse(await ops.fs_stat(pathOf(path)));
+  return await ops.fs_stat(pathOf(path));
 }
 
 async function exists(path) {

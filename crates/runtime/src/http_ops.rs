@@ -38,7 +38,7 @@ pub(crate) fn install(
             let port = arg_u16(&args, 1);
             Box::pin(async move {
                 let (id, info) = require(&h)?.serve(host, port).await.map_err(map_err)?;
-                Ok(Value::String(server_json(id, &info)))
+                Ok(server_value(id, &info))
             })
         })
         .requires(Capability::NetListen),
@@ -173,26 +173,10 @@ fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message())
 }
 
-/// `{"id":N,"localAddress":"…","localPort":N}` for the prelude to `JSON.parse`.
-fn server_json(id: u64, info: &SocketInfo) -> String {
-    let mut out = format!("{{\"id\":{id},\"localAddress\":");
-    push_json_string(&mut out, &info.local_address);
-    out.push_str(&format!(",\"localPort\":{}}}", info.local_port));
-    out
-}
-
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
+fn server_value(id: u64, info: &SocketInfo) -> Value {
+    Value::Object(vec![
+        ("id".to_string(), Value::Number(id as f64)),
+        ("localAddress".to_string(), Value::String(info.local_address.clone())),
+        ("localPort".to_string(), Value::Number(info.local_port as f64)),
+    ])
 }
