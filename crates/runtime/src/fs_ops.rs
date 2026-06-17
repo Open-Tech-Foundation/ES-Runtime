@@ -205,7 +205,10 @@ fn stat_value(s: &FileStat) -> Value {
         ("isFile".to_string(), Value::Bool(s.is_file)),
         ("isDir".to_string(), Value::Bool(s.is_dir)),
         ("isSymlink".to_string(), Value::Bool(s.is_symlink)),
-        ("mtimeMs".to_string(), s.mtime_ms.map(|m| Value::Number(m as f64)).unwrap_or(Value::Null)),
+        (
+            "mtimeMs".to_string(),
+            s.mtime_ms.map(Value::Number).unwrap_or(Value::Null),
+        ),
     ])
 }
 
@@ -214,12 +217,17 @@ fn strings_value(items: &[String]) -> Value {
 }
 
 fn dir_value(entries: &[DirEntry]) -> Value {
-    Value::Array(entries.iter().map(|e| {
-        Value::Object(vec![
-            ("name".to_string(), Value::String(e.name.clone())),
-            ("isFile".to_string(), Value::Bool(e.is_file)),
-            ("isDir".to_string(), Value::Bool(e.is_dir)),
-            ("isSymlink".to_string(), Value::Bool(e.is_symlink)),
-        ])
-    }).collect())
+    Value::Array(
+        entries
+            .iter()
+            .map(|e| {
+                Value::Object(vec![
+                    ("name".to_string(), Value::String(e.name.clone())),
+                    ("isFile".to_string(), Value::Bool(e.is_file)),
+                    ("isDir".to_string(), Value::Bool(e.is_dir)),
+                    ("isSymlink".to_string(), Value::Bool(e.is_symlink)),
+                ])
+            })
+            .collect(),
+    )
 }

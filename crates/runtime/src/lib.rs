@@ -430,7 +430,7 @@ impl Runtime {
                                 .load(&canonical)
                                 .await
                                 .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                            
+
                             if canonical.ends_with(".json") {
                                 // Transpile JSON into a safe ES module that exports the parsed object.
                                 // serde_json::to_string safely escapes the entire raw string into a JS string literal.
@@ -519,11 +519,11 @@ impl Runtime {
                     .load(&canonical)
                     .await
                     .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                    
-                if canonical.ends_with(".json") {
-                    if let Ok(escaped) = serde_json::to_string(&source) {
-                        source = format!("export default JSON.parse({});", escaped);
-                    }
+
+                if canonical.ends_with(".json")
+                    && let Ok(escaped) = serde_json::to_string(&source)
+                {
+                    source = format!("export default JSON.parse({});", escaped);
                 }
 
                 let id = self.engine.compile_module(&canonical, &source)?;

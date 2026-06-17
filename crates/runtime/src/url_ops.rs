@@ -114,21 +114,24 @@ fn set_component(href: &str, component: &str, value: &str) -> Option<Url> {
             let (host_str, port_str) = if value.starts_with('[') {
                 if let Some(closing) = value.find(']') {
                     if let Some(colon) = value[closing..].find(':') {
-                        (&value[..closing + colon], Some(&value[closing + colon + 1..]))
+                        (
+                            &value[..closing + colon],
+                            Some(&value[closing + colon + 1..]),
+                        )
                     } else {
-                        (&value[..], None)
+                        (value, None)
                     }
                 } else {
-                    (&value[..], None)
+                    (value, None)
                 }
             } else if let Some(colon) = value.rfind(':') {
                 (&value[..colon], Some(&value[colon + 1..]))
             } else {
-                (&value[..], None)
+                (value, None)
             };
 
             let port_opt = match port_str {
-                Some(p) if p.is_empty() => Some(None),
+                Some("") => Some(None),
                 Some(p) => match p.parse::<u16>() {
                     Ok(num) => Some(Some(num)),
                     Err(_) => None, // Invalid port
@@ -137,10 +140,10 @@ fn set_component(href: &str, component: &str, value: &str) -> Option<Url> {
             };
 
             // Only apply if BOTH host is valid AND port is valid
-            if url::Host::parse(host_str).is_ok() && port_opt.is_some() {
+            if let (Ok(_), Some(port)) = (url::Host::parse(host_str), port_opt) {
                 let _ = url.set_host(Some(host_str));
                 if port_str.is_some() {
-                    let _ = url.set_port(port_opt.unwrap());
+                    let _ = url.set_port(port);
                 }
             }
         }

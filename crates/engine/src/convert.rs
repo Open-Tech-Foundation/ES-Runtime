@@ -38,18 +38,26 @@ pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>)
         let len = array.length();
         let mut items = Vec::with_capacity(len as usize);
         for i in 0..len {
-            let item = array.get_index(scope, i).unwrap_or_else(|| v8::undefined(scope).into());
+            let item = array
+                .get_index(scope, i)
+                .unwrap_or_else(|| v8::undefined(scope).into());
             items.push(marshal(scope, item));
         }
         Value::Array(items)
     } else if value.is_object() && !value.is_function() && !value.is_promise() {
         let obj = v8::Local::<v8::Object>::try_from(value).expect("checked object");
-        let prop_names = obj.get_own_property_names(scope, v8::GetPropertyNamesArgs::default()).unwrap_or_else(|| v8::Array::new(scope, 0));
+        let prop_names = obj
+            .get_own_property_names(scope, v8::GetPropertyNamesArgs::default())
+            .unwrap_or_else(|| v8::Array::new(scope, 0));
         let len = prop_names.length();
         let mut map = Vec::with_capacity(len as usize);
         for i in 0..len {
-            let key = prop_names.get_index(scope, i).unwrap_or_else(|| v8::undefined(scope).into());
-            let val = obj.get(scope, key).unwrap_or_else(|| v8::undefined(scope).into());
+            let key = prop_names
+                .get_index(scope, i)
+                .unwrap_or_else(|| v8::undefined(scope).into());
+            let val = obj
+                .get(scope, key)
+                .unwrap_or_else(|| v8::undefined(scope).into());
             map.push((js_to_string(scope, key), marshal(scope, val)));
         }
         Value::Object(map)
@@ -81,7 +89,8 @@ pub(crate) fn value_to_js<'s>(
         Value::Object(map) => {
             let obj = v8::Object::new(scope);
             for (key, val) in map {
-                let v8_key = v8::String::new(scope, &key).unwrap_or_else(|| v8::String::empty(scope));
+                let v8_key =
+                    v8::String::new(scope, &key).unwrap_or_else(|| v8::String::empty(scope));
                 let v8_val = value_to_js(scope, val);
                 obj.set(scope, v8_key.into(), v8_val);
             }

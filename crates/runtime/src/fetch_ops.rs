@@ -116,15 +116,25 @@ fn response_value(
 ) -> Value {
     Value::Object(vec![
         ("status".to_string(), Value::Number(status as f64)),
-        ("statusText".to_string(), Value::String(status_text.to_string())),
+        (
+            "statusText".to_string(),
+            Value::String(status_text.to_string()),
+        ),
         ("url".to_string(), Value::String(url.to_string())),
         ("bodyId".to_string(), Value::Number(body_id as f64)),
-        ("headers".to_string(), Value::Array(
-            headers.iter().map(|(n, v)| {
-                Value::Array(vec![Value::String(n.to_string()), Value::String(v.to_string())])
-            }).collect()
-        ))
+        (
+            "headers".to_string(),
+            Value::Array(
+                headers
+                    .iter()
+                    .map(|(n, v)| {
+                        Value::Array(vec![
+                            Value::String(n.to_string()),
+                            Value::String(v.to_string()),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
     ])
 }
-
-

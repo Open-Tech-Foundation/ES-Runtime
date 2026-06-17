@@ -103,7 +103,7 @@ pub(crate) fn install(
         let mut it = args.into_iter();
         let rid = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u64;
         let status = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u16;
-        
+
         let body = match it.next() {
             Some(Value::String(s)) => s.into_bytes(),
             Some(Value::Bytes(b)) => b,
@@ -156,8 +156,6 @@ fn arg_u64(args: &[Value], i: usize) -> u64 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u64
 }
 
-
-
 fn require(
     http: &Option<Arc<dyn HttpServerProvider>>,
 ) -> std::result::Result<Arc<dyn HttpServerProvider>, OpError> {
@@ -176,7 +174,13 @@ fn map_err(e: ProviderError) -> OpError {
 fn server_value(id: u64, info: &SocketInfo) -> Value {
     Value::Object(vec![
         ("id".to_string(), Value::Number(id as f64)),
-        ("localAddress".to_string(), Value::String(info.local_address.clone())),
-        ("localPort".to_string(), Value::Number(info.local_port as f64)),
+        (
+            "localAddress".to_string(),
+            Value::String(info.local_address.clone()),
+        ),
+        (
+            "localPort".to_string(),
+            Value::Number(info.local_port as f64),
+        ),
     ])
 }

@@ -172,10 +172,25 @@ fn map_err(e: ProviderError) -> OpError {
 fn socket_value(id: u64, info: &SocketInfo) -> Value {
     Value::Object(vec![
         ("id".to_string(), Value::Number(id as f64)),
-        ("remoteAddress".to_string(), Value::String(info.remote_address.clone())),
-        ("remotePort".to_string(), Value::Number(info.remote_port as f64)),
-        ("localAddress".to_string(), Value::String(info.local_address.clone())),
-        ("localPort".to_string(), Value::Number(info.local_port as f64)),
-        ("alpn".to_string(), info.alpn.clone().map(Value::String).unwrap_or(Value::Null)),
+        (
+            "remoteAddress".to_string(),
+            Value::String(info.remote_address.clone()),
+        ),
+        (
+            "remotePort".to_string(),
+            Value::Number(info.remote_port as f64),
+        ),
+        (
+            "localAddress".to_string(),
+            Value::String(info.local_address.clone()),
+        ),
+        (
+            "localPort".to_string(),
+            Value::Number(info.local_port as f64),
+        ),
+        (
+            "alpn".to_string(),
+            info.alpn.clone().map(Value::String).unwrap_or(Value::Null),
+        ),
     ])
 }

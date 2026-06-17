@@ -15,8 +15,6 @@ use es_runtime_engine::{Engine, OpDecl, Value};
 
 use crate::Result;
 
-
-
 /// Registers `base64_encode` / `base64_decode`.
 pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     engine.register_op(OpDecl::sync("base64_encode", |args| {
@@ -37,7 +35,9 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     Ok(())
 }
 
-use base64::{engine::general_purpose::STANDARD_NO_PAD, engine::general_purpose::STANDARD, Engine as _};
+use base64::{
+    Engine as _, engine::general_purpose::STANDARD, engine::general_purpose::STANDARD_NO_PAD,
+};
 
 /// `btoa`: base64 of a Latin-1 string. `None` if any code point exceeds U+00FF.
 fn encode(s: &str) -> Option<String> {
@@ -67,7 +67,7 @@ fn decode(s: &str) -> Option<String> {
             cleaned.push(b);
         }
     }
-    
+
     if cleaned.len() % 4 == 1 {
         return None;
     }
