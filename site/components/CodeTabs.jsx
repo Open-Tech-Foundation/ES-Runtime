@@ -35,8 +35,10 @@ const EXAMPLES = [
     code: (
       <code>
         <span className="text-brand-400">import</span> {"{ Glob }"} <span className="text-brand-400">from</span> <span className="text-emerald-300">"runtime:fs"</span>;{"\n\n"}
-        <span className="text-brand-400">for await</span> (<span className="text-brand-400">const</span> match <span className="text-brand-400">of new</span> <span className="text-blue-300">Glob</span>(<span className="text-emerald-300">"**/*.ts"</span>).<span className="text-blue-300">scan</span>()) {"{\n"}
-        {"  "}<span className="text-blue-300">console</span>.log(match); <span className="text-zinc-500">// prints matched TypeScript file paths</span>{"\n"}
+        <span className="text-brand-400">const</span> glob = <span className="text-brand-400">new</span> <span className="text-blue-300">Glob</span>(<span className="text-emerald-300">"**/*.ts"</span>);{"\n\n"}
+        <span className="text-brand-400">for await</span> (<span className="text-brand-400">const</span> match <span className="text-brand-400">of</span> glob.<span className="text-blue-300">scan</span>()) {"{\n"}
+        {"  "}<span className="text-zinc-500">// prints matched TypeScript file paths</span>{"\n"}
+        {"  "}<span className="text-blue-300">console</span>.log(match);{"\n"}
         {"}\n"}
       </code>
     )
