@@ -55,7 +55,7 @@ and native top-level `await` all work. Imports resolve as **local files**
 (relative or absolute paths, or `file:` URLs) and **bare specifiers through
 `node_modules`** for ES module packages (run `npm install` yourself — nothing is
 fetched). CommonJS packages and `node:` builtins are rejected with a clear
-message; import attributes and remote modules are not supported yet.
+message; import attributes (`with { type: "json" }`) are fully supported. Remote (`https://`) modules are explicitly unsupported by design to enforce a strict local-only security model.
 
 ## TypeScript
 

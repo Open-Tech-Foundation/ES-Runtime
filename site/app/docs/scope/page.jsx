@@ -19,8 +19,8 @@ const nonGoals = [
     body: "JSX is not a JavaScript standard; esrun does not transform it. Compile it ahead of time if you need it.",
   },
   {
-    title: "No JSON module imports",
-    body: 'import data from "./x.json" is not supported. Read and JSON.parse() the file through a runtime: API instead. (Import attributes are not implemented.)',
+    title: "No remote module imports",
+    body: 'import "https://..." is explicitly rejected. Load data through a runtime:net API instead, keeping code locally verified and safe from supply-chain hijacking.',
   },
   {
     title: "No package installer",

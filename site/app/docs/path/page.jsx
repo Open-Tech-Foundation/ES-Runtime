@@ -26,6 +26,30 @@ export default function PathDoc() {
         <CodeBlock code={PATH} title="app.js" lang="js" />
       </div>
 
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        Working with import.meta.url
+      </h2>
+      <p className="mt-3 text-zinc-600">
+        Every ES module provides an <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">import.meta.url</code> which 
+        is a fully resolved <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">file://</code> URL pointing to the absolute path of the current module. You can use the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">fromFileURL</code> utility to convert it into an absolute file path.
+      </p>
+      <div className="mt-4">
+        <CodeBlock 
+          code={`import { dirname, fromFileURL } from "runtime:path";
+
+// 1. Get the absolute file path of the current module
+const __filename = fromFileURL(import.meta.url);
+
+// 2. Get the directory name of the current module
+const __dirname = dirname(__filename);
+
+console.log("Current module is at:", __filename);
+console.log("Current directory is:", __dirname);`} 
+          title="utils.js" 
+          lang="js" 
+        />
+      </div>
+
       <p className="mt-12 text-sm text-zinc-500">
         For more details on available properties, view the{" "}
         <a href="/api/path" className="font-medium text-brand-600 hover:text-brand-700">

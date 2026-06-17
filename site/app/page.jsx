@@ -14,7 +14,7 @@ const features = [
   },
   {
     title: "ESM, and only ESM",
-    body: "Static imports, dynamic import(), top-level await, import.meta. No CommonJS, no JSON imports, no JSX.",
+    body: "Static imports, dynamic import(), top-level await, import.meta, and JSON modules. No CommonJS, no JSX.",
   },
   {
     title: "Built on Rust",
@@ -198,7 +198,6 @@ export default function HomePage() {
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> CommonJS</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> TypeScript</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> JSX</li>
-              <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> JSON imports</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Package installer</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Bundler / linter / formatter</li>
               <li className="flex items-center gap-2"><StatusIcon status="no" className="inline-block h-[18px] w-[18px] shrink-0 text-rose-500" /> Test runner</li>

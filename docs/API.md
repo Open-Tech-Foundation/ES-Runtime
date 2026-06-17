@@ -33,7 +33,7 @@ The following are deliberate, durable boundaries — not unimplemented features:
 | CommonJS                 | ES Modules only — no `require`/`module.exports`, no CJS↔ESM interop. |
 | TypeScript               | Runs JavaScript; transpile types ahead of time.                    |
 | JSX                      | Not a JS standard; compile ahead of time.                          |
-| JSON module imports      | `import x from "./x.json"` unsupported (no import attributes).      |
+| JSON module imports      | `import x from "./x.json" with { type: "json" }` supported via transpilation. |
 | Package installer        | Resolves an existing `node_modules`; does not install.             |
 | Bundler / linter / formatter / test runner | Left to dedicated tools.                         |
 | Watch mode               | No built-in file watcher / auto-restart.                           |

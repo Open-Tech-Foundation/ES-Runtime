@@ -426,10 +426,19 @@ impl Runtime {
                     match self.module_map.get(&canonical) {
                         Some(&id) => (id, None),
                         None => {
-                            let source = loader
+                            let mut source = loader
                                 .load(&canonical)
                                 .await
                                 .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                            
+                            if canonical.ends_with(".json") {
+                                // Transpile JSON into a safe ES module that exports the parsed object.
+                                // serde_json::to_string safely escapes the entire raw string into a JS string literal.
+                                if let Ok(escaped) = serde_json::to_string(&source) {
+                                    source = format!("export default JSON.parse({});", escaped);
+                                }
+                            }
+
                             let id = self.engine.compile_module(&canonical, &source)?;
                             self.module_map.insert(canonical.clone(), id);
                             (id, Some(canonical))
@@ -506,10 +515,17 @@ impl Runtime {
         let id = match self.module_map.get(&canonical) {
             Some(&id) => id,
             None => {
-                let source = loader
+                let mut source = loader
                     .load(&canonical)
                     .await
                     .map_err(|e| Error::ModuleLoad(e.to_string()))?;
+                    
+                if canonical.ends_with(".json") {
+                    if let Ok(escaped) = serde_json::to_string(&source) {
+                        source = format!("export default JSON.parse({});", escaped);
+                    }
+                }
+
                 let id = self.engine.compile_module(&canonical, &source)?;
                 self.module_map.insert(canonical.clone(), id);
                 id

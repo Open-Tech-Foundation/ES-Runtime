@@ -8,6 +8,7 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **JSON modules**: Fully support ES module `import ... with { type: "json" }` for importing JSON data securely, via safe runtime transpilation (no unsafe JS evaluation).
 - **`runtime:parsers` Native XML parsing.** The `runtime:parsers` module exposes `XMLParser`, `XMLBuilder`, and `XMLValidator` mapped directly to the `quick-xml` Rust engine. Provides ultra-fast native XML-to-JSON and JSON-to-XML conversion, and strict validation. Now includes **`XMLDecoderStream`**, a native `TransformStream` for incremental, memory-efficient streaming XML parsing that yields native JS objects (`for await (const node of stream)`). 
 - **Benchmarks.** The newly added `xml_small` and `xml_large` benchmarks show ES-Runtime drastically outperforming other JS engines (often 2-4x faster than Node/Bun/Deno) via deep structural conversion bypassing `JSON.parse`.
 

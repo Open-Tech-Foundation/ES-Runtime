@@ -55,7 +55,8 @@ Inputs run as ES modules: import/export and top-level await work. Imports
 resolve as local files (relative/absolute paths or file: URLs) and as bare
 specifiers through node_modules (ES module packages only — CommonJS packages
 and node: builtins are rejected; nothing is installed). Static and dynamic
-import() both work; import attributes and remote modules are not supported yet.
+import() both work; import attributes (`with { type: \"json\" }`) are supported.
+Remote (`https://`) modules are explicitly unsupported to enforce a local-only security model.
 The full WinterTC surface is available (console, URL, fetch, crypto, streams,
 encoding, timers, events).
 All host capabilities are granted.";

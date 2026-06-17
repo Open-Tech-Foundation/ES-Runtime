@@ -118,6 +118,17 @@ export default function SecurityDoc() {
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        Remote modules disabled
+      </h2>
+      <p className="mt-3 text-zinc-600">
+        esrun intentionally drops support for downloading modules dynamically over 
+        the network (e.g., <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">import "https://..."</code>). 
+        This mitigates entire classes of supply-chain attacks and runtime hijacking 
+        because every piece of executed code must explicitly reside within the secure 
+        local filesystem root, greatly improving predictability and security.
+      </p>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Engine confinement
       </h2>
       <p className="mt-3 text-zinc-600">

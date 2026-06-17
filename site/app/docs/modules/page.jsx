@@ -31,16 +31,25 @@ export default function ModulesDoc() {
       </p>
 
       <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm leading-relaxed text-zinc-600">
+        <strong className="text-zinc-900">Supported by design:</strong>{" "}
+        JSON module imports (<code className="rounded bg-white px-1.5 py-0.5 text-[12px]">import data from "./x.json" with &#123; type: "json" &#125;</code>)
+        are fully supported.
+        <br /><br />
         <strong className="text-zinc-900">Not supported, by design:</strong>{" "}
         CommonJS (<code className="rounded bg-white px-1.5 py-0.5 text-[12px]">require</code> /{" "}
-        <code className="rounded bg-white px-1.5 py-0.5 text-[12px]">module.exports</code>), JSON module
-        imports (<code className="rounded bg-white px-1.5 py-0.5 text-[12px]">import data from "./x.json"</code>),
-        import attributes, JSX, and TypeScript. esrun runs JavaScript ES
-        Modules — transpile anything else ahead of time. See{" "}
+        <code className="rounded bg-white px-1.5 py-0.5 text-[12px]">module.exports</code>), JSX, and TypeScript.
+        esrun runs JavaScript ES Modules — transpile anything else ahead of time. See{" "}
         <a href="/docs/scope" className="font-medium text-brand-600 hover:text-brand-700">
           Scope &amp; non-goals
         </a>
         .
+      </div>
+
+      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+        <strong>Remote modules explicitly disabled.</strong> Loading code from remote web addresses 
+        (<code className="rounded bg-white px-1.5 py-0.5 text-[12px]">https://</code>) is permanently 
+        unsupported. This strictly enforces the secure runtime model and prevents 
+        arbitrary remote code execution over the network.
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Static imports</h2>

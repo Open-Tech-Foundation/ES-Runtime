@@ -7,7 +7,7 @@ const rows = [
   { f: "CommonJS (require)", esrun: "no", node: "yes", bun: "yes", deno: "partial" },
   { f: "TypeScript (built-in)", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
   { f: "JSX (built-in)", esrun: "no", node: "no", bun: "yes", deno: "yes" },
-  { f: "JSON module imports", esrun: "no", node: "yes", bun: "yes", deno: "yes" },
+  { f: "JSON module imports", esrun: "yes", node: "yes", bun: "yes", deno: "yes" },
   { f: "Web APIs (fetch/URL/streams/WebCrypto)", esrun: "yes", node: "yes", bun: "yes", deno: "yes" },
   { f: "Temporal API", esrun: "yes", node: "yes", bun: "no", deno: "yes" },
   { f: "Node.js compatibility (node: builtins)", esrun: "no", node: "yes", bun: "yes", deno: "partial" },
