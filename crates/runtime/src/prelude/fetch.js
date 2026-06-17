@@ -400,8 +400,7 @@
     const args = [request.method, request.url, hasBody ? bodyBytes : null];
     for (const [name, value] of request._headers()) args.push(name, value);
 
-    const metaJson = await ops.fetch(...args);
-    const meta = JSON.parse(metaJson);
+    const meta = await ops.fetch(...args);
 
     const bodyId = meta.bodyId;
     const stream = new ReadableStream({

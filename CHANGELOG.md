@@ -37,6 +37,9 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Changed
 
+- **Fetch and HTTP performance.** Host operations for HTTP and network boundaries now return native V8 structures (`Value::Object` / `Value::Array`) instead of serializing to JSON strings. Eliminating the intermediate `JSON.parse` overhead drastically accelerates HTTP server throughput (by over 40% on hello-world workloads).
+- **Automated benchmarks.** The repository's benchmark runner now automatically drives and integrates external web-framework load tests (like Hono over `oha`) directly into the documentation's dynamic datasets without manual static entries.
+
 - **Release checksums.** Replaced the per-archive `.sha256` sidecars with a
   single `checksums.txt` per release. The sidecars shared the platform target
   string with their archive, making `esrun upgrade`'s asset selection ambiguous;

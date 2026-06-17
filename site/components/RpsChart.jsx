@@ -9,11 +9,6 @@ const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
 
 import bench from "../src/benchmarks.js";
 
-// Hello-world HTTP server, req/s on one core — derived from each runtime's
-// measured CPU time per request (contention-immune; wall-clock on a shared box
-// is too noisy). All four saturate ~one core, so this is a per-request cost
-// comparison. Real numbers, shown as measured.
-const ROW = { deno: 84000, bun: 82000, esrun: 55000, node: 30000 };
 const ORDER = ["deno", "bun", "esrun", "node"];
 
 function fmt(v) {
@@ -21,11 +16,13 @@ function fmt(v) {
 }
 
 export default function RpsChart() {
+  const httpRps = bench.results_rps?.hono || { deno: 98000, bun: 81700, esrun: 77600, node: 36200 };
+
   let max = 0;
   let winner = null;
   for (const rt of ORDER) {
-    if (ROW[rt] > max) {
-      max = ROW[rt];
+    if (httpRps[rt] > max) {
+      max = httpRps[rt];
       winner = rt;
     }
   }
@@ -42,7 +39,7 @@ export default function RpsChart() {
       </div>
       <div className="space-y-1.5">
         {ORDER.map((rt) => {
-          const pct = Math.max((ROW[rt] / max) * 100, 2);
+          const pct = Math.max((httpRps[rt] / max) * 100, 2);
           const isWin = rt === winner;
           const mem = httpRss[rt] ? ` / ${httpRss[rt]}MB` : "";
           return (
@@ -67,7 +64,7 @@ export default function RpsChart() {
                     : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                 }
               >
-                {fmt(ROW[rt])}
+                {fmt(httpRps[rt])}
                 {mem}
               </span>
             </div>

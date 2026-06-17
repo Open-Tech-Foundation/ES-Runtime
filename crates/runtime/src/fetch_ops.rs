@@ -42,13 +42,13 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                 let id = id_gen.get();
                 id_gen.set(id + 1);
                 bodies.borrow_mut().insert(id, response.body);
-                Ok(Value::String(response_json(
+                Ok(response_value(
                     response.status,
                     &response.status_text,
                     &response.url,
                     &response.headers,
                     id,
-                )))
+                ))
             })
         })
         .requires(Capability::Net),
@@ -107,51 +107,24 @@ fn parse_request(args: &[Value]) -> HttpRequest {
     }
 }
 
-/// Serializes response metadata as a JSON object string for the prelude to
-/// `JSON.parse` (headers as an array of `[name, value]` pairs).
-fn response_json(
+fn response_value(
     status: u16,
     status_text: &str,
     url: &str,
     headers: &[(String, String)],
     body_id: u64,
-) -> String {
-    let mut out = String::from("{\"status\":");
-    out.push_str(&status.to_string());
-    out.push_str(",\"statusText\":");
-    push_json_string(&mut out, status_text);
-    out.push_str(",\"url\":");
-    push_json_string(&mut out, url);
-    out.push_str(",\"bodyId\":");
-    out.push_str(&body_id.to_string());
-    out.push_str(",\"headers\":[");
-    for (i, (name, value)) in headers.iter().enumerate() {
-        if i > 0 {
-            out.push(',');
-        }
-        out.push('[');
-        push_json_string(&mut out, name);
-        out.push(',');
-        push_json_string(&mut out, value);
-        out.push(']');
-    }
-    out.push_str("]}");
-    out
+) -> Value {
+    Value::Object(vec![
+        ("status".to_string(), Value::Number(status as f64)),
+        ("statusText".to_string(), Value::String(status_text.to_string())),
+        ("url".to_string(), Value::String(url.to_string())),
+        ("bodyId".to_string(), Value::Number(body_id as f64)),
+        ("headers".to_string(), Value::Array(
+            headers.iter().map(|(n, v)| {
+                Value::Array(vec![Value::String(n.to_string()), Value::String(v.to_string())])
+            }).collect()
+        ))
+    ])
 }
 
-/// Appends `s` as a JSON string literal.
-fn push_json_string(out: &mut String, s: &str) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-}
+

@@ -101,13 +101,25 @@ measure() {
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
 }
 
-echo "HTTP requests/sec — hello-world plaintext (\"Hello, World!\")"
-echo "server: $SERVER"
-echo "load: $TOOL -c $CONN -n $REQUESTS -H \"$HDR\" $URL"
-echo
-printf "%-7s | %12s | %11s\n" "runtime" "req/sec" "avg lat"
-printf -- "--------+--------------+------------\n"
-for r in "${ORDER[@]}"; do
-  read -r rps avg <<<"$(measure "${CMD[$r]}")"
-  printf "%-7s | %12s | %9s ms\n" "$r" "$rps" "$avg"
-done
+if [ -n "${BENCH_JSON:-}" ]; then
+  printf '{\n  "results_rps": {\n    "hono": {'
+  first=1
+  for r in "${ORDER[@]}"; do
+    read -r rps avg <<<"$(measure "${CMD[$r]}")"
+    [ -z "$first" ] && printf ','
+    first=
+    printf '\n      "%s": %s' "$r" "$rps"
+  done
+  printf '\n    }\n  }\n}\n'
+else
+  echo "HTTP requests/sec — hello-world plaintext (\"Hello, World!\")"
+  echo "server: $SERVER"
+  echo "load: $TOOL -c $CONN -n $REQUESTS -H \"$HDR\" $URL"
+  echo
+  printf "%-7s | %12s | %11s\n" "runtime" "req/sec" "avg lat"
+  printf -- "--------+--------------+------------\n"
+  for r in "${ORDER[@]}"; do
+    read -r rps avg <<<"$(measure "${CMD[$r]}")"
+    printf "%-7s | %12s | %9s ms\n" "$r" "$rps" "$avg"
+  done
+fi
