@@ -212,7 +212,7 @@ Status: **Locked** · **Proposed** · **Open** (needs maintainer sign-off) · **
 ### D18 — URL family via the `url` crate · *Locked (maintainer sign-off, 2026-06-11)*
 **Context:** WHATWG URL is large and subtle; a from-scratch JS implementation carries real conformance risk.
 **Decision (maintainer):** Implement `URL`/`URLSearchParams` parsing and serialization with the servo **`url`** crate behind sync ops; the JS wrappers provide the surface. `URLSearchParams` is pure JS.
-**Consequences:** Well-tested, ~WHATWG-conformant parsing for low effort; `runtime` gains a `url` dependency (MIT OR Apache-2.0). Minor WHATWG gaps (e.g. the `hostname` setter's port handling) are tracked against WPT (D13). **URLPattern** is not covered by the crate and is instead implemented via a custom, efficient JavaScript compilation strategy in the runtime prelude.
+**Consequences:** Well-tested, ~WHATWG-conformant parsing for low effort; `runtime` gains a `url` dependency (MIT OR Apache-2.0). Minor WHATWG gaps are tracked against WPT (D13) — note: the `hostname`/`host` setter port handling gap was resolved. **URLPattern** is not covered by the crate and is instead implemented via a custom, efficient JavaScript compilation strategy in the runtime prelude.
 
 ---
 

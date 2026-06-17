@@ -25,6 +25,44 @@ test("URL default ports are dropped", () => {
   assertEquals(new URL("http://h.test:80/").port, "");
 });
 
+test("URL hostname setter handles ports correctly", () => {
+  const u = new URL("http://example.com:8080");
+  u.hostname = "test.com:9999"; // Fails parsing, ignored
+  assertEquals(u.href, "http://example.com:8080/");
+  
+  u.hostname = "test.com"; // Succeeds
+  assertEquals(u.href, "http://test.com:8080/");
+  
+  u.hostname = "[::1]:80"; // Fails parsing, ignored
+  assertEquals(u.href, "http://test.com:8080/");
+  
+  u.hostname = "[::1]"; // Succeeds
+  assertEquals(u.href, "http://[::1]:8080/");
+});
+
+test("URL host setter parses and sets ports", () => {
+  const u1 = new URL("http://example.com:8080");
+  u1.host = "test.com:9999"; // Succeeds, sets both
+  assertEquals(u1.href, "http://test.com:9999/");
+  
+  const u2 = new URL("http://example.com:8080");
+  u2.host = "test.com"; // Succeeds, leaves port alone
+  assertEquals(u2.href, "http://test.com:8080/");
+  
+  const u3 = new URL("http://example.com:8080");
+  u3.host = "test.com:"; // Succeeds, clears port
+  assertEquals(u3.href, "http://test.com/");
+  
+  const u4 = new URL("http://example.com:8080");
+  u4.host = "[::1]:80"; // Default port dropped
+  assertEquals(u4.href, "http://[::1]/");
+
+  // Invalid ports fail the whole setter, ignoring
+  const u5 = new URL("http://example.com:8080");
+  u5.host = "test.com:abc"; // Invalid port fails, ignored
+  assertEquals(u5.href, "http://example.com:8080/");
+});
+
 test("URLSearchParams get/getAll/has", () => {
   const p = new URLSearchParams("a=1&a=2&b=3");
   assertEquals(p.get("a"), "1");

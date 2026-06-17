@@ -16,6 +16,13 @@ pre-`0.1.0` and the public API is unstable.
   `secureTransport: "starttls"` / `startTls()` and TLS on `listen` remain
   unsupported (DECISIONS D28).
 
+- **URL component setters.** The `host` and `hostname` setters now fully comply
+  with WHATWG specification. Setting a `hostname` with an invalid port ignores the
+  input, while setting a `host` properly parses and applies both the domain and the
+  port (with standard ports correctly dropping).
+- **Benchmarks.** Added a new benchmark workload `url_setter` to specifically
+  measure the overhead of modifying URL components across the JS/Rust boundary.
+
 ### Fixed
 
 - **`esrun upgrade`.** Release archives nest the binary under a versioned

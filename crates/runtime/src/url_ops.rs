@@ -110,8 +110,54 @@ fn set_component(href: &str, component: &str, value: &str) -> Option<Url> {
         "password" => {
             let _ = url.set_password((!value.is_empty()).then_some(value));
         }
-        "host" | "hostname" => {
-            let _ = url.set_host((!value.is_empty()).then_some(value));
+        "host" => {
+            let (host_str, port_str) = if value.starts_with('[') {
+                if let Some(closing) = value.find(']') {
+                    if let Some(colon) = value[closing..].find(':') {
+                        (&value[..closing + colon], Some(&value[closing + colon + 1..]))
+                    } else {
+                        (&value[..], None)
+                    }
+                } else {
+                    (&value[..], None)
+                }
+            } else if let Some(colon) = value.rfind(':') {
+                (&value[..colon], Some(&value[colon + 1..]))
+            } else {
+                (&value[..], None)
+            };
+
+            let port_opt = match port_str {
+                Some(p) if p.is_empty() => Some(None),
+                Some(p) => match p.parse::<u16>() {
+                    Ok(num) => Some(Some(num)),
+                    Err(_) => None, // Invalid port
+                },
+                None => Some(None), // Valid, but no port specified
+            };
+
+            // Only apply if BOTH host is valid AND port is valid
+            if url::Host::parse(host_str).is_ok() && port_opt.is_some() {
+                let _ = url.set_host(Some(host_str));
+                if port_str.is_some() {
+                    let _ = url.set_port(port_opt.unwrap());
+                }
+            }
+        }
+        "hostname" => {
+            let has_colon = if value.starts_with('[') {
+                if let Some(closing) = value.find(']') {
+                    value[closing..].contains(':')
+                } else {
+                    value.contains(':')
+                }
+            } else {
+                value.contains(':')
+            };
+
+            if !has_colon && url::Host::parse(value).is_ok() {
+                let _ = url.set_host(Some(value));
+            }
         }
         "port" => {
             let port = if value.is_empty() {

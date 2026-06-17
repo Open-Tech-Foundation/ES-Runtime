@@ -15,6 +15,7 @@ const workloads = [
   { key: "json", label: "JSON parse/stringify", unit: "ms" },
   { key: "jsonbig", label: "JSON (large documents)", unit: "ms" },
   { key: "url", label: "URL parsing", unit: "ms" },
+  { key: "url_setter", label: "URL setter", unit: "ms" },
   { key: "urlpattern", label: "URLPattern test", unit: "ms" },
   { key: "encoding", label: "TextEncoder/TextDecoder", unit: "ms" },
   { key: "base64", label: "base64 (atob/btoa)", unit: "ms" },
