@@ -1,6 +1,5 @@
 import BenchRoller from "../components/BenchRoller.jsx";
 import RpsChart from "../components/RpsChart.jsx";
-import InstallBox from "../components/InstallBox.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
 import WhyChooseSection from "../components/WhyChooseSection.jsx";
 
@@ -63,8 +62,22 @@ export default function HomePage() {
               </a>
             </div>
             <div className="mt-6 max-w-xl">
-              <h3 className="mb-3 text-sm font-semibold text-zinc-900 uppercase tracking-wider">Install</h3>
-              <InstallBox />
+              <h3 className="mb-3 text-sm font-semibold text-zinc-900">Simple HTTP Server</h3>
+              <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3.5">
+                <pre className="text-[13px] leading-relaxed text-zinc-300 overflow-x-auto whitespace-pre">
+                  <code>
+                    <span className="text-brand-400">import</span> {"{ serve }"} <span className="text-brand-400">from</span> <span className="text-emerald-300">"runtime:http"</span>;{"\n\n"}
+                    <span className="text-blue-300">serve</span>{"({ "}port: <span className="text-orange-300">8080</span>{" }, "}
+                    <span className="text-brand-400">async</span>{" (req) "}
+                    <span className="text-brand-400">=&gt;</span>{" {\n"}
+                    {"  "}
+                    <span className="text-brand-400">return new</span>{" Response("}
+                    <span className="text-emerald-300">"👋 Hello from ESRun!"</span>{");\n"}
+                    {"});\n\n"}
+                    <span className="text-blue-300">console</span>.log(<span className="text-emerald-300">"Server listening on port 8080"</span>);{"\n"}
+                  </code>
+                </pre>
+              </div>
             </div>
           </div>
 
