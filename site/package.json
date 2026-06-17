@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@opentf/web": "^0.4.0",
-    "@opentf/web-form": "^0.1.0"
+    "@opentf/web-form": "^0.1.0",
+    "lenis": "^1.3.23"
   },
   "devDependencies": {
     "@babel/core": "^7.29.0",

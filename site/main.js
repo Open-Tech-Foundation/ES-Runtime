@@ -1,4 +1,11 @@
 import { mountApp } from "@opentf/web";
+import Lenis from 'lenis';
+import 'lenis/dist/lenis.css';
+
+// Initialize Lenis for smooth scrolling
+const lenis = new Lenis({
+  autoRaf: true,
+});
 
 // 1. Discover Pages & Layouts (including 404)
 const pages = import.meta.glob('./app/**/{page,layout,404}.{jsx,tsx}', { eager: true });
