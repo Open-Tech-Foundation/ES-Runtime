@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-17
+
 ### Added
 
 - **JSON modules**: Fully support ES module `import ... with { type: "json" }` for importing JSON data securely, via safe runtime transpilation (no unsafe JS evaluation).
