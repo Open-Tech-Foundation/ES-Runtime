@@ -8,6 +8,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`runtime:parsers` Native XML parsing.** The `runtime:parsers` module exposes `XMLParser`, `XMLBuilder`, and `XMLValidator` mapped directly to the `quick-xml` Rust engine. Provides ultra-fast native XML-to-JSON and JSON-to-XML conversion, and strict validation.
+
 - **`runtime:net` TLS client.** `connect(address, { secureTransport: "on" })`
   now negotiates TLS (rustls via tokio-rustls, `aws-lc-rs`, bundled Mozilla
   roots) with certificate verification. Follows the WinterTC Sockets API: `sni`

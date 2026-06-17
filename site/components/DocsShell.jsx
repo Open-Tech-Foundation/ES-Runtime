@@ -22,6 +22,7 @@ const NAV = [
       { href: "/docs/path", label: "Path handling" },
       { href: "/docs/http", label: "HTTP server" },
       { href: "/docs/urlpattern", label: "URLPattern" },
+      { href: "/docs/parsers", label: "Native parsers (XML)" },
     ],
   },
   {

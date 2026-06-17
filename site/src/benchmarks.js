@@ -212,6 +212,20 @@ export default {
       "llrt": null,
       "esrun": 52.6
     },
+    "xml_small": {
+      "node": 531.1,
+      "bun": 523.1,
+      "deno": 546.1,
+      "llrt": 62.4,
+      "esrun": 491.8
+    },
+    "xml_large": {
+      "node": 1003.2,
+      "bun": 973.2,
+      "deno": 1052.3,
+      "llrt": 135.7,
+      "esrun": 975.4
+    },
     "rss": {
       "node": 43,
       "bun": 29,
@@ -423,6 +437,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": 30
+    },
+    "xml_small": {
+      "node": 77,
+      "bun": 132,
+      "deno": 88,
+      "llrt": 13,
+      "esrun": 60
+    },
+    "xml_large": {
+      "node": 276,
+      "bun": 241,
+      "deno": 225,
+      "llrt": 23,
+      "esrun": 91
     },
     "rss": {
       "node": null,

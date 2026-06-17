@@ -23,6 +23,7 @@ mod fetch_ops;
 mod fs_ops;
 mod http_ops;
 mod net_ops;
+pub mod parsers_ops;
 mod prelude;
 mod process_ops;
 mod rsa_ops;

@@ -9,7 +9,7 @@ const startup = [
   { key: "rss", label: "Peak resident memory", unit: "MB" },
 ];
 
-const workloads = [
+const standardWorkloads = [
   { key: "crypto", label: "WebCrypto (sign/verify)", unit: "ms" },
   { key: "sha256", label: "SubtleCrypto SHA-256", unit: "ms" },
   { key: "json", label: "JSON parse/stringify", unit: "ms" },
@@ -37,6 +37,11 @@ const workloads = [
   { key: "fsexists_small", label: "File exists (small)", unit: "ms" },
   { key: "fsexists_large", label: "File exists (large)", unit: "ms" },
   { key: "glob", label: "Glob scan", unit: "ms" },
+];
+
+const parserWorkloads = [
+  { key: "xml_small", label: "XML parsing (small dataset)", unit: "ms" },
+  { key: "xml_large", label: "XML parsing (large dataset)", unit: "ms" },
 ];
 
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
@@ -110,14 +115,22 @@ export default function BenchmarksDoc() {
         <BenchChart metrics={startup} />
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Workloads</h2>
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Standard Workloads</h2>
       <p className="mt-2 text-sm text-zinc-500">
         Self-timed with <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">performance.now()</code>{" "}
         after an untimed JIT warmup; min of N interleaved runs, isolating engine
         cost from process launch.
       </p>
       <div className="mt-5">
-        <BenchChart metrics={workloads} />
+        <BenchChart metrics={standardWorkloads} />
+      </div>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Native vs Third-Party Parsers</h2>
+      <p className="mt-2 text-sm text-zinc-500">
+        Comparing runtimes running heavily optimized native parsing engines (esrun's <code>runtime:parsers</code>, LLRT's <code>llrt:xml</code>) versus JS-based fallback libraries (`fast-xml-parser`) for runtimes that lack native extensions (Node.js, Bun, Deno).
+      </p>
+      <div className="mt-5">
+        <BenchChart metrics={parserWorkloads} />
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Reproduce</h2>

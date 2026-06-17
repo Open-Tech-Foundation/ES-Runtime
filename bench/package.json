@@ -3,6 +3,7 @@
   "description": "Dev deps for the cross-runtime benchmark — Hono powers scripts/hono.js (rps.sh SERVER=scripts/hono.js). Install with: bun install",
   "dependencies": {
     "@hono/node-server": "^2.0.4",
+    "fast-xml-parser": "^5.9.2",
     "hono": "^4.12.25"
   }
 }
