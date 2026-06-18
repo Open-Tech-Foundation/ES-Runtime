@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-18
+
 ### Added
 
 - **`WebSocket`.** The classic WHATWG `WebSocket` interface ships as a global
