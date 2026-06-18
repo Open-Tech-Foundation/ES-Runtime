@@ -142,8 +142,20 @@ es-runtime-engine = { path = "crates/engine", version = "0.5.0" }
 es-runtime-providers = { path = "crates/providers", version = "0.5.0" }
 es-runtime = { path = "crates/runtime", version = "0.5.0" }
 es-runtime-default-providers = { path = "crates/default-providers", version = "0.5.0" }
+# Debug info dominates `target/` disk on a V8-sized dependency graph (tens of
+# GB). Keep it lean: our own crates keep line tables so panic backtraces still
+# resolve to file:line; dependencies — the bulk, rarely stepped through — carry
+# none. `build-override` is deliberately left untouched, so build scripts and
+# the from-source V8 build are unaffected (no expensive rebuild).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.dev.package.rsa]
 opt-level = 3
+debug = false
 
 # Release tuning for the Rust-side hot paths (op marshaling, URL serialization,
 # RustCrypto). V8 itself is a prebuilt static library, so this doesn't change
