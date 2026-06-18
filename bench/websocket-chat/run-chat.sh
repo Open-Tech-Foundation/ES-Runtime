@@ -3,15 +3,19 @@
 #
 # Two sweeps, both reporting messages/sec (steady-state rates → we take the max
 # over a few reps as the contention-free ceiling):
-#   1. Server sweep — fixed Bun client driver, server ∈ {bun, deno}. The classic
-#      "chat server" number: server fan-out throughput. esrun has no WebSocket
-#      server, so it is n/a here.
+#   1. Server sweep — fixed Bun client driver, server ∈ {bun, deno, esrun}. The
+#      classic "chat server" number: server fan-out throughput. (Node has no
+#      built-in WebSocket server, so it is not in this sweep.)
 #   2. Client sweep — fixed Bun server, client driver ∈ {esrun, bun, deno, node}.
-#      Each runtime's WebSocket *client* throughput under the same broadcast load
-#      — this is where esrun participates.
+#      Each runtime's WebSocket *client* throughput under the same broadcast load.
 #
 # Knobs: WS_CLIENTS (default 32), WS_WARMUP_MS (1000), WS_MEASURE_MS (3000),
 # REPS (3), ESRUN (path to the release binary).
+#
+# BENCH_JSON=1 emits the RECV (fan-out) msg/s for a C-sweep as a JSON object
+# ({ "websocket": { "server": {C:{rt:v}}, "client": {C:{rt:v}} } }) — the form
+# bench/gen-bench-data.sh merges into the site's data module. WS_CLIENTS_SWEEP
+# (default "32 64 128") sets the C values.
 set -u
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -84,6 +88,31 @@ best() { # server_rt client_rt
   done
   echo "$bs $br"
 }
+
+# Machine-readable C-sweep for the site data module: RECV (fan-out) msg/s only.
+if [ -n "${BENCH_JSON:-}" ]; then
+  rows=""
+  for C in ${WS_CLIENTS_SWEEP:-32 64 128}; do
+    for s in bun deno esrun; do
+      if have "$s" && have bun; then read -r _ rps <<<"$(best "$s" bun)"; else rps=ERR; fi
+      rows="${rows}server $s $C $rps"$'\n'
+    done
+    for cl in esrun bun deno node; do
+      if have "$cl" && have bun; then read -r _ rps <<<"$(best bun "$cl")"; else rps=ERR; fi
+      rows="${rows}client $cl $C $rps"$'\n'
+    done
+  done
+  printf '%s' "$rows" | node -e '
+    const fs = require("fs");
+    const out = { websocket: { server: {}, client: {} } };
+    for (const line of fs.readFileSync(0, "utf8").trim().split("\n")) {
+      const [sweep, rt, c, v] = line.split(" ");
+      (out.websocket[sweep][c] ??= {})[rt] = v === "ERR" ? null : Number(v);
+    }
+    process.stdout.write(JSON.stringify(out));
+  '
+  exit 0
+fi
 
 echo "WebSocket chat broadcast benchmark — C=$C clients, ${MEASURE}ms window, best of $REPS"
 echo "(SENT = client send/sec; RECV = total deliveries/sec = server fan-out)"

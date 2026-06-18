@@ -9,7 +9,7 @@ const modules = [
   { name: "runtime:fs", status: "Available", cap: "FileRead / FileWrite", href: "/api/fs" },
   { name: "runtime:net", status: "Available", cap: "Net / NetListen", href: "/api/net" },
   { name: "runtime:http", status: "Available", cap: "NetListen", href: "/api/http" },
-  { name: "runtime:websocket", status: "Available", cap: "NetListen", href: "/api/websocket-server" },
+  { name: "runtime:websocket", status: "Available", cap: "NetListen", href: "/api/websocket#server" },
 ];
 
 export default function ApiOverview() {

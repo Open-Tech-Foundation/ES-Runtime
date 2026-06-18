@@ -38,6 +38,7 @@ const groups = [
       { n: "Request", s: "yes" },
       { n: "Response", s: "yes" },
       { n: "Headers", s: "yes" },
+      { n: "WebSocket", s: "yes", note: "client; server is runtime:websocket" },
     ],
   },
   {
@@ -75,6 +76,8 @@ const groups = [
       { n: "Event", s: "yes" },
       { n: "EventTarget", s: "yes" },
       { n: "CustomEvent", s: "yes" },
+      { n: "MessageEvent", s: "yes" },
+      { n: "CloseEvent", s: "yes" },
       { n: "AbortController", s: "yes" },
       { n: "AbortSignal", s: "yes" },
     ],
@@ -97,7 +100,6 @@ const groups = [
 const notAvailable = [
   { n: "process / Buffer / require", why: "Node.js globals — not provided (use runtime: modules)" },
   { n: "Worker / MessageChannel", why: "no Workers in Layer A (see Scope)" },
-  { n: "WebSocket", why: "not yet implemented" },
   { n: "navigator / localStorage / window", why: "browser globals — out of scope" },
 ];
 

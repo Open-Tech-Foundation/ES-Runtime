@@ -21,6 +21,7 @@ const NAV = [
       { href: "/docs/process", label: "Process & Env" },
       { href: "/docs/path", label: "Path handling" },
       { href: "/docs/http", label: "HTTP server" },
+      { href: "/docs/guides/websocket", label: "WebSockets" },
       { href: "/docs/urlpattern", label: "URLPattern" },
       { href: "/docs/parsers", label: "Native parsers (XML)" },
     ],

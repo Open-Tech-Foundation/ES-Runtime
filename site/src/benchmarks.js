@@ -14,7 +14,7 @@ export default {
       "bun": 9.7,
       "deno": 24.5,
       "llrt": 3.6,
-      "esrun": 7.0
+      "esrun": 7
     },
     "bigscript": {
       "node": 29.8,
@@ -27,12 +27,12 @@ export default {
       "node": 200.8,
       "bun": 111.3,
       "deno": 212.4,
-      "llrt": 2054.0,
+      "llrt": 2054,
       "esrun": 237.8
     },
     "json": {
       "node": 283.4,
-      "bun": 211.0,
+      "bun": 211,
       "deno": 210.2,
       "llrt": 667.8,
       "esrun": 196.6
@@ -45,7 +45,7 @@ export default {
       "esrun": 597.6
     },
     "sha256": {
-      "node": 625.0,
+      "node": 625,
       "bun": 481.8,
       "deno": 555.3,
       "llrt": 341.6,
@@ -62,12 +62,12 @@ export default {
       "node": 49.4,
       "bun": 78.2,
       "deno": 102.8,
-      "llrt": 114.0,
+      "llrt": 114,
       "esrun": 90.3
     },
     "url_setter": {
       "node": 133.4,
-      "bun": 289.0,
+      "bun": 289,
       "deno": 196.1,
       "llrt": 113.9,
       "esrun": 258.5
@@ -81,21 +81,21 @@ export default {
     },
     "encoding": {
       "node": 70.5,
-      "bun": 23.0,
-      "deno": 71.0,
+      "bun": 23,
+      "deno": 71,
       "llrt": 71.5,
-      "esrun": 72.0
+      "esrun": 72
     },
     "base64": {
       "node": 7.4,
       "bun": 14.6,
-      "deno": 8.0,
+      "deno": 8,
       "llrt": 33.2,
       "esrun": 30.3
     },
     "structured": {
       "node": 220.9,
-      "bun": 272.0,
+      "bun": 272,
       "deno": 270.5,
       "llrt": 323.3,
       "esrun": 311.4
@@ -103,7 +103,7 @@ export default {
     "async": {
       "node": 57.9,
       "bun": 50.4,
-      "deno": 34.0,
+      "deno": 34,
       "llrt": 689.6,
       "esrun": 30.5
     },
@@ -117,7 +117,7 @@ export default {
     "streams": {
       "node": 23.3,
       "bun": 20.9,
-      "deno": 14.0,
+      "deno": 14,
       "llrt": null,
       "esrun": 9.6
     },
@@ -133,7 +133,7 @@ export default {
       "bun": 53.6,
       "deno": 114.3,
       "llrt": null,
-      "esrun": 90.0
+      "esrun": 90
     },
     "fsread_small": {
       "node": 123.1,
@@ -159,9 +159,9 @@ export default {
     "fswrite_large": {
       "node": 61.6,
       "bun": 19.7,
-      "deno": 42.0,
+      "deno": 42,
       "llrt": null,
-      "esrun": 23.0
+      "esrun": 23
     },
     "fsappend_small": {
       "node": 122.6,
@@ -179,7 +179,7 @@ export default {
     },
     "fsstat_small": {
       "node": 75.7,
-      "bun": 54.0,
+      "bun": 54,
       "deno": 102.7,
       "llrt": null,
       "esrun": 74.2
@@ -192,7 +192,7 @@ export default {
       "esrun": 0.3
     },
     "fsexists_small": {
-      "node": 77.0,
+      "node": 77,
       "bun": 56.3,
       "deno": 100.1,
       "llrt": null,
@@ -201,12 +201,12 @@ export default {
     "fsexists_large": {
       "node": 0.7,
       "bun": 0.2,
-      "deno": 1.0,
+      "deno": 1,
       "llrt": null,
       "esrun": 0.2
     },
     "glob": {
-      "node": 211.0,
+      "node": 211,
       "bun": 34.5,
       "deno": null,
       "llrt": null,
@@ -223,7 +223,7 @@ export default {
       "node": 1023.9,
       "bun": 949.4,
       "deno": 1022.5,
-      "llrt": 131.0,
+      "llrt": 131,
       "esrun": 342.1
     },
     "rss": {
@@ -458,6 +458,45 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    }
+  },
+  "websocket": {
+    "server": {
+      "32": {
+        "bun": 247021,
+        "deno": 203379,
+        "esrun": 283094
+      },
+      "64": {
+        "bun": 247418,
+        "deno": 204151,
+        "esrun": 106275
+      },
+      "128": {
+        "bun": 208975,
+        "deno": 200402,
+        "esrun": 45204
+      }
+    },
+    "client": {
+      "32": {
+        "esrun": 250348,
+        "bun": 244078,
+        "deno": 250252,
+        "node": 257113
+      },
+      "64": {
+        "esrun": 253210,
+        "bun": 248703,
+        "deno": 250299,
+        "node": 250568
+      },
+      "128": {
+        "esrun": 180155,
+        "bun": 178500,
+        "deno": 188004,
+        "node": 214598
+      }
     }
   }
 }

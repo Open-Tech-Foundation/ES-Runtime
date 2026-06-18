@@ -41,17 +41,20 @@ locally. All cells are full delivery (ratio = `C`).
 # Server sweep (client driver = bun)
 clients |       bun |      deno |     esrun
 --------+-----------+-----------+-----------
-     32 |   208,662 |   175,919 |   259,742
-     64 |   211,235 |   176,871 |    91,833
-    128 |   210,354 |   174,643 |    45,368
+     32 |   247,021 |   203,379 |   283,094
+     64 |   247,418 |   204,151 |   106,275
+    128 |   208,975 |   200,402 |    45,204
 
-# Client sweep (server = bun), esrun RECV
-     32 |   ~204,000   (on par with node/bun/deno)
-    128 |   ~197,000
-    256 |   ~172,000   (~12% behind node)
+# Client sweep (server = bun)
+clients |     esrun |       bun |      deno |      node
+--------+-----------+-----------+-----------+-----------
+     32 |   250,348 |   244,078 |   250,252 |   257,113
+     64 |   253,210 |   248,703 |   250,299 |   250,568
+    128 |   180,155 |   178,500 |   188,004 |   214,598
 ```
 
-(bun 1.3, deno 2.8, node 24, esrun 0.4.)
+(bun 1.3, deno 2.8, node 24, esrun 0.4. This is the same data the site renders —
+regenerate both with `bench/gen-bench-data.sh`.)
 
 ## Interpretation
 
@@ -68,10 +71,10 @@ make it competitive:
 - **Coalesced writes** — the per-connection writer `feed`s a burst of queued
   frames and `flush`es once (one socket write per drain, not per frame).
 
-Result: at **C=32 esrun leads** (260k vs Bun's 209k) with full delivery. As `C`
-grows the throughput falls off (92k at 64, 45k at 128) while Bun/Deno hold steady
+Result: at **C=32 esrun leads** (283k vs Bun's 247k) with full delivery. As `C`
+grows the throughput falls off (106k at 64, 45k at 128) while Bun/Deno hold steady
 — the remaining cost is the central `conns` map lock (each broadcast snapshots
 all senders under it, ~O(C²) lock-held work per round) and the per-connection
 actor/channel hop. Sharding that map (or caching the sender set per room) is the
 next step for high-fan-out throughput; the **client** stays on par with native
-across the board.
+(within a few percent of node/bun/deno through C=64, ~16% behind node at C=128).
