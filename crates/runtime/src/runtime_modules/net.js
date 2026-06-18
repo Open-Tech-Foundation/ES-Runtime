@@ -28,11 +28,13 @@ function parseAddress(address) {
 // A duplex socket. `conn` is a Promise resolving to { id, remoteAddress, … } —
 // the streams await it, so connect() can return synchronously.
 class Socket {
-  constructor(conn) {
+  constructor(conn, upgrade = null) {
     this._conn = conn;
     this.opened = conn;
-    // WinterTC Socket.upgraded — true only after a startTls() upgrade, which is
-    // not yet supported (see startTls() below).
+    // Set when the socket was opened with secureTransport: "starttls": the
+    // { name, alpn } a later startTls() upgrade uses. null ⇒ not upgradable.
+    this._upgrade = upgrade;
+    // WinterTC Socket.upgraded — true only after a startTls() upgrade.
     this.upgraded = false;
     let done;
     this.closed = new Promise((resolve) => (done = resolve));
@@ -85,24 +87,38 @@ class Socket {
     this._finish();
   }
 
+  // WinterTC startTls(): upgrade a "starttls" socket to TLS, returning a new
+  // Socket for the encrypted stream. The original socket is consumed.
   startTls() {
-    throw new Error("startTls() is not supported yet");
+    if (!this._upgrade) {
+      throw new TypeError("startTls() requires secureTransport: 'starttls'");
+    }
+    const { name, alpn } = this._upgrade;
+    this._upgrade = null; // single-shot
+    const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn));
+    const upgraded = new Socket(info);
+    upgraded.upgraded = true;
+    return upgraded;
   }
 }
 
 // WinterTC connect(): returns a Socket immediately; .opened settles on connect.
 function connect(address, options = {}) {
   const { hostname, port } = parseAddress(address);
-  if (options.secureTransport === "starttls") {
-    throw new Error("secureTransport 'starttls' is not supported yet");
+  const mode = options.secureTransport ?? "off";
+  if (mode !== "off" && mode !== "on" && mode !== "starttls") {
+    throw new TypeError(`invalid secureTransport: ${mode}`);
   }
-  const tls = options.secureTransport === "on";
+  const tls = mode === "on";
   // WinterTC SocketOptions: sni (server name override) + alpn (offered protocols;
   // the negotiated one comes back as SocketInfo.alpn). Empty string == no SNI.
   const sni = options.sni == null ? "" : String(options.sni);
   const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
   const conn = ops.net_connect(hostname, port, tls, sni, alpn);
-  return new Socket(conn);
+  // "starttls" opens plaintext now; record the server name (sni, default = host)
+  // + alpn a later startTls() will negotiate with.
+  const upgrade = mode === "starttls" ? { name: sni || hostname, alpn } : null;
+  return new Socket(conn, upgrade);
 }
 
 // A listening socket: an async iterator of incoming Sockets.

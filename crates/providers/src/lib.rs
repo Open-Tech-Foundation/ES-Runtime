@@ -405,6 +405,22 @@ pub trait NetProvider: Send + Sync {
 
     /// Closes listener `id` (idempotent).
     fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Upgrades plaintext socket `id` to TLS in place (the WinterTC
+    /// `startTls()`), using `server_name` for SNI + certificate verification and
+    /// offering `alpn`. Resolves to a **new** (socket id, info) for the encrypted
+    /// stream; the old id is consumed. Only valid for a socket opened with
+    /// `secureTransport: "starttls"`. The default errors — a provider can support
+    /// it only if it keeps the raw stream reclaimable until the upgrade.
+    fn start_tls(
+        &self,
+        id: u64,
+        server_name: String,
+        alpn: Vec<String>,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let _ = (id, server_name, alpn);
+        Box::pin(async { Err(ProviderError::Other("startTls is not supported".into())) })
+    }
 }
 
 /// Metadata about an opened WebSocket, from [`WebSocketProvider::connect`].

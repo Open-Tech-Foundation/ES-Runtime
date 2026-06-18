@@ -11,14 +11,17 @@
 //! the same reader/writer tasks take over the encrypted stream (DECISIONS D28).
 
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll};
 
 use es_runtime_providers::{BoxFuture, ConnectOptions, NetProvider, ProviderError, SocketInfo};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -27,12 +30,26 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
 type AcceptRx = mpsc::Receiver<(TcpStream, SocketAddr)>;
+type TcpRead = tokio::io::ReadHalf<TcpStream>;
+type TcpWrite = tokio::io::WriteHalf<TcpStream>;
+
+/// Handles that pull a plaintext socket's raw halves back out of its reader and
+/// writer tasks so the stream can be wrapped in TLS in place (`startTls`). Each
+/// task parks on its receiver; sending it a one-shot sender makes it stop and
+/// hand the half back. Present only on plaintext client sockets — `None` once a
+/// socket is already TLS, accepted, or upgraded.
+struct Reclaim {
+    read: oneshot::Sender<oneshot::Sender<TcpRead>>,
+    write: oneshot::Sender<oneshot::Sender<TcpWrite>>,
+}
 
 /// A connection's channel ends. `read_rx` is taken out during a read; `write_tx`
-/// is cloned to send and dropped (set to `None`) to half-close.
+/// is cloned to send and dropped (set to `None`) to half-close. `reclaim` is
+/// taken once, by `startTls`, to upgrade the socket.
 struct Slot {
     read_rx: Option<ReadRx>,
     write_tx: Option<WriteTx>,
+    reclaim: Option<Reclaim>,
 }
 
 /// A [`NetProvider`] over real tokio TCP sockets. The `Arc`s are cloned into each
@@ -156,7 +173,142 @@ impl SystemNet {
         Slot {
             read_rx: Some(read_rx),
             write_tx: Some(write_tx),
+            reclaim: None,
         }
+    }
+
+    /// Like [`spawn_socket`](Self::spawn_socket), but for a plaintext [`TcpStream`]
+    /// that may later be upgraded with `startTls`. The reader and writer keep
+    /// their halves reclaimable: each `select!`s its normal work against a
+    /// reclaim request, and on request hands its half back instead of looping, so
+    /// [`start_tls`](Self::start_tls) can rejoin the raw stream and wrap it in TLS.
+    fn spawn_upgradable(tcp: TcpStream) -> Slot {
+        let (mut r, mut w) = tokio::io::split(tcp);
+        let (read_tx, read_rx) = mpsc::channel::<Result<Vec<u8>, String>>(8);
+        let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (recl_read_tx, mut recl_read_rx) = oneshot::channel::<oneshot::Sender<TcpRead>>();
+        let (recl_write_tx, mut recl_write_rx) = oneshot::channel::<oneshot::Sender<TcpWrite>>();
+
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                tokio::select! {
+                    biased;
+                    // Reclaim wins over a pending read; the cancelled read is
+                    // cancel-safe (no bytes consumed), so nothing is lost.
+                    give = &mut recl_read_rx => {
+                        if let Ok(give) = give {
+                            let _ = give.send(r);
+                        }
+                        return; // upgraded or closed — stop reading
+                    }
+                    res = r.read(&mut buf) => match res {
+                        Ok(0) => break, // EOF — dropping read_tx signals it
+                        Ok(n) => {
+                            if read_tx.send(Ok(buf[..n].to_vec())).await.is_err() {
+                                break; // consumer gone
+                            }
+                        }
+                        Err(e) => {
+                            let _ = read_tx.send(Err(e.to_string())).await;
+                            break;
+                        }
+                    },
+                }
+            }
+        });
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    biased;
+                    give = &mut recl_write_rx => {
+                        // Flush whatever is still queued before handing the half
+                        // back (upgrade) or sending FIN (close).
+                        while let Ok(data) = write_rx.try_recv() {
+                            if w.write_all(&data).await.is_err() {
+                                break;
+                            }
+                        }
+                        match give {
+                            Ok(give) => {
+                                let _ = w.flush().await;
+                                let _ = give.send(w);
+                            }
+                            Err(_) => {
+                                let _ = w.shutdown().await;
+                            }
+                        }
+                        return;
+                    }
+                    data = write_rx.recv() => match data {
+                        Some(data) => {
+                            if w.write_all(&data).await.is_err() {
+                                break;
+                            }
+                        }
+                        None => {
+                            let _ = w.shutdown().await; // write_tx dropped (half-close / close)
+                            break;
+                        }
+                    },
+                }
+            }
+        });
+
+        Slot {
+            read_rx: Some(read_rx),
+            write_tx: Some(write_tx),
+            reclaim: Some(Reclaim {
+                read: recl_read_tx,
+                write: recl_write_tx,
+            }),
+        }
+    }
+}
+
+/// A reclaimed plaintext stream with any bytes the reader task had already
+/// buffered (but the guest never read) replayed ahead of the live socket, so a
+/// `startTls` upgrade keeps anything the peer sent between its go-ahead and the
+/// TLS handshake.
+struct Prefixed {
+    prefix: io::Cursor<Vec<u8>>,
+    inner: TcpStream,
+}
+
+impl AsyncRead for Prefixed {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let pos = self.prefix.position() as usize;
+        let bytes = self.prefix.get_ref();
+        if pos < bytes.len() {
+            let n = (bytes.len() - pos).min(buf.remaining());
+            buf.put_slice(&bytes[pos..pos + n]);
+            self.prefix.set_position((pos + n) as u64);
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Prefixed {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 
@@ -208,7 +360,9 @@ impl NetProvider for SystemNet {
                     .map(|p| String::from_utf8_lossy(p).into_owned());
                 SystemNet::spawn_socket(tls)
             } else {
-                SystemNet::spawn_socket(tcp)
+                // Plaintext (`"off"` or `"starttls"`): keep the stream
+                // reclaimable so a later startTls can upgrade it in place.
+                SystemNet::spawn_upgradable(tcp)
             };
             this.sockets.lock().unwrap().insert(id, slot);
             Ok((id, info))
@@ -333,6 +487,74 @@ impl NetProvider for SystemNet {
             Ok(())
         })
     }
+
+    fn start_tls(
+        &self,
+        id: u64,
+        server_name: String,
+        alpn: Vec<String>,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            // Take the reclaim handles and drain anything the reader already
+            // buffered but the guest never read, so the upgrade loses nothing the
+            // peer sent before the handshake.
+            let (reclaim, prefix) = {
+                let mut socks = this.sockets.lock().unwrap();
+                let slot = socks.get_mut(&id).ok_or_else(|| err("socket is closed"))?;
+                let reclaim = slot
+                    .reclaim
+                    .take()
+                    .ok_or_else(|| err("socket cannot be upgraded to TLS"))?;
+                let mut prefix = Vec::new();
+                if let Some(rx) = slot.read_rx.as_mut() {
+                    while let Ok(Ok(mut chunk)) = rx.try_recv() {
+                        prefix.append(&mut chunk);
+                    }
+                }
+                (reclaim, prefix)
+            };
+
+            // Stop both tasks and rejoin the raw stream from their halves.
+            let (rtx, rrx) = oneshot::channel();
+            reclaim.read.send(rtx).map_err(|_| err("socket is closed"))?;
+            let read_half = rrx.await.map_err(|_| err("socket is closed"))?;
+            let (wtx, wrx) = oneshot::channel();
+            reclaim
+                .write
+                .send(wtx)
+                .map_err(|_| err("socket is closed"))?;
+            let write_half = wrx.await.map_err(|_| err("socket is closed"))?;
+            let tcp = read_half.unsplit(write_half);
+            let (local, remote) = (tcp.local_addr().ok(), tcp.peer_addr().ok());
+
+            // Wrap reader/writer tasks back over the TLS stream under a fresh id;
+            // the old id is consumed (WinterTC returns a new Socket).
+            let stream = Prefixed {
+                prefix: io::Cursor::new(prefix),
+                inner: tcp,
+            };
+            let name = ServerName::try_from(server_name)
+                .map_err(|_| err("invalid TLS server name"))?;
+            let tls = this
+                .tls_connector(&alpn)?
+                .connect(name, stream)
+                .await
+                .map_err(err)?;
+            let mut info = info_of(local, remote);
+            info.alpn = tls
+                .get_ref()
+                .1
+                .alpn_protocol()
+                .map(|p| String::from_utf8_lossy(p).into_owned());
+
+            let new_id = this.id();
+            let mut socks = this.sockets.lock().unwrap();
+            socks.remove(&id);
+            socks.insert(new_id, SystemNet::spawn_socket(tls));
+            Ok((new_id, info))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -430,6 +652,83 @@ mod tests {
         };
         let res = net.connect("localhost".to_string(), port, opts).await;
         assert!(res.is_err(), "TLS to a plaintext server must error");
+    }
+
+    // A STARTTLS upgrade: connect plaintext, exchange a line in the clear, then
+    // upgrade the *same* connection to TLS and round-trip over the encrypted
+    // stream — the SMTP/IMAP/XMPP "STARTTLS" shape.
+    #[tokio::test]
+    async fn starttls_upgrades_a_live_plaintext_socket() {
+        let (cert, key) = self_signed();
+
+        let mut server_cfg =
+            ServerConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert.clone()], key)
+                .unwrap();
+        server_cfg.alpn_protocols = vec![b"h2".to_vec()];
+        let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            // Plaintext go-ahead, then upgrade the same socket to TLS.
+            let mut buf = [0u8; 16];
+            let n = tcp.read(&mut buf).await.unwrap();
+            assert_eq!(&buf[..n], b"STARTTLS\n");
+            tcp.write_all(b"OK\n").await.unwrap();
+            tcp.flush().await.unwrap();
+            let mut tls = acceptor.accept(tcp).await.unwrap();
+            let mut b = [0u8; 32];
+            let n = tls.read(&mut b).await.unwrap();
+            let up: Vec<u8> = b[..n].iter().map(u8::to_ascii_uppercase).collect();
+            tls.write_all(&up).await.unwrap();
+            tls.flush().await.unwrap();
+        });
+
+        let net = net_trusting(cert);
+        let (id, _) = net
+            .connect("localhost".to_string(), port, ConnectOptions::default())
+            .await
+            .unwrap();
+        net.write(id, b"STARTTLS\n".to_vec()).await.unwrap();
+        assert_eq!(net.read(id).await.unwrap().unwrap(), b"OK\n");
+
+        let (tls_id, info) = net
+            .start_tls(id, "localhost".to_string(), vec!["h2".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(info.alpn.as_deref(), Some("h2"));
+
+        net.write(tls_id, b"ping".to_vec()).await.unwrap();
+        assert_eq!(net.read(tls_id).await.unwrap().unwrap(), b"PING");
+
+        // The upgraded (already-TLS) socket cannot be upgraded again.
+        assert!(
+            net.start_tls(tls_id, "localhost".to_string(), vec![])
+                .await
+                .is_err(),
+            "a TLS socket has no reclaimable raw stream"
+        );
+
+        net.close(tls_id).await.unwrap();
+        server.await.unwrap();
+    }
+
+    // startTls on an id that was never opened (or already closed) errors rather
+    // than panicking.
+    #[tokio::test]
+    async fn start_tls_on_an_unknown_socket_errors() {
+        let net = SystemNet::new();
+        assert!(
+            net.start_tls(999, "localhost".to_string(), vec![])
+                .await
+                .is_err()
+        );
     }
 
     // Plaintext connect still works unchanged through the generic spawn path.

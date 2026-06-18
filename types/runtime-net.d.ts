@@ -8,12 +8,21 @@ declare module "runtime:net" {
     remotePort: number;
     localAddress: string;
     localPort: number;
+    /** Negotiated ALPN protocol (TLS only; `null` for plaintext or none). */
+    alpn: string | null;
   }
 
   /** Options for {@link connect} (the WinterTC Sockets API shape). */
   export interface ConnectOptions {
-    /** `"on"` negotiates TLS; `"starttls"` is reserved (not yet supported). */
+    /**
+     * `"on"` negotiates TLS immediately; `"starttls"` opens plaintext and may be
+     * upgraded later via {@link Socket.startTls}; `"off"` (default) is plain TCP.
+     */
     secureTransport?: "off" | "on" | "starttls";
+    /** TLS server name (SNI + cert verification); defaults to the connect host. */
+    sni?: string;
+    /** ALPN protocols to offer, in preference order. */
+    alpn?: string[];
     allowHalfOpen?: boolean;
   }
 
@@ -29,7 +38,13 @@ declare module "runtime:net" {
     readonly closed: Promise<void>;
     /** Fully close the socket. */
     close(): Promise<void>;
-    /** Upgrade to TLS (not yet supported). */
+    /** `true` once this socket is the result of a {@link startTls} upgrade. */
+    readonly upgraded: boolean;
+    /**
+     * Upgrade a `secureTransport: "starttls"` socket to TLS in place, returning
+     * a new {@link Socket} for the encrypted stream (`upgraded === true`). The
+     * original socket is consumed. Throws on a non-`"starttls"` socket.
+     */
     startTls(): Socket;
   }
 

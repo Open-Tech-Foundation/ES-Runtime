@@ -39,6 +39,23 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
         .requires(Capability::Net),
     )?;
 
+    // Upgrades a plaintext "starttls" socket to TLS in place. Like read/write it
+    // needs no capability — the original `connect` was already authorized (D7).
+    let n = net.clone();
+    engine.register_op(OpDecl::r#async("net_start_tls", move |args| {
+        let n = n.clone();
+        let id = arg_u64(&args, 0);
+        let server_name = arg_str(&args, 1);
+        let alpn = arg_str_vec(&args, 2);
+        Box::pin(async move {
+            let (new_id, info) = require(&n)?
+                .start_tls(id, server_name, alpn)
+                .await
+                .map_err(map_err)?;
+            Ok(socket_value(new_id, &info))
+        })
+    }))?;
+
     let n = net.clone();
     engine.register_op(OpDecl::r#async("net_read", move |args| {
         let n = n.clone();

@@ -307,7 +307,8 @@ supported via `secureTransport: "on"` (certificate verification on, with `sni`
 and `alpn`). `sni` overrides the server name used for **both** the SNI extension
 and certificate hostname verification (they share one name in rustls), so set it
 only to a name the presented certificate is valid for. `secureTransport:
-"starttls"` / `Socket.startTls()` and TLS on `listen` are not yet supported.
+"starttls"` opens plaintext and upgrades in place via `Socket.startTls()` (SMTP/
+IMAP-style); TLS on `listen` (server termination) is not yet supported.
 
 ```js
 import { connect, listen } from "runtime:net";
@@ -341,8 +342,9 @@ for await (const conn of server) {
 | `listen(options)`            | `({ hostname?, port }) => Listener`   | Bind a listening socket. `NetListen`.                              |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
-`closed: Promise<void>`, `close()`, `upgraded` (always `false` until `startTls`
-lands). Closing the writable half-closes (FIN). **`SocketInfo`** (from `opened`):
+`closed: Promise<void>`, `close()`, `upgraded`, and `startTls(): Socket` (valid
+only on a `"starttls"` socket; returns a new TLS `Socket` with `upgraded ===
+true`). Closing the writable half-closes (FIN). **`SocketInfo`** (from `opened`):
 `{ remoteAddress, remotePort, localAddress, localPort, alpn }` — `alpn` is the
 negotiated protocol for a TLS socket, else `null`.
 

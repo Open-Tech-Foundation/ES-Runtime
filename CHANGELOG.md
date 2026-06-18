@@ -6,6 +6,18 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:net` `startTls()`.** A socket opened with
+  `connect(addr, { secureTransport: "starttls" })` now starts in plaintext and
+  can be upgraded to TLS in place with `socket.startTls()` (the SMTP/IMAP/XMPP
+  STARTTLS shape) — it returns a new `Socket` for the encrypted stream (SNI +
+  ALPN, certificate verification on), and `upgraded` is `true`. The default
+  `SystemNet` reclaims the raw stream from its reader/writer tasks to wrap it,
+  replaying any bytes the peer sent before the handshake. Calling `startTls()`
+  on a non-`"starttls"` socket throws (DECISIONS D28). Server-side TLS
+  termination remains a `runtime:http` follow-up.
+
 ### Changed
 
 - **`runtime:net` TLS connector reuse.** The default `SystemNet` built a fresh

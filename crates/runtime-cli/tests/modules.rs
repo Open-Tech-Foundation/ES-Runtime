@@ -362,6 +362,34 @@ fn runtime_net_tcp_echo_roundtrip() {
 }
 
 #[test]
+fn runtime_net_starttls_surface_and_guards() {
+    // The startTls() JS surface: a plain socket can't be upgraded, an unknown
+    // secureTransport is rejected, and a "starttls" socket opens (upgradable).
+    // The TLS handshake itself is covered by hermetic provider tests (the CLI
+    // trusts the public webpki roots, so a loopback self-signed cert can't be
+    // exercised here).
+    let script = "import { connect, listen } from 'runtime:net';\
+        const server = listen({ hostname: '127.0.0.1', port: 0 });\
+        const { port } = await server.addr;\
+        const a = connect({ hostname: '127.0.0.1', port });\
+        let g1 = 'none';\
+        try { a.startTls(); } catch (e) { g1 = e.constructor.name; }\
+        let g2 = 'none';\
+        try { connect({ hostname: '127.0.0.1', port }, { secureTransport: 'x' }); }\
+        catch (e) { g2 = e.constructor.name; }\
+        const b = connect({ hostname: '127.0.0.1', port }, { secureTransport: 'starttls' });\
+        console.log('STARTTLS:' + g1 + ':' + g2 + ':' + (b.upgraded === false));\
+        await a.close(); await b.close(); await server.close();";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("STARTTLS:TypeError:TypeError:true"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn runtime_http_serve_and_fetch_roundtrip() {
     // Loopback: serve() an echo-ish handler, fetch() it through the real HTTP
     // client, read body + a custom header, then stop the server so the process
