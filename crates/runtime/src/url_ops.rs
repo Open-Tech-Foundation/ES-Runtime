@@ -130,20 +130,22 @@ fn set_component(href: &str, component: &str, value: &str) -> Option<Url> {
                 (value, None)
             };
 
-            let port_opt = match port_str {
-                Some("") => Some(None),
+            // Per WHATWG: a host with no `:port`, or a bare trailing `:` (empty
+            // port), leaves the existing port untouched; an explicit port must be
+            // a valid u16 to set it, and an invalid one aborts the whole setter.
+            // `valid` gates the assignment; `set_port_to` is the port to apply.
+            let (valid, set_port_to) = match port_str {
+                None | Some("") => (true, None),
                 Some(p) => match p.parse::<u16>() {
-                    Ok(num) => Some(Some(num)),
-                    Err(_) => None, // Invalid port
+                    Ok(num) => (true, Some(num)),
+                    Err(_) => (false, None),
                 },
-                None => Some(None), // Valid, but no port specified
             };
 
-            // Only apply if BOTH host is valid AND port is valid
-            if let (Ok(_), Some(port)) = (url::Host::parse(host_str), port_opt) {
+            if valid && url::Host::parse(host_str).is_ok() {
                 let _ = url.set_host(Some(host_str));
-                if port_str.is_some() {
-                    let _ = url.set_port(port);
+                if let Some(port) = set_port_to {
+                    let _ = url.set_port(Some(port));
                 }
             }
         }

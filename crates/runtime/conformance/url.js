@@ -50,8 +50,8 @@ test("URL host setter parses and sets ports", () => {
   assertEquals(u2.href, "http://test.com:8080/");
   
   const u3 = new URL("http://example.com:8080");
-  u3.host = "test.com:"; // Succeeds, clears port
-  assertEquals(u3.href, "http://test.com/");
+  u3.host = "test.com:"; // Empty port — host changes, existing port kept
+  assertEquals(u3.href, "http://test.com:8080/");
   
   const u4 = new URL("http://example.com:8080");
   u4.host = "[::1]:80"; // Default port dropped

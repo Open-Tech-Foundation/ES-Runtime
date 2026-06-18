@@ -51,6 +51,10 @@ pre-`0.1.0` and the public API is unstable.
   are now plumbed through the engine (static and dynamic imports); transpilation
   is keyed on `type === "json"` regardless of extension, matching the
   import-attributes proposal.
+- **`URL` host setter, empty port.** Setting `url.host = "example.com:"` (a
+  trailing colon with no port) cleared the existing port; per WHATWG an empty
+  port component leaves the port unchanged (verified against the reference
+  implementation). Only an explicit, valid port now changes it.
 
 ## [0.4.0] - 2026-06-17
 
