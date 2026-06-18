@@ -33,6 +33,11 @@ pre-`0.1.0` and the public API is unstable.
   the stack and abort the process. Nesting is now bounded (256 levels, matching
   libxml2) and over-deep input fails gracefully with a parse error. A nested
   parse error is also propagated now instead of being silently swallowed.
+- **`XMLDecoderStream` unbounded buffer.** The streaming decoder retained bytes
+  until a top-level element closed and re-scanned the tail on every chunk, so an
+  element that never closed grew memory without bound (and made the re-scan
+  quadratic). The retained buffer is now capped (64 MB); past it the stream
+  fails with a `RangeError` instead of consuming unbounded memory.
 
 ## [0.4.0] - 2026-06-17
 

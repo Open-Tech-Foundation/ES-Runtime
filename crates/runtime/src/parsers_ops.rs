@@ -1,5 +1,5 @@
 //! Host ops backing the `runtime:parsers` module for XML processing.
-use es_runtime_engine::{Engine, OpDecl, Value};
+use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
@@ -140,6 +140,90 @@ struct XmlStreamState {
     depth: usize,
 }
 
+/// Cap on a stream's retained (unconsumed) buffer. The decoder holds bytes until
+/// a top-level element closes, re-scanning the tail on each push; an element
+/// that never closes would otherwise grow without bound and turn the re-scan
+/// quadratic. Past this, the stream fails instead of consuming unbounded memory.
+const MAX_XML_STREAM_BUFFER: usize = 64 * 1024 * 1024;
+
+/// Feeds one chunk into a streaming-decode state, returning any top-level
+/// elements that completed. Pulled out of the op so the buffer cap is unit
+/// testable. `Err` carries an overflow message (surfaced as a `RangeError`).
+fn xml_stream_step(
+    state: &mut XmlStreamState,
+    chunk: &str,
+    max_buffer: usize,
+) -> Result<Vec<Value>, String> {
+    state.buffer.extend_from_slice(chunk.as_bytes());
+
+    let mut reader = Reader::from_reader(std::io::Cursor::new(&state.buffer));
+    reader.config_mut().trim_text(true);
+
+    let mut depth = state.depth;
+    let mut start_pos = None;
+    let mut consumed_bytes = 0;
+    let mut depth_at_consumed = depth;
+    let mut results = Vec::new();
+    let mut buf = Vec::new();
+
+    loop {
+        let pos_before = reader.buffer_position() as usize;
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(_)) => {
+                if depth == 1 {
+                    start_pos = Some(pos_before);
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(_)) if depth == 1 => {
+                let end_pos = reader.buffer_position() as usize;
+                let slice = &state.buffer[pos_before..end_pos];
+                let mut sub_reader = Reader::from_reader(slice);
+                sub_reader.config_mut().trim_text(true);
+                if let Ok(val) = parse_xml_node(&mut sub_reader, &mut Vec::new(), None, 0) {
+                    results.push(val);
+                }
+                consumed_bytes = end_pos;
+                depth_at_consumed = depth;
+            }
+            Ok(Event::End(_)) => {
+                depth -= 1;
+                if depth == 1 {
+                    let end_pos = reader.buffer_position() as usize;
+                    if let Some(start) = start_pos {
+                        let slice = &state.buffer[start..end_pos];
+                        let mut sub_reader = Reader::from_reader(slice);
+                        sub_reader.config_mut().trim_text(true);
+                        if let Ok(val) = parse_xml_node(&mut sub_reader, &mut Vec::new(), None, 0) {
+                            results.push(val);
+                        }
+                        start_pos = None;
+                    }
+                    consumed_bytes = end_pos;
+                    depth_at_consumed = depth;
+                }
+                if depth == 0 {
+                    consumed_bytes = reader.buffer_position() as usize;
+                    depth_at_consumed = depth;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break, // Incomplete tag, wait for more chunks
+            _ => {}
+        }
+    }
+
+    state.buffer.drain(..consumed_bytes);
+    state.depth = depth_at_consumed;
+
+    if state.buffer.len() > max_buffer {
+        return Err(format!(
+            "XML stream: unterminated element exceeds {max_buffer} bytes"
+        ));
+    }
+    Ok(results)
+}
+
 pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
     engine.register_op(OpDecl::sync("xml_parse", |args| {
         let xml = match args.first().and_then(Value::as_str) {
@@ -193,71 +277,14 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             None => return Ok(Value::Array(vec![])),
         };
 
-        state.buffer.extend_from_slice(chunk.as_bytes());
-
-        let mut reader = Reader::from_reader(std::io::Cursor::new(&state.buffer));
-        reader.config_mut().trim_text(true);
-
-        let mut depth = state.depth;
-        let mut start_pos = None;
-        let mut consumed_bytes = 0;
-        let mut depth_at_consumed = depth;
-        let mut results = Vec::new();
-        let mut buf = Vec::new();
-
-        loop {
-            let pos_before = reader.buffer_position() as usize;
-            match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(_)) => {
-                    if depth == 1 {
-                        start_pos = Some(pos_before);
-                    }
-                    depth += 1;
-                }
-                Ok(Event::Empty(_)) if depth == 1 => {
-                    let end_pos = reader.buffer_position() as usize;
-                    let slice = &state.buffer[pos_before..end_pos];
-                    let mut sub_reader = Reader::from_reader(slice);
-                    sub_reader.config_mut().trim_text(true);
-                    if let Ok(val) = parse_xml_node(&mut sub_reader, &mut Vec::new(), None, 0) {
-                        results.push(val);
-                    }
-                    consumed_bytes = end_pos;
-                    depth_at_consumed = depth;
-                }
-                Ok(Event::End(_)) => {
-                    depth -= 1;
-                    if depth == 1 {
-                        let end_pos = reader.buffer_position() as usize;
-                        if let Some(start) = start_pos {
-                            let slice = &state.buffer[start..end_pos];
-                            let mut sub_reader = Reader::from_reader(slice);
-                            sub_reader.config_mut().trim_text(true);
-                            if let Ok(val) =
-                                parse_xml_node(&mut sub_reader, &mut Vec::new(), None, 0)
-                            {
-                                results.push(val);
-                            }
-                            start_pos = None;
-                        }
-                        consumed_bytes = end_pos;
-                        depth_at_consumed = depth;
-                    }
-                    if depth == 0 {
-                        consumed_bytes = reader.buffer_position() as usize;
-                        depth_at_consumed = depth;
-                    }
-                }
-                Ok(Event::Eof) => break,
-                Err(_) => break, // Incomplete tag, wait for more chunks
-                _ => {}
+        match xml_stream_step(state, chunk, MAX_XML_STREAM_BUFFER) {
+            Ok(results) => Ok(Value::Array(results)),
+            Err(msg) => {
+                // Overflow is fatal for this stream: drop its state and throw.
+                states.remove(&id);
+                Err(OpError::range_error(msg))
             }
         }
-
-        state.buffer.drain(..consumed_bytes);
-        state.depth = depth_at_consumed;
-
-        Ok(Value::Array(results))
     }))?;
 
     let states_close = Rc::clone(&stream_states);
@@ -345,5 +372,34 @@ mod tests {
         let xml = format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
         let err = parse(&xml).expect_err("deep nesting must be rejected");
         assert!(err.contains("nesting exceeds"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn stream_emits_top_level_elements_across_chunks() {
+        let mut state = XmlStreamState {
+            buffer: Vec::new(),
+            depth: 0,
+        };
+        // Open the root and a partial child split mid-element across chunks.
+        let r1 = xml_stream_step(&mut state, "<root><item>a</it", usize::MAX).unwrap();
+        assert!(r1.is_empty(), "no element has closed yet");
+        let r2 = xml_stream_step(&mut state, "em><item>b</item></root>", usize::MAX).unwrap();
+        assert_eq!(r2.len(), 2, "both <item> elements emitted once closed");
+        // Root consumed: nothing left to re-scan.
+        assert!(state.buffer.is_empty());
+    }
+
+    #[test]
+    fn stream_caps_unterminated_element() {
+        let mut state = XmlStreamState {
+            buffer: Vec::new(),
+            depth: 0,
+        };
+        // A root that never closes, fed past a tiny cap → fails instead of
+        // growing without bound.
+        let err = xml_stream_step(&mut state, "<root>", 8)
+            .and_then(|_| xml_stream_step(&mut state, "padding-text-that-never-closes", 8))
+            .expect_err("unterminated element past the cap must error");
+        assert!(err.contains("exceeds"), "unexpected error: {err}");
     }
 }
