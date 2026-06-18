@@ -57,7 +57,10 @@ export default function DocsShell({ active, children }) {
   return (
     <div className="mx-auto flex max-w-6xl gap-10 px-6 py-12">
       <aside className="hidden w-56 shrink-0 lg:block">
-        <nav className="sticky top-24 space-y-7">
+        <nav
+          data-lenis-prevent=""
+          className="sticky top-24 max-h-[calc(100vh_-_7rem)] space-y-7 overflow-y-auto overscroll-contain pr-2"
+        >
           {NAV.map((section) => (
             <div>
               <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
