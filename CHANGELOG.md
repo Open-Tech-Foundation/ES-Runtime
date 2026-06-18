@@ -21,6 +21,15 @@ pre-`0.1.0` and the public API is unstable.
   keeps the writable usable after the peer's FIN (read EOF), instead of tearing
   the whole socket down. Default stays `false` (WinterTC).
 
+### Fixed
+
+- **`runtime:net` listener close cancels a parked `accept`.** Closing a
+  `Listener` while an `accept()` was waiting (e.g. a detached
+  `for await (conn of server)` loop closed from elsewhere) left the accept
+  parked forever, so the loop never ended and the process hung. `close()` now
+  aborts the accept task, resolving the parked `accept` to `null` so the loop
+  terminates cleanly.
+
 ### Changed
 
 - **`runtime:net` `SocketInfo` addresses.** `opened`'s `remoteAddress` /

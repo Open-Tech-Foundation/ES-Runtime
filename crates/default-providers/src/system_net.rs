@@ -58,6 +58,11 @@ struct Slot {
 pub struct SystemNet {
     sockets: Arc<Mutex<HashMap<u64, Slot>>>,
     listeners: Arc<Mutex<HashMap<u64, AcceptRx>>>,
+    /// The accept-forwarding task per listener, kept so `close_listener` can
+    /// abort it. Aborting drops the task's channel sender, which makes any
+    /// **parked** `accept` (whose `recv` would otherwise wait forever, since it
+    /// holds the only `AcceptRx` out of the map) resolve to `None`.
+    listener_tasks: Arc<Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>>,
     next_id: Arc<AtomicU64>,
     /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
     /// tests inject a custom store via [`SystemNet::with_tls_roots`].
@@ -442,7 +447,7 @@ impl NetProvider for SystemNet {
                 .map_err(err)?;
             let local = listener.local_addr().ok();
             let (tx, rx) = mpsc::channel::<(TcpStream, SocketAddr)>(8);
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 while let Ok(conn) = listener.accept().await {
                     if tx.send(conn).await.is_err() {
                         break; // listener closed (rx dropped)
@@ -451,6 +456,7 @@ impl NetProvider for SystemNet {
             });
             let id = this.id();
             this.listeners.lock().unwrap().insert(id, rx);
+            this.listener_tasks.lock().unwrap().insert(id, task);
             Ok((id, info_of(local, None)))
         })
     }
@@ -463,9 +469,9 @@ impl NetProvider for SystemNet {
                 None => return Ok(None), // listener closed
             };
             let conn = rx.recv().await;
-            this.listeners.lock().unwrap().insert(id, rx); // keep accepting
             match conn {
                 Some((stream, remote)) => {
+                    this.listeners.lock().unwrap().insert(id, rx); // keep accepting
                     let _ = stream.set_nodelay(true);
                     let info = info_of(stream.local_addr().ok(), Some(remote));
                     let sid = this.id();
@@ -475,15 +481,27 @@ impl NetProvider for SystemNet {
                         .insert(sid, SystemNet::spawn_socket(stream));
                     Ok(Some((sid, info)))
                 }
-                None => Ok(None),
+                // Listener closed (sender dropped, e.g. close_listener aborted the
+                // task): don't re-insert the dead rx; drop its task handle.
+                None => {
+                    this.listener_tasks.lock().unwrap().remove(&id);
+                    Ok(None)
+                }
             }
         })
     }
 
     fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
         let listeners = self.listeners.clone();
+        let listener_tasks = self.listener_tasks.clone();
         Box::pin(async move {
             listeners.lock().unwrap().remove(&id);
+            // Abort the accept task so its sender drops, unblocking any parked
+            // accept with `None` (the rx may be out of the map in a parked accept,
+            // so removing it above isn't enough on its own).
+            if let Some(task) = listener_tasks.lock().unwrap().remove(&id) {
+                task.abort();
+            }
             Ok(())
         })
     }
@@ -729,6 +747,29 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    // close_listener must unblock an already-parked accept (resolve it to None),
+    // not leave it waiting forever — the bug behind a `for await (conn of server)`
+    // loop that never ends when closed from another context.
+    #[tokio::test]
+    async fn close_listener_unblocks_a_parked_accept() {
+        let net = SystemNet::new();
+        let (lid, _) = net.listen("127.0.0.1".to_string(), 0).await.unwrap();
+
+        let probe = net.clone();
+        let accept = tokio::spawn(async move { probe.accept(lid).await });
+
+        // Let the accept park on recv (no incoming connection), then close it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        net.close_listener(lid).await.unwrap();
+
+        let res = tokio::time::timeout(std::time::Duration::from_secs(5), accept)
+            .await
+            .expect("a closed listener must not hang accept")
+            .unwrap()
+            .unwrap();
+        assert!(res.is_none(), "a closed listener's accept yields None");
     }
 
     // Plaintext connect still works unchanged through the generic spawn path.

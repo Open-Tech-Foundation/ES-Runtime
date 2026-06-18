@@ -390,6 +390,24 @@ fn runtime_net_starttls_surface_and_guards() {
 }
 
 #[test]
+fn runtime_net_listener_close_ends_accept_loop() {
+    // A detached `for await (conn of server)` loop, closed from the main flow,
+    // must terminate (and let the process exit) — the parked accept resolves to
+    // null. Regression for the listener-close cancellation.
+    let script = "import { listen } from 'runtime:net';\
+        const server = listen({ hostname: '127.0.0.1', port: 0 });\
+        await server.addr;\
+        let ended = false;\
+        const loop = (async () => { for await (const _ of server) {} ended = true; })();\
+        await server.close();\
+        await loop;\
+        console.log('CLOSED:' + ended);";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("CLOSED:true"), "{}", stdout(&out));
+}
+
+#[test]
 fn runtime_net_half_open_and_combined_address() {
     // allowHalfOpen: the server FINs its write; the client (allowHalfOpen: true)
     // sees read EOF yet can still write — a default socket would be torn down.
