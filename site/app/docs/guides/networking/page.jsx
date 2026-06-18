@@ -11,8 +11,12 @@ const w = sock.writable.getWriter();
 await w.write(new TextEncoder().encode("GET / HTTP/1.0\\r\\n\\r\\n"));
 await w.close();                           // half-close: send FIN, keep reading
 
-let body = ""; const dec = new TextDecoder();
-for await (const chunk of sock.readable) body += dec.decode(chunk);`;
+// Decode through TextDecoderStream so a multi-byte character split across two
+// chunks is still decoded correctly.
+let body = "";
+for await (const chunk of sock.readable.pipeThrough(new TextDecoderStream())) {
+  body += chunk;
+}`;
 
 const TLS = `import { connect } from "runtime:net";
 
@@ -45,15 +49,15 @@ for await (const conn of server) {         // each accepted Socket, already open
 }`;
 
 const SERVER_TLS = `import { listen } from "runtime:net";
-import { readFile } from "runtime:fs";
+import { file } from "runtime:fs";
 
 // Terminate TLS on accept. cert/key are inline PEM (string or bytes), so the
 // guest loads them itself — server TLS needs no capability beyond NetListen.
 const server = listen({
   hostname: "127.0.0.1", port: 8443,
   secureTransport: "on",
-  cert: await readFile("cert.pem"),        // PEM chain, leaf first
-  key: await readFile("key.pem"),          // PKCS#8 / PKCS#1 / SEC1
+  cert: await file("cert.pem").text(),     // PEM chain, leaf first
+  key: await file("key.pem").text(),       // PKCS#8 / PKCS#1 / SEC1
   alpn: ["h2", "http/1.1"],
 });
 

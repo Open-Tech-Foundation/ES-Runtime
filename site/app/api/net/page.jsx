@@ -12,8 +12,12 @@ const writer = sock.writable.getWriter();
 await writer.write(new TextEncoder().encode("GET / HTTP/1.0\\r\\n\\r\\n"));
 await writer.close();
 
-let body = ""; const dec = new TextDecoder();
-for await (const chunk of sock.readable) body += dec.decode(chunk);`;
+// Decode through TextDecoderStream so a multi-byte character split across two
+// chunks is still decoded correctly.
+let body = "";
+for await (const chunk of sock.readable.pipeThrough(new TextDecoderStream())) {
+  body += chunk;
+}`;
 
 const TLS = `import { connect } from "runtime:net";
 
