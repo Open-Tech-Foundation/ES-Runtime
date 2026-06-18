@@ -4,7 +4,8 @@ const caps = [
   { name: "Env", desc: "Read environment, arguments, cwd, platform; backs runtime:process." },
   { name: "FileRead", desc: "Read files within the configured root jail." },
   { name: "FileWrite", desc: "Write files within the configured root jail." },
-  { name: "Net", desc: "Open outbound network connections." },
+  { name: "Net", desc: "Open outbound network connections (runtime:net connect, fetch, WebSocket)." },
+  { name: "NetListen", desc: "Bind a listening socket and accept connections (runtime:net listen, runtime:http / runtime:websocket serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed." },
   { name: "HrTime", desc: "Access high-resolution timing." },
 ];
 

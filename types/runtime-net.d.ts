@@ -25,6 +25,10 @@ declare module "runtime:net" {
     sni?: string;
     /** ALPN protocols to offer, in preference order. */
     alpn?: string[];
+    /**
+     * Keep the writable usable after the peer's FIN (read EOF) instead of tearing
+     * the whole socket down. Defaults to `false` (WinterTC).
+     */
     allowHalfOpen?: boolean;
   }
 

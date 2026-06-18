@@ -20,6 +20,7 @@ const NAV = [
       { href: "/docs/glob", label: "Glob matching" },
       { href: "/docs/process", label: "Process & Env" },
       { href: "/docs/path", label: "Path handling" },
+      { href: "/docs/guides/networking", label: "Sockets" },
       { href: "/docs/http", label: "HTTP server" },
       { href: "/docs/guides/websocket", label: "WebSockets" },
       { href: "/docs/urlpattern", label: "URLPattern" },
