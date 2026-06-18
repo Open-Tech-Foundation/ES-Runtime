@@ -23,11 +23,24 @@ fn value_to_json(v: Value) -> serde_json::Value {
     }
 }
 
+/// Maximum element nesting accepted by the recursive XML reader. The parser
+/// descends one stack frame per level, so an unbounded document (`<a><a>…`)
+/// would otherwise overflow the stack and abort the process; past this depth we
+/// fail gracefully instead. 256 matches libxml2's default and is far deeper than
+/// any realistic document.
+const MAX_XML_DEPTH: usize = 256;
+
 fn parse_xml_node(
     reader: &mut Reader<&[u8]>,
     buf: &mut Vec<u8>,
     current_tag: Option<&[u8]>,
+    depth: usize,
 ) -> Result<Value, String> {
+    if depth > MAX_XML_DEPTH {
+        return Err(format!(
+            "Parse failed: XML nesting exceeds {MAX_XML_DEPTH} levels"
+        ));
+    }
     let mut map: Vec<(String, Value)> = Vec::new();
     let mut text_content = String::new();
 
@@ -42,9 +55,11 @@ fn parse_xml_node(
                     child_map.push((k, Value::String(v)));
                 }
 
-                match parse_xml_node(reader, &mut Vec::new(), Some(e.name().as_ref())) {
-                    Ok(Value::Object(mut props)) => child_map.append(&mut props),
-                    Ok(Value::String(s)) if !s.is_empty() => {
+                // `?` propagates a depth/parse error up instead of the old
+                // `_ => {}` arm silently swallowing it.
+                match parse_xml_node(reader, &mut Vec::new(), Some(e.name().as_ref()), depth + 1)? {
+                    Value::Object(mut props) => child_map.append(&mut props),
+                    Value::String(s) if !s.is_empty() => {
                         child_map.push(("$text".to_string(), Value::String(s)));
                     }
                     _ => {}
@@ -135,7 +150,7 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
-        match parse_xml_node(&mut reader, &mut buf, None) {
+        match parse_xml_node(&mut reader, &mut buf, None, 0) {
             Ok(v) => Ok(v),
             Err(e) => Ok(Value::String(e)),
         }
@@ -204,7 +219,7 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
                     let slice = &state.buffer[pos_before..end_pos];
                     let mut sub_reader = Reader::from_reader(slice);
                     sub_reader.config_mut().trim_text(true);
-                    if let Ok(val) = parse_xml_node(&mut sub_reader, &mut Vec::new(), None) {
+                    if let Ok(val) = parse_xml_node(&mut sub_reader, &mut Vec::new(), None, 0) {
                         results.push(val);
                     }
                     consumed_bytes = end_pos;
@@ -218,7 +233,8 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
                             let slice = &state.buffer[start..end_pos];
                             let mut sub_reader = Reader::from_reader(slice);
                             sub_reader.config_mut().trim_text(true);
-                            if let Ok(val) = parse_xml_node(&mut sub_reader, &mut Vec::new(), None)
+                            if let Ok(val) =
+                                parse_xml_node(&mut sub_reader, &mut Vec::new(), None, 0)
                             {
                                 results.push(val);
                             }
@@ -292,4 +308,42 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         }
     }))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(xml: &str) -> Result<Value, String> {
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        parse_xml_node(&mut reader, &mut Vec::new(), None, 0)
+    }
+
+    #[test]
+    fn normal_nesting_parses() {
+        let v = parse("<a><b><c>hi</c></b></a>").expect("should parse");
+        // a → b → c → "$text": "hi"
+        assert!(matches!(v, Value::Object(_)));
+    }
+
+    #[test]
+    fn nesting_within_limit_is_accepted() {
+        // 256 levels deep — at the limit, still parses.
+        let xml = format!(
+            "{}{}",
+            "<a>".repeat(MAX_XML_DEPTH),
+            "</a>".repeat(MAX_XML_DEPTH)
+        );
+        assert!(parse(&xml).is_ok());
+    }
+
+    #[test]
+    fn excessive_nesting_fails_gracefully() {
+        // Far past the limit: returns an error instead of overflowing the stack.
+        let n = MAX_XML_DEPTH + 5_000;
+        let xml = format!("{}{}", "<a>".repeat(n), "</a>".repeat(n));
+        let err = parse(&xml).expect_err("deep nesting must be rejected");
+        assert!(err.contains("nesting exceeds"), "unexpected error: {err}");
+    }
 }

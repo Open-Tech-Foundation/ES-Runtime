@@ -26,6 +26,14 @@ pre-`0.1.0` and the public API is unstable.
   a `bench/websocket-chat/` broadcast chat benchmark (server + client sweeps,
   messages/sec).
 
+### Fixed
+
+- **`runtime:parsers` XML nesting depth.** The recursive XML reader descended one
+  stack frame per element, so a deeply nested document (`<a><a>…`) could overflow
+  the stack and abort the process. Nesting is now bounded (256 levels, matching
+  libxml2) and over-deep input fails gracefully with a parse error. A nested
+  parse error is also propagated now instead of being silently swallowed.
+
 ## [0.4.0] - 2026-06-17
 
 ### Added
