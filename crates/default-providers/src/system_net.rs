@@ -45,6 +45,12 @@ pub struct SystemNet {
     /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
     /// tests inject a custom store via [`SystemNet::with_tls_roots`].
     tls_roots: Option<Arc<RootCertStore>>,
+    /// Memoized TLS client connectors, keyed by the offered ALPN list (the only
+    /// per-connect input to the config). Building a [`ClientConfig`] re-parses
+    /// the whole root store, so this is shared across clones and reused for every
+    /// connect with the same ALPN set; a `TlsConnector` is an `Arc` inside, so a
+    /// cache hit is a refcount bump.
+    tls_connectors: Arc<Mutex<HashMap<Vec<String>, TlsConnector>>>,
 }
 
 impl SystemNet {
@@ -86,11 +92,14 @@ impl SystemNet {
     }
 
     /// A TLS client connector trusting [`tls_roots`](Self::tls_roots) and
-    /// offering `alpn`. The `aws-lc-rs` provider is chosen explicitly because the
-    /// process-default crypto provider is ambiguous (both ring and aws-lc-rs are
-    /// linked, so `ClientConfig::builder()` would panic). Built per connect —
-    /// fine at connection rates; cacheable later if it shows up in a profile.
+    /// offering `alpn`, memoized by ALPN set (see [`tls_connectors`](Self::tls_connectors)).
+    /// The `aws-lc-rs` provider is chosen explicitly because the process-default
+    /// crypto provider is ambiguous (both ring and aws-lc-rs are linked, so
+    /// `ClientConfig::builder()` would panic).
     fn tls_connector(&self, alpn: &[String]) -> Result<TlsConnector, ProviderError> {
+        if let Some(connector) = self.tls_connectors.lock().unwrap().get(alpn) {
+            return Ok(connector.clone());
+        }
         let provider = Arc::new(aws_lc_rs::default_provider());
         let mut config = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
@@ -98,7 +107,12 @@ impl SystemNet {
             .with_root_certificates(self.tls_roots())
             .with_no_client_auth();
         config.alpn_protocols = alpn.iter().map(|p| p.as_bytes().to_vec()).collect();
-        Ok(TlsConnector::from(Arc::new(config)))
+        let connector = TlsConnector::from(Arc::new(config));
+        self.tls_connectors
+            .lock()
+            .unwrap()
+            .insert(alpn.to_vec(), connector.clone());
+        Ok(connector)
     }
 
     /// Splits `stream` and spawns its reader + writer tasks, returning the

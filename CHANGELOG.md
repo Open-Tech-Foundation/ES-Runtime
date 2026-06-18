@@ -6,6 +6,14 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Changed
+
+- **`runtime:net` TLS connector reuse.** The default `SystemNet` built a fresh
+  rustls `ClientConfig` (re-parsing the whole root store) on every secure
+  `connect`. Connectors are now memoized by their offered ALPN set and shared
+  across connections, so repeated `secureTransport: "on"` connects no longer
+  rebuild TLS state.
+
 ## [0.5.0] - 2026-06-18
 
 ### Added
