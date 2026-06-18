@@ -52,6 +52,7 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **streams** | `ReadableStream`→`TransformStream`→`WritableStream` pipe of 5 000 × 1 KiB chunks — the streams machinery (pure-JS prelude for esrun). |
 | **fetch** | 300 sequential GETs against a local HTTP server — the network provider seam end-to-end (started by run.sh via Node; skipped if Node is absent). |
 | **http** | 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
+| **websocket** | 20 000 serial message round-trips over one `WebSocket` to a local echo server — the WebSocket *client* seam: opening handshake then per-message `send` + event dispatch (esrun: the `ws_send` op + the receive-pump's `MessageEvent` per tick). Server is whichever built-in WS server is present (Bun/Deno, or Node + `ws`); LLRT has no `WebSocket`, hence n/a. |
 | **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory floor. |
 
 ### Methodology

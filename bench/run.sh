@@ -39,10 +39,11 @@ STARTUP_RUNS="${STARTUP_RUNS:-25}"
 WORKLOAD_RUNS="${WORKLOAD_RUNS:-9}"
 # Coefficient-of-variation (%) above which a measured cell is flagged as noisy.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
-ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch http fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large"
+ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch http websocket fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923
+WS_PORT=18924
 # Per-workload wall-clock cap so a runtime that can't run a workload (or stalls
 # trying — e.g. a partial server API that never responds) yields a clean n/a
 # instead of hanging the whole run. Applied via `timeout` if available.
@@ -79,8 +80,10 @@ fi
 # Scratch dir (generated bigscript, RSS samples), cleaned on exit.
 SCRATCH="$(mktemp -d)"
 SERVER_PID=""
+WS_SERVER_PID=""
 cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  [ -n "$WS_SERVER_PID" ] && kill "$WS_SERVER_PID" 2>/dev/null
   rm -rf "$SCRATCH"
 }
 trap cleanup EXIT
@@ -112,6 +115,56 @@ start_fetch_server() {
   kill "$SERVER_PID" 2>/dev/null
   SERVER_PID=""
   WORKLOADS="${WORKLOADS//fetch/}"
+}
+
+# --- websocket echo server --------------------------------------------------
+
+# Starts the local WebSocket echo server for the websocket workload. The clients
+# are each runtime's standard `WebSocket` global; the server is whichever
+# built-in WS server is available — Bun (`Bun.serve`), Deno (`Deno.upgradeWebSocket`),
+# or Node with the `ws` package — so it needs no bundled dependency. Drops the
+# workload (with a notice) if none is available or the port doesn't come up.
+start_ws_server() {
+  case " $WORKLOADS " in *" websocket "*) ;; *) return ;; esac
+  local cmd="" script="$SCRATCH/ws-echo.js"
+  if command -v bun >/dev/null 2>&1; then
+    cmd="bun"
+    cat > "$script" <<EOF
+Bun.serve({ port: $WS_PORT, hostname: "127.0.0.1",
+  fetch(req, server) { if (server.upgrade(req)) return; return new Response("", { status: 400 }); },
+  websocket: { message(ws, m) { ws.send(m); } } });
+EOF
+  elif [ -n "$DENO" ]; then
+    cmd="$DENO run -A --quiet"
+    cat > "$script" <<EOF
+Deno.serve({ port: $WS_PORT, hostname: "127.0.0.1" }, (req) => {
+  const { socket, response } = Deno.upgradeWebSocket(req);
+  socket.onmessage = (e) => socket.send(e.data);
+  return response;
+});
+EOF
+  elif command -v node >/dev/null 2>&1 && node -e 'require("ws")' >/dev/null 2>&1; then
+    cmd="node"
+    cat > "$script" <<EOF
+const { WebSocketServer } = require("ws");
+new WebSocketServer({ host: "127.0.0.1", port: $WS_PORT })
+  .on("connection", (ws) => ws.on("message", (m) => ws.send(m, { binary: false })));
+EOF
+  else
+    note "websocket workload skipped (needs bun, deno, or node+ws for the echo server)"
+    WORKLOADS="${WORKLOADS//websocket/}"
+    return
+  fi
+  $cmd "$script" >/dev/null 2>&1 &
+  WS_SERVER_PID=$!
+  for _ in $(seq 50); do
+    (echo > "/dev/tcp/127.0.0.1/$WS_PORT") 2>/dev/null && return
+    sleep 0.1
+  done
+  note "websocket workload skipped (echo server did not come up on :$WS_PORT)"
+  kill "$WS_SERVER_PID" 2>/dev/null
+  WS_SERVER_PID=""
+  WORKLOADS="${WORKLOADS//websocket/}"
 }
 
 # --- generated big script (startup/parse cost) ------------------------------
@@ -200,6 +253,7 @@ shuffle() {  # randomize runtime order each repetition (falls back to fixed)
 # --- run --------------------------------------------------------------------
 
 start_fetch_server
+start_ws_server
 BIGSCRIPT="$(gen_bigscript)"
 
 # Rows and their (kind, script path).
