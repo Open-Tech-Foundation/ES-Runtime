@@ -56,6 +56,18 @@ declare module "runtime:net" {
     host?: string;
     /** `0` binds an ephemeral port (read it back from `addr`). */
     port: number;
+    /**
+     * `"on"` terminates TLS: every accepted {@link Socket} is encrypted and its
+     * `opened.alpn` reports the negotiated protocol. Requires {@link cert} and
+     * {@link key}. Defaults to `"off"` (plain TCP).
+     */
+    secureTransport?: "off" | "on";
+    /** PEM certificate chain (leaf first), as a string or bytes. Required for TLS. */
+    cert?: string | Uint8Array;
+    /** PEM private key (PKCS#8/PKCS#1/SEC1), as a string or bytes. Required for TLS. */
+    key?: string | Uint8Array;
+    /** ALPN protocols to advertise, in preference order. */
+    alpn?: string[];
   }
 
   /** A listening socket — an async-iterable of incoming {@link Socket}s. */

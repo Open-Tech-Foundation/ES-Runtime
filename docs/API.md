@@ -308,7 +308,11 @@ and `alpn`). `sni` overrides the server name used for **both** the SNI extension
 and certificate hostname verification (they share one name in rustls), so set it
 only to a name the presented certificate is valid for. `secureTransport:
 "starttls"` opens plaintext and upgrades in place via `Socket.startTls()` (SMTP/
-IMAP-style); TLS on `listen` (server termination) is not yet supported.
+IMAP-style). `listen({ secureTransport: "on", cert, key })` **terminates TLS
+server-side**: pass a PEM `cert` chain + `key` (and optional `alpn`) and every
+accepted socket is encrypted (its `opened.alpn` reports the negotiated protocol).
+The cert/key are supplied inline, so server TLS needs no capability beyond
+`NetListen`.
 
 ```js
 import { connect, listen } from "runtime:net";
@@ -332,6 +336,12 @@ const server = listen({ hostname: "127.0.0.1", port: 8080 });
 for await (const conn of server) {
   conn.readable.pipeTo(conn.writable); // echo
 }
+
+// TLS server (terminates TLS on accept):
+const tlsServer = listen({
+  hostname: "127.0.0.1", port: 8443,
+  secureTransport: "on", cert: certPem, key: keyPem, alpn: ["h2", "http/1.1"],
+});
 ```
 
 ### Exports
@@ -339,7 +349,7 @@ for await (const conn of server) {
 | Export                       | Type                                  | Description                                                        |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
 | `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
-| `listen(options)`            | `({ hostname?, port }) => Listener`   | Bind a listening socket. `NetListen`.                              |
+| `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn? }) => Listener` | Bind a listening socket. `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols. `NetListen`. |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
 `closed: Promise<void>`, `close()`, `upgraded`, and `startTls(): Socket` (valid

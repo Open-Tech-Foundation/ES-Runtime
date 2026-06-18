@@ -18,20 +18,32 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
-use es_runtime_providers::{BoxFuture, ConnectOptions, NetProvider, ProviderError, SocketInfo};
+use es_runtime_providers::{
+    BoxFuture, ConnectOptions, ListenOptions, NetProvider, ProviderError, SocketInfo,
+};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
-use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
-type AcceptRx = mpsc::Receiver<(TcpStream, SocketAddr)>;
+type AcceptRx = mpsc::Receiver<(Accepted, SocketAddr)>;
 type TcpRead = tokio::io::ReadHalf<TcpStream>;
 type TcpWrite = tokio::io::WriteHalf<TcpStream>;
+
+/// One inbound connection ready for [`accept`](SystemNet::accept), carrying its
+/// stream. A TLS listener finishes the server-side handshake in the accept task
+/// (so a slow client can't head-of-line-block other connections) and forwards the
+/// established `TlsStream`; a plaintext listener forwards the raw `TcpStream`.
+enum Accepted {
+    Plain(TcpStream),
+    Tls(Box<tokio_rustls::server::TlsStream<TcpStream>>),
+}
 
 /// Handles that pull a plaintext socket's raw halves back out of its reader and
 /// writer tasks so the stream can be wrapped in TLS in place (`startTls`). Each
@@ -135,6 +147,37 @@ impl SystemNet {
             .unwrap()
             .insert(alpn.to_vec(), connector.clone());
         Ok(connector)
+    }
+
+    /// A server-side TLS acceptor presenting `cert` (a PEM chain, leaf first) with
+    /// `key` (a PEM private key) and advertising `alpn`. Built once per `listen`
+    /// so the cert/key parse and config assembly are paid at bind time, not per
+    /// accept. `aws_lc_rs` is selected explicitly for the same reason as the
+    /// client connector (an ambiguous process-default provider would panic).
+    fn server_acceptor(
+        cert: &[u8],
+        key: &[u8],
+        alpn: &[String],
+    ) -> Result<TlsAcceptor, ProviderError> {
+        use tokio_rustls::rustls::pki_types::pem::PemObject;
+        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+        let certs = CertificateDer::pem_slice_iter(cert)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        if certs.is_empty() {
+            return Err(err("no certificates found in the PEM cert"));
+        }
+        let key = PrivateKeyDer::from_pem_slice(key).map_err(err)?;
+        let provider = Arc::new(aws_lc_rs::default_provider());
+        let mut config = ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(err)?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(err)?;
+        config.alpn_protocols = alpn.iter().map(|p| p.as_bytes().to_vec()).collect();
+        Ok(TlsAcceptor::from(Arc::new(config)))
     }
 
     /// Splits `stream` and spawns its reader + writer tasks, returning the
@@ -439,18 +482,56 @@ impl NetProvider for SystemNet {
         &self,
         host: String,
         port: u16,
+        opts: ListenOptions,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
+            // Build the TLS acceptor (cert/key parse, config assembly) once, at
+            // bind time, before any connection arrives.
+            let acceptor = if opts.cert.is_empty() && opts.key.is_empty() {
+                None
+            } else {
+                Some(SystemNet::server_acceptor(&opts.cert, &opts.key, &opts.alpn)?)
+            };
             let listener = TcpListener::bind((host.as_str(), port))
                 .await
                 .map_err(err)?;
             let local = listener.local_addr().ok();
-            let (tx, rx) = mpsc::channel::<(TcpStream, SocketAddr)>(8);
+            let (tx, rx) = mpsc::channel::<(Accepted, SocketAddr)>(8);
+            // One task owns the sole `tx` so `close_listener` aborting it drops the
+            // sender and resolves a parked accept to `None`. TLS handshakes run
+            // concurrently inside it (a `FuturesUnordered`) rather than in spawned
+            // tasks holding `tx` clones, so a stalled handshake neither blocks the
+            // next accept nor keeps the channel alive past a close.
             let task = tokio::spawn(async move {
-                while let Ok(conn) = listener.accept().await {
-                    if tx.send(conn).await.is_err() {
-                        break; // listener closed (rx dropped)
+                let mut handshakes = FuturesUnordered::new();
+                loop {
+                    tokio::select! {
+                        accepted = listener.accept() => {
+                            let Ok((tcp, remote)) = accepted else { break };
+                            let _ = tcp.set_nodelay(true);
+                            match &acceptor {
+                                None => {
+                                    if tx.send((Accepted::Plain(tcp), remote)).await.is_err() {
+                                        break; // listener closed (rx dropped)
+                                    }
+                                }
+                                Some(acceptor) => {
+                                    let acceptor = acceptor.clone();
+                                    handshakes.push(async move {
+                                        acceptor.accept(tcp).await.ok().map(|tls| (tls, remote))
+                                    });
+                                }
+                            }
+                        }
+                        Some(done) = handshakes.next(), if !handshakes.is_empty() => {
+                            // A failed handshake yields `None` — drop it silently.
+                            if let Some((tls, remote)) = done
+                                && tx.send((Accepted::Tls(Box::new(tls)), remote)).await.is_err()
+                            {
+                                break; // listener closed (rx dropped)
+                            }
+                        }
                     }
                 }
             });
@@ -470,15 +551,27 @@ impl NetProvider for SystemNet {
             };
             let conn = rx.recv().await;
             match conn {
-                Some((stream, remote)) => {
+                Some((accepted, remote)) => {
                     this.listeners.lock().unwrap().insert(id, rx); // keep accepting
-                    let _ = stream.set_nodelay(true);
-                    let info = info_of(stream.local_addr().ok(), Some(remote));
                     let sid = this.id();
-                    this.sockets
-                        .lock()
-                        .unwrap()
-                        .insert(sid, SystemNet::spawn_socket(stream));
+                    // The stream is already TLS-terminated (if this is a TLS
+                    // listener); just build the slot and surface the negotiated
+                    // ALPN from the handshake.
+                    let (slot, info) = match accepted {
+                        Accepted::Plain(tcp) => {
+                            let info = info_of(tcp.local_addr().ok(), Some(remote));
+                            (SystemNet::spawn_socket(tcp), info)
+                        }
+                        Accepted::Tls(tls) => {
+                            let (io, conn) = tls.get_ref();
+                            let mut info = info_of(io.local_addr().ok(), Some(remote));
+                            info.alpn = conn
+                                .alpn_protocol()
+                                .map(|p| String::from_utf8_lossy(p).into_owned());
+                            (SystemNet::spawn_socket(*tls), info)
+                        }
+                    };
+                    this.sockets.lock().unwrap().insert(sid, slot);
                     Ok(Some((sid, info)))
                 }
                 // Listener closed (sender dropped, e.g. close_listener aborted the
@@ -578,8 +671,6 @@ impl NetProvider for SystemNet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio_rustls::TlsAcceptor;
-    use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
     /// A throwaway self-signed cert for `localhost`: (cert DER, PKCS#8 key DER).
@@ -755,7 +846,10 @@ mod tests {
     #[tokio::test]
     async fn close_listener_unblocks_a_parked_accept() {
         let net = SystemNet::new();
-        let (lid, _) = net.listen("127.0.0.1".to_string(), 0).await.unwrap();
+        let (lid, _) = net
+            .listen("127.0.0.1".to_string(), 0, ListenOptions::default())
+            .await
+            .unwrap();
 
         let probe = net.clone();
         let accept = tokio::spawn(async move { probe.accept(lid).await });
@@ -770,6 +864,81 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(res.is_none(), "a closed listener's accept yields None");
+    }
+
+    // Server-side TLS termination on `listen`: a TLS listener built from a PEM
+    // cert/key accepts an encrypted client, negotiates ALPN both ways, and
+    // round-trips over the terminated stream — the full server path end to end,
+    // against a hermetic self-signed cert.
+    #[tokio::test]
+    async fn listen_terminates_tls_and_negotiates_alpn() {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_der = ck.cert.der().clone();
+        let cert_pem = ck.cert.pem().into_bytes();
+        let key_pem = ck.signing_key.serialize_pem().into_bytes();
+
+        // One SystemNet does both roles: serve with the PEM cert/key, and connect
+        // as a client trusting that self-signed cert.
+        let net = net_trusting(cert_der);
+        let (lid, addr) = net
+            .listen(
+                "127.0.0.1".to_string(),
+                0,
+                ListenOptions {
+                    cert: cert_pem,
+                    key: key_pem,
+                    alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+                },
+            )
+            .await
+            .unwrap();
+        let port = addr.local_port;
+
+        // Server: accept the (already TLS-terminated) connection, echo uppercased.
+        let server_net = net.clone();
+        let server = tokio::spawn(async move {
+            let (sid, info) = server_net.accept(lid).await.unwrap().expect("a connection");
+            // Both sides offer h2 first, so it is the negotiated protocol.
+            assert_eq!(info.alpn.as_deref(), Some("h2"));
+            let buf = server_net.read(sid).await.unwrap().expect("a chunk");
+            let up: Vec<u8> = buf.iter().map(u8::to_ascii_uppercase).collect();
+            server_net.write(sid, up).await.unwrap();
+        });
+
+        let opts = ConnectOptions {
+            secure: true,
+            sni: Some("localhost".to_string()),
+            alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+        };
+        let (cid, cinfo) = net.connect("localhost".to_string(), port, opts).await.unwrap();
+        assert_eq!(cinfo.alpn.as_deref(), Some("h2"));
+        net.write(cid, b"ping".to_vec()).await.unwrap();
+        assert_eq!(net.read(cid).await.unwrap().unwrap(), b"PING");
+
+        net.close(cid).await.unwrap();
+        net.close_listener(lid).await.unwrap();
+        server.await.unwrap();
+    }
+
+    // A TLS listener built from unparseable PEM fails at bind time (in `listen`),
+    // not later per connection.
+    #[tokio::test]
+    async fn listen_with_invalid_cert_errors_at_bind() {
+        let net = SystemNet::new();
+        let res = net
+            .listen(
+                "127.0.0.1".to_string(),
+                0,
+                ListenOptions {
+                    cert: b"-----BEGIN CERTIFICATE-----\nnonsense\n-----END CERTIFICATE-----\n"
+                        .to_vec(),
+                    key: b"-----BEGIN PRIVATE KEY-----\nnonsense\n-----END PRIVATE KEY-----\n"
+                        .to_vec(),
+                    alpn: vec![],
+                },
+            )
+            .await;
+        assert!(res.is_err(), "a TLS listener with a bad cert must fail to bind");
     }
 
     // Plaintext connect still works unchanged through the generic spawn path.

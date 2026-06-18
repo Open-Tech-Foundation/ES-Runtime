@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{ConnectOptions, NetProvider, ProviderError, SocketInfo};
+use es_runtime_providers::{ConnectOptions, ListenOptions, NetProvider, ProviderError, SocketInfo};
 
 use crate::Result;
 
@@ -109,8 +109,16 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
             let n = n.clone();
             let host = arg_str(&args, 0);
             let port = arg_u16(&args, 1);
+            // (cert, key, alpn) carry server-side TLS termination (D28): empty
+            // cert+key ⇒ plaintext. The PEM material is passed inline by the
+            // guest, so no capability beyond NetListen is needed.
+            let opts = ListenOptions {
+                cert: arg_bytes(&args, 2),
+                key: arg_bytes(&args, 3),
+                alpn: arg_str_vec(&args, 4),
+            };
             Box::pin(async move {
-                let (id, info) = require(&n)?.listen(host, port).await.map_err(map_err)?;
+                let (id, info) = require(&n)?.listen(host, port, opts).await.map_err(map_err)?;
                 Ok(socket_value(id, &info))
             })
         })
@@ -154,6 +162,14 @@ fn arg_u16(args: &[Value], i: usize) -> u16 {
 
 fn arg_u64(args: &[Value], i: usize) -> u64 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u64
+}
+
+/// Collects a byte argument (a JS `Uint8Array`); empty if absent or not bytes.
+fn arg_bytes(args: &[Value], i: usize) -> Vec<u8> {
+    args.get(i)
+        .and_then(Value::as_bytes)
+        .map(<[u8]>::to_vec)
+        .unwrap_or_default()
 }
 
 fn arg_bool(args: &[Value], i: usize) -> bool {

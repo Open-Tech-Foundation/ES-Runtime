@@ -362,6 +362,24 @@ pub struct ConnectOptions {
     pub alpn: Vec<String>,
 }
 
+/// Options for [`NetProvider::listen`] (DECISIONS D28). With a non-empty
+/// `cert`+`key` the listener **terminates TLS**: every accepted connection
+/// completes a server-side handshake before it surfaces, and the negotiated
+/// protocol comes back as [`SocketInfo::alpn`]. The certificate and key are
+/// supplied inline (PEM) by the guest, so server-side TLS needs no new
+/// capability beyond the `Capability::NetListen` the bind already requires — the
+/// guest loads the material itself (e.g. via `runtime:fs`, capability-checked)
+/// rather than the provider reaching for ambient files (no ambient authority, D5).
+#[derive(Default)]
+pub struct ListenOptions {
+    /// PEM-encoded certificate chain (leaf first). Empty ⇒ plaintext TCP.
+    pub cert: Vec<u8>,
+    /// PEM-encoded private key (PKCS#8, PKCS#1, or SEC1). Empty ⇒ plaintext TCP.
+    pub key: Vec<u8>,
+    /// ALPN protocols to advertise, in preference order (empty ⇒ none).
+    pub alpn: Vec<String>,
+}
+
 /// Raw TCP sockets backing `runtime:net` (SPEC §12, the WinterTC `connect()`
 /// shape). The implementation owns every connection and listener, keyed by an
 /// opaque id it hands back; the runtime drives reads, writes, accepts, and
@@ -393,10 +411,15 @@ pub trait NetProvider: Send + Sync {
     fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 
     /// Binds a listening socket; resolves to (listener id, bound-address info).
+    /// When `opts.cert`/`opts.key` are present the listener terminates TLS: each
+    /// accepted connection completes a server-side handshake (advertising
+    /// `opts.alpn`) before [`accept`](Self::accept) yields it, with the
+    /// negotiated protocol in [`SocketInfo::alpn`].
     fn listen(
         &self,
         host: String,
         port: u16,
+        opts: ListenOptions,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
 
     /// Accepts the next inbound connection on listener `id`; resolves to a new

@@ -33,17 +33,28 @@ for await (const conn of server) {
   conn.readable.pipeTo(conn.writable); // echo each connection
 }`;
 
+const SERVER_TLS = `import { listen } from "runtime:net";
+
+// Terminate TLS on accept — cert/key are inline PEM (no extra capability).
+const server = listen({
+  hostname: "127.0.0.1", port: 8443,
+  secureTransport: "on", cert: certPem, key: keyPem, alpn: ["h2", "http/1.1"],
+});
+for await (const conn of server) {
+  const { alpn } = await conn.opened; // negotiated protocol
+}`;
+
 const fns = [
   {
     sig: "connect(address, options?)",
-    type: "(Address, { secureTransport?, sni?, alpn? }) => Socket",
-    desc: "Open an outbound TCP or TLS connection (the WinterTC Sockets API). Returns a Socket synchronously; .opened settles once connected. address is \"host:port\" or { hostname, port }. secureTransport: \"on\" negotiates TLS; sni overrides the server name (default: the host); alpn offers protocols (the negotiated one is SocketInfo.alpn).",
+    type: "(Address, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket",
+    desc: "Open an outbound TCP or TLS connection (the WinterTC Sockets API). Returns a Socket synchronously; .opened settles once connected. address is \"host:port\" or { hostname, port }. secureTransport: \"on\" negotiates TLS, \"starttls\" opens plaintext for a later startTls(); sni overrides the server name (default: the host); alpn offers protocols (the negotiated one is SocketInfo.alpn); allowHalfOpen keeps writing after the peer's FIN.",
     ex: `const sock = connect({ hostname: "db.internal", port: 5432 });`,
   },
   {
     sig: "listen(options)",
-    type: "({ hostname?, port }) => Listener",
-    desc: "Bind a listening socket. port 0 picks an ephemeral port (read it from listener.addr). Returns an async-iterable Listener of inbound Sockets.",
+    type: "({ hostname?, port, secureTransport?, cert?, key?, alpn? }) => Listener",
+    desc: "Bind a listening socket. port 0 picks an ephemeral port (read it from listener.addr). Returns an async-iterable Listener of inbound Sockets. secureTransport: \"on\" terminates TLS on each accept — pass a PEM cert + key (and optional alpn); the cert/key are inline, so server TLS needs no capability beyond NetListen.",
     ex: `const server = listen({ hostname: "127.0.0.1", port: 8080 });`,
   },
 ];
@@ -54,7 +65,8 @@ const socketMembers = [
   { m: "opened", t: "Promise<SocketInfo>", d: "Resolves once connected: { remoteAddress, remotePort, localAddress, localPort, alpn }. alpn is the negotiated TLS protocol, else null." },
   { m: "closed", t: "Promise<void>", d: "Resolves when the socket is fully closed." },
   { m: "close()", t: "Promise<void>", d: "Fully close the socket." },
-  { m: "upgraded", t: "boolean", d: "True only after a startTls() upgrade (not yet supported)." },
+  { m: "startTls()", t: "Socket", d: "Upgrade a secureTransport: \"starttls\" socket to TLS in place; returns a new encrypted Socket (the original is consumed)." },
+  { m: "upgraded", t: "boolean", d: "True only after a startTls() upgrade." },
 ];
 
 const listenerMembers = [
@@ -128,6 +140,9 @@ export default function NetDoc() {
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Server</h2>
       <div className="mt-4">
         <CodeBlock code={SERVER} title="server.js" lang="js" />
+      </div>
+      <div className="mt-4">
+        <CodeBlock code={SERVER_TLS} title="server-tls.js" lang="js" />
       </div>
       <h3 className="mt-8 text-base font-semibold text-zinc-900">Listener</h3>
       <MemberTable rows={listenerMembers} />

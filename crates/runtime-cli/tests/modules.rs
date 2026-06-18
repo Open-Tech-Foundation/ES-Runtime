@@ -443,6 +443,50 @@ fn runtime_net_half_open_and_combined_address() {
 }
 
 #[test]
+fn runtime_net_listen_tls_surface_and_bind() {
+    // Server-side TLS termination on listen(): secureTransport: "on" needs a
+    // cert+key (TypeError without), an unknown mode is rejected, and a real PEM
+    // cert/key binds a TLS listener (proving cert/key bytes thread through the op
+    // and the ServerConfig builds). The handshake itself is covered by hermetic
+    // provider tests — the CLI trusts the public webpki roots, so a loopback
+    // self-signed cert can't be verified end to end here.
+    let script = r#"import { listen } from 'runtime:net';
+        const cert = `-----BEGIN CERTIFICATE-----
+MIIBfzCCASWgAwIBAgIUW7VE71ojFZyS30mgfs6/aXgiVxkwCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJbG9jYWxob3N0MCAXDTI2MDYxODIwMzUyNFoYDzIxMjYwNTI1
+MjAzNTI0WjAUMRIwEAYDVQQDDAlsb2NhbGhvc3QwWTATBgcqhkjOPQIBBggqhkjO
+PQMBBwNCAARMmfJSPruUifoGAbRY3gh/Sss+GDYDVXKwlHaaiSsPtueuWJ1GwC4P
+m9kbriVs1/9YTXpKdjsPga00am7iwK7co1MwUTAdBgNVHQ4EFgQU+R9EaUJyGVun
+alMb5fKe5Hlx53QwHwYDVR0jBBgwFoAU+R9EaUJyGVunalMb5fKe5Hlx53QwDwYD
+VR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiEA/jRmQTJnYabU4zgNrGeI
+bO2qBiYf5YwjN+WfeyP3ecUCIHFmUGu2HNVscjPnIlBRJpeBIw29Xm8r+ddP95M+
+hMU9
+-----END CERTIFICATE-----`;
+        const key = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgoI+sRkHefoxwbeyv
+0GUmYblUBM3eh+YRg6PRzrJEB5yhRANCAARMmfJSPruUifoGAbRY3gh/Sss+GDYD
+VXKwlHaaiSsPtueuWJ1GwC4Pm9kbriVs1/9YTXpKdjsPga00am7iwK7c
+-----END PRIVATE KEY-----`;
+        let r = '';
+        try { listen({ port: 0, secureTransport: 'on' }); r += 'NOCERT:no-throw'; }
+        catch (e) { r += 'NOCERT:' + e.constructor.name; }
+        try { listen({ port: 0, secureTransport: 'bogus' }); r += ':MODE:no-throw'; }
+        catch (e) { r += ':MODE:' + e.constructor.name; }
+        const server = listen({ hostname: '127.0.0.1', port: 0, secureTransport: 'on', cert, key, alpn: ['h2'] });
+        const { port } = await server.addr;
+        r += ':BOUND:' + (port > 0);
+        await server.close();
+        console.log(r);"#;
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("NOCERT:TypeError:MODE:TypeError:BOUND:true"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn runtime_http_serve_and_fetch_roundtrip() {
     // Loopback: serve() an echo-ish handler, fetch() it through the real HTTP
     // client, read body + a custom header, then stop the server so the process

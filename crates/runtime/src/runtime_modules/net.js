@@ -6,6 +6,7 @@
 
 const ops = globalThis.__ops;
 const encoder = new TextEncoder();
+const EMPTY = new Uint8Array(0);
 
 function toBytes(chunk) {
   if (chunk instanceof Uint8Array) return chunk;
@@ -170,7 +171,23 @@ class Listener {
 function listen(options = {}) {
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
   const port = Number(options.port) || 0;
-  const ready = ops.net_listen(hostname, port);
+  // secureTransport: "on" terminates TLS — every accepted Socket is encrypted.
+  // It needs a cert + key (PEM string or bytes); alpn advertises protocols, the
+  // negotiated one comes back as the accepted Socket's SocketInfo.alpn.
+  const mode = options.secureTransport ?? "off";
+  if (mode !== "off" && mode !== "on") {
+    throw new TypeError(`invalid secureTransport: ${mode}`);
+  }
+  let cert = EMPTY, key = EMPTY;
+  const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
+  if (mode === "on") {
+    if (options.cert == null || options.key == null) {
+      throw new TypeError("secureTransport: 'on' requires cert and key");
+    }
+    cert = toBytes(options.cert);
+    key = toBytes(options.key);
+  }
+  const ready = ops.net_listen(hostname, port, cert, key, alpn);
   return new Listener(ready);
 }
 

@@ -8,6 +8,15 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **`runtime:net` server-side TLS termination.** `listen({ secureTransport:
+  "on", cert, key, alpn })` now terminates TLS: pass a PEM certificate chain +
+  private key and every accepted `Socket` is encrypted, with the negotiated
+  protocol in `opened.alpn`. The cert/key are supplied inline by the guest, so
+  server TLS needs no capability beyond `NetListen` (the bind's). The default
+  `SystemNet` builds the rustls `ServerConfig` once at bind time and runs each
+  handshake concurrently in the accept task, so a slow client can't block other
+  connections (DECISIONS D28). This closes the last `runtime:net` TLS gap —
+  client `connect`, `startTls`, and server `listen` are all implemented.
 - **`runtime:net` `startTls()`.** A socket opened with
   `connect(addr, { secureTransport: "starttls" })` now starts in plaintext and
   can be upgraded to TLS in place with `socket.startTls()` (the SMTP/IMAP/XMPP
@@ -15,8 +24,7 @@ pre-`0.1.0` and the public API is unstable.
   ALPN, certificate verification on), and `upgraded` is `true`. The default
   `SystemNet` reclaims the raw stream from its reader/writer tasks to wrap it,
   replaying any bytes the peer sent before the handshake. Calling `startTls()`
-  on a non-`"starttls"` socket throws (DECISIONS D28). Server-side TLS
-  termination remains a `runtime:http` follow-up.
+  on a non-`"starttls"` socket throws (DECISIONS D28).
 - **`runtime:net` `allowHalfOpen`.** `connect(addr, { allowHalfOpen: true })`
   keeps the writable usable after the peer's FIN (read EOF), instead of tearing
   the whole socket down. Default stays `false` (WinterTC).
