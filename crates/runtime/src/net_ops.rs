@@ -118,7 +118,10 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
                 alpn: arg_str_vec(&args, 4),
             };
             Box::pin(async move {
-                let (id, info) = require(&n)?.listen(host, port, opts).await.map_err(map_err)?;
+                let (id, info) = require(&n)?
+                    .listen(host, port, opts)
+                    .await
+                    .map_err(map_err)?;
                 Ok(socket_value(id, &info))
             })
         })

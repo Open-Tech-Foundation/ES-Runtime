@@ -491,7 +491,9 @@ impl NetProvider for SystemNet {
             let acceptor = if opts.cert.is_empty() && opts.key.is_empty() {
                 None
             } else {
-                Some(SystemNet::server_acceptor(&opts.cert, &opts.key, &opts.alpn)?)
+                Some(SystemNet::server_acceptor(
+                    &opts.cert, &opts.key, &opts.alpn,
+                )?)
             };
             let listener = TcpListener::bind((host.as_str(), port))
                 .await
@@ -628,7 +630,10 @@ impl NetProvider for SystemNet {
 
             // Stop both tasks and rejoin the raw stream from their halves.
             let (rtx, rrx) = oneshot::channel();
-            reclaim.read.send(rtx).map_err(|_| err("socket is closed"))?;
+            reclaim
+                .read
+                .send(rtx)
+                .map_err(|_| err("socket is closed"))?;
             let read_half = rrx.await.map_err(|_| err("socket is closed"))?;
             let (wtx, wrx) = oneshot::channel();
             reclaim
@@ -645,8 +650,8 @@ impl NetProvider for SystemNet {
                 prefix: io::Cursor::new(prefix),
                 inner: tcp,
             };
-            let name = ServerName::try_from(server_name)
-                .map_err(|_| err("invalid TLS server name"))?;
+            let name =
+                ServerName::try_from(server_name).map_err(|_| err("invalid TLS server name"))?;
             let tls = this
                 .tls_connector(&alpn)?
                 .connect(name, stream)
@@ -910,7 +915,10 @@ mod tests {
             sni: Some("localhost".to_string()),
             alpn: vec!["h2".to_string(), "http/1.1".to_string()],
         };
-        let (cid, cinfo) = net.connect("localhost".to_string(), port, opts).await.unwrap();
+        let (cid, cinfo) = net
+            .connect("localhost".to_string(), port, opts)
+            .await
+            .unwrap();
         assert_eq!(cinfo.alpn.as_deref(), Some("h2"));
         net.write(cid, b"ping".to_vec()).await.unwrap();
         assert_eq!(net.read(cid).await.unwrap().unwrap(), b"PING");
@@ -938,7 +946,10 @@ mod tests {
                 },
             )
             .await;
-        assert!(res.is_err(), "a TLS listener with a bad cert must fail to bind");
+        assert!(
+            res.is_err(),
+            "a TLS listener with a bad cert must fail to bind"
+        );
     }
 
     // Plaintext connect still works unchanged through the generic spawn path.

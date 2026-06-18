@@ -439,7 +439,10 @@ fn runtime_net_half_open_and_combined_address() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     assert!(s.contains("HALF:hi:true"), "{s}");
-    assert!(s.contains("GOT:after"), "half-open write did not reach peer:\n{s}");
+    assert!(
+        s.contains("GOT:after"),
+        "half-open write did not reach peer:\n{s}"
+    );
 }
 
 #[test]
