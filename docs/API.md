@@ -60,7 +60,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Performance:** `performance` (`now()`, `timeOrigin`)
 
 **Not available:** `process`/`Buffer`/`require` (Node), `Worker`/`MessageChannel`,
-`WebSocket` (not yet), `navigator`/`localStorage`/`window` (browser).
+`WebSocket` (scoped — DECISIONS D29), `navigator`/`localStorage`/`window` (browser).
 
 ---
 
