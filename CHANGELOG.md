@@ -38,6 +38,12 @@ pre-`0.1.0` and the public API is unstable.
   element that never closed grew memory without bound (and made the re-scan
   quadratic). The retained buffer is now capped (64 MB); past it the stream
   fails with a `RangeError` instead of consuming unbounded memory.
+- **`runtime:parsers` error signaling.** `XMLParser.parse`/`XMLBuilder.build`
+  detected failures by string-matching a `"Parse failed:"`/`"Build failed:"`
+  prefix on the result, so a document that legitimately parses to a string with
+  that prefix was mistaken for an error. Parse/build failures now throw
+  (`SyntaxError`/`TypeError`) out of band; a string result is always genuine
+  data.
 
 ## [0.4.0] - 2026-06-17
 

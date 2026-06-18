@@ -14,21 +14,16 @@ export class XMLValidator {
 
 export class XMLParser {
   static parse(xml, options = {}) {
-    const result = xml_parse(xml);
-    if (typeof result === 'string' && result.startsWith("Parse failed:")) {
-      throw new Error(result);
-    }
-    return result;
+    // xml_parse throws (SyntaxError) on malformed input, so a string result
+    // here is genuine parsed text content, never an error sentinel.
+    return xml_parse(xml);
   }
 }
 
 export class XMLBuilder {
   static build(obj, options = {}) {
-    const result = xml_build(obj);
-    if (typeof result === 'string' && (result.startsWith("Parse failed:") || result.startsWith("Build failed:"))) {
-      throw new Error(result);
-    }
-    return result;
+    // xml_build throws (TypeError) if the value can't be serialized.
+    return xml_build(obj);
   }
 }
 

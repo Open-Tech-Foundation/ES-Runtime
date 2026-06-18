@@ -1,4 +1,5 @@
 //! Host ops backing the `runtime:parsers` module for XML processing.
+use es_runtime_common::ExceptionClass;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -228,16 +229,17 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
     engine.register_op(OpDecl::sync("xml_parse", |args| {
         let xml = match args.first().and_then(Value::as_str) {
             Some(s) => s,
-            None => return Ok(Value::String("Expected a string".into())),
+            None => return Err(OpError::type_error("xml_parse expects a string")),
         };
 
         let mut reader = Reader::from_str(xml);
         reader.config_mut().trim_text(true);
         let mut buf = Vec::new();
-        match parse_xml_node(&mut reader, &mut buf, None, 0) {
-            Ok(v) => Ok(v),
-            Err(e) => Ok(Value::String(e)),
-        }
+        // A parse failure throws (SyntaxError) rather than returning the error as
+        // a string — otherwise a document that legitimately parses to a string
+        // could be mistaken for an error by the caller.
+        parse_xml_node(&mut reader, &mut buf, None, 0)
+            .map_err(|e| OpError::new(ExceptionClass::SyntaxError, e))
     }))?;
 
     use std::cell::RefCell;
@@ -331,7 +333,7 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
         match quick_xml::se::to_string_with_root(&root_name, &inner_val) {
             Ok(xml_str) => Ok(Value::String(xml_str)),
-            Err(e) => Ok(Value::String(format!("Build failed: {}", e))),
+            Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }
     }))?;
     Ok(())
