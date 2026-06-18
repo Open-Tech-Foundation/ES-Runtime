@@ -15,6 +15,12 @@ function toBytes(chunk) {
   throw new TypeError("a socket write expects a string, ArrayBuffer, or ArrayBufferView");
 }
 
+// Joins a host and port into the WinterTC SocketInfo "host:port" form, bracketing
+// an IPv6 host so the port stays unambiguous.
+function hostPort(host, port) {
+  return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
 // Accepts "host:port" or { hostname | host, port }.
 function parseAddress(address) {
   if (address && typeof address === "object") {
@@ -28,12 +34,23 @@ function parseAddress(address) {
 // A duplex socket. `conn` is a Promise resolving to { id, remoteAddress, … } —
 // the streams await it, so connect() can return synchronously.
 class Socket {
-  constructor(conn, upgrade = null) {
+  constructor(conn, { upgrade = null, allowHalfOpen = false } = {}) {
     this._conn = conn;
-    this.opened = conn;
+    // WinterTC SocketInfo: combined "host:port" addresses + the negotiated alpn.
+    // remotePort/localPort are kept as a convenience superset.
+    this.opened = conn.then((c) => ({
+      remoteAddress: hostPort(c.remoteAddress, c.remotePort),
+      remotePort: c.remotePort,
+      localAddress: hostPort(c.localAddress, c.localPort),
+      localPort: c.localPort,
+      alpn: c.alpn ?? null,
+    }));
     // Set when the socket was opened with secureTransport: "starttls": the
     // { name, alpn } a later startTls() upgrade uses. null ⇒ not upgradable.
     this._upgrade = upgrade;
+    // WinterTC allowHalfOpen: when false (default), the peer's FIN tears the
+    // whole socket down; when true, the writable stays usable after read EOF.
+    this._allowHalfOpen = allowHalfOpen;
     // WinterTC Socket.upgraded — true only after a startTls() upgrade.
     this.upgraded = false;
     let done;
@@ -47,8 +64,10 @@ class Socket {
         const chunk = await ops.net_read(id);
         if (chunk === null) {
           controller.close();
-          await ops.net_close(id); // peer hung up — drop the socket
-          self._finish();
+          if (!self._allowHalfOpen) {
+            await ops.net_close(id); // peer hung up — drop the whole socket
+            self._finish();
+          }
         } else {
           controller.enqueue(chunk);
         }
@@ -96,7 +115,7 @@ class Socket {
     const { name, alpn } = this._upgrade;
     this._upgrade = null; // single-shot
     const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn));
-    const upgraded = new Socket(info);
+    const upgraded = new Socket(info, { allowHalfOpen: this._allowHalfOpen });
     upgraded.upgraded = true;
     return upgraded;
   }
@@ -118,7 +137,7 @@ function connect(address, options = {}) {
   // "starttls" opens plaintext now; record the server name (sni, default = host)
   // + alpn a later startTls() will negotiate with.
   const upgrade = mode === "starttls" ? { name: sni || hostname, alpn } : null;
-  return new Socket(conn, upgrade);
+  return new Socket(conn, { upgrade, allowHalfOpen: options.allowHalfOpen === true });
 }
 
 // A listening socket: an async iterator of incoming Sockets.

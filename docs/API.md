@@ -338,15 +338,18 @@ for await (const conn of server) {
 
 | Export                       | Type                                  | Description                                                        |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list. `Net`. |
+| `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
 | `listen(options)`            | `({ hostname?, port }) => Listener`   | Bind a listening socket. `NetListen`.                              |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
 `closed: Promise<void>`, `close()`, `upgraded`, and `startTls(): Socket` (valid
 only on a `"starttls"` socket; returns a new TLS `Socket` with `upgraded ===
-true`). Closing the writable half-closes (FIN). **`SocketInfo`** (from `opened`):
-`{ remoteAddress, remotePort, localAddress, localPort, alpn }` — `alpn` is the
-negotiated protocol for a TLS socket, else `null`.
+true`). Closing the writable half-closes (FIN); `allowHalfOpen` (a `connect`
+option, default `false`) keeps the writable usable after the peer's FIN.
+**`SocketInfo`** (from `opened`): `{ remoteAddress, remotePort, localAddress,
+localPort, alpn }` — `remoteAddress`/`localAddress` are WinterTC `"host:port"`
+strings (IPv6 host bracketed); `alpn` is the negotiated protocol for a TLS
+socket, else `null`.
 
 **`Listener`** — async-iterable of `Socket`; `addr: Promise<{ hostname, port }>`,
 `accept()`, `close()`.

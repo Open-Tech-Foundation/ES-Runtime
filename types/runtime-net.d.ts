@@ -4,8 +4,10 @@ declare module "runtime:net" {
 
   /** Metadata about an established socket. */
   export interface SocketInfo {
+    /** Remote peer as WinterTC `"host:port"` (IPv6 host bracketed). */
     remoteAddress: string;
     remotePort: number;
+    /** Local end as WinterTC `"host:port"` (IPv6 host bracketed). */
     localAddress: string;
     localPort: number;
     /** Negotiated ALPN protocol (TLS only; `null` for plaintext or none). */

@@ -390,6 +390,41 @@ fn runtime_net_starttls_surface_and_guards() {
 }
 
 #[test]
+fn runtime_net_half_open_and_combined_address() {
+    // allowHalfOpen: the server FINs its write; the client (allowHalfOpen: true)
+    // sees read EOF yet can still write — a default socket would be torn down.
+    // Also checks SocketInfo.remoteAddress is the WinterTC "host:port" form.
+    let script = "import { connect, listen } from 'runtime:net';\
+        const enc = new TextEncoder(); const dec = new TextDecoder();\
+        const server = listen({ hostname: '127.0.0.1', port: 0 });\
+        const { port } = await server.addr;\
+        (async () => {\
+          for await (const conn of server) {\
+            const w = conn.writable.getWriter();\
+            await w.write(enc.encode('hi'));\
+            await w.close();\
+            let got = '';\
+            for await (const chunk of conn.readable) got += dec.decode(chunk);\
+            console.log('GOT:' + got);\
+            await server.close();\
+          }\
+        })();\
+        const sock = connect({ hostname: '127.0.0.1', port }, { allowHalfOpen: true });\
+        const info = await sock.opened;\
+        let out = '';\
+        for await (const chunk of sock.readable) out += dec.decode(chunk);\
+        const w = sock.writable.getWriter();\
+        await w.write(enc.encode('after'));\
+        await w.close();\
+        console.log('HALF:' + out + ':' + info.remoteAddress.includes(':'));";
+    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("HALF:hi:true"), "{s}");
+    assert!(s.contains("GOT:after"), "half-open write did not reach peer:\n{s}");
+}
+
+#[test]
 fn runtime_http_serve_and_fetch_roundtrip() {
     // Loopback: serve() an echo-ish handler, fetch() it through the real HTTP
     // client, read body + a custom header, then stop the server so the process

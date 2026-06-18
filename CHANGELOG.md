@@ -17,8 +17,15 @@ pre-`0.1.0` and the public API is unstable.
   replaying any bytes the peer sent before the handshake. Calling `startTls()`
   on a non-`"starttls"` socket throws (DECISIONS D28). Server-side TLS
   termination remains a `runtime:http` follow-up.
+- **`runtime:net` `allowHalfOpen`.** `connect(addr, { allowHalfOpen: true })`
+  keeps the writable usable after the peer's FIN (read EOF), instead of tearing
+  the whole socket down. Default stays `false` (WinterTC).
 
 ### Changed
+
+- **`runtime:net` `SocketInfo` addresses.** `opened`'s `remoteAddress` /
+  `localAddress` are now WinterTC `"host:port"` strings (IPv6 host bracketed)
+  rather than bare hosts; `remotePort` / `localPort` remain as a convenience.
 
 - **`runtime:net` TLS connector reuse.** The default `SystemNet` built a fresh
   rustls `ClientConfig` (re-parsing the whole root store) on every secure
