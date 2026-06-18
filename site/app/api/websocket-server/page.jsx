@@ -2,7 +2,7 @@ import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
 import MemberTable from "../../../components/MemberTable.jsx";
 
-const SERVE = `import { serve } from "runtime:websocket";
+const SERVE = `import { serve, broadcast } from "runtime:websocket";
 
 const clients = new Set();
 const server = serve({ hostname: "127.0.0.1", port: 4001 });
@@ -10,9 +10,8 @@ const { port } = await server.addr;
 
 for await (const ws of server) {
   clients.add(ws);
-  ws.addEventListener("message", (e) => {
-    for (const c of clients) c.send(e.data); // broadcast — a chat room
-  });
+  // broadcast() fans out in one host crossing — full delivery, coalesced writes.
+  ws.addEventListener("message", (e) => broadcast(clients, e.data));
   ws.addEventListener("close", () => clients.delete(ws));
 }`;
 
@@ -22,6 +21,12 @@ const fns = [
     type: "({ hostname?, port }) => WebSocketServer",
     desc: "Bind a WebSocket server (ws: only) and start accepting. port 0 picks an ephemeral port (read it from server.addr). Returns an async-iterable of accepted connections. NetListen.",
     ex: `const server = serve({ hostname: "127.0.0.1", port: 4001 });`,
+  },
+  {
+    sig: "broadcast(connections, data)",
+    type: "(Iterable<conn>, string | BufferSource | Blob) => void",
+    desc: "Send one message to many connections in a single host crossing — the batched form of a .send() loop (one payload copy, concurrent enqueue, coalesced writes, full delivery).",
+    ex: `broadcast(clients, "hello everyone");`,
   },
 ];
 
@@ -97,9 +102,9 @@ export default function WebSocketServerDoc() {
       <MemberTable rows={connMembers} />
 
       <p className="mt-8 text-sm leading-relaxed text-zinc-500">
-        A <code className="font-mono">wss:</code> server and broadcast fan-out
-        batching are follow-ups — very high fan-out lags (deliveries queue) but is
-        not lost.
+        A <code className="font-mono">wss:</code> server and pub/sub topics are
+        follow-ups — the explicit-connection-set{" "}
+        <code className="font-mono">broadcast()</code> is the fan-out primitive.
       </p>
     </ApiShell>
   );

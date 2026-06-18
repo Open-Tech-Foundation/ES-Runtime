@@ -59,6 +59,31 @@ pub(crate) fn install(
         })
     }))?;
 
+    // Batched fan-out: one op crossing + one payload marshal for a message sent
+    // to many connections (the `runtime:websocket` `broadcast()`); no capability
+    // (operates on already-accepted/connected ids, like ws_send).
+    let w = ws.clone();
+    engine.register_op(OpDecl::r#async("ws_broadcast", move |args| {
+        let w = w.clone();
+        let ids = arg_u64_vec(&args, 0);
+        let message = match args.get(1) {
+            Some(Value::String(s)) => WsMessage::Text(s.clone()),
+            other => WsMessage::Binary(
+                other
+                    .and_then(Value::as_bytes)
+                    .map(<[u8]>::to_vec)
+                    .unwrap_or_default(),
+            ),
+        };
+        Box::pin(async move {
+            require(&w)?
+                .broadcast(ids, message)
+                .await
+                .map_err(map_err)?;
+            Ok(Value::Undefined)
+        })
+    }))?;
+
     let w = ws.clone();
     engine.register_op(OpDecl::r#async("ws_recv", move |args| {
         let w = w.clone();
@@ -173,6 +198,17 @@ fn arg_u64(args: &[Value], i: usize) -> u64 {
 
 fn arg_u16(args: &[Value], i: usize) -> u16 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u16
+}
+
+/// Collects a JS number array argument as `u64`s (non-numbers skipped).
+fn arg_u64_vec(args: &[Value], i: usize) -> Vec<u64> {
+    match args.get(i) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(|v| v.as_number().map(|n| n as u64))
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Collects a JS string array argument (non-strings skipped); `[]` if absent.

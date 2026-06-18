@@ -18,8 +18,10 @@ pre-`0.1.0` and the public API is unstable.
 - **`runtime:websocket` server.** `serve({ hostname?, port })` binds a WebSocket
   server (`ws:`, `NetListen`) and yields accepted connections as an async
   iterable; each connection has the client `WebSocket`'s `send`/`close`/
-  `binaryType` + `message`/`close` events. A `wss:` server and broadcast fan-out
-  batching are follow-ups (DECISIONS D29).
+  `binaryType` + `message`/`close` events. `broadcast(connections, data)` fans a
+  message out to many connections in one host crossing (concurrent enqueue +
+  coalesced writes — full delivery). A `wss:` server and pub/sub topics are
+  follow-ups (DECISIONS D29).
 - **Benchmarks.** Added a `websocket` workload (client ping-pong round-trips) and
   a `bench/websocket-chat/` broadcast chat benchmark (server + client sweeps,
   messages/sec).

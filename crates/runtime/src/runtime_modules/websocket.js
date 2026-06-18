@@ -12,6 +12,9 @@
 const ops = globalThis.__ops;
 const encoder = new TextEncoder();
 
+// Connection → host socket id, so broadcast() can batch without exposing the id.
+const CONN_ID = new WeakMap();
+
 function toBytes(chunk) {
   if (chunk instanceof Uint8Array) return chunk;
   if (typeof chunk === "string") return encoder.encode(chunk);
@@ -32,6 +35,7 @@ class WebSocketConnection extends EventTarget {
   constructor(id) {
     super();
     this.#id = id;
+    CONN_ID.set(this, id);
     this.#pump();
   }
 
@@ -160,5 +164,19 @@ function serve(options = {}) {
   return new WebSocketServer(ready);
 }
 
-export { serve };
-export default { serve };
+// Send one message to many connections in a single host crossing — the batched
+// form of calling `.send()` in a loop (one payload marshal, concurrent enqueue,
+// no head-of-line blocking on a slow peer). `connections` is any iterable of
+// accepted server connections; non-connections and closed ones are skipped.
+function broadcast(connections, data) {
+  const ids = [];
+  for (const conn of connections) {
+    const id = CONN_ID.get(conn);
+    if (id !== undefined) ids.push(id);
+  }
+  if (ids.length === 0) return;
+  Promise.resolve(ops.ws_broadcast(ids, toBytesOrString(data))).catch(() => {});
+}
+
+export { serve, broadcast };
+export default { serve, broadcast };

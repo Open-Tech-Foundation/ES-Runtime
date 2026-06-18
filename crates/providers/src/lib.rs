@@ -461,6 +461,14 @@ pub trait WebSocketProvider: Send + Sync {
     /// Sends one message on socket `id`.
     fn send(&self, id: u64, message: WsMessage) -> BoxFuture<Result<(), ProviderError>>;
 
+    /// Sends one message to every socket in `ids` (a fan-out / broadcast). This
+    /// is the batched form of [`send`](Self::send): one op crossing instead of
+    /// one per connection, so a server publishing to many sockets pays the JS↔
+    /// host boundary and payload marshaling once. Implementations should enqueue
+    /// to all connections without letting a slow one block the rest. Unknown ids
+    /// are skipped.
+    fn broadcast(&self, ids: Vec<u64>, message: WsMessage) -> BoxFuture<Result<(), ProviderError>>;
+
     /// Awaits the next inbound event on socket `id`; `None` signals an abnormal
     /// close (the connection dropped without a closing handshake).
     fn recv(&self, id: u64) -> BoxFuture<Result<Option<WsIncoming>, ProviderError>>;

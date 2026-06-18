@@ -413,6 +413,7 @@ for await (const ws of server) {
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
 | `serve(options)`  | `({ hostname?, port }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
+| `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). |
 
 **`WebSocketServer`** — async-iterable of server connections;
 `addr: Promise<{ hostname, port }>`, `accept(): Promise<conn | null>`,
@@ -423,9 +424,11 @@ for await (const ws of server) {
 `binaryType`, and `message`/`close` events (`on*` or `addEventListener`) — the
 same surface as the client `WebSocket`, minus the connecting handshake.
 
-> Broadcasting one message to many connections currently fires one send per
-> connection; very high fan-out *lags* (deliveries queue under the driven seam)
-> but is not lost. A `wss:` server and fan-out batching are follow-ups (D29).
+For chat-style fan-out, prefer **`broadcast(connections, data)`** over a
+`.send()` loop: it makes one host crossing and one payload copy for the whole
+room, enqueues to every connection concurrently (a slow peer can't stall the
+rest), and coalesces the writes — so delivery stays full. A `wss:` server and
+pub/sub topics are follow-ups (D29).
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

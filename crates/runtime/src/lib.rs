@@ -1571,6 +1571,15 @@ mod tests {
         > {
             Box::pin(async { Ok(()) })
         }
+        fn broadcast(
+            &self,
+            _ids: Vec<u64>,
+            _message: es_runtime_providers::WsMessage,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(async { Ok(()) })
+        }
         fn recv(
             &self,
             _id: u64,

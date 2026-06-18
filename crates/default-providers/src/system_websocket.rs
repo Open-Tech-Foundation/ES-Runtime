@@ -163,13 +163,36 @@ impl SystemWebSocket {
                         // the next `recv` resolves `None` (an abnormal close, 1006).
                         Some(Err(_)) | None => break,
                     },
-                    cmd = cmd_rx.recv() => match cmd {
-                        Some(Cmd::Send(m)) => {
-                            if sink.send(m).await.is_err() {
-                                break;
+                    cmd = cmd_rx.recv() => {
+                        // Coalesce a burst of queued sends (e.g. a fan-out that
+                        // enqueued one frame per broadcast) into the sink with a
+                        // single flush — one socket write for the whole batch
+                        // instead of a flush per frame.
+                        let mut closing = None;
+                        match cmd {
+                            Some(Cmd::Send(m)) => {
+                                if sink.feed(m).await.is_err() { break; }
+                            }
+                            Some(Cmd::Close { code, reason }) => closing = Some((code, reason)),
+                            None => break, // the runtime dropped the socket
+                        }
+                        let mut broken = false;
+                        if closing.is_none() {
+                            loop {
+                                match cmd_rx.try_recv() {
+                                    Ok(Cmd::Send(m)) => {
+                                        if sink.feed(m).await.is_err() { broken = true; break; }
+                                    }
+                                    Ok(Cmd::Close { code, reason }) => {
+                                        closing = Some((code, reason));
+                                        break;
+                                    }
+                                    Err(_) => break, // drained (or disconnected)
+                                }
                             }
                         }
-                        Some(Cmd::Close { code, reason }) => {
+                        if !broken && sink.flush().await.is_err() { broken = true; }
+                        if let Some((code, reason)) = closing {
                             let frame = code.map(|c| CloseFrame {
                                 code: CloseCode::from(c),
                                 reason: reason.into(),
@@ -177,7 +200,7 @@ impl SystemWebSocket {
                             let _ = sink.send(Message::Close(frame)).await;
                             // Keep looping to receive the peer's close acknowledgement.
                         }
-                        None => break, // the runtime dropped the socket
+                        if broken { break; }
                     },
                 }
             }
@@ -192,6 +215,14 @@ impl SystemWebSocket {
 
 fn err(e: impl ToString) -> ProviderError {
     ProviderError::Other(e.to_string())
+}
+
+/// A tungstenite frame for one outbound message (text ⇒ Text, bytes ⇒ Binary).
+fn into_message(message: WsMessage) -> Message {
+    match message {
+        WsMessage::Text(s) => Message::Text(s.into()),
+        WsMessage::Binary(b) => Message::Binary(b.into()),
+    }
 }
 
 /// The negotiated subprotocol + extensions from the handshake response headers.
@@ -263,10 +294,7 @@ impl WebSocketProvider for SystemWebSocket {
     fn send(&self, id: u64, message: WsMessage) -> BoxFuture<Result<(), ProviderError>> {
         let conns = self.conns.clone();
         Box::pin(async move {
-            let msg = match message {
-                WsMessage::Text(s) => Message::Text(s.into()),
-                WsMessage::Binary(b) => Message::Binary(b.into()),
-            };
+            let msg = into_message(message);
             let tx = conns.lock().unwrap().get(&id).map(|s| s.cmd_tx.clone());
             match tx {
                 Some(tx) => tx
@@ -275,6 +303,31 @@ impl WebSocketProvider for SystemWebSocket {
                     .map_err(|_| err("WebSocket is closed")),
                 None => Err(err("WebSocket is closed")),
             }
+        })
+    }
+
+    fn broadcast(&self, ids: Vec<u64>, message: WsMessage) -> BoxFuture<Result<(), ProviderError>> {
+        let conns = self.conns.clone();
+        Box::pin(async move {
+            // Build the frame once and snapshot the live senders, then enqueue to
+            // every connection concurrently — the `Message` is refcounted (Bytes/
+            // Utf8Bytes), so each clone is O(1), and a slow connection awaits its
+            // own channel without blocking the others (no head-of-line stall).
+            let msg = into_message(message);
+            let txs: Vec<_> = {
+                let guard = conns.lock().unwrap();
+                ids.iter()
+                    .filter_map(|id| guard.get(id).map(|s| s.cmd_tx.clone()))
+                    .collect()
+            };
+            let sends = txs.into_iter().map(|tx| {
+                let msg = msg.clone();
+                async move {
+                    let _ = tx.send(Cmd::Send(msg)).await; // dropped sockets are skipped
+                }
+            });
+            futures_util::future::join_all(sends).await;
+            Ok(())
         })
     }
 
@@ -576,6 +629,38 @@ mod tests {
                 assert_eq!(reason, "bye");
             }
             _ => panic!("server expected the close handshake"),
+        }
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    // broadcast() fans one message out to many connections in a single call —
+    // both accepted clients receive it.
+    #[tokio::test]
+    async fn ws_server_broadcast_reaches_all() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let port = info.local_port;
+
+        let (c1, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let (c2, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let (s1, _) = sys.accept(server_id).await.unwrap().expect("conn 1");
+        let (s2, _) = sys.accept(server_id).await.unwrap().expect("conn 2");
+
+        sys.broadcast(vec![s1, s2], WsMessage::Text("hi-all".to_string()))
+            .await
+            .unwrap();
+
+        for c in [c1, c2] {
+            match sys.recv(c).await.unwrap() {
+                Some(WsIncoming::Text(t)) => assert_eq!(t, "hi-all"),
+                _ => panic!("each client should receive the broadcast"),
+            }
         }
         sys.close_server(server_id).await.unwrap();
     }
