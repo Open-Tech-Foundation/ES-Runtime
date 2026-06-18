@@ -191,7 +191,65 @@
     }
   }
 
+  // MessageEvent — carries a `message` payload (used by WebSocket, DECISIONS
+  // D29; reusable later for EventSource / worker postMessage).
+  class MessageEvent extends Event {
+    #data;
+    #origin;
+    #lastEventId;
+    #source;
+    #ports;
+    constructor(type, options = {}) {
+      super(type, options);
+      this.#data = options.data ?? null;
+      this.#origin = options.origin !== undefined ? String(options.origin) : "";
+      this.#lastEventId =
+        options.lastEventId !== undefined ? String(options.lastEventId) : "";
+      this.#source = options.source ?? null;
+      this.#ports = options.ports ? [...options.ports] : [];
+    }
+    get data() {
+      return this.#data;
+    }
+    get origin() {
+      return this.#origin;
+    }
+    get lastEventId() {
+      return this.#lastEventId;
+    }
+    get source() {
+      return this.#source;
+    }
+    get ports() {
+      return this.#ports;
+    }
+  }
+
+  // CloseEvent — the WebSocket closing handshake result (DECISIONS D29).
+  class CloseEvent extends Event {
+    #wasClean;
+    #code;
+    #reason;
+    constructor(type, options = {}) {
+      super(type, options);
+      this.#wasClean = Boolean(options.wasClean);
+      this.#code = options.code !== undefined ? options.code : 0;
+      this.#reason = options.reason !== undefined ? String(options.reason) : "";
+    }
+    get wasClean() {
+      return this.#wasClean;
+    }
+    get code() {
+      return this.#code;
+    }
+    get reason() {
+      return this.#reason;
+    }
+  }
+
   globalThis.Event = Event;
   globalThis.CustomEvent = CustomEvent;
   globalThis.EventTarget = EventTarget;
+  globalThis.MessageEvent = MessageEvent;
+  globalThis.CloseEvent = CloseEvent;
 })();

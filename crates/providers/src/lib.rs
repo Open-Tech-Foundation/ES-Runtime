@@ -407,6 +407,74 @@ pub trait NetProvider: Send + Sync {
     fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
 
+/// Metadata about an opened WebSocket, from [`WebSocketProvider::connect`].
+#[derive(Default)]
+pub struct WebSocketInfo {
+    /// The negotiated subprotocol (empty if none was selected).
+    pub protocol: String,
+    /// The negotiated `extensions` header (empty until permessage-deflate; D29).
+    pub extensions: String,
+}
+
+/// A message to send on a WebSocket, from [`WebSocketProvider::send`].
+pub enum WsMessage {
+    /// A UTF-8 text frame.
+    Text(String),
+    /// A binary frame.
+    Binary(Vec<u8>),
+}
+
+/// One inbound WebSocket event surfaced by [`WebSocketProvider::recv`]. Control
+/// frames (ping/pong) are answered inside the provider and never appear here;
+/// only application messages and the peer's closing handshake reach the guest
+/// (DECISIONS D29).
+pub enum WsIncoming {
+    /// A received text frame.
+    Text(String),
+    /// A received binary frame.
+    Binary(Vec<u8>),
+    /// The peer's closing handshake (a clean close) with its code and reason.
+    Close {
+        /// The close code (`1000`, `1001`, … or an application `3000`–`4999`).
+        code: u16,
+        /// The close reason (may be empty).
+        reason: String,
+    },
+}
+
+/// The WebSocket client backing the `WebSocket` global (DECISIONS D29). Like
+/// [`NetProvider`], the implementation owns each connection keyed by an opaque
+/// id it hands back; the runtime drives sends, receives, and closes by id.
+/// `connect` is capability-checked on `Capability::Net` before this is ever
+/// called (the same gate as `fetch` / `runtime:net` `connect`); an embedder that
+/// installs no `WebSocketProvider` has no `WebSocket` access at all. The provider
+/// answers ping/pong control frames itself — only `message`/`close` surface.
+pub trait WebSocketProvider: Send + Sync {
+    /// Opens a WebSocket to `url` (`ws:`/`wss:`), offering `protocols`; resolves
+    /// to (socket id, negotiated info) once the opening handshake completes.
+    fn connect(
+        &self,
+        url: String,
+        protocols: Vec<String>,
+    ) -> BoxFuture<Result<(u64, WebSocketInfo), ProviderError>>;
+
+    /// Sends one message on socket `id`.
+    fn send(&self, id: u64, message: WsMessage) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Awaits the next inbound event on socket `id`; `None` signals an abnormal
+    /// close (the connection dropped without a closing handshake).
+    fn recv(&self, id: u64) -> BoxFuture<Result<Option<WsIncoming>, ProviderError>>;
+
+    /// Begins the closing handshake on socket `id`. `code`/`reason` follow
+    /// `WebSocket.close()`; `code` is `None` for a bare close frame. Idempotent.
+    fn close(
+        &self,
+        id: u64,
+        code: Option<u16>,
+        reason: String,
+    ) -> BoxFuture<Result<(), ProviderError>>;
+}
+
 /// An inbound HTTP request delivered to an [`HttpServerProvider`] consumer.
 ///
 /// The body is **buffered** (read in full before the request is handed to the

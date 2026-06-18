@@ -38,6 +38,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::net_ops::install(engine, providers.net_provider())?;
     // runtime:http ops: serve (NetListen); next_request/body_read/respond by id.
     crate::http_ops::install(engine, providers.http_server())?;
+    // WebSocket global ops: connect (Net); send/recv/close by id (DECISIONS D29).
+    crate::ws_ops::install(engine, providers.web_socket())?;
     crate::parsers_ops::install(engine)?;
     Ok(())
 }

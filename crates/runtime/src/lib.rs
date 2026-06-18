@@ -30,6 +30,7 @@ mod rsa_ops;
 mod runtime_modules;
 mod timer;
 mod url_ops;
+mod ws_ops;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -45,7 +46,7 @@ pub use es_runtime_engine::{
 };
 pub use es_runtime_providers::{
     Clock, Console, ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader,
-    NetProvider, NetTransport, Process,
+    NetProvider, NetTransport, Process, WebSocketProvider,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -118,6 +119,7 @@ pub struct HostProviders {
     file_system: Option<Arc<dyn FileSystem>>,
     net_provider: Option<Arc<dyn NetProvider>>,
     http_server: Option<Arc<dyn HttpServerProvider>>,
+    web_socket: Option<Arc<dyn WebSocketProvider>>,
 }
 
 impl HostProviders {
@@ -140,6 +142,7 @@ impl HostProviders {
             file_system: None,
             net_provider: None,
             http_server: None,
+            web_socket: None,
         }
     }
 
@@ -180,6 +183,17 @@ impl HostProviders {
         self
     }
 
+    /// Adds the [`WebSocketProvider`] backing the `WebSocket` global (DECISIONS
+    /// D29). `connect` is capability-gated on
+    /// [`Capability::Net`](es_runtime_common::Capability::Net), the same gate as
+    /// `fetch` and `runtime:net` `connect`. Absent, `new WebSocket(...)` fails
+    /// cleanly (an `error`/`close` with code 1006), like a denied capability.
+    #[must_use]
+    pub fn with_web_socket(mut self, web_socket: Arc<dyn WebSocketProvider>) -> Self {
+        self.web_socket = Some(web_socket);
+        self
+    }
+
     fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
     }
@@ -210,6 +224,10 @@ impl HostProviders {
 
     fn http_server(&self) -> Option<Arc<dyn HttpServerProvider>> {
         self.http_server.clone()
+    }
+
+    fn web_socket(&self) -> Option<Arc<dyn WebSocketProvider>> {
+        self.web_socket.clone()
     }
 }
 
@@ -1504,6 +1522,173 @@ mod tests {
              return s;",
         );
         assert_eq!(out, Value::String("foobarbaz".into()));
+    }
+
+    /// A scripted WebSocketProvider for the `WebSocket` global (DECISIONS D29):
+    /// `connect` hands back a fixed protocol; `recv` replays a pre-seeded frame
+    /// sequence (each future Ready on first poll, so no waker is needed under the
+    /// tick driver); `send`/`close` are no-ops.
+    struct MockWs {
+        inbound: std::sync::Mutex<std::collections::VecDeque<es_runtime_providers::WsIncoming>>,
+        protocol: String,
+    }
+    impl MockWs {
+        fn new(frames: Vec<es_runtime_providers::WsIncoming>, protocol: &str) -> Self {
+            MockWs {
+                inbound: std::sync::Mutex::new(frames.into()),
+                protocol: protocol.to_string(),
+            }
+        }
+    }
+    impl es_runtime_providers::WebSocketProvider for MockWs {
+        fn connect(
+            &self,
+            _url: String,
+            _protocols: Vec<String>,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                (u64, es_runtime_providers::WebSocketInfo),
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            let protocol = self.protocol.clone();
+            Box::pin(async move {
+                Ok((
+                    1u64,
+                    es_runtime_providers::WebSocketInfo {
+                        protocol,
+                        extensions: String::new(),
+                    },
+                ))
+            })
+        }
+        fn send(
+            &self,
+            _id: u64,
+            _message: es_runtime_providers::WsMessage,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(async { Ok(()) })
+        }
+        fn recv(
+            &self,
+            _id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                Option<es_runtime_providers::WsIncoming>,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            let item = self.inbound.lock().unwrap().pop_front();
+            Box::pin(async move { Ok(item) })
+        }
+        fn close(
+            &self,
+            _id: u64,
+            _code: Option<u16>,
+            _reason: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn runtime_with_ws(ws: Arc<dyn es_runtime_providers::WebSocketProvider>) -> Runtime {
+        let engine = V8Engine::new(Limits::default()).expect("engine");
+        Runtime::new(
+            Box::new(engine),
+            HostProviders::new(
+                Arc::new(FixedClock {
+                    monotonic: 0,
+                    wall: 0,
+                }),
+                Arc::new(TestConsole::default()),
+                Arc::new(MockNet::stub()),
+                Arc::new(TestEntropy::new()),
+            )
+            .with_web_socket(ws),
+        )
+        .expect("runtime")
+    }
+
+    #[test]
+    fn websocket_open_message_close_round_trip() {
+        use es_runtime_providers::WsIncoming;
+        let _g = v8_guard();
+        let ws = MockWs::new(
+            vec![
+                WsIncoming::Text("hello".into()),
+                WsIncoming::Binary(vec![1, 2, 3]),
+                WsIncoming::Close {
+                    code: 1000,
+                    reason: "bye".into(),
+                },
+            ],
+            "chat",
+        );
+        let mut rt = runtime_with_ws(Arc::new(ws));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const log = []; \
+             const ws = new WebSocket('ws://echo.test/sub', 'chat'); \
+             ws.binaryType = 'arraybuffer'; \
+             await new Promise((resolve) => { \
+               ws.addEventListener('open', () => { log.push('open:' + ws.readyState + ':' + ws.protocol); ws.send('ping'); }); \
+               ws.addEventListener('message', (e) => { \
+                 if (typeof e.data === 'string') log.push('txt:' + e.data + ':' + e.origin); \
+                 else log.push('bin:' + new Uint8Array(e.data).join(',')); \
+               }); \
+               ws.addEventListener('close', (e) => { log.push('close:' + e.code + ':' + e.reason + ':' + e.wasClean + ':' + ws.readyState); resolve(); }); \
+               ws.addEventListener('error', () => { log.push('error'); resolve(); }); \
+             }); \
+             return log.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String(
+                "open:1:chat|txt:hello:ws://echo.test|bin:1,2,3|close:1000:bye:true:3".into()
+            )
+        );
+    }
+
+    #[test]
+    fn websocket_validates_url_state_and_close_args() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_ws(Arc::new(MockWs::new(vec![], "")));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // All synchronous (no tick): the constructor's connect stays pending.
+        assert_true(
+            &mut rt,
+            "(() => { const errs = []; \
+             try { new WebSocket('http://x/'); } catch (e) { errs.push(e.name); } \
+             try { new WebSocket('ws://x/#f'); } catch (e) { errs.push(e.name); } \
+             try { new WebSocket('ws://x/', ['a', 'a']); } catch (e) { errs.push(e.name); } \
+             const ws = new WebSocket('ws://x/'); \
+             try { ws.send('x'); } catch (e) { errs.push(e.name); } \
+             try { ws.close(1234); } catch (e) { errs.push(e.name); } \
+             try { ws.close(1000, 'x'.repeat(200)); } catch (e) { errs.push(e.name); } \
+             return errs.join(',') === \
+               'SyntaxError,SyntaxError,SyntaxError,InvalidStateError,InvalidAccessError,SyntaxError'; })()",
+        );
+    }
+
+    #[test]
+    fn websocket_connect_requires_net_capability() {
+        let _g = v8_guard();
+        // Provider present, but Net is denied by default — the op gate fails the
+        // connect, surfacing as a non-clean close (1006).
+        let mut rt = runtime_with_ws(Arc::new(MockWs::new(vec![], "")));
+        let out = eval_async(
+            &mut rt,
+            "const ws = new WebSocket('ws://x/'); \
+             return await new Promise((resolve) => { \
+               ws.addEventListener('close', (e) => resolve(e.code + ':' + e.wasClean + ':' + ws.readyState)); \
+             });",
+        );
+        assert_eq!(out, Value::String("1006:false:3".into()));
     }
 
     #[test]

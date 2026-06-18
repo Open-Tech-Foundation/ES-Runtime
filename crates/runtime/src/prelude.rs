@@ -30,6 +30,9 @@ pub(crate) fn source() -> String {
         // fetch family: blob before fetch (fetch bodies may be Blob/FormData).
         include_str!("prelude/blob.js"),
         include_str!("prelude/fetch.js"),
+        // WebSocket (DECISIONS D29): needs events (MessageEvent/CloseEvent),
+        // Blob, URL, DOMException — all installed above.
+        include_str!("prelude/websocket.js"),
         include_str!("prelude/crypto.js"),
         // Hardening last: every global + host op must already be in place.
         include_str!("prelude/harden.js"),
