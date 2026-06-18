@@ -14,6 +14,7 @@ const NAV = [
       { href: "/api/net", label: "runtime:net" },
       { href: "/api/http", label: "runtime:http" },
       { href: "/api/websocket", label: "WebSocket" },
+      { href: "/api/websocket-server", label: "runtime:websocket" },
     ],
   },
 ];

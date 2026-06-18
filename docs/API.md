@@ -19,6 +19,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:fs`](#runtimefs)
 - [`runtime:net`](#runtimenet)
 - [`runtime:http`](#runtimehttp)
+- [`runtime:websocket`](#runtimewebsocket)
 
 ---
 
@@ -131,6 +132,7 @@ the required capability has been granted.
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
 | `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
 | `runtime:http`    | Available   | `NetListen` | [↓](#runtimehttp)               |
+| `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
 
 ---
 
@@ -381,6 +383,49 @@ await server.stop();
 
 **`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
 `finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.
+
+---
+
+## `runtime:websocket`
+
+The WebSocket **server** side (DECISIONS D29). The *client* is the global
+[`WebSocket`](#websocket); serving is capability-gated host I/O, so it lives in a
+`runtime:` module like `runtime:net` `listen()`. `serve()` requires `NetListen`
+and returns a `WebSocketServer` — an async-iterable of accepted, already-open
+server-side connections. `ws:` only (a `wss:` server is a follow-up).
+
+```js
+import { serve } from "runtime:websocket";
+
+const clients = new Set();
+const server = serve({ hostname: "127.0.0.1", port: 4001 });
+for await (const ws of server) {
+  clients.add(ws);
+  ws.addEventListener("message", (e) => {
+    for (const c of clients) c.send(e.data); // broadcast (a chat room)
+  });
+  ws.addEventListener("close", () => clients.delete(ws));
+}
+```
+
+### Exports
+
+| Export            | Type                                   | Description                                                |
+| ----------------- | -------------------------------------- | ---------------------------------------------------------- |
+| `serve(options)`  | `({ hostname?, port }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
+
+**`WebSocketServer`** — async-iterable of server connections;
+`addr: Promise<{ hostname, port }>`, `accept(): Promise<conn | null>`,
+`close(): Promise<void>`.
+
+**connection** (each accepted socket) — already open: `send(data)`
+(`string`/`Blob`/`ArrayBuffer`/`ArrayBufferView`), `close(code?, reason?)`,
+`binaryType`, and `message`/`close` events (`on*` or `addEventListener`) — the
+same surface as the client `WebSocket`, minus the connecting handshake.
+
+> Broadcasting one message to many connections currently fires one send per
+> connection; very high fan-out *lags* (deliveries queue under the driven seam)
+> but is not lost. A `wss:` server and fan-out batching are follow-ups (D29).
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

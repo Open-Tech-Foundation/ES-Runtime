@@ -15,6 +15,14 @@ pre-`0.1.0` and the public API is unstable.
   `tokio-tungstenite`; `wss:` reuses the rustls TLS stack. `MessageEvent` and
   `CloseEvent` are now globals too. `WebSocketStream` and permessage-deflate are
   not yet supported (DECISIONS D29).
+- **`runtime:websocket` server.** `serve({ hostname?, port })` binds a WebSocket
+  server (`ws:`, `NetListen`) and yields accepted connections as an async
+  iterable; each connection has the client `WebSocket`'s `send`/`close`/
+  `binaryType` + `message`/`close` events. A `wss:` server and broadcast fan-out
+  batching are follow-ups (DECISIONS D29).
+- **Benchmarks.** Added a `websocket` workload (client ping-pong round-trips) and
+  a `bench/websocket-chat/` broadcast chat benchmark (server + client sweeps,
+  messages/sec).
 
 ## [0.4.0] - 2026-06-17
 

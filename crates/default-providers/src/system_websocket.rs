@@ -19,10 +19,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use es_runtime_providers::{
-    BoxFuture, ProviderError, WebSocketInfo, WebSocketProvider, WsIncoming, WsMessage,
+    BoxFuture, ProviderError, SocketInfo, WebSocketInfo, WebSocketProvider, WsIncoming, WsMessage,
 };
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
@@ -55,11 +55,15 @@ struct WsSlot {
     cmd_tx: mpsc::Sender<Cmd>,
 }
 
+/// A bound server's queue of accepted (connection id, info), drained by `accept`.
+type AcceptRx = mpsc::Receiver<(u64, WebSocketInfo)>;
+
 /// A [`WebSocketProvider`] over real `tokio-tungstenite` connections. The `Arc`s
 /// are cloned into each returned future so the futures stay `'static`.
 #[derive(Clone, Default)]
 pub struct SystemWebSocket {
     conns: Arc<Mutex<HashMap<u64, WsSlot>>>,
+    servers: Arc<Mutex<HashMap<u64, AcceptRx>>>,
     next_id: Arc<AtomicU64>,
     /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
     /// tests inject a custom store via [`SystemWebSocket::with_tls_roots`].
@@ -318,6 +322,83 @@ impl WebSocketProvider for SystemWebSocket {
             Ok(())
         })
     }
+
+    fn serve(
+        &self,
+        host: String,
+        port: u16,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            let listener = TcpListener::bind((host.as_str(), port))
+                .await
+                .map_err(err)?;
+            let local = listener.local_addr().ok();
+            let (tx, rx) = mpsc::channel::<(u64, WebSocketInfo)>(64);
+            let conns = this.conns.clone();
+            let next_id = this.next_id.clone();
+            // Accept loop: each TCP connection's WS handshake runs in its own task
+            // so a slow handshake never blocks the next accept; on success the
+            // connection registers in the shared `conns` map and is queued for
+            // `accept`.
+            tokio::spawn(async move {
+                loop {
+                    let (tcp, _) = match listener.accept().await {
+                        Ok(c) => c,
+                        Err(_) => break,
+                    };
+                    if tx.is_closed() {
+                        break; // server closed (accept rx dropped)
+                    }
+                    let _ = tcp.set_nodelay(true);
+                    let tx = tx.clone();
+                    let conns = conns.clone();
+                    let next_id = next_id.clone();
+                    tokio::spawn(async move {
+                        let ws = match tokio_tungstenite::accept_async(tcp).await {
+                            Ok(ws) => ws,
+                            Err(_) => return, // failed handshake
+                        };
+                        let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
+                        let slot = SystemWebSocket::spawn(ws);
+                        conns.lock().unwrap().insert(id, slot);
+                        if tx.send((id, WebSocketInfo::default())).await.is_err() {
+                            conns.lock().unwrap().remove(&id); // server gone before accept
+                        }
+                    });
+                }
+            });
+            let server_id = this.id();
+            this.servers.lock().unwrap().insert(server_id, rx);
+            let info = SocketInfo {
+                local_address: local.map(|a| a.ip().to_string()).unwrap_or_default(),
+                local_port: local.map(|a| a.port()).unwrap_or(0),
+                ..Default::default()
+            };
+            Ok((server_id, info))
+        })
+    }
+
+    fn accept(&self, id: u64) -> BoxFuture<Result<Option<(u64, WebSocketInfo)>, ProviderError>> {
+        let servers = self.servers.clone();
+        Box::pin(async move {
+            let mut rx = match servers.lock().unwrap().remove(&id) {
+                Some(rx) => rx,
+                None => return Ok(None), // server closed
+            };
+            let conn = rx.recv().await;
+            servers.lock().unwrap().insert(id, rx); // keep accepting
+            Ok(conn)
+        })
+    }
+
+    fn close_server(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
+        let servers = self.servers.clone();
+        Box::pin(async move {
+            servers.lock().unwrap().remove(&id);
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +518,66 @@ mod tests {
         client.close(id, Some(1000), String::new()).await.unwrap();
         let _ = client.recv(id).await;
         server.await.unwrap();
+    }
+
+    // The server side: serve → accept → the accepted connection echoes back
+    // (text + binary) over the same send/recv/close used by client sockets.
+    #[tokio::test]
+    async fn ws_server_accepts_and_echoes() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let port = info.local_port;
+
+        // A client connects to our own server.
+        let (cid, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+
+        // Accept it, then echo whatever the client sends.
+        let (conn_id, _) = sys.accept(server_id).await.unwrap().expect("a connection");
+
+        sys.send(cid, WsMessage::Text("ping".to_string()))
+            .await
+            .unwrap();
+        match sys.recv(conn_id).await.unwrap() {
+            Some(WsIncoming::Text(t)) => {
+                assert_eq!(t, "ping");
+                sys.send(conn_id, WsMessage::Text(t.to_uppercase()))
+                    .await
+                    .unwrap();
+            }
+            _ => panic!("server expected a text frame"),
+        }
+        match sys.recv(cid).await.unwrap() {
+            Some(WsIncoming::Text(t)) => assert_eq!(t, "PING"),
+            _ => panic!("client expected the echo"),
+        }
+
+        sys.send(cid, WsMessage::Binary(vec![9, 8, 7]))
+            .await
+            .unwrap();
+        match sys.recv(conn_id).await.unwrap() {
+            Some(WsIncoming::Binary(b)) => {
+                assert_eq!(b, vec![9, 8, 7]);
+                sys.send(conn_id, WsMessage::Binary(b)).await.unwrap();
+            }
+            _ => panic!("server expected a binary frame"),
+        }
+        match sys.recv(cid).await.unwrap() {
+            Some(WsIncoming::Binary(b)) => assert_eq!(b, vec![9, 8, 7]),
+            _ => panic!("client expected the binary echo"),
+        }
+
+        sys.close(cid, Some(1000), "bye".to_string()).await.unwrap();
+        match sys.recv(conn_id).await.unwrap() {
+            Some(WsIncoming::Close { code, reason }) => {
+                assert_eq!(code, 1000);
+                assert_eq!(reason, "bye");
+            }
+            _ => panic!("server expected the close handshake"),
+        }
+        sys.close_server(server_id).await.unwrap();
     }
 
     // A server that drops without a closing handshake: recv resolves `None`, the

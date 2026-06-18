@@ -1593,6 +1593,41 @@ mod tests {
         > {
             Box::pin(async { Ok(()) })
         }
+        fn serve(
+            &self,
+            _host: String,
+            _port: u16,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                (u64, es_runtime_providers::SocketInfo),
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            Box::pin(async {
+                Err(es_runtime_providers::ProviderError::Other(
+                    "no server".into(),
+                ))
+            })
+        }
+        fn accept(
+            &self,
+            _id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                Option<(u64, es_runtime_providers::WebSocketInfo)>,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            Box::pin(async { Ok(None) })
+        }
+        fn close_server(
+            &self,
+            _id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(async { Ok(()) })
+        }
     }
 
     fn runtime_with_ws(ws: Arc<dyn es_runtime_providers::WebSocketProvider>) -> Runtime {

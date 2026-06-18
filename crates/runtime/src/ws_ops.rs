@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{ProviderError, WebSocketProvider, WsIncoming, WsMessage};
+use es_runtime_providers::{ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsMessage};
 
 use crate::Result;
 
@@ -77,8 +77,9 @@ pub(crate) fn install(
         })
     }))?;
 
+    let w = ws.clone();
     engine.register_op(OpDecl::r#async("ws_close", move |args| {
-        let w = ws.clone();
+        let w = w.clone();
         let id = arg_u64(&args, 0);
         // `close()` with no code sends a bare close frame (code ⇒ None).
         let code = match args.get(1) {
@@ -95,7 +96,60 @@ pub(crate) fn install(
         })
     }))?;
 
+    // Server side (`runtime:websocket` `serve()`): bind is gated on NetListen;
+    // accept returns a connection id driven by the same ws_send/ws_recv/ws_close.
+    let w = ws.clone();
+    engine.register_op(
+        OpDecl::r#async("ws_serve", move |args| {
+            let w = w.clone();
+            let host = arg_str(&args, 0);
+            let port = arg_u16(&args, 1);
+            Box::pin(async move {
+                let (id, info) = require(&w)?.serve(host, port).await.map_err(map_err)?;
+                Ok(server_value(id, &info))
+            })
+        })
+        .requires(Capability::NetListen),
+    )?;
+
+    let w = ws.clone();
+    engine.register_op(OpDecl::r#async("ws_accept", move |args| {
+        let w = w.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            match require(&w)?.accept(id).await.map_err(map_err)? {
+                Some((cid, info)) => Ok(Value::Object(vec![
+                    ("id".to_string(), Value::Number(cid as f64)),
+                    ("protocol".to_string(), Value::String(info.protocol)),
+                    ("extensions".to_string(), Value::String(info.extensions)),
+                ])),
+                None => Ok(Value::Null),
+            }
+        })
+    }))?;
+
+    engine.register_op(OpDecl::r#async("ws_close_server", move |args| {
+        let w = ws.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            require(&w)?.close_server(id).await.map_err(map_err)?;
+            Ok(Value::Undefined)
+        })
+    }))?;
+
     Ok(())
+}
+
+/// A `{ id, hostname, port }` envelope for a bound server's address.
+fn server_value(id: u64, info: &SocketInfo) -> Value {
+    Value::Object(vec![
+        ("id".to_string(), Value::Number(id as f64)),
+        (
+            "hostname".to_string(),
+            Value::String(info.local_address.clone()),
+        ),
+        ("port".to_string(), Value::Number(info.local_port as f64)),
+    ])
 }
 
 /// A `{ type, data }` envelope for an inbound text/binary message.
@@ -115,6 +169,10 @@ fn arg_str(args: &[Value], i: usize) -> String {
 
 fn arg_u64(args: &[Value], i: usize) -> u64 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u64
+}
+
+fn arg_u16(args: &[Value], i: usize) -> u16 {
+    args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u16
 }
 
 /// Collects a JS string array argument (non-strings skipped); `[]` if absent.

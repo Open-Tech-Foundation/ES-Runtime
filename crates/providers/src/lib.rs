@@ -473,6 +473,25 @@ pub trait WebSocketProvider: Send + Sync {
         code: Option<u16>,
         reason: String,
     ) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Binds a listening WebSocket server (`ws:` only — a `wss:` server is a
+    /// follow-up) and starts accepting; resolves to (server id, bound-address
+    /// info). `port` 0 picks an ephemeral port. Capability-checked on
+    /// `Capability::NetListen` (like `runtime:net` `listen`) before this is ever
+    /// called; backs the `runtime:websocket` `serve()` (DECISIONS D29).
+    fn serve(&self, host: String, port: u16)
+    -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
+
+    /// Accepts the next inbound connection on server `id`, once its opening
+    /// handshake completes; resolves to a new (connection id, info), or `None`
+    /// when the server is closed. The connection id is driven by the same
+    /// [`send`](Self::send) / [`recv`](Self::recv) / [`close`](Self::close) as a
+    /// client `connect` id (one shared id space, like [`NetProvider`] sockets).
+    fn accept(&self, id: u64) -> BoxFuture<Result<Option<(u64, WebSocketInfo)>, ProviderError>>;
+
+    /// Closes server `id` (idempotent); stops accepting new connections. Already
+    /// accepted connections keep working until individually closed.
+    fn close_server(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
 
 /// An inbound HTTP request delivered to an [`HttpServerProvider`] consumer.
