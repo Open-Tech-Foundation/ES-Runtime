@@ -6,6 +6,16 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`WebSocket`.** The classic WHATWG `WebSocket` interface ships as a global
+  (like `fetch`): `ws:`/`wss:`, `send`/`close`, `binaryType`, `bufferedAmount`,
+  `protocol`/`extensions`, and `open`/`message`/`error`/`close` events. Opening
+  a connection requires the `Net` capability. The default transport is
+  `tokio-tungstenite`; `wss:` reuses the rustls TLS stack. `MessageEvent` and
+  `CloseEvent` are now globals too. `WebSocketStream` and permessage-deflate are
+  not yet supported (DECISIONS D29).
+
 ## [0.4.0] - 2026-06-17
 
 ### Added

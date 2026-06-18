@@ -55,12 +55,53 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `crypto.subtle` (digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2), `CryptoKey`
-- **Events:** `Event`, `EventTarget`, `CustomEvent`, `AbortController`, `AbortSignal`
+- **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `AbortController`, `AbortSignal`
+- **Network:** `WebSocket` (capability-gated — see below)
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
 - **Performance:** `performance` (`now()`, `timeOrigin`)
 
 **Not available:** `process`/`Buffer`/`require` (Node), `Worker`/`MessageChannel`,
-`WebSocket` (scoped — DECISIONS D29), `navigator`/`localStorage`/`window` (browser).
+`navigator`/`localStorage`/`window` (browser).
+
+---
+
+## `WebSocket`
+
+The classic WHATWG [`WebSocket`](https://websockets.spec.whatwg.org/#the-websocket-interface)
+interface — a global (like `fetch`), not a `runtime:` module. Opening a
+connection requires the **`Net`** capability; with no `Net` (or no WebSocket
+provider installed) the socket fails with an `error` then a `close` (code 1006).
+`ws:` and `wss:` are both supported (`wss:` reuses the same rustls TLS stack as
+`fetch`/`runtime:net`).
+
+```js
+const ws = new WebSocket("wss://example.com/socket", ["chat"]);
+ws.binaryType = "arraybuffer"; // or "blob" (default)
+
+ws.addEventListener("open", () => ws.send("hello"));
+ws.addEventListener("message", (e) => {
+  // e.data is a string (text), or ArrayBuffer/Blob (binary, per binaryType)
+  console.log(e.data, e.origin);
+});
+ws.addEventListener("close", (e) => console.log(e.code, e.reason, e.wasClean));
+ws.addEventListener("error", () => {});
+
+ws.close(1000, "done"); // code 1000 or 3000–4999; reason ≤ 123 UTF-8 bytes
+```
+
+| Member               | Type                                          | Notes                                                                 |
+| -------------------- | --------------------------------------------- | --------------------------------------------------------------------- |
+| `new WebSocket(url, protocols?)` | `(url, string \| string[]) => WebSocket` | `url` must be `ws:`/`wss:` with no fragment; protocols are RFC 6455 tokens. `Net`. |
+| `readyState`         | `0 \| 1 \| 2 \| 3`                            | `CONNECTING`/`OPEN`/`CLOSING`/`CLOSED` (constants on the instance + interface). |
+| `send(data)`         | `(BufferSource \| Blob \| USVString) => void` | Throws `InvalidStateError` while `CONNECTING`; dropped after close.    |
+| `close(code?, reason?)` | `(number?, string?) => void`               | `code` = `1000` or `3000–4999` (`InvalidAccessError`); `reason` ≤ 123 UTF-8 bytes (`SyntaxError`). |
+| `binaryType`         | `"blob" \| "arraybuffer"`                     | How binary messages surface in `message` events (default `"blob"`).   |
+| `bufferedAmount`     | `number`                                      | Best-effort bytes queued by `send` but not yet flushed.               |
+| `protocol` / `extensions` / `url` | `string`                         | Negotiated subprotocol / extensions (`""` — none negotiated) / the resolved URL. |
+| `on{open,message,error,close}` | `EventHandler`                      | Also via `addEventListener`. `message` → `MessageEvent`; `close` → `CloseEvent`. |
+
+**Not yet:** the promise/stream-based `WebSocketStream`, and permessage-deflate
+(`extensions` is always `""`). See DECISIONS D29.
 
 ---
 
