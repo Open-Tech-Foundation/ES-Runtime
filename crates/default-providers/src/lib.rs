@@ -28,6 +28,7 @@ mod process;
 mod system_fs;
 mod system_http;
 mod system_net;
+mod system_websocket;
 mod task;
 mod timers;
 
@@ -45,5 +46,6 @@ pub use process::SystemProcess;
 pub use system_fs::SystemFileSystem;
 pub use system_http::SystemHttpServer;
 pub use system_net::SystemNet;
+pub use system_websocket::SystemWebSocket;
 pub use task::TokioTaskSpawner;
 pub use timers::TokioTimers;

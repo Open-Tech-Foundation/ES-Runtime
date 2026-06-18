@@ -33,7 +33,7 @@ use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
     NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemHttpServer,
-    SystemNet, SystemProcess, TokioTimers, path,
+    SystemNet, SystemProcess, SystemWebSocket, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -411,7 +411,8 @@ async fn run() -> Result<(), String> {
     .with_process(process.clone())
     .with_file_system(file_system)
     .with_net_provider(Arc::new(SystemNet::new()))
-    .with_http_server(Arc::new(SystemHttpServer::new()));
+    .with_http_server(Arc::new(SystemHttpServer::new()))
+    .with_web_socket(Arc::new(SystemWebSocket::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project
