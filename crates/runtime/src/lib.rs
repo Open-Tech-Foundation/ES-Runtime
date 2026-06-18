@@ -407,6 +407,18 @@ impl Runtime {
         Ok(())
     }
 
+    /// Transpiles raw JSON text into an ES module that exports the parsed value.
+    /// The entire document is escaped into a single JS string literal (a JSON
+    /// string is a valid JS string literal), so `JSON.parse` sees exactly the
+    /// file bytes and the JSON can never break out into executable code — a JSON
+    /// module cannot run.
+    fn json_module_source(raw: &str) -> String {
+        // `to_string` of a `&str` is infallible; the fallback only keeps us
+        // panic-free and is never reached in practice.
+        let escaped = serde_json::to_string(raw).unwrap_or_else(|_| "null".to_string());
+        format!("export default JSON.parse({escaped});")
+    }
+
     /// Walks the import graph reachable from `root_id`, compiling each distinct
     /// canonical specifier once (deduped via the realm [`module_map`], so
     /// diamonds and cycles load a module a single time and shared modules are one
@@ -427,7 +439,9 @@ impl Runtime {
                 continue;
             }
             let requests = self.engine.module_requests(referrer_id)?;
-            for raw in requests {
+            for req in requests {
+                let raw = req.specifier;
+                let is_json = req.import_type.as_deref() == Some("json");
                 let (target_id, newly_compiled) = if runtime_modules::is_builtin_scheme(&raw) {
                     // `runtime:` built-ins are served by the runtime itself — no
                     // loader, no FileSystem capability (their ops are gated).
@@ -444,19 +458,17 @@ impl Runtime {
                     match self.module_map.get(&canonical) {
                         Some(&id) => (id, None),
                         None => {
-                            let mut source = loader
+                            let source = loader
                                 .load(&canonical)
                                 .await
                                 .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-
-                            if canonical.ends_with(".json") {
-                                // Transpile JSON into a safe ES module that exports the parsed object.
-                                // serde_json::to_string safely escapes the entire raw string into a JS string literal.
-                                if let Ok(escaped) = serde_json::to_string(&source) {
-                                    source = format!("export default JSON.parse({});", escaped);
-                                }
-                            }
-
+                            // JSON modules are gated on the `with { type: "json" }`
+                            // attribute, not the file extension.
+                            let source = if is_json {
+                                Self::json_module_source(&source)
+                            } else {
+                                source
+                            };
                             let id = self.engine.compile_module(&canonical, &source)?;
                             self.module_map.insert(canonical.clone(), id);
                             (id, Some(canonical))
@@ -499,8 +511,11 @@ impl Runtime {
             if pending.is_empty() {
                 return Ok(());
             }
-            for (reqid, specifier, referrer) in pending {
-                match self.load_for_dynamic_import(&specifier, &referrer).await {
+            for (reqid, specifier, referrer, import_type) in pending {
+                match self
+                    .load_for_dynamic_import(&specifier, &referrer, import_type.as_deref())
+                    .await
+                {
                     Ok(id) => self.engine.link_dynamic_import(reqid, id)?,
                     Err(err) => self.engine.reject_dynamic_import(reqid, &err.to_string())?,
                 }
@@ -516,6 +531,7 @@ impl Runtime {
         &mut self,
         specifier: &str,
         referrer: &str,
+        import_type: Option<&str>,
     ) -> Result<ModuleId> {
         // A dynamic import() of a `runtime:` built-in (e.g. `import("runtime:process")`).
         if runtime_modules::is_builtin_scheme(specifier) {
@@ -533,17 +549,17 @@ impl Runtime {
         let id = match self.module_map.get(&canonical) {
             Some(&id) => id,
             None => {
-                let mut source = loader
+                let source = loader
                     .load(&canonical)
                     .await
                     .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-
-                if canonical.ends_with(".json")
-                    && let Ok(escaped) = serde_json::to_string(&source)
-                {
-                    source = format!("export default JSON.parse({});", escaped);
-                }
-
+                // JSON modules are gated on the `with { type: "json" }` attribute,
+                // not the file extension.
+                let source = if import_type == Some("json") {
+                    Self::json_module_source(&source)
+                } else {
+                    source
+                };
                 let id = self.engine.compile_module(&canonical, &source)?;
                 self.module_map.insert(canonical.clone(), id);
                 id
@@ -2371,6 +2387,68 @@ mod tests {
         );
         assert_eq!(state, ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
+    }
+
+    #[test]
+    fn json_module_with_attribute_parses() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./data.json", "{\"answer\": 42}")]);
+        let state = run_module(
+            &mut rt,
+            "import data from './data.json' with { type: 'json' }; globalThis.result = data.answer;",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
+    }
+
+    #[test]
+    fn json_module_keys_on_attribute_not_extension() {
+        // No `.json` extension, but the attribute says JSON — so it parses.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./data.conf", "{\"answer\": 7}")]);
+        let state = run_module(
+            &mut rt,
+            "import d from './data.conf' with { type: 'json' }; globalThis.result = d.answer;",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(7.0));
+    }
+
+    #[test]
+    fn dynamic_json_import_with_attribute_parses() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[("./data.json", "{\"answer\": 9}")]);
+        let state = run_module(
+            &mut rt,
+            "globalThis.result = 0; const m = await import('./data.json', { with: { type: 'json' } }); globalThis.result = m.default.answer;",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(9.0));
+    }
+
+    #[test]
+    fn json_file_without_attribute_is_not_transpiled() {
+        // A `.json` extension alone no longer triggers JSON transpilation; without
+        // the attribute the raw JSON is compiled as JS and fails (per spec).
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let loader = MapLoader::new(&[("./data.json", "{\"answer\": 1}")]);
+        let result = block_on(rt.load_module_source(
+            ENTRY,
+            "import data from './data.json'; globalThis.x = data;",
+            loader,
+        ));
+        assert!(
+            result.is_err(),
+            "a .json imported without `with {{ type: \"json\" }}` must not be transpiled"
+        );
     }
 
     #[test]

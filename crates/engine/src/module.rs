@@ -38,6 +38,37 @@ pub enum ModuleEvalState {
     Failed(String),
 }
 
+/// One import a module requests: the specifier plus the `type` import attribute
+/// when the import carried `with { type: "…" }`. The runtime keys interpretation
+/// (e.g. JSON modules) off the attribute rather than the file extension, matching
+/// the import-attributes proposal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModuleRequest {
+    /// The import specifier as written in source (e.g. `./data.json`).
+    pub specifier: String,
+    /// The `type` import attribute, if the import carried `with { type: "…" }`.
+    pub import_type: Option<String>,
+}
+
+/// Reads the `type` import attribute from a V8 attributes array, which is laid
+/// out `[key, value, source_offset, …]` (see `ModuleRequest::GetImportAttributes`).
+fn import_type_attr(
+    scope: &v8::PinScope<'_, '_>,
+    attrs: v8::Local<'_, v8::FixedArray>,
+) -> Option<String> {
+    let len = attrs.length();
+    let mut i = 0;
+    while i + 1 < len {
+        let key = v8::Local::<v8::Value>::try_from(attrs.get(scope, i)?).ok()?;
+        if js_to_string(scope, key) == "type" {
+            let val = v8::Local::<v8::Value>::try_from(attrs.get(scope, i + 1)?).ok()?;
+            return Some(js_to_string(scope, val));
+        }
+        i += 3;
+    }
+    None
+}
+
 /// Per-isolate module registry, shared with the in-isolate resolve and
 /// import-meta callbacks via an isolate slot (mirrors [`OpState`](crate::op)).
 pub(crate) struct ModuleRegistry {
@@ -58,8 +89,9 @@ pub(crate) struct ModuleRegistry {
     /// Next dynamic-`import()` request id.
     next_dynamic: u64,
     /// `import()` calls raised by the host callback, awaiting the runtime to load
-    /// the graph: `(request id, specifier, referrer)`. Drained by the runtime.
-    pending_dynamic: Vec<(u64, String, String)>,
+    /// the graph: `(request id, specifier, referrer, type attribute)`. Drained by
+    /// the runtime.
+    pending_dynamic: Vec<(u64, String, String, Option<String>)>,
     /// Resolvers for dynamic imports between the callback and either linking
     /// (graph loaded) or rejection (load failed), keyed by request id.
     dynamic_resolvers: HashMap<u64, v8::Global<v8::PromiseResolver>>,
@@ -182,7 +214,7 @@ pub(crate) fn requests(
     context: &v8::Global<v8::Context>,
     registry: &Rc<RefCell<ModuleRegistry>>,
     id: ModuleId,
-) -> Result<Vec<String>> {
+) -> Result<Vec<ModuleRequest>> {
     let module_global = registry.borrow().module(id)?;
 
     v8::scope!(let scope, isolate);
@@ -196,7 +228,10 @@ pub(crate) fn requests(
         let entry = array.get(scope, i).expect("index < length");
         let request = v8::Local::<v8::ModuleRequest>::try_from(entry)
             .expect("module-requests array holds ModuleRequests");
-        out.push(request.get_specifier().to_rust_string_lossy(scope));
+        out.push(ModuleRequest {
+            specifier: request.get_specifier().to_rust_string_lossy(scope),
+            import_type: import_type_attr(scope, request.get_import_attributes()),
+        });
     }
     Ok(out)
 }
@@ -388,11 +423,11 @@ fn dynamic_import_callback<'s>(
     _host_defined_options: v8::Local<'s, v8::Data>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
-    _import_attributes: v8::Local<'s, v8::FixedArray>,
+    import_attributes: v8::Local<'s, v8::FixedArray>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     // V8 invokes this; contain any panic rather than unwind across C++ (D15).
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        dynamic_import_inner(scope, resource_name, specifier)
+        dynamic_import_inner(scope, resource_name, specifier, import_attributes)
     }))
     .unwrap_or(None)
 }
@@ -401,8 +436,10 @@ fn dynamic_import_inner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: v8::Local<'s, v8::Value>,
     specifier: v8::Local<'s, v8::String>,
+    import_attributes: v8::Local<'s, v8::FixedArray>,
 ) -> Option<v8::Local<'s, v8::Promise>> {
     let registry = registry(scope)?;
+    let import_type = import_type_attr(scope, import_attributes);
     let specifier = specifier.to_rust_string_lossy(scope);
     // The referrer is the importing module's specifier (its ScriptOrigin
     // resource name); empty when imported from a non-module context.
@@ -420,7 +457,8 @@ fn dynamic_import_inner<'s>(
     let reqid = reg.next_dynamic;
     reg.next_dynamic += 1;
     reg.dynamic_resolvers.insert(reqid, resolver);
-    reg.pending_dynamic.push((reqid, specifier, referrer));
+    reg.pending_dynamic
+        .push((reqid, specifier, referrer, import_type));
     Some(promise)
 }
 
@@ -428,7 +466,7 @@ fn dynamic_import_inner<'s>(
 /// runtime to resolve + load.
 pub(crate) fn take_pending_dynamic(
     registry: &Rc<RefCell<ModuleRegistry>>,
-) -> Vec<(u64, String, String)> {
+) -> Vec<(u64, String, String, Option<String>)> {
     std::mem::take(&mut registry.borrow_mut().pending_dynamic)
 }
 

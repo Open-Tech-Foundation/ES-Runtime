@@ -36,7 +36,7 @@ mod value;
 
 pub use engine::{Engine, InterruptHandle, V8Engine};
 pub use error::{Error, Result};
-pub use module::{ModuleEvalState, ModuleId};
+pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use value::Value;
 

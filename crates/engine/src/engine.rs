@@ -9,7 +9,7 @@ use es_runtime_common::{CapabilitySet, Limits};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
-use crate::module::{ModuleEvalState, ModuleId, ModuleRegistry};
+use crate::module::{ModuleEvalState, ModuleId, ModuleRegistry, ModuleRequest};
 use crate::op::{OpDecl, OpState, TimerId, install_op};
 use crate::value::Value;
 
@@ -144,7 +144,7 @@ pub trait Engine {
     /// The import specifiers `id` requests, in source order — for the caller to
     /// resolve and load before instantiation (V8 resolves synchronously, so the
     /// whole graph must be compiled first; ARCHITECTURE.md §5).
-    fn module_requests(&mut self, id: ModuleId) -> Result<Vec<String>>;
+    fn module_requests(&mut self, id: ModuleId) -> Result<Vec<ModuleRequest>>;
 
     /// Instantiates `id`, resolving each `(referrer, specifier)` through
     /// `resolved`. Every referenced module must already be compiled. Wires the
@@ -165,10 +165,11 @@ pub trait Engine {
     fn module_eval_state(&mut self) -> ModuleEvalState;
 
     /// Drains the dynamic `import()` requests raised since the last call, as
-    /// `(request id, specifier, referrer)`. The runtime resolves + loads each
-    /// graph then [`link_dynamic_import`](Self::link_dynamic_import)s or
+    /// `(request id, specifier, referrer, type attribute)`. The runtime resolves
+    /// then loads each graph and either
+    /// [`link_dynamic_import`](Self::link_dynamic_import)s or
     /// [`reject_dynamic_import`](Self::reject_dynamic_import)s it.
-    fn take_pending_dynamic_imports(&mut self) -> Vec<(u64, String, String)>;
+    fn take_pending_dynamic_imports(&mut self) -> Vec<(u64, String, String, Option<String>)>;
 
     /// Links a loaded+instantiated module to dynamic-import request `reqid`,
     /// beginning evaluation; the request's promise resolves with the module
@@ -559,7 +560,7 @@ impl Engine for V8Engine {
         )
     }
 
-    fn module_requests(&mut self, id: ModuleId) -> Result<Vec<String>> {
+    fn module_requests(&mut self, id: ModuleId) -> Result<Vec<ModuleRequest>> {
         crate::module::requests(&mut self.isolate, &self.context, &self.modules, id)
     }
 
@@ -592,7 +593,7 @@ impl Engine for V8Engine {
         crate::module::eval_state(&mut self.isolate, &self.context, &self.modules)
     }
 
-    fn take_pending_dynamic_imports(&mut self) -> Vec<(u64, String, String)> {
+    fn take_pending_dynamic_imports(&mut self) -> Vec<(u64, String, String, Option<String>)> {
         crate::module::take_pending_dynamic(&self.modules)
     }
 
@@ -862,7 +863,10 @@ mod tests {
                 "import { v } from './util.mjs'; globalThis.result = v + 1;",
             )
             .expect("compile main");
-        assert_eq!(engine.module_requests(main).unwrap(), ["./util.mjs"]);
+        let reqs = engine.module_requests(main).unwrap();
+        let specifiers: Vec<&str> = reqs.iter().map(|r| r.specifier.as_str()).collect();
+        assert_eq!(specifiers, ["./util.mjs"]);
+        assert_eq!(reqs[0].import_type, None);
 
         let mut resolved = HashMap::new();
         resolved.insert((main, "./util.mjs".to_string()), util);
@@ -978,7 +982,7 @@ mod tests {
         engine.instantiate_module(entry, &HashMap::new()).unwrap();
         engine.evaluate_module(entry).unwrap();
         for _ in 0..100 {
-            for (reqid, spec, _referrer) in engine.take_pending_dynamic_imports() {
+            for (reqid, spec, _referrer, _ty) in engine.take_pending_dynamic_imports() {
                 let id = loader(engine, &spec);
                 engine.instantiate_module(id, &HashMap::new()).unwrap();
                 engine.link_dynamic_import(reqid, id).unwrap();
@@ -1045,7 +1049,7 @@ mod tests {
         engine.instantiate_module(entry, &HashMap::new()).unwrap();
         engine.evaluate_module(entry).unwrap();
         for _ in 0..100 {
-            for (reqid, _spec, _referrer) in engine.take_pending_dynamic_imports() {
+            for (reqid, _spec, _referrer, _ty) in engine.take_pending_dynamic_imports() {
                 engine
                     .reject_dynamic_import(reqid, "cannot find module")
                     .unwrap();

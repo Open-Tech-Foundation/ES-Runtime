@@ -44,6 +44,13 @@ pre-`0.1.0` and the public API is unstable.
   that prefix was mistaken for an error. Parse/build failures now throw
   (`SyntaxError`/`TypeError`) out of band; a string result is always genuine
   data.
+- **JSON modules honor the import attribute.** JSON transpilation was triggered
+  by a `.json` file extension and ignored the `with { type: "json" }` attribute,
+  so a `.json` imported without the attribute was silently accepted and a JSON
+  resource without that extension could not be imported at all. Import attributes
+  are now plumbed through the engine (static and dynamic imports); transpilation
+  is keyed on `type === "json"` regardless of extension, matching the
+  import-attributes proposal.
 
 ## [0.4.0] - 2026-06-17
 
