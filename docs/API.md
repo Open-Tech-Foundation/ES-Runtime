@@ -304,8 +304,10 @@ outbound TCP with web-stream `readable`/`writable`. `listen()` returns an
 async-iterable of inbound sockets. `connect` requires `Net`; `listen` requires
 `NetListen`. All I/O is async — nothing blocks. **TLS** client connections are
 supported via `secureTransport: "on"` (certificate verification on, with `sni`
-and `alpn`); `secureTransport: "starttls"` / `Socket.startTls()` and TLS on
-`listen` are not yet supported.
+and `alpn`). `sni` overrides the server name used for **both** the SNI extension
+and certificate hostname verification (they share one name in rustls), so set it
+only to a name the presented certificate is valid for. `secureTransport:
+"starttls"` / `Socket.startTls()` and TLS on `listen` are not yet supported.
 
 ```js
 import { connect, listen } from "runtime:net";
