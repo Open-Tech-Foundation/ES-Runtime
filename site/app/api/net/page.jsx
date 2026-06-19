@@ -68,7 +68,7 @@ const socketMembers = [
   { m: "writable", t: "WritableStream<Uint8Array>", d: "Outgoing bytes; closing the writer half-closes (FIN)." },
   { m: "opened", t: "Promise<SocketInfo>", d: "Resolves once connected: { remoteAddress, remotePort, localAddress, localPort, alpn }. alpn is the negotiated TLS protocol, else null." },
   { m: "closed", t: "Promise<void>", d: "Resolves when the socket is fully closed." },
-  { m: "close()", t: "Promise<void>", d: "Fully close the socket." },
+  { m: "close(reason?)", t: "Promise<void>", d: "Fully close the socket. reason is advisory (WinterTC) and ignored." },
   { m: "startTls()", t: "Socket", d: "Upgrade a secureTransport: \"starttls\" socket to TLS in place; returns a new encrypted Socket (the original is consumed)." },
   { m: "upgraded", t: "boolean", d: "True only after a startTls() upgrade." },
 ];
