@@ -33,6 +33,32 @@ security review. **Until those land, do not run hostile/untrusted code** with
 `esrun` (which also grants all capabilities); the embeddable library lets an
 embedder restrict capabilities and inject its own providers.
 
+## Environment files & secret masking
+
+`.env` support (DECISIONS D30) is built so that **what the guest can read from
+the environment is an explicit host decision**, and so that secret values resist
+**accidental** disclosure:
+
+- **No implicit disk reads.** A `.env` file is loaded **only** via an explicit
+  `esrun --env-file <path>` (repeatable). There is no auto-discovery of a `.env`
+  in the working directory or project root — nothing on disk is read into the
+  guest's environment unless you ask for it. This is a CLI/host feature; the
+  embeddable library never loads env files and never mutates the real process
+  environment (the file values are an in-memory overlay on `runtime:process`).
+- **OS environment wins by default.** Loaded values fill only keys the OS does
+  not already set, so a checked-in `.env` cannot silently clobber a production
+  deployment's real configuration. `--env-override` opts into letting file
+  values win; later `--env-file`s win over earlier ones.
+- **Secret masking.** Env entries whose key matches (case-insensitive)
+  `*_SECRET(S)` or `*_PASSWORD(S)` are exposed by `runtime:process` as an opaque
+  `Secret` that renders as `"[redacted]"` in `console` output, string coercion /
+  template literals, and `JSON.stringify`. The real value is held in a
+  module-private `WeakMap` and is obtainable only via the explicit
+  `unmask(value)` helper. **Scope:** this defends against *accidental* leakage
+  to logs and serialized output — it is **not** a barrier against hostile guest
+  code, which can call `unmask` itself (the guest is already trusted with the
+  value). Parser errors never include a variable's value.
+
 ## Intrinsic integrity (prototype pollution / global tampering)
 
 **The security boundary is in Rust, not in JavaScript.** The op table and the

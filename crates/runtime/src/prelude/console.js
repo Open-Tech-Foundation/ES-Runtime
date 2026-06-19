@@ -12,6 +12,9 @@
   const fnToString = Function.prototype.toString;
   const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
   const DEPTH = 4;
+  // Objects carrying this global-registry marker (e.g. runtime:process Secrets)
+  // render as "[redacted]" so secret values never leak into console output.
+  const REDACTED_MARK = Symbol.for("runtime.secret.redacted");
 
   function quote(s) {
     return (
@@ -67,6 +70,14 @@
 
     if (value === null) return "null";
     if (seen.has(value)) return "[Circular]";
+
+    // Redaction marker (secret values) — checked before any structural walk so
+    // a Secret never has its contents inspected.
+    try {
+      if (value[REDACTED_MARK] === true) return "[redacted]";
+    } catch {
+      /* exotic getters may throw; fall through to normal formatting */
+    }
 
     if (value instanceof Error) return value.stack || value.name + ": " + value.message;
     if (value instanceof RegExp) return String(value);

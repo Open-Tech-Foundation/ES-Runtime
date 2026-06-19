@@ -42,8 +42,17 @@ Run JS files like `node`/`bun`:
 esrun examples/hello.js
 esrun examples/modules/main.mjs   # ES module: import/export + top-level await
 esrun -e "console.log(6 * 7)"
+esrun --env-file .env app.mjs     # load env vars from a .env file (repeatable)
 esrun --help
 ```
+
+### Environment files
+
+`--env-file <path>` loads variables from a `.env` file into `runtime:process`
+`env` (repeatable; later files win). There is **no** auto-loading — a file is
+read only when you pass the flag. The OS environment wins on a conflict; pass
+`--env-override` to let the file win instead. Secret-bearing keys (`*_SECRET(S)`,
+`*_PASSWORD(S)`) are masked by default — see [Security](SECURITY.md).
 
 (If you built from source, the binary is at `./target/release/esrun`. To call it
 as `esrun` from anywhere, run `cargo install --path crates/runtime-cli`.)

@@ -119,6 +119,36 @@ export default function SecurityDoc() {
       </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        Environment files &amp; secret masking
+      </h2>
+      <p className="mt-3 text-zinc-600">
+        A <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.env</code>{" "}
+        file is loaded only when you pass{" "}
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">--env-file</code>{" "}
+        — there is no auto-discovery, so nothing on disk reaches the guest's
+        environment unless you ask for it. The OS environment wins on a conflict
+        by default (a checked-in file can't clobber production config);{" "}
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">--env-override</code>{" "}
+        opts into letting the file win. The real process environment is never
+        mutated.
+      </p>
+      <p className="mt-3 text-zinc-600">
+        Env values whose key ends in{" "}
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">*_SECRET(S)</code>{" "}
+        or{" "}
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">*_PASSWORD(S)</code>{" "}
+        are exposed as a{" "}
+        <a href="/api/process" className="font-medium text-brand-600 hover:text-brand-700">
+          <code className="font-mono">Secret</code>
+        </a>{" "}
+        that renders as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">[redacted]</code>{" "}
+        in logs, string coercion, and JSON — readable only via{" "}
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">unmask()</code>.
+        This prevents <em>accidental</em> leakage to logs; it is not a barrier
+        against hostile guest code, which can unmask the value itself.
+      </p>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Remote modules disabled
       </h2>
       <p className="mt-3 text-zinc-600">

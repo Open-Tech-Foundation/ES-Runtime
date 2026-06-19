@@ -4,6 +4,8 @@ import CodeBlock from "../../../components/CodeBlock.jsx";
 const USAGE = `esrun <file>             Run a JavaScript module file
 esrun -e <code>          Run an inline module snippet
 esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
+esrun --env-file <path>  Load env vars from a .env file (repeatable)
+esrun --env-override     Let --env-file values override the OS environment
 esrun upgrade            Update esrun to the latest release
 esrun types              Print the runtime: TypeScript definitions
 esrun types --install    Install the definitions + wire up tsconfig.json
@@ -20,7 +22,10 @@ esrun -e "console.log(await Promise.resolve(42))"
 esrun app.js build --watch
 
 # Stop a runaway script after 500ms
-esrun -t 500 app.js`;
+esrun -t 500 app.js
+
+# Load env vars from a .env file (OS env wins; --env-override flips it)
+esrun --env-file .env app.js`;
 
 const options = [
   {
@@ -34,6 +39,14 @@ const options = [
   {
     flag: "-t, --timeout <ms>",
     desc: "Watchdog: stop execution after <ms> milliseconds. Useful for bounding untrusted or long-running scripts.",
+  },
+  {
+    flag: "--env-file <path>",
+    desc: "Load environment variables from a .env file into runtime:process env. Repeatable (later files win). No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (*_SECRET(S), *_PASSWORD(S)) are masked.",
+  },
+  {
+    flag: "--env-override",
+    desc: "Let --env-file values override the OS environment (default: OS wins).",
   },
   {
     flag: "upgrade",

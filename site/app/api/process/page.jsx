@@ -1,10 +1,20 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
 
-const IMPORT = `import { env, args, platform, arch, cwd, exit } from "runtime:process";
+const IMPORT = `import { env, args, platform, arch, cwd, exit, unmask } from "runtime:process";
 
 // Or the default aggregate:
 import process from "runtime:process";`;
+
+const SECRET_EX = `import { env, unmask } from "runtime:process";
+
+// Keys ending in *_SECRET(S) / *_PASSWORD(S) are masked by default.
+console.log(env.DB_PASSWORD);        // [redacted]
+console.log(\`\${env.DB_PASSWORD}\`); // [redacted]
+JSON.stringify(env);                 // ..."DB_PASSWORD":"[redacted]"...
+
+const pw = unmask(env.DB_PASSWORD);  // real value, explicit
+unmask(env.DB_HOST);                 // plain strings pass through`;
 
 const ENV_EX = `import { env } from "runtime:process";
 
@@ -25,9 +35,9 @@ exit();              // defaults to 0`;
 const exports = [
   {
     sig: "env",
-    type: "Record<string, string>",
-    desc: "Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated. Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes.",
-    ex: `env.HOME; env.FLAG = "on"; delete env.SECRET;`,
+    type: "Record<string, string | Secret>",
+    desc: "Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated (plus any --env-file values). Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes. Secret-keyed values are Secret wrappers (see below).",
+    ex: `env.HOME; env.FLAG = "on"; delete env.CACHE;`,
   },
   {
     sig: "args",
@@ -58,6 +68,18 @@ const exports = [
     type: "(code?: number) => never",
     desc: "Records the exit code and halts execution immediately — code after the call does not run. The embedder treats it as a clean exit, not an error.",
     ex: `if (failed) exit(1); // halts immediately`,
+  },
+  {
+    sig: "unmask(value)",
+    type: "(value: string | Secret) => string",
+    desc: "Reveal the real value of a masked Secret. A plain string is returned unchanged, so unmask(env.ANY) is always safe.",
+    ex: `unmask(env.DB_PASSWORD); // real value`,
+  },
+  {
+    sig: "Secret",
+    type: "class",
+    desc: "Opaque holder for a masked env value (keys ending in *_SECRET(S) / *_PASSWORD(S)). Renders as \"[redacted]\" in console, string coercion, and JSON. Call unmask() to read it.",
+    ex: `env.API_SECRET instanceof Secret; // true`,
   },
 ];
 
@@ -132,6 +154,34 @@ export default function ProcessDoc() {
       <div className="mt-4">
         <CodeBlock code={EXIT_EX} title="exit.js" lang="js" />
       </div>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        Secrets — masked by default
+      </h2>
+      <p className="mt-4 text-sm leading-relaxed text-zinc-600">
+        Env entries whose key ends in{" "}
+        <code className="font-mono">*_SECRET(S)</code> or{" "}
+        <code className="font-mono">*_PASSWORD(S)</code> (case-insensitive) are
+        exposed as a <code className="font-mono">Secret</code> that renders as{" "}
+        <code className="font-mono">[redacted]</code> in console output, string
+        coercion / template literals, and{" "}
+        <code className="font-mono">JSON.stringify</code> — so they don't leak
+        into logs by accident. Call <code className="font-mono">unmask()</code>{" "}
+        to read the value. This guards against accidental disclosure, not a
+        hostile guest (which can call <code className="font-mono">unmask</code>{" "}
+        itself).
+      </p>
+      <div className="mt-4">
+        <CodeBlock code={SECRET_EX} title="secrets.js" lang="js" />
+      </div>
+      <p className="mt-4 text-sm leading-relaxed text-zinc-600">
+        Load values from a file with{" "}
+        <a href="/api/cli" className="font-medium text-brand-600 hover:text-brand-700">
+          <code className="font-mono">esrun --env-file .env</code>
+        </a>{" "}
+        (no auto-discovery; the OS environment wins unless{" "}
+        <code className="font-mono">--env-override</code> is passed).
+      </p>
 
       <div className="mt-12 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-600">
         <strong className="text-zinc-900">Note.</strong> The default export is an

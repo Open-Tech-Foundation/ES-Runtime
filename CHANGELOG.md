@@ -6,6 +6,23 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`esrun --env-file <path>` — `.env` loading** (DECISIONS D30). Loads
+  environment variables from a `.env` file into `runtime:process` `env`.
+  Repeatable (later files win); **no auto-discovery** — a file is read only when
+  the flag is passed. The OS environment wins on a conflict by default;
+  `--env-override` lets file values win instead. The real process environment is
+  never mutated. The parser is a fixed, documented dialect (quoting + escapes,
+  `#` comments, `export ` prefix, BOM/CRLF) with **no variable expansion**.
+- **`runtime:process` secret masking** (DECISIONS D30). Env values whose key
+  matches `*_SECRET(S)` / `*_PASSWORD(S)` (case-insensitive) are exposed as an
+  opaque `Secret` that renders as `"[redacted]"` in `console` output, string
+  coercion / template literals, and `JSON.stringify`, guarding against
+  accidental leakage. The new `unmask(value)` export reveals the real value
+  (plain strings pass through unchanged); `runtime:process` also exports
+  `Secret`.
+
 ## [0.6.0] - 2026-06-18
 
 ### Added

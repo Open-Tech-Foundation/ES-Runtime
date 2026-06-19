@@ -172,22 +172,48 @@ D26).
 - **Snapshotting:** values are captured when the module is evaluated.
 
 ```js
-import { env, args, platform, arch, cwd, exit } from "runtime:process";
+import { env, args, platform, arch, cwd, exit, unmask } from "runtime:process";
 // Or the default aggregate:
 import process from "runtime:process";
 ```
 
+The `env` snapshot includes any values loaded from `esrun --env-file` (DECISIONS
+D30). Files load **only** via that explicit flag (no auto-discovery); the OS
+environment wins on a conflict unless `--env-override` is passed, and later
+`--env-file`s win over earlier ones.
+
 ### Exports
 
-| Export            | Type                       | Description                                                                                                                                                                              |
-| ----------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `env`             | `object`                   | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation. Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. |
-| `args`            | `readonly string[]`        | Program arguments after the runtime binary and the script (or `-e` snippet). **Frozen.** Excludes the executable and script path.                                                          |
-| `platform`        | `string`                   | Host OS — the OS-native value (`std::env::consts::OS`): `"linux"`, `"macos"`, `"windows"`, …                                                                                              |
-| `arch`            | `string`                   | Host CPU architecture — the OS-native value (`std::env::consts::ARCH`): `"x86_64"`, `"aarch64"`, `"arm"`, …                                                                               |
-| `cwd()`           | `() => string`             | Current working directory. A **function** (not a value) because the directory can change during a run.                                                                                    |
-| `exit(code = 0)`  | `(code?: number) => never` | Records the exit code and **halts execution immediately** — code after the call does not run. The embedder reads the recorded code and treats it as a clean exit, not an error.            |
-| `default`         | `object`                   | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+| Export            | Type                                | Description                                                                                                                                                                              |
+| ----------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Secret-keyed values are `Secret` wrappers (see below). |
+| `args`            | `readonly string[]`                 | Program arguments after the runtime binary and the script (or `-e` snippet). **Frozen.** Excludes the executable and script path.                                                          |
+| `platform`        | `string`                            | Host OS — the OS-native value (`std::env::consts::OS`): `"linux"`, `"macos"`, `"windows"`, …                                                                                              |
+| `arch`            | `string`                            | Host CPU architecture — the OS-native value (`std::env::consts::ARCH`): `"x86_64"`, `"aarch64"`, `"arm"`, …                                                                               |
+| `cwd()`           | `() => string`                      | Current working directory. A **function** (not a value) because the directory can change during a run.                                                                                    |
+| `exit(code = 0)`  | `(code?: number) => never`          | Records the exit code and **halts execution immediately** — code after the call does not run. The embedder reads the recorded code and treats it as a clean exit, not an error.            |
+| `unmask(value)`   | `(value: string \| Secret) => string` | Reveal a masked `Secret`'s real value. A plain `string` passes through unchanged, so `unmask(env.ANY)` is always safe.                                                                  |
+| `Secret`          | `class`                             | Opaque holder for a masked env value (see **Secret masking**).                                                                                                                            |
+| `default`         | `object`                            | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+
+### Secret masking
+
+Env entries whose key ends in `_SECRET`, `_SECRETS`, `_PASSWORD`, or `_PASSWORDS`
+(case-insensitive) are exposed as a `Secret` rather than a raw string, so they
+render as `"[redacted]"` everywhere a value would otherwise leak — `console`
+output, string coercion / template literals, and `JSON.stringify`. The real
+value is held in a module-private `WeakMap` and is obtainable only via
+`unmask(...)`. This guards against **accidental** disclosure to logs; it is not
+a barrier against hostile guest code (which can call `unmask` itself). DECISIONS
+D30.
+
+```js
+import { env, unmask } from "runtime:process";
+console.log(env.DB_PASSWORD);        // [redacted]
+console.log(`${env.DB_PASSWORD}`);   // [redacted]
+JSON.stringify(env);                 // ..."DB_PASSWORD":"[redacted]"...
+const pw = unmask(env.DB_PASSWORD);  // real value, explicit
+```
 
 ### Examples
 
@@ -196,7 +222,7 @@ import process from "runtime:process";
 import { env } from "runtime:process";
 console.log(env.HOME);
 env.FEATURE_FLAG = "on";
-delete env.SECRET;
+delete env.CACHE_DIR;
 ```
 
 ```js
