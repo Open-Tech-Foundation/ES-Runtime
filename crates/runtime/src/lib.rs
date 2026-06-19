@@ -2257,7 +2257,7 @@ mod tests {
         assert_eq!(fail, 0, "conformance failures ({fail}):\n{failures}");
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 62;
+        const BASELINE: u32 = 68;
         assert!(
             pass >= BASELINE,
             "conformance pass count {pass} below baseline {BASELINE}"
