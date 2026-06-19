@@ -381,10 +381,11 @@ const tlsServer = listen({
 | `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn? }) => Listener` | Bind a listening socket. `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols. `NetListen`. |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
-`closed: Promise<void>`, `close()`, `upgraded`, and `startTls(): Socket` (valid
-only on a `"starttls"` socket; returns a new TLS `Socket` with `upgraded ===
-true`). Closing the writable half-closes (FIN); `allowHalfOpen` (a `connect`
-option, default `false`) keeps the writable usable after the peer's FIN.
+`closed: Promise<void>`, `close(reason?)`, `upgraded`, and `startTls(): Socket`
+(valid only on a `"starttls"` socket; returns a new TLS `Socket` with `upgraded
+=== true`). `close`'s `reason` is advisory (WinterTC) and ignored. Closing the
+writable half-closes (FIN); `allowHalfOpen` (a `connect` option, default
+`false`) keeps the writable usable after the peer's FIN.
 **`SocketInfo`** (from `opened`): `{ remoteAddress, remotePort, localAddress,
 localPort, alpn }` — `remoteAddress`/`localAddress` are WinterTC `"host:port"`
 strings (IPv6 host bracketed); `alpn` is the negotiated protocol for a TLS
@@ -392,6 +393,9 @@ socket, else `null`.
 
 **`Listener`** — async-iterable of `Socket`; `addr: Promise<{ hostname, port }>`,
 `accept()`, `close()`.
+
+**Errors** — socket failures (bad options, connect/TLS/I/O errors) surface as a
+`TypeError` whose message is prefixed `"SocketError: "` (WinterTC `SocketError`).
 
 ## `runtime:http`
 

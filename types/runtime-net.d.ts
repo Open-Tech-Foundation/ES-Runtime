@@ -42,8 +42,8 @@ declare module "runtime:net" {
     readonly opened: Promise<SocketInfo>;
     /** Resolves when the socket is fully closed. */
     readonly closed: Promise<void>;
-    /** Fully close the socket. */
-    close(): Promise<void>;
+    /** Fully close the socket. `reason` is advisory (WinterTC) and ignored. */
+    close(reason?: unknown): Promise<void>;
     /** `true` once this socket is the result of a {@link startTls} upgrade. */
     readonly upgraded: boolean;
     /**

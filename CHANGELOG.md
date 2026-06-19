@@ -6,6 +6,16 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Changed
+
+- **`runtime:net` — full WinterTC Sockets conformance.** `Socket.close(reason?)`
+  now accepts the spec's optional advisory `reason` argument (ignored by the
+  transport), and socket failures — invalid options, connect/TLS/I/O errors —
+  surface as a `TypeError` whose message is prefixed `"SocketError: "` (the
+  WinterTC `SocketError` shape). This closes the last letter-of-the-spec gaps;
+  the `runtime:net` surface now fully matches the
+  [WinterTC Sockets proposal](https://sockets-api.proposal.wintertc.org/).
+
 ## [0.7.0] - 2026-06-19
 
 ### Added

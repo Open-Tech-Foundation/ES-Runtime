@@ -8,12 +8,27 @@ const ops = globalThis.__ops;
 const encoder = new TextEncoder();
 const EMPTY = new Uint8Array(0);
 
+// WinterTC SocketError: socket failures surface as a TypeError whose message is
+// prefixed "SocketError: ". `socketError` builds one; `socketOp` rewraps the
+// rejections coming back from the host ops so connection/TLS/I/O failures conform
+// too — without double-prefixing an error that already carries the marker.
+function socketError(message) {
+  return new TypeError(`SocketError: ${message}`);
+}
+
+function socketOp(promise) {
+  return promise.catch((e) => {
+    if (e instanceof TypeError && e.message.startsWith("SocketError: ")) throw e;
+    throw socketError(e && e.message != null ? e.message : String(e));
+  });
+}
+
 function toBytes(chunk) {
   if (chunk instanceof Uint8Array) return chunk;
   if (typeof chunk === "string") return encoder.encode(chunk);
   if (ArrayBuffer.isView(chunk)) return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
   if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
-  throw new TypeError("a socket write expects a string, ArrayBuffer, or ArrayBufferView");
+  throw socketError("a socket write expects a string, ArrayBuffer, or ArrayBufferView");
 }
 
 // Joins a host and port into the WinterTC SocketInfo "host:port" form, bracketing
@@ -36,10 +51,12 @@ function parseAddress(address) {
 // the streams await it, so connect() can return synchronously.
 class Socket {
   constructor(conn, { upgrade = null, allowHalfOpen = false } = {}) {
-    this._conn = conn;
+    // Wrap once: every consumer (opened, the streams, close, a later startTls)
+    // awaits _conn, so a connect/TLS failure surfaces uniformly as a SocketError.
+    this._conn = socketOp(conn);
     // WinterTC SocketInfo: combined "host:port" addresses + the negotiated alpn.
     // remotePort/localPort are kept as a convenience superset.
-    this.opened = conn.then((c) => ({
+    this.opened = this._conn.then((c) => ({
       remoteAddress: hostPort(c.remoteAddress, c.remotePort),
       remotePort: c.remotePort,
       localAddress: hostPort(c.localAddress, c.localPort),
@@ -62,11 +79,11 @@ class Socket {
     this.readable = new ReadableStream({
       async pull(controller) {
         const { id } = await self._conn;
-        const chunk = await ops.net_read(id);
+        const chunk = await socketOp(ops.net_read(id));
         if (chunk === null) {
           controller.close();
           if (!self._allowHalfOpen) {
-            await ops.net_close(id); // peer hung up — drop the whole socket
+            await socketOp(ops.net_close(id)); // peer hung up — drop the whole socket
             self._finish();
           }
         } else {
@@ -81,12 +98,12 @@ class Socket {
     this.writable = new WritableStream({
       async write(chunk) {
         const { id } = await self._conn;
-        await ops.net_write(id, toBytes(chunk));
+        await socketOp(ops.net_write(id, toBytes(chunk)));
       },
       // Half-close: send FIN but keep reading the peer's reply.
       async close() {
         const { id } = await self._conn;
-        await ops.net_shutdown(id);
+        await socketOp(ops.net_shutdown(id));
       },
       abort() {
         return self.close();
@@ -101,9 +118,11 @@ class Socket {
     }
   }
 
-  async close() {
+  // WinterTC close(reason?): the optional reason is advisory — accepted for
+  // signature compatibility; the transport just tears the connection down.
+  async close(_reason) {
     const { id } = await this._conn;
-    await ops.net_close(id);
+    await socketOp(ops.net_close(id));
     this._finish();
   }
 
@@ -111,7 +130,7 @@ class Socket {
   // Socket for the encrypted stream. The original socket is consumed.
   startTls() {
     if (!this._upgrade) {
-      throw new TypeError("startTls() requires secureTransport: 'starttls'");
+      throw socketError("startTls() requires secureTransport: 'starttls'");
     }
     const { name, alpn } = this._upgrade;
     this._upgrade = null; // single-shot
@@ -127,7 +146,7 @@ function connect(address, options = {}) {
   const { hostname, port } = parseAddress(address);
   const mode = options.secureTransport ?? "off";
   if (mode !== "off" && mode !== "on" && mode !== "starttls") {
-    throw new TypeError(`invalid secureTransport: ${mode}`);
+    throw socketError(`invalid secureTransport: ${mode}`);
   }
   const tls = mode === "on";
   // WinterTC SocketOptions: sni (server name override) + alpn (offered protocols;
@@ -176,13 +195,13 @@ function listen(options = {}) {
   // negotiated one comes back as the accepted Socket's SocketInfo.alpn.
   const mode = options.secureTransport ?? "off";
   if (mode !== "off" && mode !== "on") {
-    throw new TypeError(`invalid secureTransport: ${mode}`);
+    throw socketError(`invalid secureTransport: ${mode}`);
   }
   let cert = EMPTY, key = EMPTY;
   const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
   if (mode === "on") {
     if (options.cert == null || options.key == null) {
-      throw new TypeError("secureTransport: 'on' requires cert and key");
+      throw socketError("secureTransport: 'on' requires cert and key");
     }
     cert = toBytes(options.cert);
     key = toBytes(options.key);

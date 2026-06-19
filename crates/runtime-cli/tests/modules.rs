@@ -372,18 +372,19 @@ fn runtime_net_starttls_surface_and_guards() {
         const server = listen({ hostname: '127.0.0.1', port: 0 });\
         const { port } = await server.addr;\
         const a = connect({ hostname: '127.0.0.1', port });\
+        const tag = (e) => e.constructor.name + (e.message.startsWith('SocketError: ') ? '+SE' : '');\
         let g1 = 'none';\
-        try { a.startTls(); } catch (e) { g1 = e.constructor.name; }\
+        try { a.startTls(); } catch (e) { g1 = tag(e); }\
         let g2 = 'none';\
         try { connect({ hostname: '127.0.0.1', port }, { secureTransport: 'x' }); }\
-        catch (e) { g2 = e.constructor.name; }\
+        catch (e) { g2 = tag(e); }\
         const b = connect({ hostname: '127.0.0.1', port }, { secureTransport: 'starttls' });\
         console.log('STARTTLS:' + g1 + ':' + g2 + ':' + (b.upgraded === false));\
-        await a.close(); await b.close(); await server.close();";
+        await a.close('done'); await b.close(); await server.close();";
     let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stdout(&out).contains("STARTTLS:TypeError:TypeError:true"),
+        stdout(&out).contains("STARTTLS:TypeError+SE:TypeError+SE:true"),
         "{}",
         stdout(&out)
     );
