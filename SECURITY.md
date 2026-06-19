@@ -39,8 +39,8 @@ embedder restrict capabilities and inject its own providers.
 the environment is an explicit host decision**, and so that secret values resist
 **accidental** disclosure:
 
-- **No implicit disk reads.** A `.env` file is loaded **only** via an explicit
-  `esrun --env-file <path>` (repeatable). There is no auto-discovery of a `.env`
+- **No implicit disk reads.** A single `.env` file is loaded **only** via an
+  explicit `esrun --env-file <path>`. There is no auto-discovery of a `.env`
   in the working directory or project root — nothing on disk is read into the
   guest's environment unless you ask for it. This is a CLI/host feature; the
   embeddable library never loads env files and never mutates the real process
@@ -48,9 +48,11 @@ the environment is an explicit host decision**, and so that secret values resist
 - **OS environment wins by default.** Loaded values fill only keys the OS does
   not already set, so a checked-in `.env` cannot silently clobber a production
   deployment's real configuration. `--env-override` opts into letting file
-  values win; later `--env-file`s win over earlier ones.
-- **Secret masking.** Env entries whose key matches (case-insensitive)
-  `*_SECRET(S)` or `*_PASSWORD(S)` are exposed by `runtime:process` as an opaque
+  values win.
+- **Secret masking.** Env entries with a secret-bearing key (case-insensitive)
+  — ending in `_KEY(S)`, `_TOKEN(S)`, `_SECRET(S)`, `_PASS`, `_PASSWORD(S)`, or
+  containing `CREDENTIAL`/`AUTH` (as an underscore-delimited word) — are exposed
+  by `runtime:process` as an opaque
   `Secret` that renders as `"[redacted]"` in `console` output, string coercion /
   template literals, and `JSON.stringify`. The real value is held in a
   module-private `WeakMap` and is obtainable only via the explicit

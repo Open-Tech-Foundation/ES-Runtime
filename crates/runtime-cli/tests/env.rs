@@ -84,26 +84,6 @@ fn env_override_lets_file_win() {
 }
 
 #[test]
-fn later_env_file_wins() {
-    let first = write("first.env", "A=1\nB=1\n");
-    let second = write("second.env", "B=2\nC=2\n");
-    let app = write("repeat.mjs", PRINT_APP);
-    let out = esrun()
-        .arg("--env-file")
-        .arg(&first)
-        .arg("--env-file")
-        .arg(&second)
-        .arg(&app)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "stderr: {}", stderr(&out));
-    let s = stdout(&out);
-    assert!(s.contains("A=1"), "{s}"); // only in first
-    assert!(s.contains("B=2"), "{s}"); // second wins
-    assert!(s.contains("C=2"), "{s}"); // only in second
-}
-
-#[test]
 fn missing_env_file_is_an_error() {
     let app = write("missing.mjs", "console.log('ran')");
     let out = esrun()
@@ -165,4 +145,52 @@ fn secret_keyed_values_are_redacted_everywhere_but_unmaskable() {
     assert!(s.contains("unmask-plain:visible"), "{s}");
     // The token must not appear except where explicitly unmasked (it isn't here).
     assert!(!s.contains("tok-123"), "API_SECRET leaked: {s}");
+}
+
+#[test]
+fn secret_key_convention_covers_the_full_pattern_set() {
+    // Positives: *_SECRET(S), *_PASSWORD(S), *_PASS, *_KEY(S), *_TOKEN(S), and
+    // CREDENTIAL / AUTH as underscore-delimited words. Negatives: lookalikes
+    // (MONKEY ends in KEY, AUTHOR contains AUTH) and ordinary config keys.
+    let envf = write(
+        "patterns.env",
+        "API_KEY=v\nACCESS_TOKEN=v\nDB_PASS=v\nDB_PASSWORD=v\nAPP_SECRET=v\n\
+         AWS_CREDENTIALS=v\nAUTH_TOKEN=v\nAPI_AUTH=v\nPUBLIC_KEY=v\n\
+         MONKEY=v\nAUTHOR=v\nDATABASE_URL=v\n",
+    );
+    let app = write(
+        "patterns.mjs",
+        r#"
+        import { env } from "runtime:process";
+        const keys = ["API_KEY","ACCESS_TOKEN","DB_PASS","DB_PASSWORD","APP_SECRET",
+          "AWS_CREDENTIALS","AUTH_TOKEN","API_AUTH","PUBLIC_KEY",
+          "MONKEY","AUTHOR","DATABASE_URL"];
+        for (const k of keys)
+          console.log(k + "=" + (String(env[k]) === "[redacted]" ? "masked" : "plain"));
+        "#,
+    );
+    let out = esrun()
+        .arg("--env-file")
+        .arg(&envf)
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for masked in [
+        "API_KEY=masked",
+        "ACCESS_TOKEN=masked",
+        "DB_PASS=masked",
+        "DB_PASSWORD=masked",
+        "APP_SECRET=masked",
+        "AWS_CREDENTIALS=masked",
+        "AUTH_TOKEN=masked",
+        "API_AUTH=masked",
+        "PUBLIC_KEY=masked",
+    ] {
+        assert!(s.contains(masked), "expected {masked}\n{s}");
+    }
+    for plain in ["MONKEY=plain", "AUTHOR=plain", "DATABASE_URL=plain"] {
+        assert!(s.contains(plain), "expected {plain}\n{s}");
+    }
 }

@@ -47,7 +47,7 @@ USAGE:
     esrun <file>             Run a JavaScript module file
     esrun -e <code>          Run an inline module snippet
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
-    esrun --env-file <path>  Load env vars from a .env file (repeatable)
+    esrun --env-file <path>  Load env vars from a .env file
     esrun --env-override     Let --env-file values override the OS environment
     esrun upgrade            Update esrun to the latest release
     esrun types              Print the runtime: TypeScript definitions
@@ -245,8 +245,8 @@ enum Source {
 struct Config {
     source: Source,
     timeout: Option<Duration>,
-    /// `.env` files to load (in order; later files win), via `--env-file`.
-    env_files: Vec<String>,
+    /// `.env` file to load, via `--env-file` (last one wins if repeated).
+    env_file: Option<String>,
     /// Whether `--env-file` values override the OS environment (`--env-override`).
     env_override: bool,
     /// User arguments after the script/`-e` code, exposed as `runtime:process`
@@ -256,7 +256,7 @@ struct Config {
 
 fn parse_args() -> Result<Config, String> {
     let mut timeout = None;
-    let mut env_files: Vec<String> = Vec::new();
+    let mut env_file: Option<String> = None;
     let mut env_override = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -306,7 +306,7 @@ fn parse_args() -> Result<Config, String> {
                 let path = args
                     .next()
                     .ok_or_else(|| "--env-file requires a path".to_string())?;
-                env_files.push(path);
+                env_file = Some(path);
             }
             "--env-override" => {
                 env_override = true;
@@ -318,7 +318,7 @@ fn parse_args() -> Result<Config, String> {
                 return Ok(Config {
                     source: Source::Inline(code),
                     timeout,
-                    env_files,
+                    env_file,
                     env_override,
                     args: args.collect(),
                 });
@@ -330,7 +330,7 @@ fn parse_args() -> Result<Config, String> {
                 return Ok(Config {
                     source: Source::File(path.to_string()),
                     timeout,
-                    env_files,
+                    env_file,
                     env_override,
                     args: args.collect(),
                 });
@@ -419,13 +419,13 @@ async fn run() -> Result<(), String> {
     let net = Arc::new(ReqwestTransport::new().map_err(|e| format!("http transport: {e}"))?);
     // Host process view for runtime:process (env/cwd/platform from the OS; args
     // are the user's, after the script/-e). A concrete handle is kept to read
-    // the exit code a guest `process.exit()` may request. `.env` files are
-    // loaded only via explicit --env-file (never auto-discovered, D30); their
+    // the exit code a guest `process.exit()` may request. The `.env` file is
+    // loaded only via explicit --env-file (never auto-discovered, D30); its
     // values override the OS env only with --env-override.
-    let mut env_overlay = Vec::new();
-    for file in &config.env_files {
-        env_overlay.extend(dotenv::load(std::path::Path::new(file))?);
-    }
+    let env_overlay = match &config.env_file {
+        Some(file) => dotenv::load(std::path::Path::new(file))?,
+        None => Vec::new(),
+    };
     let process =
         Arc::new(SystemProcess::new(config.args).with_env(env_overlay, config.env_override));
     // Filesystem view for runtime:fs: relative paths resolve under the entry's

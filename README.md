@@ -1,8 +1,16 @@
+<div align="center">
+
 # ES-Runtime
 
-V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured.
+[Website](https://esrun.opentechf.org) | [Docs](https://esrun.opentechf.org/docs) | [API](https://esrun.opentechf.org/api)
 
-**Website & docs → [esrun.opentechf.org](https://esrun.opentechf.org)**
+*Part of the <img src="https://raw.githubusercontent.com/Open-Tech-Foundation/website/3ed7ac70ec44465eec0f94e5185cb28a9b11ed07/static/img/OTF-Logo.svg" width="24" align="center" /> [Open Tech Foundation](https://github.com/Open-Tech-Foundation) ecosystem.*
+</div>
+
+> ### V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured.
+
+
+## Shapes
 
 It ships in two shapes from the same core:
 
@@ -42,29 +50,9 @@ Run JS files like `node`/`bun`:
 esrun examples/hello.js
 esrun examples/modules/main.mjs   # ES module: import/export + top-level await
 esrun -e "console.log(6 * 7)"
-esrun --env-file .env app.mjs     # load env vars from a .env file (repeatable)
+esrun --env-file .env app.mjs     # load env vars from a .env file
 esrun --help
 ```
-
-### Environment files
-
-`--env-file <path>` loads variables from a `.env` file into `runtime:process`
-`env` (repeatable; later files win). There is **no** auto-loading — a file is
-read only when you pass the flag. The OS environment wins on a conflict; pass
-`--env-override` to let the file win instead. Secret-bearing keys (`*_SECRET(S)`,
-`*_PASSWORD(S)`) are masked by default — see [Security](SECURITY.md).
-
-(If you built from source, the binary is at `./target/release/esrun`. To call it
-as `esrun` from anywhere, run `cargo install --path crates/runtime-cli`.)
-
-The full implemented WinterTC surface is available (console, URL, fetch, crypto,
-streams, encoding, timers, events); all host capabilities are granted. Inputs run
-as **ES modules**: static `import`/`export`, dynamic `import()`, `import.meta.url`,
-and native top-level `await` all work. Imports resolve as **local files**
-(relative or absolute paths, or `file:` URLs) and **bare specifiers through
-`node_modules`** for ES module packages (run `npm install` yourself — nothing is
-fetched). CommonJS packages and `node:` builtins are rejected with a clear
-message; import attributes (`with { type: "json" }`) are fully supported. Remote (`https://`) modules are explicitly unsupported by design to enforce a strict local-only security model.
 
 ## TypeScript
 
@@ -77,13 +65,6 @@ esrun types --install   # writes the defs into node_modules/@opentf/esrun and wi
 
 `esrun types` alone prints them to stdout. See
 [esrun.opentechf.org/docs/typescript](https://esrun.opentechf.org/docs/typescript).
-
-## Documentation
-
-- **[esrun.opentechf.org](https://esrun.opentechf.org)** — full docs, guides, and
-  cross-runtime benchmarks.
-- **[API reference](docs/API.md)** — globals, scope/non-goals, the `runtime:`
-  modules and their exports (canonical).
 
 ## Development
 

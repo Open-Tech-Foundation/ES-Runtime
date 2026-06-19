@@ -1,8 +1,10 @@
 declare module "runtime:process" {
   /**
-   * An opaque holder for a secret env value. Env entries whose key ends in
-   * `_SECRET(S)` or `_PASSWORD(S)` (case-insensitive) are exposed as a `Secret`
-   * instead of a raw string, so they render as `"[redacted]"` everywhere they
+   * An opaque holder for a secret env value. Env entries with a secret-bearing
+   * key (case-insensitive) — ending in `_KEY(S)`, `_TOKEN(S)`, `_SECRET(S)`,
+   * `_PASS`, or `_PASSWORD(S)`, or containing `CREDENTIAL`/`AUTH` — are exposed
+   * as a `Secret` instead of a raw string, so they render as `"[redacted]"`
+   * everywhere they
    * would otherwise leak — console output, string coercion / template literals,
    * and `JSON.stringify`. Call {@link unmask} to obtain the real value.
    */
@@ -17,8 +19,9 @@ declare module "runtime:process" {
    * snapshot taken when the module is evaluated. Reads, writes, and deletes work
    * in-process; they do not propagate to the host process or to child processes.
    *
-   * Values for secret-bearing keys (`*_SECRET(S)`, `*_PASSWORD(S)`) are
-   * {@link Secret} wrappers; pass them through {@link unmask} to read the value.
+   * Values for secret-bearing keys (e.g. `*_KEY`, `*_TOKEN`, `*_SECRET`,
+   * `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are {@link Secret} wrappers; pass
+   * them through {@link unmask} to read the value.
    */
   export const env: Record<string, string | Secret>;
 

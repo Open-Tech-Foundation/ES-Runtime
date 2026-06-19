@@ -78,7 +78,7 @@ const exports = [
   {
     sig: "Secret",
     type: "class",
-    desc: "Opaque holder for a masked env value (keys ending in *_SECRET(S) / *_PASSWORD(S)). Renders as \"[redacted]\" in console, string coercion, and JSON. Call unmask() to read it.",
+    desc: "Opaque holder for a masked env value (secret-bearing keys — see Secrets below). Renders as \"[redacted]\" in console, string coercion, and JSON. Call unmask() to read it.",
     ex: `env.API_SECRET instanceof Secret; // true`,
   },
 ];
@@ -159,22 +159,39 @@ export default function ProcessDoc() {
         Secrets — masked by default
       </h2>
       <p className="mt-4 text-sm leading-relaxed text-zinc-600">
-        Env entries whose key ends in{" "}
-        <code className="font-mono">*_SECRET(S)</code> or{" "}
-        <code className="font-mono">*_PASSWORD(S)</code> (case-insensitive) are
-        exposed as a <code className="font-mono">Secret</code> that renders as{" "}
-        <code className="font-mono">[redacted]</code> in console output, string
-        coercion / template literals, and{" "}
-        <code className="font-mono">JSON.stringify</code> — so they don't leak
-        into logs by accident. Call <code className="font-mono">unmask()</code>{" "}
-        to read the value. This guards against accidental disclosure, not a
-        hostile guest (which can call <code className="font-mono">unmask</code>{" "}
-        itself).
+        Secret-bearing keys are exposed as a{" "}
+        <code className="font-mono">Secret</code> that renders as{" "}
+        <code className="font-mono">[redacted]</code> in console, strings, and
+        JSON.
+      </p>
+      <p className="mt-3 text-sm leading-relaxed text-zinc-600">
+        A key qualifies if it ends in{" "}
+        <code className="font-mono">_KEY</code>, <code className="font-mono">_TOKEN</code>,{" "}
+        <code className="font-mono">_SECRET</code>, <code className="font-mono">_PASS(WORD)</code>,
+        or contains <code className="font-mono">CREDENTIAL</code>/<code className="font-mono">AUTH</code>.
       </p>
       <div className="mt-4">
         <CodeBlock code={SECRET_EX} title="secrets.js" lang="js" />
       </div>
-      <p className="mt-4 text-sm leading-relaxed text-zinc-600">
+      <div className="mt-5 rounded-xl border border-brand-200 bg-brand-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-700">
+          Hint · Reading a secret
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          Call <code className="font-mono">unmask(value)</code> for the real
+          string; plain values pass through unchanged.
+        </p>
+      </div>
+      <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-rose-700">
+          Danger · Not a sandbox
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          Masking stops accidental log leaks — code you run can still call{" "}
+          <code className="font-mono">unmask</code> itself.
+        </p>
+      </div>
+      <p className="mt-5 text-sm leading-relaxed text-zinc-600">
         Load values from a file with{" "}
         <a href="/api/cli" className="font-medium text-brand-600 hover:text-brand-700">
           <code className="font-mono">esrun --env-file .env</code>

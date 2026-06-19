@@ -53,8 +53,8 @@ impl SystemProcess {
     /// Layers `overlay` (e.g. parsed from `--env-file`) over the OS environment.
     /// With `override_os = false` the OS value wins on a conflict; with
     /// `override_os = true` the overlay wins. Within `overlay`, later entries
-    /// win (so a later `--env-file` overrides an earlier one). The real process
-    /// environment is never modified.
+    /// win (so a later duplicate key in the file overrides an earlier one). The
+    /// real process environment is never modified.
     pub fn with_env(mut self, overlay: Vec<(String, String)>, override_os: bool) -> Self {
         self.env_overlay = overlay;
         self.env_override = override_os;

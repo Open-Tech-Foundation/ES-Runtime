@@ -122,31 +122,51 @@ export default function SecurityDoc() {
         Environment files &amp; secret masking
       </h2>
       <p className="mt-3 text-zinc-600">
-        A <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.env</code>{" "}
-        file is loaded only when you pass{" "}
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">--env-file</code>{" "}
-        — there is no auto-discovery, so nothing on disk reaches the guest's
-        environment unless you ask for it. The OS environment wins on a conflict
-        by default (a checked-in file can't clobber production config);{" "}
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">--env-override</code>{" "}
-        opts into letting the file win. The real process environment is never
-        mutated.
+        What the guest can read from the environment is an explicit host
+        decision, and secret values resist accidental disclosure.
       </p>
-      <p className="mt-3 text-zinc-600">
-        Env values whose key ends in{" "}
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">*_SECRET(S)</code>{" "}
-        or{" "}
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">*_PASSWORD(S)</code>{" "}
-        are exposed as a{" "}
-        <a href="/api/process" className="font-medium text-brand-600 hover:text-brand-700">
-          <code className="font-mono">Secret</code>
-        </a>{" "}
-        that renders as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">[redacted]</code>{" "}
-        in logs, string coercion, and JSON — readable only via{" "}
-        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">unmask()</code>.
-        This prevents <em>accidental</em> leakage to logs; it is not a barrier
-        against hostile guest code, which can unmask the value itself.
-      </p>
+
+      <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">
+          Warning · No implicit disk reads
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          A <code className="font-mono">.env</code> loads only via{" "}
+          <code className="font-mono">--env-file</code>. Nothing on disk reaches
+          the environment unless you ask for it.
+        </p>
+      </div>
+      <div className="mt-5 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+          Note · OS environment wins
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          Loaded values fill only unset keys by default, so a checked-in file
+          can't clobber production config. The real process env is never mutated.
+        </p>
+      </div>
+      <div className="mt-5 rounded-xl border border-brand-200 bg-brand-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-700">
+          Hint · Secret masking
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          Keys ending in <code className="font-mono">_KEY/_TOKEN/_SECRET/_PASS(WORD)</code>{" "}
+          or containing <code className="font-mono">CREDENTIAL/AUTH</code> become a{" "}
+          <a href="/api/process" className="font-medium text-brand-600 hover:text-brand-700">
+            <code className="font-mono">Secret</code>
+          </a>{" "}
+          that prints as <code className="font-mono">[redacted]</code>.
+        </p>
+      </div>
+      <div className="mt-5 rounded-xl border border-rose-200 bg-rose-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-rose-700">
+          Danger · Accidents, not attackers
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-zinc-600">
+          Masking prevents leaks into logs and JSON. It is not a sandbox — guest
+          code can call <code className="font-mono">unmask()</code> itself.
+        </p>
+      </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Remote modules disabled

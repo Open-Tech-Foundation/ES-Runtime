@@ -14,8 +14,13 @@ const REDACTED = "[redacted]";
 // A global-registry symbol the console inspector checks to render "[redacted]"
 // without importing this module (console lives in the prelude snapshot).
 const REDACTED_MARK = Symbol.for("runtime.secret.redacted");
-// Keys ending in _SECRET, _SECRETS, _PASSWORD, or _PASSWORDS (case-insensitive).
-const SECRET_KEY = /(?:_SECRETS?|_PASSWORDS?)$/i;
+// A key is treated as secret-bearing (case-insensitive) when it either ends in
+// `_SECRET(S)`, `_PASSWORD(S)`, `_PASS`, `_KEY(S)`, or `_TOKEN(S)` — the leading
+// `_` avoids false hits like MONKEY/BYPASS — or contains `CREDENTIAL(S)` or
+// `AUTH` as an underscore-delimited word (so AUTH_TOKEN/API_AUTH match, AUTHOR
+// does not). Over-matching a non-secret is harmless: `unmask` still returns it.
+const SECRET_KEY =
+  /_(?:SECRET|PASSWORD|PASS|KEY|TOKEN)S?$|(?:^|_)(?:CREDENTIAL|AUTH)S?(?:_|$)/i;
 const secrets = new WeakMap();
 
 class Secret {

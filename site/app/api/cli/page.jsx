@@ -4,7 +4,7 @@ import CodeBlock from "../../../components/CodeBlock.jsx";
 const USAGE = `esrun <file>             Run a JavaScript module file
 esrun -e <code>          Run an inline module snippet
 esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
-esrun --env-file <path>  Load env vars from a .env file (repeatable)
+esrun --env-file <path>  Load env vars from a .env file
 esrun --env-override     Let --env-file values override the OS environment
 esrun upgrade            Update esrun to the latest release
 esrun types              Print the runtime: TypeScript definitions
@@ -42,7 +42,7 @@ const options = [
   },
   {
     flag: "--env-file <path>",
-    desc: "Load environment variables from a .env file into runtime:process env. Repeatable (later files win). No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (*_SECRET(S), *_PASSWORD(S)) are masked.",
+    desc: "Load environment variables from a single .env file into runtime:process env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (*_KEY, *_TOKEN, *_SECRET, *_PASSWORD, *CREDENTIAL*, *AUTH*) are masked.",
   },
   {
     flag: "--env-override",

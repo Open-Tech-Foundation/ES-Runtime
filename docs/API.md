@@ -198,9 +198,12 @@ environment wins on a conflict unless `--env-override` is passed, and later
 
 ### Secret masking
 
-Env entries whose key ends in `_SECRET`, `_SECRETS`, `_PASSWORD`, or `_PASSWORDS`
-(case-insensitive) are exposed as a `Secret` rather than a raw string, so they
-render as `"[redacted]"` everywhere a value would otherwise leak — `console`
+Env entries with a secret-bearing key (case-insensitive) are exposed as a
+`Secret` rather than a raw string. A key qualifies when it **ends with**
+`_KEY(S)`, `_TOKEN(S)`, `_SECRET(S)`, `_PASS`, or `_PASSWORD(S)`, or **contains**
+`CREDENTIAL(S)` or `AUTH` as an underscore-delimited word (so `AUTH_TOKEN`
+matches, `AUTHOR` does not). A `Secret`
+renders as `"[redacted]"` everywhere a value would otherwise leak — `console`
 output, string coercion / template literals, and `JSON.stringify`. The real
 value is held in a module-private `WeakMap` and is obtainable only via
 `unmask(...)`. This guards against **accidental** disclosure to logs; it is not
