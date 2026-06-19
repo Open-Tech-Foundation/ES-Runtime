@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-19
+
 ### Added
 
 - **`esrun --env-file <path>` — `.env` loading** (DECISIONS D30). Loads

@@ -3,4 +3,4 @@
 // each bump. Kept as a committed module (rather than read from Cargo.toml in
 // vite.config.js) so the site build needs no build-time file read and stays
 // portable to any static host, including Cloudflare.
-export const RUNTIME_VERSION = "0.6.0";
+export const RUNTIME_VERSION = "0.7.0";
