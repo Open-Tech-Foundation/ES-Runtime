@@ -365,9 +365,12 @@ fn runtime_net_tcp_echo_roundtrip() {
 fn runtime_net_starttls_surface_and_guards() {
     // The startTls() JS surface: a plain socket can't be upgraded, an unknown
     // secureTransport is rejected, and a "starttls" socket opens (upgradable).
-    // The TLS handshake itself is covered by hermetic provider tests (the CLI
-    // trusts the public webpki roots, so a loopback self-signed cert can't be
-    // exercised here).
+    // Also asserts the WinterTC SocketError shape (a TypeError whose message is
+    // prefixed "SocketError: ", marked "+SE" below) across both a synchronous
+    // option-validation throw and a runtime failure (a refused connect rejecting
+    // .opened — exercising the socketOp() op-rejection wrapper). The TLS
+    // handshake itself is covered by hermetic provider tests (the CLI trusts the
+    // public webpki roots, so a loopback self-signed cert can't be exercised here).
     let script = "import { connect, listen } from 'runtime:net';\
         const server = listen({ hostname: '127.0.0.1', port: 0 });\
         const { port } = await server.addr;\
@@ -379,12 +382,14 @@ fn runtime_net_starttls_surface_and_guards() {
         try { connect({ hostname: '127.0.0.1', port }, { secureTransport: 'x' }); }\
         catch (e) { g2 = tag(e); }\
         const b = connect({ hostname: '127.0.0.1', port }, { secureTransport: 'starttls' });\
-        console.log('STARTTLS:' + g1 + ':' + g2 + ':' + (b.upgraded === false));\
+        let g3 = 'none';\
+        try { const c = connect('127.0.0.1:1'); await c.opened; } catch (e) { g3 = tag(e); }\
+        console.log('STARTTLS:' + g1 + ':' + g2 + ':' + g3 + ':' + (b.upgraded === false));\
         await a.close('done'); await b.close(); await server.close();";
     let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stdout(&out).contains("STARTTLS:TypeError+SE:TypeError+SE:true"),
+        stdout(&out).contains("STARTTLS:TypeError+SE:TypeError+SE:TypeError+SE:true"),
         "{}",
         stdout(&out)
     );
@@ -472,10 +477,11 @@ MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgoI+sRkHefoxwbeyv
 VXKwlHaaiSsPtueuWJ1GwC4Pm9kbriVs1/9YTXpKdjsPga00am7iwK7c
 -----END PRIVATE KEY-----`;
         let r = '';
+        const tag = (e) => e.constructor.name + (e.message.startsWith('SocketError: ') ? '+SE' : '');
         try { listen({ port: 0, secureTransport: 'on' }); r += 'NOCERT:no-throw'; }
-        catch (e) { r += 'NOCERT:' + e.constructor.name; }
+        catch (e) { r += 'NOCERT:' + tag(e); }
         try { listen({ port: 0, secureTransport: 'bogus' }); r += ':MODE:no-throw'; }
-        catch (e) { r += ':MODE:' + e.constructor.name; }
+        catch (e) { r += ':MODE:' + tag(e); }
         const server = listen({ hostname: '127.0.0.1', port: 0, secureTransport: 'on', cert, key, alpn: ['h2'] });
         const { port } = await server.addr;
         r += ':BOUND:' + (port > 0);
@@ -484,7 +490,7 @@ VXKwlHaaiSsPtueuWJ1GwC4Pm9kbriVs1/9YTXpKdjsPga00am7iwK7c
     let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stdout(&out).contains("NOCERT:TypeError:MODE:TypeError:BOUND:true"),
+        stdout(&out).contains("NOCERT:TypeError+SE:MODE:TypeError+SE:BOUND:true"),
         "{}",
         stdout(&out)
     );
