@@ -1,5 +1,11 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
+import ErrorTable from "../../../components/ErrorTable.jsx";
+
+const errors = [
+  { e: "TypeError", w: "unmask() gets something other than a string or a Secret from env." },
+  { e: "DOMException", w: "name \"NotAllowedError\" — the Env capability is not granted (env access)." },
+];
 
 const IMPORT = `import { env, args, platform, arch, cwd, exit, unmask } from "runtime:process";
 
@@ -199,6 +205,9 @@ export default function ProcessDoc() {
         (no auto-discovery; the OS environment wins unless{" "}
         <code className="font-mono">--env-override</code> is passed).
       </p>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Errors</h2>
+      <ErrorTable rows={errors} />
 
       <div className="mt-12 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm text-zinc-600">
         <strong className="text-zinc-900">Note.</strong> The default export is an

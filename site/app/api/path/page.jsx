@@ -1,5 +1,10 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
+import ErrorTable from "../../../components/ErrorTable.jsx";
+
+const errors = [
+  { e: "TypeError", w: "A path segment isn't a string, or fileURLToPath() gets a non-file: URL. (Pure string functions — no capability, no I/O.)" },
+];
 
 const IMPORT = `import { join, resolve, dirname, fromFileURL } from "runtime:path";
 
@@ -82,6 +87,9 @@ export default function PathDoc() {
           </div>
         ))}
       </div>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Errors</h2>
+      <ErrorTable rows={errors} />
     </ApiShell>
   );
 }

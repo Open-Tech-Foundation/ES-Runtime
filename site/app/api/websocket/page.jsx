@@ -1,6 +1,14 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
 import MemberTable from "../../../components/MemberTable.jsx";
+import ErrorTable from "../../../components/ErrorTable.jsx";
+
+const errors = [
+  { e: "SyntaxError", w: "new WebSocket(url) with an invalid URL or scheme, or close(code, reason) with a reason longer than 123 UTF-8 bytes." },
+  { e: "DOMException", w: "name \"InvalidAccessError\" — close(code) with a code other than 1000 or 3000–4999." },
+  { e: "DOMException", w: "name \"InvalidStateError\" — send() while the socket is still CONNECTING." },
+  { e: "(event)", w: "A failed connection or a denied Net capability surfaces as an error event followed by a close (code 1006) — not a thrown exception." },
+];
 
 const CLIENT = `// The WebSocket global — like fetch, no import. Opening requires Net.
 const ws = new WebSocket("wss://example.com/socket", ["chat"]);
@@ -132,6 +140,9 @@ export default function WebSocketDoc() {
       <MemberTable rows={serverMembers} />
       <h3 className="mt-8 text-base font-semibold text-zinc-900">connection</h3>
       <MemberTable rows={connMembers} />
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Errors</h2>
+      <ErrorTable rows={errors} />
 
       <p className="mt-8 text-sm leading-relaxed text-zinc-500">
         Not yet: the promise/stream-based{" "}

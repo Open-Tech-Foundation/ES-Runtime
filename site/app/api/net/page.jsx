@@ -1,6 +1,12 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
 import MemberTable from "../../../components/MemberTable.jsx";
+import ErrorTable from "../../../components/ErrorTable.jsx";
+
+const errors = [
+  { e: "TypeError", w: "Any socket failure — invalid options, or a connect / TLS / I/O error (the latter reject .opened or the streams). The message is prefixed \"SocketError: \" (WinterTC SocketError)." },
+  { e: "DOMException", w: "name \"NotAllowedError\" — the Net (connect) or NetListen (listen) capability is not granted." },
+];
 
 const CLIENT = `import { connect } from "runtime:net";
 
@@ -150,6 +156,9 @@ export default function NetDoc() {
       </div>
       <h3 className="mt-8 text-base font-semibold text-zinc-900">Listener</h3>
       <MemberTable rows={listenerMembers} />
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Errors</h2>
+      <ErrorTable rows={errors} />
     </ApiShell>
   );
 }

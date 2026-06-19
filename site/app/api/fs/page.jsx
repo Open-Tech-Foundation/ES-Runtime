@@ -1,5 +1,12 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
+import ErrorTable from "../../../components/ErrorTable.jsx";
+
+const errors = [
+  { e: "TypeError", w: "A path isn't a string, URL, or file() handle; a non-file: URL is passed; or write() gets an unsupported input type." },
+  { e: "DOMException", w: "name \"NotAllowedError\" — the FileRead or FileWrite capability is not granted." },
+  { e: "Error", w: "A filesystem failure surfaced by the OS (not found, permission denied, etc.)." },
+];
 
 const IMPORT = `import { file, write, readDir, stat, mkdir, remove, rename, Glob } from "runtime:fs";`;
 
@@ -159,6 +166,9 @@ export default function FsDoc() {
           </tbody>
         </table>
       </div>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Errors</h2>
+      <ErrorTable rows={errors} />
     </ApiShell>
   );
 }

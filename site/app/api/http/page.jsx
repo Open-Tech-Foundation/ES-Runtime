@@ -1,6 +1,12 @@
 import ApiShell from "../../../components/ApiShell.jsx";
 import CodeBlock from "../../../components/CodeBlock.jsx";
 import MemberTable from "../../../components/MemberTable.jsx";
+import ErrorTable from "../../../components/ErrorTable.jsx";
+
+const errors = [
+  { e: "TypeError", w: "The serve() handler isn't a function, or a Request / Response is built with an invalid init (the Fetch API's own checks)." },
+  { e: "DOMException", w: "name \"NotAllowedError\" — the NetListen capability is not granted." },
+];
 
 const SERVE = `import { serve } from "runtime:http";
 
@@ -110,6 +116,9 @@ export default function HttpDoc() {
       </div>
       <h3 className="mt-8 text-base font-semibold text-zinc-900">Server</h3>
       <MemberTable rows={serverMembers} />
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Errors</h2>
+      <ErrorTable rows={errors} />
     </ApiShell>
   );
 }
