@@ -97,8 +97,6 @@ fn value_to_json(v: Value) -> serde_json::Value {
     }
 }
 
-
-
 /// Maximum element nesting accepted by the recursive XML reader. The parser
 /// descends one stack frame per level, so an unbounded document (`<a><a>…`)
 /// would otherwise overflow the stack and abort the process; past this depth we
@@ -423,13 +421,17 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         let mut json_serializer = serde_json::Serializer::new(&mut out);
 
         match serde_transcode::transcode(deserializer, &mut json_serializer) {
-            Ok(_) => {
-                match String::from_utf8(out) {
-                    Ok(json_str) => Ok(Value::String(json_str)),
-                    Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Invalid UTF-8 in JSON: {}", e))),
-                }
-            }
-            Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
+            Ok(_) => match String::from_utf8(out) {
+                Ok(json_str) => Ok(Value::String(json_str)),
+                Err(e) => Err(OpError::new(
+                    ExceptionClass::SyntaxError,
+                    format!("Invalid UTF-8 in JSON: {}", e),
+                )),
+            },
+            Err(e) => Err(OpError::new(
+                ExceptionClass::SyntaxError,
+                format!("Parse failed: {}", e),
+            )),
         }
     }))?;
 
@@ -466,17 +468,19 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         let mut json_serializer = serde_json::Serializer::new(&mut out);
 
         match serde_transcode::transcode(deserializer, &mut json_serializer) {
-            Ok(_) => {
-                match String::from_utf8(out) {
-                    Ok(json_str) => Ok(Value::String(json_str)),
-                    Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Invalid UTF-8 in JSON: {}", e))),
-                }
-            }
-            Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
+            Ok(_) => match String::from_utf8(out) {
+                Ok(json_str) => Ok(Value::String(json_str)),
+                Err(e) => Err(OpError::new(
+                    ExceptionClass::SyntaxError,
+                    format!("Invalid UTF-8 in JSON: {}", e),
+                )),
+            },
+            Err(e) => Err(OpError::new(
+                ExceptionClass::SyntaxError,
+                format!("Parse failed: {}", e),
+            )),
         }
     }))?;
-
-
 
     engine.register_op(OpDecl::sync("toml_validate", |args| {
         let toml_str = match args.first().and_then(Value::as_str) {
@@ -496,7 +500,9 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
         // TOML requires the root to be an object (table)
         if !json_val.is_object() {
-            return Err(OpError::type_error("TOML build requires the root to be an object"));
+            return Err(OpError::type_error(
+                "TOML build requires the root to be an object",
+            ));
         }
 
         match toml::to_string(&json_val) {
@@ -515,15 +521,19 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         // Pre-allocate buffer aiming for an average 2x size increase
         let mut out = Vec::with_capacity(msgpack_bytes.len() * 2);
         let mut json_serializer = serde_json::Serializer::new(&mut out);
-        
+
         match serde_transcode::transcode(&mut deserializer, &mut json_serializer) {
-            Ok(_) => {
-                match String::from_utf8(out) {
-                    Ok(json_str) => Ok(Value::String(json_str)),
-                    Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Invalid UTF-8 in JSON: {}", e))),
-                }
-            }
-            Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
+            Ok(_) => match String::from_utf8(out) {
+                Ok(json_str) => Ok(Value::String(json_str)),
+                Err(e) => Err(OpError::new(
+                    ExceptionClass::SyntaxError,
+                    format!("Invalid UTF-8 in JSON: {}", e),
+                )),
+            },
+            Err(e) => Err(OpError::new(
+                ExceptionClass::SyntaxError,
+                format!("Parse failed: {}", e),
+            )),
         }
     }))?;
 
