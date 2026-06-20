@@ -1,4 +1,56 @@
-const { xml_parse, xml_validate, xml_build } = globalThis.__ops;
+const { 
+  xml_parse, xml_validate, xml_build,
+  yaml_parse, yaml_validate, yaml_build,
+  toml_parse, toml_validate, toml_build
+} = globalThis.__ops;
+
+export class TOMLValidator {
+  static validate(toml, options = {}) {
+    const result = toml_validate(toml);
+    if (result === true) {
+      if (options.detailed) return { valid: true };
+      return true;
+    }
+    if (options.detailed) return { valid: false, error: result };
+    return false;
+  }
+}
+
+export class TOMLParser {
+  static parse(toml, options = {}) {
+    return toml_parse(toml);
+  }
+}
+
+export class TOMLBuilder {
+  static build(obj, options = {}) {
+    return toml_build(obj);
+  }
+}
+
+export class YAMLValidator {
+  static validate(yaml, options = {}) {
+    const result = yaml_validate(yaml);
+    if (result === true) {
+      if (options.detailed) return { valid: true };
+      return true;
+    }
+    if (options.detailed) return { valid: false, error: result };
+    return false;
+  }
+}
+
+export class YAMLParser {
+  static parse(yaml, options = {}) {
+    return yaml_parse(yaml);
+  }
+}
+
+export class YAMLBuilder {
+  static build(obj, options = {}) {
+    return yaml_build(obj);
+  }
+}
 
 export class XMLValidator {
   static validate(xml, options = {}) {

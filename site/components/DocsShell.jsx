@@ -24,7 +24,9 @@ const NAV = [
       { href: "/docs/http", label: "HTTP server" },
       { href: "/docs/guides/websocket", label: "WebSockets" },
       { href: "/docs/urlpattern", label: "URLPattern" },
-      { href: "/docs/parsers", label: "Native parsers (XML)" },
+      { href: "/docs/parsers/xml", label: "XML Parser" },
+      { href: "/docs/parsers/yaml", label: "YAML Parser" },
+      { href: "/docs/parsers/toml", label: "TOML Parser" },
     ],
   },
   {

@@ -42,6 +42,10 @@ const standardWorkloads = [
 const parserWorkloads = [
   { key: "xml_small", label: "XML parsing (small dataset)", unit: "ms" },
   { key: "xml_large", label: "XML parsing (large dataset)", unit: "ms" },
+  { key: "yaml_small", label: "YAML parsing (small dataset)", unit: "ms" },
+  { key: "yaml_large", label: "YAML parsing (large dataset)", unit: "ms" },
+  { key: "toml_small", label: "TOML parsing (small dataset)", unit: "ms" },
+  { key: "toml_large", label: "TOML parsing (large dataset)", unit: "ms" },
 ];
 
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };

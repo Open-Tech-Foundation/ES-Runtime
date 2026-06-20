@@ -3,6 +3,78 @@ use es_runtime_common::ExceptionClass;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use quick_xml::Reader;
 use quick_xml::events::Event;
+use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use std::fmt;
+
+pub struct ValueVisitor;
+
+impl<'de> Visitor<'de> for ValueVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("any valid JSON/YAML/TOML value")
+    }
+
+    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Value, E> {
+        Ok(Value::Number(value as f64))
+    }
+
+    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Value, E> {
+        Ok(Value::Number(value as f64))
+    }
+
+    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Value, E> {
+        Ok(Value::Number(value))
+    }
+
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Value, E> {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E: de::Error>(self, value: String) -> Result<Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E: de::Error>(self) -> Result<Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+        let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(elem) = seq.next_element_seed(ValueSeed)? {
+            vec.push(elem);
+        }
+        Ok(Value::Array(vec))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+        let mut vec = Vec::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some(key) = map.next_key::<String>()? {
+            let value = map.next_value_seed(ValueSeed)?;
+            vec.push((key, value));
+        }
+        Ok(Value::Object(vec))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ValueSeed;
+
+impl<'de> DeserializeSeed<'de> for ValueSeed {
+    type Value = Value;
+
+    fn deserialize<D: de::Deserializer<'de>>(self, deserializer: D) -> Result<Value, D::Error> {
+        deserializer.deserialize_any(ValueVisitor)
+    }
+}
 
 fn value_to_json(v: Value) -> serde_json::Value {
     match v {
@@ -21,6 +93,31 @@ fn value_to_json(v: Value) -> serde_json::Value {
             serde_json::Value::Object(obj)
         }
         _ => serde_json::Value::Null,
+    }
+}
+
+fn json_to_value(v: serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(f) = n.as_f64() {
+                Value::Number(f)
+            } else {
+                Value::Null
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s),
+        serde_json::Value::Array(arr) => {
+            Value::Array(arr.into_iter().map(json_to_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut obj = Vec::new();
+            for (k, v) in map {
+                obj.push((k, json_to_value(v)));
+            }
+            Value::Object(obj)
+        }
     }
 }
 
@@ -336,6 +433,82 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }
     }))?;
+
+    engine.register_op(OpDecl::sync("yaml_parse", |args| {
+        let yaml = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => return Err(OpError::type_error("yaml_parse expects a string")),
+        };
+
+        let deserializer = serde_yaml::Deserializer::from_str(yaml);
+        match ValueSeed.deserialize(deserializer) {
+            Ok(val) => Ok(val),
+            Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("yaml_validate", |args| {
+        let yaml = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => return Ok(Value::String("Expected a string".into())),
+        };
+
+        match serde_yaml::from_str::<serde_yaml::Value>(yaml) {
+            Ok(_) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {}", e))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("yaml_build", |mut args| {
+        let val = args.drain(..).next().unwrap_or(Value::Null);
+        let json_val = value_to_json(val);
+
+        match serde_yaml::to_string(&json_val) {
+            Ok(yaml_str) => Ok(Value::String(yaml_str)),
+            Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("toml_parse", |args| {
+        let toml_str = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => return Err(OpError::type_error("toml_parse expects a string")),
+        };
+
+        let deserializer = toml::Deserializer::new(toml_str);
+        match ValueSeed.deserialize(deserializer) {
+            Ok(val) => Ok(val),
+            Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("toml_validate", |args| {
+        let toml_str = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => return Ok(Value::String("Expected a string".into())),
+        };
+
+        match toml::from_str::<toml::Value>(toml_str) {
+            Ok(_) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {}", e))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("toml_build", |mut args| {
+        let val = args.drain(..).next().unwrap_or(Value::Null);
+        let json_val = value_to_json(val);
+
+        // TOML requires the root to be an object (table)
+        if !json_val.is_object() {
+            return Err(OpError::type_error("TOML build requires the root to be an object"));
+        }
+
+        match toml::to_string(&json_val) {
+            Ok(toml_str) => Ok(Value::String(toml_str)),
+            Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
+        }
+    }))?;
+
     Ok(())
 }
 
@@ -403,5 +576,41 @@ mod tests {
             .and_then(|_| xml_stream_step(&mut state, "padding-text-that-never-closes", 8))
             .expect_err("unterminated element past the cap must error");
         assert!(err.contains("exceeds"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn yaml_parses() {
+        let yaml = "a: hi\nb: 42\n";
+        // Since we test ops we typically test the function logic, but we can't easily call the op closure here directly in a unit test without an engine instance with the op registered.
+        // Instead, let's just test ValueSeed.
+        let deserializer = serde_yaml::Deserializer::from_str(yaml);
+        let val = ValueSeed.deserialize(deserializer).unwrap();
+        assert!(matches!(val, Value::Object(_)));
+        if let Value::Object(map) = val {
+            assert_eq!(map.len(), 2);
+            assert_eq!(map[0].0, "a");
+            assert!(matches!(map[0].1, Value::String(ref s) if s == "hi"));
+            assert_eq!(map[1].0, "b");
+            assert!(matches!(map[1].1, Value::Number(n) if n == 42.0));
+        } else {
+            panic!("Expected object");
+        }
+    }
+
+    #[test]
+    fn toml_parses() {
+        let toml_str = "a = 'hi'\nb = 42\n";
+        let deserializer = toml::Deserializer::new(toml_str);
+        let val = ValueSeed.deserialize(deserializer).unwrap();
+        assert!(matches!(val, Value::Object(_)));
+        if let Value::Object(map) = val {
+            assert_eq!(map.len(), 2);
+            assert_eq!(map[0].0, "a");
+            assert!(matches!(map[0].1, Value::String(ref s) if s == "hi"));
+            assert_eq!(map[1].0, "b");
+            assert!(matches!(map[1].1, Value::Number(n) if n == 42.0));
+        } else {
+            panic!("Expected object");
+        }
     }
 }

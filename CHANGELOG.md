@@ -6,6 +6,11 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:parsers` Native YAML parsing.** Exposes `YAMLParser`, `YAMLBuilder`, and `YAMLValidator` mapped directly to the `serde_yaml` Rust crate. Provides ultra-fast native YAML-to-JSON and JSON-to-YAML conversion, and strict validation.
+- **`runtime:parsers` Native TOML parsing.** Exposes `TOMLParser`, `TOMLBuilder`, and `TOMLValidator` mapped directly to the `toml` Rust crate for high-performance TOML processing.
+
 ### Changed
 
 - **`runtime:net` — full WinterTC Sockets conformance.** `Socket.close(reason?)`

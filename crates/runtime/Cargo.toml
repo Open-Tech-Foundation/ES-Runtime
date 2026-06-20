@@ -34,6 +34,9 @@ sha1_rsa.workspace = true
 base64 = "0.22"
 quick-xml = { version = "0.40.1", features = ["serialize"] }
 serde_json.workspace = true
+serde_yaml = "0.9.34"
+toml = "0.8"
+serde = "1.0.228"
 
 [lints]
 workspace = true
