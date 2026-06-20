@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-20
+
 ### Added
 
 - **`runtime:parsers` Module**
