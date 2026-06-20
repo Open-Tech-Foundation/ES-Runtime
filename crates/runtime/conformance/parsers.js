@@ -1,4 +1,5 @@
-import { YAMLParser, YAMLBuilder, YAMLValidator, XMLParser, XMLBuilder, XMLValidator, TOMLParser, TOMLBuilder, TOMLValidator } from 'runtime:parsers';
+test("parsers sync apis", async () => {
+const { YAMLParser, YAMLBuilder, YAMLValidator, XMLParser, XMLBuilder, XMLValidator, TOMLParser, TOMLBuilder, TOMLValidator } = await import('runtime:parsers');
 
 function assertEq(actual, expected, msg) {
     function sortKeys(obj) {
@@ -137,4 +138,5 @@ if (!builtToml.includes("Bob") || !builtToml.includes("42")) {
 assertEq(TOMLParser.parse(builtToml), objToBuildToml, "TOML build back to obj");
 
 console.log("TOML tests passed!");
+});
 

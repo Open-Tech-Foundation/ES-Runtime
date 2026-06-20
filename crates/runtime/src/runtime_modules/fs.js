@@ -57,11 +57,11 @@ class FsFile {
     return ops.fs_remove(this.path, false);
   }
   // A web-standard WritableStream sink for incremental / piped writes:
-  //   await readable.pipeTo(file("out.log").writable());
-  // The first chunk truncates the file; later chunks append.
-  writable() {
+  //   await readable.pipeTo(file("out.log").writable({ append: true }));
+  // The first chunk truncates the file unless append is true; later chunks always append.
+  writable(options = {}) {
     const path = this.path;
-    let started = false;
+    let started = !!options.append;
     return new WritableStream({
       async write(chunk) {
         await ops.fs_write(path, chunkToBytes(chunk), started);

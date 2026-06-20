@@ -40,6 +40,7 @@ const standardWorkloads = [
 ];
 
 const parserWorkloads = [
+  { key: "jsonl_stream", label: "JSONL streaming (large dataset)", unit: "ms" },
   { key: "xml_small", label: "XML parsing (small dataset)", unit: "ms" },
   { key: "xml_large", label: "XML parsing (large dataset)", unit: "ms" },
   { key: "yaml_small", label: "YAML parsing (small dataset)", unit: "ms" },

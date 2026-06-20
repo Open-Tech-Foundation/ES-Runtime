@@ -77,7 +77,7 @@ const members = [
   { m: "exists()", t: "Promise<boolean>", d: "Whether the file exists." },
   { m: "stat()", t: "Promise<Stat>", d: "File metadata (follows symlinks)." },
   { m: "write(data, options?)", t: "Promise<number>", d: "Write to this file; resolves to bytes written." },
-  { m: "writable()", t: "WritableStream", d: "A sink for piped/incremental writes (first chunk truncates, rest append)." },
+  { m: "writable(options?)", t: "WritableStream", d: "A sink for piped/incremental writes. First chunk truncates unless { append: true } is set, rest append." },
   { m: "delete()", t: "Promise<void>", d: "Delete this file." },
 ];
 

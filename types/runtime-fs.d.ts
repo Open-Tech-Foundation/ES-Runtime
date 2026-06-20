@@ -72,10 +72,11 @@ declare module "runtime:fs" {
     delete(): Promise<void>;
     /**
      * A `WritableStream` sink for incremental / piped writes:
-     * `await readable.pipeTo(file("out").writable())`. The first chunk
-     * truncates the file; later chunks append.
+     * `await readable.pipeTo(file("out").writable({ append: true }))`.
+     * The first chunk truncates the file unless { append: true } is provided;
+     * later chunks append.
      */
-    writable(): WritableStream<Uint8Array>;
+    writable(options?: { append?: boolean }): WritableStream<Uint8Array | string>;
   }
 
   /**

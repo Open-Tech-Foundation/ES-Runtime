@@ -10,18 +10,18 @@ export default {
   },
   "results_ms": {
     "startup": {
-      "node": 17.3,
-      "bun": 9.1,
-      "deno": 24.3,
+      "node": 17.7,
+      "bun": 8.9,
+      "deno": 23.9,
       "llrt": 3.5,
       "esrun": 7.2
     },
     "bigscript": {
-      "node": 28.6,
-      "bun": 21.1,
-      "deno": 32,
-      "llrt": 10.7,
-      "esrun": 18.2
+      "node": 29.5,
+      "bun": 21.4,
+      "deno": 33.1,
+      "llrt": 11,
+      "esrun": 18.7
     },
     "compute": {
       "node": 194.2,
@@ -263,26 +263,40 @@ export default {
     },
     "rss": {
       "node": 43,
-      "bun": 29,
+      "bun": 30,
       "deno": 56,
       "llrt": 11,
       "esrun": 19
+    },
+    "jsonl_large": {
+      "node": 532.8,
+      "bun": 443.8,
+      "deno": 511.4,
+      "llrt": 1555.5,
+      "esrun": 1900.1
+    },
+    "jsonl_stream": {
+      "node": 677.1,
+      "bun": 780.1,
+      "deno": 714.4,
+      "llrt": null,
+      "esrun": 586.9
     }
   },
   "results_rss": {
     "startup": {
       "node": 43,
-      "bun": 29,
+      "bun": 30,
       "deno": 56,
       "llrt": 11,
       "esrun": 19
     },
     "bigscript": {
       "node": 42,
-      "bun": 32,
+      "bun": 33,
       "deno": 57,
       "llrt": 14,
-      "esrun": 21
+      "esrun": 22
     },
     "compute": {
       "node": 53,
@@ -528,6 +542,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "jsonl_large": {
+      "node": 160,
+      "bun": 135,
+      "deno": 174,
+      "llrt": 56,
+      "esrun": 115
+    },
+    "jsonl_stream": {
+      "node": 217,
+      "bun": 173,
+      "deno": 204,
+      "llrt": null,
+      "esrun": 64
     }
   },
   "results_rps": {

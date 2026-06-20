@@ -8,8 +8,11 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
-- **`runtime:parsers` Native YAML parsing.** Exposes `YAMLParser`, `YAMLBuilder`, and `YAMLValidator` mapped directly to the `serde_yaml` Rust crate. Provides ultra-fast native YAML-to-JSON and JSON-to-YAML conversion, and strict validation.
-- **`runtime:parsers` Native TOML parsing.** Exposes `TOMLParser`, `TOMLBuilder`, and `TOMLValidator` mapped directly to the `toml` Rust crate for high-performance TOML processing.
+- **`runtime:parsers` Module**
+  - Added blazing fast native `YAMLParser`, `YAMLValidator`, and `YAMLBuilder`.
+  - Added native `TOMLParser`, `TOMLValidator`, and `TOMLBuilder`.
+  - Added native `JSONLDecoderStream` and `JSONLEncoderStream` for robust pipeline streaming of JSON Lines.
+  - Parsers are highly optimized and serialize natively to the engine's internal V8 bindings for zero-allocation performance.
 
 ### Changed
 

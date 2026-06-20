@@ -5,7 +5,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::fmt;
-
+/// A deserialization visitor that builds V8 JavaScript objects from data.
 pub struct ValueVisitor;
 
 impl<'de> Visitor<'de> for ValueVisitor {
@@ -66,6 +66,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
 }
 
 #[derive(Clone, Copy)]
+/// A deserialization seed that yields `Value` instances from a generic data format.
 pub struct ValueSeed;
 
 impl<'de> DeserializeSeed<'de> for ValueSeed {
@@ -96,30 +97,7 @@ fn value_to_json(v: Value) -> serde_json::Value {
     }
 }
 
-fn json_to_value(v: serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(f) = n.as_f64() {
-                Value::Number(f)
-            } else {
-                Value::Null
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s),
-        serde_json::Value::Array(arr) => {
-            Value::Array(arr.into_iter().map(json_to_value).collect())
-        }
-        serde_json::Value::Object(map) => {
-            let mut obj = Vec::new();
-            for (k, v) in map {
-                obj.push((k, json_to_value(v)));
-            }
-            Value::Object(obj)
-        }
-    }
-}
+
 
 /// Maximum element nesting accepted by the recursive XML reader. The parser
 /// descends one stack frame per level, so an unbounded document (`<a><a>…`)
@@ -481,6 +459,8 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
         }
     }))?;
+
+
 
     engine.register_op(OpDecl::sync("toml_validate", |args| {
         let toml_str = match args.first().and_then(Value::as_str) {

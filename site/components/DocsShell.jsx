@@ -27,6 +27,7 @@ const NAV = [
       { href: "/docs/parsers/xml", label: "XML Parser" },
       { href: "/docs/parsers/yaml", label: "YAML Parser" },
       { href: "/docs/parsers/toml", label: "TOML Parser" },
+      { href: "/docs/parsers/jsonl", label: "JSONL Parser" },
     ],
   },
   {
