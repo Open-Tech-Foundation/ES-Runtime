@@ -17,21 +17,21 @@ export default function JSONLParserDoc() {
         In real-world systems, JSONL isn't just a file format—it's a persistent stream of records. That is the mental model most backend and data engineers use. It is less like "a file" and more like "a log that happens to be stored in a file."
       </p>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        ES-Runtime provides pure streaming capabilities via <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONLDecoderStream</code> and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONLEncoderStream</code> to build robust data pipelines, analytics exports, and AI datasets.
+        ES-Runtime provides pure streaming capabilities via <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONL.DecoderStream</code> and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONL.EncoderStream</code> to build robust data pipelines, analytics exports, and AI datasets.
       </p>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
         Reading JSONL Streams
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Reading JSONL is done by piping a stream of bytes through the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONLDecoderStream</code>. This is incredibly efficient because it processes records one by one without ever loading the entire dataset into memory.
+        The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONL.DecoderStream</code> is a WHATWG TransformStream that safely decodes incoming text chunks, splitting them by newline and parsing each complete line into a JavaScript object.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { JSONLDecoderStream } from 'runtime:parsers';
+        <CodeBlock code={`import { JSONL } from 'runtime:parsers';
 import { file } from 'runtime:fs';
 
 // Read a massive JSONL file natively from the file system
-const decoder = new JSONLDecoderStream({
+const decoder = new JSONL.DecoderStream({
   skipInvalid: true // Continue processing even if lines are corrupt
 });
 
@@ -55,7 +55,7 @@ for await (const user of stream) {
         Writing JSONL Streams
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Writing is handled by piping JavaScript objects through the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONLEncoderStream</code>. This is typically used to append records continuously to a log.
+        Writing is handled by piping JavaScript objects through the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONL.EncoderStream</code>. This is typically used to append records continuously to a log.
       </p>
       
       <h3 className="mt-8 text-xl font-semibold text-zinc-900">
@@ -65,10 +65,10 @@ for await (const user of stream) {
         This is probably the most common production use case. You can continuously append events to a log file as they occur.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { JSONLEncoderStream } from 'runtime:parsers';
+        <CodeBlock code={`import { JSONL } from 'runtime:parsers';
 import { file } from 'runtime:fs';
 
-const log = new JSONLEncoderStream();
+const log = new JSONL.EncoderStream();
 
 log.pipeTo(
   file("access.log").writable({ append: true })

@@ -14,7 +14,7 @@ for (let i = 0; i < 5000; i++) {
 let esrunParser = null;
 try {
   const mod = await import('runtime:parsers');
-  esrunParser = mod.YAMLParser.parse;
+  esrunParser = mod.YAML.parse;
 } catch (e) {}
 const isEsrun = typeof esrunParser === "function";
 const isLlrt = typeof process !== 'undefined' && process.release?.name === 'llrt';

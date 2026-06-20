@@ -1,11 +1,13 @@
 const { 
   xml_parse, xml_validate, xml_build,
   yaml_parse, yaml_validate, yaml_build,
-  toml_parse, toml_validate, toml_build
+  toml_parse, toml_validate, toml_build,
+  msgpack_parse, msgpack_validate, msgpack_build,
+  xml_stream_new, xml_stream_push, xml_stream_close
 } = globalThis.__ops;
 
-export class TOMLValidator {
-  static validate(toml, options = {}) {
+export const TOML = {
+  validate(toml, options = {}) {
     const result = toml_validate(toml);
     if (result === true) {
       if (options.detailed) return { valid: true };
@@ -13,23 +15,17 @@ export class TOMLValidator {
     }
     if (options.detailed) return { valid: false, error: result };
     return false;
-  }
-}
-
-export class TOMLParser {
-  static parse(toml) {
-    return toml_parse(toml);
-  }
-}
-
-export class TOMLBuilder {
-  static build(obj) {
+  },
+  parse(toml) {
+    return JSON.parse(toml_parse(toml));
+  },
+  build(obj) {
     return toml_build(obj);
   }
-}
+};
 
-export class YAMLValidator {
-  static validate(yaml, options = {}) {
+export const YAML = {
+  validate(yaml, options = {}) {
     const result = yaml_validate(yaml);
     if (result === true) {
       if (options.detailed) return { valid: true };
@@ -37,33 +33,40 @@ export class YAMLValidator {
     }
     if (options.detailed) return { valid: false, error: result };
     return false;
-  }
-}
-
-export class YAMLParser {
-  static parse(yaml) {
-    return yaml_parse(yaml);
-  }
-}
-
-export class YAMLBuilder {
-  static build(obj) {
+  },
+  parse(yaml) {
+    return JSON.parse(yaml_parse(yaml));
+  },
+  build(obj) {
     return yaml_build(obj);
   }
-}
+};
 
+export const MessagePack = {
+  validate(msgpack, options = {}) {
+    const result = msgpack_validate(msgpack);
+    if (result === true) {
+      if (options.detailed) return { valid: true };
+      return true;
+    }
+    if (options.detailed) return { valid: false, error: result };
+    return false;
+  },
+  decode(msgpack) {
+    return JSON.parse(msgpack_parse(msgpack));
+  },
+  encode(obj) {
+    return msgpack_build(obj);
+  }
+};
 
-
-export class JSONLDecoderStream extends TransformStream {
+class JSONLDecoderStream extends TransformStream {
   constructor(options = {}) {
     let buffer = '';
     const decoder = new TextDecoder();
     const skipInvalid = !!options.skipInvalid;
     let lineNumber = 0;
     
-    // We need a reference to the instance to store the callback,
-    // but we are inside the constructor. We can define a local variable
-    // for the callback and a method on 'this' to set it.
     let errorCallback = null;
 
     super({
@@ -118,7 +121,7 @@ export class JSONLDecoderStream extends TransformStream {
   }
 }
 
-export class JSONLEncoderStream extends TransformStream {
+class JSONLEncoderStream extends TransformStream {
   constructor() {
     super({
       transform(chunk, controller) {
@@ -152,10 +155,35 @@ export class JSONLEncoderStream extends TransformStream {
   }
 }
 
+export const JSONL = {
+  DecoderStream: JSONLDecoderStream,
+  EncoderStream: JSONLEncoderStream
+};
 
+class XMLDecoderStream extends TransformStream {
+  constructor(options = {}) {
+    let streamId = null;
 
-export class XMLValidator {
-  static validate(xml, options = {}) {
+    super({
+      start(controller) {
+        streamId = xml_stream_new();
+      },
+      transform(chunk, controller) {
+        const text = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+        const parsedObjects = xml_stream_push(streamId, text);
+        for (const obj of parsedObjects) {
+          controller.enqueue(obj);
+        }
+      },
+      flush(controller) {
+        xml_stream_close(streamId);
+      }
+    });
+  }
+}
+
+export const XML = {
+  validate(xml, options = {}) {
     const result = xml_validate(xml);
     if (result === true) {
       if (options.detailed) return { valid: true };
@@ -163,42 +191,12 @@ export class XMLValidator {
     }
     if (options.detailed) return { valid: false, error: result };
     return false;
-  }
-}
-
-export class XMLParser {
-  static parse(xml) {
-    // xml_parse throws (SyntaxError) on malformed input, so a string result
-    // here is genuine parsed text content, never an error sentinel.
+  },
+  parse(xml) {
     return xml_parse(xml);
-  }
-}
-
-export class XMLBuilder {
-  static build(obj) {
-    // xml_build throws (TypeError) if the value can't be serialized.
+  },
+  build(obj) {
     return xml_build(obj);
-  }
-}
-
-export class XMLDecoderStream extends TransformStream {
-  constructor(options = {}) {
-    let streamId = null;
-
-    super({
-      start(controller) {
-        streamId = globalThis.__ops.xml_stream_new();
-      },
-      transform(chunk, controller) {
-        const text = typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
-        const parsedObjects = globalThis.__ops.xml_stream_push(streamId, text);
-        for (const obj of parsedObjects) {
-          controller.enqueue(obj);
-        }
-      },
-      flush(controller) {
-        globalThis.__ops.xml_stream_close(streamId);
-      }
-    });
-  }
-}
+  },
+  DecoderStream: XMLDecoderStream
+};

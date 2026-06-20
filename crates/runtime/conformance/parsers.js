@@ -1,5 +1,5 @@
 test("parsers sync apis", async () => {
-const { YAMLParser, YAMLBuilder, YAMLValidator, XMLParser, XMLBuilder, XMLValidator, TOMLParser, TOMLBuilder, TOMLValidator } = await import('runtime:parsers');
+const { YAML, XML, TOML, MessagePack, JSONL } = await import('runtime:parsers');
 
 function assertEq(actual, expected, msg) {
     function sortKeys(obj) {
@@ -48,24 +48,24 @@ const expectedYamlParsed = {
     }
 };
 
-assertEq(YAMLParser.parse(yamlData), expectedYamlParsed, "YAML parsing basic");
+assertEq(YAML.parse(yamlData), expectedYamlParsed, "YAML parsing basic");
 
 // YAML Validation Tests
-assertEq(YAMLValidator.validate(yamlData), true, "YAML validation valid");
-assertEq(YAMLValidator.validate(yamlData, { detailed: true }), { valid: true }, "YAML validation valid detailed");
+assertEq(YAML.validate(yamlData), true, "YAML validation valid");
+assertEq(YAML.validate(yamlData, { detailed: true }), { valid: true }, "YAML validation valid detailed");
 
 const invalidYaml = `
 name: Alice
   age: 30
 `;
 
-assertEq(YAMLValidator.validate(invalidYaml), false, "YAML validation invalid");
-const invalidDetailed = YAMLValidator.validate(invalidYaml, { detailed: true });
+assertEq(YAML.validate(invalidYaml), false, "YAML validation invalid");
+const invalidDetailed = YAML.validate(invalidYaml, { detailed: true });
 if (invalidDetailed.valid !== false || typeof invalidDetailed.error !== 'string') {
     throw new Error("YAML validation invalid detailed failed");
 }
 
-assertThrows(() => YAMLParser.parse(invalidYaml), "YAML parse invalid throws");
+assertThrows(() => YAML.parse(invalidYaml), "YAML parse invalid throws");
 
 // YAML Building Tests
 const objToBuild = {
@@ -75,11 +75,11 @@ const objToBuild = {
     }
 };
 
-const builtYaml = YAMLBuilder.build(objToBuild);
+const builtYaml = YAML.build(objToBuild);
 if (!builtYaml.includes("Bob") || !builtYaml.includes("42")) {
     throw new Error("YAML build failed: " + builtYaml);
 }
-assertEq(YAMLParser.parse(builtYaml), objToBuild, "YAML build back to obj");
+assertEq(YAML.parse(builtYaml), objToBuild, "YAML build back to obj");
 
 console.log("YAML tests passed!");
 
@@ -104,24 +104,24 @@ const expectedTomlParsed = {
     }
 };
 
-assertEq(TOMLParser.parse(tomlData), expectedTomlParsed, "TOML parsing basic");
+assertEq(TOML.parse(tomlData), expectedTomlParsed, "TOML parsing basic");
 
 // TOML Validation Tests
-assertEq(TOMLValidator.validate(tomlData), true, "TOML validation valid");
-assertEq(TOMLValidator.validate(tomlData, { detailed: true }), { valid: true }, "TOML validation valid detailed");
+assertEq(TOML.validate(tomlData), true, "TOML validation valid");
+assertEq(TOML.validate(tomlData, { detailed: true }), { valid: true }, "TOML validation valid detailed");
 
 const invalidToml = `
 name = Alice
   age = 30
 `;
 
-assertEq(TOMLValidator.validate(invalidToml), false, "TOML validation invalid");
-const tomlInvalidDetailed = TOMLValidator.validate(invalidToml, { detailed: true });
+assertEq(TOML.validate(invalidToml), false, "TOML validation invalid");
+const tomlInvalidDetailed = TOML.validate(invalidToml, { detailed: true });
 if (tomlInvalidDetailed.valid !== false || typeof tomlInvalidDetailed.error !== 'string') {
     throw new Error("TOML validation invalid detailed failed");
 }
 
-assertThrows(() => TOMLParser.parse(invalidToml), "TOML parse invalid throws");
+assertThrows(() => TOML.parse(invalidToml), "TOML parse invalid throws");
 
 // TOML Building Tests
 const objToBuildToml = {
@@ -131,12 +131,37 @@ const objToBuildToml = {
     }
 };
 
-const builtToml = TOMLBuilder.build(objToBuildToml);
+const builtToml = TOML.build(objToBuildToml);
 if (!builtToml.includes("Bob") || !builtToml.includes("42")) {
     throw new Error("TOML build failed: " + builtToml);
 }
-assertEq(TOMLParser.parse(builtToml), objToBuildToml, "TOML build back to obj");
+assertEq(TOML.parse(builtToml), objToBuildToml, "TOML build back to obj");
 
 console.log("TOML tests passed!");
-});
 
+// MessagePack Tests
+const objToBuildMsgpack = {
+    user: {
+        name: "Charlie",
+        id: 99
+    }
+};
+
+const builtMsgpack = MessagePack.encode(objToBuildMsgpack);
+if (!(builtMsgpack instanceof Uint8Array)) {
+    throw new Error("MessagePack encode did not return Uint8Array");
+}
+assertEq(MessagePack.decode(builtMsgpack), objToBuildMsgpack, "MessagePack decode back to obj");
+assertEq(MessagePack.validate(builtMsgpack), true, "MessagePack validation valid");
+
+// Invalid msgpack
+const invalidMsgpack = new Uint8Array([0xc1, 0x01]); // 0xc1 is never used
+assertEq(MessagePack.validate(invalidMsgpack), false, "MessagePack validation invalid");
+const msgpackInvalidDetailed = MessagePack.validate(invalidMsgpack, { detailed: true });
+if (msgpackInvalidDetailed.valid !== false || typeof msgpackInvalidDetailed.error !== 'string') {
+    throw new Error("MessagePack validation invalid detailed failed");
+}
+assertThrows(() => MessagePack.decode(invalidMsgpack), "MessagePack decode invalid throws");
+
+console.log("MessagePack tests passed!");
+});

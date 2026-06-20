@@ -16,10 +16,10 @@ export default function YAMLParserDoc() {
         Parsing YAML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">YAMLParser.parse</code> to convert a YAML string directly into a JavaScript object.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">YAML.parse</code> to convert a YAML string directly into a JavaScript object.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { YAMLParser } from "runtime:parsers";
+        <CodeBlock code={`import { YAML } from "runtime:parsers";
 
 const yamlData = \`
 user:
@@ -27,7 +27,7 @@ user:
   name: Alice
 \`;
 
-const parsed = YAMLParser.parse(yamlData);
+const parsed = YAML.parse(yamlData);
 console.log(parsed.user.name); // "Alice"
 console.log(parsed.user.id);   // 1`} title="yaml_parse.js" lang="js" />
       </div>
@@ -36,10 +36,10 @@ console.log(parsed.user.id);   // 1`} title="yaml_parse.js" lang="js" />
         Validating YAML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">YAMLValidator.validate</code> to check if a YAML string is well-formed.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">YAML.validate</code> to check if a YAML string is well-formed.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { YAMLValidator } from "runtime:parsers";
+        <CodeBlock code={`import { YAML } from "runtime:parsers";
 
 const yamlData = \`
 user:
@@ -47,11 +47,11 @@ user:
   name: Alice
 \`;
 
-if (YAMLValidator.validate(yamlData)) {
+if (YAML.validate(yamlData)) {
   console.log("YAML is valid!");
 }
 
-const result = YAMLValidator.validate("invalid: \\n  - yaml: [", { detailed: true });
+const result = YAML.validate("invalid: \\n  - yaml: [", { detailed: true });
 console.log(result.valid); // false
 console.log(result.error); // "Validation failed: ..." `} title="yaml_validate.js" lang="js" />
       </div>
@@ -60,10 +60,10 @@ console.log(result.error); // "Validation failed: ..." `} title="yaml_validate.j
         Building YAML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">YAMLBuilder.build</code> to convert a JavaScript object back into a YAML string.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">YAML.build</code> to convert a JavaScript object back into a YAML string.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { YAMLBuilder } from "runtime:parsers";
+        <CodeBlock code={`import { YAML } from "runtime:parsers";
 
 const obj = { 
   user: { 
@@ -72,7 +72,7 @@ const obj = {
   } 
 };
 
-const built = YAMLBuilder.build(obj);
+const built = YAML.build(obj);
 console.log(built); 
 // user:
 //   id: 1

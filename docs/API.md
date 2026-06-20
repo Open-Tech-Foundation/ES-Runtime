@@ -20,6 +20,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:net`](#runtimenet)
 - [`runtime:http`](#runtimehttp)
 - [`runtime:websocket`](#runtimewebsocket)
+- [`runtime:parsers`](#runtimeparsers)
 
 ---
 
@@ -133,6 +134,7 @@ the required capability has been granted.
 | `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
 | `runtime:http`    | Available   | `NetListen` | [↓](#runtimehttp)               |
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
+| `runtime:parsers` | Available   | None       | [↓](#runtimeparsers)           |
 
 ---
 
@@ -479,6 +481,53 @@ For chat-style fan-out, prefer **`broadcast(connections, data)`** over a
 room, enqueues to every connection concurrently (a slow peer can't stall the
 rest), and coalesces the writes — so delivery stays full. A `wss:` server and
 pub/sub topics are follow-ups (D29).
+
+## `runtime:parsers`
+
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, and MessagePack. These parsers are backed by optimized Rust implementations and are exposed via zero-cost host boundaries.
+
+- **Capability:** None (pure computation)
+- **Status:** Available
+
+```js
+import { XML, YAML, TOML, MessagePack } from "runtime:parsers";
+
+const obj = XML.parse("<root><hello>world</hello></root>");
+const yaml = YAML.parse("hello: world");
+const msgpackBytes = new Uint8Array([0x81, 0xa5, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa5, 0x77, 0x6f, 0x72, 0x6c, 0x64]);
+const obj2 = MessagePack.decode(msgpackBytes);
+```
+
+### Exports
+
+For each string format (XML, YAML, TOML), the module provides a namespace with three methods:
+
+| Export | Description |
+| --- | --- |
+| `<Format>.parse(data)` | Parses the given format into a JavaScript object. |
+| `<Format>.build(obj)` | Serializes a JavaScript object into the given format. |
+| `<Format>.validate(data, opts?)` | Validates the given data without full allocation. `opts.detailed` provides `{ valid: boolean, error: string }`. |
+
+For MessagePack, the namespace is slightly different:
+
+| Export | Description |
+| --- | --- |
+| `MessagePack.decode(bytes)` | Parses a MessagePack byte array into a JavaScript object. |
+| `MessagePack.encode(obj)` | Serializes a JavaScript object into a MessagePack `Uint8Array`. |
+| `MessagePack.validate(bytes, opts?)` | Validates the given byte array. |
+
+For JSONL, it provides transform streams under the `JSONL` namespace:
+
+| Export | Description |
+| --- | --- |
+| `new JSONL.DecoderStream()` | A `TransformStream` that parses lines of JSON. |
+| `new JSONL.EncoderStream()` | A `TransformStream` that stringifies objects to JSON lines. |
+
+For XML, it also provides a `DecoderStream`:
+
+| Export | Description |
+| --- | --- |
+| `new XML.DecoderStream()` | A `TransformStream` that parses XML chunks. |
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

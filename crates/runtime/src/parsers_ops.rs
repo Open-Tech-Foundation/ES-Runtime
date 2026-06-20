@@ -419,8 +419,16 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         };
 
         let deserializer = serde_yaml::Deserializer::from_str(yaml);
-        match ValueSeed.deserialize(deserializer) {
-            Ok(val) => Ok(val),
+        let mut out = Vec::with_capacity(yaml.len());
+        let mut json_serializer = serde_json::Serializer::new(&mut out);
+
+        match serde_transcode::transcode(deserializer, &mut json_serializer) {
+            Ok(_) => {
+                match String::from_utf8(out) {
+                    Ok(json_str) => Ok(Value::String(json_str)),
+                    Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Invalid UTF-8 in JSON: {}", e))),
+                }
+            }
             Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
         }
     }))?;
@@ -454,8 +462,16 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         };
 
         let deserializer = toml::Deserializer::new(toml_str);
-        match ValueSeed.deserialize(deserializer) {
-            Ok(val) => Ok(val),
+        let mut out = Vec::with_capacity(toml_str.len());
+        let mut json_serializer = serde_json::Serializer::new(&mut out);
+
+        match serde_transcode::transcode(deserializer, &mut json_serializer) {
+            Ok(_) => {
+                match String::from_utf8(out) {
+                    Ok(json_str) => Ok(Value::String(json_str)),
+                    Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Invalid UTF-8 in JSON: {}", e))),
+                }
+            }
             Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
         }
     }))?;
@@ -485,6 +501,50 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
         match toml::to_string(&json_val) {
             Ok(toml_str) => Ok(Value::String(toml_str)),
+            Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("msgpack_parse", |args| {
+        let msgpack_bytes = match args.first().and_then(Value::as_bytes) {
+            Some(b) => b,
+            None => return Err(OpError::type_error("msgpack_parse expects a Uint8Array")),
+        };
+
+        let mut deserializer = rmp_serde::Deserializer::new(msgpack_bytes);
+        // Pre-allocate buffer aiming for an average 2x size increase
+        let mut out = Vec::with_capacity(msgpack_bytes.len() * 2);
+        let mut json_serializer = serde_json::Serializer::new(&mut out);
+        
+        match serde_transcode::transcode(&mut deserializer, &mut json_serializer) {
+            Ok(_) => {
+                match String::from_utf8(out) {
+                    Ok(json_str) => Ok(Value::String(json_str)),
+                    Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Invalid UTF-8 in JSON: {}", e))),
+                }
+            }
+            Err(e) => Err(OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {}", e))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("msgpack_validate", |args| {
+        let msgpack_bytes = match args.first().and_then(Value::as_bytes) {
+            Some(b) => b,
+            None => return Ok(Value::String("Expected a Uint8Array".into())),
+        };
+
+        match rmp_serde::from_slice::<serde::de::IgnoredAny>(msgpack_bytes) {
+            Ok(_) => Ok(Value::Bool(true)),
+            Err(e) => Ok(Value::String(format!("Validation failed: {}", e))),
+        }
+    }))?;
+
+    engine.register_op(OpDecl::sync("msgpack_build", |mut args| {
+        let val = args.drain(..).next().unwrap_or(Value::Null);
+        let json_val = value_to_json(val);
+
+        match rmp_serde::to_vec_named(&json_val) {
+            Ok(bytes) => Ok(Value::Bytes(bytes)),
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }
     }))?;

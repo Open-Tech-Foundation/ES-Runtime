@@ -36,7 +36,9 @@ quick-xml = { version = "0.40.1", features = ["serialize"] }
 serde_json.workspace = true
 serde_yaml = "0.9.34"
 toml = "0.8"
+rmp-serde = "1.3.0"
 serde = "1.0.228"
+serde-transcode = "1.1.1"
 
 [lints]
 workspace = true

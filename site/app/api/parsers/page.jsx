@@ -9,10 +9,7 @@ const errors = [
 ];
 
 const IMPORT = `import { 
-  JSONLDecoderStream, JSONLEncoderStream,
-  XMLParser, XMLBuilder, XMLValidator, XMLDecoderStream,
-  YAMLParser, YAMLBuilder, YAMLValidator,
-  TOMLParser, TOMLBuilder, TOMLValidator 
+  JSONL, XML, YAML, TOML, MessagePack
 } from "runtime:parsers";`;
 
 const sections = [
@@ -21,19 +18,19 @@ const sections = [
     desc: "Stream-based parsing and serializing of JSON Lines data. JSONL is heavily optimized for large file handling natively over streams.",
     exports: [
       { 
-        sig: "new JSONLDecoderStream(options?)", 
+        sig: "new JSONL.DecoderStream(options?)", 
         type: "TransformStream", 
         desc: "Parses streaming JSONL byte chunks into JS objects incrementally.", 
         options: [
           { name: "skipInvalid", type: "boolean", optional: true, default: "false", desc: "If true, skips invalid JSON lines instead of destroying the stream. Skipped lines are emitted to decoder.onError(err)." }
         ],
-        ex: `stream.pipeThrough(new JSONLDecoderStream({ skipInvalid: true }))` 
+        ex: `stream.pipeThrough(new JSONL.DecoderStream({ skipInvalid: true }))` 
       },
       { 
-        sig: "new JSONLEncoderStream()", 
+        sig: "new JSONL.EncoderStream()", 
         type: "TransformStream", 
         desc: "Serializes a stream of JS objects into JSONL byte chunks. No options are currently supported.", 
-        ex: `stream.pipeThrough(new JSONLEncoderStream())` 
+        ex: `stream.pipeThrough(new JSONL.EncoderStream())` 
       },
     ]
   },
@@ -41,34 +38,34 @@ const sections = [
     title: "XML",
     desc: "Synchronous parsing, building, and validation of XML data, plus streaming support for massive documents.",
     exports: [
-      { sig: "XMLParser.parse(xml)", type: "(string) => object", desc: "Parses an XML string into a JavaScript object.", ex: `XMLParser.parse("<root>hi</root>");` },
-      { sig: "XMLBuilder.build(obj)", type: "(object) => string", desc: "Serializes a JavaScript object into an XML string.", ex: `XMLBuilder.build({ root: "hi" });` },
+      { sig: "XML.parse(xml)", type: "(string) => object", desc: "Parses an XML string into a JavaScript object.", ex: `XML.parse("<root>hi</root>");` },
+      { sig: "XML.build(obj)", type: "(object) => string", desc: "Serializes a JavaScript object into an XML string.", ex: `XML.build({ root: "hi" });` },
       { 
-        sig: "XMLValidator.validate(xml, options?)", 
+        sig: "XML.validate(xml, options?)", 
         type: "(string, object) => boolean | object", 
         desc: "Validates an XML string.", 
         options: [
           { name: "detailed", type: "boolean", optional: true, default: "false", desc: "If true, returns an object { valid: boolean, error?: string } instead of a boolean, providing the exact syntax error if validation fails." }
         ],
-        ex: `XMLValidator.validate("<root>", { detailed: true }); // { valid: false, error: "..." }` 
+        ex: `XML.validate("<root>", { detailed: true }); // { valid: false, error: "..." }` 
       },
-      { sig: "new XMLDecoderStream()", type: "TransformStream", desc: "A TransformStream that parses streaming XML byte chunks into JavaScript objects incrementally.", ex: `stream.pipeThrough(new XMLDecoderStream())` },
+      { sig: "new XML.DecoderStream()", type: "TransformStream", desc: "A TransformStream that parses streaming XML byte chunks into JavaScript objects incrementally.", ex: `stream.pipeThrough(new XML.DecoderStream())` },
     ]
   },
   {
     title: "YAML",
     desc: "Synchronous parsing, building, and validation of YAML data.",
     exports: [
-      { sig: "YAMLParser.parse(yaml)", type: "(string) => object", desc: "Parses a YAML string into a JavaScript object.", ex: `YAMLParser.parse("key: value");` },
-      { sig: "YAMLBuilder.build(obj)", type: "(object) => string", desc: "Serializes a JavaScript object into a YAML string.", ex: `YAMLBuilder.build({ key: "value" });` },
+      { sig: "YAML.parse(yaml)", type: "(string) => object", desc: "Parses a YAML string into a JavaScript object.", ex: `YAML.parse("key: value");` },
+      { sig: "YAML.build(obj)", type: "(object) => string", desc: "Serializes a JavaScript object into a YAML string.", ex: `YAML.build({ key: "value" });` },
       { 
-        sig: "YAMLValidator.validate(yaml, options?)", 
+        sig: "YAML.validate(yaml, options?)", 
         type: "(string, object) => boolean | object", 
         desc: "Validates a YAML string.", 
         options: [
           { name: "detailed", type: "boolean", optional: true, default: "false", desc: "If true, returns an object { valid: boolean, error?: string } instead of a boolean, providing the exact syntax error if validation fails." }
         ],
-        ex: `YAMLValidator.validate("key: value", { detailed: true });` 
+        ex: `YAML.validate("key: value", { detailed: true });` 
       },
     ]
   },
@@ -76,16 +73,33 @@ const sections = [
     title: "TOML",
     desc: "Synchronous parsing, building, and validation of TOML data.",
     exports: [
-      { sig: "TOMLParser.parse(toml)", type: "(string) => object", desc: "Parses a TOML string into a JavaScript object.", ex: `TOMLParser.parse("key = 'value'");` },
-      { sig: "TOMLBuilder.build(obj)", type: "(object) => string", desc: "Serializes a JavaScript object into a TOML string. The root must be an object/table.", ex: `TOMLBuilder.build({ key: "value" });` },
+      { sig: "TOML.parse(toml)", type: "(string) => object", desc: "Parses a TOML string into a JavaScript object.", ex: `TOML.parse("key = 'value'");` },
+      { sig: "TOML.build(obj)", type: "(object) => string", desc: "Serializes a JavaScript object into a TOML string. The root must be an object/table.", ex: `TOML.build({ key: "value" });` },
       { 
-        sig: "TOMLValidator.validate(toml, options?)", 
+        sig: "TOML.validate(toml, options?)", 
         type: "(string, object) => boolean | object", 
         desc: "Validates a TOML string.", 
         options: [
           { name: "detailed", type: "boolean", optional: true, default: "false", desc: "If true, returns an object { valid: boolean, error?: string } instead of a boolean, providing the exact syntax error if validation fails." }
         ],
-        ex: `TOMLValidator.validate("key = 'value'", { detailed: true });` 
+        ex: `TOML.validate("key = 'value'", { detailed: true });` 
+      },
+    ]
+  },
+  {
+    title: "MessagePack",
+    desc: "Synchronous parsing, building, and validation of binary MessagePack data.",
+    exports: [
+      { sig: "MessagePack.decode(msgpack)", type: "(Uint8Array) => object", desc: "Parses a MessagePack byte array into a JavaScript object.", ex: `MessagePack.decode(bytes);` },
+      { sig: "MessagePack.encode(obj)", type: "(object) => Uint8Array", desc: "Serializes a JavaScript object into a MessagePack byte array.", ex: `MessagePack.encode({ key: "value" });` },
+      { 
+        sig: "MessagePack.validate(msgpack, options?)", 
+        type: "(Uint8Array, object) => boolean | object", 
+        desc: "Validates a MessagePack byte array.", 
+        options: [
+          { name: "detailed", type: "boolean", optional: true, default: "false", desc: "If true, returns an object { valid: boolean, error?: string } instead of a boolean, providing the exact syntax error if validation fails." }
+        ],
+        ex: `MessagePack.validate(bytes, { detailed: true });` 
       },
     ]
   }

@@ -16,14 +16,14 @@ export default function XMLParserDoc() {
         Parsing XML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLParser.parse</code> to convert an XML string directly into a JavaScript object.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.parse</code> to convert an XML string directly into a JavaScript object.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { XMLParser } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:parsers";
 
 const xmlData = \`<user id="1"><name>Alice</name></user>\`;
 
-const parsed = XMLParser.parse(xmlData);
+const parsed = XML.parse(xmlData);
 console.log(parsed.name.$text); // "Alice"
 console.log(parsed["@id"]);     // "1"`} title="xml_parse.js" lang="js" />
       </div>
@@ -32,18 +32,18 @@ console.log(parsed["@id"]);     // "1"`} title="xml_parse.js" lang="js" />
         Validating XML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLValidator.validate</code> to check if an XML string is well-formed. Pass <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">{'{'} detailed: true {'}'}</code> to get specific error messages.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.validate</code> to check if an XML string is well-formed.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { XMLValidator } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:parsers";
 
 const xmlData = \`<user id="1"><name>Alice</name></user>\`;
 
-if (XMLValidator.validate(xmlData)) {
+if (XML.validate(xmlData)) {
   console.log("XML is valid!");
 }
 
-const result = XMLValidator.validate("<broken>", { detailed: true });
+const result = XML.validate("<invalid><xml>", { detailed: true });
 console.log(result.valid); // false
 console.log(result.error); // "Validation failed: ..." `} title="xml_validate.js" lang="js" />
       </div>
@@ -52,10 +52,10 @@ console.log(result.error); // "Validation failed: ..." `} title="xml_validate.js
         Building XML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLBuilder.build</code> to convert a JavaScript object back into an XML string.
+        For parsing massive XML files that exceed available memory, use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.DecoderStream</code>.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { XMLBuilder } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:parsers";
 
 const obj = { 
   user: { 
@@ -64,7 +64,7 @@ const obj = {
   } 
 };
 
-const built = XMLBuilder.build(obj);
+const built = XML.build(obj);
 console.log(built); // <user id="1"><name>Alice</name></user>`} title="xml_build.js" lang="js" />
       </div>
 
@@ -74,11 +74,11 @@ console.log(built); // <user id="1"><name>Alice</name></user>`} title="xml_build
       </p>
 
       <div className="mt-6">
-        <CodeBlock code={`import { XMLDecoderStream } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:parsers";
 
 async function processMassiveFeed(fileStream) {
   // Pipe the chunks directly into the native streaming parser
-  const objectStream = fileStream.pipeThrough(new XMLDecoderStream());
+  const objectStream = fileStream.pipeThrough(new XML.DecoderStream());
 
   // Use async iteration to consume parsed top-level element objects natively
   for await (const value of objectStream) {

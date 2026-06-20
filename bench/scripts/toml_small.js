@@ -16,7 +16,7 @@ description = "An in-depth look at creating applications with XML."
 let esrunParser = null;
 try {
   const mod = await import('runtime:parsers');
-  esrunParser = mod.TOMLParser.parse;
+  esrunParser = mod.TOML.parse;
 } catch (e) {}
 const isEsrun = typeof esrunParser === "function";
 

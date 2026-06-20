@@ -62,6 +62,7 @@ export const PAGES = {
   "/docs/parsers/toml": { section: "Guides", title: "TOML Parsing", description: "synchronous high-performance TOML processing." },
   "/docs/parsers/xml": { section: "Guides", title: "XML Parsing", description: "synchronous and streaming fast XML processing." },
   "/docs/parsers/yaml": { section: "Guides", title: "YAML Parsing", description: "synchronous robust YAML processing." },
+  "/docs/parsers/msgpack": { section: "Guides", title: "MessagePack Parsing", description: "synchronous fast MessagePack processing." },
 };
 
 // Static trailing sections of llms.txt (not derived from routes).

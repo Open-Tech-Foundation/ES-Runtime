@@ -10,17 +10,17 @@ export default {
   },
   "results_ms": {
     "startup": {
-      "node": 17.7,
-      "bun": 8.9,
-      "deno": 23.9,
-      "llrt": 3.5,
+      "node": 18.9,
+      "bun": 9.4,
+      "deno": 24.7,
+      "llrt": 3.7,
       "esrun": 7.2
     },
     "bigscript": {
-      "node": 29.5,
+      "node": 29.7,
       "bun": 21.4,
-      "deno": 33.1,
-      "llrt": 11,
+      "deno": 33.2,
+      "llrt": 10.9,
       "esrun": 18.7
     },
     "compute": {
@@ -234,39 +234,39 @@ export default {
       "esrun": 339
     },
     "yaml_small": {
-      "node": 193,
-      "bun": 197.8,
-      "deno": 183,
-      "llrt": 4275.5,
-      "esrun": 235.8
+      "node": 199.1,
+      "bun": 207.3,
+      "deno": 188.2,
+      "llrt": 4441.3,
+      "esrun": 208.9
     },
     "yaml_large": {
-      "node": 383.7,
-      "bun": 358.9,
-      "deno": 359.7,
-      "llrt": 8487.5,
-      "esrun": 459.7
+      "node": 392.7,
+      "bun": 357.5,
+      "deno": 366.6,
+      "llrt": 8596.9,
+      "esrun": 395.7
     },
     "toml_small": {
-      "node": 208,
-      "bun": 155.9,
-      "deno": 214.5,
-      "llrt": 4003.5,
-      "esrun": 149.7
+      "node": 215.6,
+      "bun": 156.5,
+      "deno": 222.4,
+      "llrt": 4113.4,
+      "esrun": 121.7
     },
     "toml_large": {
-      "node": 415.1,
-      "bun": 330.1,
-      "deno": 433,
-      "llrt": 8168.7,
-      "esrun": 313
+      "node": 426.9,
+      "bun": 345.5,
+      "deno": 456.5,
+      "llrt": 8289.4,
+      "esrun": 256.3
     },
     "rss": {
       "node": 43,
-      "bun": 30,
+      "bun": 29,
       "deno": 56,
       "llrt": 11,
-      "esrun": 19
+      "esrun": 20
     },
     "jsonl_large": {
       "node": 532.8,
@@ -281,22 +281,36 @@ export default {
       "deno": 714.4,
       "llrt": null,
       "esrun": 586.9
+    },
+    "msgpack_small": {
+      "node": 45.1,
+      "bun": 63.8,
+      "deno": 40.3,
+      "llrt": 1126.3,
+      "esrun": 51.1
+    },
+    "msgpack_large": {
+      "node": 44,
+      "bun": 60.1,
+      "deno": 39.8,
+      "llrt": 1127.2,
+      "esrun": 58.9
     }
   },
   "results_rss": {
     "startup": {
       "node": 43,
-      "bun": 30,
+      "bun": 29,
       "deno": 56,
       "llrt": 11,
-      "esrun": 19
+      "esrun": 20
     },
     "bigscript": {
       "node": 42,
       "bun": 33,
       "deno": 57,
       "llrt": 14,
-      "esrun": 22
+      "esrun": 21
     },
     "compute": {
       "node": 53,
@@ -509,32 +523,32 @@ export default {
       "esrun": 62
     },
     "yaml_small": {
-      "node": 62,
-      "bun": 109,
+      "node": 63,
+      "bun": 110,
       "deno": 72,
       "llrt": 14,
-      "esrun": 28
+      "esrun": 29
     },
     "yaml_large": {
       "node": 139,
-      "bun": 132,
+      "bun": 133,
       "deno": 145,
-      "llrt": 22,
-      "esrun": 58
+      "llrt": 24,
+      "esrun": 67
     },
     "toml_small": {
       "node": 67,
       "bun": 94,
-      "deno": 76,
+      "deno": 77,
       "llrt": 15,
-      "esrun": 28
+      "esrun": 29
     },
     "toml_large": {
       "node": 211,
-      "bun": 170,
+      "bun": 162,
       "deno": 218,
       "llrt": 21,
-      "esrun": 61
+      "esrun": 68
     },
     "rss": {
       "node": null,
@@ -556,6 +570,20 @@ export default {
       "deno": 204,
       "llrt": null,
       "esrun": 64
+    },
+    "msgpack_small": {
+      "node": 60,
+      "bun": 98,
+      "deno": 73,
+      "llrt": 11,
+      "esrun": 26
+    },
+    "msgpack_large": {
+      "node": 79,
+      "bun": 105,
+      "deno": 91,
+      "llrt": 15,
+      "esrun": 59
     }
   },
   "results_rps": {

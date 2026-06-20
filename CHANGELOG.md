@@ -12,10 +12,12 @@ pre-`0.1.0` and the public API is unstable.
   - Added blazing fast native `YAMLParser`, `YAMLValidator`, and `YAMLBuilder`.
   - Added native `TOMLParser`, `TOMLValidator`, and `TOMLBuilder`.
   - Added native `JSONLDecoderStream` and `JSONLEncoderStream` for robust pipeline streaming of JSON Lines.
+  - Added native `MessagePackParser`, `MessagePackValidator`, and `MessagePackBuilder` for blazing fast binary data processing.
   - Parsers are highly optimized and serialize natively to the engine's internal V8 bindings for zero-allocation performance.
 
 ### Changed
 
+- **`runtime:parsers` performance optimization.** The YAML, TOML, and MessagePack parsers now use `serde_transcode` to stream directly to JSON strings, bypassing the slow C++ FFI object construction, resulting in up to 2.5x parsing speedups and huge memory usage reductions.
 - **`runtime:net` — full WinterTC Sockets conformance.** `Socket.close(reason?)`
   now accepts the spec's optional advisory `reason` argument (ignored by the
   transport), and socket failures — invalid options, connect/TLS/I/O errors —

@@ -16,10 +16,10 @@ export default function TOMLParserDoc() {
         Parsing TOML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TOMLParser.parse</code> to convert a TOML string directly into a JavaScript object.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TOML.parse</code> to convert a TOML string directly into a JavaScript object.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { TOMLParser } from "runtime:parsers";
+        <CodeBlock code={`import { TOML } from "runtime:parsers";
 
 const tomlData = \`
 [user]
@@ -27,7 +27,7 @@ id = 1
 name = "Alice"
 \`;
 
-const parsed = TOMLParser.parse(tomlData);
+const parsed = TOML.parse(tomlData);
 console.log(parsed.user.name); // "Alice"
 console.log(parsed.user.id);   // 1`} title="toml_parse.js" lang="js" />
       </div>
@@ -36,10 +36,10 @@ console.log(parsed.user.id);   // 1`} title="toml_parse.js" lang="js" />
         Validating TOML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TOMLValidator.validate</code> to check if a TOML string is well-formed.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TOML.validate</code> to check if a TOML string is well-formed.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { TOMLValidator } from "runtime:parsers";
+        <CodeBlock code={`import { TOML } from "runtime:parsers";
 
 const tomlData = \`
 [user]
@@ -47,11 +47,11 @@ id = 1
 name = "Alice"
 \`;
 
-if (TOMLValidator.validate(tomlData)) {
+if (TOML.validate(tomlData)) {
   console.log("TOML is valid!");
 }
 
-const result = TOMLValidator.validate("invalid = TOML [[", { detailed: true });
+const result = TOML.validate("invalid = \\n  = [", { detailed: true });
 console.log(result.valid); // false
 console.log(result.error); // "Validation failed: ..." `} title="toml_validate.js" lang="js" />
       </div>
@@ -72,7 +72,7 @@ const obj = {
   } 
 };
 
-const built = TOMLBuilder.build(obj);
+const built = TOML.build(obj);
 console.log(built); 
 // [user]
 // id = 1

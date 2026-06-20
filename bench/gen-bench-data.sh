@@ -22,10 +22,10 @@ if [ $# -gt 0 ]; then
   # Partial update mode
   echo "Running partial update for: $*"
   WORKLOADS="$*" BENCH_JSON=1 bash run.sh > "$TMP1"
-  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP1"
+  bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP1"
 
   # Merge with existing benchmarks.js
-  node -e '
+  bun -e '
     const fs = require("fs");
     let existingStr = fs.readFileSync(process.argv[1], "utf8");
     // Strip the "export default " and comments
@@ -44,18 +44,18 @@ else
   # Full suite mode
   # Capture the machine-readable runs first
   BENCH_JSON=1 bash run.sh > "$TMP1"
-  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP1"
+  bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP1"
 
   # Run rps.sh for Hono RPS
   SERVER=scripts/hono.js BENCH_JSON=1 bash rps.sh > "$TMP2"
-  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP2"
+  bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP2"
 
   # WebSocket chat broadcast C-sweep (server + client fan-out msg/s)
   BENCH_JSON=1 bash websocket-chat/run-chat.sh > "$TMP3"
-  node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP3"
+  bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP3"
 
   # Merge the JSON objects
-  node -e '
+  bun -e '
     const fs = require("fs");
     const t1 = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const t2 = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));

@@ -7,6 +7,7 @@
     "fast-xml-parser": "^5.9.2",
     "hono": "^4.12.25",
     "js-yaml": "^4.2.0",
+    "msgpackr": "^1.11.2",
     "ndjson": "^2.0.0"
   }
 }
