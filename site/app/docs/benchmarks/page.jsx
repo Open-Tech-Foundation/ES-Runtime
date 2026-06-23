@@ -49,6 +49,8 @@ const parserWorkloads = [
   { key: "toml_large", label: "TOML parsing (large dataset)", unit: "ms" },
   { key: "msgpack_small", label: "MessagePack parsing (small dataset)", unit: "ms" },
   { key: "msgpack_large", label: "MessagePack parsing (large dataset)", unit: "ms" },
+  { key: "protobuf_small", label: "Protobuf parsing (small dataset)", unit: "ms" },
+  { key: "protobuf_large", label: "Protobuf parsing (large dataset)", unit: "ms" },
 ];
 
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
