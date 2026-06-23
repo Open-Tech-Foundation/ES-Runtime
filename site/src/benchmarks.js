@@ -10,18 +10,18 @@ export default {
   },
   "results_ms": {
     "startup": {
-      "node": 17.2,
-      "bun": 9,
-      "deno": 23.7,
-      "llrt": 3.7,
+      "node": 17.4,
+      "bun": 8.8,
+      "deno": 24,
+      "llrt": 3.6,
       "esrun": 7.2
     },
     "bigscript": {
-      "node": 28.6,
-      "bun": 20.6,
-      "deno": 32.3,
-      "llrt": 11.1,
-      "esrun": 18.2
+      "node": 28.9,
+      "bun": 20.8,
+      "deno": 32.5,
+      "llrt": 11.2,
+      "esrun": 18.3
     },
     "compute": {
       "node": 194.2,
@@ -297,18 +297,18 @@ export default {
       "esrun": 53.2
     },
     "protobuf_small": {
-      "node": 124.7,
-      "bun": 138.7,
-      "deno": 187.9,
-      "llrt": 1783.3,
-      "esrun": 136.5
+      "node": 120.9,
+      "bun": 141.3,
+      "deno": 186.6,
+      "llrt": 1735.5,
+      "esrun": 76.6
     },
     "protobuf_large": {
-      "node": 5969.1,
-      "bun": 6606,
-      "deno": 9618.1,
+      "node": 5879.9,
+      "bun": 6382.5,
+      "deno": 9507.1,
       "llrt": null,
-      "esrun": 7417.2
+      "esrun": 4144.3
     }
   },
   "results_rss": {
@@ -324,7 +324,7 @@ export default {
       "bun": 33,
       "deno": 55,
       "llrt": 11,
-      "esrun": 21
+      "esrun": 22
     },
     "compute": {
       "node": 53,
@@ -601,17 +601,17 @@ export default {
     },
     "protobuf_small": {
       "node": 66,
-      "bun": 123,
+      "bun": 118,
       "deno": 73,
       "llrt": 12,
-      "esrun": 42
+      "esrun": 37
     },
     "protobuf_large": {
-      "node": 357,
-      "bun": 227,
-      "deno": 366,
+      "node": 426,
+      "bun": 223,
+      "deno": 351,
       "llrt": null,
-      "esrun": 146
+      "esrun": 108
     }
   },
   "results_rps": {

@@ -182,9 +182,9 @@ export default function BenchmarksDoc() {
         <BenchChart metrics={parserWorkloads} />
       </div>
 
-      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Protobuf (same library, all runtimes)</h2>
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Protobuf (each runtime&apos;s own path)</h2>
       <p className="mt-2 text-sm text-zinc-500">
-        Every runtime runs the same library — <code>protobuf-es</code> (<code>@bufbuild/protobuf</code>) — decoding identical bytes, so this measures the runtime, not the library.
+        esrun decodes with its native <code>runtime:serialization</code> Protobuf (pure-JS, reflective); Node, Bun, and Deno decode with <code>protobuf-es</code> (<code>@bufbuild/protobuf</code>). Identical bytes, each runtime&apos;s real protobuf path.
       </p>
       <div className="mt-5">
         <BenchChart metrics={protobufWorkloads} />

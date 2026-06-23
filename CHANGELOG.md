@@ -26,6 +26,10 @@ pre-`0.1.0` and the public API is unstable.
   name now covers both text and binary serialization formats; the exported
   namespaces (`XML`/`YAML`/`TOML`/`JSONL`/`MessagePack`) and their APIs are
   unchanged — only the import specifier moves.
+- **Protobuf benchmark now compares each runtime's real path** instead of forcing
+  protobuf-es on every runtime: esrun decodes with its native
+  `runtime:serialization` Protobuf, Node/Bun/Deno with protobuf-es. esrun leads on
+  both time and memory (small 77ms/37MB, large 4.1s/108MB).
 
 ### Fixed
 
