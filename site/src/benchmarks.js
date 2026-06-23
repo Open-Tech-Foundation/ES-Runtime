@@ -6,22 +6,22 @@ export default {
     "bun": "1.3.12",
     "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.7.0"
+    "esrun": "esrun 0.8.0"
   },
   "results_ms": {
     "startup": {
-      "node": 18.9,
-      "bun": 9.4,
-      "deno": 24.7,
-      "llrt": 3.7,
-      "esrun": 7.2
+      "node": 17,
+      "bun": 8.9,
+      "deno": 23,
+      "llrt": 3.6,
+      "esrun": 7.1
     },
     "bigscript": {
-      "node": 29.7,
-      "bun": 21.4,
-      "deno": 33.2,
-      "llrt": 10.9,
-      "esrun": 18.7
+      "node": 28.8,
+      "bun": 21.1,
+      "deno": 31.7,
+      "llrt": 10.7,
+      "esrun": 18.8
     },
     "compute": {
       "node": 194.2,
@@ -263,10 +263,10 @@ export default {
     },
     "rss": {
       "node": 43,
-      "bun": 29,
+      "bun": 30,
       "deno": 56,
       "llrt": 11,
-      "esrun": 20
+      "esrun": 19
     },
     "jsonl_large": {
       "node": 532.8,
@@ -295,15 +295,29 @@ export default {
       "deno": 39.8,
       "llrt": 1127.2,
       "esrun": 58.9
+    },
+    "protobuf_small": {
+      "node": 24.8,
+      "bun": 31.1,
+      "deno": 25.5,
+      "llrt": null,
+      "esrun": 101.5
+    },
+    "protobuf_large": {
+      "node": 1131.8,
+      "bun": 1208.6,
+      "deno": 1133.9,
+      "llrt": null,
+      "esrun": 6062.7
     }
   },
   "results_rss": {
     "startup": {
       "node": 43,
-      "bun": 29,
+      "bun": 30,
       "deno": 56,
       "llrt": 11,
-      "esrun": 20
+      "esrun": 19
     },
     "bigscript": {
       "node": 42,
@@ -584,6 +598,20 @@ export default {
       "deno": 91,
       "llrt": 15,
       "esrun": 59
+    },
+    "protobuf_small": {
+      "node": 61,
+      "bun": 85,
+      "deno": 72,
+      "llrt": null,
+      "esrun": 31
+    },
+    "protobuf_large": {
+      "node": 312,
+      "bun": 253,
+      "deno": 229,
+      "llrt": null,
+      "esrun": 368
     }
   },
   "results_rps": {

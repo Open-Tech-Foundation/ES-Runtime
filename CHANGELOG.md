@@ -6,16 +6,27 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:parsers` — `Protobuf`.** Dynamic, schema-aware Protobuf parsing and
+  building via `new Protobuf.Schema(protoStr)` (compiled entirely in memory — no
+  filesystem access), with `schema.parse(messageName, bytes)` /
+  `schema.build(messageName, obj)`. Uses the canonical proto3 JSON mapping
+  (64-bit ints as strings, enums as names). `schema.free()` (and `using` /
+  `Symbol.dispose`) releases the compiled schema.
+
 ## [0.8.0] - 2026-06-20
 
 ### Added
 
-- **`runtime:parsers` Module**
-  - Added blazing fast native `YAMLParser`, `YAMLValidator`, and `YAMLBuilder`.
-  - Added native `TOMLParser`, `TOMLValidator`, and `TOMLBuilder`.
-  - Added native `JSONLDecoderStream` and `JSONLEncoderStream` for robust pipeline streaming of JSON Lines.
-  - Added native `MessagePackParser`, `MessagePackValidator`, and `MessagePackBuilder` for blazing fast binary data processing.
-  - Parsers are highly optimized and serialize natively to the engine's internal V8 bindings for zero-allocation performance.
+- **`runtime:parsers` Module** — native parsers exposed as namespace objects
+  (`XML`, `YAML`, `TOML`, `MessagePack`, `JSONL`).
+  - `YAML` / `TOML`: `parse`, `build`, and `validate` (`{ detailed }` for
+    `{ valid, error }`).
+  - `MessagePack`: `decode`, `encode`, and `validate` for binary data.
+  - `JSONL`: `DecoderStream` (with `skipInvalid`) and `EncoderStream` transform
+    streams for robust pipeline streaming of JSON Lines.
+  - Parsers are backed by optimized Rust implementations over the host op seam.
 
 ### Changed
 

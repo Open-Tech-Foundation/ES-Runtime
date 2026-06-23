@@ -9,7 +9,7 @@ const errors = [
 ];
 
 const IMPORT = `import { 
-  JSONL, XML, YAML, TOML, MessagePack
+  JSONL, XML, YAML, TOML, MessagePack, Protobuf
 } from "runtime:parsers";`;
 
 const sections = [
@@ -102,6 +102,15 @@ const sections = [
         ex: `MessagePack.validate(bytes, { detailed: true });` 
       },
     ]
+  },
+  {
+    title: "Protobuf",
+    desc: "Dynamic schema-aware parsing and building of binary Protobuf data.",
+    exports: [
+      { sig: "new Protobuf.Schema(protoStr)", type: "Schema", desc: "Compiles a Protobuf schema from a .proto schema string.", ex: `const schema = new Protobuf.Schema('syntax = "proto3"; ...');` },
+      { sig: "schema.parse(messageName, bytes)", type: "(string, Uint8Array) => object", desc: "Parses a Protobuf byte array into a JavaScript object based on the message schema.", ex: `schema.parse("Hello", pbBytes);` },
+      { sig: "schema.build(messageName, obj)", type: "(string, object) => Uint8Array", desc: "Serializes a JavaScript object into a Protobuf byte array based on the message schema.", ex: `schema.build("Hello", { name: "world" });` },
+    ]
   }
 ];
 
@@ -113,7 +122,7 @@ export default function ParsersApiDoc() {
         runtime:parsers
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        Native parser classes for JSONL, XML, YAML, and TOML. These operations run directly in Rust, avoiding JavaScript overhead and providing best-in-class performance.
+        Native parser classes for JSONL, XML, YAML, TOML, MessagePack, and Protobuf. These operations run directly in Rust, avoiding JavaScript overhead and providing best-in-class performance.
       </p>
       <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-full bg-brand-50 px-3 py-1 font-medium text-brand-700">

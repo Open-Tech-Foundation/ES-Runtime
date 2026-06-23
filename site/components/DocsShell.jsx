@@ -29,6 +29,7 @@ const NAV = [
       { href: "/docs/parsers/toml", label: "TOML Parser" },
       { href: "/docs/parsers/jsonl", label: "JSONL Parser" },
       { href: "/docs/parsers/msgpack", label: "MessagePack Parser" },
+      { href: "/docs/parsers/protobuf", label: "Protobuf Parser" },
     ],
   },
   {

@@ -8,6 +8,7 @@
     "hono": "^4.12.25",
     "js-yaml": "^4.2.0",
     "msgpackr": "^1.11.2",
-    "ndjson": "^2.0.0"
+    "ndjson": "^2.0.0",
+    "protobufjs": "^8.6.4"
   }
 }

@@ -5,6 +5,27 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use std::fmt;
+
+/// Virtual filename used to compile an in-memory protobuf schema string.
+const PROTOBUF_SCHEMA_FILE: &str = "schema.proto";
+
+/// In-memory protobuf source resolver: serves a single virtual `schema.proto`
+/// so `protox` can compile a schema string entirely in memory. `runtime:parsers`
+/// declares no capability, so it must never touch the filesystem.
+struct ProtoStringResolver {
+    source: String,
+}
+
+impl protox::file::FileResolver for ProtoStringResolver {
+    fn open_file(&self, name: &str) -> Result<protox::file::File, protox::Error> {
+        if name == PROTOBUF_SCHEMA_FILE {
+            protox::file::File::from_source(name, &self.source)
+        } else {
+            Err(protox::Error::file_not_found(name))
+        }
+    }
+}
+
 /// A deserialization visitor that builds V8 JavaScript objects from data.
 pub struct ValueVisitor;
 
@@ -557,6 +578,147 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             Ok(bytes) => Ok(Value::Bytes(bytes)),
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }
+    }))?;
+
+    // --- Protobuf Ops ---
+
+    let protobuf_pools = Rc::new(RefCell::new(
+        HashMap::<u32, prost_reflect::DescriptorPool>::new(),
+    ));
+    let mut next_protobuf_id = 1;
+
+    let pools_create = Rc::clone(&protobuf_pools);
+    engine.register_op(OpDecl::sync("protobuf_schema_create", move |args| {
+        let proto_str = match args.first().and_then(Value::as_str) {
+            Some(s) => s,
+            None => {
+                return Err(OpError::type_error(
+                    "protobuf_schema_create expects a string schema",
+                ));
+            }
+        };
+
+        // Compile entirely in memory via a string resolver — no filesystem I/O
+        // (this module holds no capability) and no cross-process temp-dir races.
+        let resolver = ProtoStringResolver {
+            source: proto_str.to_owned(),
+        };
+        let mut compiler = protox::Compiler::with_file_resolver(resolver);
+        compiler.include_source_info(false);
+        compiler.include_imports(true);
+        if let Err(e) = compiler.open_file(PROTOBUF_SCHEMA_FILE) {
+            return Err(OpError::new(
+                ExceptionClass::SyntaxError,
+                format!("Failed to compile schema: {e}"),
+            ));
+        }
+        let pool = compiler.descriptor_pool();
+
+        let id = next_protobuf_id;
+        next_protobuf_id += 1;
+        pools_create.borrow_mut().insert(id, pool);
+
+        Ok(Value::Number(id as f64))
+    }))?;
+
+    // Release a compiled schema's descriptor pool. Without this a long-running
+    // process that compiles schemas dynamically would grow the pool map forever.
+    let pools_free = Rc::clone(&protobuf_pools);
+    engine.register_op(OpDecl::sync("protobuf_schema_free", move |args| {
+        if let Some(Value::Number(n)) = args.first() {
+            pools_free.borrow_mut().remove(&(*n as u32));
+        }
+        Ok(Value::Null)
+    }))?;
+
+    let pools_parse = Rc::clone(&protobuf_pools);
+    engine.register_op(OpDecl::sync("protobuf_parse", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => return Err(OpError::type_error("protobuf_parse expects schema id")),
+        };
+        let message_name = match args.get(1).and_then(Value::as_str) {
+            Some(s) => s.to_string(),
+            None => return Err(OpError::type_error("protobuf_parse expects message name")),
+        };
+        let payload = match args.get(2).and_then(Value::as_bytes) {
+            Some(b) => b,
+            None => {
+                return Err(OpError::type_error(
+                    "protobuf_parse expects a Uint8Array payload",
+                ));
+            }
+        };
+
+        let pools = pools_parse.borrow();
+        let pool = pools
+            .get(&id)
+            .ok_or_else(|| OpError::type_error("Invalid schema ID"))?;
+        let desc = pool.get_message_by_name(&message_name).ok_or_else(|| {
+            OpError::type_error(format!("Message {} not found in schema", message_name))
+        })?;
+
+        let msg = prost_reflect::DynamicMessage::decode(desc, payload).map_err(|e| {
+            OpError::new(
+                ExceptionClass::SyntaxError,
+                format!("Failed to decode protobuf payload: {e}"),
+            )
+        })?;
+
+        // `DynamicMessage` implements `Serialize` via the `serde` feature
+        match serde_json::to_string(&msg) {
+            Ok(json_str) => Ok(Value::String(json_str)),
+            Err(e) => Err(OpError::type_error(format!(
+                "Failed to transcode to JSON: {}",
+                e
+            ))),
+        }
+    }))?;
+
+    let pools_build = Rc::clone(&protobuf_pools);
+    engine.register_op(OpDecl::sync("protobuf_build", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => return Err(OpError::type_error("protobuf_build expects schema id")),
+        };
+        let message_name = match args.get(1).and_then(Value::as_str) {
+            Some(s) => s.to_string(),
+            None => return Err(OpError::type_error("protobuf_build expects message name")),
+        };
+        let val = args.get(2).cloned().unwrap_or(Value::Null);
+
+        let pools = pools_build.borrow();
+        let pool = pools
+            .get(&id)
+            .ok_or_else(|| OpError::type_error("Invalid schema ID"))?;
+        let desc = pool.get_message_by_name(&message_name).ok_or_else(|| {
+            OpError::type_error(format!("Message {} not found in schema", message_name))
+        })?;
+
+        let json_val = value_to_json(val);
+
+        // `desc` (a MessageDescriptor) implements DeserializeSeed; serde_json::Value
+        // implements serde::Deserializer — so this maps the JS object onto the message.
+        let msg = match desc.deserialize(json_val) {
+            Ok(m) => m,
+            Err(e) => {
+                return Err(OpError::type_error(format!(
+                    "Failed to deserialize JSON to Protobuf: {}",
+                    e
+                )));
+            }
+        };
+
+        use prost::Message;
+        let mut bytes = Vec::new();
+        if let Err(e) = msg.encode(&mut bytes) {
+            return Err(OpError::type_error(format!(
+                "Failed to encode Protobuf: {}",
+                e
+            )));
+        }
+
+        Ok(Value::Bytes(bytes))
     }))?;
 
     Ok(())

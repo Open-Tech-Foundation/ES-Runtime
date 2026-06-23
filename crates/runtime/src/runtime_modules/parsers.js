@@ -60,6 +60,33 @@ export const MessagePack = {
   }
 };
 
+const { protobuf_schema_create, protobuf_schema_free, protobuf_parse, protobuf_build } = globalThis.__ops;
+
+export const Protobuf = {
+  Schema: class {
+    constructor(protoStr) {
+      this.id = protobuf_schema_create(protoStr);
+    }
+    parse(messageName, payload) {
+      return JSON.parse(protobuf_parse(this.id, messageName, payload));
+    }
+    build(messageName, obj) {
+      return protobuf_build(this.id, messageName, obj);
+    }
+    // Release the compiled schema held host-side. Idempotent; the host ignores
+    // an unknown id. Also wired to Symbol.dispose for `using` declarations.
+    free() {
+      if (this.id != null) {
+        protobuf_schema_free(this.id);
+        this.id = null;
+      }
+    }
+    [Symbol.dispose]() {
+      this.free();
+    }
+  }
+};
+
 class JSONLDecoderStream extends TransformStream {
   constructor(options = {}) {
     let buffer = '';

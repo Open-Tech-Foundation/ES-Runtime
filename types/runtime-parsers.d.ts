@@ -108,6 +108,47 @@ declare module "runtime:parsers" {
     export function encode(obj: any): Uint8Array;
   }
 
+  export namespace Protobuf {
+    /**
+     * A dynamically compiled Protobuf Schema.
+     */
+    export class Schema {
+      /**
+       * Compiles a Protobuf schema from a string.
+       * @param protoStr The content of a `.proto` file defining the schema.
+       */
+      constructor(protoStr: string);
+
+      /**
+       * Parses a Protobuf payload into a JavaScript object based on a message definition.
+       * Uses the canonical proto3 JSON mapping: 64-bit integer fields
+       * (`int64`/`uint64`/`fixed64`) are returned as strings, and enum fields as
+       * their value names.
+       * @param messageName The fully-qualified name of the message type (e.g. "package.Message").
+       * @param payload The raw Protobuf bytes.
+       * @returns The parsed JavaScript object.
+       */
+      parse(messageName: string, payload: Uint8Array): any;
+
+      /**
+       * Builds a raw Protobuf byte payload from a JavaScript object. Accepts the
+       * proto3 JSON mapping (64-bit ints as strings or numbers, enums as names or
+       * numbers).
+       * @param messageName The fully-qualified name of the message type.
+       * @param obj The JavaScript object containing the message data.
+       * @returns The serialized Protobuf bytes.
+       */
+      build(messageName: string, obj: any): Uint8Array;
+
+      /**
+       * Releases the compiled schema held by the host. Idempotent. The schema is
+       * also disposed automatically when declared with `using`.
+       */
+      free(): void;
+      [Symbol.dispose](): void;
+    }
+  }
+
   export interface JSONLParseError {
     line: number;
     raw: string;
