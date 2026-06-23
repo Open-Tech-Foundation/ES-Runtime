@@ -10,7 +10,7 @@ const errors = [
 
 const IMPORT = `import {
   JSONL, XML, YAML, TOML, MessagePack
-} from "runtime:parsers";`;
+} from "runtime:serialization";`;
 
 const sections = [
   {
@@ -107,10 +107,10 @@ const sections = [
 
 export default function ParsersApiDoc() {
   return (
-    <ApiShell active="/api/parsers">
+    <ApiShell active="/api/serialization">
       <p className="text-sm font-medium text-brand-600">API reference</p>
       <h1 className="mt-2 font-mono text-3xl font-bold tracking-tight text-zinc-900 sm:text-4xl">
-        runtime:parsers
+        runtime:serialization
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
         Native parsers for JSONL, XML, YAML, TOML, and MessagePack. These operations run directly in Rust, avoiding JavaScript overhead and providing best-in-class performance.
@@ -129,7 +129,7 @@ export default function ParsersApiDoc() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Import</h2>
       <div className="mt-4">
-        <CodeBlock code={IMPORT} title="runtime:parsers" lang="js" />
+        <CodeBlock code={IMPORT} title="runtime:serialization" lang="js" />
       </div>
 
       {sections.map(section => (

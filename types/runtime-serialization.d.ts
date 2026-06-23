@@ -1,4 +1,4 @@
-declare module "runtime:parsers" {
+declare module "runtime:serialization" {
   export interface ValidationOptions {
     detailed?: boolean;
   }

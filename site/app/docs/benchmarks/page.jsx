@@ -176,7 +176,7 @@ export default function BenchmarksDoc() {
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">Native vs Third-Party Parsers</h2>
       <p className="mt-2 text-sm text-zinc-500">
-        Comparing runtimes running heavily optimized native parsing engines (esrun's <code>runtime:parsers</code>, LLRT's <code>llrt:xml</code>) versus JS-based fallback libraries (`fast-xml-parser`) for runtimes that lack native extensions (Node.js, Bun, Deno).
+        Comparing runtimes running heavily optimized native parsing engines (esrun's <code>runtime:serialization</code>, LLRT's <code>llrt:xml</code>) versus JS-based fallback libraries (`fast-xml-parser`) for runtimes that lack native extensions (Node.js, Bun, Deno).
       </p>
       <div className="mt-5">
         <BenchChart metrics={parserWorkloads} />

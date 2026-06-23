@@ -1,4 +1,4 @@
-// Edge-case coverage for the runtime:parsers text + binary parsers, beyond the
+// Edge-case coverage for the runtime:serialization text + binary parsers, beyond the
 // happy-path round-trips in parsers.js. Each test() is one tallied assertion.
 
 // Order-insensitive deep equality via sorted-key JSON (function decl so loading
@@ -15,7 +15,7 @@ function peq(actual, expected, msg) {
 }
 
 test("yaml edge cases", async () => {
-  const { YAML } = await import("runtime:parsers");
+  const { YAML } = await import("runtime:serialization");
 
   // Empty document is null; explicit null and `~` both parse to null.
   if (YAML.parse("") !== null) throw new Error("empty YAML should be null");
@@ -44,7 +44,7 @@ test("yaml edge cases", async () => {
 });
 
 test("toml edge cases", async () => {
-  const { TOML } = await import("runtime:parsers");
+  const { TOML } = await import("runtime:serialization");
 
   if (Object.keys(TOML.parse("")).length !== 0) throw new Error("empty TOML should be {}");
 
@@ -71,7 +71,7 @@ test("toml edge cases", async () => {
 });
 
 test("messagepack edge cases", async () => {
-  const { MessagePack } = await import("runtime:parsers");
+  const { MessagePack } = await import("runtime:serialization");
 
   // Nested round-trip preserving null, bool, arrays, nested objects.
   const obj = { a: [1, 2, { b: null }], c: true, d: { e: "x" } };
@@ -88,7 +88,7 @@ test("messagepack edge cases", async () => {
 });
 
 test("jsonl decoder round-trips, buffers partial lines, skips blanks", async () => {
-  const { JSONL } = await import("runtime:parsers");
+  const { JSONL } = await import("runtime:serialization");
   const dec = new JSONL.DecoderStream();
   const writer = dec.writable.getWriter();
   const reader = dec.readable.getReader();
@@ -105,7 +105,7 @@ test("jsonl decoder round-trips, buffers partial lines, skips blanks", async () 
 });
 
 test("jsonl decoder handles a multi-byte char split across chunks", async () => {
-  const { JSONL } = await import("runtime:parsers");
+  const { JSONL } = await import("runtime:serialization");
   const dec = new JSONL.DecoderStream();
   const writer = dec.writable.getWriter();
   const reader = dec.readable.getReader();
@@ -122,7 +122,7 @@ test("jsonl decoder handles a multi-byte char split across chunks", async () => 
 });
 
 test("jsonl decoder skipInvalid tolerates and reports bad lines", async () => {
-  const { JSONL } = await import("runtime:parsers");
+  const { JSONL } = await import("runtime:serialization");
   const dec = new JSONL.DecoderStream({ skipInvalid: true });
   const errs = [];
   dec.onError((e) => errs.push(e.line));
@@ -140,7 +140,7 @@ test("jsonl decoder skipInvalid tolerates and reports bad lines", async () => {
 });
 
 test("jsonl encoder produces ndjson", async () => {
-  const { JSONL } = await import("runtime:parsers");
+  const { JSONL } = await import("runtime:serialization");
   const enc = new JSONL.EncoderStream();
   const writer = enc.writable.getWriter();
   const reader = enc.readable.getReader();

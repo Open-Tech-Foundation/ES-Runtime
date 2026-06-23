@@ -8,7 +8,7 @@ export const metadata = {
 
 export default function JSONLParserDoc() {
   return (
-    <DocsShell active="/docs/parsers/jsonl">
+    <DocsShell active="/docs/serialization/jsonl">
       <p className="text-sm font-medium text-brand-600">Guides</p>
       <h1 className="mt-2 text-4xl font-bold tracking-tight text-zinc-900">
         JSON Lines (JSONL)
@@ -27,7 +27,7 @@ export default function JSONLParserDoc() {
         The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">JSONL.DecoderStream</code> is a WHATWG TransformStream that safely decodes incoming text chunks, splitting them by newline and parsing each complete line into a JavaScript object.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { JSONL } from 'runtime:parsers';
+        <CodeBlock code={`import { JSONL } from 'runtime:serialization';
 import { file } from 'runtime:fs';
 
 // Read a massive JSONL file natively from the file system
@@ -65,7 +65,7 @@ for await (const user of stream) {
         This is probably the most common production use case. You can continuously append events to a log file as they occur.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { JSONL } from 'runtime:parsers';
+        <CodeBlock code={`import { JSONL } from 'runtime:serialization';
 import { file } from 'runtime:fs';
 
 const log = new JSONL.EncoderStream();

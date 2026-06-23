@@ -1,4 +1,4 @@
-// runtime:parsers — XML/YAML/TOML/JSONL/MessagePack, backed by host ops.
+// runtime:serialization — XML/YAML/TOML/JSONL/MessagePack, backed by host ops.
 const {
   xml_parse, xml_validate, xml_build,
   yaml_parse, yaml_validate, yaml_build,

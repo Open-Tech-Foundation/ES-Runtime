@@ -6,12 +6,19 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Changed
+
+- **`runtime:parsers` renamed to `runtime:serialization`** (breaking). One module
+  name now covers both text and binary serialization formats; the exported
+  namespaces (`XML`/`YAML`/`TOML`/`JSONL`/`MessagePack`) and their APIs are
+  unchanged — only the import specifier moves.
+
 ### Fixed
 
-- **`runtime:parsers` — TOML datetimes** now parse to RFC3339 strings instead of
+- **`runtime:serialization` — TOML datetimes** now parse to RFC3339 strings instead of
   leaking the `toml` crate's internal `$__toml_private_datetime` round-trip
   sentinel object.
-- **`runtime:parsers` — YAML non-finite floats** (`.inf`/`.nan`) now parse to
+- **`runtime:serialization` — YAML non-finite floats** (`.inf`/`.nan`) now parse to
   `Infinity`/`NaN` instead of being silently coerced to `null`. YAML and TOML
   parsing build engine values directly rather than transcoding through JSON,
   which JSON's number model cannot represent.

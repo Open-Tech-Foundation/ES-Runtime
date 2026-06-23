@@ -1,5 +1,5 @@
 test("parsers sync apis", async () => {
-const { YAML, XML, TOML, MessagePack, JSONL } = await import('runtime:parsers');
+const { YAML, XML, TOML, MessagePack, JSONL } = await import('runtime:serialization');
 
 function assertEq(actual, expected, msg) {
     function sortKeys(obj) {

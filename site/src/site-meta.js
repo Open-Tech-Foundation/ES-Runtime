@@ -42,7 +42,7 @@ export const PAGES = {
   "/api/fs": { section: "API reference", title: "runtime:fs", description: "Blob-based async file I/O — `file()` handles, `write()`, `readDir`, `stat`, `mkdir`, `remove`, `rename`, and `Glob`; confined to a root jail. Gated on FileRead/FileWrite." },
   "/api/net": { section: "API reference", title: "runtime:net", description: "TCP sockets following the WinterTC Sockets API — `connect()` and `listen()`. Gated on Net/NetListen." },
   "/api/http": { section: "API reference", title: "runtime:http", description: "an HTTP/1.1 server, `serve((request) => response)`, using the Web `Request`/`Response` objects. Gated on NetListen." },
-  "/api/parsers": { section: "API reference", title: "runtime:parsers", description: "high-performance native parsers for JSONL, XML, YAML, and TOML via streams and synchronous functions." },
+  "/api/serialization": { section: "API reference", title: "runtime:serialization", description: "high-performance native parsers for JSONL, XML, YAML, and TOML via streams and synchronous functions." },
   "/api/websocket": { section: "API reference", title: "runtime:websocket", description: "WebSocket client and server functionality native to the engine." },
 
   // Comparisons
@@ -58,11 +58,11 @@ export const PAGES = {
   "/docs/urlpattern": { section: "Guides", title: "URLPattern", description: "native support for the URLPattern web API for routing and parsing URLs." },
   "/docs/guides/networking": { section: "Guides", title: "Networking", description: "TCP client/server usage with `runtime:net`." },
   "/docs/guides/websocket": { section: "Guides", title: "WebSockets", description: "creating scalable WebSocket servers and clients." },
-  "/docs/parsers/jsonl": { section: "Guides", title: "JSONL Parsing", description: "native streaming JSONLines implementation for processing massive logs." },
-  "/docs/parsers/toml": { section: "Guides", title: "TOML Parsing", description: "synchronous high-performance TOML processing." },
-  "/docs/parsers/xml": { section: "Guides", title: "XML Parsing", description: "synchronous and streaming fast XML processing." },
-  "/docs/parsers/yaml": { section: "Guides", title: "YAML Parsing", description: "synchronous robust YAML processing." },
-  "/docs/parsers/msgpack": { section: "Guides", title: "MessagePack Parsing", description: "synchronous fast MessagePack processing." },
+  "/docs/serialization/jsonl": { section: "Guides", title: "JSONL Parsing", description: "native streaming JSONLines implementation for processing massive logs." },
+  "/docs/serialization/toml": { section: "Guides", title: "TOML Parsing", description: "synchronous high-performance TOML processing." },
+  "/docs/serialization/xml": { section: "Guides", title: "XML Parsing", description: "synchronous and streaming fast XML processing." },
+  "/docs/serialization/yaml": { section: "Guides", title: "YAML Parsing", description: "synchronous robust YAML processing." },
+  "/docs/serialization/msgpack": { section: "Guides", title: "MessagePack Parsing", description: "synchronous fast MessagePack processing." },
 };
 
 // Static trailing sections of llms.txt (not derived from routes).

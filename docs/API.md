@@ -20,7 +20,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:net`](#runtimenet)
 - [`runtime:http`](#runtimehttp)
 - [`runtime:websocket`](#runtimewebsocket)
-- [`runtime:parsers`](#runtimeparsers)
+- [`runtime:serialization`](#runtimeserialization)
 
 ---
 
@@ -134,7 +134,7 @@ the required capability has been granted.
 | `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
 | `runtime:http`    | Available   | `NetListen` | [↓](#runtimehttp)               |
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
-| `runtime:parsers` | Available   | None       | [↓](#runtimeparsers)           |
+| `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 
 ---
 
@@ -482,7 +482,7 @@ room, enqueues to every connection concurrently (a slow peer can't stall the
 rest), and coalesces the writes — so delivery stays full. A `wss:` server and
 pub/sub topics are follow-ups (D29).
 
-## `runtime:parsers`
+## `runtime:serialization`
 
 A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, and MessagePack. These parsers are backed by optimized Rust implementations and are exposed via zero-cost host boundaries.
 
@@ -490,7 +490,7 @@ A high-performance parsing and serialization module for structured data formats:
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, MessagePack } from "runtime:parsers";
+import { XML, YAML, TOML, MessagePack } from "runtime:serialization";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");

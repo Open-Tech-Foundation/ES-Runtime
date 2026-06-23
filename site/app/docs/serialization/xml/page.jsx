@@ -3,13 +3,13 @@ import CodeBlock from "../../../../components/CodeBlock.jsx";
 
 export default function XMLParserDoc() {
   return (
-    <DocsShell active="/docs/parsers/xml">
+    <DocsShell active="/docs/serialization/xml">
       <p className="text-sm font-medium text-brand-600">Guides</p>
       <h1 className="mt-2 text-4xl font-bold tracking-tight text-zinc-900">
         XML Processing
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        ES-Runtime includes a highly optimized native XML parser accessible via the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:parsers</code> module. These operations run directly in Rust, completely avoiding JavaScript garbage collection overhead and offering best-in-class performance.
+        ES-Runtime includes a highly optimized native XML parser accessible via the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:serialization</code> module. These operations run directly in Rust, completely avoiding JavaScript garbage collection overhead and offering best-in-class performance.
       </p>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
@@ -19,7 +19,7 @@ export default function XMLParserDoc() {
         Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.parse</code> to convert an XML string directly into a JavaScript object.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { XML } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:serialization";
 
 const xmlData = \`<user id="1"><name>Alice</name></user>\`;
 
@@ -35,7 +35,7 @@ console.log(parsed["@id"]);     // "1"`} title="xml_parse.js" lang="js" />
         Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.validate</code> to check if an XML string is well-formed.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { XML } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:serialization";
 
 const xmlData = \`<user id="1"><name>Alice</name></user>\`;
 
@@ -55,7 +55,7 @@ console.log(result.error); // "Validation failed: ..." `} title="xml_validate.js
         Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.build</code> to serialize a JavaScript object back into an XML string.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { XML } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:serialization";
 
 const obj = { 
   user: { 
@@ -74,7 +74,7 @@ console.log(built); // <user id="1"><name>Alice</name></user>`} title="xml_build
       </p>
 
       <div className="mt-6">
-        <CodeBlock code={`import { XML } from "runtime:parsers";
+        <CodeBlock code={`import { XML } from "runtime:serialization";
 
 async function processMassiveFeed(fileStream) {
   // Pipe the chunks directly into the native streaming parser
@@ -89,7 +89,7 @@ async function processMassiveFeed(fileStream) {
 
       <h3 className="mt-8 text-xl font-semibold text-zinc-900">Performance</h3>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Because parsing happens directly within the Rust native core, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:parsers</code> operates around 10% faster than <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">fast-xml-parser</code> running on Node.js or Bun, while utilizing half the memory. You can view the full benchmarks on the <a href="/docs/benchmarks" className="text-brand-600 hover:underline">Benchmarks</a> page.
+        Because parsing happens directly within the Rust native core, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:serialization</code> operates around 10% faster than <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">fast-xml-parser</code> running on Node.js or Bun, while utilizing half the memory. You can view the full benchmarks on the <a href="/docs/benchmarks" className="text-brand-600 hover:underline">Benchmarks</a> page.
       </p>
     </DocsShell>
   );

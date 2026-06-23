@@ -13,7 +13,7 @@ for (let i = 0; i < 5000; i++) {
 
 let esrunParser = null;
 try {
-  const mod = await import('runtime:parsers');
+  const mod = await import('runtime:serialization');
   esrunParser = mod.YAML.parse;
 } catch (e) {}
 const isEsrun = typeof esrunParser === "function";

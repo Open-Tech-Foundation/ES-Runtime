@@ -1,7 +1,7 @@
 let esrunParser = null;
 let esrunBuilder = null;
 try {
-  const mod = await import('runtime:parsers');
+  const mod = await import('runtime:serialization');
   esrunParser = mod.MessagePack.decode;
   esrunBuilder = mod.MessagePack.encode;
 } catch (e) {}

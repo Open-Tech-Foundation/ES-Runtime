@@ -1,7 +1,7 @@
 let isEsrun = false;
 let JSONLDecoderStream, JSONLEncoderStream;
 try {
-  const parsers = await import("runtime:parsers");
+  const parsers = await import("runtime:serialization");
   JSONLDecoderStream = parsers.JSONL.DecoderStream;
   JSONLEncoderStream = parsers.JSONL.EncoderStream;
   isEsrun = true;

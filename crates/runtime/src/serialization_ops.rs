@@ -1,4 +1,4 @@
-//! Host ops backing the `runtime:parsers` module for XML processing.
+//! Host ops backing the `runtime:serialization` module (XML/YAML/TOML/JSONL/MessagePack).
 use es_runtime_common::ExceptionClass;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use quick_xml::Reader;
