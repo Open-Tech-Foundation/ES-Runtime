@@ -1,4 +1,5 @@
-const { 
+// runtime:parsers — XML/YAML/TOML/JSONL/MessagePack/Protobuf, backed by host ops.
+const {
   xml_parse, xml_validate, xml_build,
   yaml_parse, yaml_validate, yaml_build,
   toml_parse, toml_validate, toml_build,

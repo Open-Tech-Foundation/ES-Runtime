@@ -1,5 +1,6 @@
 test("jsonl parser and streams", async () => {
-  const { JSONLDecoderStream, JSONLEncoderStream } = await import('runtime:parsers');
+  const { JSONL } = await import('runtime:parsers');
+  const { JSONLDecoderStream, JSONLEncoderStream } = { JSONLDecoderStream: JSONL.DecoderStream, JSONLEncoderStream: JSONL.EncoderStream };
   const { file } = await import('runtime:fs');
 
   async function testStream() {

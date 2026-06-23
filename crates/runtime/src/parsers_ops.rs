@@ -102,9 +102,19 @@ fn value_to_json(v: Value) -> serde_json::Value {
     match v {
         Value::Null => serde_json::Value::Null,
         Value::Bool(b) => serde_json::Value::Bool(b),
-        Value::Number(n) => serde_json::Number::from_f64(n)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
+        // Engine numbers are always f64. Emit an integer JSON number for integral
+        // values so builders don't turn `1` into `1.0` (YAML/TOML) or encode it as
+        // a wasteful 9-byte float64 (MessagePack). Non-integral / out-of-range fall
+        // back to a float; non-finite (no JSON representation) becomes null.
+        Value::Number(n) => {
+            if n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64 {
+                serde_json::Value::Number((n as i64).into())
+            } else {
+                serde_json::Number::from_f64(n)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+        }
         Value::String(s) => serde_json::Value::String(s),
         Value::Array(arr) => serde_json::Value::Array(arr.into_iter().map(value_to_json).collect()),
         Value::Object(map) => {

@@ -37,3 +37,49 @@ schema.free();
 if (schema.id !== null) throw new Error("Expected id to be null after free()");
 schema.free();
 });
+
+test("protobuf advanced types follow the proto3 JSON mapping", async () => {
+const { Protobuf } = await import('runtime:parsers');
+
+using schema = new Protobuf.Schema(`
+    syntax = "proto3";
+    package x;
+    enum Color { RED = 0; GREEN = 1; }
+    message Inner { string v = 1; }
+    message M {
+        int64 big = 1;
+        repeated int32 nums = 2;
+        Color c = 3;
+        Inner inner = 4;
+        bytes data = 5;
+        map<string, int32> counts = 6;
+    }
+`);
+
+// 64-bit ints round-trip exactly as strings (no f64 precision loss); enums as
+// names; repeated/nested/map carry through; bytes use base64 strings.
+const b64 = btoa(String.fromCharCode(1, 2, 3));
+const obj = {
+    big: "9007199254740993",
+    nums: [1, 2, 3],
+    c: "GREEN",
+    inner: { v: "hi" },
+    data: b64,
+    counts: { a: 1 },
+};
+const decoded = schema.parse("x.M", schema.build("x.M", obj));
+if (decoded.big !== "9007199254740993") throw new Error("int64 should be an exact string: " + decoded.big);
+if (typeof decoded.big !== "string") throw new Error("int64 must be a string");
+if (JSON.stringify(decoded.nums) !== "[1,2,3]") throw new Error("repeated mismatch: " + JSON.stringify(decoded.nums));
+if (decoded.c !== "GREEN") throw new Error("enum should be its name: " + decoded.c);
+if (decoded.inner.v !== "hi") throw new Error("nested message mismatch");
+if (decoded.data !== b64) throw new Error("bytes (base64) mismatch: " + decoded.data);
+if (decoded.counts.a !== 1) throw new Error("map mismatch");
+
+// Proto3 omits fields left at their default value.
+const defaults = schema.parse("x.M", schema.build("x.M", {}));
+if (Object.keys(defaults).length !== 0) throw new Error("expected no default fields, got " + JSON.stringify(defaults));
+
+// Decoding a payload against an unknown message name throws.
+assertThrows(() => schema.parse("x.Nope", new Uint8Array([0])));
+});
