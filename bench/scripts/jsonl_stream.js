@@ -2,8 +2,8 @@ let isEsrun = false;
 let JSONLDecoderStream, JSONLEncoderStream;
 try {
   const parsers = await import("runtime:parsers");
-  JSONLDecoderStream = parsers.JSONLDecoderStream;
-  JSONLEncoderStream = parsers.JSONLEncoderStream;
+  JSONLDecoderStream = parsers.JSONL.DecoderStream;
+  JSONLEncoderStream = parsers.JSONL.EncoderStream;
   isEsrun = true;
 } catch (e) {
 }
