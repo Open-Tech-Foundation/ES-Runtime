@@ -118,6 +118,24 @@ fn value_to_json(v: Value) -> serde_json::Value {
     }
 }
 
+/// Converts a parsed `toml::Value` into an engine `Value`. TOML datetimes become
+/// their RFC3339 string form — building Values directly (rather than transcoding
+/// to JSON) avoids the `toml` crate leaking its `$__toml_private_datetime`
+/// round-trip sentinel into user JS.
+fn toml_to_value(v: toml::Value) -> Value {
+    match v {
+        toml::Value::String(s) => Value::String(s),
+        toml::Value::Integer(i) => Value::Number(i as f64),
+        toml::Value::Float(f) => Value::Number(f),
+        toml::Value::Boolean(b) => Value::Bool(b),
+        toml::Value::Datetime(dt) => Value::String(dt.to_string()),
+        toml::Value::Array(arr) => Value::Array(arr.into_iter().map(toml_to_value).collect()),
+        toml::Value::Table(t) => {
+            Value::Object(t.into_iter().map(|(k, v)| (k, toml_to_value(v))).collect())
+        }
+    }
+}
+
 /// Maximum element nesting accepted by the recursive XML reader. The parser
 /// descends one stack frame per level, so an unbounded document (`<a><a>…`)
 /// would otherwise overflow the stack and abort the process; past this depth we
@@ -437,21 +455,15 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             None => return Err(OpError::type_error("yaml_parse expects a string")),
         };
 
+        // Build engine Values directly rather than transcoding to a JSON string:
+        // JSON can't represent `.inf`/`.nan`, so the transcode path would silently
+        // turn non-finite floats into null. ValueSeed keeps them as JS Infinity/NaN.
         let deserializer = serde_yaml::Deserializer::from_str(yaml);
-        let mut out = Vec::with_capacity(yaml.len());
-        let mut json_serializer = serde_json::Serializer::new(&mut out);
-
-        match serde_transcode::transcode(deserializer, &mut json_serializer) {
-            Ok(_) => match String::from_utf8(out) {
-                Ok(json_str) => Ok(Value::String(json_str)),
-                Err(e) => Err(OpError::new(
-                    ExceptionClass::SyntaxError,
-                    format!("Invalid UTF-8 in JSON: {}", e),
-                )),
-            },
+        match ValueSeed.deserialize(deserializer) {
+            Ok(val) => Ok(val),
             Err(e) => Err(OpError::new(
                 ExceptionClass::SyntaxError,
-                format!("Parse failed: {}", e),
+                format!("Parse failed: {e}"),
             )),
         }
     }))?;
@@ -484,21 +496,11 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             None => return Err(OpError::type_error("toml_parse expects a string")),
         };
 
-        let deserializer = toml::Deserializer::new(toml_str);
-        let mut out = Vec::with_capacity(toml_str.len());
-        let mut json_serializer = serde_json::Serializer::new(&mut out);
-
-        match serde_transcode::transcode(deserializer, &mut json_serializer) {
-            Ok(_) => match String::from_utf8(out) {
-                Ok(json_str) => Ok(Value::String(json_str)),
-                Err(e) => Err(OpError::new(
-                    ExceptionClass::SyntaxError,
-                    format!("Invalid UTF-8 in JSON: {}", e),
-                )),
-            },
+        match toml::from_str::<toml::Value>(toml_str) {
+            Ok(val) => Ok(toml_to_value(val)),
             Err(e) => Err(OpError::new(
                 ExceptionClass::SyntaxError,
-                format!("Parse failed: {}", e),
+                format!("Parse failed: {e}"),
             )),
         }
     }))?;

@@ -67,6 +67,12 @@ if (invalidDetailed.valid !== false || typeof invalidDetailed.error !== 'string'
 
 assertThrows(() => YAML.parse(invalidYaml), "YAML parse invalid throws");
 
+// Non-finite floats must survive as Infinity/NaN, not be coerced to null.
+const yamlNonFinite = YAML.parse("pos: .inf\nneg: -.inf\nnan: .nan");
+if (yamlNonFinite.pos !== Infinity) throw new Error("YAML .inf should be Infinity");
+if (yamlNonFinite.neg !== -Infinity) throw new Error("YAML -.inf should be -Infinity");
+if (!Number.isNaN(yamlNonFinite.nan)) throw new Error("YAML .nan should be NaN");
+
 // YAML Building Tests
 const objToBuild = {
     user: {
@@ -122,6 +128,13 @@ if (tomlInvalidDetailed.valid !== false || typeof tomlInvalidDetailed.error !== 
 }
 
 assertThrows(() => TOML.parse(invalidToml), "TOML parse invalid throws");
+
+// Datetimes must come back as RFC3339 strings, not the toml-crate sentinel object.
+assertEq(
+    TOML.parse("dt = 1979-05-27T07:32:00Z\nld = 1979-05-27"),
+    { dt: "1979-05-27T07:32:00Z", ld: "1979-05-27" },
+    "TOML datetimes parse to strings"
+);
 
 // TOML Building Tests
 const objToBuildToml = {

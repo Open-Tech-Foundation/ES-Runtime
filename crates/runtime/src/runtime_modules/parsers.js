@@ -17,7 +17,8 @@ export const TOML = {
     return false;
   },
   parse(toml) {
-    return JSON.parse(toml_parse(toml));
+    // toml_parse builds the value directly (datetimes as RFC3339 strings).
+    return toml_parse(toml);
   },
   build(obj) {
     return toml_build(obj);
@@ -35,7 +36,8 @@ export const YAML = {
     return false;
   },
   parse(yaml) {
-    return JSON.parse(yaml_parse(yaml));
+    // yaml_parse builds the value directly so .inf/.nan survive as Infinity/NaN.
+    return yaml_parse(yaml);
   },
   build(obj) {
     return yaml_build(obj);
