@@ -110,6 +110,8 @@ const sections = [
       { sig: "new Protobuf.Schema(protoStr)", type: "Schema", desc: "Compiles a Protobuf schema from a .proto schema string.", ex: `const schema = new Protobuf.Schema('syntax = "proto3"; ...');` },
       { sig: "schema.parse(messageName, bytes)", type: "(string, Uint8Array) => object", desc: "Parses a Protobuf byte array into a JavaScript object based on the message schema.", ex: `schema.parse("Hello", pbBytes);` },
       { sig: "schema.build(messageName, obj)", type: "(string, object) => Uint8Array", desc: "Serializes a JavaScript object into a Protobuf byte array based on the message schema.", ex: `schema.build("Hello", { name: "world" });` },
+      { sig: "schema.parseStream(messageName, fieldName, bytes)", type: "(string, string, Uint8Array) => AsyncIterable", desc: "Streams the elements of a repeated message field one at a time — bounds peak memory for large collections.", ex: `for await (const b of schema.parseStream("Catalog", "books", bytes)) { ... }` },
+      { sig: "schema.free()", type: "() => void", desc: "Releases the compiled schema (also via using / Symbol.dispose).", ex: `schema.free();` },
     ]
   }
 ];

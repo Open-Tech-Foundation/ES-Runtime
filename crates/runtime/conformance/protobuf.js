@@ -83,3 +83,42 @@ if (Object.keys(defaults).length !== 0) throw new Error("expected no default fie
 // Decoding a payload against an unknown message name throws.
 assertThrows(() => schema.parse("x.Nope", new Uint8Array([0])));
 });
+
+test("protobuf parseStream yields repeated message elements", async () => {
+const { Protobuf } = await import('runtime:parsers');
+
+using schema = new Protobuf.Schema(`
+    syntax = "proto3";
+    package x;
+    message Book { string id = 1; int32 pages = 2; }
+    message Catalog { repeated Book catalog = 1; string name = 2; }
+`);
+
+const bytes = schema.build("x.Catalog", {
+    name: "lib",
+    catalog: [{ id: "a", pages: 10 }, { id: "b", pages: 20 }, { id: "c", pages: 0 }],
+});
+
+const out = [];
+for await (const book of schema.parseStream("x.Catalog", "catalog", bytes)) out.push(book);
+// pages:0 is a proto3 default, so it is omitted from the last element.
+if (JSON.stringify(out) !== JSON.stringify([{ id: "a", pages: 10 }, { id: "b", pages: 20 }, { id: "c" }])) {
+    throw new Error("parseStream mismatch: " + JSON.stringify(out));
+}
+
+// Breaking early must release the host-side stream (return()) without error.
+let seen = 0;
+for await (const _ of schema.parseStream("x.Catalog", "catalog", bytes)) {
+    if (++seen === 1) break;
+}
+if (seen !== 1) throw new Error("early break did not stop");
+
+// Streaming a non-repeated or scalar field is rejected.
+let threw = false;
+try {
+    for await (const _ of schema.parseStream("x.Catalog", "name", bytes)) { /* unreachable */ }
+} catch (e) {
+    threw = true;
+}
+if (!threw) throw new Error("expected parseStream on a non-repeated field to throw");
+});

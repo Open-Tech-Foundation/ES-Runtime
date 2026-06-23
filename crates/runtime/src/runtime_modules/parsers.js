@@ -63,7 +63,10 @@ export const MessagePack = {
   }
 };
 
-const { protobuf_schema_create, protobuf_schema_free, protobuf_parse, protobuf_build } = globalThis.__ops;
+const {
+  protobuf_schema_create, protobuf_schema_free, protobuf_parse, protobuf_build,
+  protobuf_stream_open, protobuf_stream_next, protobuf_stream_close
+} = globalThis.__ops;
 
 export const Protobuf = {
   Schema: class {
@@ -75,6 +78,37 @@ export const Protobuf = {
     }
     build(messageName, obj) {
       return protobuf_build(this.id, messageName, obj);
+    }
+    // Async-iterate one element of a repeated message field at a time, decoding
+    // straight off the wire so a large collection never fully materializes. The
+    // host stream is released when iteration finishes or the consumer breaks early
+    // (async iterator `return()`).
+    parseStream(messageName, fieldName, payload) {
+      const schemaId = this.id;
+      return {
+        [Symbol.asyncIterator]() {
+          let sid = protobuf_stream_open(schemaId, messageName, fieldName, payload);
+          return {
+            // eslint-disable-next-line require-await
+            async next() {
+              if (sid === null) return { done: true, value: undefined };
+              const json = protobuf_stream_next(sid);
+              if (json === null) {
+                sid = null;
+                return { done: true, value: undefined };
+              }
+              return { done: false, value: JSON.parse(json) };
+            },
+            async return(value) {
+              if (sid !== null) {
+                protobuf_stream_close(sid);
+                sid = null;
+              }
+              return { done: true, value };
+            },
+          };
+        },
+      };
     }
     // Release the compiled schema held host-side. Idempotent; the host ignores
     // an unknown id. Also wired to Symbol.dispose for `using` declarations.

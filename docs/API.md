@@ -532,6 +532,7 @@ For Protobuf, dynamic schema compilation is supported:
 | `new Protobuf.Schema(protoStr)` | Compiles a `.proto` schema string dynamically into an active schema descriptor (in memory; no filesystem access). |
 | `schema.parse(messageName, bytes)` | Parses a Protobuf byte array into a JavaScript object based on the fully-qualified message name. |
 | `schema.build(messageName, obj)` | Serializes a JavaScript object into a Protobuf `Uint8Array` based on the fully-qualified message name. |
+| `schema.parseStream(messageName, fieldName, bytes)` | `AsyncIterable` yielding the elements of a repeated **message** field one at a time (decoded off the wire — bounds peak memory for large collections). |
 | `schema.free()` | Releases the compiled schema (also via `using` / `Symbol.dispose`). |
 
 `parse`/`build` use the canonical proto3 JSON mapping: 64-bit integer fields (`int64`/`uint64`/`fixed64`) are strings, and enum fields are their value names.

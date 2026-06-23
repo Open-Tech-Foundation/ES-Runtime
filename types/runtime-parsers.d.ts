@@ -141,6 +141,18 @@ declare module "runtime:parsers" {
       build(messageName: string, obj: any): Uint8Array;
 
       /**
+       * Streams the elements of a repeated **message** field one at a time,
+       * decoding straight off the wire so a large collection never fully
+       * materializes — bounding peak memory. Yields each element as a JS object
+       * (proto3 JSON shape). Throws if `fieldName` is not a repeated message field.
+       * Releasing the iterator early (e.g. `break`) frees the host-side stream.
+       * @param messageName The fully-qualified name of the containing message type.
+       * @param fieldName The repeated message field to stream.
+       * @param payload The raw Protobuf bytes.
+       */
+      parseStream(messageName: string, fieldName: string, payload: Uint8Array): AsyncIterable<any>;
+
+      /**
        * Releases the compiled schema held by the host. Idempotent. The schema is
        * also disposed automatically when declared with `using`.
        */

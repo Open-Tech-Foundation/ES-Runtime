@@ -24,6 +24,11 @@ pre-`0.1.0` and the public API is unstable.
   `schema.build(messageName, obj)`. Uses the canonical proto3 JSON mapping
   (64-bit ints as strings, enums as names). `schema.free()` (and `using` /
   `Symbol.dispose`) releases the compiled schema.
+- **`runtime:parsers` — `Protobuf.Schema.parseStream(messageName, fieldName, bytes)`.**
+  An `AsyncIterable` that decodes the elements of a repeated message field one at
+  a time straight off the wire, so a large collection never fully materializes —
+  it roughly halves peak parse memory for big payloads (e.g. ~100 MB → ~50 MB on a
+  50k-element catalog). Breaking out of the loop releases the host-side stream.
 
 ## [0.8.0] - 2026-06-20
 

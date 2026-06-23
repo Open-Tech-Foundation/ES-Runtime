@@ -146,6 +146,16 @@ fn toml_to_value(v: toml::Value) -> Value {
     }
 }
 
+/// Streaming-decode state for `Protobuf.Schema.parseStream`: walks a buffered
+/// protobuf message's wire bytes, yielding one element of a repeated message
+/// field at a time so a huge collection never materializes all at once.
+struct PbStream {
+    bytes: Vec<u8>,
+    cursor: usize,
+    field_number: u32,
+    element_desc: prost_reflect::MessageDescriptor,
+}
+
 /// Maximum element nesting accepted by the recursive XML reader. The parser
 /// descends one stack frame per level, so an unbounded document (`<a><a>…`)
 /// would otherwise overflow the stack and abort the process; past this depth we
@@ -733,6 +743,149 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         }
 
         Ok(Value::Bytes(bytes))
+    }))?;
+
+    // --- Protobuf streaming (parseStream) ---
+    //
+    // Decodes a repeated *message* field element-by-element straight off the wire,
+    // so a large collection (e.g. `repeated Book catalog`) is never fully decoded
+    // into a single DynamicMessage tree + JSON string + JS object graph at once —
+    // the consumer pulls one element at a time, bounding peak memory.
+    let pb_streams = Rc::new(RefCell::new(HashMap::<u32, PbStream>::new()));
+    let mut next_pb_stream_id = 1u32;
+
+    let pools_stream = Rc::clone(&protobuf_pools);
+    let streams_open = Rc::clone(&pb_streams);
+    engine.register_op(OpDecl::sync("protobuf_stream_open", move |args| {
+        let id = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => {
+                return Err(OpError::type_error(
+                    "protobuf_stream_open expects schema id",
+                ));
+            }
+        };
+        let message_name = args
+            .get(1)
+            .and_then(Value::as_str)
+            .ok_or_else(|| OpError::type_error("protobuf_stream_open expects message name"))?;
+        let field_name = args
+            .get(2)
+            .and_then(Value::as_str)
+            .ok_or_else(|| OpError::type_error("protobuf_stream_open expects field name"))?;
+        let payload = args.get(3).and_then(Value::as_bytes).ok_or_else(|| {
+            OpError::type_error("protobuf_stream_open expects a Uint8Array payload")
+        })?;
+
+        let pools = pools_stream.borrow();
+        let pool = pools
+            .get(&id)
+            .ok_or_else(|| OpError::type_error("Invalid schema ID"))?;
+        let msg_desc = pool.get_message_by_name(message_name).ok_or_else(|| {
+            OpError::type_error(format!("Message {message_name} not found in schema"))
+        })?;
+        let field = msg_desc.get_field_by_name(field_name).ok_or_else(|| {
+            OpError::type_error(format!("Field {field_name} not found in {message_name}"))
+        })?;
+        if !field.is_list() {
+            return Err(OpError::type_error(format!(
+                "parseStream requires a repeated field; {field_name} is not repeated"
+            )));
+        }
+        let element_desc = match field.kind() {
+            prost_reflect::Kind::Message(m) => m,
+            _ => {
+                return Err(OpError::type_error(format!(
+                    "parseStream supports only repeated message fields; {field_name} is scalar"
+                )));
+            }
+        };
+        let field_number = field.number();
+        drop(pools);
+
+        let sid = next_pb_stream_id;
+        next_pb_stream_id = next_pb_stream_id.wrapping_add(1);
+        streams_open.borrow_mut().insert(
+            sid,
+            PbStream {
+                bytes: payload.to_vec(),
+                cursor: 0,
+                field_number,
+                element_desc,
+            },
+        );
+        Ok(Value::Number(f64::from(sid)))
+    }))?;
+
+    let streams_next = Rc::clone(&pb_streams);
+    engine.register_op(OpDecl::sync("protobuf_stream_next", move |args| {
+        use prost::encoding::{DecodeContext, WireType, decode_key, decode_varint, skip_field};
+
+        let sid = match args.first() {
+            Some(Value::Number(n)) => *n as u32,
+            _ => {
+                return Err(OpError::type_error(
+                    "protobuf_stream_next expects stream id",
+                ));
+            }
+        };
+        // Take the state out so the cursor can advance without aliasing the map;
+        // it is re-inserted only when an element is yielded (end/error drops it).
+        let mut st = match streams_next.borrow_mut().remove(&sid) {
+            Some(s) => s,
+            None => return Ok(Value::Null),
+        };
+
+        let syntax = |e: &dyn std::fmt::Display| {
+            OpError::new(
+                ExceptionClass::SyntaxError,
+                format!("Malformed protobuf stream: {e}"),
+            )
+        };
+
+        loop {
+            if st.cursor >= st.bytes.len() {
+                return Ok(Value::Null); // exhausted — st dropped, freeing the buffer
+            }
+            let mut buf: &[u8] = &st.bytes[st.cursor..];
+            let start = buf.len();
+            let (tag, wire_type) = decode_key(&mut buf).map_err(|e| syntax(&e))?;
+
+            if tag == st.field_number && wire_type == WireType::LengthDelimited {
+                let len = decode_varint(&mut buf).map_err(|e| syntax(&e))? as usize;
+                let header = start - buf.len();
+                let payload_start = st.cursor + header;
+                let payload_end = payload_start + len;
+                if payload_end > st.bytes.len() {
+                    return Err(syntax(&"length-delimited field overruns the buffer"));
+                }
+                let json = {
+                    let element = &st.bytes[payload_start..payload_end];
+                    let msg =
+                        prost_reflect::DynamicMessage::decode(st.element_desc.clone(), element)
+                            .map_err(|e| syntax(&e))?;
+                    serde_json::to_string(&msg).map_err(|e| {
+                        OpError::type_error(format!("Failed to transcode element to JSON: {e}"))
+                    })?
+                };
+                st.cursor = payload_end;
+                streams_next.borrow_mut().insert(sid, st);
+                return Ok(Value::String(json));
+            }
+
+            // Not our field — skip its value and continue scanning.
+            skip_field(wire_type, tag, &mut buf, DecodeContext::default())
+                .map_err(|e| syntax(&e))?;
+            st.cursor += start - buf.len();
+        }
+    }))?;
+
+    let streams_close = Rc::clone(&pb_streams);
+    engine.register_op(OpDecl::sync("protobuf_stream_close", move |args| {
+        if let Some(Value::Number(n)) = args.first() {
+            streams_close.borrow_mut().remove(&(*n as u32));
+        }
+        Ok(Value::Null)
     }))?;
 
     Ok(())
