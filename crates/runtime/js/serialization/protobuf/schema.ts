@@ -40,14 +40,14 @@ export class Schema {
   }
 
   /** Decodes binary protobuf bytes for the fully-qualified `messageName`. */
-  parse(messageName: string, bytes: Uint8Array): Record<string, unknown> {
+  decode(messageName: string, bytes: Uint8Array): Record<string, unknown> {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     return decode(m, new Reader(bytes));
   }
 
   /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
-  build(messageName: string, value: Record<string, unknown>): Uint8Array {
+  encode(messageName: string, value: Record<string, unknown>): Uint8Array {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     const w = new Writer();

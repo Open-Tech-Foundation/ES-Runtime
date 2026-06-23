@@ -1,4 +1,4 @@
-// Recursive-descent parser for proto3 + edition 2023 .proto source → an AST.
+// Recursive-descent parser for proto3 + editions 2023/2024 .proto source → an AST.
 // Linking/resolution into the descriptor model lives in link.ts. proto2-only
 // constructs (required, group, extend/extensions) are rejected with a clear error.
 import { Lexer, type Token } from "./lexer.js";
@@ -41,7 +41,7 @@ export interface AstMessage {
 }
 
 export interface ParsedFile {
-  syntax: "proto3" | "2023";
+  syntax: "proto3" | "2023" | "2024";
   package: string;
   imports: string[];
   features: FeatureSet;
@@ -118,7 +118,7 @@ class Parser {
           this.expectSym("=");
           const v = this.expectStr();
           if (v !== "proto3" && v !== "proto2") this.err(`unknown syntax "${v}"`, t.line);
-          if (v === "proto2") this.err("proto2 syntax is unsupported (use proto3 or edition 2023)", t.line);
+          if (v === "proto2") this.err("proto2 syntax is unsupported (use proto3 or edition 2023/2024)", t.line);
           file.syntax = "proto3";
           this.expectSym(";");
           sawSyntax = true;
@@ -128,8 +128,8 @@ class Parser {
           this.lx.next();
           this.expectSym("=");
           const v = this.expectStr();
-          if (v !== "2023") this.err(`unsupported edition "${v}" (only 2023)`, t.line);
-          file.syntax = "2023";
+          if (v !== "2023" && v !== "2024") this.err(`unsupported edition "${v}" (only 2023, 2024)`, t.line);
+          file.syntax = v;
           this.expectSym(";");
           sawSyntax = true;
           break;

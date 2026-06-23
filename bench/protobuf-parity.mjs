@@ -19,9 +19,9 @@ const check = (name, cond) => { console.log((cond ? "ok  - " : "FAIL- ") + name)
     obj.catalog.push({ id: `bk${i}`, author: "A", title: "T", genre: "G", price: 44.95, publishDate: "2000-10-01", description: "D" });
   }
   const es = toBinary(CatalogSchema, create(CatalogSchema, obj));
-  const our = ours.build("test.Catalog", obj);
+  const our = ours.encode("test.Catalog", obj);
   check("catalog: byte-equal encode", eq(es, our));
-  check("catalog: our decode of es bytes", ours.parse("test.Catalog", es).catalog[0].title === "T");
+  check("catalog: our decode of es bytes", ours.decode("test.Catalog", es).catalog[0].title === "T");
   check("catalog: es decode of our bytes", fromBinary(CatalogSchema, our).catalog[999].id === "bk999");
 }
 
@@ -36,9 +36,9 @@ const check = (name, cond) => { console.log((cond ? "ok  - " : "FAIL- ") + name)
     nums: [1, 2, 300, -4], items: [{ v: "a" }, { n: 5 }], counts: { x: 1, y: 2 },
   };
   const es = toBinary(AllSchema, create(AllSchema, esInput));
-  const our = ours.build("t.All", { ...esInput, c: "BLUE" });
+  const our = ours.encode("t.All", { ...esInput, c: "BLUE" });
   check("all: byte-equal encode", eq(es, our));
-  const od = ours.parse("t.All", es);
+  const od = ours.decode("t.All", es);
   check("all: our decode 64-bit + enum name", od.i64 === 9007199254740993n && od.c === "BLUE");
   check("all: es decode of our bytes", fromBinary(AllSchema, our).c === 2);
 }

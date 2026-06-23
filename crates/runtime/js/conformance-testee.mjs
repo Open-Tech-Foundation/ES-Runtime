@@ -31,37 +31,37 @@ function schemaFor(messageType) {
 }
 
 function handle(reqBytes) {
-  const req = conf.parse(REQ, reqBytes);
+  const req = conf.decode(REQ, reqBytes);
   const mt = req.messageType ?? "";
 
   if (mt === "conformance.FailureSet") {
-    return conf.build(RESP, { protobufPayload: conf.build("conformance.FailureSet", {}) });
+    return conf.encode(RESP, { protobufPayload: conf.encode("conformance.FailureSet", {}) });
   }
 
   // We only do binary <-> binary.
   const out = req.requestedOutputFormat; // enum name
   if (req.jsonPayload !== undefined || req.jspbPayload !== undefined || req.textPayload !== undefined) {
-    return conf.build(RESP, { skipped: "non-protobuf input unsupported" });
+    return conf.encode(RESP, { skipped: "non-protobuf input unsupported" });
   }
   if (out !== "PROTOBUF") {
-    return conf.build(RESP, { skipped: `output ${out} unsupported` });
+    return conf.encode(RESP, { skipped: `output ${out} unsupported` });
   }
 
   const schema = schemaFor(mt);
-  if (!schema) return conf.build(RESP, { skipped: "proto2/unknown message type unsupported" });
+  if (!schema) return conf.encode(RESP, { skipped: "proto2/unknown message type unsupported" });
 
   try {
-    const msg = schema.parse(mt, req.protobufPayload ?? new Uint8Array(0));
+    const msg = schema.decode(mt, req.protobufPayload ?? new Uint8Array(0));
     try {
-      const bytes = schema.build(mt, msg);
-      return conf.build(RESP, { protobufPayload: bytes });
+      const bytes = schema.encode(mt, msg);
+      return conf.encode(RESP, { protobufPayload: bytes });
     } catch (e) {
-      return conf.build(RESP, { serializeError: String(e?.message ?? e) });
+      return conf.encode(RESP, { serializeError: String(e?.message ?? e) });
     }
   } catch (e) {
     const msg = String(e?.message ?? e);
-    if (msg.includes("unknown message")) return conf.build(RESP, { skipped: msg });
-    return conf.build(RESP, { parseError: msg });
+    if (msg.includes("unknown message")) return conf.encode(RESP, { skipped: msg });
+    return conf.encode(RESP, { parseError: msg });
   }
 }
 
@@ -97,7 +97,7 @@ for (;;) {
   try {
     resp = handle(reqBytes.slice());
   } catch (e) {
-    resp = conf.build(RESP, { runtimeError: String(e?.message ?? e) });
+    resp = conf.encode(RESP, { runtimeError: String(e?.message ?? e) });
   }
 
   const header = new Uint8Array(4);

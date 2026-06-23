@@ -12,13 +12,14 @@ export interface FeatureSet {
   enumType?: EnumKind;
 }
 
-/** Baseline feature set for a syntax/edition. proto3 and edition 2023 differ
- *  only in default field presence (proto3 implicit, 2023 explicit). */
-export function baseFeatures(syntax: "proto3" | "2023"): Required<FeatureSet> {
+/** Baseline feature set for a syntax/edition. proto3 differs from editions only
+ *  in default field presence (proto3 implicit, editions explicit). Editions 2023
+ *  and 2024 share the same defaults for the three wire-affecting features. */
+export function baseFeatures(syntax: "proto3" | "2023" | "2024"): Required<FeatureSet> {
   if (syntax === "proto3") {
     return { fieldPresence: "IMPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN" };
   }
-  // edition 2023 defaults
+  // edition 2023 / 2024 defaults
   return { fieldPresence: "EXPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN" };
 }
 

@@ -9,7 +9,7 @@ export default function ProtobufParserDoc() {
         Protobuf Processing
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        A pure-JavaScript, reflective Protobuf implementation in <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:serialization</code>. The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.proto</code> schema is compiled at runtime — no codegen, no build step. proto3 and edition 2023 are supported; proto2-only constructs are rejected.
+        A pure-JavaScript, reflective Protobuf implementation in <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:serialization</code>. The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.proto</code> schema is compiled at runtime — no codegen, no build step. proto3 and editions 2023/2024 are supported; proto2-only constructs are rejected.
       </p>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
@@ -33,19 +33,19 @@ const schema = new Protobuf.Schema(\`
       </div>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
-        Building and parsing
+        Encoding and decoding
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.build</code> and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.parse</code> with a fully-qualified message name.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.encode</code> and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.decode</code> with a fully-qualified message name.
       </p>
       <div className="mt-6">
-        <CodeBlock code={`const bytes = schema.build("shop.Book", {
+        <CodeBlock code={`const bytes = schema.encode("shop.Book", {
   id: "bk1",
   price: 44.95,
   tags: ["computer", "xml"],
 });
 
-const book = schema.parse("shop.Book", bytes);
+const book = schema.decode("shop.Book", bytes);
 console.log(book.price); // 44.95
 console.log(book.tags);  // ["computer", "xml"]`} title="protobuf_roundtrip.js" lang="js" />
       </div>
@@ -63,8 +63,8 @@ console.log(book.tags);  // ["computer", "xml"]`} title="protobuf_roundtrip.js" 
   message Account { uint64 id = 1; Status status = 2; }
 \`);
 
-const bytes = schema.build("Account", { id: 9007199254740993n, status: "ARCHIVED" });
-const acct = schema.parse("Account", bytes);
+const bytes = schema.encode("Account", { id: 9007199254740993n, status: "ARCHIVED" });
+const acct = schema.decode("Account", bytes);
 console.log(typeof acct.id);  // "bigint"
 console.log(acct.status);     // "ARCHIVED"`} title="protobuf_types.js" lang="js" />
       </div>

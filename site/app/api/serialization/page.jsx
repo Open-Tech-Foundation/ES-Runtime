@@ -105,11 +105,11 @@ const sections = [
   },
   {
     title: "Protobuf",
-    desc: "Schema-aware Protobuf parsing and building. Pure-JS and reflective: the .proto is compiled at runtime (proto3 and edition 2023; proto2-only constructs are rejected). Decoded objects use camelCase keys, BigInt for 64-bit ints, enum value-names, and Uint8Array for bytes.",
+    desc: "Schema-aware Protobuf decoding and encoding. Pure-JS and reflective: the .proto is compiled at runtime (proto3 and editions 2023/2024; proto2-only constructs are rejected). Decoded objects use camelCase keys, BigInt for 64-bit ints, enum value-names, and Uint8Array for bytes.",
     exports: [
       { sig: "new Protobuf.Schema(proto, options?)", type: "Schema", desc: "Compiles a .proto source string (or a { filename: source } map for multi-file schemas with imports; google/protobuf well-known types resolve automatically).", ex: `const schema = new Protobuf.Schema('syntax = "proto3"; message Hello { string name = 1; }');` },
-      { sig: "schema.parse(messageName, bytes)", type: "(string, Uint8Array) => object", desc: "Decodes a byte array into a JavaScript object for the fully-qualified message name.", ex: `schema.parse("Hello", bytes);` },
-      { sig: "schema.build(messageName, value)", type: "(string, object) => Uint8Array", desc: "Encodes a JavaScript object into a Protobuf byte array.", ex: `schema.build("Hello", { name: "world" });` },
+      { sig: "schema.decode(messageName, bytes)", type: "(string, Uint8Array) => object", desc: "Decodes a byte array into a JavaScript object for the fully-qualified message name.", ex: `schema.decode("Hello", bytes);` },
+      { sig: "schema.encode(messageName, value)", type: "(string, object) => Uint8Array", desc: "Encodes a JavaScript object into a Protobuf byte array.", ex: `schema.encode("Hello", { name: "world" });` },
     ]
   }
 ];

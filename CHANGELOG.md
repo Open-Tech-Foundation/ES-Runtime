@@ -6,6 +6,20 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **Protobuf edition 2024.** `new Protobuf.Schema(proto)` now accepts
+  `edition = "2024"` in addition to proto3 and edition 2023. The 2024 defaults
+  for the wire-affecting features (field presence, repeated encoding, enum type)
+  match edition 2023.
+
+### Changed
+
+- **`Protobuf.Schema` methods renamed `parse`/`build` → `decode`/`encode`**
+  (breaking) to match the binary `MessagePack` namespace (`decode`/`encode`).
+  No aliases are kept. The text namespaces (`XML`/`YAML`/`TOML`) keep
+  `parse`/`build`.
+
 ## [0.9.0] - 2026-06-23
 
 ### Added

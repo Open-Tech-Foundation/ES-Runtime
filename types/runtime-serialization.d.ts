@@ -140,8 +140,8 @@ declare module "runtime:serialization" {
   export namespace Protobuf {
     /**
      * A protobuf schema compiled at runtime from `.proto` source. proto3 and
-     * edition 2023 are supported (proto2-only constructs are rejected). Decoding
-     * is reflective — no codegen.
+     * editions 2023/2024 are supported (proto2-only constructs are rejected).
+     * Decoding is reflective — no codegen.
      *
      * Decoded value shape: camelCase field names; 64-bit integer fields
      * (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64`) as **BigInt**; enums as
@@ -158,10 +158,10 @@ declare module "runtime:serialization" {
       constructor(proto: string | Record<string, string>, options?: ProtobufSchemaOptions);
 
       /** Decodes binary protobuf for the fully-qualified `messageName`. */
-      parse(messageName: string, bytes: Uint8Array): Record<string, unknown>;
+      decode(messageName: string, bytes: Uint8Array): Record<string, unknown>;
 
       /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
-      build(messageName: string, value: Record<string, unknown>): Uint8Array;
+      encode(messageName: string, value: Record<string, unknown>): Uint8Array;
     }
   }
 }

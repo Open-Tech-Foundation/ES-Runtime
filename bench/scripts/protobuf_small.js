@@ -40,8 +40,8 @@ for (let i = 0; i < 50; i++) {
 
 let parseProtobuf;
 if (isEsrun) {
-  const protoBytes = schema.build("test.Catalog", obj);
-  parseProtobuf = () => schema.parse("test.Catalog", protoBytes);
+  const protoBytes = schema.encode("test.Catalog", obj);
+  parseProtobuf = () => schema.decode("test.Catalog", protoBytes);
 } else {
   const protoBytes = toBinary(CatalogSchema, create(CatalogSchema, obj));
   parseProtobuf = () => fromBinary(CatalogSchema, protoBytes);

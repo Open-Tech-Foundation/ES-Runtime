@@ -243,7 +243,7 @@ class Parser {
           if (v !== "proto3" && v !== "proto2")
             this.err(`unknown syntax "${v}"`, t.line);
           if (v === "proto2")
-            this.err("proto2 syntax is unsupported (use proto3 or edition 2023)", t.line);
+            this.err("proto2 syntax is unsupported (use proto3 or edition 2023/2024)", t.line);
           file.syntax = "proto3";
           this.expectSym(";");
           sawSyntax = true;
@@ -253,9 +253,9 @@ class Parser {
           this.lx.next();
           this.expectSym("=");
           const v = this.expectStr();
-          if (v !== "2023")
-            this.err(`unsupported edition "${v}" (only 2023)`, t.line);
-          file.syntax = "2023";
+          if (v !== "2023" && v !== "2024")
+            this.err(`unsupported edition "${v}" (only 2023, 2024)`, t.line);
+          file.syntax = v;
           this.expectSym(";");
           sawSyntax = true;
           break;
@@ -1550,13 +1550,13 @@ class Schema {
     }
     this.registry = link(parsed);
   }
-  parse(messageName, bytes) {
+  decode(messageName, bytes) {
     const m = this.registry.messages.get(messageName);
     if (!m)
       throw new Error(`protobuf: unknown message "${messageName}"`);
     return decode(m, new Reader(bytes));
   }
-  build(messageName, value) {
+  encode(messageName, value) {
     const m = this.registry.messages.get(messageName);
     if (!m)
       throw new Error(`protobuf: unknown message "${messageName}"`);

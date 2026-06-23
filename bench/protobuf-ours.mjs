@@ -36,11 +36,11 @@ function bench(name, fn, iters = 30) {
 }
 
 // correctness sanity
-const a = ours.parse("test.Catalog", bytes);
+const a = ours.decode("test.Catalog", bytes);
 console.log(`ours decoded ${a.catalog.length} books, first.price=${a.catalog[0].price}`);
 
 const esMsg = create(CatalogSchema, obj);
 bench("protobuf-es decode", () => fromBinary(CatalogSchema, bytes));
-bench("ours decode (parse)", () => ours.parse("test.Catalog", bytes));
+bench("ours decode (parse)", () => ours.decode("test.Catalog", bytes));
 bench("protobuf-es encode", () => toBinary(CatalogSchema, esMsg));
-bench("ours encode (build)", () => ours.build("test.Catalog", obj));
+bench("ours encode (build)", () => ours.encode("test.Catalog", obj));

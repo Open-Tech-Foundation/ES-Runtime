@@ -19,9 +19,9 @@ function deepEq(a, b, msg) {
 test("protobuf: exact wire bytes + round-trip", async () => {
   const { Protobuf } = await import("runtime:serialization");
   const s = new Protobuf.Schema(`syntax="proto3"; message M { int32 a = 1; string b = 2; }`);
-  const bytes = s.build("M", { a: 150, b: "hi" });
+  const bytes = s.encode("M", { a: 150, b: "hi" });
   deepEq(Array.from(bytes), [0x08, 0x96, 0x01, 0x12, 0x02, 0x68, 0x69], "wire bytes");
-  deepEq(s.parse("M", bytes), { a: 150, b: "hi" }, "round-trip");
+  deepEq(s.decode("M", bytes), { a: 150, b: "hi" }, "round-trip");
 });
 
 test("protobuf: all scalar types incl 64-bit BigInt round-trip", async () => {
@@ -41,7 +41,7 @@ test("protobuf: all scalar types incl 64-bit BigInt round-trip", async () => {
     f64: 18446744073709551615n, sf32: -42, fl: 1.5, db: 44.95,
     b: true, s: 'héllo 𐍈', by: new Uint8Array([1, 2, 3, 255]), c: "BLUE", inner: { v: "x" },
   };
-  deepEq(s.parse("t.All", s.build("t.All", input)), input, "All round-trip");
+  deepEq(s.decode("t.All", s.encode("t.All", input)), input, "All round-trip");
 });
 
 test("protobuf: repeated packed/expanded, maps, oneof", async () => {
@@ -56,24 +56,26 @@ test("protobuf: repeated packed/expanded, maps, oneof", async () => {
     }
   `);
   const input = { nums: [1, 2, 300, -4], tags: ["x", "y"], counts: { x: 1, y: 2 }, b: "picked" };
-  deepEq(s.parse("M", s.build("M", input)), input, "repeated/map/oneof round-trip");
+  deepEq(s.decode("M", s.encode("M", input)), input, "repeated/map/oneof round-trip");
 });
 
 test("protobuf: implicit presence omits defaults; edition 2023 keeps them", async () => {
   const { Protobuf } = await import("runtime:serialization");
   const p3 = new Protobuf.Schema(`syntax="proto3"; message M { int32 a = 1; }`);
-  if (p3.build("M", { a: 0 }).length !== 0) throw new Error("proto3 default should be omitted");
+  if (p3.encode("M", { a: 0 }).length !== 0) throw new Error("proto3 default should be omitted");
   const ed = new Protobuf.Schema(`edition="2023"; message M { int32 a = 1; }`);
-  deepEq(Array.from(ed.build("M", { a: 0 })), [0x08, 0x00], "edition 2023 explicit presence");
+  deepEq(Array.from(ed.encode("M", { a: 0 })), [0x08, 0x00], "edition 2023 explicit presence");
+  const ed24 = new Protobuf.Schema(`edition="2024"; message M { int32 a = 1; }`);
+  deepEq(Array.from(ed24.encode("M", { a: 0 })), [0x08, 0x00], "edition 2024 explicit presence");
 });
 
 test("protobuf: unknown fields preserved across re-encode", async () => {
   const { Protobuf } = await import("runtime:serialization");
   const full = new Protobuf.Schema(`syntax="proto3"; message M { int32 a = 1; string b = 2; }`);
   const partial = new Protobuf.Schema(`syntax="proto3"; message M { int32 a = 1; }`);
-  const original = full.build("M", { a: 5, b: "keep" });
-  const reencoded = partial.build("M", partial.parse("M", original));
-  deepEq(full.parse("M", reencoded), { a: 5, b: "keep" }, "unknown field survives");
+  const original = full.encode("M", { a: 5, b: "keep" });
+  const reencoded = partial.encode("M", partial.decode("M", original));
+  deepEq(full.decode("M", reencoded), { a: 5, b: "keep" }, "unknown field survives");
 });
 
 test("protobuf: rejects proto2", async () => {
