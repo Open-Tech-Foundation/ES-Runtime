@@ -677,12 +677,14 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             )
         })?;
 
-        // `DynamicMessage` implements `Serialize` via the `serde` feature
+        // Serialize to a proto3-JSON string and let the JS side JSON.parse it.
+        // V8's native JSON.parse builds the object graph far faster than marshaling
+        // a Rust-side Value property-by-property across the FFI seam, which for a
+        // large message (tens of thousands of objects) is dramatically slower.
         match serde_json::to_string(&msg) {
             Ok(json_str) => Ok(Value::String(json_str)),
             Err(e) => Err(OpError::type_error(format!(
-                "Failed to transcode to JSON: {}",
-                e
+                "Failed to transcode to JSON: {e}"
             ))),
         }
     }))?;
