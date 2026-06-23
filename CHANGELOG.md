@@ -6,6 +6,15 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Changed
+
+- **`runtime:parsers` — faster, lighter Protobuf decode.** `Protobuf.Schema.parse`
+  (and `parseStream`) now transcode protobuf wire bytes straight to proto3 JSON
+  against the descriptor, without building an intermediate `prost_reflect`
+  `DynamicMessage` tree. On a 50k-element catalog: parse ~6.0s → ~4.6s and
+  whole-parse peak RSS ~100 MB → ~63 MB. Output is unchanged (a differential test
+  pins byte-for-value parity with the previous `prost-reflect` serialization).
+
 ### Fixed
 
 - **`runtime:parsers` — TOML datetimes** now parse to RFC3339 strings instead of

@@ -156,6 +156,367 @@ struct PbStream {
     element_desc: prost_reflect::MessageDescriptor,
 }
 
+// --- Direct protobuf wire -> proto3 JSON transcoder ------------------------
+//
+// Decodes protobuf bytes straight to a JSON string against the descriptor,
+// without building an intermediate `DynamicMessage` tree (and without serde).
+// This is both faster and lighter than decode-to-DynamicMessage + serialize:
+// one pass, length-delimited values referenced in place. Output matches the
+// canonical proto3 JSON mapping (camelCase json_name, 64-bit ints as strings,
+// enums as names, bytes as base64, NaN/Inf as strings); a differential unit
+// test (`transcode_matches_prost_reflect`) pins parity with prost-reflect.
+
+/// A raw protobuf field value, decoded from the wire. Length-delimited values
+/// are kept as `(start, len)` ranges into the source buffer — no copy.
+enum WireVal {
+    Varint(u64),
+    Bits32(u32),
+    Bits64(u64),
+    Len(usize, usize),
+}
+
+/// One pass over a message's wire bytes, bucketing values by field number.
+/// Repeated fields accumulate; singular fields keep every occurrence (the
+/// caller takes the last, per proto3 last-wins).
+fn pb_bucket(bytes: &[u8]) -> Result<std::collections::HashMap<u32, Vec<WireVal>>, String> {
+    use prost::bytes::Buf;
+    use prost::encoding::{WireType, decode_key, decode_varint};
+    let mut map: std::collections::HashMap<u32, Vec<WireVal>> = std::collections::HashMap::new();
+    let total = bytes.len();
+    let mut buf: &[u8] = bytes;
+    while !buf.is_empty() {
+        let (tag, wire_type) = decode_key(&mut buf).map_err(|e| e.to_string())?;
+        let v = match wire_type {
+            WireType::Varint => {
+                WireVal::Varint(decode_varint(&mut buf).map_err(|e| e.to_string())?)
+            }
+            WireType::ThirtyTwoBit => {
+                if buf.remaining() < 4 {
+                    return Err("truncated 32-bit field".into());
+                }
+                WireVal::Bits32(buf.get_u32_le())
+            }
+            WireType::SixtyFourBit => {
+                if buf.remaining() < 8 {
+                    return Err("truncated 64-bit field".into());
+                }
+                WireVal::Bits64(buf.get_u64_le())
+            }
+            WireType::LengthDelimited => {
+                let len = decode_varint(&mut buf).map_err(|e| e.to_string())? as usize;
+                if buf.remaining() < len {
+                    return Err("truncated length-delimited field".into());
+                }
+                let start = total - buf.len();
+                buf.advance(len);
+                WireVal::Len(start, len)
+            }
+            WireType::StartGroup | WireType::EndGroup => {
+                return Err("group wire types are not supported".into());
+            }
+        };
+        map.entry(tag).or_default().push(v);
+    }
+    Ok(map)
+}
+
+/// Transcodes a length-delimited protobuf message into proto3 JSON, appended to
+/// `out`. Recurses for nested messages and map values.
+fn pb_transcode(
+    desc: &prost_reflect::MessageDescriptor,
+    bytes: &[u8],
+    out: &mut String,
+) -> Result<(), String> {
+    let buckets = pb_bucket(bytes)?;
+    out.push('{');
+    let mut first = true;
+    for field in desc.fields() {
+        let Some(vals) = buckets.get(&field.number()) else {
+            continue;
+        };
+        if vals.is_empty() {
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        pb_push_json_string(out, field.json_name());
+        out.push(':');
+        if field.is_map() {
+            pb_emit_map(&field, vals, bytes, out)?;
+        } else if field.is_list() {
+            pb_emit_list(&field.kind(), vals, bytes, out)?;
+        } else {
+            // Singular: proto3 last-wins.
+            pb_emit_scalar(&field.kind(), vals.last().unwrap(), bytes, out)?;
+        }
+    }
+    out.push('}');
+    Ok(())
+}
+
+/// Whether a field kind is packable (and so a repeated field of it may arrive as
+/// one length-delimited blob of concatenated values).
+fn pb_is_packable(kind: &prost_reflect::Kind) -> bool {
+    use prost_reflect::Kind;
+    !matches!(kind, Kind::String | Kind::Bytes | Kind::Message(_))
+}
+
+fn pb_emit_list(
+    kind: &prost_reflect::Kind,
+    vals: &[WireVal],
+    bytes: &[u8],
+    out: &mut String,
+) -> Result<(), String> {
+    out.push('[');
+    let mut first = true;
+    for v in vals {
+        // A length-delimited value for a packable kind is a packed run of values.
+        if let (WireVal::Len(s, l), true) = (v, pb_is_packable(kind)) {
+            let mut pb: &[u8] = &bytes[*s..*s + *l];
+            while !pb.is_empty() {
+                let pv = pb_read_packed(kind, &mut pb)?;
+                if !first {
+                    out.push(',');
+                }
+                first = false;
+                pb_emit_scalar(kind, &pv, bytes, out)?;
+            }
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        pb_emit_scalar(kind, v, bytes, out)?;
+    }
+    out.push(']');
+    Ok(())
+}
+
+/// Reads one packed scalar of `kind` from a packed blob.
+fn pb_read_packed(kind: &prost_reflect::Kind, buf: &mut &[u8]) -> Result<WireVal, String> {
+    use prost::bytes::Buf;
+    use prost::encoding::decode_varint;
+    use prost_reflect::Kind;
+    Ok(match kind {
+        Kind::Double | Kind::Fixed64 | Kind::Sfixed64 => {
+            if buf.remaining() < 8 {
+                return Err("truncated packed 64-bit value".into());
+            }
+            WireVal::Bits64(buf.get_u64_le())
+        }
+        Kind::Float | Kind::Fixed32 | Kind::Sfixed32 => {
+            if buf.remaining() < 4 {
+                return Err("truncated packed 32-bit value".into());
+            }
+            WireVal::Bits32(buf.get_u32_le())
+        }
+        _ => WireVal::Varint(decode_varint(buf).map_err(|e| e.to_string())?),
+    })
+}
+
+/// Emits one scalar/message value of `kind` (proto3 JSON form) into `out`.
+fn pb_emit_scalar(
+    kind: &prost_reflect::Kind,
+    v: &WireVal,
+    bytes: &[u8],
+    out: &mut String,
+) -> Result<(), String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use prost_reflect::Kind;
+    let varint = |v: &WireVal| match v {
+        WireVal::Varint(n) => Ok(*n),
+        _ => Err("expected a varint value".to_string()),
+    };
+    match kind {
+        Kind::Int32 => out.push_str(&(varint(v)? as i32).to_string()),
+        Kind::Uint32 => out.push_str(&(varint(v)? as u32).to_string()),
+        Kind::Sint32 => {
+            let n = varint(v)? as u32;
+            out.push_str(&(((n >> 1) as i32) ^ -((n & 1) as i32)).to_string());
+        }
+        Kind::Int64 => pb_push_json_string(out, &(varint(v)? as i64).to_string()),
+        Kind::Uint64 => pb_push_json_string(out, &varint(v)?.to_string()),
+        Kind::Sint64 => {
+            let n = varint(v)?;
+            pb_push_json_string(out, &(((n >> 1) as i64) ^ -((n & 1) as i64)).to_string());
+        }
+        Kind::Fixed32 => match v {
+            WireVal::Bits32(n) => out.push_str(&n.to_string()),
+            _ => return Err("expected a 32-bit value".into()),
+        },
+        Kind::Sfixed32 => match v {
+            WireVal::Bits32(n) => out.push_str(&(*n as i32).to_string()),
+            _ => return Err("expected a 32-bit value".into()),
+        },
+        Kind::Fixed64 => match v {
+            WireVal::Bits64(n) => pb_push_json_string(out, &n.to_string()),
+            _ => return Err("expected a 64-bit value".into()),
+        },
+        Kind::Sfixed64 => match v {
+            WireVal::Bits64(n) => pb_push_json_string(out, &(*n as i64).to_string()),
+            _ => return Err("expected a 64-bit value".into()),
+        },
+        Kind::Float => match v {
+            WireVal::Bits32(n) => pb_push_json_f32(out, f32::from_bits(*n)),
+            _ => return Err("expected a 32-bit value".into()),
+        },
+        Kind::Double => match v {
+            WireVal::Bits64(n) => pb_push_json_f64(out, f64::from_bits(*n)),
+            _ => return Err("expected a 64-bit value".into()),
+        },
+        Kind::Bool => out.push_str(if varint(v)? != 0 { "true" } else { "false" }),
+        Kind::String => match v {
+            WireVal::Len(s, l) => {
+                let text = std::str::from_utf8(&bytes[*s..*s + *l]).map_err(|e| e.to_string())?;
+                pb_push_json_string(out, text);
+            }
+            _ => return Err("expected a length-delimited string".into()),
+        },
+        Kind::Bytes => match v {
+            WireVal::Len(s, l) => pb_push_json_string(out, &STANDARD.encode(&bytes[*s..*s + *l])),
+            _ => return Err("expected a length-delimited bytes value".into()),
+        },
+        Kind::Enum(en) => {
+            let n = varint(v)? as i32;
+            match en.get_value(n) {
+                Some(value) => pb_push_json_string(out, value.name()),
+                None => out.push_str(&n.to_string()),
+            }
+        }
+        Kind::Message(m) => match v {
+            WireVal::Len(s, l) => pb_transcode(m, &bytes[*s..*s + *l], out)?,
+            _ => return Err("expected a length-delimited message".into()),
+        },
+    }
+    Ok(())
+}
+
+fn pb_emit_map(
+    field: &prost_reflect::FieldDescriptor,
+    vals: &[WireVal],
+    bytes: &[u8],
+    out: &mut String,
+) -> Result<(), String> {
+    use prost_reflect::Kind;
+    let entry = match field.kind() {
+        Kind::Message(m) if m.is_map_entry() => m,
+        _ => return Err("map field is not a map-entry message".into()),
+    };
+    let key_field = entry.map_entry_key_field();
+    let value_field = entry.map_entry_value_field();
+    out.push('{');
+    let mut first = true;
+    for v in vals {
+        let WireVal::Len(s, l) = v else {
+            return Err("map entry is not length-delimited".into());
+        };
+        let entry_bytes = &bytes[*s..*s + *l];
+        let eb = pb_bucket(entry_bytes)?;
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        // JSON object keys are always strings; render the key into one.
+        let mut key = String::new();
+        match eb.get(&key_field.number()).and_then(|x| x.last()) {
+            Some(kv) => pb_emit_scalar(&key_field.kind(), kv, entry_bytes, &mut key)?,
+            None => pb_emit_default(&key_field.kind(), &mut key)?,
+        }
+        // Strip surrounding quotes if the key kind already rendered a JSON string.
+        let key = key.trim_matches('"');
+        pb_push_json_string(out, key);
+        out.push(':');
+        match eb.get(&value_field.number()).and_then(|x| x.last()) {
+            Some(vv) => pb_emit_scalar(&value_field.kind(), vv, entry_bytes, out)?,
+            None => pb_emit_default_json(&value_field.kind(), out)?,
+        }
+    }
+    out.push('}');
+    Ok(())
+}
+
+/// Renders a field's default value as a *bare* scalar (used to build map keys).
+fn pb_emit_default(kind: &prost_reflect::Kind, out: &mut String) -> Result<(), String> {
+    use prost_reflect::Kind;
+    match kind {
+        Kind::Bool => out.push_str("false"),
+        Kind::String => {}
+        Kind::Int64 | Kind::Uint64 | Kind::Sint64 | Kind::Fixed64 | Kind::Sfixed64 => {
+            out.push('0');
+        }
+        _ => out.push('0'),
+    }
+    Ok(())
+}
+
+/// Renders a field's default value as proto3 JSON (used for an absent map value).
+fn pb_emit_default_json(kind: &prost_reflect::Kind, out: &mut String) -> Result<(), String> {
+    use prost_reflect::Kind;
+    match kind {
+        Kind::Bool => out.push_str("false"),
+        Kind::String | Kind::Bytes => out.push_str("\"\""),
+        Kind::Int64 | Kind::Uint64 | Kind::Sint64 | Kind::Fixed64 | Kind::Sfixed64 => {
+            out.push_str("\"0\"");
+        }
+        Kind::Double | Kind::Float => out.push('0'),
+        Kind::Enum(en) => match en.get_value(0) {
+            Some(value) => pb_push_json_string(out, value.name()),
+            None => out.push('0'),
+        },
+        Kind::Message(_) => out.push_str("null"),
+        _ => out.push('0'),
+    }
+    Ok(())
+}
+
+/// Appends `s` as a JSON string literal (delegating escaping to serde_json so it
+/// matches the prost-reflect/serde output exactly).
+fn pb_push_json_string(out: &mut String, s: &str) {
+    match serde_json::to_string(s) {
+        Ok(escaped) => out.push_str(&escaped),
+        Err(_) => out.push_str("\"\""),
+    }
+}
+
+/// proto3 JSON for a non-finite float is a string: "NaN"/"Infinity"/"-Infinity".
+fn pb_push_nonfinite(out: &mut String, sign_positive: bool, is_nan: bool) {
+    if is_nan {
+        out.push_str("\"NaN\"");
+    } else if sign_positive {
+        out.push_str("\"Infinity\"");
+    } else {
+        out.push_str("\"-Infinity\"");
+    }
+}
+
+/// Appends an f32 via serde_json's shortest form (matching proto3's float
+/// rendering — formatted at f32 precision, not widened to f64).
+fn pb_push_json_f32(out: &mut String, n: f32) {
+    if n.is_finite() {
+        match serde_json::to_string(&n) {
+            Ok(s) => out.push_str(&s),
+            Err(_) => out.push('0'),
+        }
+    } else {
+        pb_push_nonfinite(out, n > 0.0, n.is_nan());
+    }
+}
+
+/// Appends an f64 via serde_json's shortest form, or the non-finite string.
+fn pb_push_json_f64(out: &mut String, n: f64) {
+    if n.is_finite() {
+        match serde_json::to_string(&n) {
+            Ok(s) => out.push_str(&s),
+            Err(_) => out.push('0'),
+        }
+    } else {
+        pb_push_nonfinite(out, n > 0.0, n.is_nan());
+    }
+}
+
 /// Maximum element nesting accepted by the recursive XML reader. The parser
 /// descends one stack frame per level, so an unbounded document (`<a><a>…`)
 /// would otherwise overflow the stack and abort the process; past this depth we
@@ -680,23 +1041,18 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             OpError::type_error(format!("Message {} not found in schema", message_name))
         })?;
 
-        let msg = prost_reflect::DynamicMessage::decode(desc, payload).map_err(|e| {
+        // Transcode the wire bytes straight to a proto3-JSON string (no
+        // intermediate DynamicMessage), then let the JS side JSON.parse it —
+        // V8's native JSON.parse builds the object graph far faster than
+        // marshaling a Rust-side Value property-by-property across the FFI seam.
+        let mut out = String::with_capacity(payload.len() * 2);
+        pb_transcode(&desc, payload, &mut out).map_err(|e| {
             OpError::new(
                 ExceptionClass::SyntaxError,
                 format!("Failed to decode protobuf payload: {e}"),
             )
         })?;
-
-        // Serialize to a proto3-JSON string and let the JS side JSON.parse it.
-        // V8's native JSON.parse builds the object graph far faster than marshaling
-        // a Rust-side Value property-by-property across the FFI seam, which for a
-        // large message (tens of thousands of objects) is dramatically slower.
-        match serde_json::to_string(&msg) {
-            Ok(json_str) => Ok(Value::String(json_str)),
-            Err(e) => Err(OpError::type_error(format!(
-                "Failed to transcode to JSON: {e}"
-            ))),
-        }
+        Ok(Value::String(out))
     }))?;
 
     let pools_build = Rc::clone(&protobuf_pools);
@@ -859,15 +1215,13 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
                 if payload_end > st.bytes.len() {
                     return Err(syntax(&"length-delimited field overruns the buffer"));
                 }
-                let json = {
-                    let element = &st.bytes[payload_start..payload_end];
-                    let msg =
-                        prost_reflect::DynamicMessage::decode(st.element_desc.clone(), element)
-                            .map_err(|e| syntax(&e))?;
-                    serde_json::to_string(&msg).map_err(|e| {
-                        OpError::type_error(format!("Failed to transcode element to JSON: {e}"))
-                    })?
-                };
+                let mut json = String::new();
+                pb_transcode(
+                    &st.element_desc,
+                    &st.bytes[payload_start..payload_end],
+                    &mut json,
+                )
+                .map_err(|e| syntax(&e))?;
                 st.cursor = payload_end;
                 streams_next.borrow_mut().insert(sid, st);
                 return Ok(Value::String(json));
@@ -991,5 +1345,74 @@ mod tests {
         } else {
             panic!("Expected object");
         }
+    }
+
+    // The direct wire->JSON transcoder (pb_transcode) must produce JSON
+    // equivalent to prost-reflect's serde serialization of the same bytes,
+    // across every scalar type, enums, nested messages, repeated (packed +
+    // message) and maps. This pins parity so the fast path can't silently drift.
+    #[test]
+    fn transcode_matches_prost_reflect() {
+        use prost::Message;
+
+        let schema = r#"
+            syntax = "proto3";
+            package t;
+            enum Color { RED = 0; GREEN = 1; BLUE = 2; }
+            message Inner { string v = 1; int32 n = 2; }
+            message All {
+                int32 i32 = 1; int64 i64 = 2; uint32 u32 = 3; uint64 u64 = 4;
+                sint32 s32 = 5; sint64 s64 = 6; fixed32 f32 = 7; fixed64 f64 = 8;
+                sfixed32 sf32 = 9; sfixed64 sf64 = 10; float fl = 11; double db = 12;
+                bool b = 13; string s = 14; bytes by = 15; Color c = 16;
+                Inner inner = 17; repeated int32 nums = 18; repeated Inner items = 19;
+                map<string, int32> counts = 20; map<int32, string> names = 21;
+                repeated Color colors = 22;
+            }
+        "#;
+
+        let mut compiler = protox::Compiler::with_file_resolver(ProtoStringResolver {
+            source: schema.to_owned(),
+        });
+        compiler.include_imports(true);
+        compiler.open_file(PROTOBUF_SCHEMA_FILE).expect("compile");
+        let pool = compiler.descriptor_pool();
+        let desc = pool.get_message_by_name("t.All").expect("message");
+
+        // Build a populated message from proto3 JSON, then encode to wire bytes.
+        let input = serde_json::json!({
+            "i32": -7, "i64": "9007199254740993", "u32": 7, "u64": "18446744073709551615",
+            "s32": -123, "s64": "-9007199254740993", "f32": 4294967295u32, "f64": "123456789",
+            "sf32": -42, "sf64": "-99", "fl": 1.5, "db": 44.95,
+            "b": true, "s": "héllo \"q\"\n", "by": "AQID// 8=".replace(" ", ""), "c": "BLUE",
+            "inner": { "v": "x", "n": 9 },
+            "nums": [1, 2, 300, -4], "items": [{ "v": "a" }, { "n": 5 }],
+            "counts": { "x": 1, "y": 2 }, "names": { "1": "one", "2": "two" },
+            "colors": ["RED", "GREEN", "BLUE"]
+        });
+        let msg = {
+            use serde::de::DeserializeSeed;
+            desc.clone()
+                .deserialize(input)
+                .expect("build dynamic message")
+        };
+        let bytes = msg.encode_to_vec();
+
+        // Expected: prost-reflect decode + serde serialize, parsed to a Value.
+        let decoded =
+            prost_reflect::DynamicMessage::decode(desc.clone(), bytes.as_slice()).expect("decode");
+        let expected: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&decoded).unwrap()).unwrap();
+
+        // Actual: our direct transcoder, parsed to a Value (order-insensitive compare).
+        let mut out = String::new();
+        pb_transcode(&desc, &bytes, &mut out).expect("transcode");
+        let actual: serde_json::Value = serde_json::from_str(&out)
+            .unwrap_or_else(|e| panic!("transcoder emitted invalid JSON: {e}\n{out}"));
+
+        assert_eq!(
+            actual, expected,
+            "transcoder JSON diverged from prost-reflect"
+        );
     }
 }
