@@ -49,8 +49,11 @@ const parserWorkloads = [
   { key: "toml_large", label: "TOML parsing (large dataset)", unit: "ms" },
   { key: "msgpack_small", label: "MessagePack parsing (small dataset)", unit: "ms" },
   { key: "msgpack_large", label: "MessagePack parsing (large dataset)", unit: "ms" },
-  { key: "protobuf_small", label: "Protobuf parsing (small dataset)", unit: "ms" },
-  { key: "protobuf_large", label: "Protobuf parsing (large dataset)", unit: "ms" },
+];
+
+const protobufWorkloads = [
+  { key: "protobuf_small", label: "Protobuf decode (small dataset)", unit: "ms" },
+  { key: "protobuf_large", label: "Protobuf decode (large dataset)", unit: "ms" },
 ];
 
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
@@ -177,6 +180,14 @@ export default function BenchmarksDoc() {
       </p>
       <div className="mt-5">
         <BenchChart metrics={parserWorkloads} />
+      </div>
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">Protobuf (same library, all runtimes)</h2>
+      <p className="mt-2 text-sm text-zinc-500">
+        Every runtime runs the same library — <code>protobuf-es</code> (<code>@bufbuild/protobuf</code>) — decoding identical bytes, so this measures the runtime, not the library.
+      </p>
+      <div className="mt-5">
+        <BenchChart metrics={protobufWorkloads} />
       </div>
 
       <h2 id="websocket" className="mt-12 text-xl font-semibold text-zinc-900">

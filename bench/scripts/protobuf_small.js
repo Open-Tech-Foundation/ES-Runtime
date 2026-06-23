@@ -1,57 +1,9 @@
-let esrunParser = null;
-let esrunBuilder = null;
-let esrunSchema = null;
-try {
-  const mod = await import('runtime:parsers');
-  const schemaDef = `
-    syntax = "proto3";
-    package test;
-    message Book {
-      string id = 1;
-      string author = 2;
-      string title = 3;
-      string genre = 4;
-      double price = 5;
-      string publish_date = 6;
-      string description = 7;
-    }
-    message Catalog {
-      repeated Book catalog = 1;
-    }
-  `;
-  esrunSchema = new mod.Protobuf.Schema(schemaDef);
-  esrunParser = (bytes) => esrunSchema.parse("test.Catalog", bytes);
-  esrunBuilder = (obj) => esrunSchema.build("test.Catalog", obj);
-} catch (e) {}
-const isEsrun = typeof esrunParser === "function";
+// Protobuf decode (small payload). Same library — protobuf-es (@bufbuild/protobuf)
+// — on every runtime, so this measures the runtime, not the library.
+import { create, toBinary, fromBinary } from "@bufbuild/protobuf";
+import { CatalogSchema } from "../gen/catalog_pb.js";
 
-let protobufjs = null;
-let root = null;
-let Catalog = null;
-if (!isEsrun) {
-  const mod = await import('protobufjs');
-  protobufjs = mod.default || mod;
-  root = protobufjs.parse(`
-    syntax = "proto3";
-    package test;
-    message Book {
-      string id = 1;
-      string author = 2;
-      string title = 3;
-      string genre = 4;
-      double price = 5;
-      string publish_date = 6;
-      string description = 7;
-    }
-    message Catalog {
-      repeated Book catalog = 1;
-    }
-  `).root;
-  Catalog = root.lookupType("test.Catalog");
-}
-
-// Generate a small mock Object for benching
-let obj = { catalog: [] };
+const obj = { catalog: [] };
 for (let i = 0; i < 50; i++) {
   obj.catalog.push({
     id: `bk${i}`,
@@ -59,36 +11,20 @@ for (let i = 0; i < 50; i++) {
     title: "XML Developer's Guide",
     genre: "Computer",
     price: 44.95,
-    publish_date: "2000-10-01",
-    description: "An in-depth look at creating applications with XML."
+    publishDate: "2000-10-01",
+    description: "An in-depth look at creating applications with XML.",
   });
 }
 
-let protoBytes;
-if (isEsrun) {
-    protoBytes = esrunBuilder(obj);
-} else {
-    protoBytes = Catalog.encode(Catalog.create(obj)).finish();
-}
-
-function parseProtobuf() {
-  if (isEsrun) {
-    esrunParser(protoBytes);
-  } else if (Catalog) {
-    Catalog.decode(protoBytes);
-  }
-}
+const protoBytes = toBinary(CatalogSchema, create(CatalogSchema, obj));
+const parseProtobuf = () => fromBinary(CatalogSchema, protoBytes);
 
 // Warmup
-for (let i = 0; i < 5; i++) {
-  parseProtobuf();
-}
+for (let i = 0; i < 5; i++) parseProtobuf();
 
 // Timed run
 const iterations = 1000;
 const start = performance.now();
-for (let i = 0; i < iterations; i++) {
-  parseProtobuf();
-}
+for (let i = 0; i < iterations; i++) parseProtobuf();
 const end = performance.now();
 console.log(`RESULT_MS=${end - start}`);

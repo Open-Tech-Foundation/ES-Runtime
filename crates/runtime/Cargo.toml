@@ -39,9 +39,6 @@ toml = "0.8"
 rmp-serde = "1.3.0"
 serde = "1.0.228"
 serde-transcode = "1.1.1"
-protox = "0.9.1"
-prost-reflect = { version = "0.16.4", features = ["serde"] }
-prost = "0.14.4"
 
 [lints]
 workspace = true

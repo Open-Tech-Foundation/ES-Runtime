@@ -2,13 +2,15 @@
   "private": true,
   "description": "Dev deps for the cross-runtime benchmark — Hono powers scripts/hono.js (rps.sh SERVER=scripts/hono.js). Install with: bun install",
   "dependencies": {
+    "@bufbuild/buf": "^1.71.0",
+    "@bufbuild/protobuf": "^2.12.1",
+    "@bufbuild/protoc-gen-es": "^2.12.1",
     "@hono/node-server": "^2.0.4",
     "@iarna/toml": "^2.2.5",
     "fast-xml-parser": "^5.9.2",
     "hono": "^4.12.25",
     "js-yaml": "^4.2.0",
     "msgpackr": "^1.11.2",
-    "ndjson": "^2.0.0",
-    "protobufjs": "^8.6.4"
+    "ndjson": "^2.0.0"
   }
 }

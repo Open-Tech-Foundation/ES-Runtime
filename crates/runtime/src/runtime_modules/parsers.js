@@ -1,4 +1,4 @@
-// runtime:parsers — XML/YAML/TOML/JSONL/MessagePack/Protobuf, backed by host ops.
+// runtime:parsers — XML/YAML/TOML/JSONL/MessagePack, backed by host ops.
 const {
   xml_parse, xml_validate, xml_build,
   yaml_parse, yaml_validate, yaml_build,
@@ -60,67 +60,6 @@ export const MessagePack = {
   },
   encode(obj) {
     return msgpack_build(obj);
-  }
-};
-
-const {
-  protobuf_schema_create, protobuf_schema_free, protobuf_parse, protobuf_build,
-  protobuf_stream_open, protobuf_stream_next, protobuf_stream_close
-} = globalThis.__ops;
-
-export const Protobuf = {
-  Schema: class {
-    constructor(protoStr) {
-      this.id = protobuf_schema_create(protoStr);
-    }
-    parse(messageName, payload) {
-      return JSON.parse(protobuf_parse(this.id, messageName, payload));
-    }
-    build(messageName, obj) {
-      return protobuf_build(this.id, messageName, obj);
-    }
-    // Async-iterate one element of a repeated message field at a time, decoding
-    // straight off the wire so a large collection never fully materializes. The
-    // host stream is released when iteration finishes or the consumer breaks early
-    // (async iterator `return()`).
-    parseStream(messageName, fieldName, payload) {
-      const schemaId = this.id;
-      return {
-        [Symbol.asyncIterator]() {
-          let sid = protobuf_stream_open(schemaId, messageName, fieldName, payload);
-          return {
-            // eslint-disable-next-line require-await
-            async next() {
-              if (sid === null) return { done: true, value: undefined };
-              const json = protobuf_stream_next(sid);
-              if (json === null) {
-                sid = null;
-                return { done: true, value: undefined };
-              }
-              return { done: false, value: JSON.parse(json) };
-            },
-            async return(value) {
-              if (sid !== null) {
-                protobuf_stream_close(sid);
-                sid = null;
-              }
-              return { done: true, value };
-            },
-          };
-        },
-      };
-    }
-    // Release the compiled schema held host-side. Idempotent; the host ignores
-    // an unknown id. Also wired to Symbol.dispose for `using` declarations.
-    free() {
-      if (this.id != null) {
-        protobuf_schema_free(this.id);
-        this.id = null;
-      }
-    }
-    [Symbol.dispose]() {
-      this.free();
-    }
   }
 };
 

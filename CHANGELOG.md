@@ -6,15 +6,6 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
-### Changed
-
-- **`runtime:parsers` — faster, lighter Protobuf decode.** `Protobuf.Schema.parse`
-  (and `parseStream`) now transcode protobuf wire bytes straight to proto3 JSON
-  against the descriptor, without building an intermediate `prost_reflect`
-  `DynamicMessage` tree. On a 50k-element catalog: parse ~6.0s → ~4.6s and
-  whole-parse peak RSS ~100 MB → ~63 MB. Output is unchanged (a differential test
-  pins byte-for-value parity with the previous `prost-reflect` serialization).
-
 ### Fixed
 
 - **`runtime:parsers` — TOML datetimes** now parse to RFC3339 strings instead of
@@ -24,20 +15,6 @@ pre-`0.1.0` and the public API is unstable.
   `Infinity`/`NaN` instead of being silently coerced to `null`. YAML and TOML
   parsing build engine values directly rather than transcoding through JSON,
   which JSON's number model cannot represent.
-
-### Added
-
-- **`runtime:parsers` — `Protobuf`.** Dynamic, schema-aware Protobuf parsing and
-  building via `new Protobuf.Schema(protoStr)` (compiled entirely in memory — no
-  filesystem access), with `schema.parse(messageName, bytes)` /
-  `schema.build(messageName, obj)`. Uses the canonical proto3 JSON mapping
-  (64-bit ints as strings, enums as names). `schema.free()` (and `using` /
-  `Symbol.dispose`) releases the compiled schema.
-- **`runtime:parsers` — `Protobuf.Schema.parseStream(messageName, fieldName, bytes)`.**
-  An `AsyncIterable` that decodes the elements of a repeated message field one at
-  a time straight off the wire, so a large collection never fully materializes —
-  it roughly halves peak parse memory for big payloads (e.g. ~100 MB → ~50 MB on a
-  50k-element catalog). Breaking out of the loop releases the host-side stream.
 
 ## [0.8.0] - 2026-06-20
 

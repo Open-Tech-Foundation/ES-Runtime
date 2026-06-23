@@ -484,27 +484,18 @@ pub/sub topics are follow-ups (D29).
 
 ## `runtime:parsers`
 
-A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, MessagePack, and Protobuf. These parsers are backed by optimized Rust implementations and are exposed via zero-cost host boundaries.
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, and MessagePack. These parsers are backed by optimized Rust implementations and are exposed via zero-cost host boundaries.
 
 - **Capability:** None (pure computation)
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, MessagePack, Protobuf } from "runtime:parsers";
+import { XML, YAML, TOML, MessagePack } from "runtime:parsers";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");
 const msgpackBytes = new Uint8Array([0x81, 0xa5, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa5, 0x77, 0x6f, 0x72, 0x6c, 0x64]);
 const obj2 = MessagePack.decode(msgpackBytes);
-
-const schema = new Protobuf.Schema(`
-  syntax = "proto3";
-  message Hello {
-    string name = 1;
-  }
-`);
-const pbBytes = schema.build("Hello", { name: "world" });
-const pbObj = schema.parse("Hello", pbBytes);
 ```
 
 ### Exports
@@ -524,18 +515,6 @@ For binary formats like MessagePack, the namespace is slightly different:
 | `MessagePack.decode(bytes)` | Parses a MessagePack byte array into a JavaScript object. |
 | `MessagePack.encode(obj)` | Serializes a JavaScript object into a MessagePack `Uint8Array`. |
 | `MessagePack.validate(bytes, opts?)` | Validates the given byte array. |
-
-For Protobuf, dynamic schema compilation is supported:
-
-| Export | Description |
-| --- | --- |
-| `new Protobuf.Schema(protoStr)` | Compiles a `.proto` schema string dynamically into an active schema descriptor (in memory; no filesystem access). |
-| `schema.parse(messageName, bytes)` | Parses a Protobuf byte array into a JavaScript object based on the fully-qualified message name. |
-| `schema.build(messageName, obj)` | Serializes a JavaScript object into a Protobuf `Uint8Array` based on the fully-qualified message name. |
-| `schema.parseStream(messageName, fieldName, bytes)` | `AsyncIterable` yielding the elements of a repeated **message** field one at a time (decoded off the wire — bounds peak memory for large collections). |
-| `schema.free()` | Releases the compiled schema (also via `using` / `Symbol.dispose`). |
-
-`parse`/`build` use the canonical proto3 JSON mapping: 64-bit integer fields (`int64`/`uint64`/`fixed64`) are strings, and enum fields are their value names.
 
 For JSONL, it provides transform streams under the `JSONL` namespace:
 

@@ -1,0 +1,16 @@
+syntax = "proto3";
+package test;
+
+message Book {
+  string id = 1;
+  string author = 2;
+  string title = 3;
+  string genre = 4;
+  double price = 5;
+  string publish_date = 6;
+  string description = 7;
+}
+
+message Catalog {
+  repeated Book catalog = 1;
+}
