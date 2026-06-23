@@ -131,4 +131,37 @@ declare module "runtime:serialization" {
       close(): Promise<void>;
     }
   }
+
+  export interface ProtobufSchemaOptions {
+    /** Entry filename when the schema is given as a file map. */
+    entry?: string;
+  }
+
+  export namespace Protobuf {
+    /**
+     * A protobuf schema compiled at runtime from `.proto` source. proto3 and
+     * edition 2023 are supported (proto2-only constructs are rejected). Decoding
+     * is reflective — no codegen.
+     *
+     * Decoded value shape: camelCase field names; 64-bit integer fields
+     * (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64`) as **BigInt**; enums as
+     * their value-name string (unknown numbers kept as numbers); `bytes` as
+     * `Uint8Array`; maps as plain objects; nested messages as plain objects.
+     * Fields absent on the wire are omitted from the result.
+     */
+    export class Schema {
+      /**
+       * @param proto A single `.proto` source string, or a map of
+       *   filename → source for multi-file schemas with `import`s. The
+       *   `google/protobuf/*` well-known types resolve without being provided.
+       */
+      constructor(proto: string | Record<string, string>, options?: ProtobufSchemaOptions);
+
+      /** Decodes binary protobuf for the fully-qualified `messageName`. */
+      parse(messageName: string, bytes: Uint8Array): Record<string, unknown>;
+
+      /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
+      build(messageName: string, value: Record<string, unknown>): Uint8Array;
+    }
+  }
 }
