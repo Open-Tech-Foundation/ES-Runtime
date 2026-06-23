@@ -6,6 +6,8 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-23
+
 ### Added
 
 - **`runtime:serialization` — `Protobuf`.** A pure-JS, reflective Protobuf
