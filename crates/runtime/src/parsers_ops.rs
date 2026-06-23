@@ -175,13 +175,14 @@ enum WireVal {
     Len(usize, usize),
 }
 
-/// One pass over a message's wire bytes, bucketing values by field number.
-/// Repeated fields accumulate; singular fields keep every occurrence (the
-/// caller takes the last, per proto3 last-wins).
-fn pb_bucket(bytes: &[u8]) -> Result<std::collections::HashMap<u32, Vec<WireVal>>, String> {
+/// One pass over a message's wire bytes, collecting `(field number, value)` in
+/// wire order. A flat `Vec` (not a per-message `HashMap`) keeps the common case
+/// — small messages with each field once — allocation-light; the emit side scans
+/// it per descriptor field (field counts are small, so this stays cheap).
+fn pb_bucket(bytes: &[u8]) -> Result<Vec<(u32, WireVal)>, String> {
     use prost::bytes::Buf;
     use prost::encoding::{WireType, decode_key, decode_varint};
-    let mut map: std::collections::HashMap<u32, Vec<WireVal>> = std::collections::HashMap::new();
+    let mut entries: Vec<(u32, WireVal)> = Vec::new();
     let total = bytes.len();
     let mut buf: &[u8] = bytes;
     while !buf.is_empty() {
@@ -215,9 +216,18 @@ fn pb_bucket(bytes: &[u8]) -> Result<std::collections::HashMap<u32, Vec<WireVal>
                 return Err("group wire types are not supported".into());
             }
         };
-        map.entry(tag).or_default().push(v);
+        entries.push((tag, v));
     }
-    Ok(map)
+    Ok(entries)
+}
+
+/// The last value bucketed for `tag` (proto3 last-wins for singular fields).
+fn pb_last_by_tag(entries: &[(u32, WireVal)], tag: u32) -> Option<&WireVal> {
+    entries
+        .iter()
+        .rev()
+        .find(|(t, _)| *t == tag)
+        .map(|(_, v)| v)
 }
 
 /// Transcodes a length-delimited protobuf message into proto3 JSON, appended to
@@ -227,29 +237,45 @@ fn pb_transcode(
     bytes: &[u8],
     out: &mut String,
 ) -> Result<(), String> {
-    let buckets = pb_bucket(bytes)?;
+    let entries = pb_bucket(bytes)?;
     out.push('{');
     let mut first = true;
     for field in desc.fields() {
-        let Some(vals) = buckets.get(&field.number()) else {
-            continue;
-        };
-        if vals.is_empty() {
-            continue;
-        }
-        if !first {
-            out.push(',');
-        }
-        first = false;
-        pb_push_json_string(out, field.json_name());
-        out.push(':');
-        if field.is_map() {
-            pb_emit_map(&field, vals, bytes, out)?;
-        } else if field.is_list() {
-            pb_emit_list(&field.kind(), vals, bytes, out)?;
+        let num = field.number();
+        if field.is_map() || field.is_list() {
+            // Repeated/map fields may be scattered across the wire — gather every
+            // occurrence in order. (Only allocates for fields actually present.)
+            let vals: Vec<&WireVal> = entries
+                .iter()
+                .filter(|(t, _)| *t == num)
+                .map(|(_, v)| v)
+                .collect();
+            if vals.is_empty() {
+                continue;
+            }
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            pb_push_json_string(out, field.json_name());
+            out.push(':');
+            if field.is_map() {
+                pb_emit_map(&field, &vals, bytes, out)?;
+            } else {
+                pb_emit_list(&field.kind(), &vals, bytes, out)?;
+            }
         } else {
-            // Singular: proto3 last-wins.
-            pb_emit_scalar(&field.kind(), vals.last().unwrap(), bytes, out)?;
+            // Singular: proto3 last-wins; no allocation.
+            let Some(v) = pb_last_by_tag(&entries, num) else {
+                continue;
+            };
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            pb_push_json_string(out, field.json_name());
+            out.push(':');
+            pb_emit_scalar(&field.kind(), v, bytes, out)?;
         }
     }
     out.push('}');
@@ -265,13 +291,13 @@ fn pb_is_packable(kind: &prost_reflect::Kind) -> bool {
 
 fn pb_emit_list(
     kind: &prost_reflect::Kind,
-    vals: &[WireVal],
+    vals: &[&WireVal],
     bytes: &[u8],
     out: &mut String,
 ) -> Result<(), String> {
     out.push('[');
     let mut first = true;
-    for v in vals {
+    for &v in vals {
         // A length-delimited value for a packable kind is a packed run of values.
         if let (WireVal::Len(s, l), true) = (v, pb_is_packable(kind)) {
             let mut pb: &[u8] = &bytes[*s..*s + *l];
@@ -396,7 +422,7 @@ fn pb_emit_scalar(
 
 fn pb_emit_map(
     field: &prost_reflect::FieldDescriptor,
-    vals: &[WireVal],
+    vals: &[&WireVal],
     bytes: &[u8],
     out: &mut String,
 ) -> Result<(), String> {
@@ -409,7 +435,7 @@ fn pb_emit_map(
     let value_field = entry.map_entry_value_field();
     out.push('{');
     let mut first = true;
-    for v in vals {
+    for &v in vals {
         let WireVal::Len(s, l) = v else {
             return Err("map entry is not length-delimited".into());
         };
@@ -421,7 +447,7 @@ fn pb_emit_map(
         first = false;
         // JSON object keys are always strings; render the key into one.
         let mut key = String::new();
-        match eb.get(&key_field.number()).and_then(|x| x.last()) {
+        match pb_last_by_tag(&eb, key_field.number()) {
             Some(kv) => pb_emit_scalar(&key_field.kind(), kv, entry_bytes, &mut key)?,
             None => pb_emit_default(&key_field.kind(), &mut key)?,
         }
@@ -429,7 +455,7 @@ fn pb_emit_map(
         let key = key.trim_matches('"');
         pb_push_json_string(out, key);
         out.push(':');
-        match eb.get(&value_field.number()).and_then(|x| x.last()) {
+        match pb_last_by_tag(&eb, value_field.number()) {
             Some(vv) => pb_emit_scalar(&value_field.kind(), vv, entry_bytes, out)?,
             None => pb_emit_default_json(&value_field.kind(), out)?,
         }
