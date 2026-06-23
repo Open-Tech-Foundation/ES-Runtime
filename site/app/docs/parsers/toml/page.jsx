@@ -60,10 +60,10 @@ console.log(result.error); // "Validation failed: ..." `} title="toml_validate.j
         Building TOML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TOMLBuilder.build</code> to convert a JavaScript object back into a TOML string. Note that the root of the JavaScript object must map to a TOML table (an object).
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TOML.build</code> to convert a JavaScript object back into a TOML string. Note that the root of the JavaScript object must map to a TOML table (an object).
       </p>
       <div className="mt-6">
-        <CodeBlock code={`import { TOMLBuilder } from "runtime:parsers";
+        <CodeBlock code={`import { TOML } from "runtime:parsers";
 
 const obj = { 
   user: { 

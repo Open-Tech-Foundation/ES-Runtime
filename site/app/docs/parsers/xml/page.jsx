@@ -52,7 +52,7 @@ console.log(result.error); // "Validation failed: ..." `} title="xml_validate.js
         Building XML
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        For parsing massive XML files that exceed available memory, use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.DecoderStream</code>.
+        Use <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.build</code> to serialize a JavaScript object back into an XML string.
       </p>
       <div className="mt-6">
         <CodeBlock code={`import { XML } from "runtime:parsers";
@@ -68,9 +68,9 @@ const built = XML.build(obj);
 console.log(built); // <user id="1"><name>Alice</name></user>`} title="xml_build.js" lang="js" />
       </div>
 
-      <h3 className="mt-8 text-xl font-semibold text-zinc-900">Streaming (XMLDecoderStream)</h3>
+      <h3 className="mt-8 text-xl font-semibold text-zinc-900">Streaming (XML.DecoderStream)</h3>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        For massive multi-gigabyte XML datasets, ES-Runtime provides the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XMLDecoderStream</code>. This is a standard Web <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TransformStream</code> that consumes XML string chunks and incrementally yields fully-parsed JavaScript objects, achieving a near-zero memory footprint.
+        For massive multi-gigabyte XML datasets, ES-Runtime provides <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">XML.DecoderStream</code>. This is a standard Web <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">TransformStream</code> that consumes XML string chunks and incrementally yields fully-parsed JavaScript objects, achieving a near-zero memory footprint.
       </p>
 
       <div className="mt-6">

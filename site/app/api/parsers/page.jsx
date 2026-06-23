@@ -124,7 +124,7 @@ export default function ParsersApiDoc() {
         runtime:parsers
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        Native parser classes for JSONL, XML, YAML, TOML, MessagePack, and Protobuf. These operations run directly in Rust, avoiding JavaScript overhead and providing best-in-class performance.
+        Native parsers for JSONL, XML, YAML, TOML, MessagePack, and Protobuf. These operations run directly in Rust, avoiding JavaScript overhead and providing best-in-class performance.
       </p>
       <div className="mt-5 flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded-full bg-brand-50 px-3 py-1 font-medium text-brand-700">
