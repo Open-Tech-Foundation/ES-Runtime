@@ -9,7 +9,7 @@ const errors = [
 ];
 
 const IMPORT = `import {
-  JSONL, XML, YAML, TOML, MessagePack
+  JSONL, XML, YAML, TOML, MessagePack, Protobuf
 } from "runtime:serialization";`;
 
 const sections = [
@@ -99,8 +99,17 @@ const sections = [
         options: [
           { name: "detailed", type: "boolean", optional: true, default: "false", desc: "If true, returns an object { valid: boolean, error?: string } instead of a boolean, providing the exact syntax error if validation fails." }
         ],
-        ex: `MessagePack.validate(bytes, { detailed: true });` 
+        ex: `MessagePack.validate(bytes, { detailed: true });`
       },
+    ]
+  },
+  {
+    title: "Protobuf",
+    desc: "Schema-aware Protobuf parsing and building. Pure-JS and reflective: the .proto is compiled at runtime (proto3 and edition 2023; proto2-only constructs are rejected). Decoded objects use camelCase keys, BigInt for 64-bit ints, enum value-names, and Uint8Array for bytes.",
+    exports: [
+      { sig: "new Protobuf.Schema(proto, options?)", type: "Schema", desc: "Compiles a .proto source string (or a { filename: source } map for multi-file schemas with imports; google/protobuf well-known types resolve automatically).", ex: `const schema = new Protobuf.Schema('syntax = "proto3"; message Hello { string name = 1; }');` },
+      { sig: "schema.parse(messageName, bytes)", type: "(string, Uint8Array) => object", desc: "Decodes a byte array into a JavaScript object for the fully-qualified message name.", ex: `schema.parse("Hello", bytes);` },
+      { sig: "schema.build(messageName, value)", type: "(string, object) => Uint8Array", desc: "Encodes a JavaScript object into a Protobuf byte array.", ex: `schema.build("Hello", { name: "world" });` },
     ]
   }
 ];

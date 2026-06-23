@@ -484,18 +484,25 @@ pub/sub topics are follow-ups (D29).
 
 ## `runtime:serialization`
 
-A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, and MessagePack. These parsers are backed by optimized Rust implementations and are exposed via zero-cost host boundaries.
+A high-performance parsing and serialization module for structured data formats: XML, YAML, TOML, JSONL, MessagePack, and Protobuf. The text/binary parsers are backed by optimized Rust implementations; Protobuf is a pure-JS reflective implementation. All are exposed via zero-cost host boundaries.
 
 - **Capability:** None (pure computation)
 - **Status:** Available
 
 ```js
-import { XML, YAML, TOML, MessagePack } from "runtime:serialization";
+import { XML, YAML, TOML, MessagePack, Protobuf } from "runtime:serialization";
 
 const obj = XML.parse("<root><hello>world</hello></root>");
 const yaml = YAML.parse("hello: world");
 const msgpackBytes = new Uint8Array([0x81, 0xa5, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0xa5, 0x77, 0x6f, 0x72, 0x6c, 0x64]);
 const obj2 = MessagePack.decode(msgpackBytes);
+
+const schema = new Protobuf.Schema(`
+  syntax = "proto3";
+  message Hello { string name = 1; }
+`);
+const pbBytes = schema.build("Hello", { name: "world" });
+const pbObj = schema.parse("Hello", pbBytes); // { name: "world" }
 ```
 
 ### Exports
@@ -528,6 +535,16 @@ For XML, it also provides a `DecoderStream`:
 | Export | Description |
 | --- | --- |
 | `new XML.DecoderStream()` | A `TransformStream` that parses XML chunks. |
+
+For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, reflective — proto3 and edition 2023; proto2-only constructs are rejected):
+
+| Export | Description |
+| --- | --- |
+| `new Protobuf.Schema(proto, opts?)` | Compiles a `.proto` source string (or a `{ filename: source }` map for multi-file schemas with `import`s; the `google/protobuf/*` well-known types resolve automatically). |
+| `schema.parse(messageName, bytes)` | Decodes a `Uint8Array` for the fully-qualified `messageName`. |
+| `schema.build(messageName, value)` | Encodes a JavaScript object into a `Uint8Array`. |
+
+Decoded value shape: camelCase field names; 64-bit integer fields (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64`) as **BigInt**; enums as their value-name string (unknown numbers kept as numbers); `bytes` as `Uint8Array`; maps as plain objects; nested messages as plain objects. Fields absent on the wire are omitted.
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

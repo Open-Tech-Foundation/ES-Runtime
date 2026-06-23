@@ -29,6 +29,7 @@ const NAV = [
       { href: "/docs/serialization/toml", label: "TOML Parser" },
       { href: "/docs/serialization/jsonl", label: "JSONL Parser" },
       { href: "/docs/serialization/msgpack", label: "MessagePack Parser" },
+      { href: "/docs/serialization/protobuf", label: "Protobuf Parser" },
     ],
   },
   {

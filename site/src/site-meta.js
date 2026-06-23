@@ -42,7 +42,7 @@ export const PAGES = {
   "/api/fs": { section: "API reference", title: "runtime:fs", description: "Blob-based async file I/O — `file()` handles, `write()`, `readDir`, `stat`, `mkdir`, `remove`, `rename`, and `Glob`; confined to a root jail. Gated on FileRead/FileWrite." },
   "/api/net": { section: "API reference", title: "runtime:net", description: "TCP sockets following the WinterTC Sockets API — `connect()` and `listen()`. Gated on Net/NetListen." },
   "/api/http": { section: "API reference", title: "runtime:http", description: "an HTTP/1.1 server, `serve((request) => response)`, using the Web `Request`/`Response` objects. Gated on NetListen." },
-  "/api/serialization": { section: "API reference", title: "runtime:serialization", description: "high-performance native parsers for JSONL, XML, YAML, and TOML via streams and synchronous functions." },
+  "/api/serialization": { section: "API reference", title: "runtime:serialization", description: "serialization for JSONL, XML, YAML, TOML, MessagePack (native), and Protobuf (pure-JS, reflective)." },
   "/api/websocket": { section: "API reference", title: "runtime:websocket", description: "WebSocket client and server functionality native to the engine." },
 
   // Comparisons
@@ -63,6 +63,7 @@ export const PAGES = {
   "/docs/serialization/xml": { section: "Guides", title: "XML Parsing", description: "synchronous and streaming fast XML processing." },
   "/docs/serialization/yaml": { section: "Guides", title: "YAML Parsing", description: "synchronous robust YAML processing." },
   "/docs/serialization/msgpack": { section: "Guides", title: "MessagePack Parsing", description: "synchronous fast MessagePack processing." },
+  "/docs/serialization/protobuf": { section: "Guides", title: "Protobuf Processing", description: "pure-JS reflective Protobuf (proto3 + edition 2023): runtime .proto compilation, BigInt 64-bit, no codegen." },
 };
 
 // Static trailing sections of llms.txt (not derived from routes).

@@ -6,6 +6,17 @@ pre-`0.1.0` and the public API is unstable.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:serialization` — `Protobuf`.** A pure-JS, reflective Protobuf
+  implementation (no native deps, no codegen). `new Protobuf.Schema(proto)`
+  compiles a `.proto` source string (or a `{ filename: source }` map) at runtime
+  — proto3 and edition 2023; proto2-only constructs are rejected — and
+  `schema.parse(messageName, bytes)` / `schema.build(messageName, value)` decode
+  and encode the binary wire format. Decoded objects use camelCase keys, BigInt
+  for 64-bit ints, enum value-names, and `Uint8Array` for bytes; unknown fields
+  are preserved across re-encode. Byte-for-byte verified against protobuf-es.
+
 ### Changed
 
 - **`runtime:parsers` renamed to `runtime:serialization`** (breaking). One module
