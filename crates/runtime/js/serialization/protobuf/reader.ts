@@ -5,6 +5,8 @@ import { utf8Read } from "./utf8.js";
 export const WIRE_VARINT = 0;
 export const WIRE_I64 = 1;
 export const WIRE_LEN = 2;
+export const WIRE_SGROUP = 3;
+export const WIRE_EGROUP = 4;
 export const WIRE_I32 = 5;
 
 export class Reader {
@@ -24,14 +26,22 @@ export class Reader {
     return this.pos >= this.end;
   }
 
+  private need(n: number): void {
+    if (this.pos + n > this.end) throw new Error("protobuf: unexpected end of input");
+  }
+
   /** Reads a full varint, returns its low 32 bits as an unsigned number.
    *  Used for tags, lengths, bool, enum, int32/uint32 — and always consumes
-   *  the complete varint even if it is wider than 32 bits. */
+   *  the complete varint even if it is wider than 32 bits. Rejects truncated
+   *  and overlong (>10 byte) varints. */
   uint32(): number {
     let result = 0;
     let shift = 0;
+    let count = 0;
     let b: number;
     do {
+      if (this.pos >= this.end) throw new Error("protobuf: unexpected end of input (varint)");
+      if (++count > 10) throw new Error("protobuf: varint is too long");
       b = this.buf[this.pos++]!;
       if (shift < 32) result = (result | ((b & 0x7f) << shift)) >>> 0;
       shift += 7;
@@ -52,8 +62,11 @@ export class Reader {
   varint64(): bigint {
     let result = 0n;
     let shift = 0n;
+    let count = 0;
     let b: number;
     do {
+      if (this.pos >= this.end) throw new Error("protobuf: unexpected end of input (varint)");
+      if (++count > 10) throw new Error("protobuf: varint is too long");
       b = this.buf[this.pos++]!;
       result |= BigInt(b & 0x7f) << shift;
       shift += 7n;
@@ -79,36 +92,42 @@ export class Reader {
   }
 
   fixed32(): number {
+    this.need(4);
     const v = this.view.getUint32(this.pos, true);
     this.pos += 4;
     return v;
   }
 
   sfixed32(): number {
+    this.need(4);
     const v = this.view.getInt32(this.pos, true);
     this.pos += 4;
     return v;
   }
 
   float(): number {
+    this.need(4);
     const v = this.view.getFloat32(this.pos, true);
     this.pos += 4;
     return v;
   }
 
   fixed64(): bigint {
+    this.need(8);
     const v = this.view.getBigUint64(this.pos, true);
     this.pos += 8;
     return v;
   }
 
   sfixed64(): bigint {
+    this.need(8);
     const v = this.view.getBigInt64(this.pos, true);
     this.pos += 8;
     return v;
   }
 
   double(): number {
+    this.need(8);
     const v = this.view.getFloat64(this.pos, true);
     this.pos += 8;
     return v;
@@ -117,6 +136,7 @@ export class Reader {
   /** Length-delimited UTF-8 string. */
   string(): string {
     const len = this.uint32();
+    this.need(len);
     const start = this.pos;
     this.pos += len;
     return utf8Read(this.buf, start, start + len);
@@ -125,6 +145,7 @@ export class Reader {
   /** Length-delimited bytes (copied out). */
   bytes(): Uint8Array {
     const len = this.uint32();
+    this.need(len);
     const start = this.pos;
     this.pos += len;
     return this.buf.slice(start, start + len);
@@ -133,6 +154,7 @@ export class Reader {
   /** Returns a sub-reader over the next length-delimited region. */
   fork(): Reader {
     const len = this.uint32();
+    this.need(len);
     const start = this.pos;
     this.pos += len;
     return new Reader(this.buf, start, start + len);
@@ -141,17 +163,39 @@ export class Reader {
   /** Skips a field of the given wire type. */
   skip(wireType: number): void {
     switch (wireType) {
-      case WIRE_VARINT:
-        while (this.buf[this.pos++]! & 0x80);
+      case WIRE_VARINT: {
+        let b: number;
+        do {
+          if (this.pos >= this.end) throw new Error("protobuf: unexpected end of input (varint)");
+          b = this.buf[this.pos++]!;
+        } while (b & 0x80);
         break;
+      }
       case WIRE_I64:
+        this.need(8);
         this.pos += 8;
         break;
-      case WIRE_LEN:
-        this.pos += this.uint32();
+      case WIRE_LEN: {
+        const len = this.uint32();
+        this.need(len);
+        this.pos += len;
         break;
+      }
       case WIRE_I32:
+        this.need(4);
         this.pos += 4;
+        break;
+      case WIRE_SGROUP: {
+        // Skip a (deprecated) group: consume fields until the matching end-group.
+        for (;;) {
+          const tag = this.uint32();
+          const wt = tag & 7;
+          if (wt === WIRE_EGROUP) break;
+          this.skip(wt);
+        }
+        break;
+      }
+      case WIRE_EGROUP:
         break;
       default:
         throw new Error(`protobuf: cannot skip wire type ${wireType}`);

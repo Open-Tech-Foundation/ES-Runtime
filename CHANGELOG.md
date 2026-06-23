@@ -15,7 +15,10 @@ pre-`0.1.0` and the public API is unstable.
   `schema.parse(messageName, bytes)` / `schema.build(messageName, value)` decode
   and encode the binary wire format. Decoded objects use camelCase keys, BigInt
   for 64-bit ints, enum value-names, and `Uint8Array` for bytes; unknown fields
-  are preserved across re-encode. Byte-for-byte verified against protobuf-es.
+  are preserved across re-encode. Passes the **official protobuf conformance
+  suite** for binary wire format (2060 successes, 0 failures across proto3 +
+  edition 2023; JSON/text-format/proto2 out of scope); byte-for-byte verified
+  against protobuf-es.
 
 ### Changed
 

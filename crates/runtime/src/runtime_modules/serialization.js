@@ -296,7 +296,9 @@ class Parser {
           this.skipBlock();
           break;
         case "extend":
-          this.err("proto2 extensions (extend) are unsupported", t.line);
+          this.lx.next();
+          this.skipBlock();
+          break;
         default:
           this.err(`unexpected '${t.value}' at top level`, t.line);
       }
@@ -354,8 +356,13 @@ class Parser {
           case "group":
             this.err("proto2 groups are unsupported", t.line);
           case "extensions":
+            this.lx.next();
+            this.skipToSemicolon();
+            continue;
           case "extend":
-            this.err("proto2 extensions are unsupported", t.line);
+            this.lx.next();
+            this.skipBlock();
+            continue;
         }
       }
       msg.fields.push(this.parseField());
@@ -462,6 +469,12 @@ class Parser {
       return t.value;
     if (t.kind === "ident" || t.kind === "num")
       return t.value;
+    if (t.kind === "sym" && (t.value === "-" || t.value === "+")) {
+      const num = this.lx.next();
+      if (num.kind !== "num")
+        this.err(`bad option value '${t.value}${num.value}'`, t.line);
+      return (t.value === "-" ? "-" : "") + num.value;
+    }
     if (t.kind === "sym" && t.value === "{") {
       let depth = 1;
       while (depth > 0) {
@@ -529,13 +542,19 @@ class Parser {
     return t.value;
   }
   parseInt32() {
+    let sign = 1;
+    const s = this.lx.peek();
+    if (s.kind === "sym" && (s.value === "-" || s.value === "+")) {
+      this.lx.next();
+      sign = s.value === "-" ? -1 : 1;
+    }
     const t = this.lx.next();
     if (t.kind !== "num")
       this.err(`expected number, got '${t.value}'`, t.line);
     const n = t.value.startsWith("0x") || t.value.startsWith("0X") ? parseInt(t.value, 16) : parseInt(t.value, 10);
     if (!Number.isFinite(n))
       this.err(`bad number '${t.value}'`, t.line);
-    return n;
+    return sign * n;
   }
   parseQualifiedName() {
     let name = "";
@@ -810,6 +829,8 @@ function utf8Write(str, buf, offset) {
 var WIRE_VARINT = 0;
 var WIRE_I64 = 1;
 var WIRE_LEN = 2;
+var WIRE_SGROUP = 3;
+var WIRE_EGROUP = 4;
 var WIRE_I32 = 5;
 
 class Reader {
@@ -826,11 +847,20 @@ class Reader {
   eof() {
     return this.pos >= this.end;
   }
+  need(n) {
+    if (this.pos + n > this.end)
+      throw new Error("protobuf: unexpected end of input");
+  }
   uint32() {
     let result = 0;
     let shift = 0;
+    let count = 0;
     let b;
     do {
+      if (this.pos >= this.end)
+        throw new Error("protobuf: unexpected end of input (varint)");
+      if (++count > 10)
+        throw new Error("protobuf: varint is too long");
       b = this.buf[this.pos++];
       if (shift < 32)
         result = (result | (b & 127) << shift) >>> 0;
@@ -848,8 +878,13 @@ class Reader {
   varint64() {
     let result = 0n;
     let shift = 0n;
+    let count = 0;
     let b;
     do {
+      if (this.pos >= this.end)
+        throw new Error("protobuf: unexpected end of input (varint)");
+      if (++count > 10)
+        throw new Error("protobuf: varint is too long");
       b = this.buf[this.pos++];
       result |= BigInt(b & 127) << shift;
       shift += 7n;
@@ -870,67 +905,98 @@ class Reader {
     return this.varint64() !== 0n;
   }
   fixed32() {
+    this.need(4);
     const v = this.view.getUint32(this.pos, true);
     this.pos += 4;
     return v;
   }
   sfixed32() {
+    this.need(4);
     const v = this.view.getInt32(this.pos, true);
     this.pos += 4;
     return v;
   }
   float() {
+    this.need(4);
     const v = this.view.getFloat32(this.pos, true);
     this.pos += 4;
     return v;
   }
   fixed64() {
+    this.need(8);
     const v = this.view.getBigUint64(this.pos, true);
     this.pos += 8;
     return v;
   }
   sfixed64() {
+    this.need(8);
     const v = this.view.getBigInt64(this.pos, true);
     this.pos += 8;
     return v;
   }
   double() {
+    this.need(8);
     const v = this.view.getFloat64(this.pos, true);
     this.pos += 8;
     return v;
   }
   string() {
     const len = this.uint32();
+    this.need(len);
     const start = this.pos;
     this.pos += len;
     return utf8Read(this.buf, start, start + len);
   }
   bytes() {
     const len = this.uint32();
+    this.need(len);
     const start = this.pos;
     this.pos += len;
     return this.buf.slice(start, start + len);
   }
   fork() {
     const len = this.uint32();
+    this.need(len);
     const start = this.pos;
     this.pos += len;
     return new Reader(this.buf, start, start + len);
   }
   skip(wireType) {
     switch (wireType) {
-      case WIRE_VARINT:
-        while (this.buf[this.pos++] & 128)
-          ;
+      case WIRE_VARINT: {
+        let b;
+        do {
+          if (this.pos >= this.end)
+            throw new Error("protobuf: unexpected end of input (varint)");
+          b = this.buf[this.pos++];
+        } while (b & 128);
         break;
+      }
       case WIRE_I64:
+        this.need(8);
         this.pos += 8;
         break;
-      case WIRE_LEN:
-        this.pos += this.uint32();
+      case WIRE_LEN: {
+        const len = this.uint32();
+        this.need(len);
+        this.pos += len;
         break;
+      }
       case WIRE_I32:
+        this.need(4);
         this.pos += 4;
+        break;
+      case WIRE_SGROUP: {
+        for (;; ) {
+          const tag = this.uint32();
+          const wt = tag & 7;
+          if (wt === WIRE_EGROUP)
+            break;
+          this.skip(wt);
+        }
+        break;
+      }
+      case WIRE_EGROUP:
         break;
       default:
         throw new Error(`protobuf: cannot skip wire type ${wireType}`);
@@ -1009,13 +1075,15 @@ function readSingle(r, type) {
     return readEnum(r, type.enum);
   return decode(type.message, r.fork());
 }
-function decode(message, r) {
-  const out = {};
+function decode(message, r, target) {
+  const out = target ?? {};
   while (!r.eof()) {
     const tagStart = r.pos;
     const tag = r.uint32();
     const fieldNo = tag >>> 3;
     const wire = tag & 7;
+    if (fieldNo === 0)
+      throw new Error("protobuf: invalid field number 0");
     const field = message.fieldByNumber.get(fieldNo);
     if (!field) {
       r.skip(wire);
@@ -1059,7 +1127,6 @@ function decode(message, r) {
       (out[UNKNOWN] ?? (out[UNKNOWN] = [])).push(r.buf.slice(tagStart, r.pos));
       continue;
     }
-    const value = readSingle(r, field.type);
     if (field.oneofIndex >= 0) {
       for (const num of message.oneofs[field.oneofIndex].fieldNumbers) {
         const other = message.fieldByNumber.get(num);
@@ -1067,7 +1134,13 @@ function decode(message, r) {
           delete out[other.jsonName];
       }
     }
-    out[field.jsonName] = value;
+    if (field.type.kind === "message") {
+      const existing = out[field.jsonName];
+      const into = existing && typeof existing === "object" ? existing : undefined;
+      out[field.jsonName] = decode(field.type.message, r.fork(), into);
+    } else {
+      out[field.jsonName] = readSingle(r, field.type);
+    }
   }
   return out;
 }
@@ -1092,7 +1165,7 @@ function defaultForType(type) {
   }
   if (type.kind === "enum")
     return type.enum.byNumber.get(0) ?? 0;
-  return;
+  return {};
 }
 
 // serialization/protobuf/writer.ts

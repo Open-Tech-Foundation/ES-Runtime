@@ -87,6 +87,37 @@ test("unknown fields are preserved across re-encode", () => {
   expect(full.parse("M", reencoded)).toEqual({ a: 5, b: "keep" });
 });
 
+// --- regressions found by the official protobuf conformance suite ---
+
+test("negative enum values parse", () => {
+  const s = new Schema(`syntax="proto3"; enum E { Z = 0; NEG = -1; } message M { E e = 1; }`);
+  expect(s.parse("M", s.build("M", { e: "NEG" }))).toEqual({ e: "NEG" });
+});
+
+test("singular message fields merge across repeated occurrences", () => {
+  const s = new Schema(`syntax="proto3"; message Inner { int32 a = 1; int32 b = 2; } message M { Inner inner = 1; }`);
+  const a = s.build("M", { inner: { a: 1 } });
+  const b = s.build("M", { inner: { b: 2 } });
+  const concat = new Uint8Array([...a, ...b]);
+  expect(s.parse("M", concat)).toEqual({ inner: { a: 1, b: 2 } });
+});
+
+test("unknown length-delimited field is skipped without desync", () => {
+  const full = new Schema(`syntax="proto3"; message M { string a = 1; int32 b = 2; }`);
+  const partial = new Schema(`syntax="proto3"; message M { int32 b = 2; }`);
+  // field a (unknown to partial) precedes known field b — a skip off-by-one would corrupt b.
+  const decoded = partial.parse("M", full.build("M", { a: "skipme", b: 99 }));
+  expect(decoded.b).toBe(99);
+});
+
+test("rejects truncated, overlong, and field-0 inputs", () => {
+  const s = new Schema(`syntax="proto3"; message M { int64 n = 1; }`);
+  const valid = s.build("M", { n: 300n });
+  expect(() => s.parse("M", valid.subarray(0, valid.length - 1))).toThrow(); // truncated varint
+  expect(() => s.parse("M", new Uint8Array([0x08, ...Array(11).fill(0x80)]))).toThrow(/too long/); // overlong
+  expect(() => s.parse("M", new Uint8Array([0x00, 0x01]))).toThrow(/field number 0/); // tag field 0
+});
+
 test("rejects proto2", () => {
   expect(() => new Schema(`syntax="proto2"; message M {}`)).toThrow(/proto2/);
   expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(/proto2|required/);

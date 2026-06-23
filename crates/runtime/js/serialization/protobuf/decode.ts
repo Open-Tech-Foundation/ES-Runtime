@@ -50,13 +50,14 @@ function readSingle(r: Reader, type: FieldType): unknown {
   return decode(type.message, r.fork());
 }
 
-export function decode(message: MessageType, r: Reader): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+export function decode(message: MessageType, r: Reader, target?: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = target ?? {};
   while (!r.eof()) {
     const tagStart = r.pos;
     const tag = r.uint32();
     const fieldNo = tag >>> 3;
     const wire = tag & 7;
+    if (fieldNo === 0) throw new Error("protobuf: invalid field number 0");
     const field: Field | undefined = message.fieldByNumber.get(fieldNo);
 
     if (!field) {
@@ -107,14 +108,20 @@ export function decode(message: MessageType, r: Reader): Record<string, unknown>
       );
       continue;
     }
-    const value = readSingle(r, field.type);
     if (field.oneofIndex >= 0) {
       for (const num of message.oneofs[field.oneofIndex]!.fieldNumbers) {
         const other = message.fieldByNumber.get(num)!;
         if (other.jsonName !== field.jsonName) delete out[other.jsonName];
       }
     }
-    out[field.jsonName] = value;
+    if (field.type.kind === "message") {
+      // Repeated occurrences of a singular message field merge (proto spec).
+      const existing = out[field.jsonName];
+      const into = existing && typeof existing === "object" ? (existing as Record<string, unknown>) : undefined;
+      out[field.jsonName] = decode(field.type.message, r.fork(), into);
+    } else {
+      out[field.jsonName] = readSingle(r, field.type);
+    }
   }
   return out;
 }
@@ -130,5 +137,5 @@ function defaultForType(type: FieldType): unknown {
     }
   }
   if (type.kind === "enum") return type.enum.byNumber.get(0) ?? 0;
-  return undefined;
+  return {}; // message: default to an empty message (e.g. map<…, Message> missing value)
 }

@@ -169,8 +169,9 @@ class Parser {
           this.skipBlock();
           break;
         case "extend":
-          this.err("proto2 extensions (extend) are unsupported", t.line);
-        // eslint-disable-next-line no-fallthrough
+          this.lx.next();
+          this.skipBlock();
+          break;
         default:
           this.err(`unexpected '${t.value}' at top level`, t.line);
       }
@@ -231,8 +232,15 @@ class Parser {
             this.err("proto2 groups are unsupported", t.line);
           // eslint-disable-next-line no-fallthrough
           case "extensions":
+            // extension *range* declaration (valid in editions too) — ignore.
+            this.lx.next();
+            this.skipToSemicolon();
+            continue;
           case "extend":
-            this.err("proto2 extensions are unsupported", t.line);
+            // extension field definitions — skipped; such fields decode as unknown.
+            this.lx.next();
+            this.skipBlock();
+            continue;
         }
       }
       // otherwise a field
@@ -340,6 +348,11 @@ class Parser {
     const t = this.lx.next();
     if (t.kind === "str") return t.value;
     if (t.kind === "ident" || t.kind === "num") return t.value;
+    if (t.kind === "sym" && (t.value === "-" || t.value === "+")) {
+      const num = this.lx.next();
+      if (num.kind !== "num") this.err(`bad option value '${t.value}${num.value}'`, t.line);
+      return (t.value === "-" ? "-" : "") + num.value;
+    }
     if (t.kind === "sym" && t.value === "{") {
       // aggregate option value — skip to matching brace
       let depth = 1;
@@ -408,13 +421,19 @@ class Parser {
   }
 
   private parseInt32(): number {
+    let sign = 1;
+    const s = this.lx.peek();
+    if (s.kind === "sym" && (s.value === "-" || s.value === "+")) {
+      this.lx.next();
+      sign = s.value === "-" ? -1 : 1;
+    }
     const t = this.lx.next();
     if (t.kind !== "num") this.err(`expected number, got '${t.value}'`, t.line);
     const n = t.value.startsWith("0x") || t.value.startsWith("0X")
       ? parseInt(t.value, 16)
       : parseInt(t.value, 10);
     if (!Number.isFinite(n)) this.err(`bad number '${t.value}'`, t.line);
-    return n;
+    return sign * n;
   }
 
   /** Reads a (possibly dotted, possibly leading-dot) qualified name. */
