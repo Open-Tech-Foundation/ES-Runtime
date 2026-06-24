@@ -123,6 +123,31 @@ console.log(acct.status);     // "ARCHIVED"`} title="protobuf_types.js" lang="js
       </div>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Maps, oneofs, and enums
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        Maps decode to plain objects, enums to their value-name string, and only the set member of a <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">oneof</code> appears in the result.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const schema = new Protobuf.Schema(\`
+  syntax = "proto3";
+  enum Tier { FREE = 0; PRO = 1; }
+  message User {
+    map<string, int32> scores = 1;
+    oneof contact { string email = 2; string phone = 3; }
+    Tier tier = 4;
+  }
+\`);
+
+const user = schema.decode("User", schema.encode("User", {
+  scores: { alice: 10 },
+  email: "a@b.co",   // sets the "contact" oneof
+  tier: "PRO",
+}));
+// { scores: { alice: 10 }, tier: "PRO", email: "a@b.co" }`} title="protobuf_collections.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
         JSON mapping
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
@@ -134,6 +159,85 @@ console.log(acct.status);     // "ARCHIVED"`} title="protobuf_types.js" lang="js
 
 const value = schema.fromJson("Account", json);
 const back = schema.encode("Account", value);`} title="protobuf_json.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Well-known types
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">google/protobuf/*</code> well-known types resolve without being provided and take their canonical JSON forms — Timestamp and Duration as strings, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Struct</code> and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Value</code> as native JSON, <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Any</code> with an <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">@type</code> member.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const schema = new Protobuf.Schema({ "event.proto": \`
+  syntax = "proto3";
+  import "google/protobuf/timestamp.proto";
+  import "google/protobuf/duration.proto";
+  import "google/protobuf/struct.proto";
+  message Event {
+    google.protobuf.Timestamp at = 1;
+    google.protobuf.Duration ttl = 2;
+    google.protobuf.Struct meta = 3;
+  }
+\` });
+
+const value = schema.fromJson("Event", {
+  at: "2024-01-02T03:04:05Z",
+  ttl: "1.500s",
+  meta: { region: "eu", retries: 3 },
+});
+const bytes = schema.encode("Event", value); // wire-format protobuf`} title="protobuf_wkt.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Strict JSON parsing
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">fromJson</code> rejects malformed input — non-integral or out-of-range numbers, wrong types, unknown fields, duplicate <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">oneof</code> members. Pass <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">{`{ ignoreUnknownFields: true }`}</code> to drop unrecognized fields and enum values instead.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`schema.fromJson("M", { count: "1.5" });      // throws: 1.5 is not an integer
+schema.fromJson("M", { count: 4294967296 }); // throws: integer out of range
+schema.fromJson("M", { nope: 1 });           // throws: unknown field "nope"
+
+schema.fromJson("M", { count: 5, nope: 1 }, { ignoreUnknownFields: true });
+// { count: 5 }`} title="protobuf_strict.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Multi-file schemas
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        Pass a <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">{`{ filename: source }`}</code> map; <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">import</code> statements resolve against its keys (and the built-in well-known types).
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const schema = new Protobuf.Schema({
+  "user.proto": \`
+    syntax = "proto3"; package app;
+    import "common.proto";
+    message User { app.Id id = 1; }
+  \`,
+  "common.proto": \`
+    syntax = "proto3"; package app;
+    message Id { string value = 1; }
+  \`,
+});
+
+schema.encode("app.User", { id: { value: "u1" } });`} title="protobuf_imports.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Editions and features
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        Edition 2023 and 2024 are supported. Field presence is explicit by default — a zero is serialized rather than omitted — and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">features.message_encoding = DELIMITED</code> selects group encoding for message fields.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const schema = new Protobuf.Schema(\`
+  edition = "2023";
+  message M { int32 a = 1; }   // explicit presence
+\`);
+
+schema.encode("M", { a: 0 }); // Uint8Array [8, 0] — the zero is on the wire`} title="protobuf_editions.js" lang="js" />
       </div>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
