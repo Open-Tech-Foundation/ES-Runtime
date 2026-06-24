@@ -136,6 +136,9 @@ class Lexer {
 
 // serialization/protobuf/features.ts
 function baseFeatures(syntax) {
+  if (syntax === "proto2") {
+    return { fieldPresence: "EXPLICIT", repeatedEncoding: "EXPANDED", enumType: "CLOSED", messageEncoding: "LENGTH_PREFIXED" };
+  }
   if (syntax === "proto3") {
     return { fieldPresence: "IMPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN", messageEncoding: "LENGTH_PREFIXED" };
   }
@@ -190,6 +193,7 @@ function parseProto(source) {
 
 class Parser {
   lx;
+  syntax = "proto3";
   constructor(source) {
     this.lx = new Lexer(source);
   }
@@ -245,9 +249,8 @@ class Parser {
           const v = this.expectStr();
           if (v !== "proto3" && v !== "proto2")
             this.err(`unknown syntax "${v}"`, t.line);
-          if (v === "proto2")
-            this.err("proto2 syntax is unsupported (use proto3 or edition 2023/2024)", t.line);
-          file.syntax = "proto3";
+          file.syntax = v;
+          this.syntax = v;
           this.expectSym(";");
           sawSyntax = true;
           break;
@@ -259,6 +262,7 @@ class Parser {
           if (v !== "2023" && v !== "2024")
             this.err(`unsupported edition "${v}" (only 2023, 2024)`, t.line);
           file.syntax = v;
+          this.syntax = v;
           this.expectSym(";");
           sawSyntax = true;
           break;
@@ -309,7 +313,9 @@ class Parser {
     return file;
   }
   parseMessage() {
-    const name = this.expectIdent();
+    return this.parseMessageBody(this.expectIdent());
+  }
+  parseMessageBody(name) {
     const msg = { name, fields: [], oneofs: [], messages: [], enums: [], features: {} };
     this.expectSym("{");
     for (;; ) {
@@ -354,10 +360,6 @@ class Parser {
           case "map":
             msg.fields.push(this.parseMapField());
             continue;
-          case "required":
-            this.err("proto2 'required' fields are unsupported", t.line);
-          case "group":
-            this.err("proto2 groups are unsupported", t.line);
           case "extensions":
             this.lx.next();
             this.skipToSemicolon();
@@ -368,7 +370,7 @@ class Parser {
             continue;
         }
       }
-      msg.fields.push(this.parseField());
+      this.parseFieldOrGroup(msg);
     }
     return msg;
   }
@@ -405,6 +407,9 @@ class Parser {
     } else if (t.value === "repeated" || t.value === "optional") {
       this.err(`'${t.value}' is not allowed inside oneof`, t.line);
     }
+    return this.parseFieldTail(label);
+  }
+  parseFieldTail(label) {
     const typeName = this.parseQualifiedName();
     const name = this.expectIdent();
     this.expectSym("=");
@@ -413,6 +418,29 @@ class Parser {
     this.parseFieldOptions(field);
     this.expectSym(";");
     return field;
+  }
+  parseFieldOrGroup(msg) {
+    let label = "singular";
+    const lead = this.lx.peek();
+    if (lead.value === "repeated" || lead.value === "optional" || lead.value === "required") {
+      label = lead.value;
+      this.lx.next();
+    }
+    if (label === "required" && this.syntax !== "proto2") {
+      this.err("'required' fields are only valid in proto2", lead.line);
+    }
+    if (this.isKeyword(this.lx.peek(), "group")) {
+      if (this.syntax !== "proto2")
+        this.err("groups are only valid in proto2", this.lx.peek().line);
+      this.lx.next();
+      const groupName = this.expectIdent();
+      this.expectSym("=");
+      const number = this.parseInt32();
+      msg.messages.push(this.parseMessageBody(groupName));
+      msg.fields.push({ label, typeName: groupName, name: groupName.toLowerCase(), number, features: { messageEncoding: "DELIMITED" } });
+      return;
+    }
+    msg.fields.push(this.parseFieldTail(label));
   }
   parseMapField() {
     this.lx.next();
@@ -2561,7 +2589,10 @@ function mapField(f, mapEntries) {
       map: e
     };
   }
-  const label = repeated ? "repeated" : f.proto3Optional ? "optional" : "singular";
+  const label = repeated ? "repeated" : f.label === "LABEL_REQUIRED" ? "required" : f.proto3Optional ? "optional" : "singular";
+  const features = mapFeatures(f.options?.features);
+  if (f.type === "TYPE_GROUP")
+    features.messageEncoding = "DELIMITED";
   return {
     label,
     typeName: typeRef(f),
@@ -2569,7 +2600,7 @@ function mapField(f, mapEntries) {
     number: f.number,
     jsonName: f.jsonName,
     packedOption: f.options?.packed,
-    features: mapFeatures(f.options?.features)
+    features
   };
 }
 function mapEnum(e) {
@@ -2624,7 +2655,9 @@ function mapSyntax(syntax, edition) {
   }
   if (syntax === "proto3")
     return "proto3";
-  throw new Error(`protobuf: descriptor set uses ${syntax ?? "proto2"} — only proto3 and editions 2023/2024 are supported`);
+  if (syntax === undefined || syntax === "" || syntax === "proto2")
+    return "proto2";
+  throw new Error(`protobuf: descriptor set uses unsupported syntax "${syntax}"`);
 }
 function mapFile(fd) {
   return {

@@ -149,9 +149,11 @@ declare module "runtime:serialization" {
 
   export namespace Protobuf {
     /**
-     * A protobuf schema compiled at runtime from `.proto` source. proto3 and
-     * editions 2023/2024 are supported (proto2-only constructs are rejected).
-     * Decoding is reflective — no codegen.
+     * A protobuf schema compiled at runtime from `.proto` source. proto2,
+     * proto3, and editions 2023/2024 are supported; proto2 `group`s lower to
+     * delimited message fields, while `extend`/extensions are unsupported (such
+     * fields round-trip losslessly as preserved unknown fields). Decoding is
+     * reflective — no codegen.
      *
      * Decoded value shape: camelCase field names; 64-bit integer fields
      * (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64`) as **BigInt**; enums as
@@ -172,7 +174,8 @@ declare module "runtime:serialization" {
        * `--descriptor_set_out`) rather than `.proto` source. Use
        * `--include_imports` so referenced types are present; the
        * `google/protobuf/*` well-known types are otherwise supplied from the
-       * embedded sources. Only proto3 and editions 2023/2024 are accepted.
+       * embedded sources. proto2 (including descriptor sets with an unset
+       * `syntax` field), proto3, and editions 2023/2024 are accepted.
        */
       static fromDescriptorSet(descriptorSet: Uint8Array): Schema;
 

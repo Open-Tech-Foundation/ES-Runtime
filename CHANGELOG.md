@@ -69,6 +69,19 @@ namespace) is unstable and may change between minor releases until the API freez
   `--maximum_edition 2023 --enforce_recommended`) now passes **4101 successes,
   0 unexpected failures** (one proto2-extension-in-JSON case is a documented
   expected failure — proto2 extensions are unsupported by design).
+- **Protobuf proto2 schemas.** `new Protobuf.Schema(proto)` and
+  `Protobuf.Schema.fromDescriptorSet(bytes)` now accept `syntax = "proto2"`
+  (and descriptor sets with an unset `syntax`), covering the large legacy
+  proto2 ecosystem. proto2 maps onto the editions feature machinery: explicit
+  field presence (so `required`/`optional` keep zero values on the wire),
+  unpacked repeated fields by default, and closed enums (an unrecognized value
+  is retained as an unknown field). `group` fields lower to delimited message
+  fields and round-trip with start/end-group framing. `required` is mapped to
+  explicit presence but **not enforced** as present; custom field defaults
+  (`[default = …]`) parse but are **not materialized** (the decoded value shape
+  stays sparse). **Extensions** (`extend`) remain unsupported — extension
+  fields continue to round-trip losslessly as preserved unknown fields. `group`
+  and `required` are rejected outside proto2.
 
 ### Fixed
 

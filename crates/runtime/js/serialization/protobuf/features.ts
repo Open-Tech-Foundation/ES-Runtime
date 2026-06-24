@@ -15,10 +15,15 @@ export interface FeatureSet {
   messageEncoding?: MessageEncoding;
 }
 
-/** Baseline feature set for a syntax/edition. proto3 differs from editions only
- *  in default field presence (proto3 implicit, editions explicit). Editions 2023
- *  and 2024 share the same defaults for the four wire-affecting features. */
-export function baseFeatures(syntax: "proto3" | "2023" | "2024"): Required<FeatureSet> {
+/** Baseline feature set for a syntax/edition. proto2 has explicit presence,
+ *  unpacked repeated fields, and closed enums; proto3 has implicit presence,
+ *  packed repeated, and open enums; editions default to explicit presence with
+ *  packed repeated and open enums. Editions 2023 and 2024 share the same
+ *  defaults for the four wire-affecting features. */
+export function baseFeatures(syntax: "proto2" | "proto3" | "2023" | "2024"): Required<FeatureSet> {
+  if (syntax === "proto2") {
+    return { fieldPresence: "EXPLICIT", repeatedEncoding: "EXPANDED", enumType: "CLOSED", messageEncoding: "LENGTH_PREFIXED" };
+  }
   if (syntax === "proto3") {
     return { fieldPresence: "IMPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN", messageEncoding: "LENGTH_PREFIXED" };
   }

@@ -78,11 +78,14 @@ test("protobuf: unknown fields preserved across re-encode", async () => {
   deepEq(full.decode("M", reencoded), { a: 5, b: "keep" }, "unknown field survives");
 });
 
-test("protobuf: rejects proto2", async () => {
+test("protobuf: rejects proto2-only constructs outside proto2", async () => {
   const { Protobuf } = await import("runtime:serialization");
-  let threw = false;
-  try { new Protobuf.Schema(`syntax="proto2"; message M {}`); } catch { threw = true; }
-  if (!threw) throw new Error("proto2 should be rejected");
+  const rejects = (src) => {
+    try { new Protobuf.Schema(src); } catch { return true; }
+    return false;
+  };
+  deepEq(rejects(`syntax="proto3"; message M { required int32 a = 1; }`), true, "required only in proto2");
+  deepEq(rejects(`syntax="proto3"; message M { optional group G = 1 { } }`), true, "group only in proto2");
 });
 
 test("protobuf: proto3-JSON scalar mapping round-trips", async () => {
@@ -132,4 +135,27 @@ test("protobuf: decode enforces a maximum nesting depth", async () => {
   let threw = false;
   try { s.decode("M", s.encode("M", deep)); } catch (e) { threw = /depth/.test(e.message); }
   deepEq(threw, true, "deep nesting rejected");
+});
+
+test("protobuf: proto2 required/optional, unpacked repeated, groups, closed enum", async () => {
+  const { Protobuf } = await import("runtime:serialization");
+  const s = new Protobuf.Schema(`
+    syntax = "proto2";
+    enum E { A = 0; B = 1; }
+    message M {
+      required int32 r = 1;
+      optional int32 o = 2;
+      repeated int32 ns = 3;                 // unpacked by default in proto2
+      optional E e = 4;                      // closed enum
+      optional group G = 5 { optional int32 a = 1; }
+    }
+  `);
+  // explicit presence keeps zeros; repeated is unpacked; group uses start/end-group framing.
+  deepEq(Array.from(s.encode("M", { r: 0, o: 0 })), [0x08, 0x00, 0x10, 0x00], "proto2 explicit presence");
+  deepEq(Array.from(s.encode("M", { ns: [1, 2] })), [0x18, 0x01, 0x18, 0x02], "proto2 unpacked repeated");
+  deepEq(Array.from(s.encode("M", { g: { a: 5 } })), [0x2b, 0x08, 0x05, 0x2c], "proto2 group framing");
+  const v = { r: 7, o: 3, ns: [1, 2, 3], e: "B", g: { a: 9 } };
+  deepEq(s.decode("M", s.encode("M", v)), v, "proto2 round-trip");
+  // unrecognized closed-enum value is retained, not surfaced
+  deepEq(s.decode("M", new Uint8Array([0x20, 0x05])).e, undefined, "proto2 closed enum");
 });

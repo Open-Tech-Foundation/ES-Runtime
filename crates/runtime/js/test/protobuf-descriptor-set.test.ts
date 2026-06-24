@@ -48,3 +48,47 @@ test("fromDescriptorSet round-trips binary and JSON (maps, oneofs, enums, nested
   const json = s.toJson("shop.Order", value);
   expect(s.fromJson("shop.Order", json)).toEqual(value);
 });
+
+// A minimal descriptor.proto subset, used to synthesize a proto2 descriptor set
+// in-memory (a proto2 FileDescriptorProto leaves `syntax` unset).
+const META = `
+  syntax = "proto3"; package google.protobuf;
+  message FileDescriptorSet { repeated FileDescriptorProto file = 1; }
+  message FileDescriptorProto {
+    string name = 1; string package = 2;
+    repeated DescriptorProto message_type = 4; string syntax = 12;
+  }
+  message DescriptorProto { string name = 1; repeated FieldDescriptorProto field = 2; }
+  message FieldDescriptorProto {
+    enum Label { LABEL_UNKNOWN = 0; LABEL_OPTIONAL = 1; LABEL_REQUIRED = 2; LABEL_REPEATED = 3; }
+    enum Type {
+      TYPE_UNKNOWN = 0; TYPE_DOUBLE = 1; TYPE_FLOAT = 2; TYPE_INT64 = 3; TYPE_UINT64 = 4;
+      TYPE_INT32 = 5; TYPE_FIXED64 = 6; TYPE_FIXED32 = 7; TYPE_BOOL = 8; TYPE_STRING = 9;
+      TYPE_GROUP = 10; TYPE_MESSAGE = 11; TYPE_BYTES = 12; TYPE_UINT32 = 13; TYPE_ENUM = 14;
+    }
+    string name = 1; int32 number = 3; Label label = 4; Type type = 5; string type_name = 6;
+  }`;
+
+test("fromDescriptorSet accepts a proto2 descriptor (unset syntax, required label)", () => {
+  const meta = new Schema(META);
+  const proto2Set = meta.encode("google.protobuf.FileDescriptorSet", {
+    file: [{
+      name: "person.proto",
+      package: "people",
+      // no `syntax` member → proto2
+      messageType: [{
+        name: "Person",
+        field: [
+          { name: "name", number: 1, label: "LABEL_REQUIRED", type: "TYPE_STRING" },
+          { name: "age", number: 2, label: "LABEL_OPTIONAL", type: "TYPE_INT32" },
+        ],
+      }],
+    }],
+  });
+
+  const fromSet = Schema.fromDescriptorSet(proto2Set);
+  const fromText = new Schema(`syntax="proto2"; package people; message Person { required string name = 1; optional int32 age = 2; }`);
+  const v = { name: "ada", age: 0 }; // proto2 optional → explicit presence, 0 is kept
+  expect([...fromSet.encode("people.Person", v)]).toEqual([...fromText.encode("people.Person", v)]);
+  expect(fromSet.decode("people.Person", fromSet.encode("people.Person", v))).toEqual(v);
+});

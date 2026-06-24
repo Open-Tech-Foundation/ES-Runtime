@@ -2,8 +2,8 @@
 // rather than .proto source. A descriptor set is itself protobuf, so we decode
 // it with an embedded subset of google/protobuf/descriptor.proto and map each
 // FileDescriptorProto onto the same AST the .proto parser produces — then the
-// usual link() builds the registry. Only proto3 and editions 2023/2024 are
-// accepted (matching the text parser); proto2 descriptors are rejected.
+// usual link() builds the registry. proto2, proto3, and editions 2023/2024 are
+// accepted (matching the text parser); a missing `syntax` field means proto2.
 import type { AstEnum, AstField, AstMessage, AstOneof, ParsedFile } from "./parser.js";
 import { parseProto } from "./parser.js";
 import type { FeatureSet } from "./features.js";
@@ -123,10 +123,15 @@ function mapField(f: Obj, mapEntries: Map<string, { key: string; value: string }
       jsonName: f.jsonName, features: mapFeatures(f.options?.features), map: e,
     };
   }
-  const label: AstField["label"] = repeated ? "repeated" : f.proto3Optional ? "optional" : "singular";
+  const label: AstField["label"] = repeated ? "repeated"
+    : f.label === "LABEL_REQUIRED" ? "required"
+    : f.proto3Optional ? "optional" : "singular";
+  const features = mapFeatures(f.options?.features);
+  // A group field (proto2) is wire-encoded as a delimited message.
+  if (f.type === "TYPE_GROUP") features.messageEncoding = "DELIMITED";
   return {
     label, typeName: typeRef(f), name: f.name, number: f.number,
-    jsonName: f.jsonName, packedOption: f.options?.packed, features: mapFeatures(f.options?.features),
+    jsonName: f.jsonName, packedOption: f.options?.packed, features,
   };
 }
 
@@ -183,7 +188,9 @@ function mapSyntax(syntax: string | undefined, edition: number | undefined): Par
     throw new Error(`protobuf: descriptor set uses an unsupported edition (${edition ?? "unknown"})`);
   }
   if (syntax === "proto3") return "proto3";
-  throw new Error(`protobuf: descriptor set uses ${syntax ?? "proto2"} — only proto3 and editions 2023/2024 are supported`);
+  // proto2 descriptors leave the syntax field unset (or "proto2").
+  if (syntax === undefined || syntax === "" || syntax === "proto2") return "proto2";
+  throw new Error(`protobuf: descriptor set uses unsupported syntax "${syntax}"`);
 }
 
 function mapFile(fd: Obj): ParsedFile {

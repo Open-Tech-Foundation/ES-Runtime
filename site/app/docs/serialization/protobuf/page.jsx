@@ -62,7 +62,7 @@ export default function ProtobufParserDoc() {
         Protobuf Processing
       </h1>
       <p className="mt-4 text-lg leading-relaxed text-zinc-600">
-        A pure-JavaScript, reflective Protobuf implementation in <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:serialization</code>. The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.proto</code> schema is compiled at runtime — no codegen, no build step. proto3 and editions 2023/2024 are supported; proto2-only constructs are rejected.
+        A pure-JavaScript, reflective Protobuf implementation in <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">runtime:serialization</code>. The <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.proto</code> schema is compiled at runtime — no codegen, no build step. proto2, proto3, and editions 2023/2024 are supported; extensions are not (extension fields round-trip as unknown fields).
       </p>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">

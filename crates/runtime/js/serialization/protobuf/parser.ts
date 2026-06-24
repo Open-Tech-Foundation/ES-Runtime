@@ -1,11 +1,14 @@
-// Recursive-descent parser for proto3 + editions 2023/2024 .proto source → an AST.
-// Linking/resolution into the descriptor model lives in link.ts. proto2-only
-// constructs (required, group, extend/extensions) are rejected with a clear error.
+// Recursive-descent parser for proto2 + proto3 + editions 2023/2024 .proto
+// source → an AST. Linking/resolution into the descriptor model lives in
+// link.ts. proto2 `group`s lower to delimited message fields and `required`
+// maps to explicit presence; `extend`/extension fields are skipped (they decode
+// as unknown), and custom field defaults (`[default = …]`) parse but are not
+// materialized (the decoded value shape stays sparse).
 import { Lexer, type Token } from "./lexer.js";
 import { type FeatureSet, featureFromOption } from "./features.js";
 
 export interface AstField {
-  label: "singular" | "optional" | "repeated";
+  label: "singular" | "optional" | "repeated" | "required";
   typeName: string;
   name: string;
   number: number;
@@ -41,7 +44,7 @@ export interface AstMessage {
 }
 
 export interface ParsedFile {
-  syntax: "proto3" | "2023" | "2024";
+  syntax: "proto2" | "proto3" | "2023" | "2024";
   package: string;
   imports: string[];
   features: FeatureSet;
@@ -60,6 +63,7 @@ export function parseProto(source: string): ParsedFile {
 
 class Parser {
   private lx: Lexer;
+  private syntax: ParsedFile["syntax"] = "proto3";
   constructor(source: string) {
     this.lx = new Lexer(source);
   }
@@ -118,8 +122,8 @@ class Parser {
           this.expectSym("=");
           const v = this.expectStr();
           if (v !== "proto3" && v !== "proto2") this.err(`unknown syntax "${v}"`, t.line);
-          if (v === "proto2") this.err("proto2 syntax is unsupported (use proto3 or edition 2023/2024)", t.line);
-          file.syntax = "proto3";
+          file.syntax = v;
+          this.syntax = v;
           this.expectSym(";");
           sawSyntax = true;
           break;
@@ -130,6 +134,7 @@ class Parser {
           const v = this.expectStr();
           if (v !== "2023" && v !== "2024") this.err(`unsupported edition "${v}" (only 2023, 2024)`, t.line);
           file.syntax = v;
+          this.syntax = v;
           this.expectSym(";");
           sawSyntax = true;
           break;
@@ -182,7 +187,13 @@ class Parser {
   }
 
   private parseMessage(): AstMessage {
-    const name = this.expectIdent();
+    return this.parseMessageBody(this.expectIdent());
+  }
+
+  /** Parses a `{ ... }` message body; `name` is already consumed. Shared by
+   *  normal messages and proto2 group declarations (a group is a nested message
+   *  plus a delimited field of that type). */
+  private parseMessageBody(name: string): AstMessage {
     const msg: AstMessage = { name, fields: [], oneofs: [], messages: [], enums: [], features: {} };
     this.expectSym("{");
     for (;;) {
@@ -225,14 +236,8 @@ class Parser {
           case "map":
             msg.fields.push(this.parseMapField());
             continue;
-          case "required":
-            this.err("proto2 'required' fields are unsupported", t.line);
-          // eslint-disable-next-line no-fallthrough
-          case "group":
-            this.err("proto2 groups are unsupported", t.line);
-          // eslint-disable-next-line no-fallthrough
           case "extensions":
-            // extension *range* declaration (valid in editions too) — ignore.
+            // extension *range* declaration (valid in proto2 and editions) — ignore.
             this.lx.next();
             this.skipToSemicolon();
             continue;
@@ -243,8 +248,8 @@ class Parser {
             continue;
         }
       }
-      // otherwise a field
-      msg.fields.push(this.parseField());
+      // otherwise a field or a (proto2) group
+      this.parseFieldOrGroup(msg);
     }
     return msg;
   }
@@ -283,6 +288,11 @@ class Parser {
     } else if (t.value === "repeated" || t.value === "optional") {
       this.err(`'${t.value}' is not allowed inside oneof`, t.line);
     }
+    return this.parseFieldTail(label);
+  }
+
+  /** Parses everything after the optional label: type, name, number, options. */
+  private parseFieldTail(label: AstField["label"]): AstField {
     const typeName = this.parseQualifiedName();
     const name = this.expectIdent();
     this.expectSym("=");
@@ -291,6 +301,33 @@ class Parser {
     this.parseFieldOptions(field);
     this.expectSym(";");
     return field;
+  }
+
+  /** Parses a message-body field, or a proto2 `group` — a nested message plus a
+   *  delimited field of that type. Pushes the result(s) onto `msg`. */
+  private parseFieldOrGroup(msg: AstMessage): void {
+    let label: AstField["label"] = "singular";
+    const lead = this.lx.peek();
+    if (lead.value === "repeated" || lead.value === "optional" || lead.value === "required") {
+      label = lead.value as AstField["label"];
+      this.lx.next();
+    }
+    if (label === "required" && this.syntax !== "proto2") {
+      this.err("'required' fields are only valid in proto2", lead.line);
+    }
+    if (this.isKeyword(this.lx.peek(), "group")) {
+      if (this.syntax !== "proto2") this.err("groups are only valid in proto2", this.lx.peek().line);
+      this.lx.next(); // 'group'
+      const groupName = this.expectIdent();
+      this.expectSym("=");
+      const number = this.parseInt32();
+      msg.messages.push(this.parseMessageBody(groupName));
+      // The field's name is the lowercased group name; a group is wire-encoded
+      // as a delimited message (the editions DELIMITED message-encoding feature).
+      msg.fields.push({ label, typeName: groupName, name: groupName.toLowerCase(), number, features: { messageEncoding: "DELIMITED" } });
+      return;
+    }
+    msg.fields.push(this.parseFieldTail(label));
   }
 
   private parseMapField(): AstField {

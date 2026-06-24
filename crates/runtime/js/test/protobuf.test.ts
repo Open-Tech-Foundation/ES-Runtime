@@ -194,9 +194,65 @@ test("rejects truncated, overlong, and field-0 inputs", () => {
   expect(() => s.decode("M", new Uint8Array([0x00, 0x01]))).toThrow(/field number 0/); // tag field 0
 });
 
-test("rejects proto2", () => {
-  expect(() => new Schema(`syntax="proto2"; message M {}`)).toThrow(/proto2/);
-  expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(/proto2|required/);
+test("proto2-only constructs are rejected outside proto2", () => {
+  expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(/required/);
+  expect(() => new Schema(`syntax="proto3"; message M { optional group G = 1 { } }`)).toThrow(/group/);
+});
+
+test("proto2: required + optional presence, unpacked repeated, closed enum", () => {
+  const s = new Schema(`
+    syntax = "proto2";
+    enum E { A = 0; B = 1; }
+    message M {
+      required int32 r = 1;        // explicit presence — serialized even at 0
+      optional int32 o = 2;        // explicit presence
+      repeated int32 ns = 3;       // unpacked by default in proto2
+      optional E e = 4;            // closed enum
+    }
+  `);
+  // required/optional both keep their zero value on the wire (explicit presence).
+  expect([...s.encode("M", { r: 0, o: 0 })]).toEqual([0x08, 0x00, 0x10, 0x00]);
+  // repeated int32 is NOT packed in proto2: one tag per element.
+  expect([...s.encode("M", { ns: [1, 2] })]).toEqual([0x18, 0x01, 0x18, 0x02]);
+  // a full round-trip
+  const v = { r: 7, o: 3, ns: [1, 2, 3], e: "B" };
+  expect(s.decode("M", s.encode("M", v))).toEqual(v);
+  // an unrecognized closed-enum number is retained, not surfaced
+  const wire = new Uint8Array([0x20, 0x05]); // field 4 = 5, undeclared
+  expect(s.decode("M", wire).e).toBeUndefined();
+  expect([...s.encode("M", s.decode("M", wire))]).toEqual([0x20, 0x05]);
+});
+
+test("proto2: groups encode/decode as delimited message fields", () => {
+  const s = new Schema(`
+    syntax = "proto2";
+    message M {
+      optional group Inner = 1 { optional int32 a = 1; required string b = 2; }
+      repeated group Pt = 3 { optional int32 x = 1; }
+    }
+  `);
+  // group name lowercases to the field key; start-group/end-group framing on the wire.
+  const bytes = s.encode("M", { inner: { a: 5 } });
+  expect([...bytes]).toEqual([0x0b, 0x08, 0x05, 0x0c]); // SGROUP(1) int32 a=5 EGROUP(1)
+  expect(s.decode("M", bytes)).toEqual({ inner: { a: 5 } });
+  // repeated group round-trips
+  const v = { inner: { a: 1, b: "x" }, pt: [{ x: 1 }, { x: 2 }] };
+  expect(s.decode("M", s.encode("M", v))).toEqual(v);
+});
+
+test("proto2: custom field defaults parse (and are not materialized)", () => {
+  const s = new Schema(`
+    syntax = "proto2";
+    message M {
+      optional int32 a = 1 [default = 41];
+      optional string s = 2 [default = "hi"];
+      optional bool b = 3 [default = true];
+    }
+  `);
+  // the [default=…] options are accepted but the value shape stays sparse:
+  // an absent field is simply absent, not its declared default.
+  expect(s.decode("M", new Uint8Array([]))).toEqual({});
+  expect(s.decode("M", s.encode("M", { a: 5 }))).toEqual({ a: 5 });
 });
 
 test("decode enforces a maximum nesting depth", () => {
