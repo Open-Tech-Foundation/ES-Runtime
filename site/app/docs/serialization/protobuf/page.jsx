@@ -1,11 +1,17 @@
 import DocsShell from "../../../../components/DocsShell.jsx";
 import CodeBlock from "../../../../components/CodeBlock.jsx";
 
-// Official protobuf conformance suite (v29.3) against our reflective codec.
+// Official protobuf conformance suite (v29.3, --maximum_edition 2023) against
+// our reflective codec. Since the suite reports 0 failures, every test is either
+// passed or skipped — skips are the JSON / JSPB / text-format / proto2 cases the
+// binary-only codec doesn't claim.
 const CONFORMANCE = [
-  { suite: "Binary / JSON", pass: 684, skip: 1991, fail: 0 },
-  { suite: "Text format", pass: 0, skip: 414, fail: 0 },
-  { suite: "Total", pass: 684, skip: 2405, fail: 0, total: true },
+  { suite: "proto3", pass: 684, skip: 1125, fail: 0 },
+  { suite: "proto2", pass: 0, skip: 1280, fail: 0 },
+  { suite: "editions 2023", pass: 8, skip: 21, fail: 0 },
+  { suite: "editions (proto3)", pass: 684, skip: 1125, fail: 0 },
+  { suite: "editions (proto2)", pass: 684, skip: 596, fail: 0 },
+  { suite: "Total", pass: 2060, skip: 4147, fail: 0, total: true },
 ];
 
 export default function ProtobufParserDoc() {
@@ -80,13 +86,13 @@ console.log(acct.status);     // "ARCHIVED"`} title="protobuf_types.js" lang="js
         Conformance
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Verified against the official protobuf conformance suite (v29.3). The codec is binary&harr;binary — JSON, JSPB, text-format, and proto2 cases are reported as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">skipped</code>.
+        Verified against the official protobuf conformance suite (v29.3), split by message category. The codec is binary&harr;binary, so JSON, JSPB, text-format, and proto2 cases are reported as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">skipped</code> — never failed.
       </p>
       <div className="mt-6 overflow-hidden rounded-xl border border-zinc-200">
         <table className="w-full text-left text-sm">
           <thead className="bg-zinc-50 text-zinc-600">
             <tr>
-              <th className="px-4 py-3 font-medium">Suite</th>
+              <th className="px-4 py-3 font-medium">Category</th>
               <th className="px-3 py-3 text-right font-medium">Passed</th>
               <th className="px-3 py-3 text-right font-medium">Skipped</th>
               <th className="px-4 py-3 text-right font-medium">Failed</th>
