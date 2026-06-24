@@ -1,0 +1,9 @@
+# Known, deliberate non-conformances for the official protobuf conformance
+# suite (conformance_test_runner --maximum_edition 2023 --enforce_recommended
+# --failure_list this-file -- ./conformance-testee). Everything else passes.
+#
+# Proto2 extensions are unsupported by design — the pure-JS implementation
+# targets proto3 + editions and rejects proto2-only constructs (groups,
+# required, extensions). This recommended test feeds an extension field
+# ("[...extension_int32]") in JSON, which we cannot represent.
+Recommended.Editions_Proto2.JsonInput.FieldNameExtension.Validator

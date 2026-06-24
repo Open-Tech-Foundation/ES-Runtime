@@ -4,7 +4,7 @@
 // numbers), bytes are Uint8Array, maps are plain objects, nested are objects.
 // Unrecognized fields are preserved under the UNKNOWN symbol for lossless re-encode.
 import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.js";
-import { Reader, WIRE_LEN } from "./reader.js";
+import { Reader, WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.js";
 
 export const UNKNOWN = Symbol.for("esrun.protobuf.unknown");
 
@@ -50,13 +50,32 @@ function readSingle(r: Reader, type: FieldType): unknown {
   return decode(type.message, r.fork());
 }
 
-export function decode(message: MessageType, r: Reader, target?: Record<string, unknown>): Record<string, unknown> {
+/** Clears the other members of `field`'s oneof so only the last one set wins. */
+function clearOneof(message: MessageType, out: Record<string, unknown>, field: Field): void {
+  for (const num of message.oneofs[field.oneofIndex]!.fieldNumbers) {
+    const other = message.fieldByNumber.get(num)!;
+    if (other.jsonName !== field.jsonName) delete out[other.jsonName];
+  }
+}
+
+/** Decodes message fields from `r`. At the top level it reads to EOF; for a
+ *  delimited (group) field it reads until the matching end-group tag, which the
+ *  caller passes as `groupFieldNo`. */
+export function decode(message: MessageType, r: Reader, target?: Record<string, unknown>, groupFieldNo?: number): Record<string, unknown> {
   const out: Record<string, unknown> = target ?? {};
-  while (!r.eof()) {
+  for (;;) {
+    if (r.eof()) {
+      if (groupFieldNo !== undefined) throw new Error("protobuf: unexpected end of input inside group");
+      break;
+    }
     const tagStart = r.pos;
     const tag = r.uint32();
     const fieldNo = tag >>> 3;
     const wire = tag & 7;
+    if (wire === WIRE_EGROUP) {
+      if (groupFieldNo !== undefined && fieldNo === groupFieldNo) break;
+      throw new Error("protobuf: unexpected end-group");
+    }
     if (fieldNo === 0) throw new Error("protobuf: invalid field number 0");
     const field: Field | undefined = message.fieldByNumber.get(fieldNo);
 
@@ -65,6 +84,20 @@ export function decode(message: MessageType, r: Reader, target?: Record<string, 
       (out[UNKNOWN] as Uint8Array[] | undefined ?? (out[UNKNOWN] = [] as Uint8Array[]) as Uint8Array[]).push(
         r.buf.slice(tagStart, r.pos),
       );
+      continue;
+    }
+
+    // Delimited (group-encoded) message field: read inline until the end-group.
+    if (field.delimited && field.type.kind === "message" && wire === WIRE_SGROUP) {
+      if (field.repeated) {
+        const arr = (out[field.jsonName] as unknown[]) ?? (out[field.jsonName] = []);
+        arr.push(decode(field.type.message, r, undefined, fieldNo));
+      } else {
+        if (field.oneofIndex >= 0) clearOneof(message, out, field);
+        const existing = out[field.jsonName];
+        const into = existing && typeof existing === "object" ? (existing as Record<string, unknown>) : undefined;
+        out[field.jsonName] = decode(field.type.message, r, into, fieldNo);
+      }
       continue;
     }
 
@@ -108,12 +141,7 @@ export function decode(message: MessageType, r: Reader, target?: Record<string, 
       );
       continue;
     }
-    if (field.oneofIndex >= 0) {
-      for (const num of message.oneofs[field.oneofIndex]!.fieldNumbers) {
-        const other = message.fieldByNumber.get(num)!;
-        if (other.jsonName !== field.jsonName) delete out[other.jsonName];
-      }
-    }
+    if (field.oneofIndex >= 0) clearOneof(message, out, field);
     if (field.type.kind === "message") {
       // Repeated occurrences of a singular message field merge (proto spec).
       const existing = out[field.jsonName];

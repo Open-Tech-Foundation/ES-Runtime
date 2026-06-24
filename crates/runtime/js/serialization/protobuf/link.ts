@@ -106,9 +106,9 @@ export function link(files: ParsedFile[]): Registry {
     if (ast.map) {
       const keyType = resolveType(ast.map.key, scope);
       const valueType = resolveType(ast.map.value, scope);
-      const key: Field = { name: "key", jsonName: "key", number: 1, repeated: false, explicitPresence: false, packed: false, type: keyType, oneofIndex: -1 };
-      const value: Field = { name: "value", jsonName: "value", number: 2, repeated: false, explicitPresence: false, packed: false, type: valueType, oneofIndex: -1 };
-      return { name: ast.name, jsonName, number: ast.number, repeated: false, explicitPresence: false, packed: false, type: valueType, oneofIndex: -1, map: { key, value } };
+      const key: Field = { name: "key", jsonName: "key", number: 1, repeated: false, explicitPresence: false, packed: false, delimited: false, type: keyType, oneofIndex: -1 };
+      const value: Field = { name: "value", jsonName: "value", number: 2, repeated: false, explicitPresence: false, packed: false, delimited: false, type: valueType, oneofIndex: -1 };
+      return { name: ast.name, jsonName, number: ast.number, repeated: false, explicitPresence: false, packed: false, delimited: false, type: valueType, oneofIndex: -1, map: { key, value } };
     }
 
     const type = resolveType(ast.typeName, scope);
@@ -127,7 +127,10 @@ export function link(files: ParsedFile[]): Registry {
       explicitPresence = feat.fieldPresence === "EXPLICIT";
     }
 
-    return { name: ast.name, jsonName, number: ast.number, repeated, explicitPresence, packed, type, oneofIndex };
+    // Group (delimited) encoding applies to message fields only.
+    const delimited = type.kind === "message" && feat.messageEncoding === "DELIMITED";
+
+    return { name: ast.name, jsonName, number: ast.number, repeated, explicitPresence, packed, delimited, type, oneofIndex };
   }
 
   // Pass 2: resolve each message's fields and oneofs.

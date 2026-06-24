@@ -2,7 +2,7 @@
 // presence (implicit-presence scalars at default are omitted) and packed
 // encoding, re-emits preserved unknown fields.
 import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.js";
-import { WIRE_LEN } from "./reader.js";
+import { WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.js";
 import { Writer } from "./writer.js";
 import { UNKNOWN } from "./decode.js";
 
@@ -48,6 +48,13 @@ function wireFor(type: FieldType): number {
 function writeField(w: Writer, field: Field, v: unknown): void {
   const type = field.type;
   if (type.kind === "message") {
+    if (field.delimited) {
+      // Group encoding: start-group tag, fields inline, matching end-group tag.
+      w.tag(field.number, WIRE_SGROUP);
+      encode(type.message, v as Record<string, unknown>, w);
+      w.tag(field.number, WIRE_EGROUP);
+      return;
+    }
     const child = new Writer();
     encode(type.message, v as Record<string, unknown>, child);
     w.lenDelimited(field.number, child);

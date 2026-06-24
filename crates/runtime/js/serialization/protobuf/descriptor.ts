@@ -40,6 +40,9 @@ export interface Field {
   explicitPresence: boolean;
   /** Resolved packed encoding for repeated scalar/enum fields. */
   packed: boolean;
+  /** Group (delimited) wire encoding for a message field — editions
+   *  `features.message_encoding = DELIMITED`. */
+  delimited: boolean;
   type: FieldType;
   /** Index into message.oneofs, or -1. Synthetic oneofs (proto3 `optional`) are
    *  flattened: the field stays a normal optional field, oneofIndex = -1. */

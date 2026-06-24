@@ -4,8 +4,8 @@
 //
 //   PB_SRC=/path/to/protobuf bun conformance-testee.mjs
 //
-// We implement binary<->binary for proto3 + edition 2023. JSON / JSPB /
-// TEXT_FORMAT and proto2 message types are reported as `skipped`.
+// We implement binary and proto3-JSON (both directions) for proto3 + edition
+// 2023. JSPB / TEXT_FORMAT and proto2 message types are reported as `skipped`.
 import { readFileSync } from "node:fs";
 import { Schema } from "./serialization/protobuf/schema.ts";
 
@@ -38,30 +38,41 @@ function handle(reqBytes) {
     return conf.encode(RESP, { protobufPayload: conf.encode("conformance.FailureSet", {}) });
   }
 
-  // We only do binary <-> binary.
+  // We do binary and proto3-JSON, both directions. JSPB / TEXT_FORMAT skip.
   const out = req.requestedOutputFormat; // enum name
-  if (req.jsonPayload !== undefined || req.jspbPayload !== undefined || req.textPayload !== undefined) {
-    return conf.encode(RESP, { skipped: "non-protobuf input unsupported" });
+  if (req.jspbPayload !== undefined || req.textPayload !== undefined) {
+    return conf.encode(RESP, { skipped: "non-protobuf/json input unsupported" });
   }
-  if (out !== "PROTOBUF") {
+  if (out !== "PROTOBUF" && out !== "JSON") {
     return conf.encode(RESP, { skipped: `output ${out} unsupported` });
   }
 
   const schema = schemaFor(mt);
   if (!schema) return conf.encode(RESP, { skipped: "proto2/unknown message type unsupported" });
 
+  // Parse input (binary or JSON) into the value shape.
+  let value;
   try {
-    const msg = schema.decode(mt, req.protobufPayload ?? new Uint8Array(0));
-    try {
-      const bytes = schema.encode(mt, msg);
-      return conf.encode(RESP, { protobufPayload: bytes });
-    } catch (e) {
-      return conf.encode(RESP, { serializeError: String(e?.message ?? e) });
+    if (req.jsonPayload !== undefined) {
+      const ignoreUnknownFields = req.testCategory === "JSON_IGNORE_UNKNOWN_PARSING_TEST";
+      value = schema.fromJson(mt, JSON.parse(req.jsonPayload), { ignoreUnknownFields });
+    } else {
+      value = schema.decode(mt, req.protobufPayload ?? new Uint8Array(0));
     }
   } catch (e) {
     const msg = String(e?.message ?? e);
     if (msg.includes("unknown message")) return conf.encode(RESP, { skipped: msg });
     return conf.encode(RESP, { parseError: msg });
+  }
+
+  // Serialize to the requested output format.
+  try {
+    if (out === "JSON") {
+      return conf.encode(RESP, { jsonPayload: JSON.stringify(schema.toJson(mt, value)) });
+    }
+    return conf.encode(RESP, { protobufPayload: schema.encode(mt, value) });
+  } catch (e) {
+    return conf.encode(RESP, { serializeError: String(e?.message ?? e) });
   }
 }
 

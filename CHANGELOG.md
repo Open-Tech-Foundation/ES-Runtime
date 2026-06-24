@@ -8,10 +8,24 @@ pre-`0.1.0` and the public API is unstable.
 
 ### Added
 
+- **Protobuf proto3-JSON.** `schema.toJson(messageName, value)` and
+  `schema.fromJson(messageName, json)` convert between the decoded value shape
+  and the canonical proto3-JSON mapping: 64-bit integers and `bytes` as strings
+  (base64 for `bytes`), enums as value-names, and the well-known-type special
+  forms (Timestamp/Duration as strings, wrappers as bare values,
+  Struct/Value/ListValue as native JSON, Any with an `@type` member, FieldMask
+  as a comma path string, Empty as `{}`).
 - **Protobuf edition 2024.** `new Protobuf.Schema(proto)` now accepts
   `edition = "2024"` in addition to proto3 and edition 2023. The 2024 defaults
   for the wire-affecting features (field presence, repeated encoding, enum type)
   match edition 2023.
+- **Protobuf delimited (group) message encoding.** Editions
+  `features.message_encoding = DELIMITED` message fields now decode/encode as
+  groups instead of being preserved as opaque unknown fields, so editions JSON
+  output is lossless. The official conformance suite (v29.3,
+  `--maximum_edition 2023 --enforce_recommended`) now passes **4101 successes,
+  0 unexpected failures** (one proto2-extension-in-JSON case is a documented
+  expected failure — proto2 extensions are unsupported by design).
 
 ### Changed
 

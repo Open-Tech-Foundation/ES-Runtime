@@ -110,6 +110,8 @@ const sections = [
       { sig: "new Protobuf.Schema(proto, options?)", type: "Schema", desc: "Compiles a .proto source string (or a { filename: source } map for multi-file schemas with imports; google/protobuf well-known types resolve automatically).", ex: `const schema = new Protobuf.Schema('syntax = "proto3"; message Hello { string name = 1; }');` },
       { sig: "schema.decode(messageName, bytes)", type: "(string, Uint8Array) => object", desc: "Decodes a byte array into a JavaScript object for the fully-qualified message name.", ex: `schema.decode("Hello", bytes);` },
       { sig: "schema.encode(messageName, value)", type: "(string, object) => Uint8Array", desc: "Encodes a JavaScript object into a Protobuf byte array.", ex: `schema.encode("Hello", { name: "world" });` },
+      { sig: "schema.toJson(messageName, value)", type: "(string, object) => JsonValue", desc: "Converts a decoded value to canonical proto3-JSON (64-bit ints and bytes as strings, enums as value-names, well-known-type special forms).", ex: `schema.toJson("Hello", value);` },
+      { sig: "schema.fromJson(messageName, json, options?)", type: "(string, JsonValue, { ignoreUnknownFields? }) => object", desc: "Parses canonical proto3-JSON into the decoded value shape (ready for encode). Strict by default.", ex: `schema.fromJson("Hello", { name: "world" });` },
     ]
   }
 ];

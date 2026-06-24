@@ -543,8 +543,12 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 | `new Protobuf.Schema(proto, opts?)` | Compiles a `.proto` source string (or a `{ filename: source }` map for multi-file schemas with `import`s; the `google/protobuf/*` well-known types resolve automatically). |
 | `schema.decode(messageName, bytes)` | Decodes a `Uint8Array` for the fully-qualified `messageName`. |
 | `schema.encode(messageName, value)` | Encodes a JavaScript object into a `Uint8Array`. |
+| `schema.toJson(messageName, value)` | Converts a decoded value to its canonical proto3-JSON representation. |
+| `schema.fromJson(messageName, json)` | Parses canonical proto3-JSON into the decoded value shape (ready for `encode`). |
 
 Decoded value shape: camelCase field names; 64-bit integer fields (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64`) as **BigInt**; enums as their value-name string (unknown numbers kept as numbers); `bytes` as `Uint8Array`; maps as plain objects; nested messages as plain objects. Fields absent on the wire are omitted.
+
+In the proto3-JSON form, 64-bit integers and `bytes` become strings (base64 for `bytes`), enums their value-name string, and the well-known types take their special forms (Timestamp/Duration as strings, wrappers as bare values, Struct/Value/ListValue as native JSON, Any with an `@type` member, FieldMask as a comma path string, Empty as `{}`).
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md

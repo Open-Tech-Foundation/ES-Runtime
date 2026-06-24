@@ -84,3 +84,31 @@ test("protobuf: rejects proto2", async () => {
   try { new Protobuf.Schema(`syntax="proto2"; message M {}`); } catch { threw = true; }
   if (!threw) throw new Error("proto2 should be rejected");
 });
+
+test("protobuf: proto3-JSON scalar mapping round-trips", async () => {
+  const { Protobuf } = await import("runtime:serialization");
+  const s = new Protobuf.Schema(`
+    syntax="proto3";
+    enum Color { RED = 0; GREEN = 1; }
+    message M { int64 big = 1; bytes by = 2; Color c = 3; repeated int32 ns = 4; }
+  `);
+  const value = { big: 9007199254740993n, by: new Uint8Array([1, 2, 255]), c: "GREEN", ns: [1, 2] };
+  const json = s.toJson("M", value);
+  deepEq(json, { big: "9007199254740993", by: "AQL/", c: "GREEN", ns: [1, 2] }, "to proto3-JSON");
+  deepEq(s.fromJson("M", json), value, "from proto3-JSON");
+});
+
+test("protobuf: proto3-JSON well-known types", async () => {
+  const { Protobuf } = await import("runtime:serialization");
+  const s = new Protobuf.Schema({ "m.proto": `syntax="proto3";
+    import "google/protobuf/timestamp.proto";
+    import "google/protobuf/struct.proto";
+    import "google/protobuf/wrappers.proto";
+    message M {
+      google.protobuf.Timestamp at = 1;
+      google.protobuf.Struct data = 2;
+      google.protobuf.Int64Value n = 3;
+    }` });
+  const json = { at: "1970-01-01T00:00:01Z", data: { a: 1, b: [true, null] }, n: "7" };
+  deepEq(s.toJson("M", s.fromJson("M", json)), json, "WKT JSON round-trip");
+});

@@ -137,9 +137,9 @@ class Lexer {
 // serialization/protobuf/features.ts
 function baseFeatures(syntax) {
   if (syntax === "proto3") {
-    return { fieldPresence: "IMPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN" };
+    return { fieldPresence: "IMPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN", messageEncoding: "LENGTH_PREFIXED" };
   }
-  return { fieldPresence: "EXPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN" };
+  return { fieldPresence: "EXPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN", messageEncoding: "LENGTH_PREFIXED" };
 }
 function mergeFeatures(base, over) {
   if (!over)
@@ -147,7 +147,8 @@ function mergeFeatures(base, over) {
   return {
     fieldPresence: over.fieldPresence ?? base.fieldPresence,
     repeatedEncoding: over.repeatedEncoding ?? base.repeatedEncoding,
-    enumType: over.enumType ?? base.enumType
+    enumType: over.enumType ?? base.enumType,
+    messageEncoding: over.messageEncoding ?? base.messageEncoding
   };
 }
 function featureFromOption(key, value) {
@@ -158,6 +159,8 @@ function featureFromOption(key, value) {
       return { repeatedEncoding: value };
     case "features.enum_type":
       return { enumType: value };
+    case "features.message_encoding":
+      return { messageEncoding: value };
     default:
       return null;
   }
@@ -709,9 +712,9 @@ function link(files) {
     if (ast.map) {
       const keyType = resolveType(ast.map.key, scope);
       const valueType = resolveType(ast.map.value, scope);
-      const key = { name: "key", jsonName: "key", number: 1, repeated: false, explicitPresence: false, packed: false, type: keyType, oneofIndex: -1 };
-      const value = { name: "value", jsonName: "value", number: 2, repeated: false, explicitPresence: false, packed: false, type: valueType, oneofIndex: -1 };
-      return { name: ast.name, jsonName, number: ast.number, repeated: false, explicitPresence: false, packed: false, type: valueType, oneofIndex: -1, map: { key, value } };
+      const key = { name: "key", jsonName: "key", number: 1, repeated: false, explicitPresence: false, packed: false, delimited: false, type: keyType, oneofIndex: -1 };
+      const value = { name: "value", jsonName: "value", number: 2, repeated: false, explicitPresence: false, packed: false, delimited: false, type: valueType, oneofIndex: -1 };
+      return { name: ast.name, jsonName, number: ast.number, repeated: false, explicitPresence: false, packed: false, delimited: false, type: valueType, oneofIndex: -1, map: { key, value } };
     }
     const type = resolveType(ast.typeName, scope);
     const repeated = ast.label === "repeated";
@@ -727,7 +730,8 @@ function link(files) {
     } else {
       explicitPresence = feat.fieldPresence === "EXPLICIT";
     }
-    return { name: ast.name, jsonName, number: ast.number, repeated, explicitPresence, packed, type, oneofIndex };
+    const delimited = type.kind === "message" && feat.messageEncoding === "DELIMITED";
+    return { name: ast.name, jsonName, number: ast.number, repeated, explicitPresence, packed, delimited, type, oneofIndex };
   }
   for (const { ast, desc, scope, inherited } of jobs) {
     const add = (f) => {
@@ -1075,19 +1079,49 @@ function readSingle(r, type) {
     return readEnum(r, type.enum);
   return decode(type.message, r.fork());
 }
-function decode(message, r, target) {
+function clearOneof(message, out, field) {
+  for (const num of message.oneofs[field.oneofIndex].fieldNumbers) {
+    const other = message.fieldByNumber.get(num);
+    if (other.jsonName !== field.jsonName)
+      delete out[other.jsonName];
+  }
+}
+function decode(message, r, target, groupFieldNo) {
   const out = target ?? {};
-  while (!r.eof()) {
+  for (;; ) {
+    if (r.eof()) {
+      if (groupFieldNo !== undefined)
+        throw new Error("protobuf: unexpected end of input inside group");
+      break;
+    }
     const tagStart = r.pos;
     const tag = r.uint32();
     const fieldNo = tag >>> 3;
     const wire = tag & 7;
+    if (wire === WIRE_EGROUP) {
+      if (groupFieldNo !== undefined && fieldNo === groupFieldNo)
+        break;
+      throw new Error("protobuf: unexpected end-group");
+    }
     if (fieldNo === 0)
       throw new Error("protobuf: invalid field number 0");
     const field = message.fieldByNumber.get(fieldNo);
     if (!field) {
       r.skip(wire);
       (out[UNKNOWN] ?? (out[UNKNOWN] = [])).push(r.buf.slice(tagStart, r.pos));
+      continue;
+    }
+    if (field.delimited && field.type.kind === "message" && wire === WIRE_SGROUP) {
+      if (field.repeated) {
+        const arr = out[field.jsonName] ?? (out[field.jsonName] = []);
+        arr.push(decode(field.type.message, r, undefined, fieldNo));
+      } else {
+        if (field.oneofIndex >= 0)
+          clearOneof(message, out, field);
+        const existing = out[field.jsonName];
+        const into = existing && typeof existing === "object" ? existing : undefined;
+        out[field.jsonName] = decode(field.type.message, r, into, fieldNo);
+      }
       continue;
     }
     if (field.map) {
@@ -1127,13 +1161,8 @@ function decode(message, r, target) {
       (out[UNKNOWN] ?? (out[UNKNOWN] = [])).push(r.buf.slice(tagStart, r.pos));
       continue;
     }
-    if (field.oneofIndex >= 0) {
-      for (const num of message.oneofs[field.oneofIndex].fieldNumbers) {
-        const other = message.fieldByNumber.get(num);
-        if (other.jsonName !== field.jsonName)
-          delete out[other.jsonName];
-      }
-    }
+    if (field.oneofIndex >= 0)
+      clearOneof(message, out, field);
     if (field.type.kind === "message") {
       const existing = out[field.jsonName];
       const into = existing && typeof existing === "object" ? existing : undefined;
@@ -1371,6 +1400,12 @@ function wireFor(type) {
 function writeField(w, field, v) {
   const type = field.type;
   if (type.kind === "message") {
+    if (field.delimited) {
+      w.tag(field.number, WIRE_SGROUP);
+      encode(type.message, v, w);
+      w.tag(field.number, WIRE_EGROUP);
+      return;
+    }
     const child = new Writer;
     encode(type.message, v, child);
     w.lenDelimited(field.number, child);
@@ -1474,6 +1509,669 @@ function encode(message, value, w) {
       w.raw(raw);
 }
 
+// serialization/protobuf/descriptor.ts
+var BIGINT_SCALARS = new Set([
+  "int64",
+  "uint64",
+  "sint64",
+  "fixed64",
+  "sfixed64"
+]);
+function scalarDefault(t) {
+  switch (t) {
+    case "double":
+    case "float":
+    case "int32":
+    case "uint32":
+    case "sint32":
+    case "fixed32":
+    case "sfixed32":
+      return 0;
+    case "int64":
+    case "uint64":
+    case "sint64":
+    case "fixed64":
+    case "sfixed64":
+      return 0n;
+    case "bool":
+      return false;
+    case "string":
+      return "";
+    case "bytes":
+      return new Uint8Array(0);
+  }
+}
+
+// serialization/protobuf/json.ts
+var DROP = Symbol("drop");
+var WRAPPERS = new Set([
+  "google.protobuf.DoubleValue",
+  "google.protobuf.FloatValue",
+  "google.protobuf.Int64Value",
+  "google.protobuf.UInt64Value",
+  "google.protobuf.Int32Value",
+  "google.protobuf.UInt32Value",
+  "google.protobuf.BoolValue",
+  "google.protobuf.StringValue",
+  "google.protobuf.BytesValue"
+]);
+var SPECIAL_JSON_WKT = new Set([
+  "google.protobuf.Timestamp",
+  "google.protobuf.Duration",
+  "google.protobuf.FieldMask",
+  "google.protobuf.Value",
+  "google.protobuf.ListValue",
+  "google.protobuf.Struct",
+  "google.protobuf.Any",
+  ...WRAPPERS
+]);
+var I32_MIN = -2147483648;
+var I32_MAX = 2147483647;
+var U32_MAX = 4294967295;
+var I64_MIN = -9223372036854775808n;
+var I64_MAX = 9223372036854775807n;
+var U64_MAX = 18446744073709551615n;
+var TS_MIN = -62135596800n;
+var TS_MAX = 253402300799n;
+var DUR_MAX = 315576000000n;
+var NUM_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
+var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var B64INV = /* @__PURE__ */ (() => {
+  const t = new Int16Array(256).fill(-1);
+  for (let i = 0;i < B64.length; i++)
+    t[B64.charCodeAt(i)] = i;
+  return t;
+})();
+function base64Encode(bytes) {
+  let out = "";
+  let i = 0;
+  for (;i + 2 < bytes.length; i += 3) {
+    const n = bytes[i] << 16 | bytes[i + 1] << 8 | bytes[i + 2];
+    out += B64[n >> 18 & 63] + B64[n >> 12 & 63] + B64[n >> 6 & 63] + B64[n & 63];
+  }
+  const rem = bytes.length - i;
+  if (rem === 1) {
+    const n = bytes[i] << 16;
+    out += B64[n >> 18 & 63] + B64[n >> 12 & 63] + "==";
+  } else if (rem === 2) {
+    const n = bytes[i] << 16 | bytes[i + 1] << 8;
+    out += B64[n >> 18 & 63] + B64[n >> 12 & 63] + B64[n >> 6 & 63] + "=";
+  }
+  return out;
+}
+function base64Decode(s) {
+  const out = [];
+  let bits = 0;
+  let nbits = 0;
+  for (let i = 0;i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    if (ch === 61)
+      break;
+    if (ch === 32 || ch === 10 || ch === 13 || ch === 9)
+      continue;
+    const v = ch === 45 ? 62 : ch === 95 ? 63 : B64INV[ch];
+    if (v < 0)
+      throw new Error("protobuf: invalid base64 in JSON");
+    bits = bits << 6 | v;
+    nbits += 6;
+    if (nbits >= 8) {
+      nbits -= 8;
+      out.push(bits >> nbits & 255);
+    }
+  }
+  return new Uint8Array(out);
+}
+function camelCase2(s) {
+  let out = "";
+  let up = false;
+  for (const c of s) {
+    if (c === "_")
+      up = true;
+    else {
+      out += up ? c.toUpperCase() : c;
+      up = false;
+    }
+  }
+  return out;
+}
+function snakeCase(s) {
+  return s.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
+}
+function parseIntStrict(j, min, max) {
+  let n;
+  if (typeof j === "number")
+    n = j;
+  else if (typeof j === "string") {
+    if (!NUM_RE.test(j))
+      throw new Error(`protobuf: invalid integer ${JSON.stringify(j)}`);
+    n = Number(j);
+  } else
+    throw new Error("protobuf: integer field expects a number or string");
+  if (!Number.isInteger(n))
+    throw new Error(`protobuf: ${n} is not an integer`);
+  if (n < min || n > max)
+    throw new Error(`protobuf: integer ${n} out of range`);
+  return n;
+}
+function parseBigIntStrict(j, min, max) {
+  let b;
+  if (typeof j === "number") {
+    if (!Number.isInteger(j))
+      throw new Error(`protobuf: ${j} is not an integer`);
+    b = BigInt(j);
+  } else if (typeof j === "string") {
+    if (/^-?(?:0|[1-9][0-9]*)$/.test(j))
+      b = BigInt(j);
+    else {
+      if (!NUM_RE.test(j))
+        throw new Error(`protobuf: invalid integer ${JSON.stringify(j)}`);
+      const n = Number(j);
+      if (!Number.isInteger(n))
+        throw new Error(`protobuf: ${j} is not an integer`);
+      b = BigInt(n);
+    }
+  } else
+    throw new Error("protobuf: integer field expects a number or string");
+  if (b < min || b > max)
+    throw new Error(`protobuf: integer ${b} out of range`);
+  return b;
+}
+var FLOAT_MAX = 340282346638528860000000000000000000000;
+function parseFloatStrict(j, isFloat) {
+  let n;
+  if (typeof j === "number")
+    n = j;
+  else if (typeof j === "string") {
+    if (j === "NaN")
+      return NaN;
+    if (j === "Infinity")
+      return Infinity;
+    if (j === "-Infinity")
+      return -Infinity;
+    if (!NUM_RE.test(j))
+      throw new Error(`protobuf: invalid number ${JSON.stringify(j)}`);
+    n = Number(j);
+  } else
+    throw new Error("protobuf: float field expects a number or string");
+  if (!Number.isFinite(n))
+    throw new Error("protobuf: number out of range");
+  if (isFloat && Math.abs(n) > FLOAT_MAX)
+    throw new Error("protobuf: float out of range");
+  return n;
+}
+function validateUtf16(s) {
+  for (let i = 0;i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 55296 && c <= 56319) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 56320 && next <= 57343))
+        throw new Error("protobuf: unpaired UTF-16 surrogate in string");
+      i++;
+    } else if (c >= 56320 && c <= 57343) {
+      throw new Error("protobuf: unpaired UTF-16 surrogate in string");
+    }
+  }
+}
+function nanosFraction(nanos) {
+  const s = String(nanos).padStart(9, "0");
+  if (s.endsWith("000000"))
+    return s.slice(0, 3);
+  if (s.endsWith("000"))
+    return s.slice(0, 6);
+  return s;
+}
+function timestampToJson(value) {
+  const seconds = BigInt(value.seconds ?? 0);
+  const nanos = Number(value.nanos ?? 0);
+  if (seconds < TS_MIN || seconds > TS_MAX)
+    throw new Error("protobuf: Timestamp seconds out of range");
+  if (nanos < 0 || nanos > 999999999)
+    throw new Error("protobuf: Timestamp nanos out of range");
+  const date = new Date(Number(seconds) * 1000);
+  const base = date.toISOString().slice(0, 19);
+  return base + (nanos ? "." + nanosFraction(nanos) : "") + "Z";
+}
+function timestampFromJson(j) {
+  if (typeof j !== "string")
+    throw new Error("protobuf: Timestamp JSON must be a string");
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})$/.exec(j);
+  if (!m)
+    throw new Error(`protobuf: invalid Timestamp "${j}"`);
+  const ms = Date.parse(m[1] + (m[3] === "Z" ? "Z" : m[3]));
+  if (Number.isNaN(ms))
+    throw new Error(`protobuf: invalid Timestamp "${j}"`);
+  const seconds = BigInt(Math.floor(ms / 1000));
+  const nanos = m[2] ? Number(m[2].padEnd(9, "0").slice(0, 9)) : 0;
+  if (seconds < TS_MIN || seconds > TS_MAX)
+    throw new Error(`protobuf: Timestamp "${j}" out of range`);
+  const out = {};
+  if (seconds !== 0n)
+    out.seconds = seconds;
+  if (nanos !== 0)
+    out.nanos = nanos;
+  return out;
+}
+function durationToJson(value) {
+  const seconds = BigInt(value.seconds ?? 0);
+  const nanos = Number(value.nanos ?? 0);
+  if (seconds < -DUR_MAX || seconds > DUR_MAX)
+    throw new Error("protobuf: Duration seconds out of range");
+  if (nanos < -999999999 || nanos > 999999999)
+    throw new Error("protobuf: Duration nanos out of range");
+  if (seconds !== 0n && nanos !== 0 && seconds < 0n !== nanos < 0) {
+    throw new Error("protobuf: Duration seconds and nanos must share sign");
+  }
+  const neg = seconds < 0n || nanos < 0;
+  const absSec = seconds < 0n ? -seconds : seconds;
+  const absNanos = Math.abs(nanos);
+  return (neg ? "-" : "") + absSec.toString() + (absNanos ? "." + nanosFraction(absNanos) : "") + "s";
+}
+function durationFromJson(j) {
+  if (typeof j !== "string")
+    throw new Error("protobuf: Duration JSON must be a string");
+  const m = /^(-)?(\d+)(?:\.(\d+))?s$/.exec(j);
+  if (!m)
+    throw new Error(`protobuf: invalid Duration "${j}"`);
+  let seconds = BigInt(m[2]);
+  let nanos = m[3] ? Number(m[3].padEnd(9, "0").slice(0, 9)) : 0;
+  if (m[1] === "-") {
+    seconds = -seconds;
+    nanos = -nanos;
+  }
+  if (seconds < -DUR_MAX || seconds > DUR_MAX)
+    throw new Error(`protobuf: Duration "${j}" out of range`);
+  const out = {};
+  if (seconds !== 0n)
+    out.seconds = seconds;
+  if (nanos !== 0)
+    out.nanos = nanos;
+  return out;
+}
+function valueToJson(value, registry) {
+  if ("nullValue" in value)
+    return null;
+  if ("numberValue" in value) {
+    const n = value.numberValue;
+    if (!Number.isFinite(n))
+      throw new Error("protobuf: Value number_value must be finite");
+    return n;
+  }
+  if ("stringValue" in value)
+    return value.stringValue;
+  if ("boolValue" in value)
+    return value.boolValue;
+  if ("structValue" in value)
+    return structToJson(value.structValue, registry);
+  if ("listValue" in value)
+    return listValueToJson(value.listValue, registry);
+  return null;
+}
+function valueFromJson(j, ctx) {
+  if (j === null)
+    return { nullValue: "NULL_VALUE" };
+  switch (typeof j) {
+    case "number":
+      if (!Number.isFinite(j))
+        throw new Error("protobuf: Value number must be finite");
+      return { numberValue: j };
+    case "string":
+      return { stringValue: j };
+    case "boolean":
+      return { boolValue: j };
+  }
+  if (Array.isArray(j))
+    return { listValue: { values: j.map((e) => valueFromJson(e, ctx)) } };
+  return { structValue: structFromJson(j, ctx) };
+}
+function structToJson(value, registry) {
+  const out = {};
+  const fields = value.fields;
+  if (fields)
+    for (const [k, v] of Object.entries(fields))
+      out[k] = valueToJson(v, registry);
+  return out;
+}
+function structFromJson(j, ctx) {
+  const fields = {};
+  for (const [k, v] of Object.entries(j))
+    fields[k] = valueFromJson(v, ctx);
+  return { fields };
+}
+function listValueToJson(value, registry) {
+  const vals = value.values ?? [];
+  return vals.map((v) => valueToJson(v, registry));
+}
+function listValueFromJson(j, ctx) {
+  if (!Array.isArray(j))
+    throw new Error("protobuf: ListValue JSON must be an array");
+  return { values: j.map((e) => valueFromJson(e, ctx)) };
+}
+function fieldMaskToJson(value) {
+  const paths = value.paths ?? [];
+  return paths.map((p) => {
+    const camel = p.split(".").map(camelCase2).join(".");
+    if (camel.split(".").map(snakeCase).join(".") !== p) {
+      throw new Error(`protobuf: FieldMask path "${p}" is not a valid field path`);
+    }
+    return camel;
+  }).join(",");
+}
+function fieldMaskFromJson(j) {
+  if (typeof j !== "string")
+    throw new Error("protobuf: FieldMask JSON must be a string");
+  if (j === "")
+    return {};
+  return {
+    paths: j.split(",").map((p) => {
+      const snake = p.split(".").map(snakeCase).join(".");
+      if (snake.split(".").map(camelCase2).join(".") !== p) {
+        throw new Error(`protobuf: invalid FieldMask path "${p}"`);
+      }
+      return snake;
+    })
+  };
+}
+function wrapperToJson(message, value) {
+  const field = message.fields[0];
+  const scalar = field.type.scalar;
+  const v = value[field.jsonName];
+  return scalarToJson(scalar, v === undefined ? scalarDefault(scalar) : v);
+}
+function wrapperFromJson(message, j) {
+  const field = message.fields[0];
+  const scalar = field.type.scalar;
+  return { [field.jsonName]: scalarFromJson(scalar, j) };
+}
+function typeName(typeUrl) {
+  return typeUrl.slice(typeUrl.lastIndexOf("/") + 1);
+}
+function anyToJson(value, registry) {
+  const typeUrl = value.typeUrl;
+  if (!typeUrl)
+    return {};
+  const name = typeName(typeUrl);
+  const m = registry.messages.get(name);
+  if (!m)
+    throw new Error(`protobuf: Any references unknown type "${typeUrl}"`);
+  const bytes = value.value ?? new Uint8Array(0);
+  const inner = messageToJson(m, decode(m, new Reader(bytes)), registry);
+  if (SPECIAL_JSON_WKT.has(name))
+    return { "@type": typeUrl, value: inner };
+  return { "@type": typeUrl, ...inner };
+}
+function anyFromJson(j, ctx) {
+  if (j === null || typeof j !== "object" || Array.isArray(j)) {
+    throw new Error("protobuf: Any JSON must be an object");
+  }
+  const typeUrl = j["@type"];
+  if (!typeUrl)
+    return {};
+  const name = typeName(typeUrl);
+  const m = ctx.registry.messages.get(name);
+  if (!m)
+    throw new Error(`protobuf: Any references unknown type "${typeUrl}"`);
+  let innerValue;
+  if (SPECIAL_JSON_WKT.has(name)) {
+    innerValue = messageFromJsonCtx(m, j.value ?? null, ctx);
+  } else {
+    const { "@type": _omit, ...rest } = j;
+    innerValue = messageFromJsonCtx(m, rest, ctx);
+  }
+  const w = new Writer;
+  encode(m, innerValue, w);
+  return { typeUrl, value: w.finish() };
+}
+function scalarToJson(t, v) {
+  if (BIGINT_SCALARS.has(t))
+    return String(v);
+  switch (t) {
+    case "double":
+    case "float": {
+      const n = v;
+      if (Number.isFinite(n))
+        return n;
+      if (Number.isNaN(n))
+        return "NaN";
+      return n > 0 ? "Infinity" : "-Infinity";
+    }
+    case "bytes":
+      return base64Encode(v);
+    default:
+      return v;
+  }
+}
+function scalarFromJson(t, j) {
+  switch (t) {
+    case "int32":
+    case "sint32":
+    case "sfixed32":
+      return parseIntStrict(j, I32_MIN, I32_MAX);
+    case "uint32":
+    case "fixed32":
+      return parseIntStrict(j, 0, U32_MAX);
+    case "int64":
+    case "sint64":
+    case "sfixed64":
+      return parseBigIntStrict(j, I64_MIN, I64_MAX);
+    case "uint64":
+    case "fixed64":
+      return parseBigIntStrict(j, 0n, U64_MAX);
+    case "double":
+      return parseFloatStrict(j, false);
+    case "float":
+      return parseFloatStrict(j, true);
+    case "bool":
+      if (typeof j !== "boolean")
+        throw new Error("protobuf: bool field expects true or false");
+      return j;
+    case "string":
+      if (typeof j !== "string")
+        throw new Error("protobuf: string field expects a string");
+      validateUtf16(j);
+      return j;
+    case "bytes":
+      if (typeof j !== "string")
+        throw new Error("protobuf: bytes field expects a base64 string");
+      return base64Decode(j);
+  }
+}
+function enumToJson(e, v) {
+  if (e.fullName === "google.protobuf.NullValue")
+    return null;
+  return v;
+}
+function enumFromJson(e, j, ctx) {
+  if (e.fullName === "google.protobuf.NullValue") {
+    if (j !== null && j !== "NULL_VALUE")
+      throw new Error("protobuf: NullValue expects null");
+    return "NULL_VALUE";
+  }
+  if (typeof j === "number") {
+    return e.byNumber.get(j) ?? j;
+  }
+  if (typeof j === "string") {
+    if (e.byName.has(j))
+      return j;
+    if (ctx.ignoreUnknown)
+      return DROP;
+    throw new Error(`protobuf: unknown enum value "${j}" for ${e.fullName}`);
+  }
+  throw new Error(`protobuf: enum field expects a name string or number`);
+}
+function singleToJson(type, v, registry) {
+  if (type.kind === "scalar")
+    return scalarToJson(type.scalar, v);
+  if (type.kind === "enum")
+    return enumToJson(type.enum, v);
+  return messageToJson(type.message, v, registry);
+}
+function fieldToJson(field, v, registry) {
+  if (field.map) {
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+      out[k] = singleToJson(field.map.value.type, val, registry);
+    }
+    return out;
+  }
+  if (field.repeated)
+    return v.map((e) => singleToJson(field.type, e, registry));
+  return singleToJson(field.type, v, registry);
+}
+function isJsonOmittable(field, v) {
+  if (field.explicitPresence)
+    return false;
+  if (field.map)
+    return typeof v === "object" && v !== null && Object.keys(v).length === 0;
+  if (field.repeated)
+    return Array.isArray(v) && v.length === 0;
+  if (field.type.kind === "scalar") {
+    const t = field.type.scalar;
+    if (BIGINT_SCALARS.has(t))
+      return BigInt(v) === 0n;
+    switch (t) {
+      case "bool":
+        return v === false;
+      case "string":
+        return v === "";
+      case "bytes":
+        return v.length === 0;
+      default:
+        return v === 0;
+    }
+  }
+  if (field.type.kind === "enum") {
+    const e = field.type.enum;
+    return typeof v === "number" ? v === 0 : v === e.byNumber.get(0);
+  }
+  return false;
+}
+function messageToJson(message, value, registry) {
+  switch (message.fullName) {
+    case "google.protobuf.Timestamp":
+      return timestampToJson(value);
+    case "google.protobuf.Duration":
+      return durationToJson(value);
+    case "google.protobuf.FieldMask":
+      return fieldMaskToJson(value);
+    case "google.protobuf.Struct":
+      return structToJson(value, registry);
+    case "google.protobuf.Value":
+      return valueToJson(value, registry);
+    case "google.protobuf.ListValue":
+      return listValueToJson(value, registry);
+    case "google.protobuf.Any":
+      return anyToJson(value, registry);
+    case "google.protobuf.Empty":
+      return {};
+  }
+  if (WRAPPERS.has(message.fullName))
+    return wrapperToJson(message, value);
+  const out = {};
+  for (const field of message.fields) {
+    const v = value[field.jsonName];
+    if (v === undefined)
+      continue;
+    if (isJsonOmittable(field, v))
+      continue;
+    out[field.jsonName] = fieldToJson(field, v, registry);
+  }
+  return out;
+}
+function singleFromJson(type, j, ctx) {
+  if (j === null) {
+    if (type.kind === "message" && type.message.fullName === "google.protobuf.Value")
+      return valueFromJson(null, ctx);
+    if (type.kind === "enum" && type.enum.fullName === "google.protobuf.NullValue")
+      return "NULL_VALUE";
+    throw new Error("protobuf: null is not a valid value here");
+  }
+  if (type.kind === "scalar")
+    return scalarFromJson(type.scalar, j);
+  if (type.kind === "enum")
+    return enumFromJson(type.enum, j, ctx);
+  return messageFromJsonCtx(type.message, j, ctx);
+}
+function fieldFromJson(field, j, ctx) {
+  if (field.map) {
+    if (typeof j !== "object" || j === null || Array.isArray(j)) {
+      throw new Error(`protobuf: map field "${field.name}" JSON must be an object`);
+    }
+    const out = {};
+    for (const [k, val] of Object.entries(j)) {
+      const v = singleFromJson(field.map.value.type, val, ctx);
+      if (v !== DROP)
+        out[k] = v;
+    }
+    return out;
+  }
+  if (field.repeated) {
+    if (!Array.isArray(j))
+      throw new Error(`protobuf: repeated field "${field.name}" JSON must be an array`);
+    const out = [];
+    for (const e of j) {
+      const v = singleFromJson(field.type, e, ctx);
+      if (v !== DROP)
+        out.push(v);
+    }
+    return out;
+  }
+  return singleFromJson(field.type, j, ctx);
+}
+function isNullableField(type) {
+  return type.kind === "message" && type.message.fullName === "google.protobuf.Value" || type.kind === "enum" && type.enum.fullName === "google.protobuf.NullValue";
+}
+function messageFromJsonCtx(message, j, ctx) {
+  switch (message.fullName) {
+    case "google.protobuf.Timestamp":
+      return timestampFromJson(j);
+    case "google.protobuf.Duration":
+      return durationFromJson(j);
+    case "google.protobuf.FieldMask":
+      return fieldMaskFromJson(j);
+    case "google.protobuf.Struct":
+      if (j === null || typeof j !== "object" || Array.isArray(j))
+        throw new Error("protobuf: Struct JSON must be an object");
+      return structFromJson(j, ctx);
+    case "google.protobuf.Value":
+      return valueFromJson(j, ctx);
+    case "google.protobuf.ListValue":
+      return listValueFromJson(j, ctx);
+    case "google.protobuf.Any":
+      return anyFromJson(j, ctx);
+    case "google.protobuf.Empty":
+      return {};
+  }
+  if (WRAPPERS.has(message.fullName))
+    return wrapperFromJson(message, j);
+  if (j === null || typeof j !== "object" || Array.isArray(j)) {
+    throw new Error(`protobuf: message "${message.fullName}" JSON must be an object`);
+  }
+  const out = {};
+  const seenOneof = new Set;
+  for (const [k, val] of Object.entries(j)) {
+    const field = message.fields.find((f) => f.jsonName === k || f.name === k);
+    if (!field) {
+      if (ctx.ignoreUnknown)
+        continue;
+      throw new Error(`protobuf: unknown field "${k}" in ${message.fullName}`);
+    }
+    if (val === null && !isNullableField(field.type))
+      continue;
+    if (field.oneofIndex >= 0) {
+      if (seenOneof.has(field.oneofIndex))
+        throw new Error(`protobuf: multiple values for oneof "${message.oneofs[field.oneofIndex].name}"`);
+      seenOneof.add(field.oneofIndex);
+    }
+    const v = fieldFromJson(field, val, ctx);
+    if (v !== DROP)
+      out[field.jsonName] = v;
+  }
+  return out;
+}
+function messageFromJson(message, j, registry, opts = {}) {
+  return messageFromJsonCtx(message, j, { registry, ignoreUnknown: opts.ignoreUnknownFields ?? false });
+}
+
 // serialization/protobuf/wkt.ts
 var WKT = {
   "google/protobuf/timestamp.proto": `
@@ -1563,6 +2261,18 @@ class Schema {
     const w = new Writer;
     encode(m, value, w);
     return w.finish();
+  }
+  toJson(messageName, value) {
+    const m = this.registry.messages.get(messageName);
+    if (!m)
+      throw new Error(`protobuf: unknown message "${messageName}"`);
+    return messageToJson(m, value, this.registry);
+  }
+  fromJson(messageName, json, options = {}) {
+    const m = this.registry.messages.get(messageName);
+    if (!m)
+      throw new Error(`protobuf: unknown message "${messageName}"`);
+    return messageFromJson(m, json, this.registry, options);
   }
 }
 var Protobuf = { Schema };

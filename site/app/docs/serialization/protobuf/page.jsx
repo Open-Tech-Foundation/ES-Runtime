@@ -1,26 +1,27 @@
 import DocsShell from "../../../../components/DocsShell.jsx";
 import CodeBlock from "../../../../components/CodeBlock.jsx";
 
-// Official protobuf conformance suite (v29.3, --maximum_edition 2023) against
-// our reflective codec. Since the suite reports 0 failures, every test is either
-// passed or skipped — skips are the JSON / JSPB / text-format / proto2 cases the
-// binary-only codec doesn't claim.
+// Official protobuf conformance suite (v29.3, --maximum_edition 2023
+// --enforce_recommended) against our reflective codec. Binary and proto3-JSON
+// are covered; the skips are text-format / JSPB and proto2-syntax cases. The
+// single failure is a proto2 extension in JSON — unsupported by design and
+// listed as an expected failure.
 const CONFORMANCE = [
-  { suite: "proto3", pass: 684, skip: 1125, fail: 0 },
+  { suite: "proto3", pass: 1413, skip: 396, fail: 0 },
   { suite: "proto2", pass: 0, skip: 1280, fail: 0 },
-  { suite: "editions 2023", pass: 8, skip: 21, fail: 0 },
-  { suite: "editions (proto3)", pass: 684, skip: 1125, fail: 0 },
-  { suite: "editions (proto2)", pass: 684, skip: 596, fail: 0 },
-  { suite: "Total", pass: 2060, skip: 4147, fail: 0, total: true },
+  { suite: "editions 2023", pass: 14, skip: 15, fail: 0 },
+  { suite: "editions (proto3)", pass: 1413, skip: 396, fail: 0 },
+  { suite: "editions (proto2)", pass: 1261, skip: 18, fail: 1 },
+  { suite: "Total", pass: 4101, skip: 2105, fail: 1, total: true },
 ];
 
-// The same run, split by wire format: binary is fully covered; JSON, text-format,
-// and the proto2 binary cases (the 684 binary skips) are out of scope by design.
+// The same run, split by wire format: binary and JSON are covered; text-format
+// and JSPB are out of scope, as are the proto2-syntax binary cases (684 skips).
 const CONFORMANCE_FMT = [
   { suite: "Binary", pass: 2060, skip: 684, fail: 0 },
-  { suite: "JSON", pass: 0, skip: 2620, fail: 0 },
+  { suite: "JSON", pass: 2041, skip: 578, fail: 1 },
   { suite: "Text format", pass: 0, skip: 843, fail: 0 },
-  { suite: "Total", pass: 2060, skip: 4147, fail: 0, total: true },
+  { suite: "Total", pass: 4101, skip: 2105, fail: 1, total: true },
 ];
 
 function ConformanceTable({ label, rows, firstCol }) {
@@ -122,10 +123,24 @@ console.log(acct.status);     // "ARCHIVED"`} title="protobuf_types.js" lang="js
       </div>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        JSON mapping
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.toJson</code> and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.fromJson</code> convert between the decoded value shape and canonical proto3-JSON: 64-bit integers and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">bytes</code> become strings (base64 for bytes), enums their value-name, and the well-known types take their special forms (Timestamp/Duration as strings, wrappers as bare values, Struct/Value as native JSON, Any with an <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">@type</code> member). Parsing is strict; pass <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">{`{ ignoreUnknownFields: true }`}</code> to relax it.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const json = schema.toJson("Account", schema.decode("Account", bytes));
+// { "id": "9007199254740993", "status": "ARCHIVED" }
+
+const value = schema.fromJson("Account", json);
+const back = schema.encode("Account", value);`} title="protobuf_json.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
         Conformance
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Verified against the official protobuf conformance suite (v29.3). The codec is binary&harr;binary, so JSON, JSPB, text-format, and proto2 cases are reported as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">skipped</code> — never failed.
+        Verified against the official protobuf conformance suite (v29.3). Binary and proto3-JSON both pass; JSPB, text-format, and proto2-syntax cases are reported as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">skipped</code>. The one failure is a proto2 extension in JSON — unsupported by design.
       </p>
       <ConformanceTable label="By message category" firstCol="Category" rows={CONFORMANCE} />
       <ConformanceTable label="By wire format" firstCol="Wire format" rows={CONFORMANCE_FMT} />

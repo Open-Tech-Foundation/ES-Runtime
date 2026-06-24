@@ -106,6 +106,19 @@ test("negative enum values parse", () => {
   expect(s.decode("M", s.encode("M", { e: "NEG" }))).toEqual({ e: "NEG" });
 });
 
+test("editions delimited (group) message encoding round-trips", () => {
+  const s = new Schema(`edition = "2023";
+    option features.message_encoding = DELIMITED;
+    message M { Sub sub = 1; repeated Sub many = 2; }
+    message Sub { int32 a = 1; }
+  `);
+  const input = { sub: { a: 99 }, many: [{ a: 1 }, { a: 2 }] };
+  const bytes = s.encode("M", input);
+  // group: start-group tag (1<<3|3=0x0B), a=99 (0x08 0x63), end-group (1<<3|4=0x0C).
+  expect([...bytes.slice(0, 4)]).toEqual([0x0b, 0x08, 0x63, 0x0c]);
+  expect(s.decode("M", bytes)).toEqual(input);
+});
+
 test("singular message fields merge across repeated occurrences", () => {
   const s = new Schema(`syntax="proto3"; message Inner { int32 a = 1; int32 b = 2; } message M { Inner inner = 1; }`);
   const a = s.encode("M", { inner: { a: 1 } });

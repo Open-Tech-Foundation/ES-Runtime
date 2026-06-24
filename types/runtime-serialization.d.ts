@@ -137,6 +137,16 @@ declare module "runtime:serialization" {
     entry?: string;
   }
 
+    /**
+     * A canonical proto3-JSON value: 64-bit integers and `bytes` are strings
+     * (base64 for `bytes`), enums are their value-name string, and the
+     * well-known types take their special forms (Timestamp/Duration as strings,
+     * wrappers as bare values, Struct/Value/ListValue as native JSON, Any with
+     * an `@type` member, FieldMask as a comma path string, Empty as `{}`).
+     */
+    export type JsonValue =
+      | null | boolean | number | string | JsonValue[] | { [k: string]: JsonValue };
+
   export namespace Protobuf {
     /**
      * A protobuf schema compiled at runtime from `.proto` source. proto3 and
@@ -162,6 +172,24 @@ declare module "runtime:serialization" {
 
       /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
       encode(messageName: string, value: Record<string, unknown>): Uint8Array;
+
+      /**
+       * Converts a decoded value (the `decode` shape) to its canonical
+       * proto3-JSON representation for the fully-qualified `messageName`.
+       */
+      toJson(messageName: string, value: Record<string, unknown>): JsonValue;
+
+      /**
+       * Parses canonical proto3-JSON into the decoded value shape (ready for
+       * `encode`) for the fully-qualified `messageName`. Parsing is strict;
+       * pass `{ ignoreUnknownFields: true }` to drop unrecognized fields and
+       * unknown enum-name strings instead of throwing.
+       */
+      fromJson(
+        messageName: string,
+        json: JsonValue,
+        options?: { ignoreUnknownFields?: boolean },
+      ): Record<string, unknown>;
     }
   }
 }

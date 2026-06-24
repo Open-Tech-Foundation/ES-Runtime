@@ -5,6 +5,7 @@ import { type ParsedFile, parseProto } from "./parser.js";
 import { type Registry, link } from "./link.js";
 import { decode } from "./decode.js";
 import { encode } from "./encode.js";
+import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.js";
 import { Reader } from "./reader.js";
 import { Writer } from "./writer.js";
 import { WKT } from "./wkt.js";
@@ -53,6 +54,20 @@ export class Schema {
     const w = new Writer();
     encode(m, value, w);
     return w.finish();
+  }
+
+  /** Converts a decoded value to its canonical proto3-JSON representation. */
+  toJson(messageName: string, value: Record<string, unknown>): JsonValue {
+    const m = this.registry.messages.get(messageName);
+    if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
+    return messageToJson(m, value, this.registry);
+  }
+
+  /** Parses canonical proto3-JSON into the decoded value shape (`encode`-ready). */
+  fromJson(messageName: string, json: JsonValue, options: FromJsonOptions = {}): Record<string, unknown> {
+    const m = this.registry.messages.get(messageName);
+    if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
+    return messageFromJson(m, json, this.registry, options);
   }
 }
 
