@@ -8,8 +8,11 @@
 //! (`"lodash"`) and remote schemes (`http:`) are rejected (SPEC non-goals: no
 //! npm/node resolution, no remote imports yet).
 //!
-//! No root confinement yet: a path may escape via `..`/symlinks. Jailing module
-//! loading to a root is a later hardening item (tracked with the FS provider).
+//! This strict loader is **not** root-confined: a path may escape via
+//! `..`/symlinks. That is by design — it is an embedder-only alternative for
+//! callers wanting no package resolution, which must add their own confinement.
+//! The CLI default (`NodeModuleLoader`) and `runtime:fs` are root-jailed (D25);
+//! `esrun` does not use this loader.
 
 use std::path::PathBuf;
 
