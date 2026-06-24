@@ -392,15 +392,71 @@
 
   // ---- fetch --------------------------------------------------------------
 
+  // Streams a request body's ReadableStream to the host one chunk at a time.
+  // Each push awaits the bounded host channel (upload backpressure); a guest
+  // stream error is forwarded so the in-flight request aborts cleanly.
+  async function pumpRequestBody(stream, id) {
+    const reader = stream.getReader();
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        let chunk;
+        if (value instanceof Uint8Array) chunk = value;
+        else if (ArrayBuffer.isView(value)) {
+          chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        } else if (value instanceof ArrayBuffer) chunk = new Uint8Array(value);
+        else throw new TypeError("ReadableStream body must yield Uint8Array chunks");
+        const accepted = await ops.fetch_request_body_push(id, chunk);
+        if (!accepted) break; // host receiver gone (request finished/failed)
+      }
+      await ops.fetch_request_body_close(id);
+    } catch (e) {
+      await ops.fetch_request_body_close(id, String((e && e.message) || e));
+      throw e;
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
   async function fetch(input, init) {
     const request = new Request(input, init);
-    const bodyBytes = request.bodyUsed ? null : await consumeBody(request[BODY]);
+    const state = request[BODY];
+
+    // A ReadableStream body streams to the host without buffering; anything else
+    // (bytes or a deferred string) is materialized and sent as one buffered body.
+    let bodyStreamId = null;
+    let bodyBytes = null;
+    if (!state.used) {
+      if (state.stream && state.bytes === null && state.str === null) {
+        bodyStreamId = ops.fetch_request_body_new();
+        state.used = true;
+      } else {
+        bodyBytes = await consumeBody(state);
+      }
+    }
     const hasBody = bodyBytes && bodyBytes.length > 0;
 
-    const args = [request.method, request.url, hasBody ? bodyBytes : null];
+    const args = [request.method, request.url, hasBody ? bodyBytes : null, bodyStreamId];
     for (const [name, value] of request._headers()) args.push(name, value);
 
-    const meta = await ops.fetch(...args);
+    // Start the request and (for a streaming body) the pump concurrently — the
+    // driven loop polls both, so chunks flow while `fetch` awaits the response.
+    // The pump's rejection is captured rather than left floating: if the request
+    // itself fails first, that error wins and the pump error must not surface as
+    // an unhandled rejection.
+    let pumpError = null;
+    const fetchPromise = ops.fetch(...args);
+    const pumpPromise =
+      bodyStreamId !== null
+        ? pumpRequestBody(state.stream, bodyStreamId).catch((e) => {
+            pumpError = e;
+          })
+        : null;
+
+    const meta = await fetchPromise;
+    if (pumpPromise) await pumpPromise;
+    if (pumpError) throw pumpError;
 
     const bodyId = meta.bodyId;
     const stream = new ReadableStream({

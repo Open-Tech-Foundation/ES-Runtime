@@ -25,6 +25,7 @@ const standardWorkloads = [
   { key: "timers", label: "setTimeout churn", unit: "ms" },
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
+  { key: "fetch_upload", label: "fetch (streamed upload)", unit: "ms" },
   { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
   { key: "fsread_small", label: "File read (small)", unit: "ms" },
   { key: "fsread_large", label: "File read (large)", unit: "ms" },

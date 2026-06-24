@@ -728,6 +728,7 @@ dependencies = [
  "es-runtime-common",
  "es-runtime-engine",
  "es-runtime-providers",
+ "futures-channel",
  "futures-util",
  "hkdf 0.13.0",
  "hmac 0.13.0",

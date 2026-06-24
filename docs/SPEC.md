@@ -49,7 +49,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ☑ `ReadableStream` (default + **byte/`type:"bytes"`**), `WritableStream`, `TransformStream`, **backpressure**, `CountQueuingStrategy`/`ByteLengthQueuingStrategy`, `tee`/`pipeTo`/`pipeThrough`, and **byte/BYOB** streams (`ReadableByteStreamController`, `ReadableStreamBYOBReader`, `ReadableStreamBYOBRequest`, `autoAllocateChunkSize`) *(Phase 5 + Phase 9, hand-written — DECISIONS D19)*. Byte streams copy rather than transfer/detach ArrayBuffers (single-threaded; zero-copy is the D3a follow-up).
 
 ### 2.9 Fetch family
-- ◐ `Headers`, `Request`, `Response`, `Body` mixin, `fetch` ☑ — networking exclusively via the `NetTransport` provider; **response** bodies stream via §2.8. Request-body streaming ⊘ → follow-up (buffered for now). *(Phase 6, DECISIONS D20.)*
+- ☑ `Headers`, `Request`, `Response`, `Body` mixin, `fetch` — networking exclusively via the `NetTransport` provider. **Both** directions stream: response bodies via §2.8, and a `ReadableStream` **request** body uploads with chunked transfer-encoding (bounded-channel backpressure) rather than buffering. A non-stream body still travels buffered. *(Phase 6, DECISIONS D20.)*
 - ☑ `Blob`, `File`, `FormData`. *(Phase 6.)*
 
 ### 2.10 WebCrypto
@@ -94,11 +94,15 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 
 ## 5. Conformance & testing
 
-- Unit tests per module; integration tests via `runtime-cli`.
+- Unit tests per module; integration tests via `runtime-cli`. The behavioral test
+  job runs on **Linux, Windows, and macOS** (CI matrix) so platform-divergent
+  surfaces — filesystem/path semantics, the symlink-canonicalized root jail,
+  process exit codes, networking, CRLF/encoding — are covered, not just Linux.
 - **Conformance:** ☑ a curated in-repo suite of spec-behaviour assertions over the implemented surface (`crates/runtime/conformance/*.js`), run by the `conformance_suite_passes` gate with a recorded, non-regressing pass-rate (`conformance/RESULTS.md` — currently 68/68). The full WPT harness (`testharness.js`) is a later addition; the curated suite is meant to trend up as coverage grows.
+- **Soak / leak:** ◐ opt-in soak tests (`#[ignore]`, run with `cargo test -- --ignored soak`) hammer a subsystem over many iterations and assert it neither leaks nor deadlocks. The first, `soak_streaming_fetch_does_not_leak`, runs 20k streaming-`fetch` uploads and asserts (a) the three request/response **body registries drain to zero every iteration** — the precise native-leak guard, via the test-only `__fetch_inflight` op — and (b) steady-state RSS stays bounded. Broad cross-subsystem soak coverage is a Phase-14 item.
 - **Fuzzing:** `cargo-fuzz` on URL parsing, streams, encoding, and the JS↔Rust marshaler.
 - **Soundness:** Miri on the safe core where applicable; ASAN/valgrind on the FFI surface in CI; isolate/handle release verified.
-- **CI gates (all required):** `cargo fmt --check`, `cargo clippy -D warnings`, tests, `cargo-deny`, `cargo-audit`, MSRV build, conformance run.
+- **CI gates (all required):** `cargo fmt --check`, `cargo clippy -D warnings`, tests (Linux/Windows/macOS), `cargo-deny`, `cargo-audit`, MSRV build, conformance run.
 
 ---
 
@@ -111,7 +115,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 3. ☑ **Provider traits + default tokio providers** — Clock, Entropy, Timers, TaskSpawner; deterministic test providers. (`providers` + `default-providers` crates + a tokio `Driver`; `runtime` API unchanged — DECISIONS D16.)
 4. ☑ **Core web primitives** — console, encoding, URL family, `structuredClone`, performance, events, Abort. (JS prelude over the op system + `Console` provider; DECISIONS D17/D18.)
 5. ☑ **Streams** — readable/writable/transform + backpressure + queuing strategies + tee/pipe + encoding streams, hand-written (DECISIONS D19). Byte/BYOB streams added in Phase 9.
-6. ◐ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response bodies; request-body streaming deferred.
+6. ☑ **Fetch family** — Headers/Request/Response/Body/fetch over `NetTransport` (reqwest+rustls), Blob/File/FormData (DECISIONS D20). Streamed response **and** request bodies (chunked upload with backpressure).
 7. ☑ **WebCrypto** — getRandomValues, randomUUID, subtle digest/HMAC/AES-GCM/AES-CBC/AES-CTR + HKDF/PBKDF2 derivation + ECDSA/ECDH (P-256/384/521) + RSA (PKCS1-v1_5/PSS/OAEP) (RustCrypto — DECISIONS D9). Carries the `rsa` Marvin advisory (SECURITY.md).
 8. ☑ **Snapshot + perf** — the prelude + op shells bake into a V8 startup snapshot (D8); `Runtime::with_snapshot` restores it (~2.3× faster startup in the `bench` example). Zero-copy `ArrayBuffer` transfer was audited and deliberately deferred (D3a Phase 8). Benchmark harness (`default-providers` `bench` example) covers context creation + op-dispatch throughput.
 9. ◐ **Hardening + conformance** — ☑ safety spine (heap/execution/stack limits + watchdog `InterruptHandle`, bounded pending-ops, panic-across-FFI containment; `esrun --timeout`); ☑ curated conformance suite + recorded pass-rate. ☑ byte/BYOB streams; ☑ intrinsic-integrity audit (Rust-side boundary verified + JS-surface defense-in-depth; SES-style primordial hardening deferred to the embedder); ☑ internal security review (`docs/SECURITY-REVIEW.md`) + docs finalization. Remaining: fuzzing (`cargo-fuzz`) + sanitizer CI (Miri/ASAN) — needs nightly; an **external** security review (pre-`1.0`).
@@ -120,11 +124,11 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 
 Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM module support (static + dynamic, `node_modules` ESM) landed ahead of these (D21/D22/D23).
 
-10. ◐ **FS sandbox + symlink-correct resolution** — module/file resolution **realpaths** resolved modules (Node-default, preserve-symlinks off) so pnpm's symlinked store resolves transitive deps; resolution is **root-jailed** to the detected project root by default (DECISIONS D25). Windows CI added (macOS later).
+10. ◐ **FS sandbox + symlink-correct resolution** — module/file resolution **realpaths** resolved modules (Node-default, preserve-symlinks off) so pnpm's symlinked store resolves transitive deps; resolution is **root-jailed** to the detected project root by default (DECISIONS D25). The behavioral test job now runs on **Linux + Windows + macOS** (CI matrix), so the platform-divergent path/jail behavior is exercised on each.
 11. ◐ **`runtime:` standard modules I** — ☑ the `runtime:` built-in scheme (served by the runtime, loader-independent; ops are the capability boundary) and ☑ **`runtime:process`** (`env` mutable-in-process / `args` / `cwd()` / `platform` OS-native / `exit(code=0)`), gated on `Capability::Env`, backed by the new `Process` provider (DECISIONS D26). Remaining: **`runtime:path`** (pure; uses `cwd`/`platform`) and **`runtime:fs`** (async file ops, jailed) + the `FileSystem` provider.
-12. ◐ **`runtime:` standard modules II** — ☑ **`runtime:serialization`** (XML validation, XML parser, and XML builder backed natively by `quick-xml`). Remaining: `runtime:net` (sockets, listener provider) and `runtime:http` (HTTP **server** — the standalone capstone). Streaming request bodies.
+12. ◐ **`runtime:` standard modules II** — ☑ **`runtime:serialization`** (XML validation, XML parser, and XML builder backed natively by `quick-xml`). Remaining: `runtime:net` (sockets, listener provider) and `runtime:http` (HTTP **server** — the standalone capstone). ☑ Streaming `fetch` request bodies (chunked upload with backpressure; DECISIONS D20).
 13. ◐ **Diagnostics & DX** — error model standardization. ☑ JS **stack traces + source position** (`engine` extracts `Error.stack` with a `v8::Message` `file:line:col` fallback, preserving the error class), ☑ **one coherent CLI error block** with ☑ **optional color** (bold-red `error`, dimmed `at …` frames; terminal-detected + `NO_COLOR`-aware). Remaining: **stable guest-facing error codes** (errors are typed Rust enums today, no stable string codes). (SPEC §7 deferral promoted.)
-14. ☐ **Production hardening & release** — fuzzing + sanitizers/Miri in CI, soak/leak tests, external security review, API freeze + semver commitment, embedder guide + supported-platforms statement, macOS CI. *(A standard **WPT subset** is **deferred to post-1.0**: this is a server-side WinterTC runtime, so full Web Platform Tests — built around DOM/document/worker semantics and legacy encodings — are disproportionate; the curated in-repo `conformance/*.js` suite is the pre-1.0 conformance signal and keeps trending up.)*
+14. ◐ **Production hardening & release** — ☑ cross-platform test CI (Linux + Windows + macOS matrix); ◐ soak/leak tests (the streaming-`fetch` leak soak landed; broad cross-subsystem coverage remains). Remaining: fuzzing + sanitizers/Miri in CI, external security review, API freeze + semver commitment, embedder guide + supported-platforms statement. *(A standard **WPT subset** is **deferred to post-1.0**: this is a server-side WinterTC runtime, so full Web Platform Tests — built around DOM/document/worker semantics and legacy encodings — are disproportionate; the curated in-repo `conformance/*.js` suite is the pre-1.0 conformance signal and keeps trending up.)*
 
 ---
 
@@ -142,7 +146,12 @@ Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM
 - **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) — ☑ **implemented in Phase 9**: a host op panic is contained as a JS exception, not an abort (assumes `panic = "unwind"`). (DECISIONS D15.)
 - **`DOMException` engine reconciliation** — ☑ **implemented**: the engine dynamically resolves `globalThis.DOMException` when marshaling a native `DOMException`, surfacing it as a proper instance of the JS class (resolves DECISIONS D3a).
 - **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) — ☑ **implemented in Phase 9** (copy-based, no ArrayBuffer transfer/detach; DECISIONS D19). Default streams + encoding streams shipped in Phase 5.
-- **Streaming `fetch` request bodies** → a follow-up; Phase 6 buffers the request body and streams the response (DECISIONS D20).
+- **Streaming `fetch` request bodies** → ☑ **implemented**: a `ReadableStream`
+  request body uploads with chunked transfer-encoding, pumped to the host one
+  chunk at a time over a bounded channel (upload backpressure); a stream error
+  aborts the in-flight request. The provider's `HttpRequest.body` is now a
+  `RequestBody` enum (`Empty`/`Bytes`/`Stream`). Non-stream bodies stay buffered.
+  (DECISIONS D20.)
 - **`crypto.subtle` minor gaps.** The algorithm set is complete (digest/HMAC/AES-GCM/CBC/CTR, HKDF/PBKDF2, ECDSA/ECDH, RSA PKCS1-v1_5/PSS/OAEP — DECISIONS D9). Remaining edges: AES-CTR supports only 32/64/128-bit counter widths (others → `NotSupportedError`); RSA-OAEP **labels must be UTF-8** (the `rsa` 0.9 API limitation; non-UTF-8 → `NotSupportedError`); EC keys import/export as raw/spki/pkcs8/jwk and RSA as spki/pkcs8/jwk; `deriveKey` targets AES-* and HMAC keys. All asymmetric signing/keygen randomness routes through the Entropy provider, never ambient `OsRng`. RSA carries an **accepted timing-sidechannel advisory** (RUSTSEC-2023-0071) tracked on the SECURITY.md revisit list.
 - **`runtime:net` TLS** → implemented per the WinterTC Sockets API (DECISIONS D28). **In:** `secureTransport: "on"` client TLS (certificate verification, **SNI**, **ALPN** surfaced as `SocketInfo.alpn`), the `Socket.upgraded` flag, `startTls()` / `secureTransport: "starttls"` in-place upgrade, **server-side TLS termination on `listen`** (`{ secureTransport: "on", cert, key, alpn }`, cert/key inline so no capability beyond `NetListen`), `allowHalfOpen`, and the combined `"host:port"` `SocketInfo` shape. The TLS surface is complete. The remaining spec-letter details are also covered: the advisory `close(reason?)` argument, and `SocketError` (failures surface as a `TypeError` whose message is prefixed `"SocketError: "`). The `runtime:net` surface fully matches the WinterTC Sockets proposal.
   - **Perf follow-up (cache-optimization phase):** TLS `connect` currently builds a fresh `ClientConfig` + crypto provider **per connection** (`SystemNet::tls_connector`), cloning the webpki root store each time. Micro-bench the per-connect setup cost; if non-trivial, cache the `TlsConnector` keyed by the ALPN tuple. Internal optimization only — no API change.

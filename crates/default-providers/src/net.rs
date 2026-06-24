@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use futures_util::StreamExt;
 
 use es_runtime_providers::{
-    BoxFuture, ByteStream, HttpRequest, HttpResponse, NetTransport, ProviderError,
+    BoxFuture, ByteStream, HttpRequest, HttpResponse, NetTransport, ProviderError, RequestBody,
 };
 
 /// A [`NetTransport`] backed by `reqwest` with rustls TLS (no OpenSSL). HTTP/1.1
@@ -52,8 +52,18 @@ impl NetTransport for ReqwestTransport {
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
             }
-            if let Some(body) = request.body {
-                builder = builder.body(body);
+            match request.body {
+                RequestBody::Empty => {}
+                RequestBody::Bytes(body) => {
+                    builder = builder.body(body);
+                }
+                RequestBody::Stream(stream) => {
+                    // Chunked transfer-encoding: reqwest pulls from the stream as
+                    // the connection drains, so the upload never fully buffers.
+                    // `Bytes: From<Vec<u8>>`, so only the error needs adapting.
+                    let body = stream.map(|chunk| chunk.map_err(std::io::Error::other));
+                    builder = builder.body(reqwest::Body::wrap_stream(body));
+                }
             }
 
             let response = builder

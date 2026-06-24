@@ -779,6 +779,65 @@ mod tests {
         }
     }
 
+    /// A test transport that drains the **request** body (buffered or streamed)
+    /// and echoes it back as the response body, recording what it received so a
+    /// test can assert both the uploaded content and that a streamed body arrived
+    /// as a `RequestBody::Stream` (i.e. was not buffered in JS).
+    struct EchoNet {
+        captured: Arc<std::sync::Mutex<Vec<u8>>>,
+        saw_stream: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl EchoNet {
+        fn new() -> Self {
+            EchoNet {
+                captured: Arc::new(std::sync::Mutex::new(Vec::new())),
+                saw_stream: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            }
+        }
+    }
+    impl es_runtime_providers::NetTransport for EchoNet {
+        fn fetch(
+            &self,
+            request: es_runtime_providers::HttpRequest,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                es_runtime_providers::HttpResponse,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            use es_runtime_providers::RequestBody;
+            use futures_util::StreamExt;
+            let captured = self.captured.clone();
+            let saw_stream = self.saw_stream.clone();
+            Box::pin(async move {
+                let body = match request.body {
+                    RequestBody::Empty => Vec::new(),
+                    RequestBody::Bytes(b) => b,
+                    RequestBody::Stream(mut s) => {
+                        saw_stream.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let mut buf = Vec::new();
+                        while let Some(chunk) = s.next().await {
+                            // A guest stream error (forwarded via close(id, err))
+                            // surfaces here and aborts the request.
+                            buf.extend_from_slice(&chunk?);
+                        }
+                        buf
+                    }
+                };
+                *captured.lock().unwrap() = body.clone();
+                let stream: es_runtime_providers::ByteStream =
+                    Box::pin(futures_util::stream::iter(std::iter::once(Ok(body))));
+                Ok(es_runtime_providers::HttpResponse {
+                    status: 200,
+                    status_text: "OK".into(),
+                    url: request.url,
+                    headers: vec![],
+                    body: stream,
+                })
+            })
+        }
+    }
+
     /// A deterministic (non-crypto) entropy source for tests.
     struct TestEntropy {
         state: std::sync::atomic::AtomicU64,
@@ -1538,6 +1597,201 @@ mod tests {
              return s;",
         );
         assert_eq!(out, Value::String("foobarbaz".into()));
+    }
+
+    #[test]
+    fn fetch_streams_a_request_body_from_a_readable_stream() {
+        let _g = v8_guard();
+        let net = Arc::new(EchoNet::new());
+        let mut rt = runtime_with_net(net.clone());
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // A ReadableStream body of three chunks streams to the host (not buffered
+        // in JS); the EchoNet echoes the concatenation back.
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); \
+             const body = new ReadableStream({ start(c) { \
+               c.enqueue(enc.encode('alpha-')); c.enqueue(enc.encode('beta-')); \
+               c.enqueue(enc.encode('gamma')); c.close(); } }); \
+             const r = await fetch('https://x.test/up', { method: 'POST', body }); \
+             return await r.text();",
+        );
+        assert_eq!(out, Value::String("alpha-beta-gamma".into()));
+        assert_eq!(&*net.captured.lock().unwrap(), b"alpha-beta-gamma");
+        assert!(
+            net.saw_stream.load(std::sync::atomic::Ordering::SeqCst),
+            "request body should have arrived as a stream, not buffered"
+        );
+    }
+
+    #[test]
+    fn fetch_buffers_a_string_request_body() {
+        let _g = v8_guard();
+        let net = Arc::new(EchoNet::new());
+        let mut rt = runtime_with_net(net.clone());
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // A non-stream body still travels buffered (RequestBody::Bytes), so the
+        // transport must NOT see a stream.
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/up', { method: 'POST', body: 'hello body' }); \
+             return await r.text();",
+        );
+        assert_eq!(out, Value::String("hello body".into()));
+        assert_eq!(&*net.captured.lock().unwrap(), b"hello body");
+        assert!(
+            !net.saw_stream.load(std::sync::atomic::Ordering::SeqCst),
+            "a string body must be sent buffered, not streamed"
+        );
+    }
+
+    #[test]
+    fn fetch_streams_an_empty_request_body() {
+        let _g = v8_guard();
+        let net = Arc::new(EchoNet::new());
+        let mut rt = runtime_with_net(net.clone());
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // A ReadableStream that closes immediately: still the streaming path, but
+        // zero bytes uploaded.
+        let out = eval_async(
+            &mut rt,
+            "const body = new ReadableStream({ start(c) { c.close(); } }); \
+             const r = await fetch('https://x.test/up', { method: 'POST', body }); \
+             return (await r.text()).length;",
+        );
+        assert_eq!(out, Value::Number(0.0));
+        assert!(net.captured.lock().unwrap().is_empty());
+        assert!(net.saw_stream.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn fetch_aborts_when_the_request_body_stream_errors() {
+        let _g = v8_guard();
+        let net = Arc::new(EchoNet::new());
+        let mut rt = runtime_with_net(net.clone());
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // A body stream that errors mid-flight: the error is forwarded to the
+        // host, which aborts the request, and `fetch` rejects.
+        let out = eval_async(
+            &mut rt,
+            "const enc = new TextEncoder(); let n = 0; \
+             const body = new ReadableStream({ pull(c) { \
+               if (n++ === 0) c.enqueue(enc.encode('partial')); \
+               else c.error(new Error('boom')); } }); \
+             const r = await fetch('https://x.test/up', { method: 'POST', body }); \
+             return await r.text();",
+        );
+        match out {
+            Value::String(s) => assert!(
+                s.starts_with("ERR:") && s.contains("boom"),
+                "expected the body-stream error to reject fetch, got {s}"
+            ),
+            other => panic!("expected rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_streaming_request_body_requires_net_capability() {
+        let _g = v8_guard();
+        let net = Arc::new(EchoNet::new());
+        let mut rt = runtime_with_net(net);
+        // No Net capability: allocating the body stream channel must itself be
+        // gated, so the streaming path is denied just like the buffered one.
+        let out = eval_async(
+            &mut rt,
+            "const body = new ReadableStream({ start(c) { c.close(); } }); \
+             await fetch('https://x.test/up', { method: 'POST', body }); return 'ok';",
+        );
+        match out {
+            Value::String(s) => assert!(
+                s.starts_with("ERR:") && (s.contains("capability") || s.contains("NotAllowed")),
+                "expected capability denial, got {s}"
+            ),
+            other => panic!("expected rejection, got {other:?}"),
+        }
+    }
+
+    /// Resident set size in KiB (Linux), for the soak/leak test. Elsewhere 0, so
+    /// the growth bound is trivially satisfied (the registry-drain assertion is
+    /// the portable leak guard).
+    #[cfg(target_os = "linux")]
+    fn resident_kib() -> u64 {
+        let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
+        let pages: u64 = statm
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        pages * 4 // 4 KiB pages
+    }
+    #[cfg(not(target_os = "linux"))]
+    fn resident_kib() -> u64 {
+        0
+    }
+
+    /// Soak: hammer the streaming-request-body path and prove it neither leaks
+    /// (the three body registries drain to zero each time, and RSS stays bounded)
+    /// nor deadlocks/corrupts over many iterations. Opt-in:
+    ///   cargo test -p es-runtime -- --ignored soak
+    #[test]
+    #[ignore = "soak/leak: run with `cargo test -p es-runtime -- --ignored soak_streaming_fetch`"]
+    fn soak_streaming_fetch_does_not_leak() {
+        let _g = v8_guard();
+        let net = Arc::new(EchoNet::new());
+        let mut rt = runtime_with_net(net.clone());
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+
+        const ITERS: usize = 20_000;
+        // Warm up the heap/allocator before sampling so we measure steady-state
+        // growth, not first-touch.
+        let script = "const enc = new TextEncoder(); \
+             const body = new ReadableStream({ start(c) { \
+               c.enqueue(enc.encode('alpha-')); c.enqueue(enc.encode('beta-')); \
+               c.enqueue(enc.encode('gamma')); c.close(); } }); \
+             const r = await fetch('https://x.test/up', { method: 'POST', body }); \
+             return await r.text();";
+        for _ in 0..500 {
+            assert_eq!(
+                eval_async(&mut rt, script),
+                Value::String("alpha-beta-gamma".into())
+            );
+        }
+
+        let mut rss_mid = 0u64;
+        for k in 0..ITERS {
+            let out = eval_async(&mut rt, script);
+            assert_eq!(out, Value::String("alpha-beta-gamma".into()), "iter {k}");
+            // The precise leak guard: the three body registries must be empty
+            // between requests — no leaked response body stream, request sender,
+            // or receiver. This holds regardless of V8 heap behavior.
+            let inflight = rt.eval("globalThis.__ops.__fetch_inflight()").unwrap();
+            assert_eq!(
+                inflight,
+                Value::Array(vec![
+                    Value::Number(0.0),
+                    Value::Number(0.0),
+                    Value::Number(0.0)
+                ]),
+                "registry not drained at iter {k}"
+            );
+            // Sample resident set at the halfway mark, so the comparison below
+            // measures *steady-state* growth (the V8 heap/code-cache warm-up is
+            // a one-time cost paid in the first half).
+            if k == ITERS / 2 {
+                rss_mid = resident_kib();
+            }
+        }
+
+        let rss_after = resident_kib();
+        let second_half = rss_after.saturating_sub(rss_mid);
+        // A per-iteration native leak would keep growing linearly into the second
+        // half; a warmed V8 heap plateaus. Require the second-half growth to stay
+        // small (the registry-drain assertion above is the precise guard).
+        assert!(
+            second_half < 16 * 1024,
+            "RSS grew {second_half} KiB over the second {} streaming fetches — possible leak",
+            ITERS / 2
+        );
     }
 
     /// A scripted WebSocketProvider for the `WebSocket` global (DECISIONS D29):

@@ -1,5 +1,20 @@
 import DocsShell from "../../../components/DocsShell.jsx";
 import StatusIcon from "../../../components/StatusIcon.jsx";
+import CodeBlock from "../../../components/CodeBlock.jsx";
+
+// A ReadableStream request body uploads as a chunked transfer with backpressure —
+// the payload never fully buffers, so large/open-ended uploads stay memory-bounded.
+const STREAM_UPLOAD = `// A ReadableStream body streams to the server (chunked upload, backpressured).
+const body = new ReadableStream({
+  async pull(c) {
+    const next = await source.read();        // your data source
+    if (next.done) c.close();
+    else c.enqueue(next.value);              // Uint8Array chunks
+  },
+});
+
+await fetch("https://example.com/upload", { method: "POST", body });
+// Anything else (string, Blob, FormData, Uint8Array) is sent buffered.`;
 
 // Web-standard globals available in esrun (sourced from the runtime prelude).
 const groups = [
@@ -34,7 +49,7 @@ const groups = [
   {
     title: "Fetch & networking",
     items: [
-      { n: "fetch", s: "yes" },
+      { n: "fetch", s: "yes", note: "streaming request + response bodies" },
       { n: "Request", s: "yes" },
       { n: "Response", s: "yes" },
       { n: "Headers", s: "yes" },
@@ -147,6 +162,19 @@ export default function GlobalsDoc() {
           </div>
         </div>
       ))}
+
+      <h2 className="mt-12 text-xl font-semibold text-zinc-900">
+        Streaming upload
+      </h2>
+      <p className="mt-3 text-zinc-600">
+        Passing a <code className="font-mono">ReadableStream</code> as the{" "}
+        <code className="font-mono">fetch</code> body uploads it as a chunked
+        transfer with backpressure — the body is never fully buffered, so large
+        or open-ended uploads stay memory-bounded. Response bodies stream too.
+      </p>
+      <div className="mt-5">
+        <CodeBlock code={STREAM_UPLOAD} title="upload.js" lang="js" />
+      </div>
 
       <h2 className="mt-12 text-xl font-semibold text-zinc-900">
         Not available

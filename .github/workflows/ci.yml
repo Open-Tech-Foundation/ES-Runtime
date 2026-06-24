@@ -41,9 +41,20 @@ jobs:
       - run: cargo build --workspace --all-features
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+  # Behavioral tests run on all three tier-1 platforms: filesystem/path semantics
+  # (separators, drive letters, the symlink-canonicalized root jail), process exit
+  # codes, networking (half-close, localhost, streaming upload), and CRLF/encoding
+  # handling genuinely differ off Linux even though the Rust source is identical,
+  # so Linux-only coverage misses them. The `v8` crate ships prebuilt static libs
+  # for x86_64-pc-windows-msvc and aarch64-apple-darwin, so no source V8 build is
+  # needed. `fail-fast: false` so one platform's failure still reports the others.
   test:
-    name: test
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2

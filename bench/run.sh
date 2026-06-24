@@ -39,7 +39,7 @@ STARTUP_RUNS="${STARTUP_RUNS:-15}"
 WORKLOAD_RUNS="${WORKLOAD_RUNS:-5}"
 # Coefficient-of-variation (%) above which a measured cell is flagged as noisy.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
-ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch http websocket fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream"
+ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch fetch_upload http websocket fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923
@@ -90,20 +90,33 @@ trap cleanup EXIT
 
 # --- fetch server -----------------------------------------------------------
 
-# Starts the local HTTP server for the fetch workload. Drops the workload (with
-# a notice) if Node is missing or the port doesn't come up.
+# Starts the local HTTP server for the fetch + fetch_upload workloads. The server
+# drains any request body (so the streamed-upload workload actually transfers its
+# bytes) and replies with a fixed payload. Drops both workloads (with a notice) if
+# Node is missing or the port doesn't come up.
 start_fetch_server() {
-  case " $WORKLOADS " in *" fetch "*) ;; *) return ;; esac
+  case " $WORKLOADS " in
+    *" fetch "* | *" fetch_upload "*) ;;
+    *) return ;;
+  esac
   if ! command -v node >/dev/null 2>&1; then
-    note "fetch workload skipped (needs node for the local server)"
-    WORKLOADS="${WORKLOADS//fetch/}"
+    note "fetch/fetch_upload workloads skipped (needs node for the local server)"
+    drop_fetch_workloads
     return
   fi
   node -e '
     const http = require("http");
     http.createServer((req, res) => {
-      res.setHeader("content-type", "text/plain");
-      res.end("x".repeat(64));
+      // Count the request body so the upload workload can verify the bytes
+      // actually arrived (a runtime that does not truly stream the body gets a
+      // mismatch and is recorded n/a, keeping the comparison fair). A GET still
+      // gets the fixed 64-byte payload the buffered `fetch` workload expects.
+      let n = 0;
+      req.on("data", (c) => { n += c.length; });
+      req.on("end", () => {
+        res.setHeader("content-type", "text/plain");
+        res.end(req.method === "POST" ? String(n) : "x".repeat(64));
+      });
     }).listen('"$FETCH_PORT"', "127.0.0.1");
   ' &
   SERVER_PID=$!
@@ -111,10 +124,20 @@ start_fetch_server() {
     (echo > "/dev/tcp/127.0.0.1/$FETCH_PORT") 2>/dev/null && return
     sleep 0.1
   done
-  note "fetch workload skipped (server did not come up on :$FETCH_PORT)"
+  note "fetch/fetch_upload workloads skipped (server did not come up on :$FETCH_PORT)"
   kill "$SERVER_PID" 2>/dev/null
   SERVER_PID=""
-  WORKLOADS="${WORKLOADS//fetch/}"
+  drop_fetch_workloads
+}
+
+# Removes the server-dependent fetch workloads from the active set (token-safe, so
+# "fetch_upload" isn't mangled by a substring removal of "fetch").
+drop_fetch_workloads() {
+  local kept="" w
+  for w in $WORKLOADS; do
+    case "$w" in fetch | fetch_upload) ;; *) kept="$kept $w" ;; esac
+  done
+  WORKLOADS="${kept# }"
 }
 
 # --- websocket echo server --------------------------------------------------

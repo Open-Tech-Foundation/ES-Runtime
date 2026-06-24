@@ -6,22 +6,22 @@ export default {
     "bun": "1.3.12",
     "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.8.0"
+    "esrun": "esrun 0.9.0"
   },
   "results_ms": {
     "startup": {
       "node": 17.4,
-      "bun": 8.8,
+      "bun": 9.2,
       "deno": 24,
-      "llrt": 3.6,
-      "esrun": 7.2
+      "llrt": 3.3,
+      "esrun": 7.1
     },
     "bigscript": {
-      "node": 28.9,
-      "bun": 20.8,
-      "deno": 32.5,
+      "node": 29.2,
+      "bun": 20.7,
+      "deno": 32.4,
       "llrt": 11.2,
-      "esrun": 18.3
+      "esrun": 18.2
     },
     "compute": {
       "node": 194.2,
@@ -309,6 +309,13 @@ export default {
       "deno": 9507.1,
       "llrt": null,
       "esrun": 4144.3
+    },
+    "fetch_upload": {
+      "node": 109.8,
+      "bun": 45.5,
+      "deno": 35.1,
+      "llrt": null,
+      "esrun": 36.5
     }
   },
   "results_rss": {
@@ -324,7 +331,7 @@ export default {
       "bun": 33,
       "deno": 55,
       "llrt": 11,
-      "esrun": 22
+      "esrun": 21
     },
     "compute": {
       "node": 53,
@@ -612,6 +619,13 @@ export default {
       "deno": 351,
       "llrt": null,
       "esrun": 108
+    },
+    "fetch_upload": {
+      "node": 88,
+      "bun": 50,
+      "deno": 62,
+      "llrt": null,
+      "esrun": 31
     }
   },
   "results_rps": {

@@ -10,7 +10,7 @@ LLRT has no general HTTP server and only partial `fs`/streams).
 and built for cold-start and low memory — a deliberate foil for esrun's startup
 and footprint numbers, and a different engine (QuickJS, vs V8 for
 esrun/Node/Deno and JavaScriptCore for Bun). It runs the engine + Web-API
-workloads it supports; `http`/`streams`/`fs`/`glob` fall through to n/a.
+workloads it supports; `http`/`streams`/`fs`/`glob`/`fetch_upload` fall through to n/a.
 
 ## Running
 
@@ -51,6 +51,7 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **timers** | 10 000 zero-delay `setTimeout`s drained to completion — timer scheduling + driver. |
 | **streams** | `ReadableStream`→`TransformStream`→`WritableStream` pipe of 5 000 × 1 KiB chunks — the streams machinery (pure-JS prelude for esrun). |
 | **fetch** | 300 sequential GETs against a local HTTP server — the network provider seam end-to-end (started by run.sh via Node; skipped if Node is absent). |
+| **fetch_upload** | 200 sequential POSTs each streaming an 8 KiB `ReadableStream` request body (chunked upload) to the same local server — the request-body streaming path: building the body stream, the per-chunk host channel with backpressure, and chunked transfer-encoding. The server echoes the bytes it received and the workload **verifies** them, so a runtime that doesn't truly stream the body (e.g. LLRT, which coerces the stream) is recorded **n/a** rather than posting a misleadingly fast time. |
 | **http** | 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
 | **websocket** | 20 000 serial message round-trips over one `WebSocket` to a local echo server — the WebSocket *client* seam: opening handshake then per-message `send` + event dispatch (esrun: the `ws_send` op + the receive-pump's `MessageEvent` per tick). Server is whichever built-in WS server is present (Bun/Deno, or Node + `ws`); LLRT has no `WebSocket`, hence n/a. |
 | **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory floor. |

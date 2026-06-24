@@ -2,11 +2,39 @@
 
 All notable changes to ES-Runtime are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project is
-pre-`0.1.0` and the public API is unstable.
+pre-`1.0` and the public API (the Rust crates and the `runtime:` standard-module
+namespace) is unstable and may change between minor releases until the API freeze
+(SPEC §14).
 
 ## [Unreleased]
 
+### Testing / CI
+
+- **Cross-platform test CI.** The behavioral test job now runs on a
+  **Linux + Windows + macOS** matrix (was Linux-only), so platform-divergent
+  surfaces — filesystem/path semantics, the symlink-canonicalized root jail,
+  process exit codes, networking, CRLF/encoding — are covered on each tier-1 OS.
+- **Soak / leak tests.** Opt-in soak tests (`#[ignore]`,
+  `cargo test -- --ignored soak`) hammer a subsystem over many iterations and
+  assert it neither leaks nor deadlocks. The first runs 20k streaming-`fetch`
+  uploads and asserts the request/response body registries drain to zero every
+  iteration (precise native-leak guard) with bounded steady-state RSS.
+
 ### Added
+
+- **Streaming `fetch` request bodies.** A `fetch` whose body is a `ReadableStream`
+  now uploads with chunked transfer-encoding instead of being buffered first, so a
+  large or open-ended request body streams to the server with bounded memory.
+  The guest stream is pumped into the host one chunk at a time across a bounded
+  channel (upload backpressure); a stream error aborts the in-flight request, and
+  a non-stream body (string/bytes/Blob/FormData) still travels buffered as before.
+  New provider type `RequestBody` (`Empty`/`Bytes`/`Stream`) replaces
+  `HttpRequest.body: Option<Vec<u8>>` (**breaking** for embedders implementing
+  `NetTransport`). This closes the last Fetch streaming gap — request **and**
+  response bodies now stream (SPEC §2.9; DECISIONS D20). New cross-runtime
+  benchmark **`fetch_upload`** (200 streamed POSTs): the workload verifies the
+  bytes actually arrived, so a runtime that doesn't truly stream the body is
+  recorded n/a; esrun ties Deno and leads Bun/Node, lowest RSS.
 
 - **Protobuf proto3-JSON.** `schema.toJson(messageName, value)` and
   `schema.fromJson(messageName, json)` convert between the decoded value shape

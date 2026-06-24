@@ -56,6 +56,10 @@ serde_json = "1.0.150"
 dunce = "1.0.5"
 # Async byte-stream trait for provider bodies (trait-only, tiny).
 futures-core = "0.3.32"
+# Runtime-agnostic mpsc channel (no tokio) — backs the streaming `fetch` request
+# body: JS pushes chunks into a bounded sender, the transport drains the receiver
+# as a `ByteStream`. Bounded capacity gives upload backpressure.
+futures-channel = { version = "0.3.32", default-features = false, features = ["alloc"] }
 # Vetted HTTP client for the default NetTransport (DECISIONS.md D20). rustls TLS
 # only (no OpenSSL/native-tls). Confined to `default-providers`.
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset"] }

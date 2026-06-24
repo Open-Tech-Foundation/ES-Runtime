@@ -11,11 +11,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use futures_util::stream;
+use futures_util::{StreamExt, stream};
 
 use es_runtime_providers::{
     BoxFuture, ByteStream, Clock, Console, ConsoleLevel, Entropy, HttpRequest, HttpResponse,
-    NetTransport, ProviderError, TaskSpawner, Timers,
+    NetTransport, ProviderError, RequestBody, TaskSpawner, Timers,
 };
 
 /// A [`Clock`] whose monotonic time advances only via [`advance`](Self::advance)
@@ -195,14 +195,14 @@ impl MockResponse {
 /// A deterministic [`NetTransport`] that answers from a handler closure — no
 /// network. Tests assert on fetch behavior without connectivity.
 pub struct MockTransport {
-    handler: Box<dyn Fn(HttpRequest) -> MockResponse + Send + Sync>,
+    handler: Arc<dyn Fn(HttpRequest) -> MockResponse + Send + Sync>,
 }
 
 impl MockTransport {
     /// Builds a transport whose `handler` decides the response per request.
     pub fn new(handler: impl Fn(HttpRequest) -> MockResponse + Send + Sync + 'static) -> Self {
         MockTransport {
-            handler: Box::new(handler),
+            handler: Arc::new(handler),
         }
     }
 
@@ -213,13 +213,24 @@ impl MockTransport {
 }
 
 impl NetTransport for MockTransport {
-    fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
-        let url = request.url.clone();
-        let response = (self.handler)(request);
-        let chunks: Vec<Result<Vec<u8>, ProviderError>> =
-            response.chunks.into_iter().map(Ok).collect();
-        let body: ByteStream = Box::pin(stream::iter(chunks));
+    fn fetch(&self, mut request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
+        // Drain a streaming request body to bytes first, so the handler always
+        // sees a buffered `RequestBody::Bytes` and tests can assert the uploaded
+        // content regardless of how the guest produced it.
+        let handler = self.handler.clone();
         Box::pin(async move {
+            if let RequestBody::Stream(mut stream) = request.body {
+                let mut buf = Vec::new();
+                while let Some(chunk) = stream.next().await {
+                    buf.extend_from_slice(&chunk?);
+                }
+                request.body = RequestBody::Bytes(buf);
+            }
+            let url = request.url.clone();
+            let response = (handler)(request);
+            let chunks: Vec<Result<Vec<u8>, ProviderError>> =
+                response.chunks.into_iter().map(Ok).collect();
+            let body: ByteStream = Box::pin(stream::iter(chunks));
             Ok(HttpResponse {
                 status: response.status,
                 status_text: response.status_text,

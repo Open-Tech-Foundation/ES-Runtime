@@ -58,6 +58,16 @@ fn resolves_parent_directory_imports_on_disk() {
 }
 
 #[test]
+fn streams_a_fetch_request_body_to_a_server() {
+    // Real reqwest chunked upload → real runtime:http echo server, end to end.
+    let out = run_file("fetch-stream-upload.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("UPLOAD_OK"), "{stdout}");
+    assert!(stdout.contains("status:200"), "{stdout}");
+}
+
+#[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
         .arg("-e")

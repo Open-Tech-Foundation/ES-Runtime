@@ -146,9 +146,32 @@ pub struct HttpRequest {
     pub url: String,
     /// Header name/value pairs, in order.
     pub headers: Vec<(String, String)>,
-    /// The request body, already buffered. Streaming request bodies are a
-    /// follow-up (SPEC §7); response bodies stream via [`ByteStream`].
-    pub body: Option<Vec<u8>>,
+    /// The request body — absent, fully buffered, or streamed incrementally.
+    pub body: RequestBody,
+}
+
+/// The body of an outbound [`HttpRequest`].
+///
+/// A buffered body ([`Bytes`](RequestBody::Bytes)) is the common case and lets
+/// the transport set `Content-Length`. A [`Stream`](RequestBody::Stream) is sent
+/// with chunked transfer-encoding without ever materializing the whole payload —
+/// the runtime feeds it incrementally from a guest `ReadableStream`, so a large
+/// upload streams with bounded memory.
+pub enum RequestBody {
+    /// No request body.
+    Empty,
+    /// A fully-buffered body.
+    Bytes(Vec<u8>),
+    /// A body streamed as byte-chunks (chunked transfer-encoding). Ends at the
+    /// stream's `None`; an item `Err` aborts the in-flight request.
+    Stream(ByteStream),
+}
+
+impl RequestBody {
+    /// Whether there is no body (`Empty`).
+    pub fn is_empty(&self) -> bool {
+        matches!(self, RequestBody::Empty)
+    }
 }
 
 /// The response a [`NetTransport`] returns: metadata available immediately, body
