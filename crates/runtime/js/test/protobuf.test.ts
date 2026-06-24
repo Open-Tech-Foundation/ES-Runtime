@@ -106,6 +106,34 @@ test("negative enum values parse", () => {
   expect(s.decode("M", s.encode("M", { e: "NEG" }))).toEqual({ e: "NEG" });
 });
 
+test("decodeStream yields repeated message elements across chunk boundaries", async () => {
+  const s = new Schema(`syntax="proto3";
+    message Book { string title = 1; uint64 isbn = 2; }
+    message Catalog { string name = 1; repeated Book books = 2; uint32 count = 3; }`);
+  const books = [{ title: "A", isbn: 1n }, { title: "Bigger title", isbn: 2n }, { title: "C", isbn: 3n }];
+  // `name` precedes the repeated field and `count` follows — both must be skipped.
+  const bytes = s.encode("Catalog", { name: "lib", books, count: 3 });
+
+  // Feed one byte at a time to stress varint/length straddling chunk boundaries.
+  async function* oneByteAtATime() {
+    for (const b of bytes) yield new Uint8Array([b]);
+  }
+  const out = [];
+  for await (const book of s.decodeStream("Catalog", "books", oneByteAtATime())) out.push(book);
+  expect(out).toEqual(books);
+});
+
+test("decodeStream accepts a ReadableStream and rejects non-repeated-message fields", async () => {
+  const s = new Schema(`syntax="proto3"; message M { repeated int32 ns = 1; message Sub { int32 a = 1; } repeated Sub subs = 2; }`);
+  expect(() => s.decodeStream("M", "ns", [])).toThrow(/repeated message field/);
+
+  const bytes = s.encode("M", { subs: [{ a: 1 }, { a: 2 }] });
+  const stream = new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } });
+  const out = [];
+  for await (const sub of s.decodeStream("M", "subs", stream)) out.push(sub);
+  expect(out).toEqual([{ a: 1 }, { a: 2 }]);
+});
+
 test("editions delimited (group) message encoding round-trips", () => {
   const s = new Schema(`edition = "2023";
     option features.message_encoding = DELIMITED;

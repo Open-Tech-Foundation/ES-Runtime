@@ -190,6 +190,19 @@ declare module "runtime:serialization" {
         json: JsonValue,
         options?: { ignoreUnknownFields?: boolean },
       ): Record<string, unknown>;
+
+      /**
+       * Streams the elements of a repeated message field (`fieldName`) from a
+       * chunked byte source — a `ReadableStream`, async iterable, or sync
+       * iterable of `Uint8Array`. Each element is decoded and yielded as it is
+       * fully buffered; the outer message's other fields are skipped, so a
+       * large collection is processed without materializing the whole array.
+       */
+      decodeStream(
+        messageName: string,
+        fieldName: string,
+        source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+      ): AsyncGenerator<Record<string, unknown>>;
     }
   }
 }

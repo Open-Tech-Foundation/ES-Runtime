@@ -545,6 +545,7 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 | `schema.encode(messageName, value)` | Encodes a JavaScript object into a `Uint8Array`. |
 | `schema.toJson(messageName, value)` | Converts a decoded value to its canonical proto3-JSON representation. |
 | `schema.fromJson(messageName, json)` | Parses canonical proto3-JSON into the decoded value shape (ready for `encode`). |
+| `schema.decodeStream(messageName, fieldName, source)` | Async generator that streams the elements of a repeated message field from a chunked byte `source` (a `ReadableStream` or async/sync iterable of `Uint8Array`), yielding each element as it arrives and skipping the other fields. |
 
 Decoded value shape: camelCase field names; 64-bit integer fields (`int64`/`uint64`/`sint64`/`fixed64`/`sfixed64`) as **BigInt**; enums as their value-name string (unknown numbers kept as numbers); `bytes` as `Uint8Array`; maps as plain objects; nested messages as plain objects. Fields absent on the wire are omitted.
 

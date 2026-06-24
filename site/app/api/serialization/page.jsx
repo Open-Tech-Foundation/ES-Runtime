@@ -112,6 +112,7 @@ const sections = [
       { sig: "schema.encode(messageName, value)", type: "(string, object) => Uint8Array", desc: "Encodes a JavaScript object into a Protobuf byte array.", ex: `schema.encode("Hello", { name: "world" });` },
       { sig: "schema.toJson(messageName, value)", type: "(string, object) => JsonValue", desc: "Converts a decoded value to canonical proto3-JSON (64-bit ints and bytes as strings, enums as value-names, well-known-type special forms).", ex: `schema.toJson("Hello", value);` },
       { sig: "schema.fromJson(messageName, json, options?)", type: "(string, JsonValue, { ignoreUnknownFields? }) => object", desc: "Parses canonical proto3-JSON into the decoded value shape (ready for encode). Strict by default.", ex: `schema.fromJson("Hello", { name: "world" });` },
+      { sig: "schema.decodeStream(messageName, fieldName, source)", type: "(string, string, ReadableStream | AsyncIterable | Iterable) => AsyncGenerator<object>", desc: "Streams the elements of a repeated message field from a chunked byte source, yielding each as it arrives without materializing the whole array.", ex: `for await (const item of schema.decodeStream("Catalog", "books", stream)) { /* … */ }` },
     ]
   }
 ];

@@ -19,6 +19,12 @@ pre-`0.1.0` and the public API is unstable.
   `edition = "2024"` in addition to proto3 and edition 2023. The 2024 defaults
   for the wire-affecting features (field presence, repeated encoding, enum type)
   match edition 2023.
+- **Protobuf streaming.** `schema.decodeStream(messageName, fieldName, source)`
+  is an async generator that streams the elements of a repeated message field
+  from a chunked byte source (a `ReadableStream` or async/sync iterable of
+  `Uint8Array`), decoding each element as it arrives and skipping the outer
+  message's other fields — so a large collection is processed without
+  materializing the whole array.
 - **Protobuf delimited (group) message encoding.** Editions
   `features.message_encoding = DELIMITED` message fields now decode/encode as
   groups instead of being preserved as opaque unknown fields, so editions JSON

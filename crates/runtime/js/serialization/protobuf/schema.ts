@@ -6,6 +6,7 @@ import { type Registry, link } from "./link.js";
 import { decode } from "./decode.js";
 import { encode } from "./encode.js";
 import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.js";
+import { type StreamSource, decodeStream } from "./stream.js";
 import { Reader } from "./reader.js";
 import { Writer } from "./writer.js";
 import { WKT } from "./wkt.js";
@@ -68,6 +69,23 @@ export class Schema {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     return messageFromJson(m, json, this.registry, options);
+  }
+
+  /** Streams the elements of a repeated message field from a chunked byte
+   *  `source` (a ReadableStream or async/sync iterable of `Uint8Array`),
+   *  decoding each element as it arrives and skipping the other fields. */
+  decodeStream(messageName: string, fieldName: string, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+    const m = this.registry.messages.get(messageName);
+    if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
+    const field = m.fields.find((f) => f.jsonName === fieldName || f.name === fieldName);
+    if (!field) throw new Error(`protobuf: unknown field "${fieldName}" in ${messageName}`);
+    if (!field.repeated || field.type.kind !== "message") {
+      throw new Error(`protobuf: decodeStream requires a repeated message field; "${fieldName}" is not one`);
+    }
+    if (field.delimited) {
+      throw new Error(`protobuf: decodeStream does not support delimited (group) fields`);
+    }
+    return decodeStream(field, source);
   }
 }
 

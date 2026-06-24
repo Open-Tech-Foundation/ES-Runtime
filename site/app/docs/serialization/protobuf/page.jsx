@@ -241,6 +241,25 @@ schema.encode("M", { a: 0 }); // Uint8Array [8, 0] — the zero is on the wire`}
       </div>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Streaming a repeated field
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">schema.decodeStream</code> yields the elements of a repeated message field from a chunked byte source — a <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">ReadableStream</code> or async/sync iterable of <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Uint8Array</code> — decoding each as it arrives, so a large collection never materializes as one array. The outer message's other fields are skipped.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const schema = new Protobuf.Schema(\`
+  syntax = "proto3";
+  message Book { string title = 1; uint64 isbn = 2; }
+  message Catalog { string name = 1; repeated Book books = 2; }
+\`);
+
+const res = await fetch("https://example.com/catalog.pb");
+for await (const book of schema.decodeStream("Catalog", "books", res.body)) {
+  console.log(book.title, book.isbn); // each Book, one at a time
+}`} title="protobuf_stream.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
         Conformance
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">

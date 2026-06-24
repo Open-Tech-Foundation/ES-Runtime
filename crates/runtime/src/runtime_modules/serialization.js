@@ -2172,6 +2172,151 @@ function messageFromJson(message, j, registry, opts = {}) {
   return messageFromJsonCtx(message, j, { registry, ignoreUnknown: opts.ignoreUnknownFields ?? false });
 }
 
+// serialization/protobuf/stream.ts
+function pullFrom(source) {
+  const s = source;
+  if (typeof s.getReader === "function") {
+    const r = source.getReader();
+    return async () => {
+      const { done, value } = await r.read();
+      return done || value === undefined ? null : value;
+    };
+  }
+  if (typeof s[Symbol.asyncIterator] === "function") {
+    const it = source[Symbol.asyncIterator]();
+    return async () => {
+      const { done, value } = await it.next();
+      return done ? null : value;
+    };
+  }
+  if (typeof s[Symbol.iterator] === "function") {
+    const it = source[Symbol.iterator]();
+    return async () => {
+      const { done, value } = it.next();
+      return done ? null : value;
+    };
+  }
+  throw new Error("protobuf: decodeStream source must be a ReadableStream or (async) iterable of Uint8Array");
+}
+
+class ByteStream {
+  pull;
+  buf = new Uint8Array(0);
+  pos = 0;
+  done = false;
+  constructor(pull) {
+    this.pull = pull;
+  }
+  async more() {
+    if (this.done)
+      return false;
+    const chunk = await this.pull();
+    if (chunk == null) {
+      this.done = true;
+      return false;
+    }
+    if (chunk.length === 0)
+      return this.more();
+    const rest = this.buf.subarray(this.pos);
+    const next = new Uint8Array(rest.length + chunk.length);
+    next.set(rest);
+    next.set(chunk, rest.length);
+    this.buf = next;
+    this.pos = 0;
+    return true;
+  }
+  async ensure(n) {
+    while (this.buf.length - this.pos < n)
+      if (!await this.more())
+        return false;
+    return true;
+  }
+  async atEnd() {
+    if (this.buf.length > this.pos)
+      return false;
+    return !await this.more();
+  }
+  async varint() {
+    let result = 0n;
+    let shift = 0n;
+    let count = 0;
+    for (;; ) {
+      if (this.pos >= this.buf.length && !await this.more()) {
+        throw new Error("protobuf: truncated varint in stream");
+      }
+      if (++count > 10)
+        throw new Error("protobuf: varint is too long");
+      const b = this.buf[this.pos++];
+      result |= BigInt(b & 127) << shift;
+      shift += 7n;
+      if (!(b & 128))
+        break;
+    }
+    return result;
+  }
+  async tag() {
+    if (await this.atEnd())
+      return null;
+    const v = Number(await this.varint());
+    return { fieldNo: v >>> 3, wire: v & 7 };
+  }
+  async bytes(n) {
+    if (!await this.ensure(n))
+      throw new Error("protobuf: truncated length-delimited value in stream");
+    const out = this.buf.subarray(this.pos, this.pos + n);
+    this.pos += n;
+    return out;
+  }
+  async skip(wire) {
+    switch (wire) {
+      case 0:
+        await this.varint();
+        break;
+      case 1:
+        await this.bytes(8);
+        break;
+      case WIRE_LEN:
+        await this.bytes(Number(await this.varint()));
+        break;
+      case 5:
+        await this.bytes(4);
+        break;
+      case 3: {
+        for (;; ) {
+          const t = await this.tag();
+          if (!t)
+            throw new Error("protobuf: truncated group in stream");
+          if (t.wire === WIRE_EGROUP)
+            break;
+          await this.skip(t.wire);
+        }
+        break;
+      }
+      case WIRE_EGROUP:
+        break;
+      default:
+        throw new Error(`protobuf: cannot skip wire type ${wire} in stream`);
+    }
+  }
+}
+async function* decodeStream(field, source) {
+  if (field.type.kind !== "message")
+    return;
+  const element = field.type.message;
+  const reader = new ByteStream(pullFrom(source));
+  for (;; ) {
+    const t = await reader.tag();
+    if (!t)
+      break;
+    if (t.fieldNo === field.number && t.wire === WIRE_LEN) {
+      const len = Number(await reader.varint());
+      yield decode(element, new Reader(await reader.bytes(len)));
+    } else {
+      await reader.skip(t.wire);
+    }
+  }
+}
+
 // serialization/protobuf/wkt.ts
 var WKT = {
   "google/protobuf/timestamp.proto": `
@@ -2273,6 +2418,21 @@ class Schema {
     if (!m)
       throw new Error(`protobuf: unknown message "${messageName}"`);
     return messageFromJson(m, json, this.registry, options);
+  }
+  decodeStream(messageName, fieldName, source) {
+    const m = this.registry.messages.get(messageName);
+    if (!m)
+      throw new Error(`protobuf: unknown message "${messageName}"`);
+    const field = m.fields.find((f) => f.jsonName === fieldName || f.name === fieldName);
+    if (!field)
+      throw new Error(`protobuf: unknown field "${fieldName}" in ${messageName}`);
+    if (!field.repeated || field.type.kind !== "message") {
+      throw new Error(`protobuf: decodeStream requires a repeated message field; "${fieldName}" is not one`);
+    }
+    if (field.delimited) {
+      throw new Error(`protobuf: decodeStream does not support delimited (group) fields`);
+    }
+    return decodeStream(field, source);
   }
 }
 var Protobuf = { Schema };

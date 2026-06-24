@@ -1,6 +1,6 @@
 // Embedded google/protobuf well-known-type sources so `import` of them resolves
-// without a filesystem. Binary decode/encode treats these as ordinary messages
-// (their special JSON forms are a deferred concern).
+// without a filesystem. Binary decode/encode treats these as ordinary messages;
+// their special proto3-JSON forms are handled in json.ts.
 export const WKT: Record<string, string> = {
   "google/protobuf/timestamp.proto": `
     syntax = "proto3"; package google.protobuf;
