@@ -97,15 +97,25 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    termination.
 6. **Side channels (Spectre, timing).** Relies on V8's own mitigations; not
    separately addressed at this layer.
-7. **`esrun` grants all capabilities** (trusted-local-script mode) and loads ES
-   modules from the local filesystem via `FsModuleLoader`. That loader does
-   **not** confine resolution to a root — a `file:`/relative/absolute specifier
-   may reach any readable path (no `..`/symlink jail yet), so module loading has
-   the same reach as the granted `FileSystem` capability. `esrun` is a
-   convenience runner for trusted local code, not a sandbox for untrusted code;
-   an embedder sandboxing modules should supply a root-confining `ModuleLoader`
-   and withhold `FileSystem` where appropriate. (Root-jailing is a tracked
-   hardening follow-up; DECISIONS D21.)
+7. **`esrun` grants all capabilities** (trusted-local-script mode), but module
+   resolution **and** the filesystem capability are **root-jailed by default**
+   (DECISIONS D25). `esrun` loads modules through `NodeModuleLoader` and serves
+   `runtime:fs` from `SystemFileSystem`; both confine every *real* (canonicalized)
+   path to the detected **project root** — the nearest ancestor of the entry
+   containing `node_modules`/`package.json`, else the entry's directory — and
+   reject a path that escapes it via `..` or a symlink whose realpath leaves the
+   root (enforced by `path::within_root`; covered by jail tests in
+   `default-providers` and a `../escape.txt` rejection test in `runtime-cli`).
+   So a granted capability's reach is the project root, not the whole filesystem.
+   Residual nuances: (a) within that root, the trusted-mode all-capabilities grant
+   has full reach — `esrun` is a runner for *trusted* local code, not a sandbox
+   for hostile code; (b) legitimate cross-root setups (workspaces, `pnpm link`, a
+   symlinked external store) need the **relax flag** (additional allowed roots),
+   which is the still-deferred CLI part of D24/D25; and (c) the strict
+   `FsModuleLoader` — an embedder-only alternative that `esrun` does **not** use —
+   is unjailed by design, so an embedder choosing it must add its own confinement.
+   An embedder sandboxing untrusted code should still withhold `FileSystem`/`Net`
+   outright rather than rely on the jail alone.
 8. **Engine after `Terminated` is "spent."** The embedder should discard a
    runtime whose `eval`/tick returned `Error::Terminated` rather than reuse it.
 
