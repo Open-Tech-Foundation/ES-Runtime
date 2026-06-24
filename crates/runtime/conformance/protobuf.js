@@ -112,3 +112,24 @@ test("protobuf: proto3-JSON well-known types", async () => {
   const json = { at: "1970-01-01T00:00:01Z", data: { a: 1, b: [true, null] }, n: "7" };
   deepEq(s.toJson("M", s.fromJson("M", json)), json, "WKT JSON round-trip");
 });
+
+test("protobuf: CLOSED enum retains unrecognized value as unknown field", async () => {
+  const { Protobuf } = await import("runtime:serialization");
+  const open = new Protobuf.Schema(`edition="2023"; package t; enum E { A=0; B=1; } message M { E e = 1; }`);
+  const closed = new Protobuf.Schema(`edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { E e = 1; }`);
+  const wire = open.encode("t.M", { e: 5 }); // 5 is not a declared member
+  const decoded = closed.decode("t.M", wire);
+  deepEq(decoded.e, undefined, "unknown CLOSED value not surfaced");
+  deepEq(Array.from(closed.encode("t.M", decoded)), [0x08, 0x05], "preserved on re-encode");
+  deepEq(closed.decode("t.M", open.encode("t.M", { e: 1 })), { e: "B" }, "known value decodes");
+});
+
+test("protobuf: decode enforces a maximum nesting depth", async () => {
+  const { Protobuf } = await import("runtime:serialization");
+  const s = new Protobuf.Schema(`syntax="proto3"; message M { M m = 1; }`);
+  let deep = {};
+  for (let i = 0; i < 200; i++) deep = { m: deep };
+  let threw = false;
+  try { s.decode("M", s.encode("M", deep)); } catch (e) { threw = /depth/.test(e.message); }
+  deepEq(threw, true, "deep nesting rejected");
+});

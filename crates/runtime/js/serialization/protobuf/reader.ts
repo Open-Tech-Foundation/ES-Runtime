@@ -160,8 +160,8 @@ export class Reader {
     return new Reader(this.buf, start, start + len);
   }
 
-  /** Skips a field of the given wire type. */
-  skip(wireType: number): void {
+  /** Skips a field of the given wire type. `depth` bounds nested group recursion. */
+  skip(wireType: number, depth = 0): void {
     switch (wireType) {
       case WIRE_VARINT: {
         let b: number;
@@ -187,11 +187,12 @@ export class Reader {
         break;
       case WIRE_SGROUP: {
         // Skip a (deprecated) group: consume fields until the matching end-group.
+        if (depth > 100) throw new Error("protobuf: group nesting exceeds maximum depth");
         for (;;) {
           const tag = this.uint32();
           const wt = tag & 7;
           if (wt === WIRE_EGROUP) break;
-          this.skip(wt);
+          this.skip(wt, depth + 1);
         }
         break;
       }

@@ -965,7 +965,7 @@ class Reader {
     this.pos += len;
     return new Reader(this.buf, start, start + len);
   }
-  skip(wireType) {
+  skip(wireType, depth = 0) {
     switch (wireType) {
       case WIRE_VARINT: {
         let b;
@@ -991,12 +991,14 @@ class Reader {
         this.pos += 4;
         break;
       case WIRE_SGROUP: {
+        if (depth > 100)
+          throw new Error("protobuf: group nesting exceeds maximum depth");
         for (;; ) {
           const tag = this.uint32();
           const wt = tag & 7;
           if (wt === WIRE_EGROUP)
             break;
-          this.skip(wt);
+          this.skip(wt, depth + 1);
         }
         break;
       }
@@ -1013,6 +1015,23 @@ class Reader {
 
 // serialization/protobuf/decode.ts
 var UNKNOWN = Symbol.for("esrun.protobuf.unknown");
+var MAX_DEPTH = 100;
+function pushUnknown(out, bytes) {
+  (out[UNKNOWN] ?? (out[UNKNOWN] = [])).push(bytes);
+}
+function unknownEnumEntry(fieldNo, valueBytes) {
+  const tag = [];
+  let v = fieldNo * 8;
+  while (v > 127) {
+    tag.push(v & 127 | 128);
+    v = Math.floor(v / 128);
+  }
+  tag.push(v);
+  const out = new Uint8Array(tag.length + valueBytes.length);
+  out.set(tag, 0);
+  out.set(valueBytes, tag.length);
+  return out;
+}
 function expectedWire(type) {
   if (type.kind === "message")
     return 2;
@@ -1072,12 +1091,12 @@ function readEnum(r, e) {
   const n = r.int32();
   return e.byNumber.get(n) ?? n;
 }
-function readSingle(r, type) {
+function readSingle(r, type, depth) {
   if (type.kind === "scalar")
     return readScalar(r, type.scalar);
   if (type.kind === "enum")
     return readEnum(r, type.enum);
-  return decode(type.message, r.fork());
+  return decode(type.message, r.fork(), undefined, undefined, depth + 1);
 }
 function clearOneof(message, out, field) {
   for (const num of message.oneofs[field.oneofIndex].fieldNumbers) {
@@ -1086,7 +1105,9 @@ function clearOneof(message, out, field) {
       delete out[other.jsonName];
   }
 }
-function decode(message, r, target, groupFieldNo) {
+function decode(message, r, target, groupFieldNo, depth = 0) {
+  if (depth > MAX_DEPTH)
+    throw new Error("protobuf: message nesting exceeds maximum depth");
   const out = target ?? {};
   for (;; ) {
     if (r.eof()) {
@@ -1108,19 +1129,19 @@ function decode(message, r, target, groupFieldNo) {
     const field = message.fieldByNumber.get(fieldNo);
     if (!field) {
       r.skip(wire);
-      (out[UNKNOWN] ?? (out[UNKNOWN] = [])).push(r.buf.slice(tagStart, r.pos));
+      pushUnknown(out, r.buf.slice(tagStart, r.pos));
       continue;
     }
     if (field.delimited && field.type.kind === "message" && wire === WIRE_SGROUP) {
       if (field.repeated) {
         const arr = out[field.jsonName] ?? (out[field.jsonName] = []);
-        arr.push(decode(field.type.message, r, undefined, fieldNo));
+        arr.push(decode(field.type.message, r, undefined, fieldNo, depth + 1));
       } else {
         if (field.oneofIndex >= 0)
           clearOneof(message, out, field);
         const existing = out[field.jsonName];
         const into = existing && typeof existing === "object" ? existing : undefined;
-        out[field.jsonName] = decode(field.type.message, r, into, fieldNo);
+        out[field.jsonName] = decode(field.type.message, r, into, fieldNo, depth + 1);
       }
       continue;
     }
@@ -1133,9 +1154,9 @@ function decode(message, r, target, groupFieldNo) {
         const n = t >>> 3;
         const w = t & 7;
         if (n === 1)
-          k = readSingle(sub, field.map.key.type);
+          k = readSingle(sub, field.map.key.type, depth);
         else if (n === 2)
-          v = readSingle(sub, field.map.value.type);
+          v = readSingle(sub, field.map.value.type, depth);
         else
           sub.skip(w);
       }
@@ -1145,20 +1166,53 @@ function decode(message, r, target, groupFieldNo) {
     }
     if (field.repeated) {
       const arr = out[field.jsonName] ?? (out[field.jsonName] = []);
-      const packable = field.type.kind === "enum" || field.type.kind === "scalar" && field.type.scalar !== "string" && field.type.scalar !== "bytes";
+      const enumType = field.type.kind === "enum" ? field.type.enum : null;
+      const packable = enumType !== null || field.type.kind === "scalar" && field.type.scalar !== "string" && field.type.scalar !== "bytes";
       if (wire === WIRE_LEN && packable) {
         const sub = r.fork();
         while (!sub.eof()) {
-          arr.push(field.type.kind === "enum" ? readEnum(sub, field.type.enum) : readScalar(sub, field.type.scalar));
+          if (enumType) {
+            const elemStart = sub.pos;
+            const n = sub.int32();
+            const name = enumType.byNumber.get(n);
+            if (name !== undefined)
+              arr.push(name);
+            else if (enumType.closed)
+              pushUnknown(out, unknownEnumEntry(field.number, sub.buf.slice(elemStart, sub.pos)));
+            else
+              arr.push(n);
+          } else {
+            arr.push(readScalar(sub, field.type.scalar));
+          }
         }
+      } else if (enumType) {
+        const n = r.int32();
+        const name = enumType.byNumber.get(n);
+        if (name !== undefined)
+          arr.push(name);
+        else if (enumType.closed)
+          pushUnknown(out, r.buf.slice(tagStart, r.pos));
+        else
+          arr.push(n);
       } else {
-        arr.push(readSingle(r, field.type));
+        arr.push(readSingle(r, field.type, depth));
       }
       continue;
     }
     if (wire !== expectedWire(field.type) && !(wire === WIRE_LEN && field.type.kind === "message")) {
       r.skip(wire);
-      (out[UNKNOWN] ?? (out[UNKNOWN] = [])).push(r.buf.slice(tagStart, r.pos));
+      pushUnknown(out, r.buf.slice(tagStart, r.pos));
+      continue;
+    }
+    if (field.type.kind === "enum" && field.type.enum.closed) {
+      const name = field.type.enum.byNumber.get(r.int32());
+      if (name === undefined) {
+        pushUnknown(out, r.buf.slice(tagStart, r.pos));
+        continue;
+      }
+      if (field.oneofIndex >= 0)
+        clearOneof(message, out, field);
+      out[field.jsonName] = name;
       continue;
     }
     if (field.oneofIndex >= 0)
@@ -1166,9 +1220,9 @@ function decode(message, r, target, groupFieldNo) {
     if (field.type.kind === "message") {
       const existing = out[field.jsonName];
       const into = existing && typeof existing === "object" ? existing : undefined;
-      out[field.jsonName] = decode(field.type.message, r.fork(), into);
+      out[field.jsonName] = decode(field.type.message, r.fork(), into, undefined, depth + 1);
     } else {
-      out[field.jsonName] = readSingle(r, field.type);
+      out[field.jsonName] = readSingle(r, field.type, depth);
     }
   }
   return out;
@@ -2271,7 +2325,7 @@ class ByteStream {
     this.pos += n;
     return out;
   }
-  async skip(wire) {
+  async skip(wire, depth = 0) {
     switch (wire) {
       case 0:
         await this.varint();
@@ -2286,13 +2340,15 @@ class ByteStream {
         await this.bytes(4);
         break;
       case 3: {
+        if (depth > 100)
+          throw new Error("protobuf: group nesting exceeds maximum depth in stream");
         for (;; ) {
           const t = await this.tag();
           if (!t)
             throw new Error("protobuf: truncated group in stream");
           if (t.wire === WIRE_EGROUP)
             break;
-          await this.skip(t.wire);
+          await this.skip(t.wire, depth + 1);
         }
         break;
       }

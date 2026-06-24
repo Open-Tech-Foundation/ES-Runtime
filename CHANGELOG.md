@@ -70,6 +70,18 @@ namespace) is unstable and may change between minor releases until the API freez
   0 unexpected failures** (one proto2-extension-in-JSON case is a documented
   expected failure — proto2 extensions are unsupported by design).
 
+### Fixed
+
+- **Protobuf decode recursion limit.** `decode` (and the streaming/group skip
+  paths) now bound message nesting to a maximum depth (100, the protobuf
+  default), rejecting deeply-nested sub-messages or groups instead of exhausting
+  the JS stack — hardening against hostile input on the binary decode path.
+- **Protobuf CLOSED-enum decoding.** An unrecognized number in a CLOSED enum
+  (proto2/editions `features.enum_type = CLOSED`) is now retained as an unknown
+  field (lossless on re-encode) rather than surfaced as the field value; open
+  enums (proto3 default) keep the existing pass-through behavior. The resolved
+  `closed` flag was previously computed but unused by the decoder.
+
 ### Changed
 
 - **`Protobuf.Schema` methods renamed `parse`/`build` → `decode`/`encode`**

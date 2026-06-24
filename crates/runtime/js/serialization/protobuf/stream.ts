@@ -119,19 +119,21 @@ class ByteStream {
     return out;
   }
 
-  /** Consumes a field of the given wire type without decoding it. */
-  async skip(wire: number): Promise<void> {
+  /** Consumes a field of the given wire type without decoding it. `depth` bounds
+   *  nested group recursion. */
+  async skip(wire: number, depth = 0): Promise<void> {
     switch (wire) {
       case 0: await this.varint(); break;
       case 1: await this.bytes(8); break;
       case WIRE_LEN: await this.bytes(Number(await this.varint())); break;
       case 5: await this.bytes(4); break;
       case 3: { // start-group: skip until the matching end-group
+        if (depth > 100) throw new Error("protobuf: group nesting exceeds maximum depth in stream");
         for (;;) {
           const t = await this.tag();
           if (!t) throw new Error("protobuf: truncated group in stream");
           if (t.wire === WIRE_EGROUP) break;
-          await this.skip(t.wire);
+          await this.skip(t.wire, depth + 1);
         }
         break;
       }

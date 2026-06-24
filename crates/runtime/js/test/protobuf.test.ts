@@ -198,3 +198,37 @@ test("rejects proto2", () => {
   expect(() => new Schema(`syntax="proto2"; message M {}`)).toThrow(/proto2/);
   expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(/proto2|required/);
 });
+
+test("decode enforces a maximum nesting depth", () => {
+  const s = new Schema(`syntax="proto3"; message M { M m = 1; }`);
+  let ok: Record<string, unknown> = {};
+  for (let i = 0; i < 50; i++) ok = { m: ok };
+  expect(s.decode("M", s.encode("M", ok))).toEqual(ok); // within the limit
+
+  let deep: Record<string, unknown> = {};
+  for (let i = 0; i < 200; i++) deep = { m: deep };
+  expect(() => s.decode("M", s.encode("M", deep))).toThrow(/depth/);
+});
+
+test("CLOSED enum retains an unrecognized value as an unknown field", () => {
+  const open = new Schema(`edition="2023"; package t; enum E { A=0; B=1; } message M { E e = 1; }`);
+  const closed = new Schema(`edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { E e = 1; }`);
+  const wire = open.encode("t.M", { e: 5 }); // value 5 is not a declared member
+  expect([...wire]).toEqual([0x08, 0x05]);
+
+  const decoded = closed.decode("t.M", wire);
+  expect(decoded.e).toBeUndefined();                                   // not surfaced as the field
+  expect([...closed.encode("t.M", decoded)]).toEqual([0x08, 0x05]);    // preserved on re-encode
+  expect(closed.decode("t.M", open.encode("t.M", { e: 1 }))).toEqual({ e: "B" }); // known value still decodes
+});
+
+test("CLOSED repeated (packed) enum keeps known members, preserves unknown", () => {
+  const open = new Schema(`edition="2023"; package t; enum E { A=0; B=1; C=2; } message M { repeated E es = 2; }`);
+  const closed = new Schema(`edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { repeated E es = 2; }`);
+  const wire = open.encode("t.M", { es: [1, 7, 0] }); // 7 is unknown to the closed schema
+
+  const decoded = closed.decode("t.M", wire);
+  expect(decoded.es).toEqual(["B", "A"]);              // known members, in order
+  // re-encoding emits the known members (packed) plus the retained unknown 7.
+  expect(open.decode("t.M", closed.encode("t.M", decoded)).es).toEqual(["B", "A", 7]);
+});
