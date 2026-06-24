@@ -14,6 +14,45 @@ const CONFORMANCE = [
   { suite: "Total", pass: 2060, skip: 4147, fail: 0, total: true },
 ];
 
+// The same run, split by wire format: binary is fully covered; JSON, text-format,
+// and the proto2 binary cases (the 684 binary skips) are out of scope by design.
+const CONFORMANCE_FMT = [
+  { suite: "Binary", pass: 2060, skip: 684, fail: 0 },
+  { suite: "JSON", pass: 0, skip: 2620, fail: 0 },
+  { suite: "Text format", pass: 0, skip: 843, fail: 0 },
+  { suite: "Total", pass: 2060, skip: 4147, fail: 0, total: true },
+];
+
+function ConformanceTable({ label, rows, firstCol }) {
+  return (
+    <div className="mt-6">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-400">{label}</p>
+      <div className="overflow-hidden rounded-xl border border-zinc-200">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-zinc-50 text-zinc-600">
+            <tr>
+              <th className="px-4 py-3 font-medium">{firstCol}</th>
+              <th className="px-3 py-3 text-right font-medium">Passed</th>
+              <th className="px-3 py-3 text-right font-medium">Skipped</th>
+              <th className="px-4 py-3 text-right font-medium">Failed</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {rows.map((r) => (
+              <tr className={r.total ? "bg-zinc-50/60 font-medium" : "hover:bg-zinc-50/60"}>
+                <td className="px-4 py-2.5 text-zinc-700">{r.suite}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-brand-700">{r.pass.toLocaleString()}</td>
+                <td className="px-3 py-2.5 text-right font-mono text-zinc-500">{r.skip.toLocaleString()}</td>
+                <td className="px-4 py-2.5 text-right font-mono text-zinc-700">{r.fail}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function ProtobufParserDoc() {
   return (
     <DocsShell active="/docs/serialization/protobuf">
@@ -86,30 +125,10 @@ console.log(acct.status);     // "ARCHIVED"`} title="protobuf_types.js" lang="js
         Conformance
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">
-        Verified against the official protobuf conformance suite (v29.3), split by message category. The codec is binary&harr;binary, so JSON, JSPB, text-format, and proto2 cases are reported as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">skipped</code> — never failed.
+        Verified against the official protobuf conformance suite (v29.3). The codec is binary&harr;binary, so JSON, JSPB, text-format, and proto2 cases are reported as <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">skipped</code> — never failed.
       </p>
-      <div className="mt-6 overflow-hidden rounded-xl border border-zinc-200">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-zinc-50 text-zinc-600">
-            <tr>
-              <th className="px-4 py-3 font-medium">Category</th>
-              <th className="px-3 py-3 text-right font-medium">Passed</th>
-              <th className="px-3 py-3 text-right font-medium">Skipped</th>
-              <th className="px-4 py-3 text-right font-medium">Failed</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-zinc-100">
-            {CONFORMANCE.map((r) => (
-              <tr className={r.total ? "bg-zinc-50/60 font-medium" : "hover:bg-zinc-50/60"}>
-                <td className="px-4 py-2.5 text-zinc-700">{r.suite}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-brand-700">{r.pass.toLocaleString()}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-zinc-500">{r.skip.toLocaleString()}</td>
-                <td className="px-4 py-2.5 text-right font-mono text-zinc-700">{r.fail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <ConformanceTable label="By message category" firstCol="Category" rows={CONFORMANCE} />
+      <ConformanceTable label="By wire format" firstCol="Wire format" rows={CONFORMANCE_FMT} />
     </DocsShell>
   );
 }
