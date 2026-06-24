@@ -19,12 +19,21 @@ pre-`0.1.0` and the public API is unstable.
   `edition = "2024"` in addition to proto3 and edition 2023. The 2024 defaults
   for the wire-affecting features (field presence, repeated encoding, enum type)
   match edition 2023.
+- **Protobuf descriptor-set loading.** `Protobuf.Schema.fromDescriptorSet(bytes)`
+  builds a schema from a compiled `FileDescriptorSet` (`protoc
+  --descriptor_set_out`, ideally `--include_imports`) instead of `.proto`
+  source — the common way production systems distribute schemas. proto3 and
+  editions 2023/2024 only; encodes byte-identically to a text-built schema.
+- **Protobuf length-delimited framing.** `schema.encodeDelimited(messageName,
+  value)` writes one varint-length-prefixed message (the `writeDelimitedTo`
+  framing); `schema.decodeDelimited(messageName, source)` streams such messages
+  back from a `ReadableStream`, async/sync iterable, or `Uint8Array`.
 - **Protobuf streaming.** `schema.decodeStream(messageName, fieldName, source)`
   is an async generator that streams the elements of a repeated message field
-  from a chunked byte source (a `ReadableStream` or async/sync iterable of
-  `Uint8Array`), decoding each element as it arrives and skipping the outer
-  message's other fields — so a large collection is processed without
-  materializing the whole array.
+  from a chunked byte source (a `ReadableStream`, async/sync iterable of
+  `Uint8Array`, or a `Uint8Array`), decoding each element as it arrives and
+  skipping the outer message's other fields — so a large collection is
+  processed without materializing the whole array.
 - **Protobuf delimited (group) message encoding.** Editions
   `features.message_encoding = DELIMITED` message fields now decode/encode as
   groups instead of being preserved as opaque unknown fields, so editions JSON

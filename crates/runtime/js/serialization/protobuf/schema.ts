@@ -6,7 +6,8 @@ import { type Registry, link } from "./link.js";
 import { decode } from "./decode.js";
 import { encode } from "./encode.js";
 import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.js";
-import { type StreamSource, decodeStream } from "./stream.js";
+import { type StreamSource, decodeDelimitedStream, decodeStream } from "./stream.js";
+import { parseDescriptorSet } from "./descriptor_set.js";
 import { Reader } from "./reader.js";
 import { Writer } from "./writer.js";
 import { WKT } from "./wkt.js";
@@ -41,6 +42,16 @@ export class Schema {
     this.registry = link(parsed);
   }
 
+  /** Builds a Schema from a compiled `FileDescriptorSet` (protoc
+   *  `--descriptor_set_out`) instead of `.proto` source. Use `--include_imports`
+   *  so referenced types are present; the `google/protobuf/*` well-known types
+   *  are otherwise supplied from the embedded sources. */
+  static fromDescriptorSet(descriptorSet: Uint8Array): Schema {
+    const schema = Object.create(Schema.prototype) as Schema;
+    (schema as unknown as { registry: Registry }).registry = link(parseDescriptorSet(descriptorSet));
+    return schema;
+  }
+
   /** Decodes binary protobuf bytes for the fully-qualified `messageName`. */
   decode(messageName: string, bytes: Uint8Array): Record<string, unknown> {
     const m = this.registry.messages.get(messageName);
@@ -54,6 +65,17 @@ export class Schema {
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     const w = new Writer();
     encode(m, value, w);
+    return w.finish();
+  }
+
+  /** Encodes `value` as a single length-delimited message — a varint length
+   *  prefix followed by the encoded bytes (the `writeDelimitedTo` framing).
+   *  Concatenate the results to write a stream of messages. */
+  encodeDelimited(messageName: string, value: Record<string, unknown>): Uint8Array {
+    const body = this.encode(messageName, value);
+    const w = new Writer();
+    w.uint32(body.length);
+    w.raw(body);
     return w.finish();
   }
 
@@ -86,6 +108,15 @@ export class Schema {
       throw new Error(`protobuf: decodeStream does not support delimited (group) fields`);
     }
     return decodeStream(field, source);
+  }
+
+  /** Streams the messages of a length-delimited stream (varint-length-prefixed,
+   *  the `writeDelimitedTo` framing) from a chunked byte `source`, decoding and
+   *  yielding each message in turn. */
+  decodeDelimited(messageName: string, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+    const m = this.registry.messages.get(messageName);
+    if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
+    return decodeDelimitedStream(m, source);
   }
 }
 

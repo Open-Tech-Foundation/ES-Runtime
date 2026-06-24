@@ -260,6 +260,43 @@ for await (const book of schema.decodeStream("Catalog", "books", res.body)) {
       </div>
 
       <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Length-delimited streams
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        For a sequence of independent messages (the <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">writeDelimitedTo</code> framing — each message preceded by a varint length), <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">encodeDelimited</code> frames one message and <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">decodeDelimited</code> streams them back from a <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">ReadableStream</code>, iterable, or <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Uint8Array</code>.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`const schema = new Protobuf.Schema(\`
+  syntax = "proto3";
+  message Event { string kind = 1; uint64 at = 2; }
+\`);
+
+// write a framed log
+const chunks = events.map((e) => schema.encodeDelimited("Event", e));
+
+// read it back, one message at a time
+const res = await fetch("https://example.com/events.pb");
+for await (const event of schema.decodeDelimited("Event", res.body)) {
+  console.log(event.kind, event.at);
+}`} title="protobuf_delimited.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
+        Loading a descriptor set
+      </h2>
+      <p className="mt-2 text-zinc-600 leading-relaxed">
+        Production systems often ship a compiled <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">FileDescriptorSet</code> rather than <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">.proto</code> text. <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">Protobuf.Schema.fromDescriptorSet</code> loads one directly — build it with <code className="rounded bg-zinc-100 px-1.5 py-0.5 text-[13px]">--include_imports</code> so referenced types resolve.
+      </p>
+      <div className="mt-6">
+        <CodeBlock code={`// protoc --include_imports --descriptor_set_out=app.pb app.proto
+
+const res = await fetch("https://example.com/app.pb");
+const schema = Protobuf.Schema.fromDescriptorSet(new Uint8Array(await res.arrayBuffer()));
+
+schema.decode("app.Order", bytes);`} title="protobuf_descriptor_set.js" lang="js" />
+      </div>
+
+      <h2 className="mt-12 text-2xl font-semibold text-zinc-900">
         Conformance
       </h2>
       <p className="mt-2 text-zinc-600 leading-relaxed">

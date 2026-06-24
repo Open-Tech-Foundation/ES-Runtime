@@ -134,6 +134,29 @@ test("decodeStream accepts a ReadableStream and rejects non-repeated-message fie
   expect(out).toEqual([{ a: 1 }, { a: 2 }]);
 });
 
+test("encodeDelimited / decodeDelimited round-trips a stream of messages", async () => {
+  const s = new Schema(`syntax="proto3"; message Event { string kind = 1; uint64 at = 2; }`);
+  const events = [{ kind: "a", at: 1n }, { kind: "longer kind", at: 2n }, { kind: "c", at: 3n }];
+
+  // Frame each independently and concatenate — the writeDelimitedTo wire form.
+  const framed = events.map((e) => s.encodeDelimited("Event", e));
+  const total = framed.reduce((n, f) => n + f.length, 0);
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const f of framed) { buf.set(f, off); off += f.length; }
+
+  // Decode from a Uint8Array directly.
+  const direct = [];
+  for await (const e of s.decodeDelimited("Event", buf)) direct.push(e);
+  expect(direct).toEqual(events);
+
+  // And from a one-byte-at-a-time stream (straddles every length prefix).
+  async function* dribble() { for (const b of buf) yield new Uint8Array([b]); }
+  const streamed = [];
+  for await (const e of s.decodeDelimited("Event", dribble())) streamed.push(e);
+  expect(streamed).toEqual(events);
+});
+
 test("editions delimited (group) message encoding round-trips", () => {
   const s = new Schema(`edition = "2023";
     option features.message_encoding = DELIMITED;

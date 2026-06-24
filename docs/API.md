@@ -541,8 +541,11 @@ For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, ref
 | Export | Description |
 | --- | --- |
 | `new Protobuf.Schema(proto, opts?)` | Compiles a `.proto` source string (or a `{ filename: source }` map for multi-file schemas with `import`s; the `google/protobuf/*` well-known types resolve automatically). |
+| `Protobuf.Schema.fromDescriptorSet(bytes)` | Builds a `Schema` from a compiled `FileDescriptorSet` (`protoc --descriptor_set_out`, ideally with `--include_imports`) instead of `.proto` source. |
 | `schema.decode(messageName, bytes)` | Decodes a `Uint8Array` for the fully-qualified `messageName`. |
 | `schema.encode(messageName, value)` | Encodes a JavaScript object into a `Uint8Array`. |
+| `schema.encodeDelimited(messageName, value)` | Encodes one length-delimited message (varint length prefix + bytes — the `writeDelimitedTo` framing). |
+| `schema.decodeDelimited(messageName, source)` | Async generator over a length-delimited stream of messages from a chunked byte `source` (`ReadableStream`, async/sync iterable, or `Uint8Array`). |
 | `schema.toJson(messageName, value)` | Converts a decoded value to its canonical proto3-JSON representation. |
 | `schema.fromJson(messageName, json)` | Parses canonical proto3-JSON into the decoded value shape (ready for `encode`). |
 | `schema.decodeStream(messageName, fieldName, source)` | Async generator that streams the elements of a repeated message field from a chunked byte `source` (a `ReadableStream` or async/sync iterable of `Uint8Array`), yielding each element as it arrives and skipping the other fields. |

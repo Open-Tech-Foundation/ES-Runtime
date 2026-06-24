@@ -2174,6 +2174,10 @@ function messageFromJson(message, j, registry, opts = {}) {
 
 // serialization/protobuf/stream.ts
 function pullFrom(source) {
+  if (source instanceof Uint8Array) {
+    let sent = false;
+    return async () => sent ? null : (sent = true, source);
+  }
   const s = source;
   if (typeof s.getReader === "function") {
     const r = source.getReader();
@@ -2316,6 +2320,13 @@ async function* decodeStream(field, source) {
     }
   }
 }
+async function* decodeDelimitedStream(message, source) {
+  const reader = new ByteStream(pullFrom(source));
+  while (!await reader.atEnd()) {
+    const len = Number(await reader.varint());
+    yield decode(message, new Reader(await reader.bytes(len)));
+  }
+}
 
 // serialization/protobuf/wkt.ts
 var WKT = {
@@ -2369,6 +2380,220 @@ var WKT = {
   `
 };
 
+// serialization/protobuf/descriptor_set.ts
+var DESCRIPTOR_PROTO = `
+syntax = "proto3";
+package google.protobuf;
+
+message FileDescriptorSet { repeated FileDescriptorProto file = 1; }
+
+message FileDescriptorProto {
+  string name = 1;
+  string package = 2;
+  repeated string dependency = 3;
+  repeated DescriptorProto message_type = 4;
+  repeated EnumDescriptorProto enum_type = 5;
+  FileOptions options = 8;
+  string syntax = 12;
+  int32 edition = 14;
+}
+
+message DescriptorProto {
+  string name = 1;
+  repeated FieldDescriptorProto field = 2;
+  repeated DescriptorProto nested_type = 3;
+  repeated EnumDescriptorProto enum_type = 4;
+  MessageOptions options = 7;
+  repeated OneofDescriptorProto oneof_decl = 8;
+}
+
+message FieldDescriptorProto {
+  enum Label { LABEL_UNKNOWN = 0; LABEL_OPTIONAL = 1; LABEL_REQUIRED = 2; LABEL_REPEATED = 3; }
+  enum Type {
+    TYPE_UNKNOWN = 0; TYPE_DOUBLE = 1; TYPE_FLOAT = 2; TYPE_INT64 = 3; TYPE_UINT64 = 4;
+    TYPE_INT32 = 5; TYPE_FIXED64 = 6; TYPE_FIXED32 = 7; TYPE_BOOL = 8; TYPE_STRING = 9;
+    TYPE_GROUP = 10; TYPE_MESSAGE = 11; TYPE_BYTES = 12; TYPE_UINT32 = 13; TYPE_ENUM = 14;
+    TYPE_SFIXED32 = 15; TYPE_SFIXED64 = 16; TYPE_SINT32 = 17; TYPE_SINT64 = 18;
+  }
+  string name = 1;
+  int32 number = 3;
+  Label label = 4;
+  Type type = 5;
+  string type_name = 6;
+  FieldOptions options = 8;
+  int32 oneof_index = 9;
+  string json_name = 10;
+  bool proto3_optional = 17;
+}
+
+message OneofDescriptorProto { string name = 1; OneofOptions options = 2; }
+message EnumDescriptorProto { string name = 1; repeated EnumValueDescriptorProto value = 2; EnumOptions options = 3; }
+message EnumValueDescriptorProto { string name = 1; int32 number = 2; }
+
+message FeatureSet {
+  enum FieldPresence { FIELD_PRESENCE_UNKNOWN = 0; EXPLICIT = 1; IMPLICIT = 2; LEGACY_REQUIRED = 3; }
+  enum EnumType { ENUM_TYPE_UNKNOWN = 0; OPEN = 1; CLOSED = 2; }
+  enum RepeatedFieldEncoding { REPEATED_FIELD_ENCODING_UNKNOWN = 0; PACKED = 1; EXPANDED = 2; }
+  enum MessageEncoding { MESSAGE_ENCODING_UNKNOWN = 0; LENGTH_PREFIXED = 1; DELIMITED = 2; }
+  FieldPresence field_presence = 1;
+  EnumType enum_type = 2;
+  RepeatedFieldEncoding repeated_field_encoding = 3;
+  MessageEncoding message_encoding = 5;
+}
+
+message FileOptions { FeatureSet features = 50; }
+message MessageOptions { bool map_entry = 7; FeatureSet features = 12; }
+message FieldOptions { bool packed = 2; FeatureSet features = 21; }
+message EnumOptions { FeatureSet features = 7; }
+message OneofOptions { FeatureSet features = 1; }
+`;
+var SCALAR_BY_TYPE = {
+  TYPE_DOUBLE: "double",
+  TYPE_FLOAT: "float",
+  TYPE_INT64: "int64",
+  TYPE_UINT64: "uint64",
+  TYPE_INT32: "int32",
+  TYPE_FIXED64: "fixed64",
+  TYPE_FIXED32: "fixed32",
+  TYPE_BOOL: "bool",
+  TYPE_STRING: "string",
+  TYPE_BYTES: "bytes",
+  TYPE_UINT32: "uint32",
+  TYPE_SFIXED32: "sfixed32",
+  TYPE_SFIXED64: "sfixed64",
+  TYPE_SINT32: "sint32",
+  TYPE_SINT64: "sint64"
+};
+var descRegistry = null;
+function descriptorRegistry() {
+  return descRegistry ??= link([parseProto(DESCRIPTOR_PROTO)]);
+}
+function mapFeatures(f) {
+  const out = {};
+  if (!f)
+    return out;
+  if (f.fieldPresence && f.fieldPresence !== "FIELD_PRESENCE_UNKNOWN")
+    out.fieldPresence = f.fieldPresence;
+  if (f.enumType && f.enumType !== "ENUM_TYPE_UNKNOWN")
+    out.enumType = f.enumType;
+  if (f.repeatedFieldEncoding && f.repeatedFieldEncoding !== "REPEATED_FIELD_ENCODING_UNKNOWN")
+    out.repeatedEncoding = f.repeatedFieldEncoding;
+  if (f.messageEncoding && f.messageEncoding !== "MESSAGE_ENCODING_UNKNOWN")
+    out.messageEncoding = f.messageEncoding;
+  return out;
+}
+function typeRef(f) {
+  if (f.type === "TYPE_MESSAGE" || f.type === "TYPE_ENUM" || f.type === "TYPE_GROUP")
+    return f.typeName;
+  const scalar = typeof f.type === "string" ? SCALAR_BY_TYPE[f.type] : undefined;
+  if (!scalar)
+    throw new Error(`protobuf: unsupported field type ${f.type} in descriptor set`);
+  return scalar;
+}
+function mapField(f, mapEntries) {
+  const repeated = f.label === "LABEL_REPEATED";
+  const entryName = typeof f.typeName === "string" ? f.typeName.split(".").pop() : "";
+  if (repeated && f.type === "TYPE_MESSAGE" && mapEntries.has(entryName)) {
+    const e = mapEntries.get(entryName);
+    return {
+      label: "singular",
+      typeName: "",
+      name: f.name,
+      number: f.number,
+      jsonName: f.jsonName,
+      features: mapFeatures(f.options?.features),
+      map: e
+    };
+  }
+  const label = repeated ? "repeated" : f.proto3Optional ? "optional" : "singular";
+  return {
+    label,
+    typeName: typeRef(f),
+    name: f.name,
+    number: f.number,
+    jsonName: f.jsonName,
+    packedOption: f.options?.packed,
+    features: mapFeatures(f.options?.features)
+  };
+}
+function mapEnum(e) {
+  return {
+    name: e.name,
+    values: (e.value ?? []).map((v) => ({ name: v.name, number: v.number ?? 0 })),
+    features: mapFeatures(e.options?.features)
+  };
+}
+function mapMessage(d) {
+  const nested = d.nestedType ?? [];
+  const mapEntries = new Map;
+  for (const nt of nested) {
+    if (nt.options?.mapEntry) {
+      const field = nt.field ?? [];
+      const k = field.find((x) => x.number === 1);
+      const v = field.find((x) => x.number === 2);
+      mapEntries.set(nt.name, { key: typeRef(k), value: typeRef(v) });
+    }
+  }
+  const oneofDecl = d.oneofDecl ?? [];
+  const realOneof = new Map;
+  const fields = [];
+  for (const f of d.field ?? []) {
+    const af = mapField(f, mapEntries);
+    if (!f.proto3Optional && f.oneofIndex != null) {
+      let arr = realOneof.get(f.oneofIndex);
+      if (!arr)
+        realOneof.set(f.oneofIndex, arr = []);
+      arr.push(af);
+    } else {
+      fields.push(af);
+    }
+  }
+  const oneofs = [...realOneof.keys()].sort((a, b) => a - b).map((idx) => ({ name: oneofDecl[idx]?.name ?? `oneof_${idx}`, fields: realOneof.get(idx) }));
+  return {
+    name: d.name,
+    fields,
+    oneofs,
+    messages: nested.filter((nt) => !nt.options?.mapEntry).map(mapMessage),
+    enums: (d.enumType ?? []).map(mapEnum),
+    features: mapFeatures(d.options?.features)
+  };
+}
+function mapSyntax(syntax, edition) {
+  if (syntax === "editions") {
+    if (edition === 1000)
+      return "2023";
+    if (edition === 1001)
+      return "2024";
+    throw new Error(`protobuf: descriptor set uses an unsupported edition (${edition ?? "unknown"})`);
+  }
+  if (syntax === "proto3")
+    return "proto3";
+  throw new Error(`protobuf: descriptor set uses ${syntax ?? "proto2"} — only proto3 and editions 2023/2024 are supported`);
+}
+function mapFile(fd) {
+  return {
+    syntax: mapSyntax(fd.syntax, fd.edition),
+    package: fd.package ?? "",
+    imports: fd.dependency ?? [],
+    features: mapFeatures(fd.options?.features),
+    messages: (fd.messageType ?? []).map(mapMessage),
+    enums: (fd.enumType ?? []).map(mapEnum)
+  };
+}
+function parseDescriptorSet(bytes) {
+  const reg = descriptorRegistry();
+  const setType = reg.messages.get("google.protobuf.FileDescriptorSet");
+  const fds = decode(setType, new Reader(bytes));
+  const files = fds.file ?? [];
+  const present = new Set(files.map((f) => f.name));
+  const parsed = files.map(mapFile);
+  for (const [name, src] of Object.entries(WKT)) {
+    if (!present.has(name))
+      parsed.push(parseProto(src));
+  }
+  return parsed;
+}
+
 // serialization/protobuf/schema.ts
 class Schema {
   registry;
@@ -2393,6 +2618,11 @@ class Schema {
     }
     this.registry = link(parsed);
   }
+  static fromDescriptorSet(descriptorSet) {
+    const schema = Object.create(Schema.prototype);
+    schema.registry = link(parseDescriptorSet(descriptorSet));
+    return schema;
+  }
   decode(messageName, bytes) {
     const m = this.registry.messages.get(messageName);
     if (!m)
@@ -2405,6 +2635,13 @@ class Schema {
       throw new Error(`protobuf: unknown message "${messageName}"`);
     const w = new Writer;
     encode(m, value, w);
+    return w.finish();
+  }
+  encodeDelimited(messageName, value) {
+    const body = this.encode(messageName, value);
+    const w = new Writer;
+    w.uint32(body.length);
+    w.raw(body);
     return w.finish();
   }
   toJson(messageName, value) {
@@ -2433,6 +2670,12 @@ class Schema {
       throw new Error(`protobuf: decodeStream does not support delimited (group) fields`);
     }
     return decodeStream(field, source);
+  }
+  decodeDelimited(messageName, source) {
+    const m = this.registry.messages.get(messageName);
+    if (!m)
+      throw new Error(`protobuf: unknown message "${messageName}"`);
+    return decodeDelimitedStream(m, source);
   }
 }
 var Protobuf = { Schema };

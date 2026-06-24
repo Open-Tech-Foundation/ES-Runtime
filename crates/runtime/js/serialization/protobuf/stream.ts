@@ -6,7 +6,7 @@
 // The source may be a Web ReadableStream, an async iterable, or a sync iterable
 // of Uint8Array chunks. A small buffering reader handles values (varints,
 // length-delimited regions) that straddle chunk boundaries.
-import type { Field } from "./descriptor.js";
+import type { Field, MessageType } from "./descriptor.js";
 import { decode } from "./decode.js";
 import { Reader, WIRE_EGROUP, WIRE_LEN } from "./reader.js";
 
@@ -15,6 +15,7 @@ interface ReadableStreamLike {
 }
 
 export type StreamSource =
+  | Uint8Array
   | ReadableStreamLike
   | AsyncIterable<Uint8Array>
   | Iterable<Uint8Array>;
@@ -22,6 +23,10 @@ export type StreamSource =
 /** Normalizes any accepted source into a `pull()` that yields the next chunk or
  *  null at end of input. */
 function pullFrom(source: StreamSource): () => Promise<Uint8Array | null> {
+  if (source instanceof Uint8Array) {
+    let sent = false;
+    return async () => (sent ? null : ((sent = true), source));
+  }
   const s = source as Record<symbol | string, unknown>;
   if (typeof s.getReader === "function") {
     const r = (source as ReadableStreamLike).getReader();
@@ -151,5 +156,15 @@ export async function* decodeStream(field: Field, source: StreamSource): AsyncGe
     } else {
       await reader.skip(t.wire);
     }
+  }
+}
+
+/** Yields each message of a length-delimited stream — a sequence of
+ *  varint-length-prefixed messages (the `writeDelimitedTo` framing). */
+export async function* decodeDelimitedStream(message: MessageType, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+  const reader = new ByteStream(pullFrom(source));
+  while (!(await reader.atEnd())) {
+    const len = Number(await reader.varint());
+    yield decode(message, new Reader(await reader.bytes(len)));
   }
 }

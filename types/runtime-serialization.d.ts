@@ -167,11 +167,27 @@ declare module "runtime:serialization" {
        */
       constructor(proto: string | Record<string, string>, options?: ProtobufSchemaOptions);
 
+      /**
+       * Builds a Schema from a compiled `FileDescriptorSet` (protoc
+       * `--descriptor_set_out`) rather than `.proto` source. Use
+       * `--include_imports` so referenced types are present; the
+       * `google/protobuf/*` well-known types are otherwise supplied from the
+       * embedded sources. Only proto3 and editions 2023/2024 are accepted.
+       */
+      static fromDescriptorSet(descriptorSet: Uint8Array): Schema;
+
       /** Decodes binary protobuf for the fully-qualified `messageName`. */
       decode(messageName: string, bytes: Uint8Array): Record<string, unknown>;
 
       /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
       encode(messageName: string, value: Record<string, unknown>): Uint8Array;
+
+      /**
+       * Encodes `value` as a single length-delimited message — a varint length
+       * prefix followed by the encoded bytes (the `writeDelimitedTo` framing).
+       * Concatenate results to write a stream of messages.
+       */
+      encodeDelimited(messageName: string, value: Record<string, unknown>): Uint8Array;
 
       /**
        * Converts a decoded value (the `decode` shape) to its canonical
@@ -201,7 +217,18 @@ declare module "runtime:serialization" {
       decodeStream(
         messageName: string,
         fieldName: string,
-        source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+        source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> | Iterable<Uint8Array> | Uint8Array,
+      ): AsyncGenerator<Record<string, unknown>>;
+
+      /**
+       * Streams the messages of a length-delimited stream (varint-length-
+       * prefixed, the `writeDelimitedTo` framing) from a chunked byte `source` —
+       * a `ReadableStream`, async/sync iterable of `Uint8Array`, or a single
+       * `Uint8Array` — decoding and yielding each message in turn.
+       */
+      decodeDelimited(
+        messageName: string,
+        source: ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> | Iterable<Uint8Array> | Uint8Array,
       ): AsyncGenerator<Record<string, unknown>>;
     }
   }
