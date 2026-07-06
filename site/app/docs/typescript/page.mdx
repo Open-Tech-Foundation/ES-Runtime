@@ -1,0 +1,60 @@
+---
+title: TypeScript setup
+description: Full editor autocompletion and type checking for the runtime:* modules in one command.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# TypeScript setup
+
+esrun does not execute TypeScript natively, nor does it inject ambient globals
+like `Bun` or `process`. But you can get full editor autocompletion and type
+checking for the `runtime:*` modules in one command.
+
+## One-command setup
+
+`esrun types --install` writes the bundled definitions into
+`node_modules/@opentf/esrun` (as a type package, so your project tree stays
+clean) and wires them into your `tsconfig.json` — creating one if you don't have
+it, or merging into an existing one without touching your other settings.
+
+```sh
+esrun types --install
+```
+
+## What it configures
+
+The types are registered through `typeRoots` + `types` — the form editors and
+language servers load globally, so the `runtime:*` modules resolve everywhere,
+not just per-file:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "typeRoots": ["node_modules/@types", "node_modules/@opentf"],
+    "types": ["esrun"]
+  },
+  "include": ["**/*.ts"]
+}
+```
+
+<Callout type="note" title="Manual alternative">
+  If you'd rather not let the CLI edit your config, run `esrun types >
+  runtime.d.ts` and add that file to your `include`.
+</Callout>
+
+## Use it
+
+Your editor now provides intellisense, inline docs, and type checking for every
+built-in module:
+
+```ts
+import { file } from "runtime:fs";
+
+// Your IDE knows `text()` returns a Promise<string>
+const data = await file("./config.json").text();
+```

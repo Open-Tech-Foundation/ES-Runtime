@@ -1,0 +1,115 @@
+---
+title: Sockets
+description: Raw TCP and TLS with runtime:net, following the WinterTC Sockets API.
+---
+
+# Sockets
+
+`runtime:net` is raw TCP following the
+[WinterTC Sockets API](https://sockets-api.proposal.wintertc.org/):
+[`connect()`](/api/net) for outbound connections, `listen()` for a server. Bytes
+move over web streams — nothing blocks.
+
+## Client
+
+Opening an outbound connection needs the **Net** capability (the esrun CLI grants
+it). Closing the `writable` half-closes (sends FIN) while reads continue; pass
+`allowHalfOpen: true` to keep writing after the peer's FIN.
+
+```js
+import { connect } from "runtime:net";
+
+// connect() returns a Socket synchronously; .opened settles once connected.
+const sock = connect({ hostname: "example.com", port: 80 });
+await sock.opened;
+
+const w = sock.writable.getWriter();
+await w.write(new TextEncoder().encode("GET / HTTP/1.0\r\n\r\n"));
+await w.close();                           // half-close: send FIN, keep reading
+
+// Decode through TextDecoderStream so a multi-byte character split across two
+// chunks is still decoded correctly.
+let body = "";
+for await (const chunk of sock.readable.pipeThrough(new TextDecoderStream())) {
+  body += chunk;
+}
+```
+
+## TLS
+
+`secureTransport: "on"` negotiates TLS with certificate verification on. `sni`
+sets the server name (used for both the SNI extension and hostname verification),
+and `alpn` offers protocols — the negotiated one comes back as `opened.alpn`.
+
+```js
+import { connect } from "runtime:net";
+
+// secureTransport: "on" — TLS with certificate verification, offering ALPN.
+const sock = connect({ hostname: "example.com", port: 443 }, {
+  secureTransport: "on",
+  sni: "example.com",                      // optional; defaults to the host
+  alpn: ["h2", "http/1.1"],
+});
+const { alpn } = await sock.opened;        // negotiated protocol, e.g. "h2" (or null)
+```
+
+### STARTTLS
+
+`secureTransport: "starttls"` opens plaintext and upgrades the same connection in
+place via `startTls()`, which returns a new encrypted `Socket` (the original is
+consumed).
+
+```js
+import { connect } from "runtime:net";
+
+// "starttls" opens plaintext, then upgrades the SAME connection in place
+// (the SMTP/IMAP/XMPP pattern).
+const sock = connect({ hostname: "mail.example.com", port: 143 }, {
+  secureTransport: "starttls",
+});
+// ... exchange the plaintext go-ahead, then:
+const tls = sock.startTls();               // a new, encrypted Socket
+console.log(tls.upgraded);                 // true
+```
+
+## Server
+
+`listen()` binds a server (needs **NetListen**) and yields each accepted `Socket`
+as an async iterable. `port: 0` picks an ephemeral port — read it from `addr`.
+
+```js
+import { listen } from "runtime:net";
+
+const server = listen({ hostname: "127.0.0.1", port: 8080 });
+const { port } = await server.addr;        // resolves once listening
+
+for await (const conn of server) {         // each accepted Socket, already open
+  conn.readable.pipeTo(conn.writable);     // echo
+}
+```
+
+### TLS termination
+
+`secureTransport: "on"` on the server terminates TLS on every accept — pass a PEM
+`cert` + `key` (and optional `alpn`). The cert/key are supplied inline, so server
+TLS needs no capability beyond the **NetListen** the bind already requires.
+
+```js
+import { listen } from "runtime:net";
+import { file } from "runtime:fs";
+
+// Terminate TLS on accept. cert/key are inline PEM (string or bytes), so the
+// guest loads them itself — server TLS needs no capability beyond NetListen.
+const server = listen({
+  hostname: "127.0.0.1", port: 8443,
+  secureTransport: "on",
+  cert: await file("cert.pem").text(),     // PEM chain, leaf first
+  key: await file("key.pem").text(),       // PKCS#8 / PKCS#1 / SEC1
+  alpn: ["h2", "http/1.1"],
+});
+
+for await (const conn of server) {
+  const { alpn } = await conn.opened;      // negotiated protocol
+  conn.readable.pipeTo(conn.writable);     // every byte is encrypted
+}
+```

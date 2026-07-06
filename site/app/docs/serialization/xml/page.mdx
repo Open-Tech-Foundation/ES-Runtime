@@ -1,0 +1,89 @@
+---
+title: XML Processing
+description: A highly optimized native XML parser via runtime:serialization — parse, validate, build, and stream.
+---
+
+# XML Processing
+
+ES-Runtime includes a highly optimized native XML parser accessible via the
+`runtime:serialization` module. These operations run directly in Rust, completely
+avoiding JavaScript garbage collection overhead and offering best-in-class
+performance.
+
+## Parsing XML
+
+Use `XML.parse` to convert an XML string directly into a JavaScript object.
+
+```js
+import { XML } from "runtime:serialization";
+
+const xmlData = `<user id="1"><name>Alice</name></user>`;
+
+const parsed = XML.parse(xmlData);
+console.log(parsed.name.$text); // "Alice"
+console.log(parsed["@id"]);     // "1"
+```
+
+## Validating XML
+
+Use `XML.validate` to check if an XML string is well-formed.
+
+```js
+import { XML } from "runtime:serialization";
+
+const xmlData = `<user id="1"><name>Alice</name></user>`;
+
+if (XML.validate(xmlData)) {
+  console.log("XML is valid!");
+}
+
+const result = XML.validate("<invalid><xml>", { detailed: true });
+console.log(result.valid); // false
+console.log(result.error); // "Validation failed: ..."
+```
+
+## Building XML
+
+Use `XML.build` to serialize a JavaScript object back into an XML string.
+
+```js
+import { XML } from "runtime:serialization";
+
+const obj = {
+  user: {
+    "@id": "1",
+    name: "Alice"
+  }
+};
+
+const built = XML.build(obj);
+console.log(built); // <user id="1"><name>Alice</name></user>
+```
+
+### Streaming (XML.DecoderStream)
+
+For massive multi-gigabyte XML datasets, ES-Runtime provides `XML.DecoderStream`.
+This is a standard Web `TransformStream` that consumes XML string chunks and
+incrementally yields fully-parsed JavaScript objects, achieving a near-zero
+memory footprint.
+
+```js
+import { XML } from "runtime:serialization";
+
+async function processMassiveFeed(fileStream) {
+  // Pipe the chunks directly into the native streaming parser
+  const objectStream = fileStream.pipeThrough(new XML.DecoderStream());
+
+  // Use async iteration to consume parsed top-level element objects natively
+  for await (const value of objectStream) {
+    console.log(value);
+  }
+}
+```
+
+### Performance
+
+Because parsing happens directly within the Rust native core,
+`runtime:serialization` operates around 10% faster than `fast-xml-parser` running
+on Node.js or Bun, while utilizing half the memory. You can view the full
+benchmarks on the [Benchmarks](/docs/benchmarks) page.

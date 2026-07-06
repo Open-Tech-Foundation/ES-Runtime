@@ -1,0 +1,64 @@
+---
+title: Installation
+description: Install the esrun CLI — a prebuilt, checksum-verified binary that upgrades in place.
+---
+
+import { Tabs, CodeBlock } from "@opentf/web-docs";
+
+export const installTabs = [
+  {
+    label: "Linux / macOS",
+    content: (
+      <CodeBlock
+        lang="sh"
+        name="Terminal"
+        code="curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash"
+      />
+    ),
+  },
+  {
+    label: "Windows (PowerShell)",
+    content: (
+      <CodeBlock
+        lang="powershell"
+        name="PowerShell"
+        code="irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex"
+      />
+    ),
+  },
+];
+
+# Installation
+
+A prebuilt, checksum-verified `esrun` binary is downloaded and installed
+automatically.
+
+## Install
+
+<Tabs tabs={installTabs} />
+
+Prefer to build from source? See the
+[README](https://github.com/Open-Tech-Foundation/ES-Runtime).
+
+## Upgrade
+
+`esrun upgrade` updates the binary in place — no reinstall needed.
+
+```sh
+# Built in — downloads the latest release and replaces the binary.
+esrun upgrade
+```
+
+## Uninstall
+
+Delete the install directory and remove it from your `PATH`.
+
+```sh
+# Linux / macOS — remove the install dir, then drop the PATH line from your shell profile.
+rm -rf "$HOME/.esrun"
+```
+
+```powershell
+# Windows (PowerShell) — remove the install dir, then remove it from your user PATH.
+Remove-Item -Recurse -Force "$HOME\.esrun"
+```

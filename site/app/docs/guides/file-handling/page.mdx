@@ -1,0 +1,114 @@
+---
+title: File handling
+description: Read and write files with runtime:fs — a Blob-based surface, capability-gated and jailed to the project root.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# File handling
+
+Read and write files with [`runtime:fs`](/api/fs) — a Blob-based surface, gated
+by capabilities and confined to the project root jail.
+
+<Callout type="tip">
+  Every operation is async — use `await`. Top-level `await` covers the "load
+  config at startup" case.
+</Callout>
+
+## Reading files
+
+`file(path)` is a lazy handle; pick the read shape you want.
+
+```js
+import { file } from "runtime:fs";
+
+const f = file("./config/app.json");   // lazy — nothing is read yet
+const text   = await f.text();          // UTF-8 string
+const data   = await f.json();          // parsed JSON
+const bytes  = await f.bytes();          // Uint8Array
+const buf    = await f.arrayBuffer();    // ArrayBuffer
+const rs     = f.stream();               // ReadableStream
+const ok     = await f.exists();         // boolean
+const info   = await f.stat();           // { size, isFile, isDir, mtimeMs }
+```
+
+## Write file
+
+`write()` accepts any web body (string, bytes, etc.).
+
+```js
+import { write } from "runtime:fs";
+
+await write("./out/result.txt", "done");                  // string
+await write("/srv/app/cache.bin", new Uint8Array([1, 2])); // bytes
+```
+
+## Append file
+
+Pass `{ append: true }` to add to the end of the file.
+
+```js
+import { write } from "runtime:fs";
+
+await write("./app.log", "started\n", { append: true });  // append
+```
+
+## Stream to write
+
+You can stream data straight to disk using standard web streams.
+
+```js
+import { file } from "runtime:fs";
+
+// Any web body works — and you can stream straight to disk:
+const res = await fetch("https://example.com/big.bin");
+await res.body.pipeTo(file("./big.bin").writable());
+```
+
+## Folders
+
+### Create directory
+
+```js
+import { mkdir } from "runtime:fs";
+
+await mkdir("./logs/2026", { recursive: true });
+```
+
+### Read directory
+
+```js
+import { readDir } from "runtime:fs";
+
+for (const entry of await readDir("./logs")) {
+  console.log(entry.name, entry.isDir);
+}
+```
+
+### Rename
+
+```js
+import { rename } from "runtime:fs";
+
+await rename("./logs/app.log", "./logs/app.1.log");
+```
+
+### Remove
+
+```js
+import { remove } from "runtime:fs";
+
+await remove("./logs", { recursive: true });
+```
+
+## Capabilities & the jail
+
+Reads need `FileRead`, writes need `FileWrite` (the CLI grants both), and every
+path is confined to the project root — escapes via `..` or a symlink are
+rejected.
+
+## How other runtimes compare
+
+- **Node.js** — `node:fs` in callback, sync, and promise flavors.
+- **Deno** — promise-based `Deno.*` behind `--allow-read`/`--allow-write`.
+- **Bun** — Blob-based `Bun.file`/`Bun.write`, the shape esrun follows.

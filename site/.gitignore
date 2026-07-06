@@ -8,6 +8,9 @@ dist/
 .vite/
 *.local
 
+# otfw CLI generated entry / caches (do not commit)
+.dev/
+
 # Logs
 *.log
 npm-debug.log*

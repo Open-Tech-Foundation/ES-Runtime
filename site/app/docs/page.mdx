@@ -1,0 +1,74 @@
+---
+title: Overview
+description: ES Runtime — a secure, standards-based JavaScript runtime for the server, built on V8 in Rust.
+---
+
+import { Tabs, CodeBlock, Callout } from "@opentf/web-docs";
+
+export const installTabs = [
+  {
+    label: "Linux / macOS",
+    content: (
+      <CodeBlock
+        lang="sh"
+        name="Terminal"
+        code="curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash"
+      />
+    ),
+  },
+  {
+    label: "Windows (PowerShell)",
+    content: (
+      <CodeBlock
+        lang="powershell"
+        name="PowerShell"
+        code="irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex"
+      />
+    ),
+  },
+];
+
+# Overview
+
+ES Runtime is a secure, standards-based JavaScript runtime for the server, built
+on V8 in Rust. It runs standard ES Modules with a sandboxed module system.
+
+<Callout type="info">
+  Ships in two shapes from one core: an **embeddable library**, which is
+  deny-by-default, and the **standalone CLI** (`esrun`), which grants all
+  capabilities.
+</Callout>
+
+It is **not** Node.js-compatible — see [Scope & non-goals](/docs/scope) and the
+[runtime comparison](/docs/comparison).
+
+## Principles
+
+- **ESM only.** There is no CommonJS interop. Modules are real ES Modules and
+  packages must expose an ESM entry point.
+- **Capabilities are explicit.** Host powers — environment, filesystem, network
+  — are granted one at a time. Nothing is ambient.
+- **Standard surface.** Host functionality is exposed through `runtime:` module
+  imports rather than magic globals.
+
+## Install
+
+Download a prebuilt, checksum-verified binary for your platform:
+
+<Tabs tabs={installTabs} />
+
+Prefer to build from source? See the
+[README](https://github.com/Open-Tech-Foundation/ES-Runtime).
+
+## Run a script
+
+```sh
+# Run a module file
+esrun app.js
+
+# Evaluate an inline snippet (top-level await is supported)
+esrun -e "console.log(await Promise.resolve(42))"
+
+# Pass arguments through to the script
+esrun app.js --name Ada
+```

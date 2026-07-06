@@ -1,0 +1,57 @@
+---
+title: esrun vs Node.js · Bun · Deno
+description: The trade-offs between esrun's sandboxed, standards-only core and general-purpose runtimes.
+---
+
+# esrun vs Node.js · Bun · Deno
+
+Node.js, Bun, and Deno are general-purpose runtimes with broad toolchains and
+(varying degrees of) Node.js compatibility. esrun is intentionally smaller: a
+sandboxed, standards-only execution core you embed or run directly. The table
+makes the trade-offs explicit.
+
+| Capability | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
+| ES Modules | ✅ | ✅ | ✅ | ✅ |
+| CommonJS (require) | ❌ | ✅ | ✅ | 🟡 |
+| TypeScript (built-in) | ❌ | ✅ | ✅ | ✅ |
+| JSX (built-in) | ❌ | ❌ | ✅ | ✅ |
+| JSON module imports | ✅ | ✅ | ✅ | ✅ |
+| Web APIs (fetch/URL/streams/WebCrypto) | ✅ | ✅ | ✅ | ✅ |
+| Temporal API | ✅ | ✅ | ❌ | ✅ |
+| Node.js compatibility (`node:` builtins) | ❌ | ✅ | ✅ | 🟡 |
+| Capability sandbox (deny by default) | ❌ | 🟡 | ❌ | ✅ |
+| Workers / multi-thread | ❌ | ✅ | ✅ | ✅ |
+| FFI (dlopen) | ❌ | ❌ | ✅ | ✅ |
+| Native addons (N-API) | ❌ | ✅ | ✅ | ✅ |
+| Package installer | ❌ | ✅ | ✅ | ✅ |
+| Bundler / test runner | ❌ | 🟡 | ✅ | ✅ |
+| Embeddable as a library | ✅ | ❌ | ❌ | 🟡 |
+
+**Legend:** ✅ Supported · 🟡 Partial / flagged / experimental · ❌ Not supported
+
+<br />
+
+> **Note on the esrun sandbox column.** The esrun **CLI** grants all capabilities,
+> so the "deny by default" and always-on jail apply to the **embeddable library** —
+> deny-by-default there, unrestricted in the CLI.
+
+## Where the API surface differs
+
+- **No Node.js API.** Where Node.js, Bun, and Deno all expose `node:fs`,
+  `Buffer`, and a global `process`, esrun exposes host functionality only through
+  capability-gated `runtime:` modules.
+- **Globals are not host APIs.** Like Deno, esrun keeps the global scope close to
+  the Web platform — but it does not put filesystem or process access on a global
+  either.
+- **Always-on filesystem jail.** File access — including module resolution — is
+  confined to a project root that can't be escaped, even via symlink, in both the
+  library and the CLI. Deno gates host access with CLI permission flags and
+  Node.js has an experimental permission model; the esrun CLI grants all
+  capabilities, while the embeddable library is deny-by-default.
+- **It embeds.** esrun is a Rust library with a driven event loop and no owned
+  thread, designed to run inside a host application — a use case the others do not
+  target.
+
+Status reflects general availability at the time of writing and is a summary, not
+an exhaustive audit. See [Benchmarks](/docs/benchmarks) for measured performance.

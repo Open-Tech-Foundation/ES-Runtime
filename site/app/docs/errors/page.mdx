@@ -1,0 +1,30 @@
+---
+title: Error diagnostics
+description: Native exception class preservation and accurate stack trace reporting.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Error diagnostics
+
+ES-Runtime guarantees native exception class preservation and accurate stack
+trace reporting. Instead of swallowing errors as generic string blocks, the
+runtime retains exact subclasses (like `TypeError`, `DOMException`) and precise
+source mapping points.
+
+## Stack traces
+
+When an unhandled exception or unhandled promise rejection bubbles to the top
+level, `esrun` elegantly formats the error trace in your CLI:
+
+```text
+error: uncaught exception in my-script.mjs
+TypeError: network connection refused
+    at fetchData (file:///path/to/script.mjs:10:5)
+    at file:///path/to/script.mjs:2:1
+```
+
+<Callout type="info" title="Good to know">
+  The CLI handles color formatting seamlessly and adjusts gracefully if piped
+  into other tools or if `NO_COLOR` is set.
+</Callout>

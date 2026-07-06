@@ -1,0 +1,92 @@
+---
+title: Migration guide
+description: Moving from Node.js, Bun, or Deno to esrun.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Migration guide
+
+A comprehensive guide to moving from Node.js, Bun, or Deno to esrun.
+
+<Callout type="info" title="Core principle: no ambient globals">
+  Unlike other runtimes, esrun does not expose global `process`, `Bun`, or `Deno`
+  objects. You explicitly import what you need from the `runtime:` scheme.
+</Callout>
+
+## From Node.js
+
+esrun uses ES modules exclusively. CommonJS is not supported. Built-in modules
+like `node:fs` or `node:path` are replaced by secure, scoped equivalents under
+the `runtime:` prefix.
+
+### Process & Env globals
+
+In Node.js, `process` is a global object. In esrun, you must explicitly import
+environment variables and arguments from `runtime:process`.
+
+```js
+// Node.js
+const port = process.env.PORT;
+const args = process.argv.slice(2);
+const cwd = process.cwd();
+
+// ESRun
+import { env, args, cwd } from "runtime:process";
+
+const port = env.PORT;
+const cliArgs = args;   // already the parsed argument list
+const dir = cwd();
+```
+
+### File System
+
+esrun moves away from synchronous file operations and callback APIs, embracing a
+modern, Promise-based `Blob`-like interface.
+
+```js
+// Node.js
+import { readFileSync, writeFileSync } from "node:fs";
+const data = readFileSync("./data.txt", "utf8");
+writeFileSync("./data.txt", "done");
+
+// ESRun
+import { file, write } from "runtime:fs";
+const data = await file("./data.txt").text();
+await write("./data.txt", "done");
+```
+
+## From Bun
+
+Bun and esrun share similarities in embracing modern Web APIs and the `Blob` file
+structure. However, esrun requires explicit imports rather than relying on the
+`Bun` global object.
+
+```js
+// Bun
+const data = await Bun.file("./data.txt").text();
+await Bun.write("./data.txt", "done");
+
+// ESRun
+import { file, write } from "runtime:fs";
+const data = await file("./data.txt").text();
+await write("./data.txt", "done");
+```
+
+## From Deno
+
+Similar to Deno, esrun focuses on standard web APIs and a secure capability
+model. Instead of relying on the `Deno.*` namespace, esrun exposes explicit
+`runtime:` modules. Note that esrun uses standard `package.json` and
+`node_modules` resolution instead of URL imports for packages.
+
+```js
+// Deno
+const data = await Deno.readTextFile("./data.txt");
+await Deno.writeTextFile("./data.txt", "done");
+
+// ESRun
+import { file, write } from "runtime:fs";
+const data = await file("./data.txt").text();
+await write("./data.txt", "done");
+```

@@ -1,0 +1,103 @@
+---
+title: runtime:serialization
+description: Native parsers for JSONL, XML, YAML, TOML, MessagePack, and Protobuf — running directly in Rust.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:serialization
+
+Native parsers for JSONL, XML, YAML, TOML, and MessagePack. These operations run
+directly in Rust, avoiding JavaScript overhead and providing best-in-class
+performance.
+
+<Callout type="info" title="Capability: None (Pure Computation)">
+  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import {
+  JSONL, XML, YAML, TOML, MessagePack, Protobuf
+} from "runtime:serialization";
+```
+
+## JSONL (JSON Lines)
+
+Stream-based parsing and serializing of JSON Lines data. JSONL is heavily
+optimized for large file handling natively over streams.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `new JSONL.DecoderStream(options?)` | `TransformStream` | Parses streaming JSONL byte chunks into JS objects incrementally. Option `skipInvalid?` (boolean, default `false`): skip invalid JSON lines instead of destroying the stream; skipped lines are emitted to `decoder.onError(err)`. | `stream.pipeThrough(new JSONL.DecoderStream({ skipInvalid: true }))` |
+| `new JSONL.EncoderStream()` | `TransformStream` | Serializes a stream of JS objects into JSONL byte chunks. No options are currently supported. | `stream.pipeThrough(new JSONL.EncoderStream())` |
+
+## XML
+
+Synchronous parsing, building, and validation of XML data, plus streaming
+support for massive documents.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `XML.parse(xml)` | `(string) => object` | Parses an XML string into a JavaScript object. | `XML.parse("<root>hi</root>")` |
+| `XML.build(obj)` | `(object) => string` | Serializes a JavaScript object into an XML string. | `XML.build({ root: "hi" })` |
+| `XML.validate(xml, options?)` | `(string, object) => boolean \| object` | Validates an XML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean, with the exact syntax error on failure. | `XML.validate("<root>", { detailed: true })` |
+| `new XML.DecoderStream()` | `TransformStream` | Parses streaming XML byte chunks into JavaScript objects incrementally. | `stream.pipeThrough(new XML.DecoderStream())` |
+
+## YAML
+
+Synchronous parsing, building, and validation of YAML data.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `YAML.parse(yaml)` | `(string) => object` | Parses a YAML string into a JavaScript object. | `YAML.parse("key: value")` |
+| `YAML.build(obj)` | `(object) => string` | Serializes a JavaScript object into a YAML string. | `YAML.build({ key: "value" })` |
+| `YAML.validate(yaml, options?)` | `(string, object) => boolean \| object` | Validates a YAML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `YAML.validate("key: value", { detailed: true })` |
+
+## TOML
+
+Synchronous parsing, building, and validation of TOML data.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `TOML.parse(toml)` | `(string) => object` | Parses a TOML string into a JavaScript object. | `TOML.parse("key = 'value'")` |
+| `TOML.build(obj)` | `(object) => string` | Serializes a JavaScript object into a TOML string. The root must be an object/table. | `TOML.build({ key: "value" })` |
+| `TOML.validate(toml, options?)` | `(string, object) => boolean \| object` | Validates a TOML string. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `TOML.validate("key = 'value'", { detailed: true })` |
+
+## MessagePack
+
+Synchronous parsing, building, and validation of binary MessagePack data.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `MessagePack.decode(msgpack)` | `(Uint8Array) => object` | Parses a MessagePack byte array into a JavaScript object. | `MessagePack.decode(bytes)` |
+| `MessagePack.encode(obj)` | `(object) => Uint8Array` | Serializes a JavaScript object into a MessagePack byte array. | `MessagePack.encode({ key: "value" })` |
+| `MessagePack.validate(msgpack, options?)` | `(Uint8Array, object) => boolean \| object` | Validates a MessagePack byte array. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `MessagePack.validate(bytes, { detailed: true })` |
+
+## Protobuf
+
+Schema-aware Protobuf decoding and encoding. Pure-JS and reflective: the `.proto`
+is compiled at runtime (proto3 and editions 2023/2024; proto2-only constructs are
+rejected). Decoded objects use camelCase keys, BigInt for 64-bit ints, enum
+value-names, and `Uint8Array` for bytes.
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `new Protobuf.Schema(proto, options?)` | `Schema` | Compiles a `.proto` source string (or a `{ filename: source }` map for multi-file schemas with imports; `google/protobuf` well-known types resolve automatically). | `new Protobuf.Schema('syntax = "proto3"; message Hello { string name = 1; }')` |
+| `Protobuf.Schema.fromDescriptorSet(bytes)` | `(Uint8Array) => Schema` | Builds a Schema from a compiled FileDescriptorSet (`protoc --descriptor_set_out`, ideally with `--include_imports`) instead of `.proto` source. | `Protobuf.Schema.fromDescriptorSet(await readDescriptorBytes())` |
+| `schema.decode(messageName, bytes)` | `(string, Uint8Array) => object` | Decodes a byte array into a JavaScript object for the fully-qualified message name. | `schema.decode("Hello", bytes)` |
+| `schema.encode(messageName, value)` | `(string, object) => Uint8Array` | Encodes a JavaScript object into a Protobuf byte array. | `schema.encode("Hello", { name: "world" })` |
+| `schema.encodeDelimited(messageName, value)` | `(string, object) => Uint8Array` | Encodes one length-delimited message (varint length prefix + bytes). Concatenate results to write a stream. | `schema.encodeDelimited("Hello", { name: "world" })` |
+| `schema.decodeDelimited(messageName, source)` | `(string, ReadableStream \| AsyncIterable \| Iterable \| Uint8Array) => AsyncGenerator<object>` | Streams the messages of a length-delimited stream from a chunked byte source. | `for await (const m of schema.decodeDelimited("Hello", res.body)) { … }` |
+| `schema.toJson(messageName, value)` | `(string, object) => JsonValue` | Converts a decoded value to canonical proto3-JSON (64-bit ints and bytes as strings, enums as value-names, well-known-type special forms). | `schema.toJson("Hello", value)` |
+| `schema.fromJson(messageName, json, options?)` | `(string, JsonValue, { ignoreUnknownFields? }) => object` | Parses canonical proto3-JSON into the decoded value shape (ready for encode). Strict by default. | `schema.fromJson("Hello", { name: "world" })` |
+| `schema.decodeStream(messageName, fieldName, source)` | `(string, string, ReadableStream \| AsyncIterable \| Iterable) => AsyncGenerator<object>` | Streams the elements of a repeated message field from a chunked byte source, yielding each as it arrives without materializing the whole array. | `for await (const item of schema.decodeStream("Catalog", "books", stream)) { … }` |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `SyntaxError` | Parsing fails due to malformed XML, YAML, or TOML input. |
+| `TypeError` | Building fails because the provided JavaScript object cannot be serialized into the target format (e.g., circular references, invalid keys). |
+| `RangeError` | The input exceeds parser depth or memory limits (e.g., XML streaming buffer cap). |

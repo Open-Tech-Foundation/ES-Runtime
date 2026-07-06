@@ -1,0 +1,43 @@
+---
+title: Path handling
+description: Utilities for working with file and directory paths via runtime:path.
+---
+
+# Path handling
+
+The `runtime:path` module provides utilities for working with file and directory
+paths. It is similar to Node.js's `path` module.
+
+## Usage
+
+```js
+import { join, resolve, basename, dirname, extname } from "runtime:path";
+
+const p = join("docs", "path", "page.jsx");
+console.log(p); // docs/path/page.jsx
+
+console.log(basename(p)); // page.jsx
+console.log(dirname(p));  // docs/path
+console.log(extname(p));  // .jsx
+```
+
+## Working with import.meta.url
+
+Every ES module provides an `import.meta.url` which is a fully resolved `file://`
+URL pointing to the absolute path of the current module. You can use the
+`fromFileURL` utility to convert it into an absolute file path.
+
+```js
+import { dirname, fromFileURL } from "runtime:path";
+
+// 1. Get the absolute file path of the current module
+const __filename = fromFileURL(import.meta.url);
+
+// 2. Get the directory name of the current module
+const __dirname = dirname(__filename);
+
+console.log("Current module is at:", __filename);
+console.log("Current directory is:", __dirname);
+```
+
+For more details on available properties, view the [API Reference](/api/path).

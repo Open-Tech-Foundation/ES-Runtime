@@ -1,0 +1,70 @@
+---
+title: YAML Processing
+description: High-performance native YAML parsing via runtime:serialization, backed by serde_yaml.
+---
+
+# YAML Processing
+
+ES-Runtime provides high-performance native YAML parsing via the
+`runtime:serialization` module, backed by `serde_yaml`.
+
+## Parsing YAML
+
+Use `YAML.parse` to convert a YAML string directly into a JavaScript object.
+
+```js
+import { YAML } from "runtime:serialization";
+
+const yamlData = `
+user:
+  id: 1
+  name: Alice
+`;
+
+const parsed = YAML.parse(yamlData);
+console.log(parsed.user.name); // "Alice"
+console.log(parsed.user.id);   // 1
+```
+
+## Validating YAML
+
+Use `YAML.validate` to check if a YAML string is well-formed.
+
+```js
+import { YAML } from "runtime:serialization";
+
+const yamlData = `
+user:
+  id: 1
+  name: Alice
+`;
+
+if (YAML.validate(yamlData)) {
+  console.log("YAML is valid!");
+}
+
+const result = YAML.validate("invalid: \n  - yaml: [", { detailed: true });
+console.log(result.valid); // false
+console.log(result.error); // "Validation failed: ..."
+```
+
+## Building YAML
+
+Use `YAML.build` to convert a JavaScript object back into a YAML string.
+
+```js
+import { YAML } from "runtime:serialization";
+
+const obj = {
+  user: {
+    id: 1,
+    name: "Alice"
+  }
+};
+
+const built = YAML.build(obj);
+console.log(built);
+// user:
+//   id: 1
+//   name: Alice
+```

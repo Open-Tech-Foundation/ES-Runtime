@@ -1,0 +1,120 @@
+---
+title: WebSocket
+description: The WHATWG WebSocket — a client global (like fetch) and a runtime:websocket server.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# WebSocket
+
+The classic WHATWG `WebSocket` — a **client** as a global (like `fetch`) and a
+**server** as `runtime:websocket`. Push-based `message`/`close` events ride the
+runtime's tick; `wss:` reuses the same TLS stack as `runtime:net`.
+
+## Client
+
+The `WebSocket` global — no import.
+
+<Callout type="info" title="Capability: Net">
+  Global client over `ws:` / `wss:`.
+</Callout>
+
+```js
+// The WebSocket global — like fetch, no import. Opening requires Net.
+const ws = new WebSocket("wss://example.com/socket", ["chat"]);
+ws.binaryType = "arraybuffer"; // or "blob" (default)
+
+ws.addEventListener("open", () => ws.send("hello"));
+ws.addEventListener("message", (e) => {
+  // e.data: string (text) | ArrayBuffer | Blob (binary, per binaryType)
+  console.log(e.data, e.origin);
+});
+ws.addEventListener("close", (e) => console.log(e.code, e.reason, e.wasClean));
+
+ws.close(1000, "done"); // code 1000 or 3000–4999; reason ≤ 123 UTF-8 bytes
+```
+
+<Callout type="warning" title="Net capability">
+  Without the **Net** capability (or with no WebSocket provider installed) the
+  socket fails with an `error` then a `close` (code 1006).
+</Callout>
+
+### Interface
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `new WebSocket(url, protocols?)` | `(url, string \| string[]) => WebSocket` | `url` must be `ws:`/`wss:` with no fragment; `protocols` are RFC 6455 tokens. Requires Net. |
+| `readyState` | `0 \| 1 \| 2 \| 3` | CONNECTING / OPEN / CLOSING / CLOSED — constants on the instance and the interface. |
+| `send(data)` | `(BufferSource \| Blob \| USVString) => void` | Throws InvalidStateError while CONNECTING; dropped silently after close. |
+| `close(code?, reason?)` | `(number?, string?) => void` | `code` = 1000 or 3000–4999 (else InvalidAccessError); `reason` ≤ 123 UTF-8 bytes (else SyntaxError). |
+| `binaryType` | `"blob" \| "arraybuffer"` | How binary messages surface in message events (default `"blob"`). |
+| `bufferedAmount` | `number` | Best-effort bytes queued by `send` but not yet flushed. |
+| `protocol / extensions / url` | `string` | Negotiated subprotocol / extensions (`""` — none) / the resolved URL. |
+| `on{open,message,error,close}` | `EventHandler` | Also via `addEventListener`. message → MessageEvent; close → CloseEvent. |
+
+<span id="server"></span>
+
+## Server · `runtime:websocket`
+
+Serving is capability-gated I/O, so it lives in a `runtime:` module like
+`runtime:net` `listen()`. `serve()` yields accepted connections — each the same
+shape as a client socket, already open.
+
+<Callout type="info" title="Capability: NetListen">
+  Exposed as an ES module over `ws:`.
+</Callout>
+
+```js
+import { serve, broadcast } from "runtime:websocket";
+
+const clients = new Set();
+const server = serve({ hostname: "127.0.0.1", port: 4001 });
+const { port } = await server.addr;
+
+for await (const ws of server) {
+  clients.add(ws);
+  // broadcast() fans out in one host crossing — full delivery, coalesced writes.
+  ws.addEventListener("message", (e) => broadcast(clients, e.data));
+  ws.addEventListener("close", () => clients.delete(ws));
+}
+```
+
+### Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `serve(options)` | `({ hostname?, port }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
+| `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). |
+
+### WebSocketServer
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `addr` | `Promise<{ hostname, port }>` | The bound address (resolves once listening). |
+| `accept()` | `Promise<connection \| null>` | The next connection, or `null` once closed. |
+| `close()` | `Promise<void>` | Stop accepting new connections. |
+| `[Symbol.asyncIterator]` | `AsyncIterable<connection>` | `for await (const ws of server) { … }` |
+
+### connection
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `send(data)` | `(string \| Blob \| BufferSource) => void` | Send a text or binary frame. |
+| `close(code?, reason?)` | `(number?, string?) => void` | Begin the closing handshake. |
+| `binaryType` | `"blob" \| "arraybuffer"` | How binary messages surface (default `"blob"`). |
+| `on{message,close,error}` | `EventHandler` | Also via `addEventListener` — the client surface, minus the connecting handshake. |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `SyntaxError` | `new WebSocket(url)` with an invalid URL or scheme, or `close(code, reason)` with a reason longer than 123 UTF-8 bytes. |
+| `DOMException` | name `"InvalidAccessError"` — `close(code)` with a code other than 1000 or 3000–4999. |
+| `DOMException` | name `"InvalidStateError"` — `send()` while the socket is still CONNECTING. |
+| `(event)` | A failed connection or a denied Net capability surfaces as an `error` event followed by a `close` (code 1006) — not a thrown exception. |
+
+<Callout type="note" title="Not yet">
+  The promise/stream-based `WebSocketStream`, permessage-deflate (`extensions` is
+  always `""`), a `wss:` server, and pub/sub topics over the explicit-set
+  `broadcast()`.
+</Callout>

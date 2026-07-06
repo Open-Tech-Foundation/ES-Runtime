@@ -1,0 +1,33 @@
+---
+title: Overview
+description: The runtime: standard modules and the esrun CLI — ESM-only, capability-gated host functionality.
+---
+
+# API reference
+
+ES Runtime is ESM-only; the embeddable library is deny-by-default (the `esrun`
+CLI grants all capabilities). Host functionality is exposed as ES modules under
+the `runtime:` scheme — never as ambient globals — and every operation is gated
+on an explicit capability.
+
+## The `runtime:` scheme
+
+Built-in modules are imported with a `runtime:` specifier. They are served from a
+baked, in-binary registry before any injected loader runs, and never touch the
+filesystem. The security boundary is the **op**, not the module: importing always
+succeeds, but an operation throws unless its capability has been granted.
+
+```js
+import { env, args } from "runtime:process";
+```
+
+## Built-in modules
+
+| Module | Status | Capability |
+| --- | --- | --- |
+| [`runtime:process`](/api/process) | Available | Env |
+| [`runtime:path`](/api/path) | Available | Env |
+| [`runtime:fs`](/api/fs) | Available | FileRead / FileWrite |
+| [`runtime:net`](/api/net) | Available | Net / NetListen |
+| [`runtime:http`](/api/http) | Available | NetListen |
+| [`runtime:websocket`](/api/websocket#server) | Available | NetListen |

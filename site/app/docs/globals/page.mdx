@@ -1,0 +1,124 @@
+---
+title: Global objects
+description: esrun's global scope tracks the WinterTC Minimum Common Web Platform API.
+---
+
+# Global objects
+
+esrun's global scope tracks the WinterTC Minimum Common Web Platform API. These
+are standard Web globals — the same names you would use in a browser or other
+server runtimes. Host capabilities (filesystem, process, network access) are
+_not_ globals; they live in [runtime: modules](/docs/modules).
+
+## Core
+
+| Global | Notes |
+| --- | --- |
+| `globalThis` | |
+| `self` | |
+| `console` | |
+| `queueMicrotask` | |
+| `structuredClone` | |
+| `reportError` | |
+
+## Timers
+
+| Global | Notes |
+| --- | --- |
+| `setTimeout` / `clearTimeout` | |
+| `setInterval` / `clearInterval` | |
+
+## URL
+
+| Global | Notes |
+| --- | --- |
+| `URL` | |
+| `URLSearchParams` | |
+| `URLPattern` | |
+
+## Fetch & networking
+
+| Global | Notes |
+| --- | --- |
+| `fetch` | streaming request + response bodies |
+| `Request` | |
+| `Response` | |
+| `Headers` | |
+| `WebSocket` | client; server is `runtime:websocket` |
+
+## Encoding
+
+| Global | Notes |
+| --- | --- |
+| `TextEncoder` / `TextDecoder` | |
+| `TextEncoderStream` / `TextDecoderStream` | |
+| `atob` / `btoa` | |
+
+## Streams
+
+| Global | Notes |
+| --- | --- |
+| `ReadableStream` | |
+| `WritableStream` | |
+| `TransformStream` | |
+| `ByteLengthQueuingStrategy` | |
+| `CountQueuingStrategy` | |
+
+## Crypto
+
+| Global | Notes |
+| --- | --- |
+| `crypto` | `getRandomValues`, `randomUUID` |
+| `crypto.subtle` | digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2 |
+| `CryptoKey` | |
+
+## Events
+
+| Global | Notes |
+| --- | --- |
+| `Event` / `EventTarget` / `CustomEvent` | |
+| `MessageEvent` / `CloseEvent` | |
+| `AbortController` / `AbortSignal` | |
+
+## Data
+
+| Global | Notes |
+| --- | --- |
+| `Blob` | |
+| `File` | |
+| `FormData` | |
+| `DOMException` | |
+
+## Performance
+
+| Global | Notes |
+| --- | --- |
+| `performance` | `now()`, `timeOrigin` |
+
+## Streaming upload
+
+Passing a `ReadableStream` as the `fetch` body uploads it as a chunked transfer
+with backpressure — the body is never fully buffered, so large or open-ended
+uploads stay memory-bounded. Response bodies stream too.
+
+```js
+// A ReadableStream body streams to the server (chunked upload, backpressured).
+const body = new ReadableStream({
+  async pull(c) {
+    const next = await source.read();        // your data source
+    if (next.done) c.close();
+    else c.enqueue(next.value);              // Uint8Array chunks
+  },
+});
+
+await fetch("https://example.com/upload", { method: "POST", body });
+// Anything else (string, Blob, FormData, Uint8Array) is sent buffered.
+```
+
+## Not available
+
+| Global | Why not |
+| --- | --- |
+| `process` / `Buffer` / `require` | Node.js globals — not provided (use `runtime:` modules) |
+| `Worker` / `MessageChannel` | no Workers in Layer A (see [Scope](/docs/scope)) |
+| `navigator` / `localStorage` / `window` | browser globals — out of scope |

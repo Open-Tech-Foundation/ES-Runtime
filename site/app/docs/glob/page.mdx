@@ -1,0 +1,62 @@
+---
+title: Glob matching
+description: Find files and match paths using the Glob API from runtime:fs.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Glob matching
+
+Find files and match paths using the [`Glob`](/api/fs) API from `runtime:fs`.
+
+## Basic matching & scanning
+
+`Glob` matches strings without I/O, or it can scan the filesystem tree.
+
+```js
+import { Glob } from "runtime:fs";
+
+const ts = new Glob("**/*.ts");
+ts.match("src/index.ts"); // true (pure, no I/O)
+
+// Scan a directory recursively for matches
+for await (const path of ts.scan("src")) {
+  console.log(path);
+}
+```
+
+## Pattern syntax
+
+Every token a `Glob` pattern supports:
+
+| Token | Description | Example |
+| --- | --- | --- |
+| `*` | Any run of characters within one path segment (not `/`). | `"*.ts"` |
+| `**` | Any characters, crossing `/` — recurse into subdirectories. | `"src/**/*.ts"` |
+| `?` | Exactly one character (not `/`). | `"v?.json"` |
+| `[abc]` | Any one character in the set. | `"[abc]*.js"` |
+| `[a-z]` | Any one character in the range. | `"[0-9]*.log"` |
+| `[!abc]` | Any one character NOT in the set (`[^abc]` works too). | `"[!_]*.ts"` |
+| `{a,b}` | Alternation — match any of the comma-separated options. | `"*.{ts,tsx}"` |
+| `\` | Escape — match the next metacharacter literally. | `"file\*.txt"` |
+| `!…` | A leading `!` negates the whole pattern. | `"!**/*.test.ts"` |
+
+<Callout type="note" title="Cross-OS">
+  Patterns and matched paths always use `/` separators, even on Windows —
+  matching is identical on Linux, macOS, and Windows.
+</Callout>
+
+## Narrowing a scan
+
+There's no `exclude` option — scan a narrower root to skip a subtree, or filter
+the results yourself.
+
+```js
+import { Glob } from "runtime:fs";
+
+const js = new Glob("**/*.js");
+for await (const path of js.scan("src")) {   // walks only ./src
+  if (path.includes("/vendor/")) continue;   // ...and filter in JS
+  console.log(path);
+}
+```
