@@ -95,9 +95,13 @@ export default function WhyChooseSection() {
           {/* ESRun */}
           <div className="flex flex-col">
             <div className="flex items-center justify-center gap-2 mb-4">
-              <span className="flex h-6 w-6 items-center justify-center rounded-full bg-brand-500 text-white shadow-md shrink-0">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-              </span>
+              <img
+                src="/img/otf-logo.svg"
+                alt="Open Tech Foundation"
+                width="24"
+                height="24"
+                className="shrink-0"
+              />
               <h3 className="font-bold text-zinc-100 tracking-wide">ESRun</h3>
             </div>
             <div className="flex-1 bg-zinc-900 border-t-4 border-brand-500 rounded-xl p-5 shadow-lg relative group transition-colors hover:bg-zinc-800">
