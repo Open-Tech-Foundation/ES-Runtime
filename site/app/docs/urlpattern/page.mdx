@@ -1,0 +1,49 @@
+---
+title: URLPattern
+description: A hyper-optimized, native-JavaScript implementation of the URLPattern Web API.
+---
+
+# URLPattern
+
+esrun provides a hyper-optimized, native-JavaScript implementation of the
+`URLPattern` Web API. It allows you to match URLs and extract data (like route
+parameters and wildcards) cleanly and efficiently.
+
+## Basic Usage
+
+You can construct a pattern using a string and an optional base URL. Use `test()`
+to check if a URL matches, and `exec()` to extract parameters.
+
+```js
+const pattern = new URLPattern('/api/users/:id', 'https://api.example.com');
+console.log(pattern.test('https://api.example.com/api/users/123')); // true
+console.log(pattern.test('https://api.example.com/api/posts/123')); // false
+
+const result = pattern.exec('https://api.example.com/api/users/456');
+console.log(result.pathname.groups.id); // "456"
+```
+
+## Object Patterns
+
+For more complex matching, you can pass an object defining specific patterns for
+each URL component (protocol, hostname, pathname, etc).
+
+```js
+const pattern = new URLPattern({
+  protocol: 'http*',
+  hostname: '*.example.com',
+  pathname: '/data/:type/*'
+});
+
+const result = pattern.exec('https://api.example.com/data/images/avatar.png');
+console.log(result.pathname.groups.type); // "images"
+console.log(result.pathname.groups['0']); // "avatar.png" (from wildcard *)
+```
+
+## Syntax features
+
+- **Named groups:** Use `:param` to extract a segment into `groups.param`.
+- **Wildcards:** Use `*` to match everything up to the end of the component.
+  Wildcards are indexed numerically in the groups object.
+- **Ignore Case:** Pass `{ ignoreCase: true }` to the constructor options to match
+  case-insensitively.

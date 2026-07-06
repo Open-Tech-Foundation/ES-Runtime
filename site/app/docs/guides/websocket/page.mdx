@@ -1,0 +1,96 @@
+---
+title: WebSockets
+description: The WHATWG WebSocket on both sides — a client global and a runtime:websocket server.
+---
+
+# WebSockets
+
+esrun ships the classic WHATWG [`WebSocket`](/api/websocket) on both sides: a
+**client** as a global (like `fetch`) and a **server** as the `runtime:websocket`
+module. Both speak `ws:` and `wss:` (client); messages ride the runtime's event
+loop — no extra threads.
+
+## Client
+
+Construct a `WebSocket` and listen for `open`, `message`, `close`, and `error`.
+Opening a connection needs the **Net** capability (the esrun CLI grants it).
+
+```js
+// WebSocket is a global — like fetch, no import. Opening requires Net.
+const ws = new WebSocket("wss://example.com/feed", ["json"]);
+
+ws.addEventListener("open", () => ws.send(JSON.stringify({ hello: "world" })));
+ws.addEventListener("message", (e) => {
+  const msg = JSON.parse(e.data);          // e.data is a string for text frames
+  console.log("got", msg);
+});
+ws.addEventListener("close", (e) => console.log("closed", e.code, e.reason));
+ws.addEventListener("error", () => console.log("connection failed"));
+```
+
+### Binary data
+
+Send strings, `ArrayBuffer`, typed arrays, or `Blob`. Set `binaryType` to choose
+how binary frames arrive.
+
+```js
+const ws = new WebSocket("ws://localhost:9001/");
+ws.binaryType = "arraybuffer";             // default is "blob"
+
+ws.addEventListener("open", () => ws.send(new Uint8Array([1, 2, 3]).buffer));
+ws.addEventListener("message", (e) => {
+  if (typeof e.data === "string") console.log("text", e.data);
+  else console.log("binary", new Uint8Array(e.data)); // ArrayBuffer
+});
+```
+
+### Closing
+
+```js
+ws.close();                  // normal (1000)
+ws.close(1000, "bye");       // code 1000 or 3000–4999; reason ≤ 123 UTF-8 bytes
+// send() while CONNECTING throws InvalidStateError; after close it is ignored.
+```
+
+## Server
+
+`serve()` binds a server (needs **NetListen**) and yields each accepted
+connection as an async iterable — every connection has the same `send`/`close`
+and `message`/`close` surface as a client socket, already open.
+
+```js
+import { serve } from "runtime:websocket";
+
+const server = serve({ hostname: "127.0.0.1", port: 9001 });
+const { port } = await server.addr;        // resolves once listening
+console.log("listening on", port);
+
+for await (const ws of server) {           // each accepted connection
+  ws.addEventListener("message", (e) => ws.send(e.data)); // echo
+}
+```
+
+### Broadcast (chat)
+
+For chat-style fan-out, keep a set of connections and use `broadcast()` — it
+delivers one message to the whole room in a single host crossing with one payload
+copy, so it stays fast and lossless where a per-connection `.send()` loop would
+lag under load.
+
+```js
+import { serve, broadcast } from "runtime:websocket";
+
+const clients = new Set();
+const server = serve({ hostname: "127.0.0.1", port: 9001 });
+
+for await (const ws of server) {
+  clients.add(ws);
+  // broadcast() sends to the whole room in ONE host crossing — far cheaper than
+  // a c.send() loop, with full delivery and coalesced socket writes.
+  ws.addEventListener("message", (e) => broadcast(clients, e.data));
+  ws.addEventListener("close", () => clients.delete(ws));
+}
+```
+
+See the [WebSocket benchmarks](/docs/benchmarks#websocket) for fan-out
+throughput. A `wss:` server and pub/sub topics are on the roadmap.

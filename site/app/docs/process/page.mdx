@@ -1,0 +1,98 @@
+---
+title: Process & Env
+description: The environment, CLI arguments, working directory, and exit — via runtime:process.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Process & Env
+
+`runtime:process` gives you the environment, CLI arguments, working directory,
+and exit.
+
+It is an ES module, gated on the `Env` capability. Import only what you need.
+
+## Reading process info
+
+`env` is a plain object; `args` is the script's own arguments.
+
+```js
+import { env, args, cwd } from "runtime:process";
+
+console.log(cwd());     // "/srv/app"
+console.log(args);      // ["build", "--watch"]
+console.log(env.HOME);  // "/home/app"
+```
+
+<Callout type="note" title="In-process only">
+  Writing or deleting an `env` key changes it for this run only — it never
+  touches the host or child processes.
+</Callout>
+
+## Environment files
+
+Load variables from a `.env` file with `--env-file`.
+
+```sh
+# .env
+DATABASE_URL=postgres://localhost/app
+PORT=8080
+API_TOKEN=tok_live_123
+```
+
+```sh
+esrun --env-file .env app.js
+
+# Let the file beat the OS environment (default: OS wins):
+esrun --env-file .env --env-override app.js
+```
+
+<Callout type="warning" title="No auto-loading">
+  A `.env` is read only when you pass `--env-file`. Nothing on disk is loaded
+  implicitly from the working directory.
+</Callout>
+
+<Callout type="note" title="Precedence">
+  The OS environment wins on a conflict by default, so a committed `.env` can't
+  clobber production config. Pass `--env-override` to flip it.
+</Callout>
+
+<Callout type="note" title="One file">
+  A single `--env-file` is supported — production config comes from one `.env` or
+  the orchestrator. There is no `.env.*` layering.
+</Callout>
+
+## Secrets are masked
+
+Secret-bearing keys are wrapped so they print as `[redacted]` in logs, strings,
+and JSON.
+
+A key qualifies if it ends in `_KEY`, `_TOKEN`, `_SECRET`, `_PASS(WORD)`, or
+contains `CREDENTIAL`/`AUTH`.
+
+```js
+import { env, unmask } from "runtime:process";
+
+console.log(env.API_TOKEN);        // [redacted]
+console.log(`${env.API_TOKEN}`);   // [redacted]
+JSON.stringify(env);               // ..."API_TOKEN":"[redacted]"...
+
+const token = unmask(env.API_TOKEN); // real value, explicit
+```
+
+<Callout type="tip" title="Reading a secret">
+  Call `unmask(value)` to get the real string. Plain values pass through, so
+  `unmask(env.ANY)` is always safe.
+</Callout>
+
+<Callout type="danger" title="Masking is for accidents, not attackers">
+  It stops secrets leaking into logs by mistake. It is not a sandbox — code you
+  run can call `unmask` itself.
+</Callout>
+
+## Exit
+
+`exit(code)` records the status and halts immediately — nothing after it runs.
+
+Full export list and types: [runtime:process API reference](/api/process). CLI
+flags: [esrun CLI](/api/cli).

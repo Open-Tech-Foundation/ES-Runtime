@@ -1,0 +1,164 @@
+---
+title: Benchmarks
+description: Cross-runtime results vs Node.js, Bun, Deno, and LLRT — startup, standard Web APIs, parsers, and WebSocket fan-out.
+---
+
+import { Callout } from "@opentf/web-docs";
+import BenchChart from "../../../components/BenchChart.jsx";
+import BenchStandings from "../../../components/BenchStandings.jsx";
+import RuntimeVersions from "../../../components/RuntimeVersions.jsx";
+import WsSweepTable from "../../../components/WsSweepTable.jsx";
+import bench from "../../../src/benchmarks.js";
+
+export const startup = [
+  { key: "startup", label: "Cold start (near-empty script)", unit: "ms" },
+  { key: "bigscript", label: "Parse + run ~100 KB script", unit: "ms" },
+  { key: "rss", label: "Peak resident memory", unit: "MB" },
+];
+
+export const standardWorkloads = [
+  { key: "crypto", label: "WebCrypto (sign/verify)", unit: "ms" },
+  { key: "sha256", label: "SubtleCrypto SHA-256", unit: "ms" },
+  { key: "json", label: "JSON parse/stringify", unit: "ms" },
+  { key: "jsonbig", label: "JSON (large documents)", unit: "ms" },
+  { key: "url", label: "URL parsing", unit: "ms" },
+  { key: "url_setter", label: "URL setter", unit: "ms" },
+  { key: "urlpattern", label: "URLPattern test", unit: "ms" },
+  { key: "encoding", label: "TextEncoder/TextDecoder", unit: "ms" },
+  { key: "base64", label: "base64 (atob/btoa)", unit: "ms" },
+  { key: "structured", label: "structuredClone", unit: "ms" },
+  { key: "compute", label: "Tight compute loop", unit: "ms" },
+  { key: "async", label: "async/await throughput", unit: "ms" },
+  { key: "timers", label: "setTimeout churn", unit: "ms" },
+  { key: "streams", label: "ReadableStream piping", unit: "ms" },
+  { key: "fetch", label: "fetch (local server)", unit: "ms" },
+  { key: "fetch_upload", label: "fetch (streamed upload)", unit: "ms" },
+  { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
+  { key: "fsread_small", label: "File read (small)", unit: "ms" },
+  { key: "fsread_large", label: "File read (large)", unit: "ms" },
+  { key: "fswrite_small", label: "File write (small)", unit: "ms" },
+  { key: "fswrite_large", label: "File write (large)", unit: "ms" },
+  { key: "fsappend_small", label: "File append (small)", unit: "ms" },
+  { key: "fsappend_large", label: "File append (large)", unit: "ms" },
+  { key: "fsstat_small", label: "File stat (small)", unit: "ms" },
+  { key: "fsstat_large", label: "File stat (large)", unit: "ms" },
+  { key: "fsexists_small", label: "File exists (small)", unit: "ms" },
+  { key: "fsexists_large", label: "File exists (large)", unit: "ms" },
+  { key: "glob", label: "Glob scan", unit: "ms" },
+];
+
+export const parserWorkloads = [
+  { key: "jsonl_stream", label: "JSONL streaming (large dataset)", unit: "ms" },
+  { key: "xml_small", label: "XML parsing (small dataset)", unit: "ms" },
+  { key: "xml_large", label: "XML parsing (large dataset)", unit: "ms" },
+  { key: "yaml_small", label: "YAML parsing (small dataset)", unit: "ms" },
+  { key: "yaml_large", label: "YAML parsing (large dataset)", unit: "ms" },
+  { key: "toml_small", label: "TOML parsing (small dataset)", unit: "ms" },
+  { key: "toml_large", label: "TOML parsing (large dataset)", unit: "ms" },
+  { key: "msgpack_small", label: "MessagePack parsing (small dataset)", unit: "ms" },
+  { key: "msgpack_large", label: "MessagePack parsing (large dataset)", unit: "ms" },
+];
+
+export const protobufWorkloads = [
+  { key: "protobuf_small", label: "Protobuf decode (small dataset)", unit: "ms" },
+  { key: "protobuf_large", label: "Protobuf decode (large dataset)", unit: "ms" },
+];
+
+# Benchmarks
+
+Standard Web APIs, the same script on each runtime (n/a where a runtime lacks
+one). Lower is better. esrun pairs near-instant startup with full WinterTC
+coverage and a JIT engine.
+
+**Runtimes measured**
+
+<RuntimeVersions />
+
+<Callout type="note" title="How it's measured">
+  - Runtimes run **interleaved, in randomized order** each repetition — so they
+    share one contention window and the ranking is fair, not decided by which ran
+    first.
+  - Each cell is the **minimum** over repetitions (the contention-free floor),
+    after a discarded warmup.
+  - Cells with high run-to-run variance are flagged in the raw output.
+</Callout>
+
+## Standings at a glance
+
+Who placed where across every metric — and a quick, neutral take on where each
+runtime fits in production. Pick by fit, not by medal count.
+
+<BenchStandings />
+
+## Startup & footprint
+
+Process wall-time (min of N runs) and peak resident set on a near-empty script.
+
+<BenchChart metrics={startup} />
+
+## Standard Workloads
+
+Self-timed with `performance.now()` after an untimed JIT warmup; min of N
+interleaved runs, isolating engine cost from process launch.
+
+<BenchChart metrics={standardWorkloads} />
+
+## Native vs Third-Party Parsers
+
+Comparing runtimes running heavily optimized native parsing engines (esrun's
+`runtime:serialization`, LLRT's `llrt:xml`) versus JS-based fallback libraries
+(`fast-xml-parser`) for runtimes that lack native extensions (Node.js, Bun, Deno).
+
+<BenchChart metrics={parserWorkloads} />
+
+## Protobuf (each runtime's own path)
+
+esrun decodes with its native `runtime:serialization` Protobuf (pure-JS,
+reflective); Node, Bun, and Deno decode with `protobuf-es` (`@bufbuild/protobuf`).
+Identical bytes, each runtime's real protobuf path.
+
+<BenchChart metrics={protobufWorkloads} />
+
+<span id="websocket"></span>
+
+## WebSocket chat broadcast
+
+`C` clients in one room; the server fans every message out to all of them. Cells
+are **RECV messages/sec** (fan-out), best of 3. Higher is better.
+
+### Server fan-out
+
+Each runtime's built-in server, fixed Bun client driver. Node has no built-in WS
+server, so it's not in this sweep.
+
+<WsSweepTable sweep={bench.websocket.server} header="Server" />
+
+esrun serves through the capability-secured [driven seam](/api/websocket#server)
+(each connection a spawned actor), not a native pub/sub server. A batched
+`broadcast()` leads at low fan-out; as `C` grows the central connection-map lock
+costs throughput while Bun/Deno hold flat.
+
+### Client throughput
+
+Fixed Bun server; each runtime's WebSocket _client_ under the same broadcast load
+— esrun lands on par with node, Bun and Deno.
+
+<WsSweepTable sweep={bench.websocket.client} header="Client" />
+
+See the [WebSocket guide](/docs/guides/websocket).
+
+## Reproduce
+
+The harness lives in `bench/`. It auto-detects installed runtimes and can emit
+the JSON that powers these charts:
+
+```sh
+# human-readable table
+bench/run.sh
+
+# regenerate the data module this page renders
+bench/gen-bench-data.sh
+```
+
+For CLI/script benchmarking, tools like `hyperfine` are also a good fit. Numbers
+vary by hardware; treat them as relative, not absolute.

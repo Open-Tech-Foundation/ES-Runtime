@@ -1,0 +1,110 @@
+---
+title: JSON Lines (JSONL)
+description: Pure streaming JSONL encode/decode for data pipelines, analytics exports, and AI datasets.
+---
+
+# JSON Lines (JSONL)
+
+In real-world systems, JSONL isn't just a file format—it's a persistent stream of
+records. That is the mental model most backend and data engineers use. It is less
+like "a file" and more like "a log that happens to be stored in a file."
+
+ES-Runtime provides pure streaming capabilities via `JSONL.DecoderStream` and
+`JSONL.EncoderStream` to build robust data pipelines, analytics exports, and AI
+datasets.
+
+## Reading JSONL Streams
+
+The `JSONL.DecoderStream` is a WHATWG TransformStream that safely decodes incoming
+text chunks, splitting them by newline and parsing each complete line into a
+JavaScript object.
+
+```js
+import { JSONL } from 'runtime:serialization';
+import { file } from 'runtime:fs';
+
+// Read a massive JSONL file natively from the file system
+const decoder = new JSONL.DecoderStream({
+  skipInvalid: true // Continue processing even if lines are corrupt
+});
+
+// Optionally log skipped/corrupted lines without crashing the pipeline
+decoder.onError(err => {
+  console.warn(`Corrupt JSONL at line ${err.line}: ${err.raw}`);
+  console.error(err.cause);
+});
+
+const stream = file("users.jsonl")
+  .stream()
+  .pipeThrough(decoder);
+
+for await (const user of stream) {
+  // Process each parsed JavaScript object sequentially
+  console.log("Loaded record:", user.id);
+}
+```
+
+## Writing JSONL Streams
+
+Writing is handled by piping JavaScript objects through the
+`JSONL.EncoderStream`. This is typically used to append records continuously to a
+log.
+
+### Example 1: Application Logs
+
+This is probably the most common production use case. You can continuously append
+events to a log file as they occur.
+
+```js
+import { JSONL } from 'runtime:serialization';
+import { file } from 'runtime:fs';
+
+const log = new JSONL.EncoderStream();
+
+log.pipeTo(
+  file("access.log").writable({ append: true })
+);
+
+// Append logs as events happen
+app.on("request", async req => {
+  await log.write({
+    timestamp: Date.now(),
+    method: req.method,
+    path: req.path,
+    userId: req.userId,
+  });
+});
+```
+
+### Example 2: API → JSONL
+
+Suppose you're collecting GitHub events to back up to a persistent log.
+
+```js
+const response = await fetch("https://api.github.com/users/octocat/events");
+const events = await response.json();
+
+for (const event of events) {
+  await log.write({
+    id: event.id,
+    type: event.type,
+    createdAt: event.created_at,
+  });
+}
+```
+
+### Example 3: Database → JSONL
+
+Very common for database exports, analytics backups, and AI training dataset
+generation.
+
+```js
+const users = await db.query(`
+  SELECT id, email, created_at
+  FROM users
+`);
+
+for (const user of users.rows) {
+  await log.write(user);
+}
+```

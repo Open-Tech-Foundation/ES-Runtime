@@ -1,0 +1,115 @@
+---
+title: runtime:net
+description: TCP and TLS sockets — the WinterTC Sockets API. Bytes move over web streams.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:net
+
+TCP sockets. `connect()` follows the WinterTC Sockets API; `listen()` yields
+inbound connections. Bytes move over web streams.
+
+<Callout type="info" title="Capability: Net (connect) / NetListen (listen)">
+  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
+</Callout>
+
+<Callout type="warning" title="All I/O is async">
+  All I/O is async over web streams — nothing blocks the event loop. Closing a
+  socket's `writable` half-closes (sends FIN) while reads continue.
+</Callout>
+
+## Functions
+
+| Function | Type | Description | Example |
+| --- | --- | --- | --- |
+| `connect(address, options?)` | `(Address, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP or TLS connection (the WinterTC Sockets API). Returns a `Socket` synchronously; `.opened` settles once connected. `address` is `"host:port"` or `{ hostname, port }`. `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` offers protocols (the negotiated one is `SocketInfo.alpn`); `allowHalfOpen` keeps writing after the peer's FIN. | `const sock = connect({ hostname: "db.internal", port: 5432 })` |
+| `listen(options)` | `({ hostname?, port, secureTransport?, cert?, key?, alpn? }) => Listener` | Bind a listening socket. `port 0` picks an ephemeral port (read it from `listener.addr`). Returns an async-iterable `Listener` of inbound `Socket`s. `secureTransport: "on"` terminates TLS on each accept — pass a PEM `cert` + `key` (and optional `alpn`); the cert/key are inline, so server TLS needs no capability beyond NetListen. | `const server = listen({ hostname: "127.0.0.1", port: 8080 })` |
+
+## Client
+
+```js
+import { connect } from "runtime:net";
+
+// WinterTC connect() — returns a Socket immediately; .opened settles on connect.
+const sock = connect({ hostname: "example.com", port: 80 });
+await sock.opened;
+
+const writer = sock.writable.getWriter();
+await writer.write(new TextEncoder().encode("GET / HTTP/1.0\r\n\r\n"));
+await writer.close();
+
+// Decode through TextDecoderStream so a multi-byte character split across two
+// chunks is still decoded correctly.
+let body = "";
+for await (const chunk of sock.readable.pipeThrough(new TextDecoderStream())) {
+  body += chunk;
+}
+```
+
+### Socket
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `readable` | `ReadableStream<Uint8Array>` | Incoming bytes. |
+| `writable` | `WritableStream<Uint8Array>` | Outgoing bytes; closing the writer half-closes (FIN). |
+| `opened` | `Promise<SocketInfo>` | Resolves once connected: `{ remoteAddress, remotePort, localAddress, localPort, alpn }`. `alpn` is the negotiated TLS protocol, else `null`. |
+| `closed` | `Promise<void>` | Resolves when the socket is fully closed. |
+| `close(reason?)` | `Promise<void>` | Fully close the socket. `reason` is advisory (WinterTC) and ignored. |
+| `startTls()` | `Socket` | Upgrade a `secureTransport: "starttls"` socket to TLS in place; returns a new encrypted `Socket` (the original is consumed). |
+| `upgraded` | `boolean` | True only after a `startTls()` upgrade. |
+
+## TLS
+
+```js
+import { connect } from "runtime:net";
+
+// TLS client — secureTransport "on" (certificate verification on), offering ALPN.
+const sock = connect({ hostname: "example.com", port: 443 }, {
+  secureTransport: "on",
+  alpn: ["h2", "http/1.1"],
+});
+const { alpn } = await sock.opened; // negotiated protocol, e.g. "h2" (or null)
+```
+
+## Server
+
+```js
+import { listen } from "runtime:net";
+
+const server = listen({ hostname: "127.0.0.1", port: 8080 });
+const { port } = await server.addr;
+
+for await (const conn of server) {
+  conn.readable.pipeTo(conn.writable); // echo each connection
+}
+```
+
+```js
+import { listen } from "runtime:net";
+
+// Terminate TLS on accept — cert/key are inline PEM (no extra capability).
+const server = listen({
+  hostname: "127.0.0.1", port: 8443,
+  secureTransport: "on", cert: certPem, key: keyPem, alpn: ["h2", "http/1.1"],
+});
+for await (const conn of server) {
+  const { alpn } = await conn.opened; // negotiated protocol
+}
+```
+
+### Listener
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `addr` | `Promise<{ hostname, port }>` | The bound address (resolves after bind). |
+| `accept()` | `Promise<Socket \| null>` | The next connection, or `null` once closed. |
+| `close()` | `Promise<void>` | Stop listening. |
+| `[Symbol.asyncIterator]` | `AsyncIterable<Socket>` | `for await (const conn of server) { … }` |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | Any socket failure — invalid options, or a connect / TLS / I/O error (the latter reject `.opened` or the streams). The message is prefixed `"SocketError: "` (WinterTC SocketError). |
+| `DOMException` | name `"NotAllowedError"` — the Net (connect) or NetListen (listen) capability is not granted. |

@@ -1,0 +1,269 @@
+---
+title: Protobuf Processing
+description: A pure-JavaScript, reflective Protobuf implementation — the .proto is compiled at runtime, no codegen.
+---
+
+# Protobuf Processing
+
+A pure-JavaScript, reflective Protobuf implementation in `runtime:serialization`.
+The `.proto` schema is compiled at runtime — no codegen, no build step. proto2,
+proto3, and editions 2023/2024 are supported; extensions are not (extension
+fields round-trip as unknown fields).
+
+## Compiling a schema
+
+Construct a `Protobuf.Schema` from `.proto` source. Pass a single string, or a
+`{ filename: source }` map for multi-file schemas with imports.
+
+```js
+import { Protobuf } from "runtime:serialization";
+
+const schema = new Protobuf.Schema(`
+  syntax = "proto3";
+  package shop;
+  message Book {
+    string id = 1;
+    double price = 5;
+    repeated string tags = 8;
+  }
+`);
+```
+
+## Encoding and decoding
+
+Use `schema.encode` and `schema.decode` with a fully-qualified message name.
+
+```js
+const bytes = schema.encode("shop.Book", {
+  id: "bk1",
+  price: 44.95,
+  tags: ["computer", "xml"],
+});
+
+const book = schema.decode("shop.Book", bytes);
+console.log(book.price); // 44.95
+console.log(book.tags);  // ["computer", "xml"]
+```
+
+## Decoded value shape
+
+Decoded objects use camelCase field names (or the explicit `json_name`). 64-bit
+integer fields surface as `BigInt`; enums as their value-name string; `bytes` as
+`Uint8Array`; maps as plain objects. Fields absent on the wire are omitted.
+
+```js
+const schema = new Protobuf.Schema(`
+  syntax = "proto3";
+  enum Status { ACTIVE = 0; ARCHIVED = 1; }
+  message Account { uint64 id = 1; Status status = 2; }
+`);
+
+const bytes = schema.encode("Account", { id: 9007199254740993n, status: "ARCHIVED" });
+const acct = schema.decode("Account", bytes);
+console.log(typeof acct.id);  // "bigint"
+console.log(acct.status);     // "ARCHIVED"
+```
+
+## Maps, oneofs, and enums
+
+Maps decode to plain objects, enums to their value-name string, and only the set
+member of a `oneof` appears in the result.
+
+```js
+const schema = new Protobuf.Schema(`
+  syntax = "proto3";
+  enum Tier { FREE = 0; PRO = 1; }
+  message User {
+    map<string, int32> scores = 1;
+    oneof contact { string email = 2; string phone = 3; }
+    Tier tier = 4;
+  }
+`);
+
+const user = schema.decode("User", schema.encode("User", {
+  scores: { alice: 10 },
+  email: "a@b.co",   // sets the "contact" oneof
+  tier: "PRO",
+}));
+// { scores: { alice: 10 }, tier: "PRO", email: "a@b.co" }
+```
+
+## JSON mapping
+
+`schema.toJson` and `schema.fromJson` convert between the decoded value shape and
+canonical proto3-JSON: 64-bit integers and `bytes` become strings (base64 for
+bytes), enums their value-name, and the well-known types take their special forms
+(Timestamp/Duration as strings, wrappers as bare values, Struct/Value as native
+JSON, Any with an `@type` member). Parsing is strict; pass
+`{ ignoreUnknownFields: true }` to relax it.
+
+```js
+const json = schema.toJson("Account", schema.decode("Account", bytes));
+// { "id": "9007199254740993", "status": "ARCHIVED" }
+
+const value = schema.fromJson("Account", json);
+const back = schema.encode("Account", value);
+```
+
+## Well-known types
+
+The `google/protobuf/*` well-known types resolve without being provided and take
+their canonical JSON forms — Timestamp and Duration as strings, `Struct` and
+`Value` as native JSON, `Any` with an `@type` member.
+
+```js
+const schema = new Protobuf.Schema({ "event.proto": `
+  syntax = "proto3";
+  import "google/protobuf/timestamp.proto";
+  import "google/protobuf/duration.proto";
+  import "google/protobuf/struct.proto";
+  message Event {
+    google.protobuf.Timestamp at = 1;
+    google.protobuf.Duration ttl = 2;
+    google.protobuf.Struct meta = 3;
+  }
+` });
+
+const value = schema.fromJson("Event", {
+  at: "2024-01-02T03:04:05Z",
+  ttl: "1.500s",
+  meta: { region: "eu", retries: 3 },
+});
+const bytes = schema.encode("Event", value); // wire-format protobuf
+```
+
+## Strict JSON parsing
+
+`fromJson` rejects malformed input — non-integral or out-of-range numbers, wrong
+types, unknown fields, duplicate `oneof` members. Pass
+`{ ignoreUnknownFields: true }` to drop unrecognized fields and enum values
+instead.
+
+```js
+schema.fromJson("M", { count: "1.5" });      // throws: 1.5 is not an integer
+schema.fromJson("M", { count: 4294967296 }); // throws: integer out of range
+schema.fromJson("M", { nope: 1 });           // throws: unknown field "nope"
+
+schema.fromJson("M", { count: 5, nope: 1 }, { ignoreUnknownFields: true });
+// { count: 5 }
+```
+
+## Multi-file schemas
+
+Pass a `{ filename: source }` map; `import` statements resolve against its keys
+(and the built-in well-known types).
+
+```js
+const schema = new Protobuf.Schema({
+  "user.proto": `
+    syntax = "proto3"; package app;
+    import "common.proto";
+    message User { app.Id id = 1; }
+  `,
+  "common.proto": `
+    syntax = "proto3"; package app;
+    message Id { string value = 1; }
+  `,
+});
+
+schema.encode("app.User", { id: { value: "u1" } });
+```
+
+## Editions and features
+
+Edition 2023 and 2024 are supported. Field presence is explicit by default — a
+zero is serialized rather than omitted — and
+`features.message_encoding = DELIMITED` selects group encoding for message fields.
+
+```js
+const schema = new Protobuf.Schema(`
+  edition = "2023";
+  message M { int32 a = 1; }   // explicit presence
+`);
+
+schema.encode("M", { a: 0 }); // Uint8Array [8, 0] — the zero is on the wire
+```
+
+## Streaming a repeated field
+
+`schema.decodeStream` yields the elements of a repeated message field from a
+chunked byte source — a `ReadableStream` or async/sync iterable of `Uint8Array` —
+decoding each as it arrives, so a large collection never materializes as one
+array. The outer message's other fields are skipped.
+
+```js
+const schema = new Protobuf.Schema(`
+  syntax = "proto3";
+  message Book { string title = 1; uint64 isbn = 2; }
+  message Catalog { string name = 1; repeated Book books = 2; }
+`);
+
+const res = await fetch("https://example.com/catalog.pb");
+for await (const book of schema.decodeStream("Catalog", "books", res.body)) {
+  console.log(book.title, book.isbn); // each Book, one at a time
+}
+```
+
+## Length-delimited streams
+
+For a sequence of independent messages (the `writeDelimitedTo` framing — each
+message preceded by a varint length), `encodeDelimited` frames one message and
+`decodeDelimited` streams them back from a `ReadableStream`, iterable, or
+`Uint8Array`.
+
+```js
+const schema = new Protobuf.Schema(`
+  syntax = "proto3";
+  message Event { string kind = 1; uint64 at = 2; }
+`);
+
+// write a framed log
+const chunks = events.map((e) => schema.encodeDelimited("Event", e));
+
+// read it back, one message at a time
+const res = await fetch("https://example.com/events.pb");
+for await (const event of schema.decodeDelimited("Event", res.body)) {
+  console.log(event.kind, event.at);
+}
+```
+
+## Loading a descriptor set
+
+Production systems often ship a compiled `FileDescriptorSet` rather than `.proto`
+text. `Protobuf.Schema.fromDescriptorSet` loads one directly — build it with
+`--include_imports` so referenced types resolve.
+
+```js
+// protoc --include_imports --descriptor_set_out=app.pb app.proto
+
+const res = await fetch("https://example.com/app.pb");
+const schema = Protobuf.Schema.fromDescriptorSet(new Uint8Array(await res.arrayBuffer()));
+
+schema.decode("app.Order", bytes);
+```
+
+## Conformance
+
+Verified against the official protobuf conformance suite (v29.3). Binary and
+proto3-JSON both pass; JSPB, text-format, and proto2-syntax cases are reported as
+`skipped`. The one failure is a proto2 extension in JSON — unsupported by design.
+
+**By message category**
+
+| Category | Passed | Skipped | Failed |
+| --- | ---: | ---: | ---: |
+| proto3 | 1,413 | 396 | 0 |
+| proto2 | 0 | 1,280 | 0 |
+| editions 2023 | 14 | 15 | 0 |
+| editions (proto3) | 1,413 | 396 | 0 |
+| editions (proto2) | 1,261 | 18 | 1 |
+| **Total** | **4,101** | **2,105** | **1** |
+
+**By wire format**
+
+| Wire format | Passed | Skipped | Failed |
+| --- | ---: | ---: | ---: |
+| Binary | 2,060 | 684 | 0 |
+| JSON | 2,041 | 578 | 1 |
+| Text format | 0 | 843 | 0 |
+| **Total** | **4,101** | **2,105** | **1** |

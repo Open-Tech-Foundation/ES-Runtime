@@ -4,23 +4,20 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "bun run build && wrangler dev",
-    "deploy": "bun run build && wrangler deploy"
+    "dev": "otfw dev",
+    "build": "otfw build --ssg",
+    "preview": "otfw build --ssg && wrangler dev",
+    "deploy": "otfw build --ssg && wrangler deploy"
   },
   "dependencies": {
-    "@opentf/web": "^0.4.0",
-    "@opentf/web-form": "^0.1.0",
-    "lenis": "^1.3.23"
+    "@opentf/web": "^0.11.0",
+    "@opentf/web-docs": "^0.7.0"
   },
   "devDependencies": {
-    "@babel/core": "^7.29.0",
-    "@babel/plugin-syntax-jsx": "^7.28.6",
-    "@rollup/plugin-babel": "^7.0.0",
-    "@tailwindcss/vite": "^4.2.2",
-    "tailwindcss": "^4.2.2",
-    "vite": "^8.0.8",
+    "@opentf/web-cli": "^1.6.0",
     "wrangler": "^4.100.0"
-  }
+  },
+  "trustedDependencies": [
+    "@opentf/web-compiler"
+  ]
 }

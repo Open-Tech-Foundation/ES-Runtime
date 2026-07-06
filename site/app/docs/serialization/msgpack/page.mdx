@@ -1,0 +1,62 @@
+---
+title: MessagePack Processing
+description: High-performance native MessagePack parsing via runtime:serialization, backed by rmp-serde.
+---
+
+# MessagePack Processing
+
+ES-Runtime provides high-performance native MessagePack parsing via the
+`runtime:serialization` module, backed by `rmp-serde`.
+
+## Parsing MessagePack
+
+Use `MessagePack.decode` to convert a MessagePack byte array directly into a
+JavaScript object.
+
+```js
+import { MessagePack } from "runtime:serialization";
+
+const msgpackBytes = new Uint8Array([0x81, 0xa4, 0x75, 0x73, 0x65, 0x72, 0x82, 0xa2, 0x69, 0x64, 0x01, 0xa4, 0x6e, 0x61, 0x6d, 0x65, 0xa5, 0x41, 0x6c, 0x69, 0x63, 0x65]);
+
+const parsed = MessagePack.decode(msgpackBytes);
+console.log(parsed.user.name); // "Alice"
+console.log(parsed.user.id);   // 1
+```
+
+## Validating MessagePack
+
+Use `MessagePack.validate` to check if a MessagePack byte array is well-formed.
+
+```js
+import { MessagePack } from "runtime:serialization";
+
+const msgpackBytes = new Uint8Array([0x81, 0xa4, 0x75, 0x73, 0x65, 0x72, 0x82, 0xa2, 0x69, 0x64, 0x01, 0xa4, 0x6e, 0x61, 0x6d, 0x65, 0xa5, 0x41, 0x6c, 0x69, 0x63, 0x65]);
+
+if (MessagePack.validate(msgpackBytes)) {
+  console.log("MessagePack is valid!");
+}
+
+const invalidBytes = new Uint8Array([0xc1]);
+const result = MessagePack.validate(invalidBytes, { detailed: true });
+console.log(result.valid); // false
+console.log(result.error); // "Validation failed: ..."
+```
+
+## Building MessagePack
+
+Use `MessagePack.encode` to convert a JavaScript object back into a MessagePack
+byte array.
+
+```js
+import { MessagePack } from "runtime:serialization";
+
+const obj = {
+  user: {
+    id: 1,
+    name: "Alice"
+  }
+};
+
+const built = MessagePack.encode(obj);
+console.log(built instanceof Uint8Array); // true
+```

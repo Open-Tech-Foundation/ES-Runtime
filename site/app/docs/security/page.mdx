@@ -1,0 +1,87 @@
+---
+title: Security model
+description: Deny-by-default capabilities, a filesystem root jail, secret masking, and engine confinement.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Security model
+
+ES Runtime ships in two forms, and they differ on what code can reach by
+default:
+
+- **Embeddable library — deny-by-default.** A runtime the host creates can
+  compute, but cannot reach the host environment, filesystem, or network until
+  the host grants a capability for it.
+- **The `esrun` CLI — unrestricted.** The standalone binary grants all
+  capabilities so scripts run without setup. It is not deny-by-default.
+
+## Capabilities
+
+Every host operation declares the capability it requires. The check lives on the
+native op, not in JavaScript, so it cannot be bypassed by reaching a different
+module path. A denied capability will instantly throw a standard `DOMException`
+with the `NotAllowedError` name.
+
+| Capability | Grants |
+| --- | --- |
+| `Env` | Read environment, arguments, cwd, platform; backs `runtime:process`. |
+| `FileRead` | Read files within the configured root jail. |
+| `FileWrite` | Write files within the configured root jail. |
+| `Net` | Open outbound network connections (`runtime:net` connect, fetch, WebSocket). |
+| `NetListen` | Bind a listening socket and accept connections (`runtime:net` listen, `runtime:http` / `runtime:websocket` serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed. |
+| `HrTime` | Access high-resolution timing. |
+
+## The filesystem root jail
+
+Filesystem access — including module resolution — is confined to a single
+project root. Paths are canonicalized to their real location before the check, so
+a symlink cannot be used to escape the jail. This is on by default and is not
+currently optional.
+
+<Callout type="danger" title="Root jail in action">
+  Untrusted JS calls `file("../../etc/passwd")` → the **FileRead** capability
+  check and **Root Jail** check run in the trusted Rust host → the path
+  canonicalizes to `/etc/passwd` → **DENIED: path escapes the project root**
+  (`/home/user/project`).
+</Callout>
+
+## Environment files & secret masking
+
+What the guest can read from the environment is an explicit host decision, and
+secret values resist accidental disclosure.
+
+<Callout type="warning" title="No implicit disk reads">
+  A `.env` loads only via `--env-file`. Nothing on disk reaches the environment
+  unless you ask for it.
+</Callout>
+
+<Callout type="note" title="OS environment wins">
+  Loaded values fill only unset keys by default, so a checked-in file can't
+  clobber production config. The real process env is never mutated.
+</Callout>
+
+<Callout type="tip" title="Secret masking">
+  Keys ending in `_KEY/_TOKEN/_SECRET/_PASS(WORD)` or containing
+  `CREDENTIAL/AUTH` become a [`Secret`](/api/process) that prints as `[redacted]`.
+</Callout>
+
+<Callout type="danger" title="Accidents, not attackers">
+  Masking prevents leaks into logs and JSON. It is not a sandbox — guest code can
+  call `unmask()` itself.
+</Callout>
+
+## Remote modules disabled
+
+esrun intentionally drops support for downloading modules dynamically over the
+network (e.g., `import "https://..."`). This mitigates entire classes of
+supply-chain attacks and runtime hijacking because every piece of executed code
+must explicitly reside within the secure local filesystem root, greatly
+improving predictability and security.
+
+## Engine confinement
+
+All V8 contact is contained in a single engine crate; the rest of the runtime
+never names a V8 type. This keeps the trusted surface small and auditable, and
+lets the host drive the event loop without surrendering control of its own
+thread.

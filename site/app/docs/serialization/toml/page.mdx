@@ -1,0 +1,71 @@
+---
+title: TOML Processing
+description: High-performance native TOML parsing via runtime:serialization, backed by the toml crate.
+---
+
+# TOML Processing
+
+ES-Runtime provides high-performance native TOML parsing via the
+`runtime:serialization` module, backed by the fast `toml` rust crate.
+
+## Parsing TOML
+
+Use `TOML.parse` to convert a TOML string directly into a JavaScript object.
+
+```js
+import { TOML } from "runtime:serialization";
+
+const tomlData = `
+[user]
+id = 1
+name = "Alice"
+`;
+
+const parsed = TOML.parse(tomlData);
+console.log(parsed.user.name); // "Alice"
+console.log(parsed.user.id);   // 1
+```
+
+## Validating TOML
+
+Use `TOML.validate` to check if a TOML string is well-formed.
+
+```js
+import { TOML } from "runtime:serialization";
+
+const tomlData = `
+[user]
+id = 1
+name = "Alice"
+`;
+
+if (TOML.validate(tomlData)) {
+  console.log("TOML is valid!");
+}
+
+const result = TOML.validate("invalid = \n  = [", { detailed: true });
+console.log(result.valid); // false
+console.log(result.error); // "Validation failed: ..."
+```
+
+## Building TOML
+
+Use `TOML.build` to convert a JavaScript object back into a TOML string. Note
+that the root of the JavaScript object must map to a TOML table (an object).
+
+```js
+import { TOML } from "runtime:serialization";
+
+const obj = {
+  user: {
+    id: 1,
+    name: "Alice"
+  }
+};
+
+const built = TOML.build(obj);
+console.log(built);
+// [user]
+// id = 1
+// name = "Alice"
+```

@@ -1,0 +1,61 @@
+---
+title: Scope & non-goals
+description: esrun is a secure, standards-based runtime for server-side JavaScript — and deliberately nothing more.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Scope & non-goals
+
+esrun is a secure, standards-based runtime for running server-side JavaScript —
+and nothing more. Its scope is deliberately narrow. Knowing what it does _not_
+do is as important as knowing what it does.
+
+<Callout type="info" title="In scope">
+  Executing standard ES Modules on V8 with a Web-standard API surface,
+  deny-by-default capabilities for embedders, a sandboxed module system, and host
+  functionality exposed through `runtime:` modules. esrun ships as an embeddable
+  Rust library and a standalone CLI.
+</Callout>
+
+## Non-goals
+
+These are explicit, durable boundaries — not missing features awaiting
+implementation.
+
+- **No Node.js compatibility.** esrun is not a drop-in for Node.js. There is no
+  `node:` builtin namespace, no Node.js globals (no `process` global, no
+  `Buffer`, no `require`), and no npm lifecycle. Code targets Web standards plus
+  the `runtime:` modules, not the Node.js API.
+- **No CommonJS.** Modules are real ES Modules only. There is no `require()`, no
+  `module.exports`, and no CJS↔ESM interop. A CommonJS-only package is rejected
+  with a clear error.
+- **No TypeScript.** esrun runs JavaScript. It does not strip or compile types —
+  transpile TypeScript ahead of time with your own toolchain and run the emitted
+  JS.
+- **No JSX.** JSX is not a JavaScript standard; esrun does not transform it.
+  Compile it ahead of time if you need it.
+- **No remote module imports.** `import "https://..."` is explicitly rejected.
+  Load data through a `runtime:net` API instead, keeping code locally verified
+  and safe from supply-chain hijacking.
+- **No package installer.** esrun resolves an existing `node_modules` tree but
+  does not install anything. Use your package manager (npm, pnpm, bun) to
+  populate dependencies.
+- **No bundler, linter, formatter, or test runner.** esrun is a runtime, not a
+  toolchain. Bundling, linting, formatting, and testing are left to dedicated
+  tools.
+- **No watch mode.** There is no built-in file watcher or auto-restart. Wrap
+  esrun in your own watcher if you want one.
+- **No FFI or native addons.** There is no foreign-function interface and no
+  native addon ABI. The host extends the runtime through injected providers and
+  capability-gated ops, in Rust.
+- **No Workers (yet).** Web Workers are not exposed. Multi-isolate execution is
+  the goal of the embeddable VM layer (Layer B, the "es-vm"), where the host owns
+  isolate lifecycle — not a Worker global in Layer A.
+
+## Two layers, one core
+
+esrun is **Layer A**: a single driven runtime that the host ticks. **Layer B** —
+the embeddable "es-vm" — is the path to multiple isolates under host control, and
+is where concurrency primitives like Workers belong. Both ship from the same
+core; the Web-standard surface and capability model are shared.

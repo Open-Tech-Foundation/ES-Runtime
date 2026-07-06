@@ -1,0 +1,109 @@
+---
+title: runtime:process
+description: Host process information — environment, arguments, working directory, platform, and exit.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:process
+
+Host process information: environment, arguments, working directory, platform,
+and exit. Aligned in spirit with the WinterTC CLI-API proposal.
+
+<Callout type="info" title="Capability: Env">
+  Environment access is gated on the **Env** capability. Exposed as an ES module
+  under the `runtime:` scheme. Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import { env, args, platform, arch, cwd, exit, unmask } from "runtime:process";
+
+// Or the default aggregate:
+import process from "runtime:process";
+```
+
+## Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `env` | `Record<string, string \| Secret>` | Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes. Secret-keyed values are `Secret` wrappers (see below). |
+| `args` | `readonly string[]` | Program arguments after the runtime binary and the script (or `-e` snippet). Frozen. Excludes the executable and script path. |
+| `platform` | `string` | Host operating system — the OS-native std value (`"linux" \| "macos" \| "windows"`). |
+| `arch` | `string` | Host CPU architecture — the OS-native std value (`"x86_64" \| "aarch64" \| "arm"`). |
+| `cwd()` | `() => string` | Current working directory. A function (not a value) because it can change during a run. |
+| `exit(code = 0)` | `(code?: number) => never` | Records the exit code and halts execution immediately — code after the call does not run. The embedder treats it as a clean exit, not an error. |
+| `unmask(value)` | `(value: string \| Secret) => string` | Reveal the real value of a masked `Secret`. A plain string is returned unchanged, so `unmask(env.ANY)` is always safe. |
+| `Secret` | `class` | Opaque holder for a masked env value. Renders as `"[redacted]"` in console, string coercion, and JSON. Call `unmask()` to read it. |
+
+## env — reading and writing
+
+```js
+import { env } from "runtime:process";
+
+console.log(env.HOME);      // read
+env.FEATURE_FLAG = "on";    // write (in-process only)
+delete env.SECRET;          // delete (in-process only)
+```
+
+## args — program arguments
+
+```js
+// esrun app.js build --watch
+import { args } from "runtime:process";
+
+console.log(args); // ["build", "--watch"]
+```
+
+## exit — stopping the run
+
+```js
+import { exit } from "runtime:process";
+
+if (failed) exit(1); // records the code and halts immediately
+exit();              // defaults to 0
+```
+
+## Secrets — masked by default
+
+Secret-bearing keys are exposed as a `Secret` that renders as `[redacted]` in
+console, strings, and JSON. A key qualifies if it ends in `_KEY`, `_TOKEN`,
+`_SECRET`, `_PASS(WORD)`, or contains `CREDENTIAL`/`AUTH`.
+
+```js
+import { env, unmask } from "runtime:process";
+
+// Keys ending in *_SECRET(S) / *_PASSWORD(S) are masked by default.
+console.log(env.DB_PASSWORD);        // [redacted]
+console.log(`${env.DB_PASSWORD}`);   // [redacted]
+JSON.stringify(env);                 // ..."DB_PASSWORD":"[redacted]"...
+
+const pw = unmask(env.DB_PASSWORD);  // real value, explicit
+unmask(env.DB_HOST);                 // plain strings pass through
+```
+
+<Callout type="tip" title="Reading a secret">
+  Call `unmask(value)` for the real string; plain values pass through unchanged.
+</Callout>
+
+<Callout type="danger" title="Not a sandbox">
+  Masking stops accidental log leaks — code you run can still call `unmask`
+  itself.
+</Callout>
+
+Load values from a file with [`esrun --env-file .env`](/api/cli) (no
+auto-discovery; the OS environment wins unless `--env-override` is passed).
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | `unmask()` gets something other than a string or a `Secret` from env. |
+| `DOMException` | name `"NotAllowedError"` — the Env capability is not granted (env access). |
+
+<Callout type="note">
+  The default export is an object bundling all named exports — useful for a
+  single import binding — but named imports are preferred for clarity and
+  tree-shaking.
+</Callout>

@@ -1,0 +1,66 @@
+---
+title: runtime:fs
+description: Blob-based file I/O — lazy file handles and writes that accept any web body, jailed to the project root.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:fs
+
+Blob-based file I/O, modeled on the web `Blob` surface — lazy file handles and
+writes that accept any web body.
+
+<Callout type="info" title="Capability: FileRead / FileWrite">
+  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
+</Callout>
+
+<Callout type="warning" title="Everything is async">
+  Every operation returns a Promise — there are no synchronous variants. esrun is
+  a driven runtime with no thread of its own, so file I/O never blocks the event
+  loop. Use `await` (top-level `await` works). Paths are a string, a `file:` URL,
+  or a `file()` handle, and every path is confined to the project root jail.
+</Callout>
+
+## Import
+
+```js
+import { file, write, readDir, stat, mkdir, remove, rename, Glob } from "runtime:fs";
+```
+
+## Functions
+
+| Function | Type | Description | Example |
+| --- | --- | --- | --- |
+| `file(path)` | `(path: PathLike) => FsFile` | A lazy, Blob-like handle — nothing is read until a read method is called. | `const f = file("./config/app.json")` |
+| `write(dest, input, options?)` | `(dest, body, { append? }) => Promise<number>` | Writes any web body (`string`, `Blob`, `ArrayBuffer`, `TypedArray`, `Response`, `ReadableStream`, `file()`) to `dest`; resolves to bytes written. | `await write("/srv/app/out.bin", bytes, { append: true })` |
+| `readDir(path)` | `(path) => Promise<DirEntry[]>` | Directory entries: `{ name, isFile, isDir, isSymlink }`. | `for (const e of await readDir("./src")) …` |
+| `stat(path)` | `(path) => Promise<Stat>` | `{ size, isFile, isDir, isSymlink, mtimeMs }` — follows symlinks. | `const { size } = await stat("C:\data\cache.bin")` |
+| `exists(path)` | `(path) => Promise<boolean>` | Whether the path exists (a missing path is `false`, not an error). | `if (await exists("./.cache")) { … }` |
+| `mkdir(path, options?)` | `(path, { recursive? }) => Promise<void>` | Creates a directory; `recursive` creates missing parents. | `await mkdir("./logs/2026", { recursive: true })` |
+| `remove(path, options?)` | `(path, { recursive? }) => Promise<void>` | Removes a file or (with `recursive`) a directory tree. | `await remove("./tmp", { recursive: true })` |
+| `rename(from, to)` | `(from, to) => Promise<void>` | Renames or moves an entry (both jailed). | `await rename("./draft.md", "./final.md")` |
+| `new Glob(pattern)` | `Glob` | Glob matcher/scanner. `match(path)` is pure; `scan(cwd \| options)` is an async iterator over the jailed tree. Patterns: `*`, `**`, `?`, `[a-z]`, `[!x]`, `{a,b}`, leading `!`. | `new Glob("**/*.ts").match("src/app.ts") // true` |
+
+## FsFile — the `file(path)` handle
+
+| Member | Returns | Description |
+| --- | --- | --- |
+| `path` | `string` | The path this handle points at. |
+| `text()` | `Promise<string>` | Read the whole file as UTF-8 text. |
+| `json()` | `Promise<any>` | Read and `JSON.parse` the file. |
+| `bytes()` | `Promise<Uint8Array>` | Read the whole file as bytes. |
+| `arrayBuffer()` | `Promise<ArrayBuffer>` | Read the whole file as an ArrayBuffer. |
+| `stream()` | `ReadableStream` | A readable byte stream of the file. |
+| `exists()` | `Promise<boolean>` | Whether the file exists. |
+| `stat()` | `Promise<Stat>` | File metadata (follows symlinks). |
+| `write(data, options?)` | `Promise<number>` | Write to this file; resolves to bytes written. |
+| `writable(options?)` | `WritableStream` | A sink for piped/incremental writes. First chunk truncates unless `{ append: true }` is set, rest append. |
+| `delete()` | `Promise<void>` | Delete this file. |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | A path isn't a string, URL, or `file()` handle; a non-`file:` URL is passed; or `write()` gets an unsupported input type. |
+| `DOMException` | name `"NotAllowedError"` — the FileRead or FileWrite capability is not granted. |
+| `Error` | A filesystem failure surfaced by the OS (not found, permission denied, etc.). |

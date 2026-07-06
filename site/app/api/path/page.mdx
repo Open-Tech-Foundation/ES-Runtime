@@ -1,0 +1,54 @@
+---
+title: runtime:path
+description: Modern, platform-aware path utilities — pure computation, no I/O, with first-class file: URL interop.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:path
+
+Modern, platform-aware path utilities. Pure computation — no I/O. The host
+platform and working directory come from `runtime:process`, so separators and
+`resolve()` follow the real OS.
+
+<Callout type="info" title="Capability: Env">
+  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
+</Callout>
+
+One platform-correct surface — no `posix`/`win32` dual namespaces and no
+overloaded signatures — plus first-class `file:` URL interop:
+`dirname(fromFileURL(import.meta.url))` is the modern `__dirname`.
+
+## Import
+
+```js
+import { join, resolve, dirname, fromFileURL } from "runtime:path";
+
+// The modern __dirname: the directory of the current module.
+const here = dirname(fromFileURL(import.meta.url));
+const cfg = resolve(here, "config", "app.json");
+```
+
+## Exports
+
+| Export | Type | Description | Example |
+| --- | --- | --- | --- |
+| `sep` | `string` | Path segment separator for the host OS (`"/"` or `"\"`). | `sep; // "/" on POSIX` |
+| `delimiter` | `string` | Path list delimiter for the host OS (`":"` or `";"`). | `env.PATH.split(delimiter)` |
+| `isAbsolute(p)` | `(string) => boolean` | Whether `p` is an absolute path. | `isAbsolute("/etc/hosts") // true` |
+| `normalize(p)` | `(string) => string` | Collapses `.` / `..` and redundant separators. | `normalize("/a/./b/../c") // "/a/c"` |
+| `join(...segments)` | `(...string) => string` | Joins segments with the separator, then normalizes. | `join("src", "lib", "x.js") // "src/lib/x.js"` |
+| `resolve(...segments)` | `(...string) => string` | Resolves to an absolute path, anchoring at `cwd()` if no segment is absolute. | `resolve("data", "out.json")` |
+| `dirname(p)` | `(string) => string` | The directory portion of `p`. | `dirname("/var/log/app.log") // "/var/log"` |
+| `basename(p)` | `(string) => string` | The final segment of `p` (no suffix-stripping overload). | `basename("/var/log/app.log") // "app.log"` |
+| `extname(p)` | `(string) => string` | The extension of the final segment, including the dot (or empty). | `extname("archive.tar.gz") // ".gz"` |
+| `parse(p)` | `(string) => object` | `{ root, dir, base, name, ext }`. | `parse("/a/b.txt")` |
+| `relative(from, to)` | `(string, string) => string` | Relative path from `from` to `to` (both resolved first). | `relative("/a/b", "/a/c/d") // "../c/d"` |
+| `fromFileURL(url)` | `(string \| URL) => string` | Converts a `file:` URL to a path. | `fromFileURL(import.meta.url)` |
+| `toFileURL(p)` | `(string) => URL` | Converts a path (resolved to absolute) to a `file:` URL. | `toFileURL("/a/b.txt").href // "file:///a/b.txt"` |
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | A path segment isn't a string, or `fileURLToPath()` gets a non-`file:` URL. (Pure string functions — no capability, no I/O.) |

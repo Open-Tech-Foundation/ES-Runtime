@@ -1,0 +1,76 @@
+---
+title: Module system
+description: esrun loads standard ES Modules — static imports, dynamic import(), top-level await, and import.meta.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Module system
+
+esrun loads standard ES Modules. Static imports, dynamic `import()`, top-level
+await, and `import.meta.url` all behave as specified.
+
+<Callout type="info" title="Supported by design">
+  JSON module imports (`import data from "./x.json" with { type: "json" }`) are
+  fully supported.
+</Callout>
+
+<Callout type="note" title="Not supported, by design">
+  CommonJS (`require` / `module.exports`), JSX, and TypeScript. esrun runs
+  JavaScript ES Modules — transpile anything else ahead of time. See
+  [Scope & non-goals](/docs/scope).
+</Callout>
+
+<Callout type="warning" title="Remote modules explicitly disabled">
+  Loading code from remote web addresses (`https://`) is permanently unsupported.
+  This strictly enforces the secure runtime model and prevents arbitrary remote
+  code execution over the network.
+</Callout>
+
+## Static imports
+
+```js
+// Relative and bare specifiers both work.
+import { greet } from "./greet.js";
+import greeter from "greeter";           // from node_modules (ESM)
+
+export const message = greet("world");
+```
+
+## Dynamic import
+
+```js
+// Dynamic import() is fully supported, including top-level await.
+const { default: plugin } = await import("./plugins/auth.js");
+await plugin.init();
+```
+
+## Resolving packages
+
+Bare specifiers resolve from `node_modules`, honoring the package `exports` map —
+including conditional `import`/`default` conditions and subpath patterns such as
+`"./*"`. Symlinks are resolved to their real path, so pnpm's nested store works
+as-is. A CommonJS-only package is rejected with a clear error.
+
+<Callout type="warning" title="Filesystem root jail">
+  Module resolution is confined to a project root. A specifier that escapes the
+  root is refused, even via symlink — the sandbox is the default, not an option.
+</Callout>
+
+## The runtime: scheme
+
+Built-in host APIs are not globals. They are imported under the `runtime:`
+scheme, which makes every host dependency explicit and statically visible in the
+source.
+
+```js
+// Host functionality is imported under the runtime: scheme.
+import { env, args } from "runtime:process";
+
+console.log(env.HOME, args);
+```
+
+Each built-in module is backed by host ops that carry the capability check — the
+security boundary is the op, not the JavaScript. Shipped modules include
+[runtime:process](/api/process), `runtime:fs`, `runtime:net`, `runtime:http`, and
+`runtime:websocket`.
