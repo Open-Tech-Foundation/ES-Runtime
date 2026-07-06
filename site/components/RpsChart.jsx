@@ -32,7 +32,7 @@ export default function RpsChart() {
   return (
     <div>
       <div className="mb-1.5 flex items-baseline justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
           HTTP requests/sec · Hono hello-world
         </span>
         <span className="text-[10px] text-zinc-400">higher is better</span>
@@ -44,15 +44,15 @@ export default function RpsChart() {
           const mem = httpRss[rt] ? ` / ${httpRss[rt]}MB` : "";
           return (
             <div className="flex items-center gap-2.5">
-              <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
+              <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
                 {LABELS[rt]}
               </span>
-              <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100">
+              <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                 <div
                   className={
                     isWin
                       ? "h-full rounded-full bg-emerald-500"
-                      : "h-full rounded-full bg-zinc-300"
+                      : "h-full rounded-full bg-zinc-300 dark:bg-zinc-600"
                   }
                   style={{ width: pct + "%" }}
                 />
@@ -60,7 +60,7 @@ export default function RpsChart() {
               <span
                 className={
                   isWin
-                    ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                    ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
                     : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                 }
               >

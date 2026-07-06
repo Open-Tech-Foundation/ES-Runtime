@@ -29,9 +29,9 @@ export default function BenchCard({ metric }) {
   const unit = metric.unit || "ms";
 
   return (
-    <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-2 flex items-baseline justify-between">
-        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-700">
+        <span className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
           {metric.label}
         </span>
         <span className="text-[10px] text-zinc-400">{betterLabel(metric.key)}</span>
@@ -44,15 +44,15 @@ export default function BenchCard({ metric }) {
           const mem = rssRow && rssRow[rt] ? ` / ${rssRow[rt]}MB` : "";
           return (
             <div className="flex items-center gap-2.5">
-              <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
+              <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600 dark:text-zinc-400">
                 {LABELS[rt]}
               </span>
-              <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100">
+              <div className="h-3 flex-1 overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
                 <div
                   className={
                     isWin
                       ? "h-full rounded-full bg-emerald-500"
-                      : "h-full rounded-full bg-zinc-300"
+                      : "h-full rounded-full bg-zinc-300 dark:bg-zinc-600"
                   }
                   style={{ width: pct + "%" }}
                 />
@@ -60,7 +60,7 @@ export default function BenchCard({ metric }) {
               <span
                 className={
                   isWin
-                    ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                    ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
                     : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
                 }
               >

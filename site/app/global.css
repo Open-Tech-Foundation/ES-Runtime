@@ -7,6 +7,9 @@
 @import "tailwindcss";
 @import "@opentf/web-docs/theme";
 
+/* Match the web-docs theme toggle (`documentElement[data-theme="dark"]`). */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /* Open Tech Foundation brand: orange rgb(255, 122, 0) = #ff7a00. */
 @theme {
   --color-brand-50: #fff7ed;
@@ -27,6 +30,38 @@
   --muted: #5b5b66;
   --border: #e6e6ea;
   --accent: #ff7a00;
+}
+
+[data-theme="dark"] {
+  --bg: #020617;
+  --fg: #e2e8f0;
+  --muted: #94a3b8;
+  --border: #1e293b;
+  --accent: #ff943d;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #020617;
+    --fg: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --accent: #ff943d;
+  }
+}
+
+/* Hero dot-grid — inline styles can't use the theme attribute selector. */
+.hero-dot-grid {
+  background-image: radial-gradient(circle at 1px 1px, #e4e4e7 1px, transparent 0);
+  background-size: 28px 28px;
+}
+[data-theme="dark"] .hero-dot-grid {
+  background-image: radial-gradient(circle at 1px 1px, #27272a 1px, transparent 0);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .hero-dot-grid {
+    background-image: radial-gradient(circle at 1px 1px, #27272a 1px, transparent 0);
+  }
 }
 
 * {
