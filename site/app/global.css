@@ -143,3 +143,86 @@ button:not(:disabled),
     mask-image: none;
   }
 }
+
+/* Footer org link (logo + name). */
+.otfw-footer-org {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+.otfw-footer-org-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--otfw-text-muted);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+.otfw-footer-org-link:hover {
+  color: var(--otfw-text);
+}
+.otfw-footer-org-link:focus-visible {
+  outline: 2px solid var(--otfw-accent);
+  outline-offset: 3px;
+  border-radius: 0.375rem;
+}
+.otfw-footer-org-logo {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+}
+.otfw-footer-license {
+  color: var(--otfw-text-muted);
+}
+
+/* Footer "Built with OTF Web" badge (right side). */
+.otfw-footer-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-shrink: 0;
+  padding: 0.45rem 0.95rem 0.45rem 0.55rem;
+  border: 1px solid var(--otfw-border);
+  border-radius: 9999px;
+  background: var(--otfw-bg-elevated);
+  text-decoration: none;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--otfw-text) 4%, transparent);
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+.otfw-footer-badge:hover {
+  border-color: color-mix(in srgb, var(--otfw-accent) 35%, var(--otfw-border));
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--otfw-accent) 12%, transparent);
+  transform: translateY(-1px);
+}
+.otfw-footer-badge:focus-visible {
+  outline: 2px solid var(--otfw-accent);
+  outline-offset: 3px;
+}
+.otfw-footer-badge-mark {
+  display: block;
+  flex-shrink: 0;
+}
+.otfw-footer-badge-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  line-height: 1.1;
+}
+.otfw-footer-badge-muted {
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--otfw-text-muted);
+}
+.otfw-footer-badge-brand {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--otfw-accent);
+}

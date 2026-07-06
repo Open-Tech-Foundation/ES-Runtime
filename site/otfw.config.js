@@ -20,7 +20,8 @@ export default defineDocsConfig({
       { label: "Docs", href: "/docs" },
       { label: "API", href: "/api" },
     ],
-    footer: { text: "© Open Tech Foundation — Apache-2.0" },
+    // Footer chrome is rendered by components/SiteFooter.jsx.
+    footer: {},
     // Per-page "Last updated" line, from the file's last git commit.
     lastUpdated: true,
   },

@@ -1,5 +1,6 @@
-import { Footer, Navbar } from "@opentf/web-docs";
+import { Navbar } from "@opentf/web-docs";
 
+import SiteFooter from "../components/SiteFooter.jsx";
 import config from "../otfw.config.js";
 
 // Site-wide shell: the web-docs Navbar + Footer wrap every route (landing, docs,
@@ -10,7 +11,7 @@ export default function RootLayout(props) {
     <div class="otfw-shell">
       <Navbar config={config.docs} />
       <div class="otfw-shell-body">{props.children}</div>
-      <Footer config={config.docs} />
+      <SiteFooter />
     </div>
   );
 }
