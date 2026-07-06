@@ -114,7 +114,22 @@ export default function HomePage() {
           </div>
           <div className="mx-auto flex max-w-4xl flex-col items-center justify-between gap-8 rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 md:flex-row">
             <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-brand-100 text-xl font-black text-brand-700 dark:bg-brand-950/60 dark:text-brand-300">V8</div>
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-white p-2 shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
+                <img
+                  src="/img/v8.svg"
+                  alt="V8"
+                  width="40"
+                  height="40"
+                  className="h-10 w-10 dark:hidden"
+                />
+                <img
+                  src="/img/v8-outline.svg"
+                  alt="V8"
+                  width="40"
+                  height="40"
+                  className="hidden h-10 w-10 dark:block"
+                />
+              </div>
               <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">JavaScript</h3>
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Executes your JS/ESM code at lightning speed.</p>
             </div>
