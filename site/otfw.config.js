@@ -22,6 +22,8 @@ export default defineDocsConfig({
     ],
     // Footer chrome is rendered by components/SiteFooter.jsx.
     footer: {},
+    // Navbar search (Pagefind index built during `otfw build --ssg`).
+    search: { provider: "pagefind" },
     // Per-page "Last updated" line, from the file's last git commit.
     lastUpdated: true,
   },
