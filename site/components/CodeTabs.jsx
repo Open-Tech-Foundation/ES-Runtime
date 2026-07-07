@@ -7,14 +7,14 @@ const EXAMPLES = [
     code: (
       <code>
         <span className="text-brand-400">import</span> {"{ serve }"} <span className="text-brand-400">from</span> <span className="text-emerald-300">"runtime:http"</span>;{"\n\n"}
-        <span className="text-blue-300">serve</span>{"({ "}port: <span className="text-orange-300">8080</span>{" }, "}
-        <span className="text-brand-400">async</span>{" (req) "}
+        <span className="text-brand-400">const</span> server = <span className="text-blue-300">serve</span>{"({ "}port: <span className="text-orange-300">8080</span>{" }, (req) "}
         <span className="text-brand-400">=&gt;</span>{" {\n"}
         {"  "}
         <span className="text-brand-400">return new</span>{" Response("}
         <span className="text-emerald-300">"👋 Hello from ESRun!"</span>{");\n"}
         {"});\n\n"}
-        <span className="text-blue-300">console</span>.log(<span className="text-emerald-300">"Server listening on port 8080"</span>);{"\n"}
+        <span className="text-brand-400">const</span> {"{ hostname, port }"} = <span className="text-brand-400">await</span> server.<span className="text-blue-300">addr</span>;{"\n"}
+        <span className="text-blue-300">console</span>.log(<span className="text-emerald-300">{"`listening on http://${hostname}:${port}`"}</span>);{"\n"}
       </code>
     )
   },
