@@ -5,11 +5,11 @@
     "": {
       "name": "site",
       "dependencies": {
-        "@opentf/web": "^0.12.0",
-        "@opentf/web-docs": "^0.8.0",
+        "@opentf/web": "^0.13.0",
+        "@opentf/web-docs": "^0.9.0",
       },
       "devDependencies": {
-        "@opentf/web-cli": "^1.7.0",
+        "@opentf/web-cli": "^1.8.0",
         "wrangler": "^4.100.0",
       },
     },
@@ -154,13 +154,13 @@
 
     "@napi-rs/wasm-runtime": ["@napi-rs/wasm-runtime@1.1.5", "", { "dependencies": { "@tybys/wasm-util": "^0.10.2" }, "peerDependencies": { "@emnapi/core": "^1.7.1", "@emnapi/runtime": "^1.7.1" } }, "sha512-AWPoBRJ9tsnVhor4sjO7rkni+7p+2IAEFj6cx06UgP10jkQHqay/36uRV/bFkgrh18D9vb4cr8Q0Pthskgzy+Q=="],
 
-    "@opentf/web": ["@opentf/web@0.12.0", "", {}, "sha512-g+WEDXpQmhzLnEU2ukctMgp7r6EOLOtFddrcKKnoEyZ5qT98JU4BU9b4ou6f7u6UsLzixjznK3BygNyZZoEuLQ=="],
+    "@opentf/web": ["@opentf/web@0.13.0", "", {}, "sha512-971QQrI7asd3t3uZOPgDVOdWZ8Clgwbgiwl8mPRe9wpKFoccoBpk8ehmrylow4g3LaZmu0P/ilcbeT0amY2UvA=="],
 
-    "@opentf/web-cli": ["@opentf/web-cli@1.7.0", "", { "dependencies": { "@opentf/web-compiler": "0.6.0", "@tailwindcss/node": "4.2.2", "@tailwindcss/oxide": "4.2.2", "rolldown": "1.0.0-rc.17", "tailwindcss": "4.2.2" }, "peerDependencies": { "@opentf/web": "*" }, "bin": { "otfw": "src/cli.js" } }, "sha512-xJy8kh84iyR2qT6QPOghF2AgAGDQF738U8DiF77mQmCtUvQLqcmbmI5z4aZVS1pYMpNEz8HtM5DgBEGVdYszQQ=="],
+    "@opentf/web-cli": ["@opentf/web-cli@1.8.0", "", { "dependencies": { "@opentf/web-compiler": "0.6.0", "@tailwindcss/node": "4.2.2", "@tailwindcss/oxide": "4.2.2", "rolldown": "1.0.0-rc.17", "tailwindcss": "4.2.2" }, "peerDependencies": { "@opentf/web": "*" }, "bin": { "otfw": "src/cli.js" } }, "sha512-gHdghpQuL2cpBx3H25fAh7lbADrV7LJtRUq8Qb2Ai7YVctJmvatXLKWuziVzXbf/7QjFaBK27/19oIpirPqSag=="],
 
     "@opentf/web-compiler": ["@opentf/web-compiler@0.6.0", "", {}, "sha512-y5Y+yRrD2sxhK4JX3PkBI6fErvwHsyaDo99JhfMufxUlItME2HPjRywBGDjyE6doHUiVZE+EOLisYfVCoBbiKg=="],
 
-    "@opentf/web-docs": ["@opentf/web-docs@0.8.0", "", { "dependencies": { "pagefind": "^1.5.2" }, "peerDependencies": { "@opentf/web": "*" } }, "sha512-Q8PGd4q9NblGXtoDmKKGaY55N1dINLveeeyneQcve1hI6KOBwuxjgt6oAUDtX7wI/k+cGX0K2m7s8/NMqgqp/w=="],
+    "@opentf/web-docs": ["@opentf/web-docs@0.9.0", "", { "dependencies": { "pagefind": "^1.5.2" }, "peerDependencies": { "@opentf/web": "*" } }, "sha512-HJwuY/q/Ox4QEGF578eDmRXRmTrELln7/47gXDrpjLnGUEj/A1RzdK1CCdwe4kfTH6Wxjc6p5aWO/Gb5NJDSfw=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.127.0", "", {}, "sha512-aIYXQBo4lCbO4z0R3FHeucQHpF46l2LbMdxRvqvuRuW2OxdnSkcng5B8+K12spgLDj93rtN3+J2Vac/TIO+ciQ=="],
 

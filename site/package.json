@@ -10,11 +10,11 @@
     "deploy": "otfw build --ssg && wrangler deploy"
   },
   "dependencies": {
-    "@opentf/web": "^0.12.0",
-    "@opentf/web-docs": "^0.8.0"
+    "@opentf/web": "^0.13.0",
+    "@opentf/web-docs": "^0.9.0"
   },
   "devDependencies": {
-    "@opentf/web-cli": "^1.7.0",
+    "@opentf/web-cli": "^1.8.0",
     "wrangler": "^4.100.0"
   },
   "trustedDependencies": [
