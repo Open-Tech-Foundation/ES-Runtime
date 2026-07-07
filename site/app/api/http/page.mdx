@@ -15,10 +15,10 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
 </Callout>
 
 <Callout type="warning" title="All I/O is async">
-  A handler error or a non-`Response` return becomes a `500`. Bodies stream in
-  both directions: the request body is a `ReadableStream`, and a `ReadableStream`
-  response body is sent with chunked transfer-encoding as it is produced. TLS is
-  not supported yet — terminate it at a proxy.
+  A handler error or a non-`Response` return becomes a `500`. Request and
+  response bodies stream with backpressure; string/byte bodies use the buffered
+  fast path (`Content-Length`). TLS is not supported yet — terminate it at a
+  proxy. See the [HTTP server guide](/docs/http) for patterns and examples.
 </Callout>
 
 ## Functions
@@ -46,6 +46,13 @@ const server = serve({ port: 8080 }, async (request) => {
 const { hostname, port } = await server.addr;
 console.log(`listening on http://${hostname}:${port}`);
 ```
+
+## Bodies
+
+| Direction | `ReadableStream` | `string` / bytes |
+| --- | --- | --- |
+| Request | `request.body` pulls chunks as they arrive | `request.text()` / `.json()` / `.arrayBuffer()` materialize the full body |
+| Response | Chunked transfer-encoding, backpressured | `Content-Length` buffered fast path |
 
 ## Lifecycle
 
@@ -75,4 +82,4 @@ await server.stop();                    // stop accepting; finished resolves
 
 ## See also
 
-- [HTTP server guide](/docs/http) — routing, lifecycle, TLS deployment, and framework usage
+- [HTTP server guide](/docs/http) — routing, streaming bodies, lifecycle, TLS deployment

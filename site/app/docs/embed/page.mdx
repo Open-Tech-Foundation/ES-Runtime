@@ -1,0 +1,96 @@
+---
+title: Embedding ES Runtime
+description: Run untrusted JavaScript inside your Rust application — embedder API coming soon.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Embedding ES Runtime
+
+ES Runtime ships as an **embeddable Rust library** (`es-runtime`) in addition to
+the standalone `esrun` CLI. The library is built for hosts that need to run
+untrusted or third-party JavaScript inside their own process — with explicit
+control over what that code can reach.
+
+<Callout type="warning" title="Embedder API — not finalized">
+  The Rust embedding API is still being shaped. This page explains the model and
+  what to expect; a full guide with code examples, capability wiring, and
+  provider injection will replace it soon.
+</Callout>
+
+## Two shapes, one core
+
+Both the CLI and the library share the same V8 engine, `runtime:` modules, and
+Web-standard globals. The difference is who grants access:
+
+| Shape | Who grants capabilities | Typical use |
+| --- | --- | --- |
+| **`esrun` CLI** | Grants all capabilities automatically | Scripts, local tools, servers you trust |
+| **Embeddable library** | The host (your Rust code) grants exactly what guest code needs | Plugins, sandboxes, policy-driven execution |
+
+See the [Security model](/docs/security) for how capabilities and the
+filesystem root jail work in practice.
+
+## What embedding looks like
+
+At a high level, a host application:
+
+1. **Creates a `Runtime`** with injected providers (filesystem, network, timers, …).
+2. **Grants capabilities** — only the powers guest code is allowed to use.
+3. **Loads and evaluates** guest modules (ESM only).
+4. **Drives the event loop** by calling `tick()` on a schedule the host owns — no
+   background thread is started for you.
+
+That driven model is intentional: your application keeps control of scheduling,
+threading, and lifetime. Guest async work (Promises, timers, I/O) advances when
+you tick the runtime.
+
+<Callout type="info" title="Layer A today, Layer B tomorrow">
+  The current library is **Layer A** — a single isolate the host ticks. **Layer
+  B** (the "es-vm" multi-isolate layer, including Workers) is on the roadmap and
+  will build on the same capability model. See [Scope & non-goals](/docs/scope).
+</Callout>
+
+## Deny-by-default
+
+Unlike the CLI, the embeddable library starts with **no host access**. Guest code
+can compute, but importing `runtime:fs` or calling `fetch` throws
+`NotAllowedError` until the host grants the matching capability.
+
+The host also controls:
+
+- **Which providers** back each capability (real disk, in-memory vfs, mocked net, …)
+- **The filesystem root jail** — where module resolution and file I/O are confined
+- **The environment view** — what `runtime:process` exposes to guest code
+
+For the mental model and capability table, start with
+[Security model](/docs/security) and [Module system](/docs/modules).
+
+## Extending the host
+
+Guest code cannot load native addons or call FFI. The supported extension path is
+**Rust-side providers**: implement the provider traits, wire them into the
+runtime, and gate them with capabilities. That keeps the trusted surface small and
+auditable.
+
+## Until the full guide lands
+
+Use these pages to understand the JavaScript side of embedding (what guest code
+sees and how it behaves):
+
+- [Security model](/docs/security) — capabilities, root jail, secrets
+- [Module system](/docs/modules) — ESM resolution, `runtime:` imports
+- [Global objects](/docs/globals) — Web APIs available without imports
+- [API reference](/api) — every `runtime:` module documented for guest scripts
+- [Scope & non-goals](/docs/scope) — what Layer A does and does not cover
+
+For Rust crate layout and dependency direction, see the
+[ARCHITECTURE.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/ARCHITECTURE.md)
+and [README](https://github.com/Open-Tech-Foundation/ES-Runtime) in the repository.
+
+<Callout type="note" title="Stay tuned">
+  The upcoming embedder guide will cover `Runtime` construction, granting
+  capabilities, custom providers, snapshot boot, and a minimal end-to-end Rust +
+  JavaScript example. This page will be updated in place — the URL will not
+  change.
+</Callout>

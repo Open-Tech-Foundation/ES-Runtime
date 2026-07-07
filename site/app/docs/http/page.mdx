@@ -76,40 +76,28 @@ or a small routing helper.
 
 ## Request and response bodies
 
-Bodies **stream in both directions**, with the same model as `fetch`
-(see [Global objects](/docs/globals#streaming-upload)).
-
-The request body is a `ReadableStream` pulling chunks from the network as they
-arrive — nothing is held in memory until you ask for it. Call `request.text()`,
-`request.json()`, or `request.arrayBuffer()` when you want the whole payload, or
-read `request.body` incrementally to handle a large upload with bounded memory.
-
-On the response side, a `string`, `Uint8Array`, or `ArrayBuffer` passed to
-`new Response(body)` is sent buffered with a `Content-Length` — the fast path. A
-`ReadableStream` body is sent with **chunked transfer-encoding** as you produce
-it, with backpressure, so server-sent-events-style and open-ended responses
-never materialize in memory:
+Request and response bodies **stream in both directions** with backpressure.
+`request.body` is a `ReadableStream`; nothing is held in memory until you call
+`request.text()`, `request.json()`, or read the stream incrementally. On the
+response side, `string` and byte bodies use the buffered fast path (`Content-Length`);
+a `ReadableStream` is sent with chunked transfer-encoding as you produce it:
 
 ```js
 serve({ port: 8080 }, () => {
-  const encoder = new TextEncoder();
+  const enc = new TextEncoder();
   let n = 0;
   const body = new ReadableStream({
-    async pull(controller) {
-      if (n >= 10) return controller.close();
-      await new Promise((r) => setTimeout(r, 1000));
-      controller.enqueue(encoder.encode(`tick ${n++}\n`));
+    async pull(c) {
+      if (n >= 10) return c.close();
+      c.enqueue(enc.encode(`tick ${n++}\n`));
     },
   });
   return new Response(body, { headers: { "content-type": "text/plain" } });
 });
 ```
 
-<Callout type="tip" title="The proxy shape">
-  The two streams compose: `new Response(request.body)` pipes an upload straight
-  back out — and, more generally, a request through to a response — without
-  buffering either side.
-</Callout>
+`new Response(request.body)` pipes an upload straight back out without buffering
+either side.
 
 ## Errors
 
@@ -195,5 +183,4 @@ console.log(`Hono listening on http://127.0.0.1:${port}`);
 - [`runtime:http` API reference](/api/http) — full signatures, errors, and types
 - [Sockets](/docs/guides/networking) — raw TCP/TLS when you need lower-level control
 - [WebSockets](/docs/guides/websocket) — upgrade-friendly real-time connections
-- [Global objects](/docs/globals) — `fetch`, `Request`, `Response`, `Headers`
 - [Benchmarks](/docs/benchmarks) — HTTP throughput measurements
