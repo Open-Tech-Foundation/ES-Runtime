@@ -1,8 +1,11 @@
 // runtime:http — an HTTP/1.1 server: `serve((request) => response)`. The handler
 // is called with a web `Request` and returns (or resolves to) a web `Response`
 // — the same Fetch API objects `fetch` uses. Backed by async ops over a vetted
-// HTTP backend, gated on NetListen (binding the listening socket). Request and
-// response bodies are buffered (streaming bodies are a follow-up).
+// HTTP backend, gated on NetListen (binding the listening socket). Bodies
+// stream in both directions: the request body is a `ReadableStream` pulling
+// chunks from the host as they arrive, and a `ReadableStream` response body is
+// pumped out chunk-by-chunk with backpressure (chunked transfer-encoding) —
+// neither is materialized unless the handler asks (e.g. `request.text()`).
 
 const ops = globalThis.__ops;
 // Builds a Request from the host-validated absolute URL without re-parsing it.
@@ -14,6 +17,34 @@ function parseAddress(options) {
     hostname: o.hostname ?? o.host ?? "0.0.0.0",
     port: Number(o.port) || 0,
   };
+}
+
+// Streams a Response's ReadableStream body to the host one chunk at a time.
+// Each push awaits the bounded host channel (download backpressure); a guest
+// stream error is forwarded so the in-flight response aborts the connection —
+// the only honest signal once the status line is on the wire.
+async function pumpResponseBody(stream, id) {
+  let reader;
+  try {
+    reader = stream.getReader(); // throws on a locked/consumed stream
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      let chunk;
+      if (value instanceof Uint8Array) chunk = value;
+      else if (ArrayBuffer.isView(value)) {
+        chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+      } else if (value instanceof ArrayBuffer) chunk = new Uint8Array(value);
+      else throw new TypeError("ReadableStream body must yield Uint8Array chunks");
+      const accepted = await ops.http_response_body_push(id, chunk);
+      if (!accepted) break; // host receiver gone (client disconnected)
+    }
+    await ops.http_response_body_close(id);
+  } catch (e) {
+    await ops.http_response_body_close(id, String((e && e.message) || e));
+  } finally {
+    if (reader) reader.releaseLock();
+  }
 }
 
 // Runs one request through the handler and writes the response back. Never
@@ -28,14 +59,19 @@ async function handleRequest(entry, handler) {
   const headers = entry[4];
   let response;
   try {
-    let body = null;
-    if (hasBody) {
-      // The body is fully buffered host-side; one read drains it.
-      body = await ops.http_body_read(requestId);
-    }
     const init = { method, headers };
-    // GET/HEAD must not carry a body in the Request constructor.
-    if (body && method !== "GET" && method !== "HEAD") init.body = body;
+    // The body streams from the host chunk-by-chunk; nothing is buffered until
+    // the handler consumes it. GET/HEAD must not carry a body in the Request
+    // constructor (an unread host stream is dropped when the response ends).
+    if (hasBody && method !== "GET" && method !== "HEAD") {
+      init.body = new ReadableStream({
+        async pull(controller) {
+          const chunk = await ops.http_body_read(requestId);
+          if (chunk === null) controller.close();
+          else controller.enqueue(chunk);
+        },
+      });
+    }
     response = await handler(makeServerRequest(url, init));
     if (!(response instanceof Response)) {
       response = new Response(response == null ? "" : String(response));
@@ -44,28 +80,29 @@ async function handleRequest(entry, handler) {
     response = new Response("Internal Server Error", { status: 500 });
   }
 
-  // Fast path: hand the body to http_respond without an async round-trip. A
-  // deferred string body crosses as-is (encoded Rust-side — no utf8_encode op
+  // Fast path: hand a buffered body to http_respond without an async round-trip.
+  // A deferred string body crosses as-is (encoded Rust-side — no utf8_encode op
   // and no intermediate JS byte buffer); already-materialized bytes pass
-  // through; only a streaming body needs the async arrayBuffer() drain.
+  // through. Only a streaming body goes through the chunk pump.
   const parts = response._parts();
-  let out;
+  let out = null;
+  let stream = null;
   if (parts.str !== null && parts.str !== undefined) {
     out = parts.str;
   } else if (parts.bytes !== null) {
     out = parts.bytes;
   } else if (parts.stream) {
-    const buf = await response.arrayBuffer();
-    out = buf.byteLength > 0 ? new Uint8Array(buf) : null;
-  } else {
-    out = null;
+    stream = parts.stream;
   }
-  const args = [requestId, parts.status, out];
+  const streamId = stream ? ops.http_response_body_new() : null;
+  const args = [requestId, parts.status, out, streamId];
   for (const [name, value] of parts.headers) args.push(name, value);
   // Fire-and-forget: the response is dispatched on this op; not awaiting saves a
   // microtask/tick per request. http_respond only sends on a oneshot (never
-  // rejects), so there is no rejection to surface.
+  // rejects), so there is no rejection to surface. For a streaming body the
+  // status/headers go out now and the chunks flow behind them via the pump.
   ops.http_respond(...args);
+  if (stream) await pumpResponseBody(stream, streamId);
 }
 
 // The handle returned by serve(): `addr` resolves to the bound address,

@@ -564,13 +564,42 @@ pub trait WebSocketProvider: Send + Sync {
     fn close_server(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
 
+/// A body crossing the [`HttpServerProvider`] seam, in either direction.
+///
+/// Mirrors the outbound [`RequestBody`]: [`Bytes`](HttpServerBody::Bytes) is the
+/// buffered fast path, [`Stream`](HttpServerBody::Stream) delivers chunks
+/// incrementally with bounded memory — an inbound request body the guest reads
+/// as it arrives, or an outbound response body sent with chunked
+/// transfer-encoding as the guest produces it. The stream ends at `None`; an
+/// item `Err` aborts the request/response it belongs to.
+pub enum HttpServerBody {
+    /// No body.
+    Empty,
+    /// A fully-buffered body.
+    Bytes(Vec<u8>),
+    /// A body streamed as byte-chunks.
+    Stream(ByteStream),
+}
+
+impl HttpServerBody {
+    /// Whether there is definitely no body (`Empty`, or `Bytes` with no bytes).
+    pub fn is_empty(&self) -> bool {
+        match self {
+            HttpServerBody::Empty => true,
+            HttpServerBody::Bytes(b) => b.is_empty(),
+            HttpServerBody::Stream(_) => false,
+        }
+    }
+}
+
 /// An inbound HTTP request delivered to an [`HttpServerProvider`] consumer.
 ///
-/// The body is **buffered** (read in full before the request is handed to the
-/// guest), mirroring the outbound [`HttpRequest`] shape; streaming request
-/// bodies are a follow-up. `url` is reconstructed as an absolute URL (scheme +
-/// `Host` header, or the bound address when no `Host` is sent) so the guest can
-/// build a web `Request` from it.
+/// The body arrives as an [`HttpServerBody`] — a provider should hand a
+/// [`Stream`](HttpServerBody::Stream) so the guest reads it incrementally
+/// (bounded memory for large uploads); a buffered
+/// [`Bytes`](HttpServerBody::Bytes) is also accepted. `url` is reconstructed as
+/// an absolute URL (scheme + `Host` header, or the bound address when no `Host`
+/// is sent) so the guest can build a web `Request` from it.
 pub struct HttpServerRequest {
     /// The HTTP method (`GET`, `POST`, …).
     pub method: String,
@@ -578,8 +607,8 @@ pub struct HttpServerRequest {
     pub url: String,
     /// Request header name/value pairs, in order.
     pub headers: Vec<(String, String)>,
-    /// The request body, already buffered (empty if none).
-    pub body: Vec<u8>,
+    /// The request body.
+    pub body: HttpServerBody,
 }
 
 /// The response a guest hands back for one [`HttpServerRequest`].
@@ -588,8 +617,9 @@ pub struct HttpServerResponse {
     pub status: u16,
     /// Response header name/value pairs, in order.
     pub headers: Vec<(String, String)>,
-    /// The response body, already buffered (empty if none).
-    pub body: Vec<u8>,
+    /// The response body — a [`Stream`](HttpServerBody::Stream) is sent with
+    /// chunked transfer-encoding as chunks arrive, never fully materialized.
+    pub body: HttpServerBody,
 }
 
 /// An HTTP/1.1 server backing `runtime:http` (the `serve((req) => res)` shape).

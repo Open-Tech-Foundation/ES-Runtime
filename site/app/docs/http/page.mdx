@@ -1,30 +1,182 @@
 ---
 title: HTTP server
-description: A fast, built-in HTTP server using standard web Request and Response objects.
+description: A built-in HTTP/1.1 server using standard web Request and Response objects.
 ---
+
+import { Callout } from "@opentf/web-docs";
 
 # HTTP server
 
-The `runtime:http` module provides a fast, built-in HTTP server using standard
-web `Request` and `Response` objects.
+[`runtime:http`](/api/http) provides an HTTP/1.1 server built on the same
+`Request` and `Response` objects that `fetch` uses. Handlers are plain functions
+— sync or async — that take a `Request` and return a `Response`.
 
-## Usage
+<Callout type="info" title="Capability: NetListen">
+  Binding a port requires the **NetListen** capability. The `esrun` CLI grants
+  it automatically; embedders must grant it explicitly. See
+  [Security model](/docs/security).
+</Callout>
+
+<Callout type="warning" title="Current limits">
+  **No TLS** — `runtime:http` serves plain HTTP only. Terminate TLS at a reverse
+  proxy, or use [`runtime:net`](/docs/guides/networking) for a raw TLS listener
+  if you need to terminate in-process.
+</Callout>
+
+## Basic server
+
+`serve(options, handler)` starts the accept loop in the background and returns a
+`Server` handle immediately. Await `server.addr` to learn the bound address once
+listening has started.
 
 ```js
 import { serve } from "runtime:http";
 
-// serve(options, handler) — the handler takes a Request, returns a Response.
-serve({ port: 8080 }, (req) => {
+const server = serve({ port: 8080 }, (request) => {
   return new Response("Hello from esrun!");
 });
 
-console.log("Server listening on port 8080");
+const { hostname, port } = await server.addr;
+console.log(`listening on http://${hostname}:${port}`);
 ```
+
+`serve(handler)` with no options picks an **ephemeral port** — useful in tests.
+Read the port from `await server.addr` after starting.
+
+## Routing
+
+There is no built-in router. Match on `request.method` and `new URL(request.url)`
+inside your handler, or hand requests to a framework (see Hono below).
+
+```js
+import { serve } from "runtime:http";
+
+const server = serve({ port: 8080 }, async (request) => {
+  const url = new URL(request.url);
+
+  if (request.method === "GET" && url.pathname === "/health") {
+    return Response.json({ ok: true });
+  }
+
+  if (request.method === "POST" && url.pathname === "/echo") {
+    const body = await request.text();
+    return new Response(body, {
+      headers: { "content-type": request.headers.get("content-type") ?? "text/plain" },
+    });
+  }
+
+  return new Response("Not found", { status: 404 });
+});
+
+await server.addr;
+```
+
+For pathname patterns, pair this with the global [`URLPattern`](/docs/urlpattern)
+or a small routing helper.
+
+## Request and response bodies
+
+Bodies **stream in both directions**, with the same model as `fetch`
+(see [Global objects](/docs/globals#streaming-upload)).
+
+The request body is a `ReadableStream` pulling chunks from the network as they
+arrive — nothing is held in memory until you ask for it. Call `request.text()`,
+`request.json()`, or `request.arrayBuffer()` when you want the whole payload, or
+read `request.body` incrementally to handle a large upload with bounded memory.
+
+On the response side, a `string`, `Uint8Array`, or `ArrayBuffer` passed to
+`new Response(body)` is sent buffered with a `Content-Length` — the fast path. A
+`ReadableStream` body is sent with **chunked transfer-encoding** as you produce
+it, with backpressure, so server-sent-events-style and open-ended responses
+never materialize in memory:
+
+```js
+serve({ port: 8080 }, () => {
+  const encoder = new TextEncoder();
+  let n = 0;
+  const body = new ReadableStream({
+    async pull(controller) {
+      if (n >= 10) return controller.close();
+      await new Promise((r) => setTimeout(r, 1000));
+      controller.enqueue(encoder.encode(`tick ${n++}\n`));
+    },
+  });
+  return new Response(body, { headers: { "content-type": "text/plain" } });
+});
+```
+
+<Callout type="tip" title="The proxy shape">
+  The two streams compose: `new Response(request.body)` pipes an upload straight
+  back out — and, more generally, a request through to a response — without
+  buffering either side.
+</Callout>
+
+## Errors
+
+If your handler **throws** or returns a value that is not a `Response`, the
+runtime answers with **500 Internal Server Error**. Wrap risky logic in
+`try/catch` when you want a specific status or JSON error body.
+
+```js
+serve({ port: 8080 }, async (request) => {
+  try {
+    const data = await request.json();
+    return Response.json({ received: data });
+  } catch {
+    return Response.json({ error: "invalid JSON" }, { status: 400 });
+  }
+});
+```
+
+Invalid `Request` / `Response` construction (bad status codes, malformed
+headers) throws `TypeError` at construction time — the same Fetch API rules as in
+browsers.
+
+## Lifecycle and shutdown
+
+`serve()` returns a `Server` with three members:
+
+| Member | Description |
+| --- | --- |
+| `addr` | `Promise<{ hostname, port }>` — resolves once the server is listening |
+| `stop()` | Stop accepting new connections and shut down |
+| `finished` | `Promise<void>` — resolves when the accept loop has ended |
+
+Call `await server.stop()` for graceful shutdown. In-flight requests are allowed
+to finish; no new connections are accepted after `stop()` resolves.
+
+```js
+import { serve } from "runtime:http";
+
+const server = serve({ port: 8080 }, (req) => new Response("ok"));
+const { port } = await server.addr;
+
+// … run until a signal or condition …
+
+await server.stop();
+await server.finished;
+console.log("server stopped");
+```
+
+## TLS and production deployment
+
+`runtime:http` does not terminate TLS. Typical production setups:
+
+1. **Reverse proxy** — nginx, Caddy, or a cloud load balancer terminates HTTPS
+   and forwards plain HTTP to your esrun process.
+2. **Raw TLS socket** — bind with `runtime:net` `listen({ secureTransport: "on", cert, key })`
+   and speak HTTP/1.1 yourself, or proxy to a local `serve()` port. See
+   [Sockets](/docs/guides/networking).
+
+WebSocket servers over `wss:` follow the same split today — see
+[WebSockets](/docs/guides/websocket).
 
 ## Usage with Hono
 
-Because esrun uses standard Web APIs, popular frameworks like Hono work out of
-the box.
+Because esrun uses standard Web APIs, frameworks like
+[Hono](https://hono.dev) work when their package is on disk (install with npm,
+bun, or pnpm — esrun resolves `node_modules` but does not install packages for
+you).
 
 ```js
 import { serve } from "runtime:http";
@@ -33,7 +185,15 @@ import { Hono } from "hono";
 const app = new Hono();
 app.get("/", (c) => c.text("Hello from Hono on ESRun!"));
 
-serve({ port: 8080 }, app.fetch);
-
-console.log("Hono listening on port 8080");
+const server = serve({ port: 8080 }, app.fetch);
+const { port } = await server.addr;
+console.log(`Hono listening on http://127.0.0.1:${port}`);
 ```
+
+## See also
+
+- [`runtime:http` API reference](/api/http) — full signatures, errors, and types
+- [Sockets](/docs/guides/networking) — raw TCP/TLS when you need lower-level control
+- [WebSockets](/docs/guides/websocket) — upgrade-friendly real-time connections
+- [Global objects](/docs/globals) — `fetch`, `Request`, `Response`, `Headers`
+- [Benchmarks](/docs/benchmarks) — HTTP throughput measurements

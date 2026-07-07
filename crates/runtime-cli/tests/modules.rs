@@ -68,6 +68,31 @@ fn streams_a_fetch_request_body_to_a_server() {
 }
 
 #[test]
+fn streams_an_http_server_response_to_a_client() {
+    // Chunked download: a runtime:http handler returns a ReadableStream body
+    // produced over time; the real reqwest client must see it incrementally
+    // (several reads, no Content-Length) rather than as one buffered payload.
+    let out = run_file("http-stream-response.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("STREAM_OK"), "{stdout}");
+    assert!(stdout.contains("reads>1:true"), "{stdout}");
+    assert!(stdout.contains("content-length:null"), "{stdout}");
+    assert!(stdout.contains("x-mode:stream"), "{stdout}");
+}
+
+#[test]
+fn streams_an_http_request_body_through_to_the_response() {
+    // Proxy/echo: `new Response(request.body)` pipes the inbound stream back
+    // out on the same request — concurrent pull + push, nothing buffered.
+    let out = run_file("http-stream-echo.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("ECHO_OK"), "{stdout}");
+    assert!(stdout.contains("status:200"), "{stdout}");
+}
+
+#[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
         .arg("-e")

@@ -22,6 +22,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Streaming `runtime:http` server bodies.** The HTTP server now streams bodies
+  in **both** directions instead of buffering them. The handler's `Request` body
+  is a `ReadableStream` pulling chunks from the host as they arrive on the wire
+  (nothing is materialized unless the handler asks, e.g. `request.text()`), and a
+  `Response` with a `ReadableStream` body is sent with chunked transfer-encoding
+  as the guest produces it — pumped one chunk at a time across a bounded channel
+  (download backpressure), so an SSE-style or open-ended response never
+  materializes. The proxy/echo shape `new Response(request.body)` pipes inbound
+  to outbound with nothing buffered. A buffered (string/bytes) body still crosses
+  inline as the fast path. New provider type `HttpServerBody`
+  (`Empty`/`Bytes`/`Stream`) replaces `Vec<u8>` on both `HttpServerRequest.body`
+  and `HttpServerResponse.body` (**breaking** for embedders implementing
+  `HttpServerProvider`); `SystemHttpServer` hands off hyper's request body as a
+  chunk stream and writes streamed responses via `StreamBody` (DECISIONS D31).
+
 - **Streaming `fetch` request bodies.** A `fetch` whose body is a `ReadableStream`
   now uploads with chunked transfer-encoding instead of being buffered first, so a
   large or open-ended request body streams to the server with bounded memory.

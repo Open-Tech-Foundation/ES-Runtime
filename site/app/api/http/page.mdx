@@ -15,9 +15,10 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
 </Callout>
 
 <Callout type="warning" title="All I/O is async">
-  A handler error or a non-`Response` return becomes a `500`. Request and
-  response bodies are buffered. TLS is not supported yet — terminate it at a
-  proxy.
+  A handler error or a non-`Response` return becomes a `500`. Bodies stream in
+  both directions: the request body is a `ReadableStream`, and a `ReadableStream`
+  response body is sent with chunked transfer-encoding as it is produced. TLS is
+  not supported yet — terminate it at a proxy.
 </Callout>
 
 ## Functions
@@ -71,3 +72,7 @@ await server.stop();                    // stop accepting; finished resolves
 | --- | --- |
 | `TypeError` | The `serve()` handler isn't a function, or a `Request` / `Response` is built with an invalid init (the Fetch API's own checks). |
 | `DOMException` | name `"NotAllowedError"` — the NetListen capability is not granted. |
+
+## See also
+
+- [HTTP server guide](/docs/http) — routing, lifecycle, TLS deployment, and framework usage

@@ -6,8 +6,11 @@
 //! [`next_request`](HttpServerProvider::next_request) and completes each request
 //! with [`respond`](HttpServerProvider::respond). This handoff lets hyper run
 //! across the reactor's threads while the single-threaded JS isolate produces
-//! responses one at a time. Bodies are buffered (read in full before handoff);
-//! streaming bodies are a follow-up. TLS is not supported yet.
+//! responses one at a time. Bodies **stream** in both directions: the inbound
+//! `Incoming` body crosses as an [`HttpServerBody::Stream`] the guest pulls
+//! chunk-by-chunk (hyper keeps feeding it while the connection task awaits the
+//! response oneshot), and a streamed response body is written with chunked
+//! transfer-encoding as the guest produces it. TLS is not supported yet.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -17,10 +20,13 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use es_runtime_providers::{
-    BoxFuture, HttpServerProvider, HttpServerRequest, HttpServerResponse, ProviderError, SocketInfo,
+    BoxFuture, HttpServerBody, HttpServerProvider, HttpServerRequest, HttpServerResponse,
+    ProviderError, SocketInfo,
 };
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use futures_util::StreamExt;
+use http_body_util::combinators::UnsyncBoxBody;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Body as _, Frame, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
@@ -28,6 +34,12 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::task::AbortHandle;
+
+/// The response body handed to hyper: buffered (`Full`) or streamed
+/// (`StreamBody`), erased behind one type so both share the service signature.
+/// Unsync because the guest's [`ByteStream`](es_runtime_providers::ByteStream)
+/// is `Send` but not `Sync` — hyper only needs `Send` here.
+type OutBody = UnsyncBoxBody<Bytes, ProviderError>;
 
 /// One inbound request plus the channel that carries its response back to hyper.
 type Pending = (HttpServerRequest, oneshot::Sender<HttpServerResponse>);
@@ -76,10 +88,12 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
     }
 }
 
-/// Turns a parsed hyper request (body already collected) into the buffered
-/// [`HttpServerRequest`], reconstructing an absolute URL from the `Host` header
-/// (or `authority` fallback — the bound address).
-async fn to_server_request(req: Request<Incoming>, authority: &str) -> HttpServerRequest {
+/// Turns a parsed hyper request into the [`HttpServerRequest`] handoff shape
+/// without touching the body: the `Incoming` body crosses as a chunk stream the
+/// guest pulls (hyper feeds it while the connection task awaits the response).
+/// The absolute URL is reconstructed from the `Host` header (or `authority`
+/// fallback — the bound address).
+fn to_server_request(req: Request<Incoming>, authority: &str) -> HttpServerRequest {
     let method = req.method().to_string();
     let host = req
         .headers()
@@ -98,9 +112,14 @@ async fn to_server_request(req: Request<Incoming>, authority: &str) -> HttpServe
         .iter()
         .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
-    let body = match req.into_body().collect().await {
-        Ok(c) => c.to_bytes().to_vec(),
-        Err(_) => Vec::new(),
+    let incoming = req.into_body();
+    let body = if incoming.is_end_stream() {
+        HttpServerBody::Empty
+    } else {
+        HttpServerBody::Stream(Box::pin(incoming.into_data_stream().map(|item| {
+            item.map(|bytes| bytes.to_vec())
+                .map_err(|e| ProviderError::Other(e.to_string()))
+        })))
     };
     HttpServerRequest {
         method,
@@ -110,10 +129,13 @@ async fn to_server_request(req: Request<Incoming>, authority: &str) -> HttpServe
     }
 }
 
-/// Builds the hyper response from the guest's [`HttpServerResponse`]. hyper sets
-/// `Content-Length` from the buffered body, so any guest-supplied framing header
-/// is dropped to avoid a conflicting/duplicate header.
-fn build_response(resp: HttpServerResponse) -> Response<Full<Bytes>> {
+/// Builds the hyper response from the guest's [`HttpServerResponse`]. A buffered
+/// body goes out as `Full` (hyper sets `Content-Length`); a streamed body goes
+/// out as a `StreamBody` (hyper uses chunked transfer-encoding), and a chunk
+/// `Err` aborts the connection mid-body — the only honest signal once the status
+/// line is on the wire. Guest-supplied framing headers are dropped either way to
+/// avoid conflicting with what hyper computes.
+fn build_response(resp: HttpServerResponse) -> Response<OutBody> {
     let status = StatusCode::from_u16(resp.status).unwrap_or(StatusCode::OK);
     let mut builder = Response::builder().status(status);
     for (name, value) in &resp.headers {
@@ -123,15 +145,29 @@ fn build_response(resp: HttpServerResponse) -> Response<Full<Bytes>> {
         }
         builder = builder.header(name, value);
     }
+    let body: OutBody = match resp.body {
+        HttpServerBody::Empty => buffered(Bytes::new()),
+        HttpServerBody::Bytes(b) => buffered(Bytes::from(b)),
+        HttpServerBody::Stream(s) => BodyExt::boxed_unsync(StreamBody::new(
+            s.map(|item| item.map(|chunk| Frame::data(Bytes::from(chunk)))),
+        )),
+    };
     builder
-        .body(Full::new(Bytes::from(resp.body)))
+        .body(body)
         .unwrap_or_else(|_| status_only(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
-fn status_only(status: StatusCode) -> Response<Full<Bytes>> {
+/// A fully-buffered [`OutBody`] (`Infallible` widened to the shared error type).
+fn buffered(bytes: Bytes) -> OutBody {
+    Full::new(bytes)
+        .map_err(|never: Infallible| match never {})
+        .boxed_unsync()
+}
+
+fn status_only(status: StatusCode) -> Response<OutBody> {
     Response::builder()
         .status(status)
-        .body(Full::new(Bytes::new()))
+        .body(buffered(Bytes::new()))
         .expect("status-only response is always valid")
 }
 
@@ -164,7 +200,7 @@ impl HttpServerProvider for SystemHttpServer {
                             let tx = tx.clone();
                             let authority = authority.clone();
                             async move {
-                                let server_req = to_server_request(req, &authority).await;
+                                let server_req = to_server_request(req, &authority);
                                 let (rtx, rrx) = oneshot::channel();
                                 if tx.send((server_req, rtx)).await.is_err() {
                                     // Server closed: the request channel is gone.

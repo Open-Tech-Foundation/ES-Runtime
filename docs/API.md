@@ -405,8 +405,13 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler receives a web
 `Request` and returns (or resolves to) a web `Response` — the same Fetch API
 objects `fetch` uses. A thrown error or a non-`Response` return becomes a `500`.
 `serve` requires `NetListen` (it binds a listening socket). All I/O is async.
-Request and response bodies are buffered (streaming bodies are a follow-up); TLS
-is not supported yet (terminate it at a proxy).
+Bodies **stream both directions**: the request body is a `ReadableStream`
+pulling chunks as they arrive (nothing is buffered unless the handler asks, e.g.
+`await request.text()`), and a `ReadableStream` response body is sent with
+chunked transfer-encoding as it is produced (bounded-channel backpressure) — so
+SSE-style responses and `new Response(request.body)` proxying work unbuffered.
+TLS is not supported yet (terminate it at a proxy, or use `runtime:net`
+`listen({ secureTransport: "on" })`).
 
 ```js
 import { serve } from "runtime:http";

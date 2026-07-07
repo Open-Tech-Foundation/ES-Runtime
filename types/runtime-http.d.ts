@@ -2,7 +2,10 @@ declare module "runtime:http" {
   /**
    * An HTTP request handler: called with a web `Request`, returns (or resolves
    * to) a web `Response`. A thrown error or a non-`Response` return becomes a
-   * `500`.
+   * `500`. Bodies stream: the request body is a `ReadableStream` pulling chunks
+   * as they arrive, and a `ReadableStream` response body is sent with chunked
+   * transfer-encoding as it is produced (`new Response(request.body)` proxies
+   * without buffering).
    */
   export type Handler = (request: Request) => Response | Promise<Response>;
 
