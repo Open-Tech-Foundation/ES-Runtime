@@ -2148,7 +2148,7 @@ mod tests {
             "const text = 'the quick brown fox jumps over the lazy dog. '.repeat(1500); \
              const bytes = new TextEncoder().encode(text); \
              const results = []; \
-             for (const format of ['gzip', 'deflate', 'deflate-raw']) { \
+             for (const format of ['brotli', 'gzip', 'deflate', 'deflate-raw']) { \
                const pipeline = new ReadableStream({ \
                  start(c) { \
                    for (let i = 0; i < bytes.length; i += 1024) c.enqueue(bytes.slice(i, i + 1024)); \
@@ -2169,28 +2169,40 @@ mod tests {
         );
         assert_eq!(
             out,
-            Value::String("gzip:true|deflate:true|deflate-raw:true".into())
+            Value::String("brotli:true|gzip:true|deflate:true|deflate-raw:true".into())
         );
     }
 
     #[test]
-    fn decompression_decodes_a_known_gzip_vector() {
+    fn decompression_decodes_known_gzip_and_brotli_vectors() {
         let _g = v8_guard();
         let mut rt = runtime();
-        // `printf 'hello world' | gzip -n | base64` — real-gzip interop.
+        // gzip: `printf 'hello world' | gzip -n | base64`; brotli: Node's
+        // `zlib.brotliCompressSync('hello world')` (Google's C encoder) —
+        // real-encoder interop for both.
         let out = eval_async(
             &mut rt,
-            "const b64 = 'H4sIAAAAAAAAA8tIzcnJVyjPL8pJAQCFEUoNCwAAAA=='; \
-             const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); \
-             const ds = new DecompressionStream('gzip'); \
-             const writer = ds.writable.getWriter(); \
-             writer.write(bytes); \
-             writer.close(); \
-             const parts = []; \
-             for await (const chunk of ds.readable) parts.push(...chunk); \
-             return new TextDecoder().decode(new Uint8Array(parts));",
+            "const vectors = [ \
+               ['gzip', 'H4sIAAAAAAAAA8tIzcnJVyjPL8pJAQCFEUoNCwAAAA=='], \
+               ['brotli', 'CwWAaGVsbG8gd29ybGQD'], \
+             ]; \
+             const results = []; \
+             for (const [format, b64] of vectors) { \
+               const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); \
+               const ds = new DecompressionStream(format); \
+               const writer = ds.writable.getWriter(); \
+               writer.write(bytes); \
+               writer.close(); \
+               const parts = []; \
+               for await (const chunk of ds.readable) parts.push(...chunk); \
+               results.push(format + ':' + new TextDecoder().decode(new Uint8Array(parts))); \
+             } \
+             return results.join('|');",
         );
-        assert_eq!(out, Value::String("hello world".into()));
+        assert_eq!(
+            out,
+            Value::String("gzip:hello world|brotli:hello world".into())
+        );
     }
 
     #[test]
@@ -2232,11 +2244,19 @@ mod tests {
                ds.readable.getReader().read().catch(() => {}); \
                try { await w.write(new Uint8Array([0x78, 0x9c])); await w.close(); } \
                catch (e) { log.push('truncated:' + e.name); } } \
+             { const ds = new DecompressionStream('brotli'); \
+               const w = ds.writable.getWriter(); \
+               ds.readable.getReader().read().catch(() => {}); \
+               try { await w.write(new Uint8Array([0x0b, 0x05])); await w.close(); } \
+               catch (e) { log.push('br-truncated:' + e.name); } } \
              return log.join('|');",
         );
         assert_eq!(
             out,
-            Value::String("corrupt-read:TypeError|corrupt:TypeError|truncated:TypeError".into())
+            Value::String(
+                "corrupt-read:TypeError|corrupt:TypeError|truncated:TypeError|br-truncated:TypeError"
+                    .into()
+            )
         );
     }
 

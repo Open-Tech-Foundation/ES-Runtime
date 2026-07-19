@@ -37,13 +37,18 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Added
 
 - **Compression Streams.** `CompressionStream` and `DecompressionStream`
-  (WinterTC Minimum Common API) ship as prelude globals for `gzip`, `deflate`
-  (zlib), and `deflate-raw`. Each stream is a `TransformStream` over a stateful
-  native flate2 context behind pure sync ops (no capability): chunks stream
+  (WinterTC Minimum Common API) ship as prelude globals for all four spec
+  format tokens: `brotli`, `gzip`, `deflate` (zlib), and `deflate-raw`. Each
+  stream is a `TransformStream` over a stateful native codec context — flate2,
+  plus the pure-Rust `brotli` crate (encode quality 5, the balanced streaming
+  default; window 22) — behind pure sync ops (no capability): chunks stream
   through with whatever output the codec produces, and errors follow the spec —
   corrupt input and trailing junk reject at write, a truncated stream rejects
   at close, all as `TypeError` (the zlib/raw decoders run on the low-level
-  `Decompress` state machine to catch truncation the write adapters miss).
+  `Decompress` state machine to catch truncation the write adapters miss;
+  brotli's adapters were verified to detect all three cases themselves).
+  Brotli output is verified against Node's Google-C decoder, gzip against
+  system gzip.
   Alongside this, the handwritten streams got two spec-correctness fixes:
   **`transformer.cancel`** now runs (once) on writable-abort / readable-cancel —
   Compression Streams use it to free the native context — and all

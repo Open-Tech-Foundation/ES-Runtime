@@ -4,12 +4,12 @@
 // returns whatever output the codec produced, `compression_finish` flushes the
 // tail (erroring on truncated input — the spec's flush-time check), and the
 // transformer's cancel hook frees the context on abort/cancel, where flush
-// never runs. Formats: "gzip", "deflate" (zlib-wrapped), "deflate-raw".
+// never runs. Formats: "brotli", "gzip", "deflate" (zlib), "deflate-raw".
 (() => {
   "use strict";
 
   const ops = globalThis.__ops;
-  const FORMATS = ["deflate", "deflate-raw", "gzip"];
+  const FORMATS = ["brotli", "deflate", "deflate-raw", "gzip"];
 
   function toBytes(chunk, iface) {
     if (ArrayBuffer.isView(chunk)) {

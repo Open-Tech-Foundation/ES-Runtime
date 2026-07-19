@@ -2,9 +2,9 @@
 //! Streams, part of the WinterTC Minimum Common API).
 //!
 //! Pure computation (no capability), but stateful: each JS stream owns a native
-//! flate2 context that lives across chunks in a registry here, keyed by id.
-//! `compression_new` allocates one for a format (`gzip` / `deflate` /
-//! `deflate-raw`) and direction, `compression_write` feeds it a chunk and
+//! codec context (flate2 or brotli) that lives across chunks in a registry
+//! here, keyed by id. `compression_new` allocates one for a format (`brotli` /
+//! `gzip` / `deflate` / `deflate-raw`) and direction, `compression_write` feeds it a chunk and
 //! returns whatever output the codec produced so far, `compression_finish`
 //! flushes the tail and frees it, and `compression_free` discards it early (the
 //! transformer's cancel hook — abort/cancel paths where flush never runs).
@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 
+use brotli::{CompressorWriter, DecompressorWriter};
 use es_runtime_common::ExceptionClass;
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use flate2::write::{DeflateEncoder, GzDecoder, GzEncoder, ZlibEncoder};
@@ -96,14 +97,18 @@ impl Inflate {
     }
 }
 
-/// One live codec: encoders are flate2 write-adapters over the output
-/// accumulator; zlib / raw decode is the truncation-aware [`Inflate`].
+/// One live codec: encoders are write-adapters over the output accumulator;
+/// zlib / raw decode is the truncation-aware [`Inflate`]. The brotli adapters
+/// (verified empirically) already error on corrupt input and trailing junk at
+/// write and on truncation at finish, so they need no low-level counterpart.
 enum Codec {
     GzipEncode(GzEncoder<Vec<u8>>),
     GzipDecode(GzDecoder<Vec<u8>>),
     ZlibEncode(ZlibEncoder<Vec<u8>>),
     RawEncode(DeflateEncoder<Vec<u8>>),
     Inflate(Inflate),
+    BrotliEncode(Box<CompressorWriter<Vec<u8>>>),
+    BrotliDecode(Box<DecompressorWriter<Vec<u8>>>),
 }
 
 impl Codec {
@@ -116,6 +121,15 @@ impl Codec {
             ("deflate", true) => Codec::Inflate(Inflate::new(true)),
             ("deflate-raw", false) => Codec::RawEncode(DeflateEncoder::new(Vec::new(), level)),
             ("deflate-raw", true) => Codec::Inflate(Inflate::new(false)),
+            // Quality 5 is the balanced streaming default (the reference
+            // encoder's 11 is far too slow for an on-the-fly API); any quality
+            // decodes everywhere. Window 22 = the format's standard 4 MiB.
+            ("brotli", false) => {
+                Codec::BrotliEncode(Box::new(CompressorWriter::new(Vec::new(), 4096, 5, 22)))
+            }
+            ("brotli", true) => {
+                Codec::BrotliDecode(Box::new(DecompressorWriter::new(Vec::new(), 4096)))
+            }
             _ => return None,
         })
     }
@@ -140,6 +154,14 @@ impl Codec {
                 Ok(std::mem::take(e.get_mut()))
             }
             Codec::Inflate(d) => d.write(chunk),
+            Codec::BrotliEncode(e) => {
+                e.write_all(chunk)?;
+                Ok(std::mem::take(e.get_mut()))
+            }
+            Codec::BrotliDecode(d) => {
+                d.write_all(chunk)?;
+                Ok(std::mem::take(d.get_mut()))
+            }
         }
     }
 
@@ -152,6 +174,10 @@ impl Codec {
             Codec::ZlibEncode(e) => e.finish(),
             Codec::RawEncode(e) => e.finish(),
             Codec::Inflate(d) => d.finish(),
+            Codec::BrotliEncode(e) => Ok(e.into_inner()),
+            Codec::BrotliDecode(d) => d
+                .into_inner()
+                .map_err(|_| Inflate::invalid("the compressed data was truncated")),
         }
     }
 }
