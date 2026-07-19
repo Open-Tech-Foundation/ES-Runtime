@@ -131,11 +131,14 @@ walkdir = "2.5.0"
 # Self-update for `esrun upgrade`: finds the latest GitHub release for the
 # target, downloads + extracts it, and replaces the running binary in place
 # (rustls TLS, no OpenSSL). Used only by runtime-cli.
-self_update = { version = "0.42.0", default-features = false, features = [
+self_update = { version = "1.0.0-rc.6", default-features = false, features = [
+    "github",
+    "reqwest",
     "rustls",
+    "progress-bar",
     "archive-tar",
     "archive-zip",
-    "compression-flate2",
+    "compression-tar-gz",
     "compression-zip-deflate",
 ] }
 

@@ -33,7 +33,7 @@ p521.workspace = true
 rsa.workspace = true
 sha1_rsa.workspace = true
 base64 = "0.22"
-quick-xml = { version = "0.40.1", features = ["serialize"] }
+quick-xml = { version = "0.41.0", features = ["serialize"] }
 serde_json.workspace = true
 serde_yaml = "0.9.34"
 toml = "0.8"

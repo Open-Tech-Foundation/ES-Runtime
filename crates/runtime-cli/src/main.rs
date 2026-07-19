@@ -105,12 +105,12 @@ fn upgrade() -> Result<String, Box<dyn std::error::Error>> {
         // triple; the archive extension disambiguates it from any same-target
         // sidecar (the release ships a single `checksums.txt`, but this keeps
         // selection deterministic regardless of asset order).
-        .identifier(if cfg!(windows) { ".zip" } else { ".tar.gz" })
+        .asset_identifier(if cfg!(windows) { ".zip" } else { ".tar.gz" })
         .current_version(env!("CARGO_PKG_VERSION"))
         .show_download_progress(true)
         .build()?
         .update()?;
-    Ok(if status.updated() {
+    Ok(if status.is_updated() {
         format!("Upgraded esrun to {}.", status.version())
     } else {
         format!("esrun is already up to date ({}).", status.version())

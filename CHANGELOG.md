@@ -8,6 +8,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Security
+
+- **Dependency updates clear all outstanding RUSTSEC advisories.**
+  `quick-xml` (the `runtime:serialization` XML backend) is bumped to 0.41,
+  fixing two high-severity guest-reachable DoS advisories — quadratic
+  duplicate-attribute checking (RUSTSEC-2026-0194) and unbounded
+  namespace-declaration allocation (RUSTSEC-2026-0195). `self_update` (the
+  `esrun upgrade` backend) moves to 1.0.0-rc.6, dropping its vulnerable
+  quick-xml 0.37 tree (renamed features/methods adopted; behavior unchanged).
+  A workspace-wide `cargo update` clears the remaining lockfile advisories
+  (`quinn-proto` RUSTSEC-2026-0185, `anyhow` RUSTSEC-2026-0190, yanked
+  `spin` 0.9.8). `cargo deny check` and `cargo audit` are green again; the
+  only remaining allowance is the documented `rsa` Marvin ignore.
+
 ### Testing / CI
 
 - **Cross-platform test CI.** The behavioral test job now runs on a
