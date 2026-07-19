@@ -36,6 +36,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Stable guest-facing error codes** (SPEC §6 Phase 13 — now complete).
+  Host-side failures carry a stable string `code` on the thrown JS exception
+  (`e.code === "ERR_NOT_FOUND"`), the contract guest code branches on;
+  messages stay human prose. The documented set (API.md §Error codes) covers
+  capability denials (`ERR_CAPABILITY_DENIED`), missing providers
+  (`ERR_PROVIDER_UNAVAILABLE`), filesystem io kinds (`ERR_NOT_FOUND`,
+  `ERR_ALREADY_EXISTS`, `ERR_PERMISSION_DENIED`, …), the root jail
+  (`ERR_JAIL_ESCAPE`), and networking (`ERR_CONNECTION_REFUSED`,
+  `ERR_TIMED_OUT`, `ERR_DNS`, `ERR_TLS`, …). Plumbing: a new
+  `ErrorCode` enum in `common`, `IntoException::exception_code`, an
+  `OpError::with_code` builder, and a **new `ProviderError::Coded` variant**
+  (+ `ProviderError::from_io`) that default providers use to classify io/TLS/
+  DNS failures (**breaking** only for embedders exhaustively matching
+  `ProviderError`; it is `#[non_exhaustive]`). The engine defines `code` as an
+  own data property so it also lands on `DOMException`s (shadowing the legacy
+  numeric getter), and `runtime:net`'s `SocketError:` rewrap preserves it. An
+  error with no stable classification simply carries no `code`.
+
 - **Compression Streams.** `CompressionStream` and `DecompressionStream`
   (WinterTC Minimum Common API) ship as prelude globals for all four spec
   format tokens: `brotli`, `gzip`, `deflate` (zlib), and `deflate-raw`. Each

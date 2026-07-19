@@ -122,6 +122,25 @@ pub(crate) fn build_exception<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     err: &dyn IntoException,
 ) -> v8::Local<'s, v8::Value> {
+    let exception = build_exception_inner(scope, err);
+    // Stable guest-facing code (SPEC §6 Phase 13): surface as a plain `code`
+    // string property on the exception, whatever its class. Defined as an own
+    // data property so it shadows DOMException's legacy numeric `code` getter
+    // (a prototype accessor with no setter, which would swallow a plain set).
+    if let Some(code) = err.exception_code()
+        && let Ok(obj) = v8::Local::<v8::Object>::try_from(exception)
+        && let Some(key) = v8::String::new(scope, "code")
+        && let Some(val) = v8::String::new(scope, code.as_str())
+    {
+        obj.create_data_property(scope, key.into(), val.into());
+    }
+    exception
+}
+
+fn build_exception_inner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    err: &dyn IntoException,
+) -> v8::Local<'s, v8::Value> {
     let class = err.exception_class();
 
     // Fallback/dynamic constructor lookup for classes V8 doesn't provide natively.

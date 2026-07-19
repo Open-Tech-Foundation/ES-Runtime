@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, ExceptionClass};
+use es_runtime_common::{Capability, ErrorCode, ExceptionClass};
 use es_runtime_engine::{Engine, InterruptHandle, OpDecl, OpError, Value};
 use es_runtime_providers::Process;
 
@@ -97,5 +97,6 @@ fn require(process: &Option<Arc<dyn Process>>) -> std::result::Result<Arc<dyn Pr
             ExceptionClass::Error,
             "process info is unavailable (no Process provider configured)",
         )
+        .with_code(ErrorCode::ProviderUnavailable)
     })
 }

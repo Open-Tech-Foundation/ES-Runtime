@@ -2280,6 +2280,33 @@ mod tests {
     }
 
     #[test]
+    fn error_codes_capability_denied_then_provider_unavailable() {
+        let _g = v8_guard();
+        // Stable guest-facing codes (SPEC §6 Phase 13). The capability gate
+        // runs before the handler, so with nothing granted the denial code
+        // surfaces; with FileRead granted, the missing-provider code does.
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "try { await __ops.fs_read('/x'); return 'no-throw'; } \
+             catch (e) { return e.code + ':' + e.name; }",
+        );
+        assert_eq!(
+            out,
+            Value::String("ERR_CAPABILITY_DENIED:NotAllowedError".into())
+        );
+
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
+        let out = eval_async(
+            &mut rt,
+            "try { await __ops.fs_read('/x'); return 'no-throw'; } \
+             catch (e) { return e.code + ':' + e.name; }",
+        );
+        assert_eq!(out, Value::String("ERR_PROVIDER_UNAVAILABLE:Error".into()));
+    }
+
+    #[test]
     fn get_random_values_fills_in_place() {
         let _g = v8_guard();
         let mut rt = runtime();

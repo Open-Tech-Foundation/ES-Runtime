@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use es_runtime_common::{
-    Capability, CapabilitySet, Error as CommonError, ExceptionClass, IntoException,
+    Capability, CapabilitySet, Error as CommonError, ErrorCode, ExceptionClass, IntoException,
 };
 
 use crate::convert::{build_exception, marshal, throw, value_to_js};
@@ -37,11 +37,14 @@ pub type OpResult = std::result::Result<Value, OpError>;
 /// A pending async op: a future resolving to an [`OpResult`], polled on tick.
 pub type AsyncOp = Pin<Box<dyn Future<Output = OpResult>>>;
 
-/// An error a host op raises, carrying the JS exception class it surfaces as.
+/// An error a host op raises, carrying the JS exception class it surfaces as
+/// and, when one exists, the stable guest-facing [`ErrorCode`] set as the JS
+/// exception's `code` property (SPEC §6 Phase 13).
 #[derive(Debug, Clone)]
 pub struct OpError {
     class: ExceptionClass,
     message: String,
+    code: Option<ErrorCode>,
 }
 
 impl OpError {
@@ -50,7 +53,23 @@ impl OpError {
         OpError {
             class,
             message: message.into(),
+            code: None,
         }
+    }
+
+    /// Attaches a stable guest-facing code (builder style).
+    #[must_use]
+    pub fn with_code(mut self, code: ErrorCode) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    /// Attaches a code when one is present (builder style) — the common shape
+    /// when forwarding a [`ProviderError`]'s optional classification.
+    #[must_use]
+    pub fn with_code_opt(mut self, code: Option<ErrorCode>) -> Self {
+        self.code = code;
+        self
     }
 
     /// A `TypeError` — the usual class for a bad argument from JS.
@@ -75,6 +94,10 @@ impl std::error::Error for OpError {}
 impl IntoException for OpError {
     fn exception_class(&self) -> ExceptionClass {
         self.class
+    }
+
+    fn exception_code(&self) -> Option<ErrorCode> {
+        self.code
     }
 }
 

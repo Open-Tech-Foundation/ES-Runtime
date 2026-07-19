@@ -21,6 +21,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:http`](#runtimehttp)
 - [`runtime:websocket`](#runtimewebsocket)
 - [`runtime:serialization`](#runtimeserialization)
+- [Error codes](#error-codes)
 
 ---
 
@@ -601,6 +602,49 @@ In the proto3-JSON form, 64-bit integers and `bytes` become strings (base64 for 
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md
+
+## Error codes
+
+Host-side failures carry a **stable string `code`** on the thrown exception —
+the contract guest code branches on. Messages are human prose and may be
+reworded at any time; codes never change meaning. An error with no stable
+classification simply has no `code`, so test `e.code === "ERR_X"`, never
+exhaustively.
+
+```js
+try {
+  await file("config.json").text();
+} catch (e) {
+  if (e.code === "ERR_NOT_FOUND") return defaults;
+  throw e;
+}
+```
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_CAPABILITY_DENIED` | A required capability was not granted (deny-by-default). |
+| `ERR_PROVIDER_UNAVAILABLE` | The backing provider for this API is not installed. |
+| `ERR_NOT_FOUND` | The path does not exist. |
+| `ERR_ALREADY_EXISTS` | The target already exists. |
+| `ERR_PERMISSION_DENIED` | The OS denied access (distinct from a capability denial). |
+| `ERR_IS_DIRECTORY` / `ERR_NOT_DIRECTORY` | A file op hit a directory / a directory op hit a non-directory. |
+| `ERR_DIRECTORY_NOT_EMPTY` | The directory is not empty. |
+| `ERR_JAIL_ESCAPE` | The real (canonicalized) path escapes the filesystem root jail. |
+| `ERR_CONNECTION_REFUSED` | The peer refused the connection. |
+| `ERR_CONNECTION_RESET` | The connection was reset/aborted by the peer. |
+| `ERR_TIMED_OUT` | The operation timed out. |
+| `ERR_ADDRESS_IN_USE` | The local address is already in use. |
+| `ERR_UNREACHABLE` | The host or network is unreachable. |
+| `ERR_DNS` | Name resolution failed. |
+| `ERR_TLS` | TLS handshake or certificate verification failed. |
+| `ERR_CANCELLED` | The operation was cancelled. |
+| `ERR_ENTROPY` | The entropy source failed. |
+| `ERR_IO` | An I/O failure with no finer classification. |
+
+The code rides on whatever exception class the failure surfaces as (`Error`,
+`TypeError`, `DOMException`, the `SocketError:`-prefixed `TypeError` of
+`runtime:net`, …) as an own `code` property. The set may grow in a minor
+release; existing codes are stable.
 
 ## Error Diagnostics
 

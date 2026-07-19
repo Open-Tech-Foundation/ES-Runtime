@@ -19,7 +19,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use es_runtime_common::{ExceptionClass, IntoException};
+use es_runtime_common::{ErrorCode, ExceptionClass, IntoException};
 
 /// A heap-allocated, `Send` future returned by async provider methods.
 ///
@@ -46,6 +46,41 @@ pub enum ProviderError {
     /// Any other provider failure.
     #[error("provider error: {0}")]
     Other(String),
+
+    /// A failure carrying a stable guest-facing [`ErrorCode`] (SPEC §6 Phase
+    /// 13): the message stays human prose, the code is what guest JS branches
+    /// on (`e.code === "ERR_NOT_FOUND"`). Providers should prefer this (or
+    /// [`ProviderError::from_io`]) over [`Other`](ProviderError::Other) when a
+    /// stable classification exists.
+    #[error("{message}")]
+    Coded {
+        /// The stable classification surfaced to JS as the exception's `code`.
+        code: ErrorCode,
+        /// The human-readable message (free to change between releases).
+        message: String,
+    },
+}
+
+impl ProviderError {
+    /// A [`Coded`](ProviderError::Coded) error classified from an
+    /// [`std::io::Error`]'s kind, with `context` (typically the path or
+    /// address) prefixed to the message.
+    pub fn from_io(context: impl std::fmt::Display, e: &std::io::Error) -> ProviderError {
+        ProviderError::Coded {
+            code: ErrorCode::from_io_kind(e.kind()),
+            message: format!("{context}: {e}"),
+        }
+    }
+
+    /// The stable guest-facing code, if this error carries one.
+    pub fn code(&self) -> Option<ErrorCode> {
+        match self {
+            ProviderError::Entropy(_) => Some(ErrorCode::Entropy),
+            ProviderError::Cancelled => Some(ErrorCode::Cancelled),
+            ProviderError::Other(_) => None,
+            ProviderError::Coded { code, .. } => Some(*code),
+        }
+    }
 }
 
 impl IntoException for ProviderError {
@@ -56,8 +91,12 @@ impl IntoException for ProviderError {
             // OperationError, a DOMException — added with the prelude).
             ProviderError::Entropy(_) => ExceptionClass::Error,
             ProviderError::Cancelled => ExceptionClass::NOT_ALLOWED,
-            ProviderError::Other(_) => ExceptionClass::Error,
+            ProviderError::Other(_) | ProviderError::Coded { .. } => ExceptionClass::Error,
         }
+    }
+
+    fn exception_code(&self) -> Option<ErrorCode> {
+        self.code()
     }
 }
 

@@ -22,4 +22,4 @@ pub mod telemetry;
 
 pub use capability::{Capability, CapabilitySet};
 pub use config::Limits;
-pub use error::{Error, ExceptionClass, IntoException, Result};
+pub use error::{Error, ErrorCode, ExceptionClass, IntoException, Result};

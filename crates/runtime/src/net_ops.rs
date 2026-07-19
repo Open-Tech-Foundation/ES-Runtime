@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, ExceptionClass, IntoException};
+use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{ConnectOptions, ListenOptions, NetProvider, ProviderError, SocketInfo};
 
@@ -198,11 +198,12 @@ fn require(
             ExceptionClass::Error,
             "networking is unavailable (no NetProvider configured)",
         )
+        .with_code(ErrorCode::ProviderUnavailable)
     })
 }
 
 fn map_err(e: ProviderError) -> OpError {
-    OpError::new(e.exception_class(), e.exception_message())
+    OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
 }
 
 fn socket_value(id: u64, info: &SocketInfo) -> Value {

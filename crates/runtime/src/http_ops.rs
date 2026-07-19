@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, ExceptionClass, IntoException};
+use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
     ByteStream, HttpServerBody, HttpServerProvider, HttpServerResponse, ProviderError, SocketInfo,
@@ -141,7 +141,8 @@ pub(crate) fn install(
                     bodies.borrow_mut().insert(rid, stream);
                     Ok(Value::Bytes(chunk))
                 }
-                Some(Err(e)) => Err(OpError::new(e.exception_class(), e.exception_message())),
+                Some(Err(e)) => Err(OpError::new(e.exception_class(), e.exception_message())
+                    .with_code_opt(e.code())),
                 None => Ok(Value::Null), // end of stream; not reinserted
             }
         })
@@ -328,11 +329,12 @@ fn require(
             ExceptionClass::Error,
             "HTTP serving is unavailable (no HttpServerProvider configured)",
         )
+        .with_code(ErrorCode::ProviderUnavailable)
     })
 }
 
 fn map_err(e: ProviderError) -> OpError {
-    OpError::new(e.exception_class(), e.exception_message())
+    OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
 }
 
 fn server_value(id: u64, info: &SocketInfo) -> Value {

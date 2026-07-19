@@ -11,15 +11,18 @@ const EMPTY = new Uint8Array(0);
 // WinterTC SocketError: socket failures surface as a TypeError whose message is
 // prefixed "SocketError: ". `socketError` builds one; `socketOp` rewraps the
 // rejections coming back from the host ops so connection/TLS/I/O failures conform
-// too — without double-prefixing an error that already carries the marker.
-function socketError(message) {
-  return new TypeError(`SocketError: ${message}`);
+// too — without double-prefixing an error that already carries the marker. The
+// host error's stable `code` (SPEC §6 Phase 13) survives the rewrap.
+function socketError(message, code) {
+  const err = new TypeError(`SocketError: ${message}`);
+  if (code !== undefined) err.code = code;
+  return err;
 }
 
 function socketOp(promise) {
   return promise.catch((e) => {
     if (e instanceof TypeError && e.message.startsWith("SocketError: ")) throw e;
-    throw socketError(e && e.message != null ? e.message : String(e));
+    throw socketError(e && e.message != null ? e.message : String(e), e?.code);
   });
 }
 

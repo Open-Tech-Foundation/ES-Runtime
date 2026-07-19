@@ -9,6 +9,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
     BoxFuture, DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError,
 };
@@ -78,11 +79,14 @@ impl SystemFileSystem {
 }
 
 fn escape(p: &Path, root: &Path) -> ProviderError {
-    ProviderError::Other(format!(
-        "path {} escapes the filesystem root jail {} (access outside the root is not permitted)",
-        p.display(),
-        root.display()
-    ))
+    ProviderError::Coded {
+        code: ErrorCode::JailEscape,
+        message: format!(
+            "path {} escapes the filesystem root jail {} (access outside the root is not permitted)",
+            p.display(),
+            root.display()
+        ),
+    }
 }
 
 fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError> {
@@ -120,7 +124,7 @@ fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError> {
 }
 
 fn other(p: &str, e: std::io::Error) -> ProviderError {
-    ProviderError::Other(format!("{p}: {e}"))
+    ProviderError::from_io(p, &e)
 }
 
 fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
@@ -379,13 +383,40 @@ mod tests {
         // Now "link" becomes a symlink pointing outside the jail.
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
 
-        // A second resolution must re-canonicalize and reject the escape.
+        // A second resolution must re-canonicalize and reject the escape,
+        // carrying the stable jail-escape code (SPEC §6 Phase 13).
         let second = fs.jailed("link");
         assert!(
-            second.is_err(),
-            "symlink escape must be re-checked, got {second:?}"
+            matches!(
+                second,
+                Err(ProviderError::Coded {
+                    code: ErrorCode::JailEscape,
+                    ..
+                })
+            ),
+            "symlink escape must be re-checked with ERR_JAIL_ESCAPE, got {second:?}"
         );
 
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // Provider io failures carry their stable classification (SPEC §6 Phase 13).
+    #[tokio::test]
+    async fn missing_file_read_carries_the_not_found_code() {
+        let tmp = std::env::temp_dir().join(format!("esrun-fscode-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let fs = SystemFileSystem::new(&tmp, &tmp);
+        let err = fs.read("does-not-exist.txt".into()).await.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ProviderError::Coded {
+                    code: ErrorCode::NotFound,
+                    ..
+                }
+            ),
+            "expected ERR_NOT_FOUND, got {err:?}"
+        );
         std::fs::remove_dir_all(&tmp).ok();
     }
 }

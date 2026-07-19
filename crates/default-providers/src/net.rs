@@ -2,6 +2,7 @@
 
 use std::sync::OnceLock;
 
+use es_runtime_common::ErrorCode;
 use futures_util::StreamExt;
 
 use es_runtime_providers::{
@@ -41,6 +42,53 @@ impl ReqwestTransport {
     }
 }
 
+/// Classifies a reqwest failure with a stable guest-facing code where one can
+/// be derived (SPEC §6 Phase 13): a source-chain io error carries its kind; a
+/// reqwest timeout maps to `ERR_TIMED_OUT`; TLS/certificate failures to
+/// `ERR_TLS`; name-resolution failures to `ERR_DNS`. Anything else stays an
+/// uncoded provider error.
+fn classify_reqwest(e: reqwest::Error) -> ProviderError {
+    let message = format!("request failed: {e}");
+    if e.is_timeout() {
+        return ProviderError::Coded {
+            code: ErrorCode::TimedOut,
+            message,
+        };
+    }
+    // Walk the source chain for the underlying io error / failure text.
+    let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
+    let mut chain_text = String::new();
+    while let Some(err) = source {
+        if let Some(io) = err.downcast_ref::<std::io::Error>()
+            && io.kind() != std::io::ErrorKind::Other
+        {
+            return ProviderError::Coded {
+                code: ErrorCode::from_io_kind(io.kind()),
+                message,
+            };
+        }
+        chain_text.push_str(&err.to_string());
+        chain_text.push(' ');
+        source = std::error::Error::source(err);
+    }
+    let lower = chain_text.to_lowercase();
+    let code = if lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") {
+        Some(ErrorCode::Tls)
+    } else if lower.contains("lookup") || lower.contains("dns") {
+        Some(ErrorCode::Dns)
+    } else if lower.contains("refused") {
+        Some(ErrorCode::ConnectionRefused)
+    } else if lower.contains("reset") || lower.contains("broken pipe") {
+        Some(ErrorCode::ConnectionReset)
+    } else {
+        None
+    };
+    match code {
+        Some(code) => ProviderError::Coded { code, message },
+        None => ProviderError::Other(message),
+    }
+}
+
 impl NetTransport for ReqwestTransport {
     fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
         let client = self.client();
@@ -66,10 +114,7 @@ impl NetTransport for ReqwestTransport {
                 }
             }
 
-            let response = builder
-                .send()
-                .await
-                .map_err(|e| ProviderError::Other(format!("request failed: {e}")))?;
+            let response = builder.send().await.map_err(classify_reqwest)?;
 
             let status = response.status().as_u16();
             let status_text = response

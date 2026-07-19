@@ -87,10 +87,10 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                 // the await, so the receiver is owned by the request.
                 let request = parse_request(&args, &req_receivers);
                 Box::pin(async move {
-                    let response = net
-                        .fetch(request)
-                        .await
-                        .map_err(|e| OpError::new(e.exception_class(), e.exception_message()))?;
+                    let response = net.fetch(request).await.map_err(|e| {
+                        OpError::new(e.exception_class(), e.exception_message())
+                            .with_code_opt(e.code())
+                    })?;
                     let id = resp_id_gen.get();
                     resp_id_gen.set(id + 1);
                     bodies.borrow_mut().insert(id, response.body);
@@ -142,7 +142,8 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                         bodies.borrow_mut().insert(id, stream);
                         Ok(Value::Bytes(chunk))
                     }
-                    Some(Err(e)) => Err(OpError::new(e.exception_class(), e.exception_message())),
+                    Some(Err(e)) => Err(OpError::new(e.exception_class(), e.exception_message())
+                        .with_code_opt(e.code())),
                     None => Ok(Value::Null), // end of stream; not reinserted
                 }
             })

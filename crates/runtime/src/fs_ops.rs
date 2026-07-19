@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, ExceptionClass, IntoException};
+use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError};
 
@@ -192,11 +192,12 @@ fn require(fs: &Option<Arc<dyn FileSystem>>) -> std::result::Result<Arc<dyn File
             ExceptionClass::Error,
             "filesystem is unavailable (no FileSystem provider configured)",
         )
+        .with_code(ErrorCode::ProviderUnavailable)
     })
 }
 
 fn map_err(e: ProviderError) -> OpError {
-    OpError::new(e.exception_class(), e.exception_message())
+    OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
 }
 
 fn stat_value(s: &FileStat) -> Value {

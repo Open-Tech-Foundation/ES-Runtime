@@ -75,6 +75,104 @@ impl ExceptionClass {
     }
 }
 
+/// A stable, guest-facing error code (SPEC §6 Phase 13).
+///
+/// Exception **messages** are human prose and may be reworded at any time; the
+/// **code** is the contract guest code may branch on. It surfaces to JS as a
+/// `code` string property on the thrown exception (e.g. `"ERR_NOT_FOUND"`).
+/// The set may grow, and an error without a stable classification simply
+/// carries no `code` — so guests test `e.code === "ERR_X"`, never exhaustively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ErrorCode {
+    /// A required capability was not granted (deny-by-default, D7).
+    CapabilityDenied,
+    /// The backing provider for this API is not installed on the runtime.
+    ProviderUnavailable,
+    /// The operation was cancelled before completing.
+    Cancelled,
+    /// The entropy source failed to produce randomness.
+    Entropy,
+    /// A path does not exist.
+    NotFound,
+    /// The target already exists.
+    AlreadyExists,
+    /// The OS denied access (distinct from a runtime capability denial).
+    PermissionDenied,
+    /// A file operation hit a directory.
+    IsDirectory,
+    /// A directory operation hit a non-directory.
+    NotDirectory,
+    /// The directory is not empty.
+    DirectoryNotEmpty,
+    /// A real (canonicalized) path escapes the filesystem root jail (D25).
+    JailEscape,
+    /// The peer refused the connection.
+    ConnectionRefused,
+    /// The connection was reset or aborted by the peer.
+    ConnectionReset,
+    /// The operation timed out.
+    TimedOut,
+    /// The local address is already in use.
+    AddressInUse,
+    /// The host or network is unreachable.
+    Unreachable,
+    /// Name resolution failed.
+    Dns,
+    /// TLS handshake or certificate verification failed.
+    Tls,
+    /// An I/O failure with no finer stable classification.
+    Io,
+}
+
+impl ErrorCode {
+    /// The stable string form surfaced to JS as the exception's `code`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ErrorCode::CapabilityDenied => "ERR_CAPABILITY_DENIED",
+            ErrorCode::ProviderUnavailable => "ERR_PROVIDER_UNAVAILABLE",
+            ErrorCode::Cancelled => "ERR_CANCELLED",
+            ErrorCode::Entropy => "ERR_ENTROPY",
+            ErrorCode::NotFound => "ERR_NOT_FOUND",
+            ErrorCode::AlreadyExists => "ERR_ALREADY_EXISTS",
+            ErrorCode::PermissionDenied => "ERR_PERMISSION_DENIED",
+            ErrorCode::IsDirectory => "ERR_IS_DIRECTORY",
+            ErrorCode::NotDirectory => "ERR_NOT_DIRECTORY",
+            ErrorCode::DirectoryNotEmpty => "ERR_DIRECTORY_NOT_EMPTY",
+            ErrorCode::JailEscape => "ERR_JAIL_ESCAPE",
+            ErrorCode::ConnectionRefused => "ERR_CONNECTION_REFUSED",
+            ErrorCode::ConnectionReset => "ERR_CONNECTION_RESET",
+            ErrorCode::TimedOut => "ERR_TIMED_OUT",
+            ErrorCode::AddressInUse => "ERR_ADDRESS_IN_USE",
+            ErrorCode::Unreachable => "ERR_UNREACHABLE",
+            ErrorCode::Dns => "ERR_DNS",
+            ErrorCode::Tls => "ERR_TLS",
+            ErrorCode::Io => "ERR_IO",
+        }
+    }
+
+    /// The stable classification of an [`std::io::ErrorKind`], if it has one.
+    /// Unstable/unclassified kinds map to the generic [`ErrorCode::Io`].
+    pub fn from_io_kind(kind: std::io::ErrorKind) -> ErrorCode {
+        use std::io::ErrorKind as K;
+        match kind {
+            K::NotFound => ErrorCode::NotFound,
+            K::AlreadyExists => ErrorCode::AlreadyExists,
+            K::PermissionDenied => ErrorCode::PermissionDenied,
+            K::IsADirectory => ErrorCode::IsDirectory,
+            K::NotADirectory => ErrorCode::NotDirectory,
+            K::DirectoryNotEmpty => ErrorCode::DirectoryNotEmpty,
+            K::ConnectionRefused => ErrorCode::ConnectionRefused,
+            K::ConnectionReset | K::ConnectionAborted | K::BrokenPipe => ErrorCode::ConnectionReset,
+            K::TimedOut => ErrorCode::TimedOut,
+            K::AddrInUse => ErrorCode::AddressInUse,
+            K::HostUnreachable | K::NetworkUnreachable | K::NetworkDown => ErrorCode::Unreachable,
+            K::Interrupted => ErrorCode::Cancelled,
+            _ => ErrorCode::Io,
+        }
+    }
+}
+
 /// Conversion of a layer error into the JS exception it should surface as.
 ///
 /// Implemented by every layer's error enum so the engine boundary has a single
@@ -88,6 +186,12 @@ pub trait IntoException: std::fmt::Display {
     /// The text for the JS exception's `.message`. Defaults to `Display`.
     fn exception_message(&self) -> String {
         self.to_string()
+    }
+
+    /// The stable guest-facing `code` set on the JS exception, if this error
+    /// has a stable classification (SPEC §6 Phase 13). Defaults to none.
+    fn exception_code(&self) -> Option<ErrorCode> {
+        None
     }
 }
 
@@ -116,6 +220,13 @@ impl IntoException for Error {
             Error::Config(_) => ExceptionClass::TypeError,
         }
     }
+
+    fn exception_code(&self) -> Option<ErrorCode> {
+        match self {
+            Error::CapabilityDenied(_) => Some(ErrorCode::CapabilityDenied),
+            Error::Config(_) => None,
+        }
+    }
 }
 
 /// `common`'s result alias. Crates above define their own over their own error.
@@ -140,6 +251,41 @@ mod tests {
             Some("NotAllowedError")
         );
         assert_eq!(ExceptionClass::TypeError.dom_exception_name(), None);
+    }
+
+    #[test]
+    fn error_codes_have_stable_err_prefixed_strings() {
+        assert_eq!(
+            ErrorCode::CapabilityDenied.as_str(),
+            "ERR_CAPABILITY_DENIED"
+        );
+        assert_eq!(ErrorCode::NotFound.as_str(), "ERR_NOT_FOUND");
+        assert_eq!(ErrorCode::JailEscape.as_str(), "ERR_JAIL_ESCAPE");
+        assert_eq!(ErrorCode::Tls.as_str(), "ERR_TLS");
+    }
+
+    #[test]
+    fn io_kinds_classify_with_a_generic_fallback() {
+        use std::io::ErrorKind as K;
+        assert_eq!(ErrorCode::from_io_kind(K::NotFound), ErrorCode::NotFound);
+        assert_eq!(
+            ErrorCode::from_io_kind(K::AddrInUse),
+            ErrorCode::AddressInUse
+        );
+        assert_eq!(
+            ErrorCode::from_io_kind(K::ConnectionAborted),
+            ErrorCode::ConnectionReset
+        );
+        assert_eq!(ErrorCode::from_io_kind(K::Other), ErrorCode::Io);
+    }
+
+    #[test]
+    fn capability_denial_carries_its_code() {
+        assert_eq!(
+            Error::CapabilityDenied(Capability::Net).exception_code(),
+            Some(ErrorCode::CapabilityDenied)
+        );
+        assert_eq!(Error::Config("x".into()).exception_code(), None);
     }
 
     #[test]

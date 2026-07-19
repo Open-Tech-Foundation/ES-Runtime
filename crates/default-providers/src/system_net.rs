@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
+use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
     BoxFuture, ConnectOptions, ListenOptions, NetProvider, ProviderError, SocketInfo,
 };
@@ -364,6 +365,27 @@ fn err(e: impl ToString) -> ProviderError {
     ProviderError::Other(e.to_string())
 }
 
+/// Classifies an io error with a stable guest-facing code (SPEC §6 Phase 13).
+/// Name-resolution failures surface as an uncategorized io error, so the
+/// message is sniffed to give guests the DNS classification.
+fn io_err(context: impl std::fmt::Display, e: io::Error) -> ProviderError {
+    if e.to_string().contains("lookup") {
+        return ProviderError::Coded {
+            code: ErrorCode::Dns,
+            message: format!("{context}: {e}"),
+        };
+    }
+    ProviderError::from_io(context, &e)
+}
+
+/// A TLS handshake / certificate failure with the stable `ERR_TLS` code.
+fn tls_err(e: impl ToString) -> ProviderError {
+    ProviderError::Coded {
+        code: ErrorCode::Tls,
+        message: e.to_string(),
+    }
+}
+
 fn info_of(local: Option<SocketAddr>, remote: Option<SocketAddr>) -> SocketInfo {
     SocketInfo {
         remote_address: remote.map(|a| a.ip().to_string()).unwrap_or_default(),
@@ -385,7 +407,7 @@ impl NetProvider for SystemNet {
         Box::pin(async move {
             let tcp = TcpStream::connect((host.as_str(), port))
                 .await
-                .map_err(err)?;
+                .map_err(|e| io_err(format!("connect {host}:{port}"), e))?;
             let _ = tcp.set_nodelay(true);
             // Addresses come off the raw TCP stream before the TLS handshake
             // consumes it.
@@ -400,7 +422,7 @@ impl NetProvider for SystemNet {
                     .tls_connector(&opts.alpn)?
                     .connect(server_name, tcp)
                     .await
-                    .map_err(err)?;
+                    .map_err(tls_err)?;
                 info.alpn = tls
                     .get_ref()
                     .1
@@ -497,7 +519,7 @@ impl NetProvider for SystemNet {
             };
             let listener = TcpListener::bind((host.as_str(), port))
                 .await
-                .map_err(err)?;
+                .map_err(|e| io_err(format!("listen {host}:{port}"), e))?;
             let local = listener.local_addr().ok();
             let (tx, rx) = mpsc::channel::<(Accepted, SocketAddr)>(8);
             // One task owns the sole `tx` so `close_listener` aborting it drops the
