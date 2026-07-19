@@ -33,15 +33,17 @@ REQUESTS="${REQUESTS:-500000}"
 # cargo/go install dirs even if they aren't on PATH). Sets TOOL + LOADER array.
 OHA="$(command -v oha 2>/dev/null || true)"; [ -z "$OHA" ] && [ -x "$HOME/.cargo/bin/oha" ] && OHA="$HOME/.cargo/bin/oha"
 BOMB="$(command -v bombardier 2>/dev/null || true)"; [ -z "$BOMB" ] && [ -x "$HOME/.local/bin/bombardier" ] && BOMB="$HOME/.local/bin/bombardier"
-if [ -n "$OHA" ]; then
-  TOOL="oha"
-elif [ -n "$BOMB" ]; then
-  TOOL="bombardier"
-else
-  echo "rps.sh needs a load generator. Install one:" >&2
-  echo "  cargo install oha     # preferred" >&2
-  echo "  go install github.com/codesenberg/bombardier@latest" >&2
-  exit 1
+if [ -z "${TOOL:-}" ]; then
+  if [ -n "$OHA" ]; then
+    TOOL="oha"
+  elif [ -n "$BOMB" ]; then
+    TOOL="bombardier"
+  else
+    echo "rps.sh needs a load generator. Install one:" >&2
+    echo "  cargo install oha     # preferred" >&2
+    echo "  go install github.com/codesenberg/bombardier@latest" >&2
+    exit 1
+  fi
 fi
 
 # Runtimes, in display order; skipped if not found.
