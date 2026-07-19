@@ -58,7 +58,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `crypto.subtle` (digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2), `CryptoKey`
 - **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `AbortController`, `AbortSignal`
-- **Network:** `WebSocket` (capability-gated — see below)
+- **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
 - **Performance:** `performance` (`now()`, `timeOrigin`)
 
@@ -102,8 +102,47 @@ ws.close(1000, "done"); // code 1000 or 3000–4999; reason ≤ 123 UTF-8 bytes
 | `protocol` / `extensions` / `url` | `string`                         | Negotiated subprotocol / extensions (`""` — none negotiated) / the resolved URL. |
 | `on{open,message,error,close}` | `EventHandler`                      | Also via `addEventListener`. `message` → `MessageEvent`; `close` → `CloseEvent`. |
 
-**Not yet:** the promise/stream-based `WebSocketStream`, and permessage-deflate
-(`extensions` is always `""`). See DECISIONS D29.
+**Not yet:** permessage-deflate (`extensions` is always `""`). See DECISIONS D29.
+
+## `WebSocketStream`
+
+The promise/stream-based interface from the same
+[WHATWG spec](https://websockets.spec.whatwg.org/#the-websocketstream-interface) —
+also a global, over the same connection seam and `Net` gate as `WebSocket`.
+Reads are pull-based (real receive backpressure) and each write resolves when
+the host has taken the frame (send backpressure).
+
+```js
+const wss = new WebSocketStream("wss://example.com/socket", {
+  protocols: ["chat"],   // optional
+  signal: controller.signal, // optional AbortSignal
+});
+const { readable, writable, protocol, extensions } = await wss.opened;
+
+const writer = writable.getWriter();
+await writer.write("hello");            // string ⇒ text frame
+await writer.write(new Uint8Array([1])); // BufferSource ⇒ binary frame
+
+for await (const chunk of readable) {
+  // chunk is a string (text) or Uint8Array (binary)
+}
+
+wss.close({ closeCode: 1000, reason: "done" });
+const { closeCode, reason } = await wss.closed;
+```
+
+| Member | Type | Notes |
+| --- | --- | --- |
+| `new WebSocketStream(url, options?)` | `(url, { protocols?, signal? }) => WebSocketStream` | Same URL/protocol validation as `WebSocket`. `Net`. |
+| `opened` | `Promise<{ readable, writable, protocol, extensions }>` | Rejects with `WebSocketError` if the connection fails. |
+| `closed` | `Promise<{ closeCode, reason }>` | Resolves on a clean close; rejects with `WebSocketError` on an abnormal one. |
+| `close(closeInfo?)` | `({ closeCode?, reason? }) => void` | Same code/reason validation as `WebSocket#close`. |
+| `WebSocketError` | `DOMException` subclass (global) | `name === "WebSocketError"`, plus `closeCode`/`reason`. |
+
+Receipt is pull-driven (the embedder's tick, no owned loop), so a
+server-initiated close is observed while reading — or, after a local
+`close()`/writable close, by an internal drain that keeps receiving until the
+peer's close frame settles `closed`.
 
 ---
 

@@ -2006,6 +2006,137 @@ mod tests {
     }
 
     #[test]
+    fn websocketstream_round_trip_with_backpressured_reads() {
+        use es_runtime_providers::WsIncoming;
+        let _g = v8_guard();
+        let ws = MockWs::new(
+            vec![
+                WsIncoming::Text("hello".into()),
+                WsIncoming::Binary(vec![1, 2, 3]),
+                WsIncoming::Close {
+                    code: 1000,
+                    reason: "bye".into(),
+                },
+            ],
+            "chat",
+        );
+        let mut rt = runtime_with_ws(Arc::new(ws));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const wss = new WebSocketStream('ws://echo.test/', { protocols: ['chat'] }); \
+             const { readable, writable, protocol } = await wss.opened; \
+             const log = ['open:' + protocol]; \
+             const writer = writable.getWriter(); \
+             await writer.write('ping'); \
+             await writer.write(new Uint8Array([9])); \
+             writer.releaseLock(); \
+             const reader = readable.getReader(); \
+             for (;;) { \
+               const { value, done } = await reader.read(); \
+               if (done) { log.push('done'); break; } \
+               log.push(typeof value === 'string' ? 'txt:' + value : 'bin:' + Array.from(value).join(',')); \
+             } \
+             const c = await wss.closed; \
+             log.push('close:' + c.closeCode + ':' + c.reason); \
+             return log.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String("open:chat|txt:hello|bin:1,2,3|done|close:1000:bye".into())
+        );
+    }
+
+    #[test]
+    fn websocketstream_local_close_settles_closed_via_drain() {
+        use es_runtime_providers::WsIncoming;
+        let _g = v8_guard();
+        // The guest closes without reading `readable`; the internal drain must
+        // still observe the peer's close frame and settle `closed`.
+        let ws = MockWs::new(
+            vec![WsIncoming::Close {
+                code: 1000,
+                reason: "ok".into(),
+            }],
+            "",
+        );
+        let mut rt = runtime_with_ws(Arc::new(ws));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const wss = new WebSocketStream('ws://x/'); \
+             await wss.opened; \
+             wss.close({ closeCode: 1000, reason: 'done' }); \
+             const c = await wss.closed; \
+             return c.closeCode + ':' + c.reason;",
+        );
+        assert_eq!(out, Value::String("1000:ok".into()));
+    }
+
+    #[test]
+    fn websocketstream_abnormal_close_errors_reads_and_closed() {
+        let _g = v8_guard();
+        // No inbound frames: the first recv returns null (abnormal close), so a
+        // read and the `closed` promise both reject with a WebSocketError.
+        let mut rt = runtime_with_ws(Arc::new(MockWs::new(vec![], "")));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const wss = new WebSocketStream('ws://x/'); \
+             const { readable } = await wss.opened; \
+             const log = []; \
+             try { await readable.getReader().read(); log.push('read-ok'); } \
+             catch (e) { log.push('read:' + e.name); } \
+             try { await wss.closed; } \
+             catch (e) { log.push('closed:' + e.name + ':' + (e instanceof WebSocketError) + ':' + (e instanceof DOMException)); } \
+             return log.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String("read:WebSocketError|closed:WebSocketError:true:true".into())
+        );
+    }
+
+    #[test]
+    fn websocketstream_validates_url_close_args_and_wserror_init() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_ws(Arc::new(MockWs::new(vec![], "")));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        assert_true(
+            &mut rt,
+            "(() => { const errs = []; \
+             try { new WebSocketStream('http://x/'); } catch (e) { errs.push(e.name); } \
+             const wss = new WebSocketStream('ws://x/'); \
+             try { wss.close({ closeCode: 1234 }); } catch (e) { errs.push(e.name); } \
+             try { wss.close({ reason: 'x'.repeat(200) }); } catch (e) { errs.push(e.name); } \
+             try { new WebSocketError('m', { closeCode: 1234 }); } catch (e) { errs.push(e.name); } \
+             const we = new WebSocketError('m', { reason: 'r' }); \
+             errs.push(we.name + ':' + we.closeCode + ':' + we.reason); \
+             return errs.join(',') === \
+               'SyntaxError,InvalidAccessError,SyntaxError,InvalidAccessError,WebSocketError:1000:r'; })()",
+        );
+    }
+
+    #[test]
+    fn websocketstream_connect_requires_net_capability() {
+        let _g = v8_guard();
+        // Provider present, Net denied: `opened` and `closed` both reject.
+        let mut rt = runtime_with_ws(Arc::new(MockWs::new(vec![], "")));
+        let out = eval_async(
+            &mut rt,
+            "const wss = new WebSocketStream('ws://x/'); \
+             const log = []; \
+             try { await wss.opened; } catch (e) { log.push('opened:' + e.name); } \
+             try { await wss.closed; } catch (e) { log.push('closed:' + e.name); } \
+             return log.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String("opened:WebSocketError|closed:WebSocketError".into())
+        );
+    }
+
+    #[test]
     fn get_random_values_fills_in_place() {
         let _g = v8_guard();
         let mut rt = runtime();

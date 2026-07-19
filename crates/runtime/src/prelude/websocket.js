@@ -18,23 +18,23 @@
   const CLOSED = 3;
 
   // Validate and serialize the URL: ws:/wss: only, no fragment (DECISIONS D29).
-  function parseUrl(input) {
+  function parseUrl(input, iface = "WebSocket") {
     let url;
     try {
       url = new URL(input);
     } catch {
       throw new SyntaxError(
-        `Failed to construct 'WebSocket': The URL '${input}' is invalid.`,
+        `Failed to construct '${iface}': The URL '${input}' is invalid.`,
       );
     }
     if (url.protocol !== "ws:" && url.protocol !== "wss:") {
       throw new SyntaxError(
-        `Failed to construct 'WebSocket': The URL's scheme must be either 'ws' or 'wss'. '${url.protocol.slice(0, -1)}' is not allowed.`,
+        `Failed to construct '${iface}': The URL's scheme must be either 'ws' or 'wss'. '${url.protocol.slice(0, -1)}' is not allowed.`,
       );
     }
     if (url.hash !== "") {
       throw new SyntaxError(
-        `Failed to construct 'WebSocket': The URL contains a fragment identifier ('${url.hash.slice(1)}'). Fragment identifiers are not allowed in WebSocket URLs.`,
+        `Failed to construct '${iface}': The URL contains a fragment identifier ('${url.hash.slice(1)}'). Fragment identifiers are not allowed in WebSocket URLs.`,
       );
     }
     return url;
@@ -43,7 +43,7 @@
   // RFC 6455 subprotocol tokens: non-empty, no separators/controls, no dupes.
   // Reject any space/control/non-ASCII char or an HTTP separator.
   const NON_TOKEN = /[^!-~]|[()<>@,;:\\"/[\]?={}]/;
-  function normalizeProtocols(protocols) {
+  function normalizeProtocols(protocols, iface = "WebSocket") {
     let list;
     if (protocols === undefined) list = [];
     else if (typeof protocols === "string") list = [protocols];
@@ -52,12 +52,30 @@
     for (const p of list) {
       if (p === "" || NON_TOKEN.test(p) || seen.has(p.toLowerCase())) {
         throw new SyntaxError(
-          `Failed to construct 'WebSocket': The subprotocol '${p}' is invalid or duplicated.`,
+          `Failed to construct '${iface}': The subprotocol '${p}' is invalid or duplicated.`,
         );
       }
       seen.add(p.toLowerCase());
     }
     return list;
+  }
+
+  // Close-code/reason validation shared by WebSocket#close,
+  // WebSocketStream#close, and the WebSocketError constructor: the code must be
+  // 1000 or 3000–4999, the reason at most 123 UTF-8 bytes.
+  function validateCloseInfo(where, code, reason) {
+    if (code !== undefined && code !== 1000 && !(code >= 3000 && code <= 4999)) {
+      throw new DOMException(
+        `${where}: The close code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
+        "InvalidAccessError",
+      );
+    }
+    if (encoder.encode(reason).length > 123) {
+      throw new DOMException(
+        `${where}: The close reason must not be greater than 123 UTF-8 bytes.`,
+        "SyntaxError",
+      );
+    }
   }
 
   // Copy bytes into a fresh, exactly-sized ArrayBuffer (binaryType: arraybuffer).
@@ -193,19 +211,8 @@
     }
 
     close(code, reason) {
-      if (code !== undefined && code !== 1000 && !(code >= 3000 && code <= 4999)) {
-        throw new DOMException(
-          `Failed to execute 'close' on 'WebSocket': The close code must be either 1000, or between 3000 and 4999. ${code} is neither.`,
-          "InvalidAccessError",
-        );
-      }
       const reasonStr = reason === undefined ? "" : String(reason);
-      if (encoder.encode(reasonStr).length > 123) {
-        throw new DOMException(
-          "Failed to execute 'close' on 'WebSocket': The close reason must not be greater than 123 UTF-8 bytes.",
-          "SyntaxError",
-        );
-      }
+      validateCloseInfo("Failed to execute 'close' on 'WebSocket'", code, reasonStr);
       const c = code === undefined ? null : code;
 
       if (this.#readyState === CLOSING || this.#readyState === CLOSED) return;
@@ -308,5 +315,313 @@
     Object.defineProperty(WebSocket.prototype, name, { value, enumerable: true });
   }
 
+  // WebSocketError — a DOMException (name "WebSocketError") carrying the close
+  // code/reason that produced it (WHATWG WebSockets, the WebSocketStream half).
+  // The constructor validates like close(); internally-created instances (via
+  // `makeWsError`) skip validation so a server's 1001/1005/… can be carried.
+  let makeWsError;
+  class WebSocketError extends DOMException {
+    #closeCode = null;
+    #reason = "";
+
+    constructor(message = "", init = undefined) {
+      super(message, "WebSocketError");
+      let code = init?.closeCode;
+      const reason = init?.reason === undefined ? "" : String(init.reason);
+      // A non-empty reason implies a normal (1000) close when no code is given.
+      if (code === undefined && reason !== "") code = 1000;
+      validateCloseInfo("Failed to construct 'WebSocketError'", code, reason);
+      this.#closeCode = code ?? null;
+      this.#reason = reason;
+    }
+
+    get closeCode() {
+      return this.#closeCode;
+    }
+    get reason() {
+      return this.#reason;
+    }
+
+    static {
+      makeWsError = (message, code = null, reason = "") => {
+        const e = new WebSocketError(message);
+        e.#closeCode = code;
+        e.#reason = reason;
+        return e;
+      };
+    }
+  }
+
+  // WebSocketStream — the promise/stream-based interface over the same op seam
+  // (WHATWG WebSockets). `opened` resolves to { readable, writable, protocol,
+  // extensions }; reads are pull-based (one `ws_recv` per pull — real receive
+  // backpressure), writes await `ws_send` (send backpressure). Because receipt
+  // is pull-driven, a server-initiated close is observed while reading — or,
+  // after a local close()/writable close, by an internal drain that reads until
+  // the close frame arrives so `closed` always settles.
+  class WebSocketStream {
+    #url;
+    #id = null;
+    #state = CONNECTING;
+    #opened;
+    #closed;
+    #readableCtrl = null;
+    #writableCtrl = null;
+    #recvChain = Promise.resolve();
+    #draining = false;
+    #closeRequested = null; // { code, reason } if close()/abort ran while CONNECTING
+
+    constructor(url, options = undefined) {
+      const u = parseUrl(String(url), "WebSocketStream");
+      this.#url = u.href;
+      const protos = normalizeProtocols(options?.protocols, "WebSocketStream");
+      this.#opened = Promise.withResolvers();
+      this.#closed = Promise.withResolvers();
+      // Observe rejections here so an unconsumed `opened`/`closed` never
+      // surfaces as an unhandled rejection; awaiting them still rejects.
+      this.#opened.promise.catch(() => {});
+      this.#closed.promise.catch(() => {});
+
+      const signal = options?.signal;
+      if (signal !== undefined && signal !== null) {
+        if (signal.aborted) {
+          this.#state = CLOSED;
+          this.#opened.reject(signal.reason);
+          this.#closed.reject(signal.reason);
+          return;
+        }
+        signal.addEventListener("abort", () => this.#abort(signal.reason), {
+          once: true,
+        });
+      }
+
+      // As in WebSocket: a synchronous op failure (capability denied at
+      // dispatch) routes to the same async failure path.
+      try {
+        ops.ws_connect(this.#url, protos).then(
+          (info) => this.#onConnected(info),
+          () => this.#failConnection(),
+        );
+      } catch {
+        queueMicrotask(() => this.#failConnection());
+      }
+    }
+
+    get url() {
+      return this.#url;
+    }
+    get opened() {
+      return this.#opened.promise;
+    }
+    get closed() {
+      return this.#closed.promise;
+    }
+
+    close(closeInfo = undefined) {
+      const code = closeInfo?.closeCode;
+      const reason =
+        closeInfo?.reason === undefined ? "" : String(closeInfo.reason);
+      validateCloseInfo(
+        "Failed to execute 'close' on 'WebSocketStream'",
+        code,
+        reason,
+      );
+      this.#close(code ?? null, reason);
+    }
+
+    #onConnected(info) {
+      if (this.#state === CLOSED) {
+        // close()/abort ran while CONNECTING (the promises are already
+        // rejected): finish the handshake on the wire and stop.
+        const { code, reason } = this.#closeRequested ?? { code: null, reason: "" };
+        Promise.resolve(ops.ws_close(info.id, code, reason)).catch(() => {});
+        return;
+      }
+      this.#id = info.id;
+      this.#state = OPEN;
+
+      const readable = new ReadableStream({
+        start: (c) => {
+          this.#readableCtrl = c;
+        },
+        pull: async (c) => {
+          if (this.#draining || this.#state === CLOSED) return;
+          this.#handleFrame(await this.#nextFrame(), c);
+        },
+        cancel: (reason) => this.#closeWithReason(reason),
+      });
+
+      const writable = new WritableStream({
+        start: (c) => {
+          this.#writableCtrl = c;
+        },
+        write: async (chunk) => {
+          if (this.#state !== OPEN) {
+            throw makeWsError("The WebSocket is no longer open.");
+          }
+          let payload;
+          if (ArrayBuffer.isView(chunk)) {
+            payload = new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+          } else if (chunk instanceof ArrayBuffer) {
+            payload = new Uint8Array(chunk);
+          } else {
+            payload = String(chunk); // ⇒ text frame, per the USVString conversion
+          }
+          await ops.ws_send(this.#id, payload);
+        },
+        close: () => this.#close(null, ""),
+        abort: (reason) => this.#closeWithReason(reason),
+      });
+
+      this.#opened.resolve({
+        readable,
+        writable,
+        protocol: info.protocol ?? "",
+        extensions: info.extensions ?? "",
+      });
+    }
+
+    // Serialize ws_recv calls so the pull path and the post-close drain never
+    // have two receives outstanding (frame order is preserved).
+    #nextFrame() {
+      const next = this.#recvChain.then(() => ops.ws_recv(this.#id));
+      this.#recvChain = next.then(
+        () => {},
+        () => {},
+      );
+      return next;
+    }
+
+    #handleFrame(frame, c) {
+      if (this.#state === CLOSED) return;
+      if (frame === null) {
+        this.#error(
+          makeWsError("The WebSocket connection was closed abnormally."),
+        );
+        return;
+      }
+      if (frame.type === "close") {
+        this.#state = CLOSED;
+        try {
+          c.close();
+        } catch {
+          // readable already closed/canceled
+        }
+        try {
+          this.#writableCtrl?.error(
+            makeWsError("The WebSocket connection was closed.", frame.code, frame.reason),
+          );
+        } catch {
+          // writable already closed/errored
+        }
+        this.#closed.resolve({ closeCode: frame.code, reason: frame.reason });
+        return;
+      }
+      try {
+        c.enqueue(frame.type === "text" ? frame.data : frame.data.slice());
+      } catch {
+        // readable canceled mid-drain: drop the frame
+      }
+    }
+
+    #close(code, reason) {
+      if (this.#state === CLOSING || this.#state === CLOSED) return;
+      if (this.#state === CONNECTING) {
+        // Fail the connection: reject both promises; #onConnected completes the
+        // wire close when the in-flight handshake settles.
+        this.#closeRequested = { code, reason };
+        this.#state = CLOSED;
+        const err = makeWsError(
+          "The WebSocketStream was closed before the connection was established.",
+        );
+        this.#opened.reject(err);
+        this.#closed.reject(err);
+        return;
+      }
+      this.#state = CLOSING;
+      Promise.resolve(ops.ws_close(this.#id, code, reason)).catch(() => {});
+      this.#drainUntilClose();
+    }
+
+    // Readable cancel / writable abort: if the reason is a WebSocketError its
+    // close code/reason travel on the wire (per spec), else a bare close.
+    #closeWithReason(reason) {
+      if (reason instanceof WebSocketError) {
+        this.#close(reason.closeCode, reason.reason);
+      } else {
+        this.#close(null, "");
+      }
+    }
+
+    // After a local close, keep receiving (still enqueuing data frames for a
+    // reader) until the peer's close frame settles `closed`.
+    async #drainUntilClose() {
+      if (this.#draining) return;
+      this.#draining = true;
+      try {
+        while (this.#state !== CLOSED) {
+          this.#handleFrame(await this.#nextFrame(), this.#readableCtrl);
+        }
+      } catch {
+        this.#error(
+          makeWsError("The WebSocket connection was closed abnormally."),
+        );
+      }
+    }
+
+    #failConnection() {
+      if (this.#state === CLOSED) return;
+      this.#state = CLOSED;
+      const err = makeWsError(
+        "The WebSocket connection could not be established.",
+      );
+      this.#opened.reject(err);
+      this.#closed.reject(err);
+    }
+
+    // Abort signal fired: drop the connection and reject with the signal's
+    // reason (an in-flight handshake is completed-then-closed by #onConnected).
+    #abort(reason) {
+      if (this.#state === CLOSED) return;
+      if (this.#state === CONNECTING) {
+        this.#closeRequested = { code: null, reason: "" };
+        this.#state = CLOSED;
+        this.#opened.reject(reason);
+        this.#closed.reject(reason);
+        return;
+      }
+      this.#state = CLOSED;
+      try {
+        this.#readableCtrl?.error(reason);
+      } catch {
+        // already closed
+      }
+      try {
+        this.#writableCtrl?.error(reason);
+      } catch {
+        // already closed
+      }
+      Promise.resolve(ops.ws_close(this.#id, null, "")).catch(() => {});
+      this.#closed.reject(reason);
+    }
+
+    #error(err) {
+      this.#state = CLOSED;
+      try {
+        this.#readableCtrl?.error(err);
+      } catch {
+        // already closed
+      }
+      try {
+        this.#writableCtrl?.error(err);
+      } catch {
+        // already closed
+      }
+      this.#closed.reject(err);
+    }
+  }
+
   globalThis.WebSocket = WebSocket;
+  globalThis.WebSocketStream = WebSocketStream;
+  globalThis.WebSocketError = WebSocketError;
 })();

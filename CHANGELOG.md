@@ -36,6 +36,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`WebSocketStream`.** The promise/stream-based WebSocket interface from the
+  WHATWG spec ships as a prelude global alongside the classic `WebSocket`, over
+  the same connection ops and `Net` capability gate. `opened` resolves to
+  `{ readable, writable, protocol, extensions }`: reads are pull-based (one
+  host receive per pull — real receive backpressure) and each write resolves
+  when the host has taken the frame (send backpressure); strings travel as text
+  frames, `BufferSource`s as binary. `closed` settles with
+  `{ closeCode, reason }` on a clean close and rejects with the new
+  **`WebSocketError`** (a `DOMException` subclass carrying `closeCode`/`reason`,
+  also a global) on failure. `close({ closeCode, reason })` validates like the
+  classic interface; an `AbortSignal` option drops the connection. After a
+  local close an internal drain keeps receiving until the peer's close frame,
+  so `closed` settles even with no active reader.
+
 - **Streaming `runtime:http` server bodies.** The HTTP server now streams bodies
   in **both** directions instead of buffering them. The handler's `Request` body
   is a `ReadableStream` pulling chunks from the host as they arrive on the wire
