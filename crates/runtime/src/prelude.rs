@@ -27,6 +27,8 @@ pub(crate) fn source() -> String {
         include_str!("prelude/streams.js"),
         // encoding streams need TransformStream + TextEncoder/TextDecoder.
         include_str!("prelude/encoding-streams.js"),
+        // compression streams need TransformStream.
+        include_str!("prelude/compression-streams.js"),
         // fetch family: blob before fetch (fetch bodies may be Blob/FormData).
         include_str!("prelude/blob.js"),
         include_str!("prelude/fetch.js"),

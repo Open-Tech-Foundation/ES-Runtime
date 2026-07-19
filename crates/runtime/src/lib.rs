@@ -16,6 +16,7 @@
 
 mod base64_ops;
 mod builtins;
+mod compression_ops;
 mod crypto_ops;
 mod ec_ops;
 mod encoding_ops;
@@ -2134,6 +2135,128 @@ mod tests {
             out,
             Value::String("opened:WebSocketError|closed:WebSocketError".into())
         );
+    }
+
+    #[test]
+    fn compression_round_trips_all_formats_across_chunks() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // ~64 KiB of compressible text written in 1 KiB chunks, through a
+        // CompressionStream piped into a DecompressionStream, per format.
+        let out = eval_async(
+            &mut rt,
+            "const text = 'the quick brown fox jumps over the lazy dog. '.repeat(1500); \
+             const bytes = new TextEncoder().encode(text); \
+             const results = []; \
+             for (const format of ['gzip', 'deflate', 'deflate-raw']) { \
+               const pipeline = new ReadableStream({ \
+                 start(c) { \
+                   for (let i = 0; i < bytes.length; i += 1024) c.enqueue(bytes.slice(i, i + 1024)); \
+                   c.close(); \
+                 }, \
+               }) \
+                 .pipeThrough(new CompressionStream(format)) \
+                 .pipeThrough(new DecompressionStream(format)); \
+               let size = 0; \
+               const parts = []; \
+               for await (const chunk of pipeline) { parts.push(chunk); size += chunk.length; } \
+               const merged = new Uint8Array(size); \
+               let at = 0; \
+               for (const p of parts) { merged.set(p, at); at += p.length; } \
+               results.push(format + ':' + (new TextDecoder().decode(merged) === text)); \
+             } \
+             return results.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String("gzip:true|deflate:true|deflate-raw:true".into())
+        );
+    }
+
+    #[test]
+    fn decompression_decodes_a_known_gzip_vector() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // `printf 'hello world' | gzip -n | base64` — real-gzip interop.
+        let out = eval_async(
+            &mut rt,
+            "const b64 = 'H4sIAAAAAAAAA8tIzcnJVyjPL8pJAQCFEUoNCwAAAA=='; \
+             const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)); \
+             const ds = new DecompressionStream('gzip'); \
+             const writer = ds.writable.getWriter(); \
+             writer.write(bytes); \
+             writer.close(); \
+             const parts = []; \
+             for await (const chunk of ds.readable) parts.push(...chunk); \
+             return new TextDecoder().decode(new Uint8Array(parts));",
+        );
+        assert_eq!(out, Value::String("hello world".into()));
+    }
+
+    #[test]
+    fn compression_stream_validates_format_and_chunk_type() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const log = []; \
+             try { new CompressionStream('br'); } catch (e) { log.push('c:' + e.name); } \
+             try { new DecompressionStream('zip'); } catch (e) { log.push('d:' + e.name); } \
+             try { new CompressionStream(); } catch (e) { log.push('none:' + e.name); } \
+             const cs = new CompressionStream('gzip'); \
+             const w = cs.writable.getWriter(); \
+             try { await w.write('not bytes'); } catch (e) { log.push('chunk:' + e.name); } \
+             return log.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String("c:TypeError|d:TypeError|none:TypeError|chunk:TypeError".into())
+        );
+    }
+
+    #[test]
+    fn decompression_errors_on_corrupt_and_truncated_input() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const log = []; \
+             { const ds = new DecompressionStream('gzip'); \
+               const w = ds.writable.getWriter(); \
+               const reads = ds.readable.getReader().read().catch((e) => log.push('corrupt-read:' + e.name)); \
+               try { await w.write(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])); await w.close(); } \
+               catch (e) { log.push('corrupt:' + e.name); } \
+               await reads; } \
+             { const ds = new DecompressionStream('deflate'); \
+               const w = ds.writable.getWriter(); \
+               ds.readable.getReader().read().catch(() => {}); \
+               try { await w.write(new Uint8Array([0x78, 0x9c])); await w.close(); } \
+               catch (e) { log.push('truncated:' + e.name); } } \
+             return log.join('|');",
+        );
+        assert_eq!(
+            out,
+            Value::String("corrupt-read:TypeError|corrupt:TypeError|truncated:TypeError".into())
+        );
+    }
+
+    #[test]
+    fn transform_stream_cancel_hook_runs_on_abort_and_cancel() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // The transformer.cancel hook (Streams spec) fires exactly once on a
+        // writable abort or a readable cancel — CompressionStream relies on it
+        // to free its native context.
+        let out = eval_async(
+            &mut rt,
+            "const log = []; \
+             { const ts = new TransformStream({ cancel(r) { log.push('abort:' + r); } }); \
+               await ts.writable.abort('w'); } \
+             { const ts = new TransformStream({ cancel(r) { log.push('cancel:' + r); } }); \
+               await ts.readable.cancel('r'); } \
+             return log.join('|');",
+        );
+        assert_eq!(out, Value::String("abort:w|cancel:r".into()));
     }
 
     #[test]

@@ -21,6 +21,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::url_ops::install(engine)?;
     crate::encoding_ops::install(engine)?;
     crate::base64_ops::install(engine)?;
+    // Compression Streams ops (flate2), pure computation but stateful.
+    crate::compression_ops::install(engine)?;
     // Networking ops, capability-gated on Net.
     crate::fetch_ops::install(engine, providers.net())?;
     // WebCrypto ops, backed by the Entropy provider + RustCrypto.

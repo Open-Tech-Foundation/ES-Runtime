@@ -26,6 +26,16 @@
     p.catch(() => {}); // avoid spurious unhandled-rejection noise
     return p;
   };
+  // Promise-calling semantics for user-supplied source/sink/transformer
+  // methods: a synchronous throw becomes a rejection, never a raw exception
+  // unwinding through the stream machinery.
+  const invoking = (fn) => {
+    try {
+      return resolved(fn());
+    } catch (e) {
+      return rejected(e);
+    }
+  };
 
   function resetQueue(c) {
     c.queue = [];
@@ -240,10 +250,10 @@
       cancelAlgorithm: () => resolved(undefined),
     });
     if (typeof source.pull === "function") {
-      c.pullAlgorithm = () => resolved(source.pull(controller));
+      c.pullAlgorithm = () => invoking(() => source.pull(controller));
     }
     if (typeof source.cancel === "function") {
-      c.cancelAlgorithm = (reason) => resolved(source.cancel(reason));
+      c.cancelAlgorithm = (reason) => invoking(() => source.cancel(reason));
     }
     stream[S].controller = controller;
 
@@ -641,8 +651,8 @@
       pendingPullIntos: [],
       autoAllocateChunkSize,
     });
-    if (typeof source.pull === "function") c.pullAlgorithm = () => resolved(source.pull(controller));
-    if (typeof source.cancel === "function") c.cancelAlgorithm = (reason) => resolved(source.cancel(reason));
+    if (typeof source.pull === "function") c.pullAlgorithm = () => invoking(() => source.pull(controller));
+    if (typeof source.cancel === "function") c.cancelAlgorithm = (reason) => invoking(() => source.cancel(reason));
     stream[S].controller = controller;
     const startResult = typeof source.start === "function" ? source.start(controller) : undefined;
     resolved(startResult).then(
@@ -1164,13 +1174,13 @@
     });
     stream[S].controller = controller;
     if (typeof sink.write === "function") {
-      c.writeAlgorithm = (chunk) => resolved(sink.write(chunk, controller));
+      c.writeAlgorithm = (chunk) => invoking(() => sink.write(chunk, controller));
     }
     if (typeof sink.close === "function") {
-      c.closeAlgorithm = () => resolved(sink.close());
+      c.closeAlgorithm = () => invoking(() => sink.close());
     }
     if (typeof sink.abort === "function") {
-      c.abortAlgorithm = (reason) => resolved(sink.abort(reason));
+      c.abortAlgorithm = (reason) => invoking(() => sink.abort(reason));
     }
     writableStreamUpdateBackpressure(
       stream,
@@ -1507,11 +1517,24 @@
       };
       if (typeof t.transform === "function") {
         controller[S].transformAlgorithm = (chunk) =>
-          resolved(t.transform(chunk, controller));
+          invoking(() => t.transform(chunk, controller));
       }
       if (typeof t.flush === "function") {
-        controller[S].flushAlgorithm = () => resolved(t.flush(controller));
+        controller[S].flushAlgorithm = () => invoking(() => t.flush(controller));
       }
+      // transformer.cancel (Streams spec): runs once when the writable is
+      // aborted or the readable is canceled — the paths where flush never
+      // will — so the transformer can release resources it holds.
+      let cancelRan = false;
+      const runCancel = (reason) => {
+        if (cancelRan || typeof t.cancel !== "function") return;
+        cancelRan = true;
+        try {
+          t.cancel(reason);
+        } catch {
+          // the stream is already erroring; a cancel failure has nowhere to go
+        }
+      };
 
       slots.writable = new WritableStream(
         {
@@ -1537,6 +1560,7 @@
             );
           },
           abort: (reason) => {
+            runCancel(reason);
             transformStreamError(this, reason);
             return resolved(undefined);
           },
@@ -1551,6 +1575,7 @@
             return slots.backpressureChange.promise;
           },
           cancel: (reason) => {
+            runCancel(reason);
             transformStreamError(this, reason);
             return resolved(undefined);
           },

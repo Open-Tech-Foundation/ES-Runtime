@@ -56,6 +56,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Fetch:** `fetch`, `Request`, `Response`, `Headers` — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
+- **Compression:** `CompressionStream`, `DecompressionStream` — formats `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
 - **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `crypto.subtle` (digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2), `CryptoKey`
 - **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `AbortController`, `AbortSignal`
 - **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
