@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use es_runtime_common::{CapabilitySet, Limits};
+use es_runtime_common::{CapabilitySet, ExceptionClass, Limits};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
@@ -177,8 +177,15 @@ pub trait Engine {
     /// [`settle_dynamic_imports`](Self::settle_dynamic_imports)).
     fn link_dynamic_import(&mut self, reqid: u64, module: ModuleId) -> Result<()>;
 
-    /// Rejects dynamic-import request `reqid` (its graph could not be loaded).
-    fn reject_dynamic_import(&mut self, reqid: u64, message: &str) -> Result<()>;
+    /// Rejects dynamic-import request `reqid` (its graph could not be loaded),
+    /// with an exception of `class` (e.g. a module with a syntax error rejects
+    /// with a `SyntaxError`, a missing module with an `Error`).
+    fn reject_dynamic_import(
+        &mut self,
+        reqid: u64,
+        class: ExceptionClass,
+        message: &str,
+    ) -> Result<()>;
 
     /// Settles linked dynamic imports whose module evaluation has completed
     /// (resolving with the namespace or rejecting with the error). Call each tick.
@@ -608,12 +615,18 @@ impl Engine for V8Engine {
         )
     }
 
-    fn reject_dynamic_import(&mut self, reqid: u64, message: &str) -> Result<()> {
+    fn reject_dynamic_import(
+        &mut self,
+        reqid: u64,
+        class: ExceptionClass,
+        message: &str,
+    ) -> Result<()> {
         crate::module::reject_dynamic(
             &mut self.isolate,
             &self.context,
             &self.modules,
             reqid,
+            class,
             message,
         )
     }
@@ -1051,7 +1064,7 @@ mod tests {
         for _ in 0..100 {
             for (reqid, _spec, _referrer, _ty) in engine.take_pending_dynamic_imports() {
                 engine
-                    .reject_dynamic_import(reqid, "cannot find module")
+                    .reject_dynamic_import(reqid, ExceptionClass::Error, "cannot find module")
                     .unwrap();
             }
             engine.settle_dynamic_imports();

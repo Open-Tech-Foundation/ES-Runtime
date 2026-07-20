@@ -645,6 +645,7 @@ pub(crate) fn reject_dynamic(
     context: &v8::Global<v8::Context>,
     registry: &Rc<RefCell<ModuleRegistry>>,
     reqid: u64,
+    class: es_runtime_common::ExceptionClass,
     message: &str,
 ) -> Result<()> {
     let resolver = registry
@@ -658,7 +659,19 @@ pub(crate) fn reject_dynamic(
     let scope = &mut v8::ContextScope::new(scope, context);
 
     let text = v8::String::new(scope, message).unwrap_or_else(|| v8::String::empty(scope));
-    let error = v8::Exception::error(scope, text);
+    // Reject with the class that matches the failure — notably a module with a
+    // syntax error rejects with a `SyntaxError`, not a plain `Error` (a `.catch`
+    // that checks `error.name` relies on this). Module-load failures only
+    // produce `Error`/`SyntaxError` in practice; other classes fall back to
+    // `Error`.
+    use es_runtime_common::ExceptionClass as C;
+    let error = match class {
+        C::SyntaxError => v8::Exception::syntax_error(scope, text),
+        C::TypeError => v8::Exception::type_error(scope, text),
+        C::RangeError => v8::Exception::range_error(scope, text),
+        C::ReferenceError => v8::Exception::reference_error(scope, text),
+        _ => v8::Exception::error(scope, text),
+    };
     let error = v8::Global::new(scope, error);
     registry.borrow_mut().dynamic_rejecting.push((resolver, error));
     Ok(())

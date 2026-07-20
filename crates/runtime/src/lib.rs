@@ -518,7 +518,14 @@ impl Runtime {
                     .await
                 {
                     Ok(id) => self.engine.link_dynamic_import(reqid, id)?,
-                    Err(err) => self.engine.reject_dynamic_import(reqid, &err.to_string())?,
+                    Err(err) => {
+                        // Preserve the failure's class: a module with a syntax
+                        // error rejects import() with a SyntaxError, not Error.
+                        use es_runtime_common::IntoException;
+                        let class = err.exception_class();
+                        self.engine
+                            .reject_dynamic_import(reqid, class, &err.to_string())?;
+                    }
                 }
             }
             self.drain_new_timers(self.now_ms);
@@ -3099,6 +3106,31 @@ mod tests {
         assert_eq!(
             rt.eval("globalThis.second").unwrap(),
             Value::String("boom B".into())
+        );
+    }
+
+    #[test]
+    fn dynamic_import_of_syntax_error_rejects_with_syntax_error() {
+        // Regression: a dynamic import() of a module that fails to compile
+        // rejected with a generic `Error`, so a `.catch` checking
+        // `error.name === 'SyntaxError'` (a common pattern, and what test262's
+        // dynamic-import/catch tests assert) saw `'Error'`. The rejection must
+        // carry the SyntaxError class.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // `var x; function x(){}` is legal as a script but a duplicate-declaration
+        // SyntaxError as a module.
+        let loader = MapLoader::new(&[("./bad.mjs", "var x; function x(){}")]);
+        let state = run_module(
+            &mut rt,
+            "globalThis.name = ''; \
+             import('./bad.mjs').catch((e) => { globalThis.name = e.name; });",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(
+            rt.eval("globalThis.name").unwrap(),
+            Value::String("SyntaxError".into())
         );
     }
 

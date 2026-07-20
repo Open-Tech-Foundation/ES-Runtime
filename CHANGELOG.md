@@ -167,6 +167,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Dynamic `import()` of a module with a syntax error rejects with a
+  `SyntaxError`.** It previously rejected with a generic `Error`, so a `.catch`
+  that inspects `error.name` saw `"Error"` rather than `"SyntaxError"`. The
+  failure's class is now threaded through the dynamic-import rejection path
+  (missing modules still reject with `Error`). Surfaced by tc39/test262
+  `dynamic-import/catch/*`.
 - **Dynamic `import()` of an errored module cycle no longer crashes the
   process.** Dynamically importing a member of an async (top-level-await) cycle
   whose evaluation already threw re-evaluated an errored module, tripping a V8
