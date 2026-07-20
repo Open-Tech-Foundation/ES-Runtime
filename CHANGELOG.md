@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-20
+
 ### Security
 
 - **Dependency updates clear all outstanding RUSTSEC advisories.**
