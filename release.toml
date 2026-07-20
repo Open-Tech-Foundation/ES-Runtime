@@ -17,11 +17,11 @@ github_release_notes = "curated-changelog"
 
 [publish.ignore_paths]
 es-runtime = []
-es-runtime-common = []
 es-runtime-cli = []
 es-runtime-engine = []
 es-runtime-providers = []
 es-runtime-default-providers = []
+es-runtime-common = []
 
 [[package]]
 name = "es-runtime-cli"
@@ -68,11 +68,3 @@ triple = "x86_64-pc-windows-msvc"
 runner = "windows-latest"
 stage_as = "win32-x64"
 ext = ".exe"
-
-[[package.targets]]
-name = "freebsd"
-arch = "x86_64"
-triple = "x86_64-unknown-freebsd"
-runner = "ubuntu-latest"
-stage_as = "freebsd-x64"
-vm = true

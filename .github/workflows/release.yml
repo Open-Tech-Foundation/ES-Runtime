@@ -62,7 +62,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-${{ matrix.arch }}-linux-gnu
       - uses: dtolnay/rust-toolchain@stable
-        if: ${{ !matrix.vm }}
         with:
           targets: ${{ matrix.triple }}
       - name: Install otf-release
@@ -78,22 +77,7 @@ jobs:
           OTF_RELEASE_VERSION: v0.26.0
         run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.ps1 | iex
       - name: Build es-runtime-cli
-        if: ${{ !matrix.vm }}
         run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
-      - name: Build es-runtime-cli in a freebsd VM
-        if: ${{ matrix.vm && matrix.name == 'freebsd' }}
-        uses: vmactions/freebsd-vm@v1
-        with:
-          arch: ${{ matrix.arch }}
-          usesh: true
-          copyback: true
-          prepare: |
-            pkg install -y rust
-          run: |
-            cargo build --release --target ${{ matrix.triple }}
-      - name: Stage es-runtime-cli
-        if: ${{ matrix.vm }}
-        run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }} --stage-only
       - uses: actions/upload-artifact@v4
         with:
           name: es-runtime-cli-${{ matrix.name }}-${{ matrix.arch }}
