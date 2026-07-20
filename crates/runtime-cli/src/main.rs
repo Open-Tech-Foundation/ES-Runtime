@@ -89,27 +89,45 @@ const TYPES: &str = concat!(
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
 /// extract it, and replace the running binary in place (the same outcome as
 /// re-running install.sh / install.ps1, but built in). HTTPS via rustls.
-fn upgrade() -> Result<String, Box<dyn std::error::Error>> {
+// Returns a `String` error (not a boxed `dyn Error`) so the result is `Send` and
+// can cross the OS-thread boundary this runs on (see the `"upgrade"` dispatch).
+fn upgrade() -> Result<String, String> {
+    // Release assets are named `esrun-<os>-<arch>.{tar.gz,zip}` by the
+    // otf-release tool (see .github/workflows/release.yml), e.g.
+    // `esrun-linux-x86-64.tar.gz`. self_update selects the asset whose name
+    // contains its configured `target`, so build that `<os>-<arch>` token for
+    // the running platform rather than using the default Rust target triple.
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x86-64"
+    };
+    let target = format!("{os}-{arch}");
+
     let status = self_update::backends::github::Update::configure()
         .repo_owner("Open-Tech-Foundation")
         .repo_name("ES-Runtime")
         .bin_name("esrun")
-        // Release archives nest the binary under a versioned directory
-        // (`esrun-<version>-<target>/esrun`, see .github/workflows/release.yml),
-        // so point self_update at that path instead of the archive root. The
-        // `{{ version }}` / `{{ target }}` / `{{ bin }}` placeholders are filled
-        // in by self_update (version has its leading `v` stripped; `bin` gains the
-        // platform `.exe` suffix on Windows).
-        .bin_path_in_archive("esrun-{{ version }}-{{ target }}/{{ bin }}")
-        // self_update picks the release asset whose name contains the target
-        // triple; the archive extension disambiguates it from any same-target
-        // sidecar (the release ships a single `checksums.txt`, but this keeps
-        // selection deterministic regardless of asset order).
+        .target(&target)
+        // The archive holds the binary at its root, so `{{ bin }}` alone (which
+        // self_update fills with the bin name plus the platform `.exe` suffix on
+        // Windows) is the in-archive path.
+        .bin_path_in_archive("{{ bin }}")
+        // Disambiguate the archive from any same-target sidecar by extension.
         .asset_identifier(if cfg!(windows) { ".zip" } else { ".tar.gz" })
         .current_version(env!("CARGO_PKG_VERSION"))
         .show_download_progress(true)
-        .build()?
-        .update()?;
+        .build()
+        .map_err(|e| e.to_string())?
+        .update()
+        .map_err(|e| e.to_string())?;
     Ok(if status.is_updated() {
         format!("Upgraded esrun to {}.", status.version())
     } else {
@@ -280,7 +298,14 @@ fn parse_args() -> Result<Config, String> {
                 std::process::exit(0);
             }
             "upgrade" => {
-                match upgrade() {
+                // `self_update` drives its own blocking HTTP runtime; running it
+                // inside this `#[tokio::main]` context would drop that runtime
+                // from within an async context and panic. Run it on a dedicated
+                // OS thread, off the tokio runtime.
+                let result = std::thread::spawn(upgrade)
+                    .join()
+                    .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
+                match result {
                     Ok(msg) => println!("{msg}"),
                     Err(e) => {
                         eprintln!("error: upgrade failed: {e}");

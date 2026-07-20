@@ -5,8 +5,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
 #
 # Downloads the latest released `esrun` binary for your platform, verifies its
-# SHA-256 checksum, and installs it to ~/.esrun/bin. Override the version with
-# ESRUN_VERSION=v0.1.0 and the install dir with ESRUN_INSTALL=/custom/path.
+# SHA-256 checksum when the release ships one, and installs it to ~/.esrun/bin.
+# Override the version with ESRUN_VERSION=v0.1.0 and the install dir with
+# ESRUN_INSTALL=/custom/path.
 set -euo pipefail
 
 REPO="Open-Tech-Foundation/ES-Runtime"
@@ -29,16 +30,18 @@ command -v tar >/dev/null 2>&1 || err "tar is required"
 os="$(uname -s)"
 arch="$(uname -m)"
 case "$os" in
-  Linux) os_part="unknown-linux-gnu" ;;
-  Darwin) os_part="apple-darwin" ;;
+  Linux) os_part="linux" ;;
+  Darwin) os_part="macos" ;;
   *) err "unsupported OS: $os (use install.ps1 on Windows)" ;;
 esac
 case "$arch" in
-  x86_64 | amd64) arch_part="x86_64" ;;
-  arm64 | aarch64) arch_part="aarch64" ;;
+  x86_64 | amd64) arch_part="x86-64" ;;
+  arm64 | aarch64) arch_part="arm64" ;;
   *) err "unsupported architecture: $arch" ;;
 esac
-target="${arch_part}-${os_part}"
+# Release assets are named `esrun-<os>-<arch>` by the otf-release tool
+# (see .github/workflows/release.yml), e.g. `esrun-linux-x86-64`.
+target="${os_part}-${arch_part}"
 
 # --- resolve version --------------------------------------------------------
 version="${ESRUN_VERSION:-}"
@@ -47,9 +50,7 @@ if [ -z "$version" ]; then
     grep -oE '"tag_name": *"[^"]+"' | head -1 | cut -d'"' -f4)"
   [ -n "$version" ] || err "could not determine the latest release (set ESRUN_VERSION)"
 fi
-ver_no_v="${version#v}"
-
-name="esrun-${ver_no_v}-${target}"
+name="esrun-${target}"
 url="https://github.com/$REPO/releases/download/${version}/${name}.tar.gz"
 
 bold "Installing esrun ${version} (${target})"
@@ -62,8 +63,9 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fSL --progress-bar "$url" -o "$tmp/$name.tar.gz" ||
   err "download failed — is there a release asset for $target?"
 
-# Checksums live in one `checksums.txt` per release (`<hash>  <archive>` lines);
-# pull out the line for our archive and verify it.
+# Checksums, when present, live in one `checksums.txt` per release
+# (`<hash>  <archive>` lines); pull out the line for our archive and verify it.
+# A release without a checksums.txt is not fatal — verification is skipped.
 sums_url="https://github.com/$REPO/releases/download/${version}/checksums.txt"
 if curl -fsSL "$sums_url" -o "$tmp/checksums.txt" 2>/dev/null &&
   grep " ${name}.tar.gz\$" "$tmp/checksums.txt" > "$tmp/$name.tar.gz.sha256"; then
@@ -75,12 +77,15 @@ if curl -fsSL "$sums_url" -o "$tmp/checksums.txt" 2>/dev/null &&
       err "checksum verification failed"
   fi
   dim "  checksum verified"
+else
+  dim "  no checksums.txt for this release — skipping verification"
 fi
 
 # --- install ----------------------------------------------------------------
+# The archive holds the `esrun` binary at its root.
 tar -xzf "$tmp/$name.tar.gz" -C "$tmp"
 mkdir -p "$BIN_DIR"
-install -m 0755 "$tmp/$name/esrun" "$BIN_DIR/esrun"
+install -m 0755 "$tmp/esrun" "$BIN_DIR/esrun"
 
 bold ""
 bold "esrun was installed to $BIN_DIR/esrun"

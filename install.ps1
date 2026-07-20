@@ -3,9 +3,9 @@
 #   irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
 #
 # Downloads the latest released `esrun` binary for your platform, verifies its
-# SHA-256 checksum, and installs it to $HOME\.esrun\bin. Override the version
-# with $env:ESRUN_VERSION = 'v0.1.0' and the install dir with
-# $env:ESRUN_INSTALL = 'C:\custom\path'.
+# SHA-256 checksum when the release ships one, and installs it to
+# $HOME\.esrun\bin. Override the version with $env:ESRUN_VERSION = 'v0.1.0' and
+# the install dir with $env:ESRUN_INSTALL = 'C:\custom\path'.
 
 $ErrorActionPreference = 'Stop'
 
@@ -14,12 +14,14 @@ $InstallDir = if ($env:ESRUN_INSTALL) { $env:ESRUN_INSTALL } else { Join-Path $H
 $BinDir = Join-Path $InstallDir 'bin'
 
 # --- detect platform --------------------------------------------------------
+# Release assets are named `esrun-<os>-<arch>` by the otf-release tool
+# (see .github/workflows/release.yml), e.g. `esrun-windows-x86-64`.
 $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
-  'AMD64' { 'x86_64' }
-  'ARM64' { 'aarch64' }
+  'AMD64' { 'x86-64' }
+  'ARM64' { 'arm64' }
   default { throw "unsupported architecture: $($env:PROCESSOR_ARCHITECTURE)" }
 }
-$target = "$arch-pc-windows-msvc"
+$target = "windows-$arch"
 
 # --- resolve version --------------------------------------------------------
 $version = $env:ESRUN_VERSION
@@ -28,9 +30,7 @@ if (-not $version) {
   $version = $rel.tag_name
 }
 if (-not $version) { throw 'could not determine the latest release (set $env:ESRUN_VERSION)' }
-$verNoV = $version.TrimStart('v')
-
-$name = "esrun-$verNoV-$target"
+$name = "esrun-$target"
 $url = "https://github.com/$Repo/releases/download/$version/$name.zip"
 
 Write-Host "Installing esrun $version ($target)" -ForegroundColor Cyan
@@ -47,8 +47,9 @@ try {
     throw "download failed - is there a release asset for $target?"
   }
 
-  # Checksums live in one `checksums.txt` per release (`<hash>  <archive>`
-  # lines); pull out the line for our archive and verify it.
+  # Checksums, when present, live in one `checksums.txt` per release
+  # (`<hash>  <archive>` lines); pull out the line for our archive and verify
+  # it. A release without a checksums.txt is not fatal - verification is skipped.
   $sumFile = Join-Path $tmp 'checksums.txt'
   $sumsUrl = "https://github.com/$Repo/releases/download/$version/checksums.txt"
   $line = $null
@@ -61,12 +62,15 @@ try {
     $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
     if ($expected -ne $actual) { throw 'checksum verification failed' }
     Write-Host '  checksum verified' -ForegroundColor DarkGray
+  } else {
+    Write-Host '  no checksums.txt for this release - skipping verification' -ForegroundColor DarkGray
   }
 
   # --- install --------------------------------------------------------------
+  # The archive holds the `esrun.exe` binary at its root.
   Expand-Archive -Path $zip -DestinationPath $tmp -Force
   New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-  Copy-Item (Join-Path $tmp "$name\esrun.exe") (Join-Path $BinDir 'esrun.exe') -Force
+  Copy-Item (Join-Path $tmp 'esrun.exe') (Join-Path $BinDir 'esrun.exe') -Force
 
   Write-Host ''
   Write-Host "esrun was installed to $BinDir\esrun.exe"

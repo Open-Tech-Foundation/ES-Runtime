@@ -169,6 +169,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`esrun upgrade` and the install scripts work with the new release asset
+  naming.** The release process moved to the `otf-release` tool, which names
+  assets `esrun-<os>-<arch>.{tar.gz,zip}` (e.g. `esrun-linux-x86-64.tar.gz`)
+  with the binary at the archive root — but `esrun upgrade`, `install.sh`, and
+  `install.ps1` still expected the old `esrun-<version>-<rust-triple>` names and
+  a nested binary, so `esrun upgrade` failed with *"No asset found for target"*
+  and the installers 404'd. All three now target the new names; checksum
+  verification is skipped (with a note) when a release ships no `checksums.txt`.
+  `esrun upgrade` additionally ran `self_update`'s blocking HTTP runtime inside
+  the async `main`, panicking on runtime drop — it now runs on a dedicated OS
+  thread.
 - **Dynamic `import()` of a module with a syntax error rejects with a
   `SyntaxError`.** It previously rejected with a generic `Error`, so a `.catch`
   that inspects `error.name` saw `"Error"` rather than `"SyntaxError"`. The
