@@ -167,6 +167,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Caught dynamic `import()` failures no longer reported as unhandled
+  rejections.** Dynamically importing a module that throws at top level and
+  catching it (`await import('./throws.js').catch(...)`) still reported the
+  module's internal evaluation promise as an unhandled rejection and exited
+  nonzero. The engine observes that promise by polling and forwards its outcome
+  to the `import()` promise, so it is now marked handled — the guest's `.catch`
+  handles the failure.
 - **Dynamic `import()` rejection reactions no longer silently dropped.** When a
   dynamic import failed to load (missing module, or a module with a syntax
   error), its promise was rejected *after* the tick's microtask checkpoint, so

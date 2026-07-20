@@ -518,6 +518,12 @@ pub(crate) fn link_dynamic(
         Some(value) => {
             let promise = v8::Local::<v8::Promise>::try_from(value)
                 .map_err(|_| Error::Internal("module evaluation returned no promise".into()))?;
+            // We observe this evaluation promise by polling ([`settle_dynamic`])
+            // and forward its outcome to the import() promise, so its rejection
+            // is *not* unhandled — the import() promise carries it to the guest's
+            // `.catch`. Mark it handled so a throwing (but caught) dynamically
+            // imported module isn't wrongly reported as an unhandled rejection.
+            promise.mark_as_handled();
             let eval = v8::Global::new(scope, promise);
             registry
                 .borrow_mut()

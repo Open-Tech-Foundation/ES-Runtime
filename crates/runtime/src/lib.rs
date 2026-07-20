@@ -3028,6 +3028,46 @@ mod tests {
     }
 
     #[test]
+    fn caught_dynamic_import_eval_failure_is_not_reported_unhandled() {
+        // Regression: dynamically importing a module that throws at top level and
+        // catching it still reported the module's *evaluation* promise as an
+        // unhandled rejection (and the CLI exited nonzero). The engine observes
+        // that promise by polling and forwards its result to the import()
+        // promise, so it must be marked handled — the guest's `.catch` is what
+        // handles the failure.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let loader = MapLoader::new(&[("./boom.mjs", "throw new Error('boom');")]);
+        let mut unhandled: Vec<String> = Vec::new();
+        block_on(async {
+            rt.load_module_source(
+                ENTRY,
+                "globalThis.caught = false; \
+                 import('./boom.mjs').catch(() => { globalThis.caught = true; });",
+                loader,
+            )
+            .await
+            .expect("load module graph");
+            for _ in 0..500 {
+                let status = rt.tick(0);
+                unhandled.extend(status.unhandled_rejections);
+                rt.process_dynamic_imports()
+                    .await
+                    .expect("process dynamic imports");
+                if !rt.has_pending_work() {
+                    break;
+                }
+            }
+        });
+        assert_eq!(rt.eval("globalThis.caught").unwrap(), Value::Bool(true));
+        assert!(
+            unhandled.is_empty(),
+            "caught dynamic import wrongly reported unhandled: {unhandled:?}"
+        );
+    }
+
+    #[test]
     fn diamond_evaluates_shared_dependency_once() {
         let _g = v8_guard();
         let mut rt = runtime();
