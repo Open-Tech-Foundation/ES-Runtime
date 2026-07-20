@@ -3068,6 +3068,41 @@ mod tests {
     }
 
     #[test]
+    fn reimport_of_errored_cycle_member_rejects_without_crashing() {
+        // Regression: dynamically importing a member of an async (top-level
+        // await) cycle whose evaluation already threw re-instantiated/re-evaluated
+        // an `Errored` module, tripping a V8 CHECK and aborting the process
+        // (SIGABRT) — guest-triggerable. It must instead reject with the cycle's
+        // recorded evaluation error. Cycle: a→b→c→a, all async; b throws.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[
+            ("./a.mjs", "import './b.mjs'; import './x.mjs';"),
+            ("./b.mjs", "import './c.mjs'; await Promise.resolve(0); throw new Error('boom B');"),
+            ("./c.mjs", "import './d.mjs'; await Promise.resolve(0);"),
+            ("./d.mjs", "import './b.mjs'; await Promise.resolve(0);"),
+            ("./x.mjs", "import './d.mjs'; await Promise.resolve(0);"),
+        ]);
+        let state = run_module(
+            &mut rt,
+            "globalThis.first = null; globalThis.second = null; \
+             try { await import('./a.mjs'); } catch (e) { globalThis.first = e.message; } \
+             try { await import('./c.mjs'); } catch (e) { globalThis.second = e.message; }",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        // Both imports reject with the cycle's recorded error, no crash.
+        assert_eq!(
+            rt.eval("globalThis.first").unwrap(),
+            Value::String("boom B".into())
+        );
+        assert_eq!(
+            rt.eval("globalThis.second").unwrap(),
+            Value::String("boom B".into())
+        );
+    }
+
+    #[test]
     fn diamond_evaluates_shared_dependency_once() {
         let _g = v8_guard();
         let mut rt = runtime();

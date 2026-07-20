@@ -15,7 +15,7 @@
 //! op: `runtime` ticks the loop until [`eval_state`] reports the graph settled.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::convert::{describe_exception, js_to_string};
@@ -106,6 +106,21 @@ pub(crate) struct ModuleRegistry {
     /// drain would leave the reaction microtask queued with nothing to run it if
     /// the loop then goes idle (the `.catch` would silently never fire).
     dynamic_rejecting: Vec<(v8::Global<v8::PromiseResolver>, v8::Global<v8::Value>)>,
+    /// Persistent module dependency adjacency (referrer → targets), accumulated
+    /// from each [`instantiate`]. Used to propagate an evaluation failure across
+    /// a graph: V8 gives an embedder no safe way to read a module's per-module
+    /// async evaluation outcome (`GetStatus` reports a failed *async* cycle
+    /// member as `Evaluated`, and `Evaluate`/`GetException` abort on it), so a
+    /// re-import must consult `errored` rather than re-evaluate.
+    deps: HashMap<ModuleId, HashSet<ModuleId>>,
+    /// Modules whose evaluation errored, mapped to the thrown value, so a later
+    /// dynamic re-import rejects with it instead of re-evaluating — evaluating an
+    /// errored module aborts V8 (a guest-triggerable crash otherwise).
+    errored: HashMap<ModuleId, v8::Global<v8::Value>>,
+    /// Modules proven to have evaluated successfully (reached from a fulfilled
+    /// graph root), so a later failing graph that also reaches them does not
+    /// mismark them errored.
+    evaluated_ok: HashSet<ModuleId>,
 }
 
 /// A dynamic import whose module is evaluating; when the evaluation promise
@@ -131,7 +146,57 @@ impl ModuleRegistry {
             dynamic_resolvers: HashMap::new(),
             dynamic_settling: Vec::new(),
             dynamic_rejecting: Vec::new(),
+            deps: HashMap::new(),
+            errored: HashMap::new(),
+            evaluated_ok: HashSet::new(),
         }
+    }
+
+    /// Records graph edges from a resolved `(referrer, specifier) → target` map
+    /// so a later evaluation failure can be propagated across the graph.
+    fn record_deps(&mut self, resolved: &HashMap<(ModuleId, String), ModuleId>) {
+        for ((referrer, _spec), target) in resolved {
+            self.deps.entry(*referrer).or_default().insert(*target);
+        }
+    }
+
+    /// Module ids reachable from `root` over the recorded dependency edges
+    /// (including `root`).
+    fn reachable(&self, root: ModuleId) -> Vec<ModuleId> {
+        let mut stack = vec![root];
+        let mut seen = HashSet::new();
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            if let Some(targets) = self.deps.get(&id) {
+                stack.extend(targets.iter().copied());
+            }
+        }
+        seen.into_iter().collect()
+    }
+
+    /// Marks every module reached from `root` as having errored with `error`
+    /// (unless already known to have evaluated successfully). A re-import of any
+    /// of them then rejects with `error` instead of aborting on re-evaluation.
+    fn mark_graph_errored(&mut self, root: ModuleId, error: &v8::Global<v8::Value>) {
+        for id in self.reachable(root) {
+            if !self.evaluated_ok.contains(&id) {
+                self.errored.entry(id).or_insert_with(|| error.clone());
+            }
+        }
+    }
+
+    /// Marks every module reached from `root` as having evaluated successfully.
+    fn mark_graph_ok(&mut self, root: ModuleId) {
+        for id in self.reachable(root) {
+            self.evaluated_ok.insert(id);
+        }
+    }
+
+    /// The module id for a V8 module handle, via its identity hash.
+    fn id_of(&self, module: &v8::Local<'_, v8::Module>) -> Option<ModuleId> {
+        self.id_by_hash.get(&module.get_identity_hash().get()).copied()
     }
 
     fn insert(&mut self, module: v8::Global<v8::Module>, hash: i32, specifier: String) -> ModuleId {
@@ -257,9 +322,14 @@ pub(crate) fn instantiate(
     resolved: &HashMap<(ModuleId, String), ModuleId>,
 ) -> Result<()> {
     let module_global = registry.borrow().module(id)?;
-    // Make the resolution map visible to the synchronous resolve callback for
-    // the duration of this call only.
-    registry.borrow_mut().resolve = resolved.clone();
+    {
+        let mut reg = registry.borrow_mut();
+        // Make the resolution map visible to the synchronous resolve callback for
+        // the duration of this call only, and record the graph adjacency so an
+        // evaluation failure can later be propagated across it.
+        reg.resolve = resolved.clone();
+        reg.record_deps(resolved);
+    }
 
     let result = {
         v8::scope!(let scope, isolate);
@@ -268,15 +338,23 @@ pub(crate) fn instantiate(
         v8::tc_scope!(let scope, scope);
 
         let module = v8::Local::new(scope, &module_global);
-        let outcome = module.instantiate_module(scope, resolve_module_callback);
-        match outcome {
-            Some(true) => Ok(()),
-            _ if interrupt.is_execution_terminating() => Err(Error::Terminated {
-                reason: "execution terminated".into(),
-            }),
-            _ => Err(Error::Execution {
-                message: describe_exception(scope, "module instantiation failed"),
-            }),
+        // Instantiation is a one-time transition out of `Uninstantiated`. A
+        // module reached again through a shared/dynamic re-import is already
+        // instantiated (or evaluated/errored); re-instantiating it is at best a
+        // no-op and at worst an abort, so skip it. An errored member is rejected
+        // at the link step ([`link_dynamic`]) via the `errored` map.
+        if module.get_status() != v8::ModuleStatus::Uninstantiated {
+            Ok(())
+        } else {
+            match module.instantiate_module(scope, resolve_module_callback) {
+                Some(true) => Ok(()),
+                _ if interrupt.is_execution_terminating() => Err(Error::Terminated {
+                    reason: "execution terminated".into(),
+                }),
+                _ => Err(Error::Execution {
+                    message: describe_exception(scope, "module instantiation failed"),
+                }),
+            }
         }
     };
 
@@ -493,7 +571,9 @@ pub(crate) fn has_pending_dynamic(registry: &Rc<RefCell<ModuleRegistry>>) -> boo
 /// evaluation and tracks the evaluation promise so [`settle_dynamic`] can
 /// resolve the request with the module namespace once it completes.
 /// `Module::evaluate` is idempotent, so this is correct for a fresh, already
-/// evaluating, or already-evaluated (shared) module alike.
+/// evaluating, or already-evaluated (shared) module alike. A module already
+/// known to have errored (a re-imported failed graph member) is instead rejected
+/// with the recorded error — re-evaluating it would abort V8.
 pub(crate) fn link_dynamic(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
@@ -508,6 +588,17 @@ pub(crate) fn link_dynamic(
         .dynamic_resolvers
         .remove(&reqid)
         .ok_or_else(|| Error::Internal(format!("unknown dynamic import request {reqid}")))?;
+
+    // A module reached again after its graph already errored (e.g. a member of a
+    // cycle whose evaluation threw) must not be re-evaluated — V8 aborts on it,
+    // and its public status is indistinguishable from a successful one. Reject
+    // with the recorded error instead (queued so the reaction runs — see
+    // [`ModuleRegistry`]'s `dynamic_rejecting`).
+    let already_errored = registry.borrow().errored.get(&id).cloned();
+    if let Some(error) = already_errored {
+        registry.borrow_mut().dynamic_rejecting.push((resolver, error));
+        return Ok(());
+    }
 
     v8::scope!(let scope, isolate);
     let context = v8::Local::new(scope, context);
@@ -608,12 +699,26 @@ pub(crate) fn settle_dynamic(
             v8::PromiseState::Pending => still_pending.push(entry),
             v8::PromiseState::Fulfilled => {
                 let module = v8::Local::new(scope, &entry.module);
+                // The whole graph evaluated: record its members as ok so a later
+                // failing graph reaching them doesn't mismark them errored.
+                let root = registry.borrow().id_of(&module);
+                if let Some(root) = root {
+                    registry.borrow_mut().mark_graph_ok(root);
+                }
                 let namespace = module.get_module_namespace();
                 let resolver = v8::Local::new(scope, &entry.resolver);
                 resolver.resolve(scope, namespace);
             }
             v8::PromiseState::Rejected => {
                 let reason = eval.result(scope);
+                // Propagate the failure across the graph: a re-import of any
+                // member must reject (not re-evaluate — that aborts V8).
+                let module = v8::Local::new(scope, &entry.module);
+                let root = registry.borrow().id_of(&module);
+                if let Some(root) = root {
+                    let error = v8::Global::new(scope, reason);
+                    registry.borrow_mut().mark_graph_errored(root, &error);
+                }
                 let resolver = v8::Local::new(scope, &entry.resolver);
                 resolver.reject(scope, reason);
             }

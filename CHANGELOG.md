@@ -167,6 +167,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Dynamic `import()` of an errored module cycle no longer crashes the
+  process.** Dynamically importing a member of an async (top-level-await) cycle
+  whose evaluation already threw re-evaluated an errored module, tripping a V8
+  `CHECK` and aborting the whole runtime (`SIGABRT`) — guest-triggerable. V8
+  exposes no safe per-module way to detect this (a failed async cycle member
+  reports `Evaluated`, and `Evaluate`/`GetException` abort on it), so the engine
+  now tracks graph adjacency and propagates an evaluation failure across the
+  reachable graph; a re-import of an errored member rejects with the recorded
+  error instead of re-evaluating. Surfaced by tc39/test262
+  `dynamic-import/import-fulfilled-member-of-errored-cycle`.
 - **Caught dynamic `import()` failures no longer reported as unhandled
   rejections.** Dynamically importing a module that throws at top level and
   catching it (`await import('./throws.js').catch(...)`) still reported the
