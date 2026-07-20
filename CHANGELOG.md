@@ -167,6 +167,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Dynamic `import()` rejection reactions no longer silently dropped.** When a
+  dynamic import failed to load (missing module, or a module with a syntax
+  error), its promise was rejected *after* the tick's microtask checkpoint, so
+  the queued `.catch`/rejection reaction never ran if the event loop then went
+  idle — `import('./missing.js').catch(...)` completed with exit 0 and the
+  handler never fired. Rejections are now deferred into the tick (before the
+  checkpoint), symmetric with the resolve path, so reactions always run.
+  Surfaced by tc39/test262 `dynamic-import/catch/*`.
 - **Protobuf decode recursion limit.** `decode` (and the streaming/group skip
   paths) now bound message nesting to a maximum depth (100, the protobuf
   default), rejecting deeply-nested sub-messages or groups instead of exhausting

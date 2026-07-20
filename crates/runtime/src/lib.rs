@@ -3007,6 +3007,27 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_import_rejection_runs_catch_when_loop_would_be_idle() {
+        // Regression: a dynamic import() that fails to load rejects its promise,
+        // but the rejection reaction is queued as a microtask. Rejecting inline
+        // during the post-tick dynamic-import drain left that microtask with no
+        // checkpoint to run it once the loop went idle, so `.catch` never fired
+        // (silent, exit 0). The rejection must be deferred into the tick so the
+        // reaction runs — with nothing else keeping the loop alive.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let loader = MapLoader::new(&[]); // any import fails to load
+        let state = run_module(
+            &mut rt,
+            "globalThis.caught = false; \
+             import('./missing.mjs').catch(() => { globalThis.caught = true; });",
+            loader,
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.caught").unwrap(), Value::Bool(true));
+    }
+
+    #[test]
     fn diamond_evaluates_shared_dependency_once() {
         let _g = v8_guard();
         let mut rt = runtime();

@@ -98,6 +98,14 @@ pub(crate) struct ModuleRegistry {
     /// Linked dynamic imports awaiting their module's evaluation to settle:
     /// `(request id, resolver, module, evaluation promise)`.
     dynamic_settling: Vec<DynamicSettling>,
+    /// Dynamic imports to reject, queued by [`reject_dynamic`] (load failure) or
+    /// [`link_dynamic`] (errored graph member). Rejecting is deferred to
+    /// [`settle_dynamic`] — which runs inside the tick, *before* the microtask
+    /// checkpoint — so the promise's rejection reactions run in that same
+    /// checkpoint. Rejecting inline from the runtime's post-tick dynamic-import
+    /// drain would leave the reaction microtask queued with nothing to run it if
+    /// the loop then goes idle (the `.catch` would silently never fire).
+    dynamic_rejecting: Vec<(v8::Global<v8::PromiseResolver>, v8::Global<v8::Value>)>,
 }
 
 /// A dynamic import whose module is evaluating; when the evaluation promise
@@ -122,6 +130,7 @@ impl ModuleRegistry {
             pending_dynamic: Vec::new(),
             dynamic_resolvers: HashMap::new(),
             dynamic_settling: Vec::new(),
+            dynamic_rejecting: Vec::new(),
         }
     }
 
@@ -477,6 +486,7 @@ pub(crate) fn has_pending_dynamic(registry: &Rc<RefCell<ModuleRegistry>>) -> boo
     !reg.pending_dynamic.is_empty()
         || !reg.dynamic_resolvers.is_empty()
         || !reg.dynamic_settling.is_empty()
+        || !reg.dynamic_rejecting.is_empty()
 }
 
 /// Links a loaded+instantiated module to its dynamic-import request: kicks off
@@ -528,8 +538,11 @@ pub(crate) fn link_dynamic(
     }
 }
 
-/// Rejects a dynamic import whose graph could not be resolved/loaded, with
-/// `message` as the error.
+/// Queues a rejection for a dynamic import whose graph could not be
+/// resolved/loaded, with `message` as the error. The rejection itself is
+/// performed later by [`settle_dynamic`] (inside the tick, before the microtask
+/// checkpoint) so the promise's reactions run — see [`ModuleRegistry`]'s
+/// `dynamic_rejecting`.
 pub(crate) fn reject_dynamic(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
@@ -547,29 +560,40 @@ pub(crate) fn reject_dynamic(
     let context = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, context);
 
-    let resolver = v8::Local::new(scope, &resolver);
     let text = v8::String::new(scope, message).unwrap_or_else(|| v8::String::empty(scope));
     let error = v8::Exception::error(scope, text);
-    resolver.reject(scope, error);
+    let error = v8::Global::new(scope, error);
+    registry.borrow_mut().dynamic_rejecting.push((resolver, error));
     Ok(())
 }
 
-/// Settles linked dynamic imports whose module evaluation has completed:
-/// fulfilled → resolve with the module namespace; rejected → reject with the
-/// evaluation error. Called each tick.
+/// Settles dynamic imports, called each tick (before the microtask checkpoint):
+/// first performs rejections queued since the last tick (load failures / errored
+/// graph members), then, for each linked import whose module evaluation has
+/// completed, fulfilled → resolve with the module namespace; rejected → reject
+/// with the evaluation error.
 pub(crate) fn settle_dynamic(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     registry: &Rc<RefCell<ModuleRegistry>>,
 ) {
+    let rejecting = std::mem::take(&mut registry.borrow_mut().dynamic_rejecting);
     let settling = std::mem::take(&mut registry.borrow_mut().dynamic_settling);
-    if settling.is_empty() {
+    if rejecting.is_empty() && settling.is_empty() {
         return;
     }
 
     v8::scope!(let scope, isolate);
     let context = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, context);
+
+    // Rejections queued since the last tick (load failures / errored graphs):
+    // reject here so the reaction microtasks run in this tick's checkpoint.
+    for (resolver, error) in rejecting {
+        let resolver = v8::Local::new(scope, &resolver);
+        let error = v8::Local::new(scope, &error);
+        resolver.reject(scope, error);
+    }
 
     let mut still_pending = Vec::new();
     for entry in settling {
