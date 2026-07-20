@@ -1,131 +1,122 @@
-# Release artifacts for the `esrun` CLI.
-#
-# Triggered by pushing a semver tag (e.g. `v0.1.0`). Runs the workspace tests
-# first; only if they pass does it build the standalone binary per target,
-# package it (tar.gz on Unix, zip on Windows) with a SHA-256 checksum, and
-# publish them all to a GitHub Release.
-#
-# The `v8` crate downloads a prebuilt static library at build time, so each
-# runner needs network access. The toolchain is pinned by rust-toolchain.toml.
-#
-# Targets: Linux + Windows now; macOS is wired but disabled until a runner is
-# available (see the commented matrix entries).
 name: Release
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+*"] # semver tags only
-  workflow_dispatch: # allow manual dry-runs (build, no publish)
+    branches: [main]
 
 permissions:
-  contents: write # create releases + upload assets
+  contents: write  # create tags and GitHub Releases
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  test:
-    name: test
+  check-release:
     runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+      release_es_runtime_cli: ${{ steps.check.outputs.release_es_runtime_cli }}
     steps:
       - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      # fmt/clippy are gated on main by ci.yml; the release only needs the tests
-      # to pass before artifacts publish.
-      - name: Tests
-        run: cargo test --workspace --locked
+        with:
+          fetch-depth: 0
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.26.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+      - id: check
+        run: |
+          echo "should_release=$(otf-release check --exclude-package es-runtime-cli)" >> "$GITHUB_OUTPUT"
+          echo "release_es_runtime_cli=$(otf-release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
 
-  build:
-    name: build (${{ matrix.target }})
-    needs: test
-    runs-on: ${{ matrix.os }}
+  matrix-es-runtime-cli:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_es_runtime_cli == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.26.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+      - id: set
+        run: echo "matrix=$(otf-release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
+
+  build-es-runtime-cli:
+    needs: [check-release, matrix-es-runtime-cli]
+    if: needs.check-release.outputs.release_es_runtime_cli == 'true'
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: zip
-          # macOS — enable once a runner is provisioned:
-          # - os: macos-latest
-          #   target: aarch64-apple-darwin
-          #   archive: tar.gz
-          # - os: macos-13
-          #   target: x86_64-apple-darwin
-          #   archive: tar.gz
+      matrix: ${{ fromJSON(needs.matrix-es-runtime-cli.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust target
-        run: rustup target add ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
+      - name: Install cross toolchain
+        if: ${{ matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-${{ matrix.arch }}-linux-gnu
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.vm }}
         with:
-          key: ${{ matrix.target }}
-
-      - name: Build esrun
-        run: cargo build --release --locked -p es-runtime-cli --target ${{ matrix.target }}
-
-      - name: Package (Unix)
-        if: matrix.archive == 'tar.gz'
+          targets: ${{ matrix.triple }}
+      - name: Install otf-release
+        if: runner.os != 'Windows'
         shell: bash
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          [ "$GITHUB_REF_TYPE" = tag ] || VERSION="dev-${GITHUB_SHA::8}"
-          NAME="esrun-${VERSION}-${{ matrix.target }}"
-          mkdir -p "dist/$NAME/types"
-          cp "target/${{ matrix.target }}/release/esrun" "dist/$NAME/"
-          cp README.md LICENSE NOTICE "dist/$NAME/" 2>/dev/null || true
-          cp types/*.d.ts "dist/$NAME/types/" 2>/dev/null || true
-          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
-
-      - name: Package (Windows)
-        if: matrix.archive == 'zip'
+        env:
+          OTF_RELEASE_VERSION: v0.26.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+      - name: Install otf-release
+        if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { "dev-$($env:GITHUB_SHA.Substring(0,8))" }
-          $name = "esrun-$version-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path "dist/$name/types" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/esrun.exe" "dist/$name/"
-          Copy-Item README.md,LICENSE,NOTICE "dist/$name/" -ErrorAction SilentlyContinue
-          Copy-Item types/*.d.ts "dist/$name/types/" -ErrorAction SilentlyContinue
-          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
-
+        env:
+          OTF_RELEASE_VERSION: v0.26.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.ps1 | iex
+      - name: Build es-runtime-cli
+        if: ${{ !matrix.vm }}
+        run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
+      - name: Build es-runtime-cli in a freebsd VM
+        if: ${{ matrix.vm && matrix.name == 'freebsd' }}
+        uses: vmactions/freebsd-vm@v1
+        with:
+          arch: ${{ matrix.arch }}
+          usesh: true
+          copyback: true
+          prepare: |
+            pkg install -y rust
+          run: |
+            cargo build --release --target ${{ matrix.triple }}
+      - name: Stage es-runtime-cli
+        if: ${{ matrix.vm }}
+        run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }} --stage-only
       - uses: actions/upload-artifact@v4
         with:
-          name: esrun-${{ matrix.target }}
-          path: |
-            dist/*.tar.gz
-            dist/*.zip
-          if-no-files-found: error
+          name: es-runtime-cli-${{ matrix.name }}-${{ matrix.arch }}
+          path: .artifacts/es-runtime-cli
 
-  publish:
-    name: publish release
-    needs: build
-    if: github.ref_type == 'tag'
+  github-release-es-runtime-cli:
+    needs: [check-release, build-es-runtime-cli]
+    if: needs.check-release.outputs.release_es_runtime_cli == 'true'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
-      # One combined checksum file (`<hash>  <archive>` per line) instead of a
-      # per-archive `.sha256` sidecar. The sidecars shared the platform target
-      # string with their archive, which made release-asset selection ambiguous
-      # for `esrun upgrade` (self_update matches assets by substring); a single
-      # `checksums.txt` keeps the archive the only target-named asset.
-      - name: Checksums
-        run: (cd dist && sha256sum esrun-*.tar.gz esrun-*.zip > checksums.txt && cat checksums.txt)
+          path: .artifacts
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.26.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/checksums.txt
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: otf-release github-release --package es-runtime-cli --artifacts-dir .artifacts
+
