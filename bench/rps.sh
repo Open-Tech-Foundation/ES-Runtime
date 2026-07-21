@@ -72,6 +72,21 @@ HDR="Accept-Encoding: identity"
 OUT="$(mktemp)"
 trap 'cleanup; rm -f "$OUT"' EXIT
 
+# Refuse to run if anything already holds $PORT. Without this the failure is
+# silent and produces plausible-looking numbers: `measure` starts a server, the
+# port-wait below succeeds instantly against the *squatter*, our own server dies
+# of EADDRINUSE, and every runtime is then measured against the same stranger —
+# which reads as all runtimes scoring identically. Observed for real (a dev
+# server on :3000), so this is a guard against a known trap, not a hypothetical.
+if (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+  echo "rps.sh: port $PORT is already in use — every runtime would be measured against that process, not its own server." >&2
+  if command -v ss >/dev/null 2>&1; then
+    echo "  holder: $(ss -tlnp 2>/dev/null | grep ":$PORT" | head -1)" >&2
+  fi
+  echo "  free the port (or set PORT=... if the server scripts are updated to honour it) and re-run." >&2
+  exit 1
+fi
+
 # Runs the load generator against the already-running server, writes JSON to
 # $OUT, then prints "<req/s> <avg-latency-ms>" parsed from it.
 load() {
@@ -99,6 +114,14 @@ measure() {
     (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break
     sleep 0.1
   done
+  # The port answering is not proof *our* server answered it: a runtime that
+  # failed to bind has already exited, and loading now would measure whatever
+  # else is listening. Check the process we started is still alive.
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    SERVER_PID=""
+    echo "ERR ERR"
+    return
+  fi
   load
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
 }
@@ -110,6 +133,9 @@ if [ -n "${BENCH_JSON:-}" ]; then
     read -r rps avg <<<"$(measure "${CMD[$r]}")"
     [ -z "$first" ] && printf ','
     first=
+    # A runtime that could not be measured emits null, not a bare ERR token —
+    # the latter is invalid JSON and would fail the consumer's parse.
+    case "$rps" in ''|ERR) rps=null ;; esac
     printf '\n      "%s": %s' "$r" "$rps"
   done
   printf '\n    }\n  }\n}\n'

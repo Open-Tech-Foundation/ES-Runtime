@@ -272,6 +272,11 @@ bench/rps.sh                             # oha -c 100 -n 500000
 CONN=250 REQUESTS=1000000 bench/rps.sh   # heavier load
 ```
 
+**Port 3000 must be free.** The hello-world servers bind it directly, so anything
+already listening there (a dev server, a stray run) would be load-tested *in place
+of* every runtime — which shows up as all runtimes scoring identically. `rps.sh`
+refuses to start in that case and names the process holding the port.
+
 Indicative numbers on one Linux x86-64 box (12 cores):
 
 ```

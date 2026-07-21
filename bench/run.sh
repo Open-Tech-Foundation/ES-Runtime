@@ -104,6 +104,14 @@ start_fetch_server() {
     drop_fetch_workloads
     return
   fi
+  # If something already holds the port, our server never binds and every
+  # runtime would silently measure that stranger instead. Drop the workloads
+  # rather than publish numbers about someone else's process.
+  if (echo > "/dev/tcp/127.0.0.1/$FETCH_PORT") 2>/dev/null; then
+    note "fetch/fetch_upload workloads skipped (port $FETCH_PORT already in use)"
+    drop_fetch_workloads
+    return
+  fi
   node -e '
     const http = require("http");
     http.createServer((req, res) => {
@@ -149,6 +157,13 @@ drop_fetch_workloads() {
 # workload (with a notice) if none is available or the port doesn't come up.
 start_ws_server() {
   case " $WORKLOADS " in *" websocket "*) ;; *) return ;; esac
+  # Same trap as the fetch server: a squatter on the port would be measured in
+  # place of the echo server we meant to start.
+  if (echo > "/dev/tcp/127.0.0.1/$WS_PORT") 2>/dev/null; then
+    note "websocket workload skipped (port $WS_PORT already in use)"
+    WORKLOADS="${WORKLOADS//websocket/}"
+    return
+  fi
   local cmd="" script="$SCRATCH/ws-echo.js"
   if command -v bun >/dev/null 2>&1; then
     cmd="bun"
