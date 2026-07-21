@@ -34,7 +34,7 @@ pub mod op;
 pub mod snapshot;
 mod value;
 
-pub use engine::{Engine, InterruptHandle, V8Engine};
+pub use engine::{Engine, InterruptHandle, V8Engine, WasmModuleInfo};
 pub use error::{Error, Result};
 pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};

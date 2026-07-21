@@ -104,8 +104,38 @@ They currently buffer the response before compiling rather than compiling as
 bytes arrive. Behaviour is identical; only peak memory and time-to-first-byte
 differ on large modules.
 
-**Not yet supported:** the ESM integration — `import ... from "./m.wasm"` fails,
-as a `.wasm` file is loaded as JS source. Compile the bytes explicitly instead.
+### ES-module integration
+
+A `.wasm` file can be imported directly; its exports are the module's exports:
+
+```js
+import { add } from "./add.wasm";
+add(2, 3); // 5
+```
+
+An export name that is not a JS identifier still round-trips — reach it off the
+namespace:
+
+```js
+import * as m from "./add.wasm";
+m["weird-name"](1, 1);
+```
+
+A wasm *import*'s module half is an ordinary module specifier, resolved through
+the same graph as any `import` — so `(import "./env.js" "log" …)` takes `log`
+from that file's namespace:
+
+```js
+// env.js
+export const log = (v) => console.log(v);
+```
+
+The module is compiled once per graph, so static and dynamic imports of the same
+file share one instance. A malformed `.wasm` fails at load with V8's own
+diagnostic, like a syntax error.
+
+**Not yet supported:** source-phase imports (`import source m from "./m.wasm"`)
+and the component model.
 
 `SharedArrayBuffer` and `shared: true` memories do construct, but there are no
 workers to share them with (see **Not available** above), so they buy nothing

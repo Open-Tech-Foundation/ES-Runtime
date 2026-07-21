@@ -196,7 +196,9 @@ impl ModuleRegistry {
 
     /// The module id for a V8 module handle, via its identity hash.
     fn id_of(&self, module: &v8::Local<'_, v8::Module>) -> Option<ModuleId> {
-        self.id_by_hash.get(&module.get_identity_hash().get()).copied()
+        self.id_by_hash
+            .get(&module.get_identity_hash().get())
+            .copied()
     }
 
     fn insert(&mut self, module: v8::Global<v8::Module>, hash: i32, specifier: String) -> ModuleId {
@@ -596,7 +598,10 @@ pub(crate) fn link_dynamic(
     // [`ModuleRegistry`]'s `dynamic_rejecting`).
     let already_errored = registry.borrow().errored.get(&id).cloned();
     if let Some(error) = already_errored {
-        registry.borrow_mut().dynamic_rejecting.push((resolver, error));
+        registry
+            .borrow_mut()
+            .dynamic_rejecting
+            .push((resolver, error));
         return Ok(());
     }
 
@@ -673,7 +678,10 @@ pub(crate) fn reject_dynamic(
         _ => v8::Exception::error(scope, text),
     };
     let error = v8::Global::new(scope, error);
-    registry.borrow_mut().dynamic_rejecting.push((resolver, error));
+    registry
+        .borrow_mut()
+        .dynamic_rejecting
+        .push((resolver, error));
     Ok(())
 }
 

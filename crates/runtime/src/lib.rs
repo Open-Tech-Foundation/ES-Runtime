@@ -47,7 +47,7 @@ pub use es_runtime_engine::{
 };
 pub use es_runtime_providers::{
     Clock, Console, ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader,
-    NetProvider, NetTransport, Process, WebSocketProvider,
+    ModuleSource, NetProvider, NetTransport, Process, WebSocketProvider,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -424,6 +424,80 @@ impl Runtime {
         format!("export default JSON.parse({escaped});")
     }
 
+    /// Turns what the loader returned into the source the engine compiles.
+    ///
+    /// WebAssembly is compiled here and represented by a generated wrapper (see
+    /// [`wasm_module_source`](Self::wasm_module_source)); JSON is wrapped when
+    /// the import carried `with { type: "json" }` — an attribute, not an
+    /// extension. Plain text passes through.
+    fn module_source(&mut self, loaded: ModuleSource, is_json: bool) -> Result<String> {
+        Ok(match loaded {
+            ModuleSource::Wasm(bytes) => {
+                let info = self.engine.compile_wasm(&bytes)?;
+                Self::wasm_module_source(&info)
+            }
+            ModuleSource::Text(text) if is_json => Self::json_module_source(&text),
+            ModuleSource::Text(text) => text,
+        })
+    }
+
+    /// Synthesizes the JS module that stands in for a `.wasm` file in the graph
+    /// (the WebAssembly ES-module integration).
+    ///
+    /// V8's synthetic modules cannot declare imports of their own, so rather than
+    /// building one, the wasm module is represented by a *generated* ES module.
+    /// That buys the whole existing pipeline for free — its wasm imports become
+    /// ordinary `import` statements that resolve, dedupe, and cycle-check exactly
+    /// like any other edge, and its exports become real named exports.
+    ///
+    /// The bytes never enter this source: they stay compiled in the engine, and
+    /// the wrapper reclaims the module by handle.
+    ///
+    /// Per the integration, the *module* half of each wasm import is an ordinary
+    /// module specifier, so `(import "./env.js" "log")` imports that file's
+    /// namespace and reads `log` off it. Each distinct specifier is imported once.
+    fn wasm_module_source(info: &es_runtime_engine::WasmModuleInfo) -> String {
+        let js_string = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
+
+        // Distinct import specifiers, in first-seen order, each bound to a
+        // namespace local.
+        let mut specifiers: Vec<&str> = Vec::new();
+        for (module, _) in &info.imports {
+            if !specifiers.contains(&module.as_str()) {
+                specifiers.push(module);
+            }
+        }
+
+        let mut out = String::new();
+        for (i, spec) in specifiers.iter().enumerate() {
+            out.push_str(&format!("import * as $ns{i} from {};\n", js_string(spec)));
+        }
+
+        out.push_str(&format!("const $mod = __wasm_module({});\n", info.handle));
+        out.push_str("const $imports = { __proto__: null };\n");
+        for (i, spec) in specifiers.iter().enumerate() {
+            out.push_str(&format!("$imports[{}] = $ns{i};\n", js_string(spec)));
+        }
+        out.push_str("const $exports = new WebAssembly.Instance($mod, $imports).exports;\n");
+
+        // Wasm export names are arbitrary strings, so bind each to a generated
+        // local and re-export it under its real name via a string alias — which
+        // covers names that are not identifiers (`foo-bar`, `0`, `default`).
+        for (i, name) in info.exports.iter().enumerate() {
+            out.push_str(&format!("const $x{i} = $exports[{}];\n", js_string(name)));
+        }
+        if !info.exports.is_empty() {
+            let aliases: Vec<String> = info
+                .exports
+                .iter()
+                .enumerate()
+                .map(|(i, name)| format!("$x{i} as {}", js_string(name)))
+                .collect();
+            out.push_str(&format!("export {{ {} }};\n", aliases.join(", ")));
+        }
+        out
+    }
+
     /// Walks the import graph reachable from `root_id`, compiling each distinct
     /// canonical specifier once (deduped via the realm [`module_map`], so
     /// diamonds and cycles load a module a single time and shared modules are one
@@ -463,17 +537,11 @@ impl Runtime {
                     match self.module_map.get(&canonical) {
                         Some(&id) => (id, None),
                         None => {
-                            let source = loader
+                            let loaded = loader
                                 .load(&canonical)
                                 .await
                                 .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                            // JSON modules are gated on the `with { type: "json" }`
-                            // attribute, not the file extension.
-                            let source = if is_json {
-                                Self::json_module_source(&source)
-                            } else {
-                                source
-                            };
+                            let source = self.module_source(loaded, is_json)?;
                             let id = self.engine.compile_module(&canonical, &source)?;
                             self.module_map.insert(canonical.clone(), id);
                             (id, Some(canonical))
@@ -561,17 +629,11 @@ impl Runtime {
         let id = match self.module_map.get(&canonical) {
             Some(&id) => id,
             None => {
-                let source = loader
+                let loaded = loader
                     .load(&canonical)
                     .await
                     .map_err(|e| Error::ModuleLoad(e.to_string()))?;
-                // JSON modules are gated on the `with { type: "json" }` attribute,
-                // not the file extension.
-                let source = if import_type == Some("json") {
-                    Self::json_module_source(&source)
-                } else {
-                    source
-                };
+                let source = self.module_source(loaded, import_type == Some("json"))?;
                 let id = self.engine.compile_module(&canonical, &source)?;
                 self.module_map.insert(canonical.clone(), id);
                 id
@@ -2985,11 +3047,16 @@ mod tests {
             &self,
             specifier: &str,
         ) -> es_runtime_providers::BoxFuture<
-            std::result::Result<String, es_runtime_providers::ProviderError>,
+            std::result::Result<ModuleSource, es_runtime_providers::ProviderError>,
         > {
-            let result = self.files.get(specifier).cloned().ok_or_else(|| {
-                es_runtime_providers::ProviderError::Other(format!("not found: {specifier}"))
-            });
+            let result = self
+                .files
+                .get(specifier)
+                .cloned()
+                .map(ModuleSource::Text)
+                .ok_or_else(|| {
+                    es_runtime_providers::ProviderError::Other(format!("not found: {specifier}"))
+                });
             Box::pin(async move { result })
         }
     }

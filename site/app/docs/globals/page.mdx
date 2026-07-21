@@ -113,7 +113,15 @@ const { instance } = await WebAssembly.instantiate(bytes, {
 instance.exports.add(2, 3); // 5
 ```
 
-`import … from "./m.wasm"` is not supported — compile the bytes.
+`.wasm` files import directly — exports become module exports, and a wasm
+import's module half resolves through the normal graph:
+
+```js
+import { add } from "./add.wasm";   // exports
+// (import "./env.js" "log" …) reads `log` from that module
+```
+
+`import source m from "./m.wasm"` is not supported yet.
 
 ## Streaming upload
 

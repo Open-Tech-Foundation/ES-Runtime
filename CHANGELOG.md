@@ -24,6 +24,24 @@ namespace) is unstable and may change between minor releases until the API freez
   (`import ... from "./m.wasm"`) is still unsupported. See
   [API.md](docs/API.md#webassembly); 18 new conformance assertions.
 
+- **WebAssembly ES-module integration.** `import { add } from "./add.wasm"` now
+  works — the last gap that kept `.wasm` from being a first-class module here,
+  and something Node, Deno and Bun all ship unflagged. A wasm import's *module*
+  half is an ordinary specifier resolved through the same graph as any `import`,
+  so `(import "./env.js" "log" …)` takes `log` from that module's namespace;
+  exports become the module's exports, including names that are not JS
+  identifiers. One instance per graph, shared by static and dynamic imports; a
+  malformed `.wasm` fails at load with V8's own diagnostic.
+  Source-phase imports (`import source`) are still unsupported.
+
+### Changed
+
+- **Breaking (embedders implementing `ModuleLoader`):** `load` now returns
+  `ModuleSource` — `Text(String)` or `Wasm(Vec<u8>)` — rather than `String`, so
+  the seam can carry a binary module at all. A text-only loader wraps its string
+  in `ModuleSource::Text`. `Engine` also gains `compile_wasm`, breaking for
+  out-of-repo implementors of that trait.
+
 ## [0.10.0] - 2026-07-20
 
 ### Security

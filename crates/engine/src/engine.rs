@@ -13,6 +13,88 @@ use crate::module::{ModuleEvalState, ModuleId, ModuleRegistry, ModuleRequest};
 use crate::op::{OpDecl, OpState, TimerId, install_op};
 use crate::value::Value;
 
+/// Calls a `WebAssembly.Module` reflection static (`imports`/`exports`) on
+/// `module` and pulls `fields` off each descriptor object it returns, one row per
+/// descriptor.
+fn wasm_reflect(
+    scope: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
+    func: &v8::Global<v8::Function>,
+    module: v8::Local<v8::WasmModuleObject>,
+    fields: &[&str],
+) -> Result<Vec<Vec<String>>> {
+    let func = v8::Local::new(scope, func);
+    let undefined: v8::Local<v8::Value> = v8::undefined(scope).into();
+    let result = func
+        .call(scope, undefined, &[module.into()])
+        .ok_or_else(|| Error::Internal("WebAssembly reflection call failed".into()))?;
+    let array: v8::Local<v8::Array> = result
+        .try_into()
+        .map_err(|_| Error::Internal("WebAssembly reflection did not yield an array".into()))?;
+
+    let mut rows = Vec::with_capacity(array.length() as usize);
+    for i in 0..array.length() {
+        let entry = array
+            .get_index(scope, i)
+            .ok_or_else(|| Error::Internal("missing WebAssembly descriptor".into()))?;
+        let entry: v8::Local<v8::Object> = entry
+            .try_into()
+            .map_err(|_| Error::Internal("WebAssembly descriptor is not an object".into()))?;
+        let mut row = Vec::with_capacity(fields.len());
+        for field in fields {
+            let key = v8::String::new(scope, field)
+                .ok_or_else(|| Error::Internal("could not intern field name".into()))?;
+            let value = entry
+                .get(scope, key.into())
+                .and_then(|v| v.to_string(scope))
+                .ok_or_else(|| {
+                    Error::Internal(format!("WebAssembly descriptor lacks {field:?}"))
+                })?;
+            row.push(value.to_rust_string_lossy(scope));
+        }
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// Looks up `WebAssembly.Module.<name>` (the `imports`/`exports` reflection
+/// statics). `None` when there is no `WebAssembly` namespace — a snapshot-builder
+/// isolate.
+fn wasm_module_static(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+    name: &str,
+) -> Option<v8::Global<v8::Function>> {
+    let global = context.global(scope);
+    let wasm = v8::String::new(scope, "WebAssembly")
+        .and_then(|k| global.get(scope, k.into()))
+        .and_then(|v| v8::Local::<v8::Object>::try_from(v).ok())?;
+    let module = v8::String::new(scope, "Module")
+        .and_then(|k| wasm.get(scope, k.into()))
+        .and_then(|v| v8::Local::<v8::Object>::try_from(v).ok())?;
+    let func = v8::String::new(scope, name)
+        .and_then(|k| module.get(scope, k.into()))
+        .and_then(|v| v8::Local::<v8::Function>::try_from(v).ok())?;
+    Some(v8::Global::new(scope, func))
+}
+
+/// What a compiled WebAssembly module needs from the host to join a module
+/// graph, produced by [`Engine::compile_wasm`].
+///
+/// Names no V8 type (DECISIONS.md D3): the compiled module itself stays inside
+/// the engine, reachable from JS only through `handle`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WasmModuleInfo {
+    /// Identifies the stashed compiled module; the generated wrapper passes it
+    /// to `__wasm_module(handle)` to instantiate without re-reading the bytes.
+    pub handle: u32,
+    /// The module's imports as `(module specifier, field name)`, in declaration
+    /// order. Per the ES-module integration the *module* half is an ordinary
+    /// import specifier, resolved like any other.
+    pub imports: Vec<(String, String)>,
+    /// The module's export names, in declaration order.
+    pub exports: Vec<String>,
+}
+
 /// A thread-safe handle for interrupting a running engine — typically held by a
 /// watchdog thread that bounds execution time (SPEC §4). Calling
 /// [`terminate`](Self::terminate) stops the engine's currently running
@@ -115,6 +197,15 @@ pub trait Engine {
     /// threads — async WebAssembly compilation above all — so a driver must pump
     /// before the microtask checkpoint for such promises to settle. Non-blocking.
     fn pump_message_loop(&mut self) -> bool;
+
+    /// Compiles WebAssembly `bytes` and stashes the result for the ES-module
+    /// integration, returning the handle plus the module's import and export
+    /// names — everything the caller needs to synthesize the JS wrapper that
+    /// joins it to the module graph (see [`WasmModuleInfo`]).
+    ///
+    /// Compilation is synchronous and reports a malformed module as a compile
+    /// error, so a bad `.wasm` fails at load like a syntax error would.
+    fn compile_wasm(&mut self, bytes: &[u8]) -> Result<WasmModuleInfo>;
 
     /// Whether a `WebAssembly` async compile/instantiate is still in flight.
     ///
@@ -242,6 +333,13 @@ pub struct V8Engine {
     /// Set by the near-heap-limit callback; lets `eval` label a termination as a
     /// heap-limit hit vs a watchdog interrupt.
     heap_tripped: Arc<AtomicBool>,
+    /// `WebAssembly.Module.imports` / `.exports`, captured at construction —
+    /// before any guest code can run — so the ES-module integration reflects a
+    /// module through pristine functions rather than whatever the global happens
+    /// to hold at import time. `None` in a snapshot-builder isolate, which has no
+    /// `WebAssembly` namespace at all.
+    wasm_imports_fn: Option<v8::Global<v8::Function>>,
+    wasm_exports_fn: Option<v8::Global<v8::Function>>,
     /// Keeps the near-heap-limit callback's data alive for the isolate's life
     /// (its address was handed to V8). `None` for snapshot-builder engines,
     /// which install no heap guard. Dropped after `isolate` (field order).
@@ -423,6 +521,20 @@ impl V8Engine {
             crate::op::install_wasm_builtins(scope, context)?;
         }
 
+        // Capture the WebAssembly reflection functions now, while the global is
+        // still exactly what V8 built. Absent in a snapshot-builder isolate,
+        // which exposes no `WebAssembly` — `compile_wasm` reports that clearly if
+        // it is ever reached there.
+        let (wasm_imports_fn, wasm_exports_fn) = {
+            v8::scope!(let scope, &mut isolate);
+            let context = v8::Local::new(scope, &context);
+            let scope = &mut v8::ContextScope::new(scope, context);
+            (
+                wasm_module_static(scope, context, "imports"),
+                wasm_module_static(scope, context, "exports"),
+            )
+        };
+
         Ok(V8Engine {
             isolate,
             context,
@@ -431,6 +543,8 @@ impl V8Engine {
             ops_baked,
             interrupt,
             heap_tripped,
+            wasm_imports_fn,
+            wasm_exports_fn,
             _heap_guard,
         })
     }
@@ -551,6 +665,70 @@ impl Engine for V8Engine {
 
     fn pump_message_loop(&mut self) -> bool {
         crate::pump_platform(&self.isolate)
+    }
+
+    fn compile_wasm(&mut self, bytes: &[u8]) -> Result<WasmModuleInfo> {
+        // Cloned out before the isolate is borrowed by the scope below. These
+        // were captured at wire time, before any guest code could run, so
+        // reassigning `WebAssembly.Module.imports` cannot redirect module
+        // loading.
+        let (imports_fn, exports_fn) = match (&self.wasm_imports_fn, &self.wasm_exports_fn) {
+            (Some(i), Some(e)) => (i.clone(), e.clone()),
+            _ => {
+                return Err(Error::Internal(
+                    "WebAssembly reflection unavailable in this context".into(),
+                ));
+            }
+        };
+
+        v8::scope!(let scope, &mut self.isolate);
+        let context = v8::Local::new(scope, &self.context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+        v8::tc_scope!(let scope, scope);
+
+        let module = match v8::WasmModuleObject::compile(scope, bytes) {
+            Some(module) => module,
+            None => {
+                // V8 reports the reason as a thrown CompileError; surface its
+                // message so a malformed `.wasm` reads like any other module
+                // compile failure.
+                let detail = scope
+                    .exception()
+                    .and_then(|e| e.to_string(scope))
+                    .map(|s| s.to_rust_string_lossy(scope))
+                    .unwrap_or_else(|| "invalid WebAssembly module".into());
+                return Err(Error::Compile { message: detail });
+            }
+        };
+
+        let imports = wasm_reflect(scope, &imports_fn, module, &["module", "name"])?
+            .into_iter()
+            .map(|mut fields| {
+                let name = fields.pop().unwrap_or_default();
+                let module = fields.pop().unwrap_or_default();
+                (module, name)
+            })
+            .collect();
+        let exports = wasm_reflect(scope, &exports_fn, module, &["name"])?
+            .into_iter()
+            .map(|mut fields| fields.pop().unwrap_or_default())
+            .collect();
+
+        let handle = {
+            let mut state = self.op_state.borrow_mut();
+            let handle = state.next_wasm_handle;
+            state.next_wasm_handle += 1;
+            state
+                .wasm_modules
+                .insert(handle, v8::Global::new(scope, module));
+            handle
+        };
+
+        Ok(WasmModuleInfo {
+            handle,
+            imports,
+            exports,
+        })
     }
 
     fn has_pending_wasm(&self) -> bool {

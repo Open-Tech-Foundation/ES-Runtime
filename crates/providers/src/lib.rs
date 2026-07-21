@@ -262,9 +262,40 @@ pub trait ModuleLoader: Send + Sync {
     /// loader's base, e.g. the working dir).
     fn resolve(&self, specifier: &str, referrer: &str) -> BoxFuture<Result<String, ProviderError>>;
 
-    /// Loads the UTF-8 source for a canonical id (as returned by
-    /// [`resolve`](Self::resolve)).
-    fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>>;
+    /// Loads the module at a canonical id (as returned by
+    /// [`resolve`](Self::resolve)) as either source text or WebAssembly bytes.
+    fn load(&self, specifier: &str) -> BoxFuture<Result<ModuleSource, ProviderError>>;
+}
+
+/// What a [`ModuleLoader`] returned for a module id.
+///
+/// Text and WebAssembly are separate variants because a `.wasm` file is binary
+/// and has no UTF-8 reading: the runtime compiles it and joins it to the graph
+/// through the WebAssembly ES-module integration, rather than parsing it as
+/// source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModuleSource {
+    /// UTF-8 source text — JavaScript, or JSON when the import carries
+    /// `with { type: "json" }`.
+    Text(String),
+    /// A WebAssembly binary (`.wasm`).
+    Wasm(Vec<u8>),
+}
+
+impl ModuleSource {
+    /// The source text, or `None` for a WebAssembly module.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            ModuleSource::Text(s) => Some(s),
+            ModuleSource::Wasm(_) => None,
+        }
+    }
+}
+
+impl From<String> for ModuleSource {
+    fn from(text: String) -> Self {
+        ModuleSource::Text(text)
+    }
 }
 
 /// Host process information — environment, arguments, working directory,

@@ -16,7 +16,7 @@
 
 use std::path::PathBuf;
 
-use es_runtime_providers::{BoxFuture, ModuleLoader, ProviderError};
+use es_runtime_providers::{BoxFuture, ModuleLoader, ModuleSource, ProviderError};
 use url::Url;
 
 /// A [`ModuleLoader`] that resolves and reads ES modules from the local
@@ -88,7 +88,7 @@ impl ModuleLoader for FsModuleLoader {
         })
     }
 
-    fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>> {
+    fn load(&self, specifier: &str) -> BoxFuture<Result<ModuleSource, ProviderError>> {
         let specifier = specifier.to_string();
         Box::pin(async move {
             let url = Url::parse(&specifier).map_err(|e| {
@@ -97,9 +97,23 @@ impl ModuleLoader for FsModuleLoader {
             let path: PathBuf = url.to_file_path().map_err(|()| {
                 ProviderError::Other(format!("module id is not a file path: {specifier}"))
             })?;
-            tokio::fs::read_to_string(&path)
-                .await
-                .map_err(|e| ProviderError::Other(format!("cannot read {}: {e}", path.display())))
+            // `.wasm` is binary and joins the graph through the WebAssembly ESM
+            // integration; everything else is read as UTF-8 source.
+            let is_wasm = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("wasm"));
+            let read = |e: std::io::Error| {
+                ProviderError::Other(format!("cannot read {}: {e}", path.display()))
+            };
+            if is_wasm {
+                Ok(ModuleSource::Wasm(
+                    tokio::fs::read(&path).await.map_err(read)?,
+                ))
+            } else {
+                Ok(ModuleSource::Text(
+                    tokio::fs::read_to_string(&path).await.map_err(read)?,
+                ))
+            }
         })
     }
 }
@@ -123,7 +137,7 @@ impl ModuleLoader for DenyModuleLoader {
         })
     }
 
-    fn load(&self, specifier: &str) -> BoxFuture<Result<String, ProviderError>> {
+    fn load(&self, specifier: &str) -> BoxFuture<Result<ModuleSource, ProviderError>> {
         let specifier = specifier.to_string();
         Box::pin(async move {
             Err(ProviderError::Other(format!(
@@ -211,7 +225,24 @@ mod tests {
         let id = Url::from_file_path(&path).unwrap().to_string();
 
         let source = loader().load(&id).await.unwrap();
-        assert_eq!(source, "export const v = 1;");
+        assert_eq!(source, ModuleSource::Text("export const v = 1;".into()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn loads_a_wasm_file_as_bytes() {
+        let dir = std::env::temp_dir().join(format!("esrt-mod-wasm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.wasm");
+        // `\0asm` + version 1 — an empty but well-formed module.
+        let bytes = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+        std::fs::write(&path, bytes).unwrap();
+        let id = Url::from_file_path(&path).unwrap().to_string();
+
+        // Read as bytes, not decoded as UTF-8 (which these are not).
+        let source = loader().load(&id).await.unwrap();
+        assert_eq!(source, ModuleSource::Wasm(bytes.to_vec()));
 
         std::fs::remove_dir_all(&dir).ok();
     }

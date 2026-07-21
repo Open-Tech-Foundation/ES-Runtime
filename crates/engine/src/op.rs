@@ -202,6 +202,12 @@ pub(crate) struct OpState {
     /// to poll, so this count is what keeps the driver's loop alive until they
     /// settle (see [`Engine::has_pending_wasm`](crate::Engine::has_pending_wasm)).
     pub pending_wasm: u32,
+    /// Compiled WebAssembly modules awaiting instantiation by the JS wrapper the
+    /// ESM integration generates, keyed by the handle baked into that wrapper.
+    /// Read back through the `__wasm_module` builtin.
+    pub wasm_modules: HashMap<u32, v8::Global<v8::WasmModuleObject>>,
+    /// Next handle handed out by [`Engine::compile_wasm`](crate::Engine::compile_wasm).
+    pub next_wasm_handle: u32,
 }
 
 impl OpState {
@@ -217,6 +223,8 @@ impl OpState {
             max_pending_ops: usize::MAX,
             async_waker: None,
             pending_wasm: 0,
+            wasm_modules: HashMap::new(),
+            next_wasm_handle: 1,
         }
     }
 
@@ -413,6 +421,9 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
         v8::ExternalReference {
             function: wasm_pending.map_fn_to(),
         },
+        v8::ExternalReference {
+            function: wasm_module.map_fn_to(),
+        },
     ])
 }
 
@@ -528,7 +539,64 @@ pub(crate) fn install_wasm_builtins(
     context: v8::Local<v8::Context>,
 ) -> Result<()> {
     let global = context.global(scope);
-    install_global_fn(scope, global, "__wasm_pending", wasm_pending, None)
+    install_global_fn(scope, global, "__wasm_pending", wasm_pending, None)?;
+    install_global_fn(scope, global, "__wasm_module", wasm_module, None)
+}
+
+/// `__wasm_module(handle)`: hands back the compiled module the host stashed for
+/// the WebAssembly ES-module integration, so the generated wrapper can
+/// instantiate it without the bytes making a round trip through JS.
+///
+/// Guest-reachable but not a capability: the only thing it can return is a
+/// module the guest's own `import` already caused to be compiled.
+fn wasm_module(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wasm_module_inner(&mut *scope, args, rv);
+    }));
+    if caught.is_err() && !scope.is_execution_terminating() {
+        throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "internal error in __wasm_module"),
+        );
+    }
+}
+
+fn wasm_module_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    mut rv: v8::ReturnValue<v8::Value>,
+) {
+    let handle = args.get(0).number_value(scope).unwrap_or(-1.0);
+    if !handle.is_finite() || handle < 0.0 {
+        throw(scope, &OpError::type_error("invalid wasm module handle"));
+        return;
+    }
+    let Some(state_rc) = op_state(scope) else {
+        throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "op state unavailable"),
+        );
+        return;
+    };
+    let found = state_rc
+        .borrow()
+        .wasm_modules
+        .get(&(handle as u32))
+        .cloned();
+    match found {
+        Some(global) => {
+            let local = v8::Local::new(scope, &global);
+            rv.set(local.into());
+        }
+        None => throw(
+            scope,
+            &OpError::new(ExceptionClass::Error, "unknown wasm module handle"),
+        ),
+    }
 }
 
 /// `__wasm_pending(delta)`: adjusts the in-flight async-WebAssembly count.
