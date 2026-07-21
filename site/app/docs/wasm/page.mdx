@@ -39,7 +39,7 @@ import { add } from "./add.wasm";   // exports
 // (import "./env.js" "log" …) reads `log` from that module
 ```
 
-| | |
+| Feature | Support |
 | --- | --- |
 | Named + namespace imports | ✅ |
 | Non-identifier export names | ✅ via string alias |
@@ -125,7 +125,7 @@ independent checks — and preopens are isolated from each other, so `../` out o
 | `FileRead` / `FileWrite` is granted | the host op | `ENOTCAPABLE` |
 | The resolved path is inside the root jail | the provider | `ENOTCAPABLE` |
 
-| Syscalls | |
+| Syscalls | Served |
 | --- | --- |
 | `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, `path_create_directory`, `path_unlink_file`, `path_remove_directory`, `path_rename` | ✅ |
 | `fd_pread`, `fd_pwrite`, `path_link`, `path_symlink`, `path_readlink`, the `*_set_times` / `set_size` calls, sockets | ❌ `ENOTCAPABLE` |
