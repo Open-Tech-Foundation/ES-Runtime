@@ -4,13 +4,14 @@ Compares **esrun** (the ES-Runtime CLI) against **Node.js**, **Bun**, **Deno**,
 and **LLRT** on a spread of Web-API workloads. Each workload uses only standard
 Web APIs, so the same script (`scripts/*.js`) runs unmodified on each runtime;
 where a runtime lacks an API the cell is **n/a** (e.g. Deno has no built-in glob;
-LLRT has no general HTTP server and only partial `fs`/streams).
+LLRT has no general HTTP server, no `WebAssembly`, and only partial `fs`/streams).
 
 [LLRT](https://github.com/awslabs/llrt) (AWS Low Latency Runtime) is QuickJS-based
 and built for cold-start and low memory — a deliberate foil for esrun's startup
 and footprint numbers, and a different engine (QuickJS, vs V8 for
 esrun/Node/Deno and JavaScriptCore for Bun). It runs the engine + Web-API
-workloads it supports; `http`/`streams`/`fs`/`glob`/`fetch_upload` fall through to n/a.
+workloads it supports; `http`/`streams`/`fs`/`glob`/`fetch_upload` and the
+`wasm_*`/`wasi_*` rows fall through to n/a.
 
 ## Running
 
@@ -54,7 +55,19 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **fetch_upload** | 200 sequential POSTs each streaming an 8 KiB `ReadableStream` request body (chunked upload) to the same local server — the request-body streaming path: building the body stream, the per-chunk host channel with backpressure, and chunked transfer-encoding. The server echoes the bytes it received and the workload **verifies** them, so a runtime that doesn't truly stream the body (e.g. LLRT, which coerces the stream) is recorded **n/a** rather than posting a misleadingly fast time. |
 | **http** | 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
 | **websocket** | 20 000 serial message round-trips over one `WebSocket` to a local echo server — the WebSocket *client* seam: opening handshake then per-message `send` + event dispatch (esrun: the `ws_send` op + the receive-pump's `MessageEvent` per tick). Server is whichever built-in WS server is present (Bun/Deno, or Node + `ws`); LLRT has no `WebSocket`, hence n/a. |
+| **wasm_compile** | 60 × `WebAssembly.compile` of a ~250 KB module (600 functions) — validation + codegen. Each module carries a different salt so the bytes differ and no compilation cache can serve the result. |
+| **wasm_call** | 20M calls across the JS↔wasm boundary into an exported `add`, plus 100M iterations of the same arithmetic run *inside* wasm — separates per-call boundary cost from wasm execution. |
+| **wasm_mem** | 8 000 × (JS fills a 64 KiB window of the instance's linear memory through a typed array; wasm sums it back) — the shared-buffer shape most real wasm interop takes. |
+| **wasi_start** | 2 000 × (construct a `WASI`, instantiate a command module against its import object, run `_start`) on a pre-compiled module — what *running a `wasm32-wasip1` program* costs per invocation. The guest makes no syscalls. |
+| **wasi_syscall** | A guest whose `_start` loops 60 000 times calling `random_get` + `clock_time_get`, timed around `start()` alone — the preview-1 implementation on the host side, called from inside wasm where a real program calls it. |
 | **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory floor. |
+
+The wasm modules are **assembled in JS** (`scripts/wasm-mod.js`) rather than
+checked in as `.wasm` fixtures, so every runtime compiles byte-identical input
+and a workload can vary a constant per iteration. `WASI` is taken from
+`runtime:wasi` on esrun and `node:wasi` on Node/Bun/Deno (Bun exposes the import
+object as `wasi.wasiImport` rather than `getImportObject()`; both are handled).
+LLRT has no `WebAssembly` at all, so all five rows are **n/a** there.
 
 ### Methodology
 
@@ -135,6 +148,19 @@ rss         |        41 |        29 |        54 |        11 |        19
 lacks. LLRT's QuickJS has no JIT — hence `compute`/`json`/`async` — and no
 streams/HTTP-server/`fs` here.)
 
+The wasm/WASI rows were added later and measured in their own run (same box,
+node v24, bun 1.4, deno 2.8, esrun 0.10):
+
+```
+workload      |      node |       bun |      deno |      llrt |     esrun
+--------------+-----------+-----------+-----------+-----------+-----------
+wasm_compile  |      46.6 |      70.2 |      36.1 |       n/a |     144.0
+wasm_call     |      91.6 |     151.3 |      81.5 |       n/a |      79.8
+wasm_mem      |     207.4 |     370.7 |     244.0 |       n/a |     244.4
+wasi_start    |     282.9 |     641.1 |      48.1 |       n/a |      48.1
+wasi_syscall  |      44.6 |    4806.5 |      17.3 |       n/a |      55.6
+```
+
 ## Interpretation
 
 **Reading the LLRT column.** LLRT is the cold-start/footprint specialist —
@@ -171,6 +197,12 @@ WinterTC surface**, not "fastest at everything."
   (per-request CPU cost) — the in-process `http` micro-workload here just exercises
   the warm request/response path.
 - **rss (19 MB) — lowest among the JIT runtimes**, under LLRT's 11 MB QuickJS.
+- **wasi_start — fastest, tied with Deno** (48 ms vs Node's 283 and Bun's 641 for
+  2 000 program runs). `runtime:wasi` is pure JS in the prelude, so constructing a
+  WASI and building its import object is object allocation inside the isolate —
+  no host crossing, no native binding to set up per instance.
+- **wasm_call — fastest** (80 ms), marginally ahead of Deno and Node; the JS↔wasm
+  boundary is V8's own and esrun adds nothing to it.
 - **json, jsonbig — mid-pack and competitive**; pure-engine baselines confirming
   the engine itself isn't a bottleneck (and where LLRT's missing JIT bites hardest).
 
@@ -181,6 +213,21 @@ WinterTC surface**, not "fastest at everything."
   on. The residual is attributed to the prebuilt `rusty_v8` library's build
   configuration (e.g. pointer compression, which Node builds without) and V8
   version skew — not addressable from this repo. Far behind Bun's JavaScriptCore.
+- **wasm_compile (144 ms vs Deno's 36, same engine).** Not the async pipeline:
+  compiling the same 60 modules with the synchronous `new WebAssembly.Module`
+  costs 29 ms on esrun against 6 ms on Deno and 5 ms on Node, so the ~5× is in
+  wasm codegen itself, not in tier-up or promise scheduling. No V8 flags are set
+  anywhere in this repo, so this lands with `compute`: attributed to the prebuilt
+  `rusty_v8` library's build configuration rather than to anything on our side.
+  Worth revisiting if wasm payloads become a hot path.
+- **wasi_syscall (56 ms vs Deno's 17).** Each preview-1 call is a JS function
+  reached from wasm that writes its result into linear memory through a
+  `DataView`; Node and Deno drop into native implementations. It is the price of
+  D34's pure-JS, no-new-attack-surface `runtime:wasi`, and it still beats Bun's
+  `node:wasi` by ~86×. The syscalls a real guest makes in bulk are the file ones,
+  which go through host ops, not this path.
+- **wasm_mem — mid-pack** (244 ms, level with Deno, ahead of Bun). The work is
+  V8's; nothing here is ours to win.
 - **url, encoding — competitive but behind the native parsers.** This surface
   crosses the JS↔Rust op boundary per call. It got here through three rounds:
   (1) op *dispatch* is cheap (~49 ns/call) — the cost was always per-call *work*;

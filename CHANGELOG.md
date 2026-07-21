@@ -10,6 +10,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **wasm/WASI benchmarks.** Five cross-runtime workloads covering the new
+  surface: `wasm_compile` (validation + codegen), `wasm_call` (the JS↔wasm
+  boundary vs execution inside wasm), `wasm_mem` (the shared linear-memory
+  interop shape), `wasi_start` (what running a `wasm32-wasip1` program costs per
+  invocation), and `wasi_syscall` (the preview-1 implementation, called from
+  inside the guest). Modules are assembled in JS (`bench/scripts/wasm-mod.js`)
+  rather than checked in as `.wasm` fixtures, so every runtime compiles
+  byte-identical input and the compile workload can vary a constant per iteration
+  to defeat compilation caches. `WASI` resolves from `runtime:wasi` on esrun and
+  `node:wasi` on Node/Bun/Deno; LLRT has no `WebAssembly`, so all five are n/a
+  there. esrun leads `wasi_start` and `wasm_call`; `wasm_compile` is ~4× behind
+  Deno on the same engine, which the synchronous-compile control isolates to wasm
+  codegen in the prebuilt `rusty_v8` — the same attribution as the `compute` row.
+  See [bench/README.md](bench/README.md).
+
 - **WebAssembly.** The `WebAssembly` JS API now works end-to-end. V8 always
   supplied the namespace, but the promise-returning entry points could never
   settle: V8 compiles off-thread and reports completion as a *foreground* task,
