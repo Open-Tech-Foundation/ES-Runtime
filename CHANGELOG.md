@@ -10,6 +10,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`/docs/wasm` site page.** One place for the whole WebAssembly + WASI surface:
+  the JS API, `.wasm` ES module imports, a proposal matrix measured with
+  `wasm-feature-detect` against Node/Bun/Deno (esrun matches Deno exactly — the
+  surface is V8's), the WASI member and syscall tables, the three-check
+  filesystem model, and the caveats (no running wasm threads without Workers,
+  buffering streaming compiles, no `import source`, blocking WASI file calls).
+  The `WebAssembly` and `runtime:wasi` sections in
+  [Global objects](https://esrun.opentechf.org/docs/globals) and
+  [Module system](https://esrun.opentechf.org/docs/modules) now link there
+  instead of restating it, and the comparison table gains WebAssembly, `.wasm`
+  module import, and WASI rows.
 - **wasm/WASI benchmarks.** Five cross-runtime workloads covering the new
   surface: `wasm_compile` (validation + codegen), `wasm_call` (the JS↔wasm
   boundary vs execution inside wasm), `wasm_mem` (the shared linear-memory

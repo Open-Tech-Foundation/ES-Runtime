@@ -99,29 +99,16 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 
 No capability required — a module is as privileged as the imports you pass it.
 
-| Global | Notes |
-| --- | --- |
-| `WebAssembly.validate` / `compile` / `instantiate` | |
-| `WebAssembly.compileStreaming` / `instantiateStreaming` | `Response` or a promise for one; `application/wasm` + ok status, else `TypeError`. Buffers before compiling |
-| `WebAssembly.Module` / `Instance` / `Memory` / `Table` / `Global` | |
-| `WebAssembly.CompileError` / `LinkError` / `RuntimeError` | |
-
 ```js
 const { instance } = await WebAssembly.instantiate(bytes, {
   env: { log: (n) => console.log(n) },
 });
 instance.exports.add(2, 3); // 5
+
+import { add } from "./add.wasm"; // .wasm files import directly
 ```
 
-`.wasm` files import directly — exports become module exports, and a wasm
-import's module half resolves through the normal graph:
-
-```js
-import { add } from "./add.wasm";   // exports
-// (import "./env.js" "log" …) reads `log` from that module
-```
-
-`import source m from "./m.wasm"` is not supported yet.
+Full surface, proposal matrix, and caveats: [WebAssembly & WASI](/docs/wasm).
 
 ## Streaming upload
 

@@ -1,0 +1,167 @@
+---
+title: WebAssembly & WASI
+description: The WebAssembly JS API, .wasm ES module imports, and WASI preview 1 — what is supported, how it compares, and the caveats.
+---
+
+# WebAssembly & WASI
+
+WebAssembly needs **no capability**: a module is exactly as privileged as the
+import object you hand it. WASI is a `runtime:` module and reaches the host only
+through capability-gated ops.
+
+## JS API
+
+| API | Notes |
+| --- | --- |
+| `validate` / `compile` / `instantiate` | |
+| `compileStreaming` / `instantiateStreaming` | `Response` or a promise for one; `application/wasm` + ok status, else `TypeError`. Buffers before compiling |
+| `Module` / `Instance` / `Memory` / `Table` / `Global` | |
+| `Module.imports` / `.exports` / `.customSections` | |
+| `Tag` / `Exception` | Exception handling |
+| `Suspending` / `promising` | JSPI |
+| `CompileError` / `LinkError` / `RuntimeError` | |
+| `WebAssembly.Function` | ❌ type reflection — also absent from Node, Bun, and Deno |
+
+```js
+const { instance } = await WebAssembly.instantiate(bytes, {
+  env: { log: (n) => console.log(n) },
+});
+instance.exports.add(2, 3); // 5
+```
+
+## ES module imports
+
+`.wasm` files import directly — exports become module exports, and a wasm
+import's module half resolves through the normal graph:
+
+```js
+import { add } from "./add.wasm";   // exports
+// (import "./env.js" "log" …) reads `log` from that module
+```
+
+| | |
+| --- | --- |
+| Named + namespace imports | ✅ |
+| Non-identifier export names | ✅ via string alias |
+| wasm imports resolving through the graph | ✅ |
+| One instance across static + dynamic import | ✅ |
+| `import source m from "./m.wasm"` | ❌ `SyntaxError` |
+
+## Proposals
+
+The proposal surface is V8's, so it matches Deno's exactly. Verified with
+[`wasm-feature-detect`](https://github.com/GoogleChromeLabs/wasm-feature-detect).
+
+| Proposal | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
+| BigInt integration | ✅ | ✅ | ✅ | ✅ |
+| Bulk memory | ✅ | ✅ | ✅ | ✅ |
+| Exception handling | ✅ | ✅ | ✅ | ✅ |
+| Exception handling (final) | ✅ | ❌ | ✅ | ✅ |
+| Extended const | ✅ | ✅ | ✅ | ✅ |
+| Garbage collection | ✅ | ✅ | ✅ | ✅ |
+| JS string builtins | ✅ | ✅ | ✅ | ✅ |
+| JSPI (promise integration) | ✅ | ❌ | ✅ | ✅ |
+| Memory64 | ✅ | ✅ | ❌ | ✅ |
+| Multi-memory | ✅ | ✅ | ❌ | ✅ |
+| Multi-value | ✅ | ✅ | ✅ | ✅ |
+| Mutable globals | ✅ | ✅ | ✅ | ✅ |
+| Reference types | ✅ | ✅ | ✅ | ✅ |
+| Relaxed SIMD | ✅ | ✅ | ❌ | ✅ |
+| Saturating float→int | ✅ | ✅ | ✅ | ✅ |
+| Sign extension | ✅ | ✅ | ✅ | ✅ |
+| SIMD | ✅ | ✅ | ✅ | ✅ |
+| Tail call | ✅ | ✅ | ✅ | ✅ |
+| Threads (validation) | ✅ | ✅ | ✅ | ✅ |
+| Typed function references | ✅ | ✅ | ✅ | ✅ |
+| Type reflection | ❌ | ❌ | ❌ | ❌ |
+
+## WASI
+
+Preview 1 (`wasi_snapshot_preview1`) — what the `wasm32-wasip1` toolchains emit.
+
+```js
+import { WASI } from "runtime:wasi";
+import { file } from "runtime:fs";
+
+const wasi = new WASI({
+  args: ["prog", "--flag"],
+  env: { LOG: "debug" },
+  preopens: { "/sandbox": "./data" }, // the only files the guest can reach
+});
+const bytes = await file("./prog.wasm").bytes();
+const { instance } = await WebAssembly.instantiate(bytes, wasi.getImportObject());
+
+const status = wasi.start(instance); // runs `_start`, returns the exit status
+```
+
+| Member | Notes |
+| --- | --- |
+| `new WASI({ args?, env?, preopens?, version? })` | `version` must be `"preview1"` |
+| `getImportObject()` | The `wasi_snapshot_preview1` import object |
+| `start(instance)` | Runs `_start`; returns `0`, or the `proc_exit` code. A real fault still throws |
+| `initialize(instance)` | Runs a reactor module's `_initialize`, leaving the instance live |
+
+### No ambient authority
+
+Args and env come **only** from the constructor. There is no path by which a
+guest reads the host environment, so constructing a `WASI` needs no capability
+and inherits nothing. Forward the real environment explicitly through the
+`Env`-gated [runtime:process](/api/process) if you want it.
+
+Node's own docs state its `node:wasi` threat model "does not provide secure
+sandboxing" and that WASI capabilities there "do not form a security model".
+Here the sandbox is the runtime's.
+
+### Filesystem
+
+A guest sees only what `preopens` maps in. Reaching a file passes **three**
+independent checks — and preopens are isolated from each other, so `../` out of
+`/a` cannot reach `/b`:
+
+| Check | Enforced by | Failure |
+| --- | --- | --- |
+| The preopen maps the path, and it does not climb out of it | `runtime:wasi` | `ENOTCAPABLE` |
+| `FileRead` / `FileWrite` is granted | the host op | `ENOTCAPABLE` |
+| The resolved path is inside the root jail | the provider | `ENOTCAPABLE` |
+
+| Syscalls | |
+| --- | --- |
+| `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, `path_create_directory`, `path_unlink_file`, `path_remove_directory`, `path_rename` | ✅ |
+| `fd_pread`, `fd_pwrite`, `path_link`, `path_symlink`, `path_readlink`, the `*_set_times` / `set_size` calls, sockets | ❌ `ENOTCAPABLE` |
+
+Every import is **present** regardless — a missing import is a `LinkError` at
+instantiation, which would break a program that merely links a symbol without
+calling it.
+
+Stdout and stderr are line-buffered through the console sink; stdin reads as an
+immediate end-of-file.
+
+## Caveats
+
+| Caveat | Detail |
+| --- | --- |
+| No wasm threads in practice | `SharedArrayBuffer`, `Atomics`, and shared `Memory` all work, and threads *validate* — but there are no [Workers](/docs/scope), so nothing can run on a second thread |
+| Streaming compiles buffer | `compileStreaming` / `instantiateStreaming` read the `Response` fully before compiling |
+| No source-phase imports | `import source` is a `SyntaxError` (V8 gates it behind a flag that crashes on the first such import) |
+| WASI file calls block | The syscalls are synchronous, so they occupy the runtime's thread for the call's duration |
+| WASI filesystem needs a provider | Embedders wire it with `HostProviders::with_sync_file_system`; without one, every file call reports `ENOTCAPABLE` |
+| No type reflection | `WebAssembly.Function` is absent — as it is in Node, Bun, and Deno |
+| Compile throughput trails | ~4× behind Deno on the same engine; see [Benchmarks](/docs/benchmarks) |
+
+## vs other runtimes
+
+| | esrun | Node.js | Bun | Deno |
+| --- | :---: | :---: | :---: | :---: |
+| WebAssembly JS API | ✅ | ✅ | ✅ | ✅ |
+| `.wasm` ES module imports | ✅ | ✅ | ❌ | ✅ |
+| `import source` | ❌ | ✅ | ❌ | ✅ |
+| WASI preview 1 | ✅ `runtime:wasi` | ✅ `node:wasi` | 🟡 `node:wasi` | ✅ `node:wasi` |
+| `getImportObject()` | ✅ | ✅ | ❌ `wasiImport` only | ✅ |
+| `start()` returns the exit status | ✅ | ✅ | ❌ | ✅ |
+| Enforced WASI sandbox | ✅ | ❌ | ❌ | ❌ |
+| Wasm threads (running) | ❌ | ✅ | ✅ | ✅ |
+
+**Legend:** ✅ Supported · 🟡 Partial / flagged / experimental · ❌ Not supported
+
+See [Benchmarks](/docs/benchmarks) for measured `wasm_*` and `wasi_*` results.

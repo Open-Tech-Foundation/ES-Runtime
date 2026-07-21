@@ -19,6 +19,9 @@ makes the trade-offs explicit.
 | JSON module imports | ✅ | ✅ | ✅ | ✅ |
 | Web APIs (fetch/URL/streams/WebCrypto) | ✅ | ✅ | ✅ | ✅ |
 | Temporal API | ✅ | ✅ | ❌ | ✅ |
+| WebAssembly | ✅ | ✅ | ✅ | ✅ |
+| `.wasm` ES module imports | ✅ | ✅ | ❌ | ✅ |
+| WASI preview 1 | ✅ | ✅ | 🟡 | ✅ |
 | Node.js compatibility (`node:` builtins) | ❌ | ✅ | ✅ | 🟡 |
 | Capability sandbox (deny by default) | ❌ | 🟡 | ❌ | ✅ |
 | Workers / multi-thread | ❌ | ✅ | ✅ | ✅ |
@@ -52,6 +55,11 @@ makes the trade-offs explicit.
 - **It embeds.** esrun is a Rust library with a driven event loop and no owned
   thread, designed to run inside a host application — a use case the others do not
   target.
+
+- **WASI is enforced, not advisory.** Node's own docs say its `node:wasi` threat
+  model "does not provide secure sandboxing". Here a guest's file access passes
+  three independent checks — preopen, capability, root jail. See
+  [WebAssembly & WASI](/docs/wasm).
 
 Status reflects general availability at the time of writing and is a summary, not
 an exhaustive audit. See [Benchmarks](/docs/benchmarks) for measured performance.
