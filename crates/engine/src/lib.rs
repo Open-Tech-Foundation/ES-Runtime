@@ -110,6 +110,13 @@ pub(crate) fn v8_test_guard() -> std::sync::MutexGuard<'static, ()> {
 
 pub(crate) fn ensure_v8_initialized() {
     V8_INIT.call_once(|| {
+        // NOTE: source-phase imports (`import source m from "./m.wasm"`) are
+        // deliberately *not* enabled. V8 gates them behind
+        // `--js-source-phase-imports`, and turning that on without also wiring
+        // both halves of the phase — `Module::instantiate_module2`'s source
+        // resolve callback for the static form, and a phase-aware host callback
+        // for `import.source()` — segfaults the process on the first such
+        // import (verified). Left off, the syntax is a clean SyntaxError.
         // A default platform with V8's own thread-pool sizing (0 = auto) and no
         // idle-task support — the embedder drives the loop (ARCHITECTURE.md §5),
         // so V8 owns no background idle work here.
