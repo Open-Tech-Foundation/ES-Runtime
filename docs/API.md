@@ -12,6 +12,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 
 - [Scope & non-goals](#scope--non-goals)
 - [Web-standard globals](#web-standard-globals)
+- [`WebAssembly`](#webassembly)
 - [The `runtime:` scheme](#the-runtime-scheme)
 - [Capabilities](#capabilities)
 - [`runtime:process`](#runtimeprocess)
@@ -63,9 +64,52 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
 - **Performance:** `performance` (`now()`, `timeOrigin`)
+- **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
 
 **Not available:** `process`/`Buffer`/`require` (Node), `Worker`/`MessageChannel`,
 `navigator`/`localStorage`/`window` (browser).
+
+---
+
+## `WebAssembly`
+
+The full [JS API](https://webassembly.github.io/spec/js-api/), needing no
+capability — WebAssembly executes inside the isolate and reaches the host only
+through imports you pass it, so a module is exactly as privileged as the import
+object you hand it, and no more.
+
+```js
+const { instance } = await WebAssembly.instantiate(bytes, {
+  env: { log: (n) => console.log(n) },
+});
+instance.exports.add(2, 3); // 5
+```
+
+Both the synchronous constructors (`new WebAssembly.Module`,
+`new WebAssembly.Instance`) and the promise-returning `compile` / `instantiate`
+are available; the async forms compile off-thread and settle on the event loop,
+so they need the loop to be running (as `esrun` and any driver do).
+
+`compileStreaming` / `instantiateStreaming` take a `Response` or a promise for
+one, requiring a `Content-Type` of `application/wasm` and an ok status —
+otherwise the promise rejects with a `TypeError`:
+
+```js
+const { instance } = await WebAssembly.instantiateStreaming(
+  fetch("https://example.com/add.wasm"),
+);
+```
+
+They currently buffer the response before compiling rather than compiling as
+bytes arrive. Behaviour is identical; only peak memory and time-to-first-byte
+differ on large modules.
+
+**Not yet supported:** the ESM integration — `import ... from "./m.wasm"` fails,
+as a `.wasm` file is loaded as JS source. Compile the bytes explicitly instead.
+
+`SharedArrayBuffer` and `shared: true` memories do construct, but there are no
+workers to share them with (see **Not available** above), so they buy nothing
+here — and `Atomics.wait` on the only thread would deadlock the loop.
 
 ---
 

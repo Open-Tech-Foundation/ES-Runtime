@@ -41,3 +41,14 @@ pub(crate) fn source() -> String {
     ]
     .join("\n")
 }
+
+/// Prelude fragments that must run per-launch rather than being snapshot-baked.
+///
+/// A V8 snapshot-creator isolate does not expose `WebAssembly` on its global, so
+/// `wasm.js` would find nothing to wrap at build time and its work would be
+/// missing from every restored context. It runs after [`source`] — on the fresh
+/// path directly, on the restored path against the deserialized context — where
+/// the namespace and the engine's `__wasm_pending` builtin are both present.
+pub(crate) fn post_snapshot_source() -> &'static str {
+    include_str!("prelude/wasm.js")
+}

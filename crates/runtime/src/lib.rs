@@ -279,6 +279,7 @@ impl Runtime {
         // the pure-JS APIs on top of them (DECISIONS.md D8).
         builtins::install(runtime.engine.as_mut(), &providers)?;
         runtime.engine.eval(&prelude::source())?;
+        runtime.engine.eval(prelude::post_snapshot_source())?;
         Ok(runtime)
     }
 
@@ -329,6 +330,9 @@ impl Runtime {
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
         builtins::install(runtime.engine.as_mut(), &providers)?;
+        // Except the fragments that cannot be baked — `WebAssembly` exists only
+        // now, in a real isolate, so its wrappers are installed per-launch.
+        runtime.engine.eval(prelude::post_snapshot_source())?;
         Ok(runtime)
     }
 
@@ -637,6 +641,12 @@ impl Runtime {
         // 2. Settle ready async ops (resolving promises enqueues microtasks).
         let async_ops_settled = self.engine.poll_async_ops();
 
+        // 2a. Drain V8's own foreground task queue. Work V8 runs on its internal
+        // threads — async WebAssembly compilation — reports back as a task here,
+        // and resolves its promise only when the task runs. Before the checkpoint
+        // below, so those reactions run in the same tick.
+        self.engine.pump_message_loop();
+
         // 2b. Settle dynamic import() promises whose module evaluation has
         // completed (resolving with the namespace, or rejecting), so their
         // reactions run in the checkpoint below.
@@ -672,6 +682,7 @@ impl Runtime {
             || !self.timers.is_empty()
             || self.module_eval_pending
             || self.engine.has_pending_dynamic_imports()
+            || self.engine.has_pending_wasm()
     }
 
     /// Moves newly created engine timers into the schedule, anchored at `now_ms`.
@@ -1018,6 +1029,85 @@ mod tests {
         let status = rt.tick(0);
         assert_eq!(status.async_ops_settled, 1);
         assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
+        assert!(!rt.has_pending_work());
+    }
+
+    /// The smallest valid module: `(func (export "add") (param i32 i32)
+    /// (result i32) local.get 0 local.get 1 i32.add)`.
+    const ADD_WASM: &str = "new Uint8Array([\
+        0,97,115,109,1,0,0,0,\
+        1,7,1,96,2,127,127,1,127,\
+        3,2,1,0,\
+        7,7,1,3,97,100,100,0,0,\
+        10,9,1,7,0,32,0,32,1,106,11])";
+
+    /// An async WebAssembly compile settles only because the loop pumps V8's
+    /// foreground task queue, and counts as pending work until it does — without
+    /// which a driver would exit (or park forever) mid-compile. The conformance
+    /// suite cannot cover this: it runs files without a driver.
+    #[test]
+    fn async_wasm_compile_settles_and_holds_the_loop_open() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+
+        rt.eval(&format!(
+            "globalThis.mod = null; \
+             WebAssembly.compile({ADD_WASM}).then((m) => {{ globalThis.mod = m; }});"
+        ))
+        .unwrap();
+
+        // In flight: nothing has resolved, and the runtime must report work
+        // outstanding even though no op, timer, or import is pending.
+        assert_eq!(rt.eval("globalThis.mod").unwrap(), Value::Null);
+        assert!(
+            rt.has_pending_work(),
+            "an in-flight wasm compile must keep the loop alive"
+        );
+
+        // Ticking pumps the platform until V8's compile task lands.
+        for _ in 0..200 {
+            rt.tick(0);
+            if !rt.has_pending_work() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            rt.eval("globalThis.mod instanceof WebAssembly.Module")
+                .unwrap(),
+            Value::Bool(true),
+            "the compile promise never settled"
+        );
+        assert!(
+            !rt.has_pending_work(),
+            "the compile should no longer be pending"
+        );
+    }
+
+    /// A rejected compile must release its pending-work claim too, or the loop
+    /// would never quiesce after a bad module.
+    #[test]
+    fn failed_async_wasm_compile_releases_pending_work() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+
+        rt.eval(
+            "globalThis.err = null; \
+             WebAssembly.compile(new Uint8Array([0,1,2,3])).catch((e) => { globalThis.err = e.name; });",
+        )
+        .unwrap();
+
+        for _ in 0..200 {
+            rt.tick(0);
+            if !rt.has_pending_work() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            rt.eval("globalThis.err").unwrap(),
+            Value::String("CompileError".into())
+        );
         assert!(!rt.has_pending_work());
     }
 
@@ -2819,7 +2909,7 @@ mod tests {
         assert_eq!(fail, 0, "conformance failures ({fail}):\n{failures}");
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 68;
+        const BASELINE: u32 = 86;
         assert!(
             pass >= BASELINE,
             "conformance pass count {pass} below baseline {BASELINE}"
@@ -3085,7 +3175,10 @@ mod tests {
         let mut rt = runtime();
         let loader = MapLoader::new(&[
             ("./a.mjs", "import './b.mjs'; import './x.mjs';"),
-            ("./b.mjs", "import './c.mjs'; await Promise.resolve(0); throw new Error('boom B');"),
+            (
+                "./b.mjs",
+                "import './c.mjs'; await Promise.resolve(0); throw new Error('boom B');",
+            ),
             ("./c.mjs", "import './d.mjs'; await Promise.resolve(0);"),
             ("./d.mjs", "import './b.mjs'; await Promise.resolve(0);"),
             ("./x.mjs", "import './d.mjs'; await Promise.resolve(0);"),

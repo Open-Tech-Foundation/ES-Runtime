@@ -40,10 +40,50 @@ pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use value::Value;
 
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 
 /// Guards one-time, process-global V8 platform initialization.
 static V8_INIT: Once = Once::new();
+
+/// The process-global platform, retained after
+/// [`initialize_platform`](v8::V8::initialize_platform) so the engine can drain
+/// its foreground task queue (see [`V8Engine::pump_message_loop`]).
+///
+/// V8 posts the completion of work it runs on its own background threads — most
+/// visibly async WebAssembly compilation — as *foreground* tasks on this queue.
+/// Nothing runs them unless the embedder pumps, so without this handle the
+/// promise from `WebAssembly.compile` never settles.
+static PLATFORM: OnceLock<PlatformHandle> = OnceLock::new();
+
+/// Wrapper letting the platform handle live in a `static`.
+struct PlatformHandle(v8::SharedRef<v8::Platform>);
+
+// SAFETY: `SharedRef` is a C++ `shared_ptr` whose control block is refcounted
+// atomically, so cloning and dropping the handle across threads is sound. The
+// pointee is V8's default platform, which is itself internally thread-safe (V8
+// hands the same instance to every isolate in the process, on any thread). The
+// one thread-affine operation, `pump_message_loop`, is only ever reached through
+// `V8Engine::pump_message_loop`, and `V8Engine` is `!Send`/`!Sync` — so a pump
+// always happens on the thread that owns the isolate, as V8 requires.
+unsafe impl Send for PlatformHandle {}
+// SAFETY: as above — `&PlatformHandle` grants only cloning of an atomically
+// refcounted handle to a thread-safe platform.
+unsafe impl Sync for PlatformHandle {}
+
+/// Drains foreground tasks V8 has queued for `isolate`, returning whether any
+/// ran. Loops until the queue is empty, since one task may post the next.
+pub(crate) fn pump_platform(isolate: &v8::Isolate) -> bool {
+    let Some(PlatformHandle(platform)) = PLATFORM.get() else {
+        return false;
+    };
+    let mut ran = false;
+    // `wait_for_work: false` — never block the embedder's loop here; a task that
+    // is not ready yet is simply picked up on a later tick.
+    while v8::Platform::pump_message_loop(platform, isolate, false) {
+        ran = true;
+    }
+    ran
+}
 
 /// Initializes the V8 platform exactly once per process.
 ///
@@ -74,6 +114,8 @@ pub(crate) fn ensure_v8_initialized() {
         // idle-task support — the embedder drives the loop (ARCHITECTURE.md §5),
         // so V8 owns no background idle work here.
         let platform = v8::new_default_platform(0, false).make_shared();
+        // Retain a handle before handing ownership to V8 (see `PLATFORM`).
+        let _ = PLATFORM.set(PlatformHandle(platform.clone()));
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
         tracing::debug!("V8 platform initialized");

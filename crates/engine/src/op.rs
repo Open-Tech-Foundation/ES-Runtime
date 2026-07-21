@@ -197,6 +197,11 @@ pub(crate) struct OpState {
     /// readiness the instant its backing task makes progress, instead of being
     /// re-polled on a blind interval. `None` ⇒ a no-op waker (poll-on-tick).
     async_waker: Option<Waker>,
+    /// `WebAssembly` async compiles/instantiates currently in flight, reported by
+    /// the prelude wrappers. V8 runs these on its own threads with no op-future
+    /// to poll, so this count is what keeps the driver's loop alive until they
+    /// settle (see [`Engine::has_pending_wasm`](crate::Engine::has_pending_wasm)).
+    pub pending_wasm: u32,
 }
 
 impl OpState {
@@ -211,6 +216,7 @@ impl OpState {
             unhandled_rejections: HashMap::new(),
             max_pending_ops: usize::MAX,
             async_waker: None,
+            pending_wasm: 0,
         }
     }
 
@@ -404,6 +410,9 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
         v8::ExternalReference {
             function: timer_clear.map_fn_to(),
         },
+        v8::ExternalReference {
+            function: wasm_pending.map_fn_to(),
+        },
     ])
 }
 
@@ -506,6 +515,54 @@ pub(crate) fn install_timer_builtins(
     install_global_fn(scope, global, "clearTimeout", timer_clear, None)?;
     install_global_fn(scope, global, "clearInterval", timer_clear, None)?;
     Ok(())
+}
+
+/// Installs `__wasm_pending(delta)`, through which the prelude's `WebAssembly`
+/// wrappers report async compiles entering (+1) and leaving (-1) flight.
+///
+/// This is a builtin rather than a regular op because the count lives in
+/// [`OpState`], which op handlers (plain closures over their provider) cannot
+/// reach — the same reason the timer builtins are installed here.
+pub(crate) fn install_wasm_builtins(
+    scope: &mut v8::PinScope,
+    context: v8::Local<v8::Context>,
+) -> Result<()> {
+    let global = context.global(scope);
+    install_global_fn(scope, global, "__wasm_pending", wasm_pending, None)
+}
+
+/// `__wasm_pending(delta)`: adjusts the in-flight async-WebAssembly count.
+/// Contains panics as a JS exception rather than unwinding across V8 (D15).
+fn wasm_pending(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    rv: v8::ReturnValue<v8::Value>,
+) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wasm_pending_inner(&mut *scope, args, rv);
+    }));
+}
+
+fn wasm_pending_inner(
+    scope: &mut v8::PinScope,
+    args: v8::FunctionCallbackArguments,
+    _rv: v8::ReturnValue<v8::Value>,
+) {
+    let Some(delta) = args.get(0).number_value(scope) else {
+        return;
+    };
+    let Some(state_rc) = op_state(scope) else {
+        return;
+    };
+    let mut state = state_rc.borrow_mut();
+    // Saturating both ways: a forged or unbalanced call from guest code must not
+    // wrap the counter — the worst it can do is keep the loop alive, never make
+    // it exit early on work that is still in flight.
+    if delta > 0.0 {
+        state.pending_wasm = state.pending_wasm.saturating_add(1);
+    } else if delta < 0.0 {
+        state.pending_wasm = state.pending_wasm.saturating_sub(1);
+    }
 }
 
 fn install_global_fn(

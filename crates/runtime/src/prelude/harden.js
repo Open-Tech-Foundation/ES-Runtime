@@ -29,6 +29,13 @@
     });
   }
 
+  // `__wasm_pending` is deliberately *not* locked here: the engine reinstalls it
+  // on every isolate, including one restored from this snapshot, and a
+  // non-configurable binding would make that reinstall fail silently. It needs no
+  // lock — the WebAssembly wrappers capture it in a closure before any guest code
+  // runs, so reassigning the global cannot reach them, and the host counter
+  // saturates so a forged call can only keep the loop alive, never end it early.
+
   // Freeze the runtime's plain namespace objects so their methods can't be
   // swapped out from under code that reaches them by reference. (`crypto` and
   // `performance` are already frozen at their definitions.)

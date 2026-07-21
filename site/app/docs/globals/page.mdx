@@ -95,6 +95,26 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | --- | --- |
 | `performance` | `now()`, `timeOrigin` |
 
+## WebAssembly
+
+No capability required — a module is as privileged as the imports you pass it.
+
+| Global | Notes |
+| --- | --- |
+| `WebAssembly.validate` / `compile` / `instantiate` | |
+| `WebAssembly.compileStreaming` / `instantiateStreaming` | `Response` or a promise for one; `application/wasm` + ok status, else `TypeError`. Buffers before compiling |
+| `WebAssembly.Module` / `Instance` / `Memory` / `Table` / `Global` | |
+| `WebAssembly.CompileError` / `LinkError` / `RuntimeError` | |
+
+```js
+const { instance } = await WebAssembly.instantiate(bytes, {
+  env: { log: (n) => console.log(n) },
+});
+instance.exports.add(2, 3); // 5
+```
+
+`import … from "./m.wasm"` is not supported — compile the bytes.
+
 ## Streaming upload
 
 Passing a `ReadableStream` as the `fetch` body uploads it as a chunked transfer

@@ -14,9 +14,9 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **68 / 68** (100%) |
-| Files | 10 |
-| Last updated | 2026-06-19 |
+| Assertions passing | **86 / 86** (100%) |
+| Files | 15 |
+| Last updated | 2026-07-21 |
 
 ### Coverage by file
 
@@ -32,6 +32,21 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 11 |
 | `performance.js` | performance, microtasks §2.11/§2.1 | 4 |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 |
+| `wasm.js` | WebAssembly JS API | 18 |
+
+### Files present but not counted
+
+`protobuf.js`, `serialization.js`, `serialization_edge.js` and `jsonl_test.js`
+load and run, but every assertion in them is `async`. This harness settles the
+async queue by ticking the runtime directly rather than through a driver, and
+those tests await work it does not advance, so they contribute **0** to the count
+above — uncounted, not failing. Verify them under `esrun`, not by this number.
+
+That limitation is why `wasm.js` asserts only the synchronous WebAssembly API
+plus the streaming paths that reject before reaching V8. The resolving async
+paths (`compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`)
+depend on the driver pumping V8's foreground task queue, so they are verified
+under `esrun` instead.
 
 ## Not yet covered
 

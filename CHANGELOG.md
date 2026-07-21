@@ -8,6 +8,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **WebAssembly.** The `WebAssembly` JS API now works end-to-end. V8 always
+  supplied the namespace, but the promise-returning entry points could never
+  settle: V8 compiles off-thread and reports completion as a *foreground* task,
+  and nothing drained that queue — so `await WebAssembly.compile(bytes)` hung
+  forever. The loop now pumps V8's task queue each tick, and tracks in-flight
+  compiles as pending work so a driver neither exits nor parks mid-compile.
+  `compileStreaming` and `instantiateStreaming` are added (absent from bare V8,
+  being defined by the fetch integration); they take a `Response` or a promise
+  for one, enforce a `application/wasm` Content-Type and an ok status, and
+  currently buffer before compiling. WebAssembly needs no capability — a module
+  is exactly as privileged as the import object it is given. The ESM integration
+  (`import ... from "./m.wasm"`) is still unsupported. See
+  [API.md](docs/API.md#webassembly); 18 new conformance assertions.
+
 ## [0.10.0] - 2026-07-20
 
 ### Security

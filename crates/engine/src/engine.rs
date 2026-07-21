@@ -110,6 +110,20 @@ pub trait Engine {
     /// promise reactions). Microtasks are explicit, never auto-run mid-eval.
     fn run_microtasks(&mut self);
 
+    /// Drains foreground tasks V8 queued for this isolate, returning whether any
+    /// ran. These are how V8 reports back work finished on its own background
+    /// threads — async WebAssembly compilation above all — so a driver must pump
+    /// before the microtask checkpoint for such promises to settle. Non-blocking.
+    fn pump_message_loop(&mut self) -> bool;
+
+    /// Whether a `WebAssembly` async compile/instantiate is still in flight.
+    ///
+    /// V8 owns these internally, so there is no op-future to poll: the prelude
+    /// wrappers report the in-flight count to the host instead, and the driver
+    /// folds it into its pending-work check so the loop does not exit while a
+    /// module is still compiling.
+    fn has_pending_wasm(&self) -> bool;
+
     /// Drains timers created by `setTimeout`/`setInterval` since the last call,
     /// as `(id, delay_ms, repeat)`. The embedder/`runtime` owns scheduling; the
     /// engine only holds the JS callbacks (ARCHITECTURE.md §5).
@@ -404,6 +418,9 @@ impl V8Engine {
             let context = v8::Local::new(scope, &context);
             let scope = &mut v8::ContextScope::new(scope, context);
             crate::op::install_timer_builtins(scope, context)?;
+            // Likewise `__wasm_pending`: loop bookkeeping for async WebAssembly,
+            // which V8 runs internally with no op-future for the driver to poll.
+            crate::op::install_wasm_builtins(scope, context)?;
         }
 
         Ok(V8Engine {
@@ -530,6 +547,14 @@ impl Engine for V8Engine {
 
     fn run_microtasks(&mut self) {
         self.isolate.perform_microtask_checkpoint();
+    }
+
+    fn pump_message_loop(&mut self) -> bool {
+        crate::pump_platform(&self.isolate)
+    }
+
+    fn has_pending_wasm(&self) -> bool {
+        self.op_state.borrow().pending_wasm > 0
     }
 
     fn take_new_timers(&mut self) -> Vec<(TimerId, u64, bool)> {
