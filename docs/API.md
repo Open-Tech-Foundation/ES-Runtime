@@ -681,14 +681,18 @@ In the proto3-JSON form, 64-bit integers and `bytes` become strings (base64 for 
 ## `runtime:wasi`
 
 WASI preview 1 (`wasi_snapshot_preview1`) — enough of the ABI to run what the
-`wasm32-wasip1` toolchains emit for compute-and-print workloads: arguments,
-environment, clocks, randomness, stdio, and process exit.
+`wasm32-wasip1` toolchains emit: arguments, environment, clocks, randomness,
+stdio, process exit, and the filesystem.
 
 ```js
 import { WASI } from "runtime:wasi";
 import { file } from "runtime:fs";
 
-const wasi = new WASI({ args: ["prog", "--flag"], env: { LOG: "debug" } });
+const wasi = new WASI({
+  args: ["prog", "--flag"],
+  env: { LOG: "debug" },
+  preopens: { "/sandbox": "./data" }, // the only files the guest can reach
+});
 const bytes = await file("./prog.wasm").bytes();
 const { instance } = await WebAssembly.instantiate(bytes, wasi.getImportObject());
 
@@ -699,7 +703,7 @@ const status = wasi.start(instance); // runs `_start`, returns the exit status
 
 | Export                    | Type                                | Description                                                                 |
 | ------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| `WASI`                    | `class`                             | `new WASI({ args?, env?, version? })`; `version` must be `"preview1"`.       |
+| `WASI`                    | `class`                             | `new WASI({ args?, env?, preopens?, version? })`; `version` must be `"preview1"`. |
 | `wasi.getImportObject()`  | `() => object`                      | The `wasi_snapshot_preview1` import object to instantiate with.              |
 | `wasi.start(instance)`    | `(Instance) => number`              | Runs a command module's `_start`; returns the exit status.                   |
 | `wasi.initialize(instance)` | `(Instance) => void`              | Runs a reactor module's `_initialize`, leaving the instance live.            |
@@ -723,14 +727,41 @@ wasm module reaches exactly as far as the imports you hand it.
 
 ### Filesystem
 
-Preopens are **not wired yet**: every fd beyond stdio reports `ENOTCAPABLE`
-(errno 76), which is what a WASI program is required to handle. The imports are
-all present regardless — a missing import is a `LinkError` at instantiation,
-which would break a program that merely links a symbol without calling it.
+A guest sees only what `preopens` maps in — WASI's own model, and the reason its
+file calls are all relative to a directory fd:
 
-Serving the file calls needs synchronous, capability-gated host ops (WASI's
-syscalls are synchronous; `runtime:fs` is asynchronous), which is the next
-increment.
+```js
+const wasi = new WASI({
+  preopens: { "/sandbox": "./data" }, // guest path → host path
+});
+```
+
+Reaching a file passes **three** independent checks:
+
+| Check | Enforced by | Failure |
+| --- | --- | --- |
+| The preopen maps the path, and it does not climb out of it | `runtime:wasi` | `ENOTCAPABLE` |
+| `FileRead` / `FileWrite` is granted | the host op (D7) | `ENOTCAPABLE` |
+| The resolved path is inside the root jail | the provider (D25) | `ENOTCAPABLE` |
+
+Preopens are also isolated from each other: `../` out of `/a` cannot reach `/b`,
+even though both are granted.
+
+Implemented: `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`,
+`fd_close`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`,
+`fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, `path_create_directory`,
+`path_unlink_file`, `path_remove_directory`, `path_rename`.
+
+Not implemented (report `ENOTCAPABLE`): `fd_pread`/`fd_pwrite`, `path_link`,
+`path_symlink`, `path_readlink`, the `*_set_times`/`set_size` calls, and the
+sockets. Every import is *present* regardless — a missing import is a
+`LinkError` at instantiation, which would break a program that merely links a
+symbol without calling it.
+
+Because the syscalls are synchronous, these go through blocking host ops that
+occupy the runtime's thread for the duration of the call. Embedders wire this up
+with `HostProviders::with_sync_file_system`; without one, every file call
+reports `ENOTCAPABLE`.
 
 Stdout and stderr are line-buffered through the console sink, with any
 unterminated trailing write flushed when the program finishes. Stdin reads as an

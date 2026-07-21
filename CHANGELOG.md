@@ -51,11 +51,35 @@ namespace) is unstable and may change between minor releases until the API freez
   there "do not form a security model"; here the sandbox is the runtime's own.
 
   Stdout/stderr are line-buffered through the console sink with the trailing
-  partial write flushed at exit; stdin reads as end-of-file. Filesystem calls
-  report `ENOTCAPABLE` (76) — preopens need synchronous capability-gated host
-  ops, which is the next increment — but every import is *present*, since a
-  missing one is a `LinkError` for a program that merely links the symbol.
+  partial write flushed at exit; stdin reads as end-of-file.
   See [API.md](docs/API.md#runtimewasi).
+
+- **WASI filesystem, behind three checks.** `new WASI({ preopens: { "/sandbox":
+  "./data" } })` gives a guest a directory, and `path_open`, `fd_read`,
+  `fd_write`, `fd_seek`/`fd_tell`, `fd_readdir`, `fd_filestat_get`,
+  `path_filestat_get`, `path_create_directory`, `path_unlink_file`,
+  `path_remove_directory` and `path_rename` all work against it.
+
+  Reaching a file passes **three independent checks**: the preopen must map it
+  (and `../` cannot climb out, so two preopens stay isolated), the host op must
+  hold `FileRead`/`FileWrite`, and the provider's root jail must contain the
+  resolved path. This is the sandboxing Node's `node:wasi` documentation
+  explicitly disclaims.
+
+  Calls that have no host primitive yet (`fd_pread`/`fd_pwrite`, `path_link`,
+  `path_symlink`, `path_readlink`, the `*_set_times`/`set_size` calls, sockets)
+  report `ENOTCAPABLE`, and every import stays *present* — a missing one is a
+  `LinkError` for a program that merely links the symbol.
+
+- **`SyncFileSystem` provider + synchronous filesystem ops.** A new provider
+  seam for callers that cannot await, with `SystemSyncFileSystem` as the
+  OS-backed default (same base and same root jail as `SystemFileSystem`), wired
+  through `HostProviders::with_sync_file_system`. It exists because WASI's
+  syscalls are synchronous — a guest calls `fd_read` and expects bytes back with
+  no chance to yield — so the async `FileSystem` cannot serve them however the
+  ops are arranged. These are the only sync I/O ops in the runtime and they
+  block the runtime's thread for the duration of the call; an embedder that
+  cannot afford that installs no implementation, and WASI reports `ENOTCAPABLE`.
 
 ### Fixed
 

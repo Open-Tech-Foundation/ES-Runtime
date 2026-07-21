@@ -188,11 +188,14 @@ assert(w.fd_seek(1) === 70, "seeking stdout is ESPIPE");
 // No stdin source: a clean EOF, not an error.
 assert(w.fd_read(0, 0, 0, 800) === 0, "stdin read errno");
 assert(dv().getUint32(800, true) === 0, "stdin reads zero bytes");
-assert(w.fd_write(7, 0, 0, 800) === 76, "writing an unknown fd is ENOTCAPABLE");
+// An fd that was never opened is EBADF; ENOTCAPABLE is for a path the guest is
+// not permitted to reach.
+assert(w.fd_write(7, 0, 0, 800) === 8, "writing an unknown fd is EBADF");
+assert(w.fd_seek(7, 0, 0, 800) === 8, "seeking an unknown fd is EBADF");
 
-// The filesystem calls exist (so linking succeeds) but grant nothing.
+// This instance was built without preopens, so no path resolves.
 assert(w.path_open(0, 0, 0, 0, 0, 0n, 0n, 0, 0) === 76, "path_open is ENOTCAPABLE");
-assert(w.fd_prestat_get(3, 0) === 76, "fd_prestat_get is ENOTCAPABLE");
+assert(w.fd_prestat_get(3, 0) === 8, "no preopen at fd 3 is EBADF");
 assert(typeof w.path_unlink_file === "function", "path_unlink_file is linkable");
 assert(typeof w.poll_oneoff === "function", "poll_oneoff is linkable");
 
@@ -295,6 +298,175 @@ console.log("DEFAULT OK:", new WASI({}) instanceof WASI);
     let stdout = stdout(&out);
     assert!(stdout.contains("REJECTED: TypeError"), "{stdout}");
     assert!(stdout.contains("DEFAULT OK: true"), "{stdout}");
+}
+
+/// Drives the whole preview-1 filesystem surface against a real preopened
+/// directory: discovery, open/read/write, seek/tell, filestat, readdir, the
+/// mutating `path_*` calls, and the two refusal paths.
+#[test]
+fn serves_the_filesystem_from_a_preopened_directory() {
+    let dir = workdir("fs");
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    write(&dir, "data/greet.txt", b"hello from disk");
+    write(
+        &dir,
+        "main.js",
+        br#"import { WASI } from "runtime:wasi";
+
+const memory = new WebAssembly.Memory({ initial: 2 });
+const wasi = new WASI({ preopens: { "/sandbox": "./data" } });
+wasi.start({ exports: { memory, _start() {} } });
+const w = wasi.getImportObject().wasi_snapshot_preview1;
+
+const dv = () => new DataView(memory.buffer);
+const u8 = () => new Uint8Array(memory.buffer);
+const enc = new TextEncoder(), dec = new TextDecoder();
+const put = (s, at) => { const b = enc.encode(s); u8().set(b, at); return [at, b.length]; };
+const assert = (c, m) => { if (!c) throw new Error("FAIL: " + m); };
+
+// A guest discovers its preopens by walking fds until EBADF.
+assert(w.fd_prestat_get(3, 0) === 0, "prestat fd3");
+assert(dv().getUint32(4, true) === "/sandbox".length, "prestat name length");
+assert(w.fd_prestat_dir_name(3, 100, 64) === 0, "prestat_dir_name");
+assert(dec.decode(u8().subarray(100, 108)) === "/sandbox", "preopen name");
+assert(w.fd_prestat_get(4, 0) === 8, "one past the last preopen is EBADF");
+
+// Read an existing file.
+const [p, l] = put("greet.txt", 200);
+assert(w.path_open(3, 0, p, l, 0, 0n, 0n, 0, 300) === 0, "path_open for read");
+const fd = dv().getUint32(300, true);
+dv().setUint32(400, 500, true); dv().setUint32(404, 64, true);
+assert(w.fd_read(fd, 400, 1, 408) === 0, "fd_read");
+const n = dv().getUint32(408, true);
+assert(dec.decode(u8().subarray(500, 500 + n)) === "hello from disk", "file contents");
+assert(w.fd_close(fd) === 0, "fd_close");
+
+// Create and write.
+const [p2, l2] = put("out.txt", 600);
+const CREAT = 1, TRUNC = 8, RIGHT_WRITE = 1n << 6n;
+assert(w.path_open(3, 0, p2, l2, CREAT | TRUNC, RIGHT_WRITE, 0n, 0, 700) === 0, "path_open for write");
+const wfd = dv().getUint32(700, true);
+const [wp, wl] = put("written by wasi", 800);
+dv().setUint32(900, wp, true); dv().setUint32(904, wl, true);
+assert(w.fd_write(wfd, 900, 1, 908) === 0, "fd_write");
+assert(dv().getUint32(908, true) === wl, "bytes written");
+w.fd_close(wfd);
+
+// Seek and tell agree on the position.
+assert(w.path_open(3, 0, p2, l2, 0, 0n, 0n, 0, 1000) === 0, "reopen");
+const sfd = dv().getUint32(1000, true);
+assert(w.fd_seek(sfd, 8, 0, 1008) === 0, "fd_seek");
+assert(dv().getBigUint64(1008, true) === 8n, "seek position");
+assert(w.fd_tell(sfd, 1016) === 0, "fd_tell");
+assert(dv().getBigUint64(1016, true) === 8n, "tell position");
+w.fd_close(sfd);
+
+// filestat reports size and type.
+assert(w.path_filestat_get(3, 0, p2, l2, 1100) === 0, "path_filestat_get");
+assert(dv().getBigUint64(1124, true) === 15n, "filestat size");
+assert(u8()[1116] === 4, "filetype is regular file");
+
+// readdir walks the packed dirent records.
+assert(w.fd_readdir(3, 1200, 512, 0n, 1180) === 0, "fd_readdir");
+const used = dv().getUint32(1180, true);
+const names = [];
+for (let off = 0; off + 24 <= used; ) {
+  const len = dv().getUint32(1200 + off + 16, true);
+  names.push(dec.decode(u8().subarray(1200 + off + 24, 1200 + off + 24 + len)));
+  off += 24 + len;
+}
+assert(names.sort().join(",") === "greet.txt,out.txt", "readdir names: " + names);
+
+// Mutating path calls.
+const [dp, dl] = put("sub", 1400);
+assert(w.path_create_directory(3, dp, dl) === 0, "path_create_directory");
+const [np, nl] = put("renamed.txt", 1500);
+assert(w.path_rename(3, p2, l2, 3, np, nl) === 0, "path_rename");
+assert(w.path_unlink_file(3, np, nl) === 0, "path_unlink_file");
+assert(w.path_remove_directory(3, dp, dl) === 0, "path_remove_directory");
+
+// Climbing out of the preopen is refused, and a miss is ENOENT rather than a
+// generic failure.
+const [tp, tl] = put("../escape.txt", 1600);
+assert(w.path_open(3, 0, tp, tl, 0, 0n, 0n, 0, 1700) === 76, "traversal is ENOTCAPABLE");
+const [mp, ml] = put("nope.txt", 1800);
+assert(w.path_open(3, 0, mp, ml, 0, 0n, 0n, 0, 1900) === 44, "missing file is ENOENT");
+
+console.log("FS OK");
+"#,
+    );
+
+    let out = run(&dir, "main.js");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("FS OK"), "{}", stdout(&out));
+    // The write really landed on disk, not just in the guest's view of it.
+    assert!(!dir.join("data/out.txt").exists(), "renamed then unlinked");
+}
+
+/// Without preopens a guest has no filesystem at all, however the host is
+/// configured — WASI's own model, and the first of the three checks a file
+/// access passes here.
+#[test]
+fn without_preopens_there_is_no_filesystem() {
+    let dir = workdir("no-preopens");
+    write(
+        &dir,
+        "main.js",
+        br#"import { WASI } from "runtime:wasi";
+const memory = new WebAssembly.Memory({ initial: 1 });
+const wasi = new WASI({});
+wasi.start({ exports: { memory, _start() {} } });
+const w = wasi.getImportObject().wasi_snapshot_preview1;
+
+const assert = (c, m) => { if (!c) throw new Error("FAIL: " + m); };
+// No preopen occupies fd 3, so discovery stops immediately.
+assert(w.fd_prestat_get(3, 0) === 8, "no preopens means EBADF at fd 3");
+// And nothing resolves against a directory fd that does not exist.
+new Uint8Array(memory.buffer).set(new TextEncoder().encode("x.txt"), 100);
+assert(w.path_open(3, 0, 100, 5, 0, 0n, 0n, 0, 200) === 76, "path_open is ENOTCAPABLE");
+console.log("NO FS OK");
+"#,
+    );
+
+    let out = run(&dir, "main.js");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("NO FS OK"), "{}", stdout(&out));
+}
+
+/// A preopen cannot be used to reach a sibling preopen's tree: each guest path
+/// is anchored to the directory fd it was resolved against.
+#[test]
+fn preopens_are_isolated_from_each_other() {
+    let dir = workdir("isolation");
+    std::fs::create_dir_all(dir.join("a")).unwrap();
+    std::fs::create_dir_all(dir.join("b")).unwrap();
+    write(&dir, "b/secret.txt", b"top secret");
+    write(
+        &dir,
+        "main.js",
+        br#"import { WASI } from "runtime:wasi";
+const memory = new WebAssembly.Memory({ initial: 1 });
+const wasi = new WASI({ preopens: { "/a": "./a", "/b": "./b" } });
+wasi.start({ exports: { memory, _start() {} } });
+const w = wasi.getImportObject().wasi_snapshot_preview1;
+
+const u8 = () => new Uint8Array(memory.buffer);
+const put = (s, at) => { const b = new TextEncoder().encode(s); u8().set(b, at); return [at, b.length]; };
+const assert = (c, m) => { if (!c) throw new Error("FAIL: " + m); };
+
+// fd 3 is /a, fd 4 is /b.
+const [esc, escLen] = put("../b/secret.txt", 100);
+assert(w.path_open(3, 0, esc, escLen, 0, 0n, 0n, 0, 300) === 76, "cannot climb into a sibling preopen");
+// The same file is reachable through its own preopen.
+const [ok, okLen] = put("secret.txt", 400);
+assert(w.path_open(4, 0, ok, okLen, 0, 0n, 0n, 0, 500) === 0, "reachable via its own preopen");
+console.log("ISOLATED OK");
+"#,
+    );
+
+    let out = run(&dir, "main.js");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("ISOLATED OK"), "{}", stdout(&out));
 }
 
 #[test]

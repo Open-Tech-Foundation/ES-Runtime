@@ -29,6 +29,7 @@ mod process_ops;
 mod rsa_ops;
 mod runtime_modules;
 pub mod serialization_ops;
+mod sync_fs_ops;
 mod timer;
 mod url_ops;
 mod ws_ops;
@@ -47,7 +48,7 @@ pub use es_runtime_engine::{
 };
 pub use es_runtime_providers::{
     Clock, Console, ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader,
-    ModuleSource, NetProvider, NetTransport, Process, WebSocketProvider,
+    ModuleSource, NetProvider, NetTransport, Process, SyncFileSystem, WebSocketProvider,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -118,6 +119,7 @@ pub struct HostProviders {
     entropy: Arc<dyn Entropy>,
     process: Option<Arc<dyn Process>>,
     file_system: Option<Arc<dyn FileSystem>>,
+    sync_file_system: Option<Arc<dyn SyncFileSystem>>,
     net_provider: Option<Arc<dyn NetProvider>>,
     http_server: Option<Arc<dyn HttpServerProvider>>,
     web_socket: Option<Arc<dyn WebSocketProvider>>,
@@ -141,6 +143,7 @@ impl HostProviders {
             entropy,
             process: None,
             file_system: None,
+            sync_file_system: None,
             net_provider: None,
             http_server: None,
             web_socket: None,
@@ -162,6 +165,19 @@ impl HostProviders {
     #[must_use]
     pub fn with_file_system(mut self, file_system: Arc<dyn FileSystem>) -> Self {
         self.file_system = Some(file_system);
+        self
+    }
+
+    /// Adds the [`SyncFileSystem`] backing `runtime:wasi`'s file calls.
+    ///
+    /// Separate from [`with_file_system`](Self::with_file_system) because WASI's
+    /// syscalls are synchronous and cannot await; gated on the same
+    /// [`FileRead`](es_runtime_common::Capability::FileRead) /
+    /// [`FileWrite`](es_runtime_common::Capability::FileWrite) capabilities.
+    /// Without one, WASI reports `ENOTCAPABLE` for every file call.
+    #[must_use]
+    pub fn with_sync_file_system(mut self, sync_file_system: Arc<dyn SyncFileSystem>) -> Self {
+        self.sync_file_system = Some(sync_file_system);
         self
     }
 
@@ -217,6 +233,10 @@ impl HostProviders {
 
     fn file_system(&self) -> Option<Arc<dyn FileSystem>> {
         self.file_system.clone()
+    }
+
+    fn sync_file_system(&self) -> Option<Arc<dyn SyncFileSystem>> {
+        self.sync_file_system.clone()
     }
 
     fn net_provider(&self) -> Option<Arc<dyn NetProvider>> {
@@ -993,6 +1013,215 @@ mod tests {
             HostProviders::new(clock, console, net, entropy),
         )
         .expect("runtime")
+    }
+
+    /// A [`SyncFileSystem`] that records what it was asked to do and never
+    /// touches a real disk — enough to prove the *gate* is what stops a call,
+    /// rather than the filesystem happening to fail.
+    #[derive(Default)]
+    struct RecordingSyncFs {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl es_runtime_providers::SyncFileSystem for RecordingSyncFs {
+        fn open(
+            &self,
+            path: &str,
+            _options: es_runtime_providers::SyncOpenOptions,
+        ) -> std::result::Result<u32, es_runtime_providers::ProviderError> {
+            self.calls.lock().unwrap().push(format!("open {path}"));
+            Ok(1)
+        }
+        fn read(
+            &self,
+            _fd: u32,
+            buf: &mut [u8],
+        ) -> std::result::Result<usize, es_runtime_providers::ProviderError> {
+            self.calls.lock().unwrap().push("read".into());
+            let data = b"data";
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            Ok(n)
+        }
+        fn write(
+            &self,
+            _fd: u32,
+            data: &[u8],
+        ) -> std::result::Result<usize, es_runtime_providers::ProviderError> {
+            self.calls.lock().unwrap().push("write".into());
+            Ok(data.len())
+        }
+        fn seek(
+            &self,
+            _fd: u32,
+            _offset: i64,
+            _whence: es_runtime_providers::SyncWhence,
+        ) -> std::result::Result<u64, es_runtime_providers::ProviderError> {
+            Ok(0)
+        }
+        fn close(&self, _fd: u32) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            Ok(())
+        }
+        fn fstat(
+            &self,
+            _fd: u32,
+        ) -> std::result::Result<es_runtime_providers::FileStat, es_runtime_providers::ProviderError>
+        {
+            Ok(es_runtime_providers::FileStat {
+                size: 4,
+                is_file: true,
+                is_dir: false,
+                is_symlink: false,
+                mtime_ms: None,
+            })
+        }
+        fn stat(
+            &self,
+            _path: &str,
+        ) -> std::result::Result<es_runtime_providers::FileStat, es_runtime_providers::ProviderError>
+        {
+            Ok(es_runtime_providers::FileStat {
+                size: 4,
+                is_file: true,
+                is_dir: false,
+                is_symlink: false,
+                mtime_ms: None,
+            })
+        }
+        fn read_dir(
+            &self,
+            _path: &str,
+        ) -> std::result::Result<
+            Vec<es_runtime_providers::DirEntry>,
+            es_runtime_providers::ProviderError,
+        > {
+            Ok(Vec::new())
+        }
+        fn mkdir(
+            &self,
+            path: &str,
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            self.calls.lock().unwrap().push(format!("mkdir {path}"));
+            Ok(())
+        }
+        fn remove_file(
+            &self,
+            _path: &str,
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            Ok(())
+        }
+        fn remove_dir(
+            &self,
+            _path: &str,
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            Ok(())
+        }
+        fn rename(
+            &self,
+            _from: &str,
+            _to: &str,
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            Ok(())
+        }
+    }
+
+    fn runtime_with_sync_fs(fs: Arc<RecordingSyncFs>) -> Runtime {
+        let engine = V8Engine::new(Limits::default()).expect("engine");
+        Runtime::new(Box::new(engine), test_providers().with_sync_file_system(fs)).expect("runtime")
+    }
+
+    /// The synchronous filesystem is behind the same gates as the async one:
+    /// without `FileWrite`, a mutating op is denied before the provider is
+    /// consulted at all.
+    #[test]
+    fn sync_fs_ops_are_capability_gated() {
+        let _g = v8_guard();
+        let fs = Arc::new(RecordingSyncFs::default());
+        let mut rt = runtime_with_sync_fs(fs.clone());
+
+        // Deny-by-default: nothing granted, so even a read is refused.
+        rt.set_capabilities(CapabilitySet::none());
+        assert!(
+            rt.eval("__ops.sync_fs_open('/x', { read: true })").is_err(),
+            "a read open must need FileRead"
+        );
+
+        // FileRead alone permits reading but not mutating.
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
+        rt.eval("__ops.sync_fs_open('/x', { read: true })")
+            .expect("read open is permitted by FileRead");
+        assert!(
+            rt.eval("__ops.sync_fs_mkdir('/d')").is_err(),
+            "mkdir must need FileWrite"
+        );
+        assert!(
+            rt.eval("__ops.sync_fs_open_write('/x', { write: true })")
+                .is_err(),
+            "a write open must need FileWrite"
+        );
+
+        // The provider saw only the permitted call — the denials never reached it.
+        let calls = fs.calls.lock().unwrap().clone();
+        assert_eq!(calls, vec!["open /x".to_string()], "calls: {calls:?}");
+
+        // Granting FileWrite opens the mutating paths.
+        rt.set_capabilities(
+            CapabilitySet::none()
+                .with(Capability::FileRead)
+                .with(Capability::FileWrite),
+        );
+        rt.eval("__ops.sync_fs_mkdir('/d')")
+            .expect("mkdir is permitted by FileWrite");
+    }
+
+    /// The read-only open op refuses a mutating mode outright, so the
+    /// `FileWrite` gate on `sync_fs_open_write` cannot be sidestepped by asking
+    /// the `FileRead`-gated op to create a file.
+    #[test]
+    fn the_read_open_op_refuses_a_mutating_mode() {
+        let _g = v8_guard();
+        let fs = Arc::new(RecordingSyncFs::default());
+        let mut rt = runtime_with_sync_fs(fs.clone());
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
+
+        for mode in [
+            "{ write: true }",
+            "{ create: true }",
+            "{ truncate: true }",
+            "{ createNew: true }",
+        ] {
+            let err = rt
+                .eval(&format!("__ops.sync_fs_open('/x', {mode})"))
+                .unwrap_err();
+            assert!(
+                format!("{err}").contains("sync_fs_open_write"),
+                "mode {mode} should be redirected, got: {err}"
+            );
+        }
+        assert!(
+            fs.calls.lock().unwrap().is_empty(),
+            "no mutating open should have reached the provider"
+        );
+    }
+
+    /// With no synchronous filesystem installed, the ops fail cleanly rather
+    /// than panicking — which is what makes WASI report `ENOTCAPABLE`.
+    #[test]
+    fn sync_fs_ops_without_a_provider_fail_cleanly() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(
+            CapabilitySet::none()
+                .with(Capability::FileRead)
+                .with(Capability::FileWrite),
+        );
+        let err = rt
+            .eval("__ops.sync_fs_open('/x', { read: true })")
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("no synchronous filesystem"),
+            "got: {err}"
+        );
     }
 
     fn test_providers() -> HostProviders {

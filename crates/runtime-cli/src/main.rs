@@ -35,7 +35,7 @@ use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
     NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemHttpServer,
-    SystemNet, SystemProcess, SystemWebSocket, TokioTimers, path,
+    SystemNet, SystemProcess, SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -457,6 +457,9 @@ async fn run() -> Result<(), String> {
     // directory, jailed to the same detected project root the loader uses (D25).
     let fs_root = path::detect_root(&base_dir);
     let file_system = Arc::new(SystemFileSystem::new(&base_dir, &fs_root));
+    // The same view, synchronously, for `runtime:wasi` — WASI's syscalls cannot
+    // await. Same base and same jail, so both paths agree on what is reachable.
+    let sync_file_system = Arc::new(SystemSyncFileSystem::new(&base_dir, &fs_root));
     let providers = HostProviders::new(
         clock.clone(),
         Arc::new(StdoutConsole),
@@ -465,6 +468,7 @@ async fn run() -> Result<(), String> {
     )
     .with_process(process.clone())
     .with_file_system(file_system)
+    .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(SystemNet::new()))
     .with_http_server(Arc::new(SystemHttpServer::new()))
     .with_web_socket(Arc::new(SystemWebSocket::new()));

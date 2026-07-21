@@ -78,15 +78,27 @@ security boundary is the op, not the JavaScript. Shipped modules include
 ## runtime:wasi
 
 WASI preview 1 for `wasm32-wasip1` binaries — args, env, clocks, random, stdio,
-exit.
+exit, filesystem.
 
 ```js
 import { WASI } from "runtime:wasi";
 
-const wasi = new WASI({ args: ["prog"], env: { LOG: "debug" } });
+const wasi = new WASI({
+  args: ["prog"],
+  env: { LOG: "debug" },
+  preopens: { "/sandbox": "./data" },
+});
 const { instance } = await WebAssembly.instantiate(bytes, wasi.getImportObject());
 const status = wasi.start(instance);
 ```
 
 Args and env come only from the constructor — the host environment is never
-inherited. Filesystem calls return `ENOTCAPABLE`; preopens are not wired yet.
+inherited.
+
+A file access passes three checks:
+
+| Check | Enforced by |
+| --- | --- |
+| Mapped by a preopen, no climbing out | `runtime:wasi` |
+| `FileRead` / `FileWrite` granted | the host op |
+| Inside the root jail | the provider |

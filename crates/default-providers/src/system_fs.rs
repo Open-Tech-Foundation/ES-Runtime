@@ -89,7 +89,22 @@ fn escape(p: &Path, root: &Path) -> ProviderError {
     }
 }
 
-fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError> {
+/// Builds a [`FileStat`] from already-read metadata. Shared with the
+/// synchronous filesystem so both report identically.
+///
+/// `is_symlink` is always `false` here: this takes metadata that has already
+/// followed links. A caller that needs the distinction stats the link itself.
+pub(crate) fn file_stat(md: &std::fs::Metadata) -> FileStat {
+    FileStat {
+        size: md.len(),
+        is_file: md.is_file(),
+        is_dir: md.is_dir(),
+        is_symlink: false,
+        mtime_ms: mtime_ms(md),
+    }
+}
+
+pub(crate) fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError> {
     let mut existing = abs.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
     loop {

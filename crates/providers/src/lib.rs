@@ -427,6 +427,96 @@ pub trait FileSystem: Send + Sync {
     ) -> BoxFuture<Result<Vec<String>, ProviderError>>;
 }
 
+/// An open handle held by a [`SyncFileSystem`]. Opaque to the guest: it indexes
+/// a table the provider owns, so a forged number can only miss.
+pub type SyncFd = u32;
+
+/// Where a [`SyncFileSystem::seek`] offset is measured from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncWhence {
+    /// From the start of the file.
+    Start,
+    /// From the current position.
+    Current,
+    /// From the end of the file.
+    End,
+}
+
+/// How a [`SyncFileSystem::open`] should open its target.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SyncOpenOptions {
+    /// Open for reading.
+    pub read: bool,
+    /// Open for writing.
+    pub write: bool,
+    /// Create the file if it does not exist.
+    pub create: bool,
+    /// Fail if the file already exists (implies `create`).
+    pub create_new: bool,
+    /// Truncate an existing file to zero length.
+    pub truncate: bool,
+    /// Append rather than overwrite.
+    pub append: bool,
+    /// Open a *directory* handle, usable only as an anchor for path resolution.
+    /// WASI needs these for its `path_*` calls, which are all relative to a
+    /// directory fd.
+    pub directory: bool,
+}
+
+/// Blocking filesystem access, for callers that cannot await.
+///
+/// WASI is why this exists. Its syscalls are **synchronous** — a guest calls
+/// `fd_read` and expects bytes back with no opportunity to yield — so the async
+/// [`FileSystem`] cannot serve them however the ops are arranged. Rather than
+/// bend WASI, this is a separate, deliberately small seam.
+///
+/// Every method blocks the calling thread, which is the runtime's own thread. An
+/// embedder that cannot afford that simply installs no implementation, and WASI
+/// then reports `ENOTCAPABLE` for every file call — the same as today.
+///
+/// Implementations are expected to confine paths to a root jail (DECISIONS D25),
+/// exactly as [`FileSystem`] does; `runtime` gates reads on
+/// [`Capability::FileRead`](es_runtime_common::Capability::FileRead) and
+/// mutations on [`FileWrite`](es_runtime_common::Capability::FileWrite) before
+/// any method here runs.
+pub trait SyncFileSystem: Send + Sync {
+    /// Opens `path`, returning a handle for the fd-based methods below.
+    fn open(&self, path: &str, options: SyncOpenOptions) -> Result<SyncFd, ProviderError>;
+
+    /// Reads into `buf`, returning the number of bytes read (0 at end of file).
+    fn read(&self, fd: SyncFd, buf: &mut [u8]) -> Result<usize, ProviderError>;
+
+    /// Writes `data`, returning the number of bytes written.
+    fn write(&self, fd: SyncFd, data: &[u8]) -> Result<usize, ProviderError>;
+
+    /// Moves the file cursor, returning the new absolute position.
+    fn seek(&self, fd: SyncFd, offset: i64, whence: SyncWhence) -> Result<u64, ProviderError>;
+
+    /// Releases `fd`. A handle that is not open is an error, not a panic.
+    fn close(&self, fd: SyncFd) -> Result<(), ProviderError>;
+
+    /// Metadata for an open handle.
+    fn fstat(&self, fd: SyncFd) -> Result<FileStat, ProviderError>;
+
+    /// Metadata for `path` (follows symlinks).
+    fn stat(&self, path: &str) -> Result<FileStat, ProviderError>;
+
+    /// Lists the entries of the directory at `path` (no `.`/`..`).
+    fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, ProviderError>;
+
+    /// Creates the directory at `path` (parents must exist).
+    fn mkdir(&self, path: &str) -> Result<(), ProviderError>;
+
+    /// Removes the file at `path`.
+    fn remove_file(&self, path: &str) -> Result<(), ProviderError>;
+
+    /// Removes the (empty) directory at `path`.
+    fn remove_dir(&self, path: &str) -> Result<(), ProviderError>;
+
+    /// Renames/moves `from` to `to` (both jailed).
+    fn rename(&self, from: &str, to: &str) -> Result<(), ProviderError>;
+}
+
 /// Metadata about a socket, from [`NetProvider::connect`]/`accept`/`listen`.
 #[derive(Default)]
 pub struct SocketInfo {

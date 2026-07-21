@@ -18,6 +18,16 @@ declare module "runtime:wasi" {
      */
     env?: Record<string, string>;
 
+    /**
+     * Guest directory path → host directory path. The guest can reach **only**
+     * what is mapped here, and cannot climb out of a mapping (`../` from one
+     * preopen does not reach another).
+     *
+     * Two further checks still apply to every access: the host op's
+     * `FileRead`/`FileWrite` capability, and the provider's root jail.
+     */
+    preopens?: Record<string, string>;
+
     /** The WASI snapshot to implement. Only `"preview1"` is supported. */
     version?: "preview1";
   }
@@ -28,9 +38,9 @@ declare module "runtime:wasi" {
    * Build one, hand {@link WASI.getImportObject} to `WebAssembly.instantiate`,
    * then {@link WASI.start} the resulting instance.
    *
-   * Arguments, environment, clocks, randomness, stdio and process exit are
-   * implemented. Filesystem calls are present but report `ENOTCAPABLE` (76):
-   * preopens are not wired yet.
+   * Arguments, environment, clocks, randomness, stdio, process exit and the
+   * filesystem are implemented. A guest reaches files only through
+   * {@link WASIOptions.preopens}; anything else reports `ENOTCAPABLE` (76).
    */
   export class WASI {
     constructor(options?: WASIOptions);
