@@ -22,6 +22,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:http`](#runtimehttp)
 - [`runtime:websocket`](#runtimewebsocket)
 - [`runtime:serialization`](#runtimeserialization)
+- [`runtime:wasi`](#runtimewasi)
 - [Error codes](#error-codes)
 
 ---
@@ -676,6 +677,66 @@ In the proto3-JSON form, 64-bit integers and `bytes` become strings (base64 for 
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md
+
+## `runtime:wasi`
+
+WASI preview 1 (`wasi_snapshot_preview1`) — enough of the ABI to run what the
+`wasm32-wasip1` toolchains emit for compute-and-print workloads: arguments,
+environment, clocks, randomness, stdio, and process exit.
+
+```js
+import { WASI } from "runtime:wasi";
+import { file } from "runtime:fs";
+
+const wasi = new WASI({ args: ["prog", "--flag"], env: { LOG: "debug" } });
+const bytes = await file("./prog.wasm").bytes();
+const { instance } = await WebAssembly.instantiate(bytes, wasi.getImportObject());
+
+const status = wasi.start(instance); // runs `_start`, returns the exit status
+```
+
+### Exports
+
+| Export                    | Type                                | Description                                                                 |
+| ------------------------- | ----------------------------------- | --------------------------------------------------------------------------- |
+| `WASI`                    | `class`                             | `new WASI({ args?, env?, version? })`; `version` must be `"preview1"`.       |
+| `wasi.getImportObject()`  | `() => object`                      | The `wasi_snapshot_preview1` import object to instantiate with.              |
+| `wasi.start(instance)`    | `(Instance) => number`              | Runs a command module's `_start`; returns the exit status.                   |
+| `wasi.initialize(instance)` | `(Instance) => void`              | Runs a reactor module's `_initialize`, leaving the instance live.            |
+
+`start` returns `0` when `_start` returns normally, or the code passed to
+`proc_exit`. A genuine fault still throws.
+
+### No ambient authority
+
+Unlike Node's `node:wasi`, **arguments and environment come only from the
+constructor**. There is no path by which a wasm module reads the host's real
+environment through this API, so constructing a `WASI` needs no capability and
+inherits nothing. Forward the real environment explicitly if you want it — via
+the `Env`-gated `runtime:process` — which makes that grant visible at the call
+site.
+
+This is the difference Node's own documentation is careful about: it states that
+its threat model "does not provide secure sandboxing" and that WASI capabilities
+there "do not form a security model". Here the sandbox is the runtime's, and a
+wasm module reaches exactly as far as the imports you hand it.
+
+### Filesystem
+
+Preopens are **not wired yet**: every fd beyond stdio reports `ENOTCAPABLE`
+(errno 76), which is what a WASI program is required to handle. The imports are
+all present regardless — a missing import is a `LinkError` at instantiation,
+which would break a program that merely links a symbol without calling it.
+
+Serving the file calls needs synchronous, capability-gated host ops (WASI's
+syscalls are synchronous; `runtime:fs` is asynchronous), which is the next
+increment.
+
+Stdout and stderr are line-buffered through the console sink, with any
+unterminated trailing write flushed when the program finishes. Stdin reads as an
+immediate end-of-file.
+
+---
 
 ## Error codes
 

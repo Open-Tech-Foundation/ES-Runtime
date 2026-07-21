@@ -72,5 +72,21 @@ console.log(env.HOME, args);
 
 Each built-in module is backed by host ops that carry the capability check — the
 security boundary is the op, not the JavaScript. Shipped modules include
-[runtime:process](/api/process), `runtime:fs`, `runtime:net`, `runtime:http`, and
-`runtime:websocket`.
+[runtime:process](/api/process), `runtime:fs`, `runtime:net`, `runtime:http`,
+`runtime:websocket`, `runtime:serialization`, and `runtime:wasi`.
+
+## runtime:wasi
+
+WASI preview 1 for `wasm32-wasip1` binaries — args, env, clocks, random, stdio,
+exit.
+
+```js
+import { WASI } from "runtime:wasi";
+
+const wasi = new WASI({ args: ["prog"], env: { LOG: "debug" } });
+const { instance } = await WebAssembly.instantiate(bytes, wasi.getImportObject());
+const status = wasi.start(instance);
+```
+
+Args and env come only from the constructor — the host environment is never
+inherited. Filesystem calls return `ENOTCAPABLE`; preopens are not wired yet.

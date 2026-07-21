@@ -19,6 +19,7 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:http" => Some(include_str!("runtime_modules/http.js")),
         "runtime:websocket" => Some(include_str!("runtime_modules/websocket.js")),
         "runtime:serialization" => Some(include_str!("runtime_modules/serialization.js")),
+        "runtime:wasi" => Some(include_str!("runtime_modules/wasi.js")),
         _ => None,
     }
 }

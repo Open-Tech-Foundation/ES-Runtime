@@ -34,6 +34,36 @@ namespace) is unstable and may change between minor releases until the API freez
   malformed `.wasm` fails at load with V8's own diagnostic.
   Source-phase imports (`import source`) are still unsupported.
 
+- **`runtime:wasi` — WASI preview 1.** Enough of the
+  `wasi_snapshot_preview1` ABI to run what the `wasm32-wasip1` toolchains emit
+  for compute-and-print workloads: arguments, environment, clocks, randomness,
+  stdio and process exit. `new WASI({ args, env })` →
+  `getImportObject()` → `start(instance)`, which returns the exit status (`0` on
+  a normal `_start` return, otherwise the `proc_exit` code) while letting a real
+  fault propagate.
+
+  **Arguments and environment come only from the constructor.** Unlike Node's
+  `node:wasi`, there is no path by which a wasm module reads the host's real
+  environment through this API, so constructing one needs no capability and
+  inherits nothing — forwarding the real environment is an explicit, visible act
+  through the `Env`-gated `runtime:process`. Node's docs are careful to say its
+  threat model "does not provide secure sandboxing" and that WASI capabilities
+  there "do not form a security model"; here the sandbox is the runtime's own.
+
+  Stdout/stderr are line-buffered through the console sink with the trailing
+  partial write flushed at exit; stdin reads as end-of-file. Filesystem calls
+  report `ENOTCAPABLE` (76) — preopens need synchronous capability-gated host
+  ops, which is the next increment — but every import is *present*, since a
+  missing one is a `LinkError` for a program that merely links the symbol.
+  See [API.md](docs/API.md#runtimewasi).
+
+### Fixed
+
+- **`@opentf/esrun-types` shipped an unresolvable reference.** `index.d.ts`
+  references `runtime-serialization.d.ts`, but the package's `files` list omitted
+  it, so the published tarball lacked the file. Added, along with the new
+  `runtime-wasi.d.ts`.
+
 ### Changed
 
 - **Breaking (embedders implementing `ModuleLoader`):** `load` now returns

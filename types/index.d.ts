@@ -13,3 +13,4 @@
 /// <reference path="./runtime-net.d.ts" />
 /// <reference path="./runtime-http.d.ts" />
 /// <reference path="./runtime-serialization.d.ts" />
+/// <reference path="./runtime-wasi.d.ts" />
