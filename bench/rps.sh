@@ -25,7 +25,16 @@ cd "$(dirname "$0")"
 
 ESRUN="${ESRUN:-../target/release/esrun}"
 SERVER="${SERVER:-scripts/helloserver.js}"  # the hello-world server to run
-PORT=3000           # the server scripts bind this fixed port
+# The port is chosen per run, not fixed: the OS hands out a free one and the
+# server scripts read it from BENCH_PORT. A fixed :3000 collided with an
+# unrelated dev server once and every runtime was silently load-tested against
+# *it* instead — plausible-looking numbers, all four within 4% of each other.
+# Override with PORT=... if you need a known port.
+pick_free_port() {
+  python3 -c 'import socket
+s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+}
+PORT="${PORT:-$(pick_free_port)}"
 CONN="${CONN:-100}"
 REQUESTS="${REQUESTS:-500000}"
 
@@ -72,18 +81,18 @@ HDR="Accept-Encoding: identity"
 OUT="$(mktemp)"
 trap 'cleanup; rm -f "$OUT"' EXIT
 
-# Refuse to run if anything already holds $PORT. Without this the failure is
-# silent and produces plausible-looking numbers: `measure` starts a server, the
-# port-wait below succeeds instantly against the *squatter*, our own server dies
-# of EADDRINUSE, and every runtime is then measured against the same stranger —
-# which reads as all runtimes scoring identically. Observed for real (a dev
-# server on :3000), so this is a guard against a known trap, not a hypothetical.
+# Belt and braces on top of the per-run port: if $PORT is somehow occupied (a
+# PORT=... override, or the free port being claimed between pick and bind), stop
+# rather than measure a stranger. The silent version of this failure produces
+# plausible-looking numbers — our server dies of EADDRINUSE, the port-wait below
+# succeeds instantly against the squatter, and every runtime is load-tested
+# against that same process, which reads as all runtimes scoring identically.
 if (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
   echo "rps.sh: port $PORT is already in use — every runtime would be measured against that process, not its own server." >&2
   if command -v ss >/dev/null 2>&1; then
     echo "  holder: $(ss -tlnp 2>/dev/null | grep ":$PORT" | head -1)" >&2
   fi
-  echo "  free the port (or set PORT=... if the server scripts are updated to honour it) and re-run." >&2
+  echo "  re-run to pick another port, or free this one if you passed PORT=$PORT." >&2
   exit 1
 fi
 
@@ -108,7 +117,7 @@ print(f\"{d['rps']['mean']:.0f} {d['latency']['mean']/1000:.2f}\")" 2>/dev/null 
 # Boots one runtime's server, waits for the port, loads it, tears it down.
 measure() {
   local cmd="$1"
-  $cmd "$SERVER" >/dev/null 2>&1 &
+  BENCH_PORT="$PORT" $cmd "$SERVER" >/dev/null 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 50); do
     (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break
