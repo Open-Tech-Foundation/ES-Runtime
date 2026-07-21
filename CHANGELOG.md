@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-21
+
 ### Added
 
 - **`/docs/wasm` site page.** One place for the whole WebAssembly + WASI surface:
