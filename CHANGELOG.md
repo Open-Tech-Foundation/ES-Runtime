@@ -8,6 +8,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **`URLPattern` implements the real pattern syntax.** It was a regex
+  escape-and-substitute pass understanding only `:name` and `*`; a custom regex
+  group (`/u/:id(\\d+)`), a `?`/`+`/`*` modifier, or a `{…}` group simply
+  failed to match, with no error to say why — the worst failure mode for a
+  router. It is now a proper lexer and parser for the path-to-regexp dialect the
+  standard adopts, compiled per component: named and anonymous groups, custom
+  regexes, all three modifiers, `{…}` grouping, and backslash escapes. A group
+  preceded by the component's prefix character absorbs it, so `/a/:b?` matches
+  `/a` as well as `/a/x` rather than leaving a dangling separator. `hostname`
+  groups are bounded by `.` and `pathname` groups by `/`. Unmatched optional
+  groups now report `undefined` rather than `""`, `hasRegExpGroups` is exposed,
+  the component accessors moved to the prototype, and a malformed pattern throws
+  at construction instead of silently never matching.
+
 ### Added
 
 - **`URL.createObjectURL()` / `URL.revokeObjectURL()`, and `fetch` serves
