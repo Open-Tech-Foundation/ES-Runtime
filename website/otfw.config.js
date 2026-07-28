@@ -1,7 +1,5 @@
 import { defineDocsConfig } from "@opentf/web-docs/config";
 
-import { RUNTIME_VERSION } from "./src/runtime-version.js";
-
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
 export default defineDocsConfig({
@@ -10,7 +8,8 @@ export default defineDocsConfig({
 
   docs: {
     title: "ES-Runtime",
-    version: `v${RUNTIME_VERSION}`,
+    // Bump on each release, to match the workspace Cargo.toml.
+    version: "v0.12.0",
     github: GITHUB,
     // Enables the per-page "Edit this page" link (with `lastUpdated`).
     repoUrl: GITHUB,
