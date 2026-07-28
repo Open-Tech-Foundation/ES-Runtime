@@ -148,7 +148,7 @@ test("Event and File constructor lengths match WebIDL", () => {
   assertEquals(Blob.length, 0);
 });
 
-todo("URL and URLSearchParams constructor lengths match WebIDL", () => {
+test("URL and URLSearchParams constructor lengths match WebIDL", () => {
   assertEquals(URL.length, 1);
   assertEquals(URLSearchParams.length, 0);
 });

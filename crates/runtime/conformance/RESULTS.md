@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **183 / 183** (100%) |
-| Known deviations (`todo`) | **17** |
+| Assertions passing | **191 / 191** (100%) |
+| Known deviations (`todo`) | **12** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -32,7 +32,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | --- | --- | --- | --- |
 | `encoding.js` | TextEncoder/TextDecoder §2.3 | 16 | — |
 | `base64.js` | atob/btoa §2.3 | 6 | — |
-| `url.js` | URL/URLSearchParams §2.4 | 11 | 3 |
+| `url.js` | URL/URLSearchParams §2.4 | 17 | — |
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |
 | `events.js` | Event/EventTarget §2.7 | 9 | 3 |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
@@ -42,21 +42,21 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 10 | 4 |
-| `fetch.js` | Headers/Request/Response object surface | 32 | 1 |
-| `webidl.js` | Interface shape: branding, arity, iterators | 22 | 1 |
+| `fetch.js` | Headers/Request/Response object surface | 33 | — |
+| `webidl.js` | Interface shape: branding, arity, iterators | 23 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
 ### Known deviations, by theme
 
-The remaining 17 `todo` cases group into five themes:
+The remaining 12 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
 | **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every interface. |
 | **Internal members on public prototypes** | `webidl.js` | ☑ Fixed — the slots are symbols now, most of them fragment-local. |
 | **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
-| **Missing members** | `url.js`, `performance.js`, `streams.js`, `events.js` | `URL.parse`, User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
-| **Wrong behaviour** | `url.js` | `URLSearchParams` over-escapes `*`. |
+| **Missing members** | `performance.js`, `streams.js`, `events.js` | User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
+
 
 One deviation found alongside these is **not** representable here and is gated
 by a Rust test instead, since it needs a driven event loop: `setTimeout` dropping

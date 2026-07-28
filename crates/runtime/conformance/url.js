@@ -102,15 +102,33 @@ test("URLSearchParams handles constructor with sequence of pairs", () => {
 });
 
 
-todo("URLSearchParams leaves '*' unescaped per the urlencoded safe set", () => {
+test("URLSearchParams leaves '*' unescaped per the urlencoded safe set", () => {
   assertEquals(new URLSearchParams([["a", "*"]]).toString(), "a=*");
 });
 
-todo("URLSearchParams accepts any iterable of pairs, not just arrays", () => {
+test("URLSearchParams accepts any iterable of pairs, not just arrays", () => {
   assertEquals(new URLSearchParams(new Map([["a", "1"]])).toString(), "a=1");
 });
 
-todo("URL.parse returns null instead of throwing", () => {
+test("URL.parse returns null instead of throwing", () => {
   assertEquals(URL.parse("::::"), null);
   assertEquals(URL.parse("https://a.example/").href, "https://a.example/");
+});
+
+test("URLSearchParams escapes the rest of the unsafe punctuation", () => {
+  assertEquals(new URLSearchParams([["a", "!'()~"]]).toString(), "a=%21%27%28%29%7E");
+});
+
+test("URLSearchParams accepts a generator of pairs and rejects bad arity", () => {
+  function* pairs() {
+    yield ["a", "1"];
+    yield ["b", "2"];
+  }
+  assertEquals(new URLSearchParams(pairs()).toString(), "a=1&b=2");
+  assertThrows(() => new URLSearchParams([["only"]]), "TypeError");
+});
+
+test("URL.parse resolves against a base", () => {
+  assertEquals(URL.parse("/p", "https://a.example/x").href, "https://a.example/p");
+  assertEquals(URL.parse("/p", "not a base"), null);
 });

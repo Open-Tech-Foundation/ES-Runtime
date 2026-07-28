@@ -53,7 +53,7 @@
 
   class Headers {
     #map = new Map(); // lowercased name -> [value, ...]
-    constructor(init) {
+    constructor(init = undefined) {
       if (init === undefined || init === null) return;
       if (init instanceof Headers) {
         for (const [k, v] of init) this.append(k, v);

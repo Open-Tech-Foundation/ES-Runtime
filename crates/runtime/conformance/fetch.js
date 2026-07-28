@@ -49,7 +49,7 @@ test("Headers reject a value containing NUL, CR or LF", () => {
   assertEquals(h.get("a"), "");
 });
 
-todo("Headers constructor length matches WebIDL", () => {
+test("Headers constructor length matches WebIDL", () => {
   assertEquals(Headers.length, 0);
 });
 

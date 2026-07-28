@@ -10,6 +10,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`URL.parse()`, and `URLSearchParams` accepts any iterable.** `URL.parse` —
+  the non-throwing way to parse, and the reason `URL.canParse` exists alongside
+  it — was missing. `URLSearchParams` treated only an `Array` as a sequence of
+  pairs, so `new URLSearchParams(new Map(...))` or a generator silently produced
+  an empty object; any iterable now works. It also percent-encoded `*`, which is
+  in the urlencoded safe set and must stay literal. Constructor arities are now
+  right for `URL` (1), `URLSearchParams` (0) and `Headers` (0).
 - **`crypto`, `crypto.subtle` and `performance` are interface instances.** All
   three were plain object literals, so their methods were own properties of a
   singleton rather than prototype members, they stringified as

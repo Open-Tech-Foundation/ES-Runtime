@@ -25,7 +25,10 @@
 
   // application/x-www-form-urlencoded encode/decode.
   function encode(s) {
-    return encodeURIComponent(s).replace(/%20/g, "+").replace(/[!'()*~]/g, (c) =>
+    // encodeURIComponent leaves !'()*~ alone, but the urlencoded serializer's
+    // safe set is only [A-Za-z0-9*-._] (plus space → "+"), so all of those
+    // except `*` still need escaping.
+    return encodeURIComponent(s).replace(/%20/g, "+").replace(/[!'()~]/g, (c) =>
       "%" + c.charCodeAt(0).toString(16).toUpperCase(),
     );
   }
@@ -41,18 +44,21 @@
     #list = [];
     #url = null;
 
-    constructor(init) {
+    constructor(init = undefined) {
       if (init === undefined || init === null || init === "") return;
       if (init instanceof URLSearchParams) {
         this.#list = init.#list.map((p) => [p[0], p[1]]);
       } else if (typeof init === "string") {
         this.#parse(init);
-      } else if (Array.isArray(init)) {
+      } else if (typeof init === "object" && typeof init[Symbol.iterator] === "function") {
+        // Any iterable of pairs, not just an Array — a Map, a Set of tuples,
+        // or a generator all qualify.
         for (const pair of init) {
-          if (pair.length !== 2) {
+          const entry = [...pair];
+          if (entry.length !== 2) {
             throw new TypeError("URLSearchParams pair must have two elements");
           }
-          this.#list.push([String(pair[0]), String(pair[1])]);
+          this.#list.push([String(entry[0]), String(entry[1])]);
         }
       } else if (typeof init === "object") {
         for (const key of Object.keys(init)) {
@@ -167,7 +173,7 @@
     #params; // lazily-built URLSearchParams (first `.searchParams` access)
     #origin; // lazily-fetched origin (first `.origin` access)
 
-    constructor(url, base) {
+    constructor(url, base = undefined) {
       const u =
         base !== undefined
           ? ops.url_parse(String(url), String(base))
@@ -176,7 +182,16 @@
       this.#u = u;
     }
 
-    static canParse(url, base) {
+    // Returns null instead of throwing — the non-exceptional way to parse.
+    static parse(url, base = undefined) {
+      try {
+        return new URL(url, base);
+      } catch {
+        return null;
+      }
+    }
+
+    static canParse(url, base = undefined) {
       const u =
         base !== undefined
           ? ops.url_parse(String(url), String(base))
