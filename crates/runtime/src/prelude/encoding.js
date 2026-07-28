@@ -78,6 +78,11 @@
     }
   }
 
-  globalThis.TextEncoder = TextEncoder;
-  globalThis.TextDecoder = TextDecoder;
+  for (const Interface of [TextEncoder, TextDecoder]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

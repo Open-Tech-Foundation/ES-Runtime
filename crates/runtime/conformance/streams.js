@@ -116,7 +116,7 @@ test("TextEncoderStream / TextDecoderStream round-trip via pipeThrough", async (
   assertEquals(s, "héllo");
 });
 
-todo("stream readers are branded", () => {
+test("stream readers are branded", () => {
   const tag = (v) => Object.prototype.toString.call(v);
   assertEquals(
     tag(new ReadableStream().getReader()),

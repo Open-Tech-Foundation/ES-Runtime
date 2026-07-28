@@ -90,6 +90,11 @@
     }
   }
 
-  globalThis.AbortSignal = AbortSignal;
-  globalThis.AbortController = AbortController;
+  for (const Interface of [AbortSignal, AbortController]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

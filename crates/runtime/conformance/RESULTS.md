@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **125 / 125** (100%) |
-| Known deviations (`todo`) | **46** |
+| Assertions passing | **137 / 137** (100%) |
+| Known deviations (`todo`) | **38** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -37,22 +37,22 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `events.js` | Event/EventTarget §2.7 | 9 | 3 |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
-| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 11 | 3 |
+| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 12 | 2 |
 | `performance.js` | performance, microtasks §2.11/§2.1 | 4 | 1 |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 10 | 4 |
 | `fetch.js` | Headers/Request/Response object surface | 12 | 12 |
-| `webidl.js` | Interface shape: branding, arity, iterators | 3 | 14 |
+| `webidl.js` | Interface shape: branding, arity, iterators | 14 | 7 |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
 ### Known deviations, by theme
 
-The 46 `todo` cases group into five themes:
+The remaining 38 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
-| **`Symbol.toStringTag` branding** | `webidl.js` | Every platform class except `DOMException` stringifies as `[object Object]`. |
+| **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every class-based interface. `crypto`, `crypto.subtle` and `performance` remain plain object literals, so they stringify as `[object Object]`. |
 | **Internal members on public prototypes** | `webidl.js` | `_bytes`, `_list`, `_parts`, `_begin`/`_end`, `_attach`/`_reload` are reachable from user code. |
 | **Missing arg validation** | `fetch.js`, `blob.js` | Header values are not checked for CR/LF; `Response` status is unvalidated; `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
 | **Missing members** | `fetch.js`, `url.js`, `performance.js`, `streams.js` | `Request.signal` and the mode/credentials/redirect defaults, `formData()`, `Response.redirect`, `URL.parse`, User Timing, `ReadableStream.from`. |

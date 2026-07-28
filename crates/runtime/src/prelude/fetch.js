@@ -475,9 +475,13 @@
     });
   }
 
-  globalThis.Headers = Headers;
-  globalThis.Request = Request;
-  globalThis.Response = Response;
+  for (const Interface of [Headers, Request, Response]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
   globalThis.fetch = fetch;
   // Internal bridge for runtime:http: build a server-side Request from a
   // host-validated absolute URL without the URL re-parse. Keyed by a private

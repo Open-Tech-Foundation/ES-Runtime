@@ -231,5 +231,9 @@
     }
   }
 
+  Object.defineProperty(URLPattern.prototype, Symbol.toStringTag, {
+    value: "URLPattern",
+    configurable: true,
+  });
   globalThis.URLPattern = URLPattern;
 })();

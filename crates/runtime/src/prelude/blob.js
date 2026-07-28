@@ -182,7 +182,11 @@
     }
   }
 
-  globalThis.Blob = Blob;
-  globalThis.File = File;
-  globalThis.FormData = FormData;
+  for (const Interface of [Blob, File, FormData]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

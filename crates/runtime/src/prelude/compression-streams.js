@@ -80,6 +80,11 @@
     }
   }
 
-  globalThis.CompressionStream = CompressionStream;
-  globalThis.DecompressionStream = DecompressionStream;
+  for (const Interface of [CompressionStream, DecompressionStream]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

@@ -1765,17 +1765,28 @@
     writer[S].stream = undefined;
   }
 
-  globalThis.ReadableStream = ReadableStream;
-  globalThis.ReadableStreamDefaultController = ReadableStreamDefaultController;
-  globalThis.ReadableStreamDefaultReader = ReadableStreamDefaultReader;
-  globalThis.ReadableByteStreamController = ReadableByteStreamController;
-  globalThis.ReadableStreamBYOBReader = ReadableStreamBYOBReader;
-  globalThis.ReadableStreamBYOBRequest = ReadableStreamBYOBRequest;
-  globalThis.WritableStream = WritableStream;
-  globalThis.WritableStreamDefaultController = WritableStreamDefaultController;
-  globalThis.WritableStreamDefaultWriter = WritableStreamDefaultWriter;
-  globalThis.TransformStream = TransformStream;
-  globalThis.TransformStreamDefaultController = TransformStreamDefaultController;
-  globalThis.CountQueuingStrategy = CountQueuingStrategy;
-  globalThis.ByteLengthQueuingStrategy = ByteLengthQueuingStrategy;
+  // Install each interface, branded so `Object.prototype.toString` reports the
+  // interface name rather than "[object Object]" (WebIDL §3.7.5). Every class
+  // name here is already the interface name, so it doubles as the global.
+  for (const Interface of [
+    ReadableStream,
+    ReadableStreamDefaultController,
+    ReadableStreamDefaultReader,
+    ReadableByteStreamController,
+    ReadableStreamBYOBReader,
+    ReadableStreamBYOBRequest,
+    WritableStream,
+    WritableStreamDefaultController,
+    WritableStreamDefaultWriter,
+    TransformStream,
+    TransformStreamDefaultController,
+    CountQueuingStrategy,
+    ByteLengthQueuingStrategy,
+  ]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

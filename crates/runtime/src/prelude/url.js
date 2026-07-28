@@ -288,6 +288,11 @@
     }
   }
 
-  globalThis.URL = URL;
-  globalThis.URLSearchParams = URLSearchParams;
+  for (const Interface of [URL, URLSearchParams]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

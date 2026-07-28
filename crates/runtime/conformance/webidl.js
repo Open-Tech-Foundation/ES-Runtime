@@ -12,40 +12,72 @@ test("DOMException is branded", () => {
   assertEquals(tagOf(new DOMException("m", "AbortError")), "[object DOMException]");
 });
 
-todo("Blob and File are branded", () => {
+test("Blob and File are branded", () => {
   assertEquals(tagOf(new Blob(["x"])), "[object Blob]");
   assertEquals(tagOf(new File(["x"], "f.txt")), "[object File]");
 });
 
-todo("FormData is branded", () => {
+test("FormData is branded", () => {
   assertEquals(tagOf(new FormData()), "[object FormData]");
 });
 
-todo("URL and URLSearchParams are branded", () => {
+test("URL and URLSearchParams are branded", () => {
   assertEquals(tagOf(new URL("https://a.example/")), "[object URL]");
   assertEquals(tagOf(new URLSearchParams("a=1")), "[object URLSearchParams]");
 });
 
-todo("Event, CustomEvent and EventTarget are branded", () => {
+test("Event, CustomEvent and EventTarget are branded", () => {
   assertEquals(tagOf(new Event("x")), "[object Event]");
   assertEquals(tagOf(new CustomEvent("x")), "[object CustomEvent]");
   assertEquals(tagOf(new EventTarget()), "[object EventTarget]");
 });
 
-todo("AbortController and AbortSignal are branded", () => {
+test("AbortController and AbortSignal are branded", () => {
   assertEquals(tagOf(new AbortController()), "[object AbortController]");
   assertEquals(tagOf(AbortSignal.abort()), "[object AbortSignal]");
 });
 
-todo("TextEncoder and TextDecoder are branded", () => {
+test("TextEncoder and TextDecoder are branded", () => {
   assertEquals(tagOf(new TextEncoder()), "[object TextEncoder]");
   assertEquals(tagOf(new TextDecoder()), "[object TextDecoder]");
 });
 
-todo("the stream classes are branded", () => {
+test("the stream classes are branded", () => {
   assertEquals(tagOf(new ReadableStream()), "[object ReadableStream]");
   assertEquals(tagOf(new WritableStream()), "[object WritableStream]");
   assertEquals(tagOf(new TransformStream()), "[object TransformStream]");
+});
+
+test("the fetch interfaces are branded", () => {
+  assertEquals(tagOf(new Headers()), "[object Headers]");
+  assertEquals(tagOf(new Request("https://a.example/")), "[object Request]");
+  assertEquals(tagOf(new Response("x")), "[object Response]");
+});
+
+test("the transform-stream interfaces are branded", () => {
+  assertEquals(tagOf(new TextEncoderStream()), "[object TextEncoderStream]");
+  assertEquals(tagOf(new TextDecoderStream()), "[object TextDecoderStream]");
+  assertEquals(tagOf(new CompressionStream("gzip")), "[object CompressionStream]");
+  assertEquals(tagOf(new DecompressionStream("gzip")), "[object DecompressionStream]");
+});
+
+test("the queuing strategies and URLPattern are branded", () => {
+  assertEquals(tagOf(new CountQueuingStrategy({ highWaterMark: 1 })), "[object CountQueuingStrategy]");
+  assertEquals(
+    tagOf(new ByteLengthQueuingStrategy({ highWaterMark: 1 })),
+    "[object ByteLengthQueuingStrategy]",
+  );
+  assertEquals(tagOf(new URLPattern({ pathname: "/a" })), "[object URLPattern]");
+});
+
+test("branding is a non-enumerable, configurable prototype property", () => {
+  const d = Object.getOwnPropertyDescriptor(Blob.prototype, Symbol.toStringTag);
+  assertEquals(d.value, "Blob");
+  assertEquals(d.enumerable, false);
+  assertEquals(d.writable, false);
+  assertEquals(d.configurable, true);
+  // On the prototype, not the instance.
+  assertEquals(Object.getOwnPropertySymbols(new Blob([])).length, 0);
 });
 
 todo("crypto and performance are branded", () => {

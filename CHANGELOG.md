@@ -8,6 +8,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **Platform objects are branded with `Symbol.toStringTag`.** Every class-based
+  Web API interface — `Blob`, `File`, `FormData`, `URL`, `URLSearchParams`,
+  `Event` and friends, `AbortController`/`AbortSignal`, `TextEncoder`/
+  `TextDecoder`, the whole streams family, `Headers`/`Request`/`Response`,
+  `CompressionStream`/`DecompressionStream`, `URLPattern`, `WebSocket` — now
+  reports its interface name from `Object.prototype.toString` instead of
+  `[object Object]` (WebIDL §3.7.5). Type-sniffing libraries, test-framework
+  diffs and inspector output all key on this. The tag is a non-enumerable,
+  non-writable, configurable property of the prototype, as WebIDL specifies.
+  `crypto`, `crypto.subtle` and `performance` are plain object literals rather
+  than class instances and are still unbranded.
+
 ### Added
 
 - **Known deviations are now executable in the conformance suite.** The harness

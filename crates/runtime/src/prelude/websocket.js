@@ -621,7 +621,11 @@
     }
   }
 
-  globalThis.WebSocket = WebSocket;
-  globalThis.WebSocketStream = WebSocketStream;
-  globalThis.WebSocketError = WebSocketError;
+  for (const Interface of [WebSocket, WebSocketStream, WebSocketError]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();

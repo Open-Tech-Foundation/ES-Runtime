@@ -247,9 +247,11 @@
     }
   }
 
-  globalThis.Event = Event;
-  globalThis.CustomEvent = CustomEvent;
-  globalThis.EventTarget = EventTarget;
-  globalThis.MessageEvent = MessageEvent;
-  globalThis.CloseEvent = CloseEvent;
+  for (const Interface of [Event, CustomEvent, EventTarget, MessageEvent, CloseEvent]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
 })();
