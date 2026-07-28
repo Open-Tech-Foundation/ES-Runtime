@@ -4,6 +4,7 @@
 // (documented in SPEC §7); a V8 ValueSerializer-based path is a later refinement.
 (() => {
   "use strict";
+  const BYTES = __internal.bytes;
 
   const TYPED_ARRAYS = [
     Int8Array,
@@ -79,12 +80,12 @@
     // Blob and File are serializable; both are cloned by value.
     if (globalThis.Blob && value instanceof Blob) {
       if (globalThis.File && value instanceof File) {
-        return new File([value._bytes()], value.name, {
+        return new File([value[BYTES]()], value.name, {
           type: value.type,
           lastModified: value.lastModified,
         });
       }
-      return new Blob([value._bytes()], { type: value.type });
+      return new Blob([value[BYTES]()], { type: value.type });
     }
 
     if (Array.isArray(value)) {

@@ -17,6 +17,11 @@
 (() => {
   "use strict";
   const ops = globalThis.__ops;
+  // Fragment-local: URL and URLSearchParams keep each other in sync through
+  // these, and nothing outside this fragment needs them.
+  const ATTACH = Symbol("URLSearchParams attach");
+  const RELOAD = Symbol("URLSearchParams reload");
+  const SET_SEARCH = Symbol("URL setSearchFromParams");
 
   // application/x-www-form-urlencoded encode/decode.
   function encode(s) {
@@ -73,14 +78,14 @@
     }
 
     #notify() {
-      if (this.#url) this.#url._setSearchFromParams(this.#serialize());
+      if (this.#url) this.#url[SET_SEARCH](this.#serialize());
     }
 
-    // Internal hooks used by URL.
-    _attach(url) {
+    // Internal slots used by URL.
+    [ATTACH](url) {
       this.#url = url;
     }
-    _reload(searchString) {
+    [RELOAD](searchString) {
       this.#list = [];
       this.#parse(searchString);
     }
@@ -196,7 +201,7 @@
       this.#apply("href", v);
       // Only resync if a URLSearchParams has actually been materialized;
       // otherwise it will be built from the current search on first access.
-      if (this.#params !== undefined) this.#params._reload(this.search);
+      if (this.#params !== undefined) this.#params[RELOAD](this.search);
     }
     get origin() {
       if (this.#origin === undefined) this.#origin = ops.url_origin(this.#u[0]);
@@ -264,19 +269,19 @@
     }
     set search(v) {
       this.#apply("search", v);
-      if (this.#params !== undefined) this.#params._reload(this.search);
+      if (this.#params !== undefined) this.#params[RELOAD](this.search);
     }
     get searchParams() {
       // Lazily materialize + attach on first access.
       if (this.#params === undefined) {
         this.#params = new URLSearchParams(this.search);
-        this.#params._attach(this);
+        this.#params[ATTACH](this);
       }
       return this.#params;
     }
 
     // Called by the attached URLSearchParams when it mutates.
-    _setSearchFromParams(serialized) {
+    [SET_SEARCH](serialized) {
       this.#apply("search", serialized ? "?" + serialized : "");
     }
 

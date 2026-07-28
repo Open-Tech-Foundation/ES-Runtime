@@ -3,9 +3,11 @@
   "use strict";
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  const BYTES = __internal.bytes;
+  const ENCODE = __internal.encode;
 
   function partToBytes(part) {
-    if (part instanceof Blob) return part._bytes();
+    if (part instanceof Blob) return part[BYTES]();
     if (typeof part === "string") return encoder.encode(part);
     if (part instanceof Uint8Array) return part;
     if (part instanceof ArrayBuffer) return new Uint8Array(part);
@@ -52,8 +54,8 @@
     get type() {
       return this.#type;
     }
-    // Internal: raw bytes (used by FormData/fetch/File).
-    _bytes() {
+    // Internal slot: raw bytes (used by FormData/fetch/structuredClone).
+    [BYTES]() {
       return this.#bytes;
     }
     slice(start, end, contentType) {
@@ -98,7 +100,7 @@
   function toEntryValue(value, filename) {
     if (value instanceof Blob) {
       if (filename !== undefined && !(value instanceof File)) {
-        return new File([value._bytes()], String(filename), { type: value.type });
+        return new File([value[BYTES]()], String(filename), { type: value.type });
       }
       return value;
     }
@@ -154,8 +156,8 @@
     [Symbol.iterator]() {
       return this.entries();
     }
-    // Internal: encode as multipart/form-data; returns { bytes, type }.
-    _encode() {
+    // Internal slot: encode as multipart/form-data; returns { bytes, type }.
+    [ENCODE]() {
       const boundary =
         "----ESRuntimeFormBoundary" + Math.random().toString(16).slice(2);
       const segments = [];
@@ -167,7 +169,7 @@
           header += `; filename="${filename}"\r\nContent-Type: ${
             value.type || "application/octet-stream"
           }\r\n\r\n`;
-          body = value._bytes();
+          body = value[BYTES]();
         } else {
           header += "\r\n\r\n";
           body = encoder.encode(value);

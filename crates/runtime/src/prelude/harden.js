@@ -29,6 +29,20 @@
     });
   }
 
+  // Same for the internal slot-key table: guest code must not be able to swap
+  // it for one whose symbols it controls, which would let it forge a Blob's
+  // backing-bytes slot. Locked, not deleted — `runtime:http` is imported lazily
+  // and reads `__internal.parts` long after the prelude has run.
+  const internal = globalThis.__internal;
+  if (internal !== undefined) {
+    Object.defineProperty(globalThis, "__internal", {
+      value: internal,
+      writable: false,
+      configurable: false,
+      enumerable: false,
+    });
+  }
+
   // `__wasm_pending` is deliberately *not* locked here: the engine reinstalls it
   // on every isolate, including one restored from this snapshot, and a
   // non-configurable binding would make that reinstall fail silently. It needs no

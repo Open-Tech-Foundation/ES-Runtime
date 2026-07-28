@@ -84,7 +84,7 @@ async function handleRequest(entry, handler) {
   // A deferred string body crosses as-is (encoded Rust-side — no utf8_encode op
   // and no intermediate JS byte buffer); already-materialized bytes pass
   // through. Only a streaming body goes through the chunk pump.
-  const parts = response._parts();
+  const parts = response[__internal.parts]();
   let out = null;
   let stream = null;
   if (parts.str !== null && parts.str !== undefined) {

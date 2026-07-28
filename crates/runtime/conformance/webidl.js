@@ -93,17 +93,27 @@ const noUnderscored = (name, proto) => {
   assertEquals(leaked.join(","), "", `${name} leaks internals`);
 };
 
-todo("Blob.prototype exposes no internal members", () => {
+test("Blob.prototype exposes no internal members", () => {
   noUnderscored("Blob", Blob.prototype);
 });
 
-todo("Event.prototype exposes no internal members", () => {
+test("Event.prototype exposes no internal members", () => {
   noUnderscored("Event", Event.prototype);
 });
 
-todo("URL and URLSearchParams expose no internal members", () => {
+test("URL and URLSearchParams expose no internal members", () => {
   noUnderscored("URL", URL.prototype);
   noUnderscored("URLSearchParams", URLSearchParams.prototype);
+});
+
+test("the fetch interfaces expose no internal members", () => {
+  noUnderscored("Headers", Headers.prototype);
+  noUnderscored("Request", Request.prototype);
+  noUnderscored("Response", Response.prototype);
+});
+
+test("FormData exposes no internal members", () => {
+  noUnderscored("FormData", FormData.prototype);
 });
 
 // ---- Constructor arity (optional arguments are not counted) ---------------

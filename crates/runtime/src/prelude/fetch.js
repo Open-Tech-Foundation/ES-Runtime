@@ -8,6 +8,13 @@
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const BODY = Symbol("bodyState");
+  // Fragment-local, so unreachable from guest code; the shared slots come from
+  // __internal (see prelude/internals.js).
+  const HEADER_LIST = Symbol("headerList");
+  const REQUEST_HEADERS = Symbol("requestHeaders");
+  const BYTES = __internal.bytes;
+  const ENCODE = __internal.encode;
+  const PARTS = __internal.parts;
   // Closure-private marker: a Request built from an already-validated absolute
   // URL (the runtime:http server path) may skip re-parsing it. Not reachable
   // from guest code, so the public constructor's eager validation is unaffected.
@@ -109,8 +116,8 @@
     [Symbol.iterator]() {
       return this.entries();
     }
-    // Internal: flat list for the fetch op.
-    _list() {
+    // Internal slot: flat list for the fetch op.
+    [HEADER_LIST]() {
       return this.#sortedEntries();
     }
   }
@@ -149,10 +156,10 @@
       return { bytes: new Uint8Array(input.buffer, input.byteOffset, input.byteLength) };
     }
     if (globalThis.Blob && input instanceof Blob) {
-      return { bytes: input._bytes(), type: input.type || null };
+      return { bytes: input[BYTES](), type: input.type || null };
     }
     if (globalThis.FormData && input instanceof FormData) {
-      const enc = input._encode();
+      const enc = input[ENCODE]();
       return { bytes: enc.bytes, type: enc.type };
     }
     if (globalThis.URLSearchParams && input instanceof URLSearchParams) {
@@ -494,10 +501,10 @@
     clone() {
       return new Request(this);
     }
-    // Internal accessors for fetch.
-    _headers() {
+    // Internal slot: header list for the fetch op.
+    [REQUEST_HEADERS]() {
       this.#ensureHeaders();
-      return this.#headers._list();
+      return this.#headers[HEADER_LIST]();
     }
   }
   defineBodyMixin(Request.prototype);
@@ -605,11 +612,11 @@
     // skip the async arrayBuffer() round-trip for the common buffered body.
     // `bytes` is the body Uint8Array, or null for an absent body or a streaming
     // body (in which case `stream` is set and the caller drains it async).
-    _parts() {
+    [PARTS]() {
       const s = this[BODY];
       return {
         status: this.#status,
-        headers: this.#headers._list(),
+        headers: this.#headers[HEADER_LIST](),
         // A deferred string body crosses to http_respond as-is (encoded
         // Rust-side); otherwise hand over already-materialized bytes or a stream.
         str: s.str,
@@ -704,7 +711,7 @@
       bodyStreamId,
       abortId,
     ];
-    for (const [name, value] of request._headers()) args.push(name, value);
+    for (const [name, value] of request[REQUEST_HEADERS]()) args.push(name, value);
 
     // Start the request and (for a streaming body) the pump concurrently — the
     // driven loop polls both, so chunks flow while `fetch` awaits the response.

@@ -3,6 +3,10 @@
 // is no propagation path, which matches a non-DOM runtime.
 (() => {
   "use strict";
+  // Fragment-local dispatch slots: EventTarget is the only caller.
+  const BEGIN = Symbol("Event begin");
+  const END = Symbol("Event end");
+  const IMMEDIATE_STOPPED = Symbol("Event immediateStopped");
 
   class Event {
     #type;
@@ -71,18 +75,18 @@
       this.#immediateStopped = true;
     }
 
-    // Internal hooks for EventTarget.dispatchEvent.
-    _begin(target) {
+    // Internal slots for EventTarget.dispatchEvent.
+    [BEGIN](target) {
       this.#target = target;
       this.#currentTarget = target;
       this.#inDispatch = true;
       this.#immediateStopped = false;
     }
-    _end() {
+    [END]() {
       this.#inDispatch = false;
       this.#currentTarget = null;
     }
-    get _immediateStopped() {
+    get [IMMEDIATE_STOPPED]() {
       return this.#immediateStopped;
     }
   }
@@ -161,10 +165,10 @@
         throw new TypeError("dispatchEvent argument must be an Event");
       }
       const list = this.#listeners.get(event.type);
-      event._begin(this);
+      event[BEGIN](this);
       if (list) {
         for (const entry of list.slice()) {
-          if (event._immediateStopped) break;
+          if (event[IMMEDIATE_STOPPED]) break;
           if (!list.includes(entry)) continue; // removed mid-dispatch
           if (entry.once) {
             this.removeEventListener(event.type, entry.callback, {
@@ -186,7 +190,7 @@
           }
         }
       }
-      event._end();
+      event[END]();
       return !event.defaultPrevented;
     }
   }

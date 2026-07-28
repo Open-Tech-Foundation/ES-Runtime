@@ -10,7 +10,9 @@
 /// fragments (e.g. `globals`' `reportError`) can route through it.
 pub(crate) fn source() -> String {
     [
-        // DOMException first: later fragments throw it.
+        // Internal slot keys first: later fragments capture them at load time.
+        include_str!("prelude/internals.js"),
+        // DOMException next: later fragments throw it.
         include_str!("prelude/dom-exception.js"),
         // console before globals: reportError routes through it.
         include_str!("prelude/console.js"),

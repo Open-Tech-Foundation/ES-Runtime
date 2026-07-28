@@ -10,6 +10,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Internal plumbing no longer sits on public prototypes.** `Blob.prototype`
+  carried `_bytes`, `Headers.prototype` `_list`, `Response.prototype` `_parts`,
+  `Event.prototype` `_begin`/`_end`/`_immediateStopped`, and so on — all
+  enumerable by `Object.getOwnPropertyNames` and callable by user code. They are
+  symbol-keyed slots now. Most are fragment-local symbols and so are genuinely
+  unreachable; the three that one prelude fragment defines and another reads
+  (`Blob`'s bytes, `FormData`'s encoder, `Response`'s parts) live on a locked,
+  non-enumerable `__internal` table, the same defense-in-depth treatment `__ops`
+  already gets. As with `__ops`, this is JS-surface hygiene, not the security
+  boundary — that stays in the engine's Rust `OpState`.
 - **`structuredClone` preserves errors, clones blobs, and supports `transfer`.**
   An `Error` was reconstructed as `new value.constructor(message)`, which lost
   `cause` and `stack` and turned a `DOMException` into a plain `Error` — the
