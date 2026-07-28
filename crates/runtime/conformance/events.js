@@ -78,7 +78,7 @@ test("Event target and timeStamp properties are populated", () => {
 });
 
 
-todo("Event exposes the legacy cancelBubble and returnValue accessors", () => {
+test("Event exposes the legacy cancelBubble and returnValue accessors", () => {
   const e = new Event("x", { cancelable: true });
   assertEquals(e.cancelBubble, false);
   assertEquals(e.returnValue, true);
@@ -86,11 +86,11 @@ todo("Event exposes the legacy cancelBubble and returnValue accessors", () => {
   assertEquals(e.returnValue, false);
 });
 
-todo("Event exposes the legacy initEvent method", () => {
+test("Event exposes the legacy initEvent method", () => {
   assertEquals(typeof new Event("x").initEvent, "function");
 });
 
-todo("dispatching an in-flight event throws InvalidStateError", () => {
+test("dispatching an in-flight event throws InvalidStateError", () => {
   const t = new EventTarget();
   const e = new Event("x");
   let name = null;
@@ -99,4 +99,48 @@ todo("dispatching an in-flight event throws InvalidStateError", () => {
   });
   t.dispatchEvent(e);
   assertEquals(name, "InvalidStateError");
+});
+
+test("cancelBubble reflects stopPropagation and is write-once", () => {
+  const e = new Event("x");
+  assertEquals(e.cancelBubble, false);
+  e.stopPropagation();
+  assertEquals(e.cancelBubble, true);
+  // Assigning false must not clear it.
+  e.cancelBubble = false;
+  assertEquals(e.cancelBubble, true);
+});
+
+test("returnValue = false prevents the default", () => {
+  const e = new Event("x", { cancelable: true });
+  e.returnValue = false;
+  assertEquals(e.defaultPrevented, true);
+  assertEquals(e.returnValue, false);
+});
+
+test("initEvent retargets a fresh event and is ignored mid-dispatch", () => {
+  const e = new Event("old");
+  e.initEvent("new", true, true);
+  assertEquals(e.type, "new");
+  assertEquals(e.bubbles, true);
+  assertEquals(e.cancelable, true);
+
+  const t = new EventTarget();
+  let typeDuring = null;
+  t.addEventListener("new", (ev) => {
+    ev.initEvent("ignored");
+    typeDuring = ev.type;
+  });
+  t.dispatchEvent(e);
+  assertEquals(typeDuring, "new");
+});
+
+test("an event can be dispatched again once the first dispatch is over", () => {
+  const t = new EventTarget();
+  const e = new Event("x");
+  let n = 0;
+  t.addEventListener("x", () => n++);
+  t.dispatchEvent(e);
+  t.dispatchEvent(e);
+  assertEquals(n, 2);
 });

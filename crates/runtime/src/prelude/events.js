@@ -19,6 +19,7 @@
     #currentTarget = null;
     #timeStamp;
     #inDispatch = false;
+    #stopped = false;
 
     constructor(type, options = {}) {
       if (arguments.length < 1) {
@@ -70,17 +71,52 @@
     preventDefault() {
       if (this.#cancelable) this.#defaultPrevented = true;
     }
-    stopPropagation() {}
+    stopPropagation() {
+      this.#stopped = true;
+    }
     stopImmediatePropagation() {
+      this.#stopped = true;
       this.#immediateStopped = true;
+    }
+    // Legacy aliases, still normative in the DOM standard. `cancelBubble`
+    // mirrors stopPropagation(); `returnValue` is the inverse of
+    // defaultPrevented.
+    get cancelBubble() {
+      return this.#stopped;
+    }
+    set cancelBubble(value) {
+      if (value) this.#stopped = true;
+    }
+    get returnValue() {
+      return !this.#defaultPrevented;
+    }
+    set returnValue(value) {
+      if (!value) this.preventDefault();
+    }
+    initEvent(type, bubbles = false, cancelable = false) {
+      // A no-op once the event is being dispatched, per the standard.
+      if (this.#inDispatch) return;
+      this.#type = String(type);
+      this.#bubbles = Boolean(bubbles);
+      this.#cancelable = Boolean(cancelable);
+      this.#defaultPrevented = false;
     }
 
     // Internal slots for EventTarget.dispatchEvent.
     [BEGIN](target) {
+      // Re-dispatching an event that is already being dispatched is an
+      // InvalidStateError, not unbounded recursion.
+      if (this.#inDispatch) {
+        throw new DOMException(
+          "The event is already being dispatched.",
+          "InvalidStateError",
+        );
+      }
       this.#target = target;
       this.#currentTarget = target;
       this.#inDispatch = true;
       this.#immediateStopped = false;
+      this.#stopped = false;
     }
     [END]() {
       this.#inDispatch = false;

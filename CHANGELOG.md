@@ -10,6 +10,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Event` gained its legacy members, and re-entrant dispatch is an error.**
+  `cancelBubble`, `returnValue` and `initEvent()` were absent — still normative
+  in the DOM standard, and what older libraries feature-detect on. Dispatching
+  an event that was already being dispatched recursed until the stack overflowed
+  with a `RangeError`; it now throws `InvalidStateError`, and an event can still
+  be dispatched again once the first dispatch has finished.
 - **`Headers`, `FormData` and `URLSearchParams` return named iterators.**
   `entries()`, `keys()` and `values()` returned bare generator objects, so they
   reported `[object Generator]` rather than `[object Headers Iterator]` and

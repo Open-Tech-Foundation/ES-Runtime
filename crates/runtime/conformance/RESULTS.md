@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **195 / 195** (100%) |
-| Known deviations (`todo`) | **10** |
+| Assertions passing | **202 / 202** (100%) |
+| Known deviations (`todo`) | **7** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -34,7 +34,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `base64.js` | atob/btoa §2.3 | 6 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 17 | — |
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |
-| `events.js` | Event/EventTarget §2.7 | 9 | 3 |
+| `events.js` | Event/EventTarget §2.7 | 16 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 12 | 2 |
@@ -48,14 +48,14 @@ every known deviation an executable, self-retiring entry rather than prose.
 
 ### Known deviations, by theme
 
-The remaining 10 `todo` cases group into five themes:
+The remaining 7 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
 | **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every interface. |
 | **Internal members on public prototypes** | `webidl.js` | ☑ Fixed — the slots are symbols now, most of them fragment-local. |
 | **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
-| **Missing members** | `performance.js`, `streams.js`, `events.js` | User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
+| **Missing members** | `performance.js`, `streams.js` | User Timing, `ReadableStream.from`. |
 
 
 One deviation found alongside these is **not** representable here and is gated
