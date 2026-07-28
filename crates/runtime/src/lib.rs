@@ -2024,6 +2024,131 @@ mod tests {
     }
 
     #[test]
+    fn message_port_delivers_asynchronously_and_in_order() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // `sync` captures that nothing is delivered synchronously: postMessage
+        // queues a task, so the count is still 0 at the point of the send.
+        let out = eval_async(
+            &mut rt,
+            "const ch = new MessageChannel(); \
+             const seen = []; \
+             ch.port2.onmessage = (e) => seen.push(e.data); \
+             ch.port1.postMessage('a'); \
+             ch.port1.postMessage('b'); \
+             const sync = seen.length; \
+             await new Promise((r) => setTimeout(r, 0)); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             return sync + '|' + seen.join(',');",
+        );
+        assert_eq!(out, Value::String("0|a,b".into()));
+    }
+
+    #[test]
+    fn message_port_structured_clones_the_payload() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // The receiver must see the value as it was at postMessage time, and
+        // must not share identity with the sender's object.
+        let out = eval_async(
+            &mut rt,
+            "const ch = new MessageChannel(); \
+             let got = null; \
+             ch.port2.onmessage = (e) => { got = e.data; }; \
+             const payload = { n: 1, nested: { deep: true } }; \
+             ch.port1.postMessage(payload); \
+             payload.n = 999; \
+             await new Promise((r) => setTimeout(r, 0)); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             return got.n + '|' + got.nested.deep + '|' + (got === payload);",
+        );
+        assert_eq!(out, Value::String("1|true|false".into()));
+    }
+
+    #[test]
+    fn message_port_buffers_until_started() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // addEventListener does not start a port; only start() (or assigning
+        // onmessage) does. Messages sent before then are buffered, not dropped.
+        let out = eval_async(
+            &mut rt,
+            "const ch = new MessageChannel(); \
+             const seen = []; \
+             ch.port2.addEventListener('message', (e) => seen.push(e.data)); \
+             ch.port1.postMessage('early'); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             const beforeStart = seen.length; \
+             ch.port2.start(); \
+             return beforeStart + '|' + seen.join(',');",
+        );
+        assert_eq!(out, Value::String("0|early".into()));
+    }
+
+    #[test]
+    fn message_port_close_stops_delivery() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const ch = new MessageChannel(); \
+             const seen = []; \
+             ch.port2.onmessage = (e) => seen.push(e.data); \
+             ch.port1.postMessage('before'); \
+             ch.port2.close(); \
+             ch.port1.postMessage('after'); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             return String(seen.length);",
+        );
+        assert_eq!(out, Value::String("0".into()));
+    }
+
+    #[test]
+    fn broadcast_channel_reaches_peers_but_not_the_sender() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const a = new BroadcastChannel('room'); \
+             const b = new BroadcastChannel('room'); \
+             const c = new BroadcastChannel('other'); \
+             const seen = []; \
+             a.onmessage = () => seen.push('a'); \
+             b.onmessage = () => seen.push('b'); \
+             c.onmessage = () => seen.push('c'); \
+             a.postMessage('hello'); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             a.close(); b.close(); c.close(); \
+             return seen.join(',');",
+        );
+        // Only the same-named peer, and never the sender itself.
+        assert_eq!(out, Value::String("b".into()));
+    }
+
+    #[test]
+    fn broadcast_channel_close_unsubscribes() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const a = new BroadcastChannel('r2'); \
+             const b = new BroadcastChannel('r2'); \
+             let n = 0; \
+             b.onmessage = () => n++; \
+             b.close(); \
+             a.postMessage('x'); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             await new Promise((r) => setTimeout(r, 0)); \
+             a.close(); \
+             return String(n);",
+        );
+        assert_eq!(out, Value::String("0".into()));
+    }
+
+    #[test]
     fn set_timeout_forwards_trailing_arguments_to_the_callback() {
         let _g = v8_guard();
         let mut rt = runtime();
@@ -3391,7 +3516,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 225;
+        const BASELINE: u32 = 234;
 
         assert!(
             pass >= BASELINE,

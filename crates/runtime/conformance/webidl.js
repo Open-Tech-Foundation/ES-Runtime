@@ -191,3 +191,12 @@ test("platform constructors reject being called without new", () => {
     assertThrows(() => C("x"), "TypeError");
   }
 });
+
+test("the messaging interfaces are branded and exposed", () => {
+  const ch = new MessageChannel();
+  assertEquals(tagOf(ch), "[object MessageChannel]");
+  assertEquals(tagOf(ch.port1), "[object MessagePort]");
+  const bc = new BroadcastChannel("brand-check");
+  assertEquals(tagOf(bc), "[object BroadcastChannel]");
+  bc.close();
+});

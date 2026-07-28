@@ -10,6 +10,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`MessageChannel`, `MessagePort` and `BroadcastChannel`.** This runtime has a
+  single agent — no workers, no second realm — so the other side of a channel is
+  always in this isolate and delivery is a queued task rather than a cross-thread
+  hop. The observable contract still holds: messages are structured-cloned at the
+  `postMessage` call (so a later mutation is not seen by the receiver, and a
+  non-cloneable value throws at the call site rather than in a detached task),
+  delivered asynchronously and in order, and a port buffers until `start()` —
+  which assigning `onmessage` does implicitly, while `addEventListener` does not.
+  Closing a port disentangles the pair. A `BroadcastChannel` reaches every open
+  channel with the same name except itself, and `postMessage` after `close()` is
+  an `InvalidStateError`. Transferring a `MessagePort` is not supported (a
+  `DataCloneError`); with one agent there is nowhere to transfer it to.
 - **The global scope is an `EventTarget`, and `reportError` dispatches.**
   `addEventListener`/`removeEventListener`/`dispatchEvent` now exist on the
   global, with `event.target` reporting `globalThis`. `reportError()` builds a

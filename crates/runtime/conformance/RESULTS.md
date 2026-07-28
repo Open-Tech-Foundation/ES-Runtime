@@ -14,9 +14,9 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **225 / 225** (100%) |
+| Assertions passing | **234 / 234** (100%) |
 | Known deviations (`todo`) | **0** |
-| Files | 19 |
+| Files | 20 |
 | Last updated | 2026-07-28 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
@@ -42,6 +42,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 14 | — |
+| `channel.js` | MessageChannel/MessagePort/BroadcastChannel | 8 | — |
 | `fetch.js` | Headers/Request/Response object surface | 33 | — |
 | `webidl.js` | Interface shape: branding, arity, iterators | 27 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |

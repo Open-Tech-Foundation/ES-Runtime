@@ -26,6 +26,8 @@ pub(crate) fn source() -> String {
         // events before abort: AbortSignal extends EventTarget.
         include_str!("prelude/events.js"),
         include_str!("prelude/abort.js"),
+        // messaging needs EventTarget + MessageEvent (events) and structuredClone.
+        include_str!("prelude/channel.js"),
         include_str!("prelude/streams.js"),
         // encoding streams need TransformStream + TextEncoder/TextDecoder.
         include_str!("prelude/encoding-streams.js"),
