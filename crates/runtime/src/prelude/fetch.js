@@ -32,6 +32,33 @@
 
   // ---- Headers ------------------------------------------------------------
 
+  // A WebIDL iterable's iterator is its own interface: it must report
+  // "[object Headers Iterator]" and inherit from %IteratorPrototype%, which a
+  // bare generator object does not do.
+  const ITER_GEN = Symbol("iterator generator");
+  const ITERATOR_PROTOTYPE = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]()),
+  );
+  const HEADERS_ITERATOR_PROTOTYPE = Object.create(ITERATOR_PROTOTYPE, {
+    [Symbol.toStringTag]: {
+      value: "Headers Iterator",
+      configurable: true,
+    },
+    next: {
+      value() {
+        return this[ITER_GEN].next();
+      },
+      writable: true,
+      configurable: true,
+    },
+  });
+  function headersIterator(generator) {
+    const it = Object.create(HEADERS_ITERATOR_PROTOTYPE);
+    Object.defineProperty(it, ITER_GEN, { value: generator });
+    return it;
+  }
+
+
   function normalizeName(name) {
     const n = String(name);
     if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(n)) {
@@ -101,14 +128,23 @@
       }
       return flat;
     }
-    *entries() {
+    *#entriesGen() {
       for (const e of this.#sortedEntries()) yield e;
     }
-    *keys() {
+    *#keysGen() {
       for (const [k] of this.#sortedEntries()) yield k;
     }
-    *values() {
+    *#valuesGen() {
       for (const [, v] of this.#sortedEntries()) yield v;
+    }
+    entries() {
+      return headersIterator(this.#entriesGen());
+    }
+    keys() {
+      return headersIterator(this.#keysGen());
+    }
+    values() {
+      return headersIterator(this.#valuesGen());
     }
     forEach(cb, thisArg) {
       for (const [k, v] of this.#sortedEntries()) cb.call(thisArg, v, k, this);

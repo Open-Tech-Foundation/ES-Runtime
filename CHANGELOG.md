@@ -10,6 +10,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Headers`, `FormData` and `URLSearchParams` return named iterators.**
+  `entries()`, `keys()` and `values()` returned bare generator objects, so they
+  reported `[object Generator]` rather than `[object Headers Iterator]` and
+  friends. Each interface now has a real iterator object inheriting from
+  `%IteratorPrototype%` and branded with its interface name.
 - **`URL.parse()`, and `URLSearchParams` accepts any iterable.** `URL.parse` —
   the non-throwing way to parse, and the reason `URL.canParse` exists alongside
   it — was missing. `URLSearchParams` treated only an `Array` as a sequence of

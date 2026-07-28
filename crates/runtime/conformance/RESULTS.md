@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **191 / 191** (100%) |
-| Known deviations (`todo`) | **12** |
+| Assertions passing | **195 / 195** (100%) |
+| Known deviations (`todo`) | **10** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -43,12 +43,12 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 10 | 4 |
 | `fetch.js` | Headers/Request/Response object surface | 33 | — |
-| `webidl.js` | Interface shape: branding, arity, iterators | 23 | — |
+| `webidl.js` | Interface shape: branding, arity, iterators | 27 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
 ### Known deviations, by theme
 
-The remaining 12 `todo` cases group into five themes:
+The remaining 10 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |

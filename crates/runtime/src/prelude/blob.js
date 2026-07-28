@@ -6,6 +6,32 @@
   const BYTES = __internal.bytes;
   const ENCODE = __internal.encode;
 
+  // A WebIDL iterable's iterator is its own interface: it must report
+  // "[object FormData Iterator]" and inherit from %IteratorPrototype%, which a
+  // bare generator object does not do.
+  const ITER_GEN = Symbol("iterator generator");
+  const ITERATOR_PROTOTYPE = Object.getPrototypeOf(
+    Object.getPrototypeOf([][Symbol.iterator]()),
+  );
+  const FORMDATA_ITERATOR_PROTOTYPE = Object.create(ITERATOR_PROTOTYPE, {
+    [Symbol.toStringTag]: {
+      value: "FormData Iterator",
+      configurable: true,
+    },
+    next: {
+      value() {
+        return this[ITER_GEN].next();
+      },
+      writable: true,
+      configurable: true,
+    },
+  });
+  function formDataIterator(generator) {
+    const it = Object.create(FORMDATA_ITERATOR_PROTOTYPE);
+    Object.defineProperty(it, ITER_GEN, { value: generator });
+    return it;
+  }
+
   function partToBytes(part) {
     if (part instanceof Blob) return part[BYTES]();
     if (typeof part === "string") return encoder.encode(part);
@@ -141,14 +167,23 @@
     delete(name) {
       this.#list = this.#list.filter(([k]) => k !== String(name));
     }
-    *entries() {
+    *#entriesGen() {
       for (const e of this.#list) yield [e[0], e[1]];
     }
-    *keys() {
+    *#keysGen() {
       for (const e of this.#list) yield e[0];
     }
-    *values() {
+    *#valuesGen() {
       for (const e of this.#list) yield e[1];
+    }
+    entries() {
+      return formDataIterator(this.#entriesGen());
+    }
+    keys() {
+      return formDataIterator(this.#keysGen());
+    }
+    values() {
+      return formDataIterator(this.#valuesGen());
     }
     forEach(cb, thisArg) {
       for (const [k, v] of this.#list) cb.call(thisArg, v, k, this);

@@ -155,12 +155,33 @@ test("URL and URLSearchParams constructor lengths match WebIDL", () => {
 
 // ---- Named iterator objects ----------------------------------------------
 
-todo("URLSearchParams iterators are named, not bare generators", () => {
+test("URLSearchParams iterators are named, not bare generators", () => {
   assertEquals(tagOf(new URLSearchParams("a=1").entries()), "[object URLSearchParams Iterator]");
 });
 
-todo("FormData iterators are named, not bare generators", () => {
+test("FormData iterators are named, not bare generators", () => {
   assertEquals(tagOf(new FormData().entries()), "[object FormData Iterator]");
+});
+
+test("Headers iterators are named, not bare generators", () => {
+  assertEquals(tagOf(new Headers().entries()), "[object Headers Iterator]");
+  assertEquals(tagOf(new Headers().keys()), "[object Headers Iterator]");
+  assertEquals(tagOf(new Headers().values()), "[object Headers Iterator]");
+});
+
+test("named iterators still iterate and inherit %IteratorPrototype%", () => {
+  const sp = new URLSearchParams("a=1&b=2");
+  assertEquals([...sp.entries()].map(([k, v]) => k + v).join(","), "a1,b2");
+  assertEquals([...sp.keys()].join(","), "a,b");
+  assertEquals([...sp].length, 2);
+  const it = sp.entries();
+  // %IteratorPrototype% supplies [Symbol.iterator], so an iterator is iterable.
+  assertEquals(it[Symbol.iterator](), it);
+  const h = new Headers({ "x-a": "1" });
+  assertEquals([...h].map(([k, v]) => k + v).join(","), "x-a1");
+  const fd = new FormData();
+  fd.append("a", "1");
+  assertEquals([...fd.values()].join(","), "1");
 });
 
 // ---- Illegal invocation ---------------------------------------------------
