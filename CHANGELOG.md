@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-28
+
 ### Changed
 
 - **`URLPattern` is now spec-conformant: 369/369 on the official WPT suite.**
