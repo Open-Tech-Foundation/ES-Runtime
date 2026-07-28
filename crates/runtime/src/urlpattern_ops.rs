@@ -186,7 +186,8 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
         };
         // An init that cannot be processed is a non-match, not an error — the
         // same answer a URL string that fails to parse gets.
-        let Ok(Some((match_input, _))) = quirks::process_match_input(StringOrInit::Init(init), None)
+        let Ok(Some((match_input, _))) =
+            quirks::process_match_input(StringOrInit::Init(init), None)
         else {
             return Ok(Value::Null);
         };

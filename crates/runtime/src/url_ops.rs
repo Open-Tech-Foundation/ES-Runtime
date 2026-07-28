@@ -308,7 +308,10 @@ mod tests {
         assert_eq!((user_only[2].as_str(), user_only[3].as_str()), ("u", ""));
 
         let password_only = slices("https://:p@example.com/");
-        assert_eq!((password_only[2].as_str(), password_only[3].as_str()), ("", "p"));
+        assert_eq!(
+            (password_only[2].as_str(), password_only[3].as_str()),
+            ("", "p")
+        );
 
         let neither = slices("https://example.com/");
         assert_eq!((neither[2].as_str(), neither[3].as_str()), ("", ""));

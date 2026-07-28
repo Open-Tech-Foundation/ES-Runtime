@@ -27,7 +27,7 @@ use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{ByteStream, HttpRequest, NetTransport, ProviderError, RequestBody};
 use futures_channel::{mpsc, oneshot};
-use futures_util::future::{select, Either};
+use futures_util::future::{Either, select};
 use futures_util::{SinkExt, StreamExt};
 
 use crate::Result;
