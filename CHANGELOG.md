@@ -10,6 +10,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`structuredClone` preserves errors, clones blobs, and supports `transfer`.**
+  An `Error` was reconstructed as `new value.constructor(message)`, which lost
+  `cause` and `stack` and turned a `DOMException` into a plain `Error` — the
+  clone of a rejected value no longer said why it failed. Errors now keep their
+  name, `cause` (cloned recursively) and `stack`, with `DOMException`
+  reconstructed through its two-argument constructor; a non-standard `Error`
+  subclass clones as a plain `Error`, as the spec requires. `Blob` and `File`
+  are serializable and now clone by value. The `transfer` option is honoured:
+  listed `ArrayBuffer`s are detached and their contents move into the clone,
+  and a view onto a transferred buffer is a `DataCloneError` rather than a
+  `TypeError` escaping from the copy.
 - **`TextDecoder.decode()` honours `{ stream: true }`.** The options argument
   was ignored outright, so a decoder fed a multi-byte code point split across
   two calls produced replacement characters instead of the character — the

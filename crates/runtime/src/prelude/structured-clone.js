@@ -26,7 +26,19 @@
     );
   }
 
-  function clone(value, seen) {
+  // The error types the spec lists as serializable. Anything else that is an
+  // Error clones as a plain Error, as the spec requires.
+  const ERROR_TYPES = {
+    Error,
+    EvalError,
+    RangeError,
+    ReferenceError,
+    SyntaxError,
+    TypeError,
+    URIError,
+  };
+
+  function clone(value, seen, transferred) {
     if (value === null) return null;
     const type = typeof value;
     if (type === "function" || type === "symbol") throw cannotClone();
@@ -42,8 +54,15 @@
     if (value instanceof Date) return new Date(value.getTime());
     if (value instanceof RegExp) return new RegExp(value.source, value.flags);
 
-    if (value instanceof ArrayBuffer) return value.slice(0);
+    if (value instanceof ArrayBuffer) {
+      // A transferred buffer moves into the clone rather than being copied.
+      const moved = transferred.get(value);
+      return moved !== undefined ? moved : value.slice(0);
+    }
+    // A view whose buffer was transferred is reading a detached buffer; the
+    // spec makes that a DataCloneError rather than a TypeError from the copy.
     if (value instanceof DataView) {
+      if (transferred.has(value.buffer)) throw cannotClone();
       return new DataView(
         value.buffer.slice(0),
         value.byteOffset,
@@ -51,14 +70,28 @@
       );
     }
     for (const TA of TYPED_ARRAYS) {
-      if (value instanceof TA) return new TA(value);
+      if (value instanceof TA) {
+        if (transferred.has(value.buffer)) throw cannotClone();
+        return new TA(value);
+      }
+    }
+
+    // Blob and File are serializable; both are cloned by value.
+    if (globalThis.Blob && value instanceof Blob) {
+      if (globalThis.File && value instanceof File) {
+        return new File([value._bytes()], value.name, {
+          type: value.type,
+          lastModified: value.lastModified,
+        });
+      }
+      return new Blob([value._bytes()], { type: value.type });
     }
 
     if (Array.isArray(value)) {
       const out = new Array(value.length);
       seen.set(value, out);
       for (let i = 0; i < value.length; i++) {
-        if (i in value) out[i] = clone(value[i], seen);
+        if (i in value) out[i] = clone(value[i], seen, transferred);
       }
       return out;
     }
@@ -66,20 +99,34 @@
     if (value instanceof Map) {
       const out = new Map();
       seen.set(value, out);
-      for (const [k, v] of value) out.set(clone(k, seen), clone(v, seen));
+      for (const [k, v] of value) out.set(clone(k, seen, transferred), clone(v, seen, transferred));
       return out;
     }
 
     if (value instanceof Set) {
       const out = new Set();
       seen.set(value, out);
-      for (const v of value) out.add(clone(v, seen));
+      for (const v of value) out.add(clone(v, seen, transferred));
       return out;
     }
 
     if (value instanceof Error) {
-      const out = new value.constructor(value.message);
+      // DOMException carries its `.name` as data, so it must be reconstructed
+      // through the two-argument constructor rather than by class.
+      let out;
+      if (globalThis.DOMException && value instanceof DOMException) {
+        out = new DOMException(value.message, value.name);
+      } else {
+        const Ctor = ERROR_TYPES[value.name] ?? Error;
+        out = new Ctor(value.message);
+      }
       seen.set(value, out);
+      // `cause` is part of the serialization; `stack` is not specified but is
+      // what makes a cloned error useful, and every engine carries it over.
+      if ("cause" in value) {
+        out.cause = clone(value.cause, seen, transferred);
+      }
+      if (typeof value.stack === "string") out.stack = value.stack;
       return out;
     }
 
@@ -92,10 +139,27 @@
     seen.set(value, out);
     for (const key of Reflect.ownKeys(value)) {
       const desc = Object.getOwnPropertyDescriptor(value, key);
-      if (desc.enumerable) out[key] = clone(value[key], seen);
+      if (desc.enumerable) out[key] = clone(value[key], seen, transferred);
     }
     return out;
   }
 
-  globalThis.structuredClone = (value) => clone(value, new Map());
+  globalThis.structuredClone = (value, options) => {
+    // Transfer first: each listed ArrayBuffer is detached and its contents move
+    // into the clone, so the original is left empty (ES2024 `transfer()` is what
+    // actually detaches — there is no way to do it from JS otherwise).
+    const transferred = new Map();
+    const list = options && options.transfer ? [...options.transfer] : [];
+    for (const item of list) {
+      if (!(item instanceof ArrayBuffer) || typeof item.transfer !== "function") {
+        throw new DOMException(
+          "Only ArrayBuffer objects can be transferred.",
+          "DataCloneError",
+        );
+      }
+      if (transferred.has(item)) continue; // listed twice: transfer once
+      transferred.set(item, item.transfer());
+    }
+    return clone(value, new Map(), transferred);
+  };
 })();

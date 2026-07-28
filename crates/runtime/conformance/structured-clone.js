@@ -59,22 +59,67 @@ test("structuredClone clones RegExp and DataView", () => {
 });
 
 
-todo("structuredClone preserves an Error's cause", () => {
+test("structuredClone preserves an Error's cause", () => {
   assertEquals(structuredClone(new Error("m", { cause: "c" })).cause, "c");
 });
 
-todo("structuredClone preserves a DOMException's name", () => {
+test("structuredClone preserves a DOMException's name", () => {
   assertEquals(structuredClone(new DOMException("m", "AbortError")).name, "AbortError");
 });
 
-todo("structuredClone clones a Blob", () => {
+test("structuredClone clones a Blob", () => {
   const b = structuredClone(new Blob(["x"], { type: "text/plain" }));
   assertEquals(b.size, 1);
   assertEquals(b.type, "text/plain");
 });
 
-todo("structuredClone detaches a transferred ArrayBuffer", () => {
+test("structuredClone detaches a transferred ArrayBuffer", () => {
   const ab = new ArrayBuffer(8);
   structuredClone(ab, { transfer: [ab] });
   assertEquals(ab.byteLength, 0);
+});
+
+test("structuredClone preserves the standard Error subclasses", () => {
+  for (const Ctor of [Error, EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError]) {
+    const c = structuredClone(new Ctor("m"));
+    assertEquals(c.name, Ctor.name);
+    assertEquals(c.message, "m");
+    assert(c instanceof Ctor);
+  }
+});
+
+test("structuredClone carries an Error's stack over", () => {
+  const e = new Error("m");
+  assertEquals(structuredClone(e).stack, e.stack);
+});
+
+test("structuredClone clones a nested error cause", () => {
+  const c = structuredClone(new Error("outer", { cause: new TypeError("inner") }));
+  assertEquals(c.cause.name, "TypeError");
+  assertEquals(c.cause.message, "inner");
+});
+
+test("structuredClone clones a File with its name and lastModified", () => {
+  const f = structuredClone(new File(["xy"], "n.txt", { type: "text/plain", lastModified: 7 }));
+  assert(f instanceof File);
+  assertEquals(f.name, "n.txt");
+  assertEquals(f.size, 2);
+  assertEquals(f.lastModified, 7);
+});
+
+test("structuredClone moves a transferred buffer's contents into the clone", () => {
+  const ab = new Uint8Array([1, 2, 3]).buffer;
+  const out = structuredClone(ab, { transfer: [ab] });
+  assertEquals(ab.byteLength, 0);
+  assertEquals(out.byteLength, 3);
+  assertEquals(new Uint8Array(out)[2], 3);
+});
+
+test("structuredClone rejects a non-ArrayBuffer in the transfer list", () => {
+  assertThrows(() => structuredClone({}, { transfer: [{}] }), "DataCloneError");
+});
+
+test("structuredClone rejects a view onto a transferred buffer", () => {
+  const view = new Uint8Array([1, 2, 3]);
+  assertThrows(() => structuredClone(view, { transfer: [view.buffer] }), "DataCloneError");
 });

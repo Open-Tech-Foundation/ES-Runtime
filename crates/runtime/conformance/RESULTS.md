@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **164 / 164** (100%) |
-| Known deviations (`todo`) | **25** |
+| Assertions passing | **175 / 175** (100%) |
+| Known deviations (`todo`) | **21** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -33,7 +33,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `encoding.js` | TextEncoder/TextDecoder §2.3 | 16 | — |
 | `base64.js` | atob/btoa §2.3 | 6 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 11 | 3 |
-| `structured-clone.js` | structuredClone §2.1 | 7 | 4 |
+| `structured-clone.js` | structuredClone §2.1 | 18 | — |
 | `events.js` | Event/EventTarget §2.7 | 9 | 3 |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
@@ -48,7 +48,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 
 ### Known deviations, by theme
 
-The remaining 25 `todo` cases group into five themes:
+The remaining 21 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ The remaining 25 `todo` cases group into five themes:
 | **Internal members on public prototypes** | `webidl.js` | `_bytes`, `_list`, `_parts`, `_begin`/`_end`, `_attach`/`_reload` are reachable from user code. |
 | **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
 | **Missing members** | `url.js`, `performance.js`, `streams.js` | `URL.parse`, User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
-| **Wrong behaviour** | `structured-clone.js`, `url.js` | `structuredClone` drops `Error.cause` and cannot clone a `Blob`; `URLSearchParams` over-escapes `*`. |
+| **Wrong behaviour** | `url.js` | `URLSearchParams` over-escapes `*`. |
 
 One deviation found alongside these is **not** representable here and is gated
 by a Rust test instead, since it needs a driven event loop: `setTimeout` dropping
