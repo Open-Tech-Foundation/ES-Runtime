@@ -8,6 +8,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clearTimeout`/`clearInterval` now release the event loop.** Clearing a timer
+  deactivated its callback engine-side but left the entry in the runtime's
+  schedule, so `has_pending_work()` stayed true and `next_timer_deadline_ms`
+  kept pointing at a firing that would never happen — a driver waited out the
+  original delay before the process could exit. `const id = setTimeout(() => {},
+  60000); clearTimeout(id);` took the full 60s under `esrun`; it now exits in
+  ~9ms. The schedule prunes cleared timers from the front of its queue wherever
+  new ones are drained, which is every point guest code could have touched a
+  timer. **Process exit time only — no behavior changed:** a cleared timer never
+  fired before and still does not, and live timers keep their own deadlines.
+
 ## [0.12.0] - 2026-07-28
 
 ### Changed

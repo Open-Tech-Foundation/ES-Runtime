@@ -768,11 +768,18 @@ impl Runtime {
             || self.engine.has_pending_wasm()
     }
 
-    /// Moves newly created engine timers into the schedule, anchored at `now_ms`.
+    /// Moves newly created engine timers into the schedule, anchored at `now_ms`,
+    /// and drops any the guest has since cleared.
+    ///
+    /// Both halves run at every point JS could have touched a timer, so the
+    /// schedule never outlives a `clearTimeout` — see
+    /// [`TimerQueue::prune_cleared`].
     fn drain_new_timers(&mut self, now_ms: u64) {
         for (id, delay_ms, repeat) in self.engine.take_new_timers() {
             self.timers.schedule(id, now_ms, delay_ms, repeat);
         }
+        let engine = &self.engine;
+        self.timers.prune_cleared(|id| engine.timer_is_active(id));
     }
 }
 
@@ -1272,6 +1279,43 @@ mod tests {
              return v;",
         );
         assert_eq!(out, Value::Number(7.0));
+    }
+
+    #[test]
+    fn clearing_a_timer_releases_the_loop_immediately() {
+        // Regression: `clearTimeout` cancelled the callback but left the entry
+        // in the schedule, so the runtime reported pending work — and a driver
+        // slept — until the original delay elapsed. A cleared 60s timer must
+        // leave nothing outstanding and no deadline to wait on.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval("const id = setTimeout(() => {}, 60000); clearTimeout(id);")
+            .unwrap();
+        let outcome = rt.tick(0);
+        assert_eq!(outcome.timers_fired, 0);
+        assert_eq!(outcome.next_timer_deadline_ms, None);
+        assert!(!outcome.has_pending_work);
+        assert!(!rt.has_pending_work());
+    }
+
+    #[test]
+    fn clearing_one_timer_leaves_the_others_scheduled() {
+        // Pruning must not take live timers with it: the surviving timer keeps
+        // its own deadline and still fires.
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval(
+            "globalThis.fired = false; \
+             const dead = setTimeout(() => {}, 60000); \
+             setTimeout(() => { globalThis.fired = true; }, 10); \
+             clearTimeout(dead);",
+        )
+        .unwrap();
+        assert_eq!(rt.tick(0).next_timer_deadline_ms, Some(10));
+        let outcome = rt.tick(10);
+        assert_eq!(outcome.timers_fired, 1);
+        assert_eq!(rt.eval("globalThis.fired").unwrap(), Value::Bool(true));
+        assert!(!rt.has_pending_work());
     }
 
     #[test]
