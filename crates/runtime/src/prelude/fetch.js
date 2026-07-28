@@ -190,6 +190,81 @@
     return new Uint8Array(0);
   }
 
+  // ---- multipart/form-data parsing ----------------------------------------
+
+  function concatBytes(parts) {
+    let total = 0;
+    for (const p of parts) total += p.length;
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) {
+      out.set(p, off);
+      off += p.length;
+    }
+    return out;
+  }
+  function indexOfBytes(haystack, needle, from) {
+    outer: for (let i = from; i <= haystack.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) {
+        if (haystack[i + j] !== needle[j]) continue outer;
+      }
+      return i;
+    }
+    return -1;
+  }
+  // Pulls a (possibly quoted) parameter value out of a header parameter list.
+  function headerParam(text, name) {
+    const re = new RegExp(`;\\s*${name}\\s*=\\s*(?:"([^"]*)"|([^;\\r\\n]*))`, "i");
+    const m = re.exec(text);
+    if (!m) return null;
+    return (m[1] !== undefined ? m[1] : m[2]).trim();
+  }
+
+  // Splits a multipart/form-data body into FormData entries. Parts are located
+  // by the CRLF-prefixed delimiter, so a boundary sequence occurring inside a
+  // part's payload without that prefix is not mistaken for a delimiter.
+  function parseMultipart(bytes, boundary) {
+    const fd = new FormData();
+    const delim = encoder.encode(`\r\n--${boundary}`);
+    // The opening delimiter has no leading CRLF; prepending one lets a single
+    // pattern find every boundary including the first.
+    const buf = concatBytes([encoder.encode("\r\n"), bytes]);
+    const CRLF2 = encoder.encode("\r\n\r\n");
+
+    let pos = indexOfBytes(buf, delim, 0);
+    if (pos === -1) throw new TypeError("Malformed multipart body: no boundary found");
+    pos += delim.length;
+
+    for (;;) {
+      // "--" right after the boundary marks the closing delimiter.
+      if (buf[pos] === 0x2d && buf[pos + 1] === 0x2d) break;
+      // Skip any transport padding up to the CRLF that ends the boundary line.
+      while (pos < buf.length && buf[pos] !== 0x0d) pos++;
+      pos += 2;
+      const headerEnd = indexOfBytes(buf, CRLF2, pos);
+      if (headerEnd === -1) throw new TypeError("Malformed multipart part: unterminated headers");
+      const headerText = decoder.decode(buf.subarray(pos, headerEnd));
+      const bodyStart = headerEnd + CRLF2.length;
+      const next = indexOfBytes(buf, delim, bodyStart);
+      if (next === -1) throw new TypeError("Malformed multipart part: unterminated body");
+      const body = buf.subarray(bodyStart, next);
+
+      const disposition = /content-disposition:([^\r\n]*)/i.exec(headerText);
+      if (!disposition) throw new TypeError("Malformed multipart part: no Content-Disposition");
+      const name = headerParam(disposition[1], "name");
+      if (name === null) throw new TypeError("Malformed multipart part: no name");
+      const filename = headerParam(disposition[1], "filename");
+      if (filename !== null) {
+        const ct = /content-type:\s*([^\r\n]*)/i.exec(headerText);
+        fd.append(name, new File([body.slice()], filename, { type: ct ? ct[1].trim() : "" }));
+      } else {
+        fd.append(name, decoder.decode(body));
+      }
+      pos = next + delim.length;
+    }
+    return fd;
+  }
+
   function defineBodyMixin(proto) {
     Object.defineProperties(proto, {
       bodyUsed: {
@@ -254,6 +329,27 @@
           return new Blob([b], { type: this.headers.get("content-type") || "" });
         },
       },
+      formData: {
+        configurable: true,
+        writable: true,
+        value: async function () {
+          const type = this.headers.get("content-type") || "";
+          if (/^\s*multipart\/form-data\s*;/i.test(type)) {
+            const boundary = headerParam(type, "boundary");
+            if (boundary === null) {
+              throw new TypeError("multipart/form-data body has no boundary parameter");
+            }
+            return parseMultipart(await consumeBody(this[BODY]), boundary);
+          }
+          if (/^\s*application\/x-www-form-urlencoded\s*(?:;|$)/i.test(type)) {
+            const fd = new FormData();
+            const text = decoder.decode(await consumeBody(this[BODY]));
+            for (const [k, v] of new URLSearchParams(text)) fd.append(k, v);
+            return fd;
+          }
+          throw new TypeError(`Body with Content-Type "${type}" cannot be parsed as FormData`);
+        },
+      },
     });
   }
 
@@ -269,6 +365,14 @@
     // plain hello-world) pays nothing for header normalization.
     #rawHeaders = null;
     #signal;
+    #redirect;
+    #cache;
+    #credentials;
+    #mode;
+    #referrer;
+    #referrerPolicy;
+    #integrity;
+    #keepalive;
     constructor(input, init = {}) {
       const options = init ?? {};
       if (options.signal !== undefined && options.signal !== null) {
@@ -299,6 +403,30 @@
         this.#method = options.method ? String(options.method).toUpperCase() : "GET";
         this.#headers = new Headers(options.headers);
       }
+      if (
+        options.body !== undefined &&
+        options.body !== null &&
+        (this.#method === "GET" || this.#method === "HEAD")
+      ) {
+        throw new TypeError(`Request with method ${this.#method} cannot have a body`);
+      }
+      // Browser-only request policy knobs. A server-side runtime has no origin,
+      // cache or referrer to apply them to, so they are recorded and reported
+      // faithfully rather than acted on — reading them must not be undefined,
+      // since code branches on these values.
+      this.#redirect = options.redirect ?? (input instanceof Request ? input.#redirect : "follow");
+      this.#cache = options.cache ?? (input instanceof Request ? input.#cache : "default");
+      this.#credentials =
+        options.credentials ?? (input instanceof Request ? input.#credentials : "same-origin");
+      this.#mode = options.mode ?? (input instanceof Request ? input.#mode : "cors");
+      this.#referrer =
+        options.referrer ?? (input instanceof Request ? input.#referrer : "about:client");
+      this.#referrerPolicy =
+        options.referrerPolicy ?? (input instanceof Request ? input.#referrerPolicy : "");
+      this.#integrity = options.integrity ?? (input instanceof Request ? input.#integrity : "");
+      this.#keepalive = Boolean(
+        options.keepalive ?? (input instanceof Request ? input.#keepalive : false),
+      );
       const extracted =
         options.body !== undefined && options.body !== null
           ? extractBody(options.body)
@@ -329,6 +457,39 @@
     }
     get signal() {
       return this.#signal;
+    }
+    get redirect() {
+      return this.#redirect;
+    }
+    get cache() {
+      return this.#cache;
+    }
+    get credentials() {
+      return this.#credentials;
+    }
+    get mode() {
+      return this.#mode;
+    }
+    get referrer() {
+      return this.#referrer;
+    }
+    get referrerPolicy() {
+      return this.#referrerPolicy;
+    }
+    get integrity() {
+      return this.#integrity;
+    }
+    get keepalive() {
+      return this.#keepalive;
+    }
+    get destination() {
+      return "";
+    }
+    get isReloadNavigation() {
+      return false;
+    }
+    get isHistoryNavigation() {
+      return false;
     }
     clone() {
       return new Request(this);

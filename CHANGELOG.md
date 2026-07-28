@@ -10,6 +10,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Request` and `Response` gained `formData()`, and `Request` its policy
+  members.** `formData()` did not exist on either body — a `multipart/form-data`
+  upload could be *sent* but never *received*, which is the shape a server
+  runtime needs most. Both now parse `multipart/form-data` (locating parts by
+  the CRLF-prefixed delimiter, so a boundary sequence inside a payload is not
+  mistaken for one) and `application/x-www-form-urlencoded`, returning
+  `FormData` with `File` entries for parts carrying a filename. `Request` also
+  now rejects a body on `GET`/`HEAD` with `TypeError`, and reports `redirect`,
+  `cache`, `credentials`, `mode`, `referrer`, `referrerPolicy`, `integrity`,
+  `keepalive` and `destination` instead of `undefined` — these are browser
+  policy knobs a server runtime has no origin or cache to apply, so they are
+  recorded and reported faithfully rather than acted on, since calling code
+  branches on their values.
 - **`Response` validates its status, and the missing statics landed.** The
   constructor accepted any status at all — `new Response("x", { status: 999 })`
   built a response no server could send, and a body on a null-body status

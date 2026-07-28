@@ -66,8 +66,11 @@ test("Request rejects a relative URL with no base", () => {
   assertThrows(() => new Request("/p"), "TypeError");
 });
 
-todo("Request rejects a body on GET or HEAD", () => {
+test("Request rejects a body on GET or HEAD", () => {
   assertThrows(() => new Request("https://a.example/", { method: "GET", body: "x" }), "TypeError");
+  assertThrows(() => new Request("https://a.example/", { method: "head", body: "x" }), "TypeError");
+  // A body on any other method is fine.
+  assertEquals(new Request("https://a.example/", { method: "POST", body: "x" }).method, "POST");
 });
 
 test("Request exposes a signal, defaulting to a fresh unaborted one", () => {
@@ -91,7 +94,7 @@ test("a cloned Request keeps the original's signal", () => {
   assertEquals(r.clone().signal, c.signal);
 });
 
-todo("Request exposes the standard mode/credentials/redirect defaults", () => {
+test("Request exposes the standard mode/credentials/redirect defaults", () => {
   const r = new Request("https://a.example/");
   assertEquals(r.redirect, "follow");
   assertEquals(r.credentials, "same-origin");
@@ -102,8 +105,24 @@ todo("Request exposes the standard mode/credentials/redirect defaults", () => {
   assertEquals(r.keepalive, false);
 });
 
-todo("Request exposes formData()", () => {
+test("Request exposes formData()", () => {
   assertEquals(typeof Request.prototype.formData, "function");
+});
+
+test("Request init overrides the policy defaults and clone carries them", () => {
+  const r = new Request("https://a.example/", {
+    redirect: "manual",
+    credentials: "include",
+    mode: "no-cors",
+    integrity: "sha256-abc",
+    keepalive: true,
+  });
+  assertEquals(r.redirect, "manual");
+  assertEquals(r.credentials, "include");
+  assertEquals(r.mode, "no-cors");
+  assertEquals(r.integrity, "sha256-abc");
+  assertEquals(r.keepalive, true);
+  assertEquals(r.clone().redirect, "manual");
 });
 
 // ---- Response -------------------------------------------------------------
@@ -195,6 +214,38 @@ test("a cloned Response keeps its type", () => {
   assertEquals(new Response("x").clone().type, "default");
 });
 
-todo("Response exposes formData()", () => {
+test("Response exposes formData()", () => {
   assertEquals(typeof Response.prototype.formData, "function");
+});
+
+test("formData() parses application/x-www-form-urlencoded", async () => {
+  const r = new Response("a=1&b=two+words&a=3", {
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+  });
+  const fd = await r.formData();
+  assertEquals(fd.getAll("a").join(","), "1,3");
+  assertEquals(fd.get("b"), "two words");
+});
+
+test("formData() round-trips a multipart body built by FormData", async () => {
+  const sent = new FormData();
+  sent.append("field", "plain value");
+  sent.append("file", new File(["file contents"], "note.txt", { type: "text/plain" }));
+  const parsed = await new Response(sent).formData();
+  assertEquals(parsed.get("field"), "plain value");
+  const f = parsed.get("file");
+  assert(f instanceof File);
+  assertEquals(f.name, "note.txt");
+  assertEquals(f.type, "text/plain");
+  assertEquals(await f.text(), "file contents");
+});
+
+test("formData() rejects a body it cannot parse", async () => {
+  let name = null;
+  try {
+    await new Response("x", { headers: { "content-type": "text/plain" } }).formData();
+  } catch (e) {
+    name = e.name;
+  }
+  assertEquals(name, "TypeError");
 });

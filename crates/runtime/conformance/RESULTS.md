@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **149 / 149** (100%) |
-| Known deviations (`todo`) | **31** |
+| Assertions passing | **157 / 157** (100%) |
+| Known deviations (`todo`) | **27** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -42,21 +42,21 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 10 | 4 |
-| `fetch.js` | Headers/Request/Response object surface | 24 | 5 |
+| `fetch.js` | Headers/Request/Response object surface | 32 | 1 |
 | `webidl.js` | Interface shape: branding, arity, iterators | 14 | 7 |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
 ### Known deviations, by theme
 
-The remaining 31 `todo` cases group into five themes:
+The remaining 27 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
 | **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every class-based interface. `crypto`, `crypto.subtle` and `performance` remain plain object literals, so they stringify as `[object Object]`. |
 | **Internal members on public prototypes** | `webidl.js` | `_bytes`, `_list`, `_parts`, `_begin`/`_end`, `_attach`/`_reload` are reachable from user code. |
-| **Missing arg validation** | `fetch.js`, `blob.js` | `Request` accepts a body on GET/HEAD; `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
-| **Missing members** | `fetch.js`, `url.js`, `performance.js`, `streams.js` | the `Request` mode/credentials/redirect defaults, `formData()`, `URL.parse`, User Timing, `ReadableStream.from`. |
-| **Wrong behaviour** | `encoding.js`, `structured-clone.js`, `url.js`, `fetch.js` | `TextDecoder` ignores `{ stream: true }`; `structuredClone` drops `Error.cause` and cannot clone a `Blob`; `URLSearchParams` over-escapes `*`. |
+| **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
+| **Missing members** | `url.js`, `performance.js`, `streams.js` | `URL.parse`, User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
+| **Wrong behaviour** | `encoding.js`, `structured-clone.js`, `url.js` | `TextDecoder` ignores `{ stream: true }`; `structuredClone` drops `Error.cause` and cannot clone a `Blob`; `URLSearchParams` over-escapes `*`. |
 
 One deviation found alongside these is **not** representable here and is gated
 by a Rust test instead, since it needs a driven event loop: `setTimeout` dropping
