@@ -55,3 +55,17 @@ test("subtle PBKDF2 deriveBits matches RFC 6070", async () => {
     { name: "PBKDF2", hash: "SHA-1", salt: enc.encode("salt"), iterations: 1 }, base, 160);
   assertEquals(hex(bits), "0c60c80f961f0e71f3a9b524af6012062fe037a6");
 });
+
+test("getRandomValues rejects Float32Array", () => {
+  assertThrows(() => crypto.getRandomValues(new Float32Array(4)), "TypeError");
+});
+
+
+test("subtle.digest SHA-1 and SHA-512 match known vectors", async () => {
+  const enc = new TextEncoder();
+  const d1 = await crypto.subtle.digest("SHA-1", enc.encode("abc"));
+  assertEquals(hex(d1), "a9993e364706816aba3e25717850c26c9cd0d89d");
+  const d512 = await crypto.subtle.digest("SHA-512", enc.encode("abc"));
+  assertEquals(hex(d512), "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+});
+

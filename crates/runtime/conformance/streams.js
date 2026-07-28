@@ -115,3 +115,19 @@ test("TextEncoderStream / TextDecoderStream round-trip via pipeThrough", async (
   }
   assertEquals(s, "héllo");
 });
+
+todo("stream readers are branded", () => {
+  const tag = (v) => Object.prototype.toString.call(v);
+  assertEquals(
+    tag(new ReadableStream().getReader()),
+    "[object ReadableStreamDefaultReader]",
+  );
+});
+
+todo("an unknown ReadableStream type is a TypeError, not a RangeError", () => {
+  assertThrows(() => new ReadableStream({ type: "nope" }), "TypeError");
+});
+
+todo("ReadableStream.from adapts an iterable", () => {
+  assertEquals(typeof ReadableStream.from, "function");
+});

@@ -45,3 +45,36 @@ test("structuredClone clones Date", () => {
 test("structuredClone throws on functions", () => {
   assertThrows(() => structuredClone(() => 1), "DataCloneError");
 });
+
+test("structuredClone clones RegExp and DataView", () => {
+  const rx = /abc/gi;
+  const crx = structuredClone(rx);
+  assert(crx instanceof RegExp);
+  assertEquals(crx.source, "abc");
+  assertEquals(crx.flags, "gi");
+  const dv = new DataView(new Uint8Array([1, 2, 3, 4]).buffer);
+  const cdv = structuredClone(dv);
+  assert(cdv instanceof DataView);
+  assertEquals(cdv.getUint8(1), 2);
+});
+
+
+todo("structuredClone preserves an Error's cause", () => {
+  assertEquals(structuredClone(new Error("m", { cause: "c" })).cause, "c");
+});
+
+todo("structuredClone preserves a DOMException's name", () => {
+  assertEquals(structuredClone(new DOMException("m", "AbortError")).name, "AbortError");
+});
+
+todo("structuredClone clones a Blob", () => {
+  const b = structuredClone(new Blob(["x"], { type: "text/plain" }));
+  assertEquals(b.size, 1);
+  assertEquals(b.type, "text/plain");
+});
+
+todo("structuredClone detaches a transferred ArrayBuffer", () => {
+  const ab = new ArrayBuffer(8);
+  structuredClone(ab, { transfer: [ab] });
+  assertEquals(ab.byteLength, 0);
+});

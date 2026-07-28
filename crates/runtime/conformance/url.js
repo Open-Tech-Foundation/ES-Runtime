@@ -87,3 +87,30 @@ test("URL.searchParams reflects the query", () => {
   u.searchParams.append("b", "2");
   assertEquals(u.search, "?a=1&b=2");
 });
+
+test("URLSearchParams iteration methods work correctly", () => {
+  const p = new URLSearchParams("a=1&b=2");
+  assertEquals([...p.keys()].join(","), "a,b");
+  assertEquals([...p.values()].join(","), "1,2");
+  assertEquals([...p.entries()].map(([k, v]) => `${k}:${v}`).join(","), "a:1,b:2");
+});
+
+test("URLSearchParams handles constructor with sequence of pairs", () => {
+  const p = new URLSearchParams([["x", "10"], ["y", "20"]]);
+  assertEquals(p.get("x"), "10");
+  assertEquals(p.get("y"), "20");
+});
+
+
+todo("URLSearchParams leaves '*' unescaped per the urlencoded safe set", () => {
+  assertEquals(new URLSearchParams([["a", "*"]]).toString(), "a=*");
+});
+
+todo("URLSearchParams accepts any iterable of pairs, not just arrays", () => {
+  assertEquals(new URLSearchParams(new Map([["a", "1"]])).toString(), "a=1");
+});
+
+todo("URL.parse returns null instead of throwing", () => {
+  assertEquals(URL.parse("::::"), null);
+  assertEquals(URL.parse("https://a.example/").href, "https://a.example/");
+});

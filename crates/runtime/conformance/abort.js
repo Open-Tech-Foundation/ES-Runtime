@@ -41,3 +41,18 @@ test("AbortSignal.any aborts when one input aborts", () => {
   b.abort("b-reason");
   assertEquals(any.aborted, true);
 });
+
+test("AbortSignal.any([]) returns unaborted signal", () => {
+  const any = AbortSignal.any([]);
+  assertEquals(any.aborted, false);
+});
+
+test("abort() called repeatedly fires abort event only once", () => {
+  const c = new AbortController();
+  let count = 0;
+  c.signal.addEventListener("abort", () => count++);
+  c.abort();
+  c.abort();
+  assertEquals(count, 1);
+});
+

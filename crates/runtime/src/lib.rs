@@ -3128,9 +3128,16 @@ mod tests {
     }
 
     /// In-JS test harness for the conformance suite: `test(name, fn)` (sync or
-    /// async), `assert*` helpers, and a `__results` tally read back by the runner.
+    /// async), `todo(name, fn)` for known deviations, `assert*` helpers, and a
+    /// `__results` tally read back by the runner.
+    ///
+    /// `todo` is the inverse of `test`: the assertion documents what the spec
+    /// requires *today*, while the runtime is known not to satisfy it yet. A
+    /// throwing `todo` is tallied as `todo` (not `fail`, so the gate stays
+    /// green); a *passing* one is an error — the deviation is fixed and the
+    /// case must be promoted to `test` so it can never silently regress.
     const CONFORMANCE_HARNESS: &str = r#"
-        globalThis.__results = { pass: 0, fail: 0, failures: [] };
+        globalThis.__results = { pass: 0, fail: 0, todo: 0, failures: [], fixed: [] };
         globalThis.__pending = [];
         globalThis.test = (name, fn) => {
           let r;
@@ -3142,6 +3149,17 @@ mod tests {
               (e) => { __results.fail++; __results.failures.push(name + ": " + ((e && e.message) || e)); },
             ));
           } else { __results.pass++; }
+        };
+        globalThis.todo = (name, fn) => {
+          let r;
+          try { r = fn(); }
+          catch { __results.todo++; return; }
+          if (r && typeof r.then === "function") {
+            __pending.push(r.then(
+              () => { __results.fixed.push(name); },
+              () => { __results.todo++; },
+            ));
+          } else { __results.fixed.push(name); }
         };
         globalThis.assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
         globalThis.assertEquals = (actual, expected, msg) => {
@@ -3192,21 +3210,34 @@ mod tests {
         };
         let pass = number(&mut rt, "__results.pass");
         let fail = number(&mut rt, "__results.fail");
+        let todo = number(&mut rt, "__results.todo");
         let failures = match rt.eval("__results.failures.join('\\n')").unwrap() {
+            Value::String(s) => s,
+            _ => String::new(),
+        };
+        let fixed = match rt.eval("__results.fixed.join('\\n')").unwrap() {
             Value::String(s) => s,
             _ => String::new(),
         };
 
         assert_eq!(fail, 0, "conformance failures ({fail}):\n{failures}");
+        // A `todo` that passes means the deviation is fixed: promote it to
+        // `test` (and bump BASELINE) so the behaviour is locked in.
+        assert!(
+            fixed.is_empty(),
+            "these `todo` cases now pass — promote them to `test`:\n{fixed}"
+        );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 86;
+        const BASELINE: u32 = 125;
+
         assert!(
             pass >= BASELINE,
             "conformance pass count {pass} below baseline {BASELINE}"
         );
         println!(
-            "conformance: {pass}/{} assertions passing across {} files",
+            "conformance: {pass}/{} assertions passing across {} files \
+             ({todo} known deviations)",
             pass + fail,
             files.len()
         );

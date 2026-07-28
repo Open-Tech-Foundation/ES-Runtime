@@ -20,3 +20,9 @@ test("queueMicrotask runs before a resolved promise continuation completes", asy
 test("globalThis aliases self", () => {
   assert(self === globalThis);
 });
+
+todo("performance exposes the User Timing entry points", () => {
+  assertEquals(typeof performance.mark, "function");
+  assertEquals(typeof performance.measure, "function");
+  assertEquals(typeof performance.getEntriesByName, "function");
+});

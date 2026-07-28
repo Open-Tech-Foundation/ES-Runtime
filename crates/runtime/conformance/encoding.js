@@ -36,3 +36,33 @@ test("TextDecoder decodes empty input to empty string", () => {
   assertEquals(new TextDecoder().decode(new Uint8Array(0)), "");
   assertEquals(new TextDecoder().decode(), "");
 });
+
+test("TextDecoder decodes DataView and ArrayBuffer", () => {
+  const enc = new TextEncoder();
+  const buf = enc.encode("test").buffer;
+  assertEquals(new TextDecoder().decode(buf), "test");
+  assertEquals(new TextDecoder().decode(new DataView(buf)), "test");
+});
+
+test("TextEncoder encodeInto writes into Uint8Array", () => {
+  const enc = new TextEncoder();
+  const dest = new Uint8Array(10);
+  const res = enc.encodeInto("hello", dest);
+  assertEquals(res.read, 5);
+  assertEquals(res.written, 5);
+  assertEquals(new TextDecoder().decode(dest.subarray(0, 5)), "hello");
+});
+
+
+todo("decode({ stream: true }) buffers a split multi-byte sequence", () => {
+  const d = new TextDecoder();
+  const head = d.decode(new Uint8Array([0xe2, 0x82]), { stream: true });
+  const tail = d.decode(new Uint8Array([0xac]), { stream: true });
+  assertEquals(head + tail, "€");
+});
+
+todo("a streaming decoder flushes a dangling sequence on the final decode", () => {
+  const d = new TextDecoder();
+  d.decode(new Uint8Array([0xe2, 0x82]), { stream: true });
+  assertEquals(d.decode(new Uint8Array([])), "�");
+});

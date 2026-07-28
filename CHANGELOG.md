@@ -8,6 +8,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **Known deviations are now executable in the conformance suite.** The harness
+  gains `todo(name, fn)` alongside `test(name, fn)`: a `todo` states what the
+  spec requires while the runtime is known not to satisfy it. Throwing `todo`s
+  are tallied separately and do not fail the build, but a `todo` that *passes*
+  does — so a fix cannot land without being promoted to `test` and locked in
+  against regression. An audit of the Web API surface against WebIDL and the
+  WHATWG specs added **46** such entries plus **28** new passing assertions,
+  across four new files (`webidl.js`, `blob.js`, `fetch.js`, `timers.js`) and
+  extensions to the encoding, URL, event, structured-clone, performance and
+  stream files. The count moves to **125/125 passing, 46 known deviations**; see
+  [conformance/RESULTS.md](crates/runtime/conformance/RESULTS.md) for the
+  grouped list.
+
 ## [0.11.0] - 2026-07-21
 
 ### Added

@@ -58,3 +58,45 @@ test("stopImmediatePropagation halts later listeners", () => {
   assertEquals(a, 1);
   assertEquals(b, 0);
 });
+
+test("EventTarget accepts options object in addEventListener", () => {
+  const t = new EventTarget();
+  let count = 0;
+  t.addEventListener("e", () => count++, { capture: true });
+  t.dispatchEvent(new Event("e"));
+  assertEquals(count, 1);
+});
+
+test("Event target and timeStamp properties are populated", () => {
+  const t = new EventTarget();
+  let target = null, timeStamp = null;
+  t.addEventListener("e", (ev) => { target = ev.target; timeStamp = ev.timeStamp; });
+  const e = new Event("e");
+  t.dispatchEvent(e);
+  assertEquals(target, t);
+  assertEquals(typeof timeStamp, "number");
+});
+
+
+todo("Event exposes the legacy cancelBubble and returnValue accessors", () => {
+  const e = new Event("x", { cancelable: true });
+  assertEquals(e.cancelBubble, false);
+  assertEquals(e.returnValue, true);
+  e.preventDefault();
+  assertEquals(e.returnValue, false);
+});
+
+todo("Event exposes the legacy initEvent method", () => {
+  assertEquals(typeof new Event("x").initEvent, "function");
+});
+
+todo("dispatching an in-flight event throws InvalidStateError", () => {
+  const t = new EventTarget();
+  const e = new Event("x");
+  let name = null;
+  t.addEventListener("x", () => {
+    try { t.dispatchEvent(e); } catch (err) { name = err.name; }
+  });
+  t.dispatchEvent(e);
+  assertEquals(name, "InvalidStateError");
+});
