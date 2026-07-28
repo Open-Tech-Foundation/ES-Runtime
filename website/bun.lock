@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "site",
+      "name": "website",
       "dependencies": {
         "@opentf/web": "^0.20.0",
         "@opentf/web-docs": "^0.17.0",

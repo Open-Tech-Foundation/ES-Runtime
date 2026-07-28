@@ -11,7 +11,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-OUT="../site/src/benchmarks.js"
+OUT="../website/src/benchmarks.js"
 TMP1="$(mktemp)"
 TMP2="$(mktemp)"
 TMP3="$(mktemp)"

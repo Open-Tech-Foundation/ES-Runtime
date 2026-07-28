@@ -1,5 +1,5 @@
 // A dependency-free horizontal bar chart driven by bench/run.sh JSON output
-// (site/src/benchmarks.js). The winner of each row (the best value in that
+// (website/src/benchmarks.js). The winner of each row (the best value in that
 // metric's better direction) is drawn in green, everyone else in neutral grey.
 // Pass `metrics` as [{ key, label, unit? }] selecting rows to show.
 //

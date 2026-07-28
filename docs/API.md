@@ -1,7 +1,7 @@
 # API Reference
 
 The canonical reference for ES-Runtime's public host APIs. This is the
-source of truth (DECISIONS [D27]); the marketing site under `site/app/docs/**`
+source of truth (DECISIONS [D27]); the marketing site under `website/app/docs/**`
 mirrors it for the web. **A change to any public API updates both.**
 
 ES-Runtime is ESM-only and deny-by-default. Host functionality is exposed as
@@ -45,7 +45,7 @@ The following are deliberate, durable boundaries — not unimplemented features:
 | FFI / native addons      | Host extends via injected providers + ops (Rust), not FFI.         |
 | Workers / multi-thread   | Multi-isolate is the embeddable VM layer (Layer B), not a global.  |
 
-See `site/app/docs/scope` for the rendered version.
+See `website/app/docs/scope` for the rendered version.
 
 ## Web-standard globals
 
