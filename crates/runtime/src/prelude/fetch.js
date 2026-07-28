@@ -12,6 +12,16 @@
   // URL (the runtime:http server path) may skip re-parsing it. Not reachable
   // from guest code, so the public constructor's eager validation is unaffected.
   const TRUSTED_URL = Symbol("trustedUrl");
+  // Closure-private marker for responses the runtime builds itself (a network
+  // response, `Response.error()`): these are *internal* responses in Fetch
+  // terms and are not subject to the constructor's status/body checks, which
+  // only constrain what a script may construct.
+  const INTERNAL_RESPONSE = Symbol("internalResponse");
+
+  // Statuses that must not carry a body (Fetch: "null body status").
+  const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+  // Statuses `Response.redirect` accepts (Fetch: "redirect status").
+  const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 
   // ---- Headers ------------------------------------------------------------
 
@@ -338,12 +348,24 @@
     #statusText;
     #headers;
     #url;
+    #type = "default";
     constructor(body = null, init = {}) {
       const options = init ?? {};
-      this.#status = options.status ?? 200;
+      const internal = options[INTERNAL_RESPONSE] === true;
+      const status = options.status ?? 200;
+      if (!internal) {
+        if (!Number.isInteger(status) || status < 200 || status > 599) {
+          throw new RangeError(`Response status ${status} is outside 200-599`);
+        }
+        if (NULL_BODY_STATUS.has(status) && body !== null && body !== undefined) {
+          throw new TypeError(`Response with a null body status (${status}) cannot have a body`);
+        }
+      }
+      this.#status = status;
       this.#statusText = options.statusText ?? "";
       this.#headers = new Headers(options.headers);
       this.#url = options.url ?? "";
+      if (options.type) this.#type = String(options.type);
       const extracted =
         body !== null && body !== undefined
           ? extractBody(body)
@@ -372,7 +394,7 @@
       return false;
     }
     get type() {
-      return "default";
+      return this.#type;
     }
     clone() {
       const r = new Response(null, {
@@ -380,19 +402,43 @@
         statusText: this.#statusText,
         headers: this.#headers,
         url: this.#url,
+        type: this.#type,
+        [INTERNAL_RESPONSE]: true,
       });
       r[BODY] = { ...this[BODY] };
       return r;
     }
     static json(data, init = {}) {
-      const r = new Response(JSON.stringify(data), init);
-      if (!r.headers.has("content-type")) {
+      const options = init ?? {};
+      const serialized = JSON.stringify(data);
+      if (serialized === undefined) {
+        throw new TypeError("Response.json: the value is not JSON-serializable");
+      }
+      const r = new Response(serialized, options);
+      // The string body already inferred "text/plain", so the JSON type has to
+      // be set unless the *caller's* init supplied one of its own.
+      if (!new Headers(options.headers).has("content-type")) {
         r.headers.set("content-type", "application/json");
       }
       return r;
     }
     static error() {
-      return new Response(null, { status: 0 });
+      return new Response(null, {
+        status: 0,
+        type: "error",
+        [INTERNAL_RESPONSE]: true,
+      });
+    }
+    static redirect(url, status = 302) {
+      const location = new URL(String(url)).href;
+      if (!REDIRECT_STATUS.has(status)) {
+        throw new RangeError(`Response.redirect: ${status} is not a redirect status`);
+      }
+      return new Response(null, {
+        status,
+        headers: { location },
+        [INTERNAL_RESPONSE]: true,
+      });
     }
     // Internal (runtime:http): synchronous response parts, so the server can
     // skip the async arrayBuffer() round-trip for the common buffered body.
@@ -560,6 +606,7 @@
       statusText: meta.statusText,
       headers: meta.headers,
       url: meta.url,
+      [INTERNAL_RESPONSE]: true,
     });
   }
 

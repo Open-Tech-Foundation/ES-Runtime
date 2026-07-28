@@ -10,6 +10,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Response` validates its status, and the missing statics landed.** The
+  constructor accepted any status at all — `new Response("x", { status: 999 })`
+  built a response no server could send, and a body on a null-body status
+  (204/205/304) was silently kept. Both now throw (`RangeError` and `TypeError`
+  respectively), matching Fetch. `Response.redirect()` was missing entirely and
+  now exists, defaulting to 302 and rejecting non-redirect statuses.
+  `Response.error()` reported `type: "default"`; it now reports `"error"`, and
+  `type` is carried through `clone()`. `Response.json()` never set
+  `application/json`, because the serialized string body had already inferred
+  `text/plain` — it now sets the JSON type unless the caller's `init` supplied
+  one, and throws `TypeError` for a value `JSON.stringify` cannot represent.
+  Responses the runtime builds itself (network responses, `Response.error()`)
+  are *internal* responses in Fetch terms and bypass the constructor checks, so
+  a real 204 from a server still works.
 - **`fetch` honours `AbortSignal`.** `Request.signal` did not exist and the
   `signal` option was dropped on the floor, so a request could not be cancelled
   and `AbortSignal.timeout` had no effect on it — there was no way to bound an

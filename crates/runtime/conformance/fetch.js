@@ -134,10 +134,17 @@ test("Response.json defaults to status 200", () => {
   assertEquals(Response.json({ a: 1 }).status, 200);
 });
 
-todo("Response.json sets a JSON Content-Type", () => {
-  // The string body's inferred "text/plain;charset=UTF-8" is already present,
-  // so the `has("content-type")` guard in Response.json never fires.
+test("Response.json sets a JSON Content-Type unless init supplied one", () => {
   assertEquals(Response.json({ a: 1 }).headers.get("content-type"), "application/json");
+  assertEquals(
+    Response.json({ a: 1 }, { headers: { "content-type": "application/problem+json" } })
+      .headers.get("content-type"),
+    "application/problem+json",
+  );
+});
+
+test("Response.json rejects a value JSON cannot serialise", () => {
+  assertThrows(() => Response.json(undefined), "TypeError");
 });
 
 test("Response body is a ReadableStream and null for a null-body status", () => {
@@ -145,25 +152,47 @@ test("Response body is a ReadableStream and null for a null-body status", () => 
   assertEquals(new Response(null, { status: 204 }).body, null);
 });
 
-todo("Response rejects a status outside 200-599", () => {
+test("Response rejects a status outside 200-599", () => {
   assertThrows(() => new Response("x", { status: 999 }), "RangeError");
   assertThrows(() => new Response("x", { status: 99 }), "RangeError");
+  assertThrows(() => new Response("x", { status: 200.5 }), "RangeError");
+  // The boundaries themselves are fine.
+  assertEquals(new Response("x", { status: 200 }).status, 200);
+  assertEquals(new Response("x", { status: 599 }).status, 599);
 });
 
-todo("Response rejects a body on a null-body status", () => {
-  assertThrows(() => new Response("x", { status: 204 }), "TypeError");
+test("Response rejects a body on a null-body status", () => {
+  // 101 and 103 are also null-body statuses but sit outside the constructor's
+  // 200-599 range, so a script cannot reach them here at all.
+  for (const status of [204, 205, 304]) {
+    assertThrows(() => new Response("x", { status }), "TypeError");
+    // The same status with no body is allowed.
+    assertEquals(new Response(null, { status }).status, status);
+  }
 });
 
-todo("Response.error() produces an error-typed response", () => {
+test("Response.error() produces an error-typed response", () => {
   const r = Response.error();
   assertEquals(r.type, "error");
   assertEquals(r.status, 0);
+  assertEquals(r.ok, false);
 });
 
-todo("Response.redirect() produces a redirect response", () => {
+test("Response.redirect() produces a redirect response", () => {
   const r = Response.redirect("https://a.example/", 302);
   assertEquals(r.status, 302);
   assertEquals(r.headers.get("location"), "https://a.example/");
+  // Defaults to 302, and only redirect statuses are accepted.
+  assertEquals(Response.redirect("https://a.example/").status, 302);
+  for (const status of [301, 303, 307, 308]) {
+    assertEquals(Response.redirect("https://a.example/", status).status, status);
+  }
+  assertThrows(() => Response.redirect("https://a.example/", 200), "RangeError");
+  assertThrows(() => Response.redirect("not a url"), "TypeError");
+});
+
+test("a cloned Response keeps its type", () => {
+  assertEquals(new Response("x").clone().type, "default");
 });
 
 todo("Response exposes formData()", () => {
