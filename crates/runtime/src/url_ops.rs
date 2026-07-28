@@ -45,6 +45,11 @@ const POSITIONS: [Position; 15] = [
     Position::AfterFragment,  // 14: hash = "#" + href[o13 .. o14] if non-empty
 ];
 
+/// Indices into [`POSITIONS`] for the password span, which needs special
+/// handling — see [`components_value`].
+const PASSWORD_START: usize = 3;
+const PASSWORD_END: usize = 4;
+
 /// Registers `url_parse`, `url_set`, and `url_origin`.
 pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     engine.register_op(OpDecl::sync("url_parse", |args| {
@@ -193,8 +198,21 @@ fn set_component(href: &str, component: &str, value: &str) -> Option<Url> {
 fn components_value(url: &Url) -> Value {
     let href = url.as_str();
     let mut offsets = [0u32; 15];
-    for (slot, position) in offsets.iter_mut().zip(POSITIONS) {
-        *slot = url[..position].len() as u32;
+    // `url` mis-slices the password positions for a URL that has a username but
+    // no password (`https://foo@example.com`). Both `BeforePassword` and
+    // `AfterPassword` fall into a branch that assumes there are no credentials
+    // at all: its `debug_assert!(username_end == host_start)` fires in debug
+    // builds, and in release the two positions straddle the "@" separator, so
+    // `.password` reads back as "@" instead of "". Derive that (empty) span from
+    // the end of the username instead, and never index those two positions.
+    let no_password = url.password().is_none();
+    let username_end = url[..Position::AfterUsername].len() as u32;
+    for (i, (slot, position)) in offsets.iter_mut().zip(POSITIONS).enumerate() {
+        *slot = if no_password && (i == PASSWORD_START || i == PASSWORD_END) {
+            username_end
+        } else {
+            url[..position].len() as u32
+        };
     }
     // JS slices by UTF-16 code unit; the offsets above are bytes. They agree
     // exactly when the href is ASCII — always, for spec-canonical hrefs.
@@ -266,6 +284,43 @@ mod tests {
                 String::new()
             },
         ]
+    }
+
+    #[test]
+    fn username_without_password_slices_to_an_empty_password() {
+        // `url`'s BeforePassword/AfterPassword straddle the "@" when there is a
+        // username and no password: debug builds hit its debug_assert, release
+        // builds read the password back as "@". Both must give "".
+        let s = slices("https://foo@example.com/p");
+        assert_eq!(s[2], "foo", "username");
+        assert_eq!(s[3], "", "password");
+        assert_eq!(s[5], "example.com", "hostname");
+        assert_eq!(s[7], "/p", "pathname");
+    }
+
+    #[test]
+    fn credential_shapes_all_slice_correctly() {
+        // Username only, password only, both, and neither.
+        let both = slices("https://u:p@example.com/");
+        assert_eq!((both[2].as_str(), both[3].as_str()), ("u", "p"));
+
+        let user_only = slices("https://u@example.com/");
+        assert_eq!((user_only[2].as_str(), user_only[3].as_str()), ("u", ""));
+
+        let password_only = slices("https://:p@example.com/");
+        assert_eq!((password_only[2].as_str(), password_only[3].as_str()), ("", "p"));
+
+        let neither = slices("https://example.com/");
+        assert_eq!((neither[2].as_str(), neither[3].as_str()), ("", ""));
+    }
+
+    #[test]
+    fn username_without_password_slices_with_non_ascii_host() {
+        // The UTF-16 remap runs over the same offsets; the empty password span
+        // must survive it.
+        let s = slices("https://foo@ünïcode.example/p");
+        assert_eq!(s[2], "foo", "username");
+        assert_eq!(s[3], "", "password");
     }
 
     #[test]

@@ -132,3 +132,25 @@ test("URL.parse resolves against a base", () => {
   assertEquals(URL.parse("/p", "https://a.example/x").href, "https://a.example/p");
   assertEquals(URL.parse("/p", "not a base"), null);
 });
+
+test("a username with no password reads back an empty password", () => {
+  const u = new URL("https://foo@example.com/p");
+  assertEquals(u.username, "foo");
+  assertEquals(u.password, "");
+  assertEquals(u.hostname, "example.com");
+  assertEquals(u.href, "https://foo@example.com/p");
+});
+
+test("every credential shape round-trips", () => {
+  const cases = [
+    ["https://u:p@example.com/", "u", "p"],
+    ["https://u@example.com/", "u", ""],
+    ["https://:p@example.com/", "", "p"],
+    ["https://example.com/", "", ""],
+  ];
+  for (const [href, username, password] of cases) {
+    const u = new URL(href);
+    assertEquals(u.username, username, href);
+    assertEquals(u.password, password, href);
+  }
+});
