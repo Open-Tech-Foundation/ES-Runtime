@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **180 / 180** (100%) |
-| Known deviations (`todo`) | **18** |
+| Assertions passing | **183 / 183** (100%) |
+| Known deviations (`todo`) | **17** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -43,19 +43,19 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 10 | 4 |
 | `fetch.js` | Headers/Request/Response object surface | 32 | 1 |
-| `webidl.js` | Interface shape: branding, arity, iterators | 19 | 4 |
+| `webidl.js` | Interface shape: branding, arity, iterators | 22 | 1 |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
 ### Known deviations, by theme
 
-The remaining 18 `todo` cases group into five themes:
+The remaining 17 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
-| **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every class-based interface. `crypto`, `crypto.subtle` and `performance` remain plain object literals, so they stringify as `[object Object]`. |
+| **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every interface. |
 | **Internal members on public prototypes** | `webidl.js` | ☑ Fixed — the slots are symbols now, most of them fragment-local. |
 | **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
-| **Missing members** | `url.js`, `performance.js`, `streams.js` | `URL.parse`, User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
+| **Missing members** | `url.js`, `performance.js`, `streams.js`, `events.js` | `URL.parse`, User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
 | **Wrong behaviour** | `url.js` | `URLSearchParams` over-escapes `*`. |
 
 One deviation found alongside these is **not** representable here and is gated

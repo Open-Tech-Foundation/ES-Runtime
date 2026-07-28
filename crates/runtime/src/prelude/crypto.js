@@ -579,9 +579,45 @@
   };
 
   globalThis.CryptoKey = CryptoKey;
-  globalThis.crypto = Object.freeze({
-    getRandomValues,
-    randomUUID,
-    subtle: Object.freeze(subtle),
-  });
+  // Expose `crypto` and `crypto.subtle` as instances of branded interfaces with
+  // their members on the prototype, per WebIDL — rather than as object literals
+  // whose methods are own properties of a singleton.
+  const INTERNAL = Symbol("Crypto.construct");
+
+  class SubtleCrypto {
+    constructor(key) {
+      if (key !== INTERNAL) throw new TypeError("Illegal constructor");
+    }
+  }
+  // The operations were written as an object literal; move them onto the
+  // prototype as enumerable members, which is how WebIDL defines operations.
+  Object.defineProperties(
+    SubtleCrypto.prototype,
+    Object.getOwnPropertyDescriptors(subtle),
+  );
+  const subtleInstance = new SubtleCrypto(INTERNAL);
+
+  class Crypto {
+    constructor(key) {
+      if (key !== INTERNAL) throw new TypeError("Illegal constructor");
+    }
+    getRandomValues(array) {
+      return getRandomValues(array);
+    }
+    randomUUID() {
+      return randomUUID();
+    }
+    get subtle() {
+      return subtleInstance;
+    }
+  }
+
+  for (const Interface of [Crypto, SubtleCrypto]) {
+    Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+      value: Interface.name,
+      configurable: true,
+    });
+    globalThis[Interface.name] = Interface;
+  }
+  globalThis.crypto = new Crypto(INTERNAL);
 })();

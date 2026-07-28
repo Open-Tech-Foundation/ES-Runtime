@@ -51,7 +51,9 @@
   // saturates so a forged call can only keep the loop alive, never end it early.
 
   // Freeze the runtime's plain namespace objects so their methods can't be
-  // swapped out from under code that reaches them by reference. (`crypto` and
-  // `performance` are already frozen at their definitions.)
+  // swapped out from under code that reaches them by reference. `crypto` and
+  // `performance` are interface instances whose members live on their
+  // prototypes, so they are not covered by this and are not frozen — matching
+  // every other platform object here.
   if (globalThis.console) Object.freeze(globalThis.console);
 })();

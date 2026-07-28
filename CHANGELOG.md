@@ -10,6 +10,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`crypto`, `crypto.subtle` and `performance` are interface instances.** All
+  three were plain object literals, so their methods were own properties of a
+  singleton rather than prototype members, they stringified as
+  `[object Object]`, and the `Crypto`, `SubtleCrypto` and `Performance`
+  constructors did not exist to check instances against. Each is now an instance
+  of a branded class with its members on the prototype, and the constructors are
+  exposed but throw `TypeError` when called, as in browsers. `performance` and
+  `crypto` are consequently no longer frozen objects — like every other platform
+  object, their behaviour lives on a prototype.
 - **Internal plumbing no longer sits on public prototypes.** `Blob.prototype`
   carried `_bytes`, `Headers.prototype` `_list`, `Response.prototype` `_parts`,
   `Event.prototype` `_begin`/`_end`/`_immediateStopped`, and so on — all

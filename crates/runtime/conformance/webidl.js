@@ -80,10 +80,34 @@ test("branding is a non-enumerable, configurable prototype property", () => {
   assertEquals(Object.getOwnPropertySymbols(new Blob([])).length, 0);
 });
 
-todo("crypto and performance are branded", () => {
+test("crypto and performance are branded", () => {
   assertEquals(tagOf(crypto), "[object Crypto]");
   assertEquals(tagOf(crypto.subtle), "[object SubtleCrypto]");
   assertEquals(tagOf(performance), "[object Performance]");
+});
+
+test("crypto and performance members live on their prototypes", () => {
+  for (const [obj, name] of [
+    [crypto, "getRandomValues"],
+    [crypto, "randomUUID"],
+    [crypto.subtle, "digest"],
+    [performance, "now"],
+  ]) {
+    assertEquals(Object.prototype.hasOwnProperty.call(obj, name), false);
+    assertEquals(typeof Object.getPrototypeOf(obj)[name], "function");
+  }
+});
+
+test("the Crypto and Performance constructors are exposed but not callable", () => {
+  assertEquals(typeof Crypto, "function");
+  assertEquals(typeof SubtleCrypto, "function");
+  assertEquals(typeof Performance, "function");
+  assert(crypto instanceof Crypto);
+  assert(crypto.subtle instanceof SubtleCrypto);
+  assert(performance instanceof Performance);
+  assertThrows(() => new Crypto(), "TypeError");
+  assertThrows(() => new SubtleCrypto(), "TypeError");
+  assertThrows(() => new Performance(), "TypeError");
 });
 
 // ---- Internal plumbing must not sit on public prototypes ------------------
