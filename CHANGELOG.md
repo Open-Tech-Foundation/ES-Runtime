@@ -10,6 +10,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`TextDecoder.decode()` honours `{ stream: true }`.** The options argument
+  was ignored outright, so a decoder fed a multi-byte code point split across
+  two calls produced replacement characters instead of the character — the
+  classic corruption when decoding a byte stream chunk by chunk. The decoder now
+  holds back a trailing incomplete sequence until the next call and flushes it
+  on the final, non-streaming `decode()`. An invalid lead byte is not a prefix
+  of anything and is decoded immediately rather than held. A BOM is stripped
+  once at the start of a stream rather than at every chunk boundary.
+  `TextDecoderStream` now delegates to this instead of carrying a second copy of
+  the same buffering logic.
 - **`Request` and `Response` gained `formData()`, and `Request` its policy
   members.** `formData()` did not exist on either body — a `multipart/form-data`
   upload could be *sent* but never *received*, which is the shape a server

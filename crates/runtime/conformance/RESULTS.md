@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **157 / 157** (100%) |
-| Known deviations (`todo`) | **27** |
+| Assertions passing | **164 / 164** (100%) |
+| Known deviations (`todo`) | **25** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -30,7 +30,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 
 | File | Area (SPEC §) | Passing | Deviations |
 | --- | --- | --- | --- |
-| `encoding.js` | TextEncoder/TextDecoder §2.3 | 9 | 2 |
+| `encoding.js` | TextEncoder/TextDecoder §2.3 | 16 | — |
 | `base64.js` | atob/btoa §2.3 | 6 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 11 | 3 |
 | `structured-clone.js` | structuredClone §2.1 | 7 | 4 |
@@ -48,7 +48,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 
 ### Known deviations, by theme
 
-The remaining 27 `todo` cases group into five themes:
+The remaining 25 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ The remaining 27 `todo` cases group into five themes:
 | **Internal members on public prototypes** | `webidl.js` | `_bytes`, `_list`, `_parts`, `_begin`/`_end`, `_attach`/`_reload` are reachable from user code. |
 | **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
 | **Missing members** | `url.js`, `performance.js`, `streams.js` | `URL.parse`, User Timing, `ReadableStream.from`, the legacy `Event` accessors. |
-| **Wrong behaviour** | `encoding.js`, `structured-clone.js`, `url.js` | `TextDecoder` ignores `{ stream: true }`; `structuredClone` drops `Error.cause` and cannot clone a `Blob`; `URLSearchParams` over-escapes `*`. |
+| **Wrong behaviour** | `structured-clone.js`, `url.js` | `structuredClone` drops `Error.cause` and cannot clone a `Blob`; `URLSearchParams` over-escapes `*`. |
 
 One deviation found alongside these is **not** representable here and is gated
 by a Rust test instead, since it needs a driven event loop: `setTimeout` dropping

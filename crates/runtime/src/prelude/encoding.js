@@ -48,9 +48,34 @@
     throw new TypeError("TextDecoder input must be a BufferSource");
   }
 
+  // Length of a trailing *incomplete but valid* UTF-8 sequence, i.e. how many
+  // bytes must be held back until the next chunk arrives. An invalid lead byte
+  // is not a prefix of anything, so it is decoded now (as U+FFFD) rather than
+  // held forever.
+  function incompleteTailLength(bytes) {
+    const n = bytes.length;
+    for (let back = 1; back <= 3 && back <= n; back++) {
+      const b = bytes[n - back];
+      if ((b & 0xc0) === 0x80) continue; // continuation byte: keep scanning back
+      let needed;
+      if ((b & 0x80) === 0) needed = 1;
+      else if ((b & 0xe0) === 0xc0) needed = 2;
+      else if ((b & 0xf0) === 0xe0) needed = 3;
+      else if ((b & 0xf8) === 0xf0) needed = 4;
+      else return 0; // invalid lead byte
+      return back < needed ? back : 0;
+    }
+    return 0;
+  }
+
   class TextDecoder {
     #fatal;
     #ignoreBOM;
+    // Streaming state: bytes held back from a `{ stream: true }` call, and
+    // whether the next decode is the start of a stream (only there is a BOM
+    // stripped — it must not be re-stripped at every chunk boundary).
+    #pending = null;
+    #atStreamStart = true;
 
     constructor(label = "utf-8", options = {}) {
       const enc = String(label).trim().toLowerCase();
@@ -72,9 +97,39 @@
       return this.#ignoreBOM;
     }
 
-    decode(input) {
+    decode(input, options = {}) {
+      const streaming = Boolean(options && options.stream);
+      let bytes = bytesOf(input);
+
+      // Prepend anything held back from the previous streaming call.
+      if (this.#pending !== null) {
+        const joined = new Uint8Array(this.#pending.length + bytes.length);
+        joined.set(this.#pending, 0);
+        joined.set(bytes, this.#pending.length);
+        bytes = joined;
+        this.#pending = null;
+      }
+
+      if (streaming) {
+        // Hold back a trailing sequence that is not yet complete, so a code
+        // point split across chunks is not decoded as two replacements.
+        const keep = incompleteTailLength(bytes);
+        if (keep > 0) {
+          this.#pending = bytes.slice(bytes.length - keep);
+          bytes = bytes.subarray(0, bytes.length - keep);
+        }
+      }
+
+      // A BOM belongs to the stream, not to each chunk.
+      const ignoreBOM = this.#ignoreBOM || !this.#atStreamStart;
       // Rust validates/replaces and V8 builds the string natively.
-      return ops.utf8_decode(bytesOf(input), this.#fatal, this.#ignoreBOM);
+      const text = ops.utf8_decode(bytes, this.#fatal, ignoreBOM);
+
+      // A non-streaming call ends the stream: reset for the next one. (Any
+      // bytes still held back were flushed above, becoming U+FFFD or, under
+      // `fatal`, an error — both from the op.)
+      this.#atStreamStart = !streaming;
+      return text;
     }
   }
 
