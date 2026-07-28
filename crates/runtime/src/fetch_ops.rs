@@ -23,10 +23,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, IntoException};
+use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{ByteStream, HttpRequest, NetTransport, ProviderError, RequestBody};
-use futures_channel::mpsc;
+use futures_channel::{mpsc, oneshot};
+use futures_util::future::{select, Either};
 use futures_util::{SinkExt, StreamExt};
 
 use crate::Result;
@@ -55,6 +56,55 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
         Rc::new(RefCell::new(HashMap::new()));
     let req_id_gen = Rc::new(Cell::new(1u64));
 
+    // Abort channels, keyed by id. `fetch_abort_new` allocates the pair before
+    // the request starts (so the guest holds a handle it can fire at any time);
+    // `fetch` takes the receiver and races it against the transport future, and
+    // `fetch_abort` fires the sender. Losing the race *drops* the transport
+    // future, which is what actually tears the connection down.
+    let abort_txs: Rc<RefCell<HashMap<u64, oneshot::Sender<()>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let abort_rxs: Rc<RefCell<HashMap<u64, oneshot::Receiver<()>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let abort_id_gen = Rc::new(Cell::new(1u64));
+
+    // ---- fetch_abort_new ----------------------------------------------------
+    {
+        let abort_txs = abort_txs.clone();
+        let abort_rxs = abort_rxs.clone();
+        let abort_id_gen = abort_id_gen.clone();
+        engine.register_op(
+            OpDecl::sync("fetch_abort_new", move |_args| {
+                let id = abort_id_gen.get();
+                abort_id_gen.set(id + 1);
+                let (tx, rx) = oneshot::channel::<()>();
+                abort_txs.borrow_mut().insert(id, tx);
+                abort_rxs.borrow_mut().insert(id, rx);
+                Ok(Value::Number(id as f64))
+            })
+            .requires(Capability::Net),
+        )?;
+    }
+
+    // ---- fetch_abort --------------------------------------------------------
+    {
+        let abort_txs = abort_txs.clone();
+        let abort_rxs = abort_rxs.clone();
+        engine.register_op(
+            OpDecl::sync("fetch_abort", move |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+                // Firing the sender wakes the `select` in `fetch`. Dropping the
+                // receiver too covers the case where the request already
+                // finished (or never started) — both registries end up clean.
+                if let Some(tx) = abort_txs.borrow_mut().remove(&id) {
+                    let _ = tx.send(());
+                }
+                abort_rxs.borrow_mut().remove(&id);
+                Ok(Value::Null)
+            })
+            .requires(Capability::Net),
+        )?;
+    }
+
     // ---- fetch_request_body_new --------------------------------------------
     {
         let req_senders = req_senders.clone();
@@ -78,16 +128,45 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
         let net = net;
         let bodies = bodies.clone();
         let req_receivers = req_receivers.clone();
+        let abort_txs = abort_txs.clone();
+        let abort_rxs = abort_rxs.clone();
         engine.register_op(
             OpDecl::r#async("fetch", move |args| {
                 let net = net.clone();
                 let bodies = bodies.clone();
                 let resp_id_gen = resp_id_gen.clone();
+                let abort_txs = abort_txs.clone();
                 // Resolve a streaming request body (if any) synchronously, before
-                // the await, so the receiver is owned by the request.
+                // the await, so the receiver is owned by the request. Same for the
+                // abort receiver, so an abort fired before the first poll still
+                // lands on this request.
                 let request = parse_request(&args, &req_receivers);
+                let abort_id = args.get(4).and_then(Value::as_number).map(|n| n as u64);
+                let abort_rx = abort_id.and_then(|id| abort_rxs.borrow_mut().remove(&id));
                 Box::pin(async move {
-                    let response = net.fetch(request).await.map_err(|e| {
+                    let result = match abort_rx {
+                        // Race the transport against the abort signal. If the
+                        // abort wins, the transport future is dropped here —
+                        // that is the cancellation, not a flag anyone polls.
+                        Some(rx) => match select(net.fetch(request), rx).await {
+                            Either::Left((response, _)) => response,
+                            Either::Right((_, _)) => {
+                                if let Some(id) = abort_id {
+                                    abort_txs.borrow_mut().remove(&id);
+                                }
+                                return Err(OpError::new(
+                                    ExceptionClass::DomException("AbortError"),
+                                    "The operation was aborted.",
+                                ));
+                            }
+                        },
+                        None => net.fetch(request).await,
+                    };
+                    // The request is settled either way; retire its abort handle.
+                    if let Some(id) = abort_id {
+                        abort_txs.borrow_mut().remove(&id);
+                    }
+                    let response = result.map_err(|e| {
                         OpError::new(e.exception_class(), e.exception_message())
                             .with_code_opt(e.code())
                     })?;
@@ -127,7 +206,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
 
     // ---- fetch_body_read ----------------------------------------------------
     {
-        let bodies = bodies;
+        let bodies = bodies.clone();
         engine.register_op(OpDecl::r#async("fetch_body_read", move |args| {
             let bodies = bodies.clone();
             let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
@@ -148,6 +227,22 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                 }
             })
         }))?;
+    }
+
+    // ---- fetch_body_cancel --------------------------------------------------
+    // Drops a response body stream without draining it — the guest cancelled or
+    // aborted mid-body. Dropping the stream closes the connection and keeps the
+    // registry from retaining an entry nobody will ever read.
+    {
+        let bodies = bodies.clone();
+        engine.register_op(
+            OpDecl::sync("fetch_body_cancel", move |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+                bodies.borrow_mut().remove(&id);
+                Ok(Value::Null)
+            })
+            .requires(Capability::Net),
+        )?;
     }
 
     // ---- fetch_request_body_push -------------------------------------------
@@ -211,9 +306,11 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
 
 /// Parses the `fetch` op arguments and resolves any streaming request body.
 ///
-/// Layout: `[method, url, body?, bodyStreamId?, name0, value0, …]` — `body` is
-/// the buffered bytes (or null), `bodyStreamId` is the id from
-/// `fetch_request_body_new` (or null) whose receiver becomes the request stream.
+/// Layout: `[method, url, body?, bodyStreamId?, abortId?, name0, value0, …]` —
+/// `body` is the buffered bytes (or null), `bodyStreamId` is the id from
+/// `fetch_request_body_new` (or null) whose receiver becomes the request stream,
+/// and `abortId` is the id from `fetch_abort_new` (or null). `abortId` is read
+/// by the caller, not here.
 fn parse_request(
     args: &[Value],
     req_receivers: &Rc<RefCell<HashMap<u64, mpsc::Receiver<ReqBodyItem>>>>,
@@ -242,7 +339,7 @@ fn parse_request(
     };
 
     let mut headers = Vec::new();
-    let mut i = 4;
+    let mut i = 5;
     while i + 1 < args.len() {
         if let (Some(name), Some(value)) = (args[i].as_str(), args[i + 1].as_str()) {
             headers.push((name.to_string(), value.to_string()));

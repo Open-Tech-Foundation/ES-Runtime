@@ -10,6 +10,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`fetch` honours `AbortSignal`.** `Request.signal` did not exist and the
+  `signal` option was dropped on the floor, so a request could not be cancelled
+  and `AbortSignal.timeout` had no effect on it — there was no way to bound an
+  outbound call. `Request` now exposes a `signal` (defaulting to a fresh
+  unaborted one, adopted from `init.signal` or from the request being cloned),
+  and `fetch` rejects with the signal's reason: immediately if the signal is
+  already aborted, without touching the transport. An abort mid-flight is real
+  cancellation, not a flag — new `fetch_abort_new`/`fetch_abort` ops race the
+  transport future against the signal and **drop** it when the signal wins,
+  tearing down the connection. An abort after the response headers arrive errors
+  the body stream and drops the host-side stream via `fetch_body_cancel`, which
+  is also now wired to `ReadableStream.cancel()` so an abandoned body no longer
+  holds its connection open. The abort is wired before the first suspension
+  point, so a signal firing while the request body is still being materialized
+  is not missed.
+
 - **`Headers` reject values containing NUL, CR or LF.** Values were trimmed of
   surrounding whitespace but never validated, so a CR/LF *inside* a value —
   reachable from any header built out of untrusted input — could splice extra
@@ -41,6 +57,12 @@ namespace) is unstable and may change between minor releases until the API freez
   stream files. The count moves to **125/125 passing, 46 known deviations**; see
   [conformance/RESULTS.md](crates/runtime/conformance/RESULTS.md) for the
   grouped list.
+
+### Changed
+
+- The internal `fetch` op's argument layout gains `abortId` after
+  `bodyStreamId`; headers now start at index 5. New ops: `fetch_abort_new`,
+  `fetch_abort`, `fetch_body_cancel` (all `Capability::Net`).
 
 ## [0.11.0] - 2026-07-21
 

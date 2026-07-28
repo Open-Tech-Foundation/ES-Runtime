@@ -1988,6 +1988,125 @@ mod tests {
         assert_eq!(out, Value::String("foobarbaz".into()));
     }
 
+    /// A transport whose request future never resolves, and which records how
+    /// many times it was polled into existence. Lets an abort test observe that
+    /// the *in-flight* request is torn down rather than merely ignored: when the
+    /// abort wins the race, `fetch_ops` drops this future.
+    struct HangingNet {
+        started: Arc<std::sync::atomic::AtomicUsize>,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    /// Bumps `dropped` when the request future is discarded — i.e. cancelled.
+    struct DropProbe(Arc<std::sync::atomic::AtomicUsize>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    impl es_runtime_providers::NetTransport for HangingNet {
+        fn fetch(
+            &self,
+            _request: es_runtime_providers::HttpRequest,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                es_runtime_providers::HttpResponse,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            self.started
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let probe = DropProbe(self.dropped.clone());
+            Box::pin(async move {
+                let _probe = probe;
+                std::future::pending().await
+            })
+        }
+    }
+
+    #[test]
+    fn fetch_rejects_an_already_aborted_signal_without_touching_the_network() {
+        let _g = v8_guard();
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let net = Arc::new(HangingNet {
+            started: started.clone(),
+            dropped: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        });
+        let mut rt = runtime_with_net(net);
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const c = new AbortController(); c.abort('too late'); \
+             try { await fetch('https://x.test/', { signal: c.signal }); return 'no-throw'; } \
+             catch (e) { return String(e); }",
+        );
+        assert_eq!(out, Value::String("too late".into()));
+        // The transport was never consulted.
+        assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn fetch_aborts_an_in_flight_request_and_drops_the_transport_future() {
+        let _g = v8_guard();
+        let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let net = Arc::new(HangingNet {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        });
+        let mut rt = runtime_with_net(net);
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        // The transport never responds. Draining a few microtask turns lets
+        // `fetch` get past body materialization and actually issue the request,
+        // so the abort below lands on an in-flight call rather than pre-empting
+        // it (which is a different path, covered above).
+        let out = eval_async(
+            &mut rt,
+            "const c = new AbortController(); \
+             const p = fetch('https://x.test/', { signal: c.signal }); \
+             for (let i = 0; i < 10; i++) await Promise.resolve(); \
+             c.abort(new DOMException('gone', 'AbortError')); \
+             try { await p; return 'no-throw'; } \
+             catch (e) { return e.name + ':' + e.message; }",
+        );
+        assert_eq!(out, Value::String("AbortError:gone".into()));
+        // The guest promise rejects as soon as the signal fires. Host-side
+        // teardown lands on a later turn of the loop, when the op future is
+        // polled and the abort wins its race, so drive a few more ticks.
+        for _ in 0..10 {
+            rt.tick(0);
+        }
+        assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // The pending transport future was dropped — that is the cancellation.
+        assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn fetch_without_a_signal_still_completes() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_net(Arc::new(MockNet::ok("fine")));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/'); return await r.text();",
+        );
+        assert_eq!(out, Value::String("fine".into()));
+    }
+
+    #[test]
+    fn fetch_default_signal_is_unaborted_and_does_not_leak_abort_handles() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_net(Arc::new(MockNet::ok("x")));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        let out = eval_async(
+            &mut rt,
+            "const r = new Request('https://x.test/'); \
+             const before = r.signal.aborted; \
+             const res = await fetch('https://x.test/'); await res.text(); \
+             return before + '|' + r.signal.aborted;",
+        );
+        assert_eq!(out, Value::String("false|false".into()));
+    }
+
     #[test]
     fn fetch_streams_a_request_body_from_a_readable_stream() {
         let _g = v8_guard();
@@ -3229,7 +3348,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 138;
+        const BASELINE: u32 = 142;
 
         assert!(
             pass >= BASELINE,

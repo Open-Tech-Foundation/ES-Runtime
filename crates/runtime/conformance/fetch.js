@@ -70,8 +70,25 @@ todo("Request rejects a body on GET or HEAD", () => {
   assertThrows(() => new Request("https://a.example/", { method: "GET", body: "x" }), "TypeError");
 });
 
-todo("Request exposes a signal", () => {
-  assert(new Request("https://a.example/").signal instanceof AbortSignal);
+test("Request exposes a signal, defaulting to a fresh unaborted one", () => {
+  const r = new Request("https://a.example/");
+  assert(r.signal instanceof AbortSignal);
+  assertEquals(r.signal.aborted, false);
+});
+
+test("Request adopts the signal from init", () => {
+  const c = new AbortController();
+  assertEquals(new Request("https://a.example/", { signal: c.signal }).signal, c.signal);
+});
+
+test("Request rejects a non-AbortSignal signal", () => {
+  assertThrows(() => new Request("https://a.example/", { signal: {} }), "TypeError");
+});
+
+test("a cloned Request keeps the original's signal", () => {
+  const c = new AbortController();
+  const r = new Request("https://a.example/", { signal: c.signal });
+  assertEquals(r.clone().signal, c.signal);
 });
 
 todo("Request exposes the standard mode/credentials/redirect defaults", () => {

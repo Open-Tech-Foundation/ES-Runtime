@@ -258,8 +258,20 @@
     // access (#ensureHeaders) — a handler that never reads req.headers (e.g. a
     // plain hello-world) pays nothing for header normalization.
     #rawHeaders = null;
+    #signal;
     constructor(input, init = {}) {
       const options = init ?? {};
+      if (options.signal !== undefined && options.signal !== null) {
+        if (!(options.signal instanceof AbortSignal)) {
+          throw new TypeError("Request signal must be an AbortSignal");
+        }
+        this.#signal = options.signal;
+      } else if (input instanceof Request) {
+        this.#signal = input.#signal;
+      } else {
+        // Every request has a signal, even when the caller passed none.
+        this.#signal = new AbortController().signal;
+      }
       if (input instanceof Request) {
         this.#method = options.method ? String(options.method).toUpperCase() : input.#method;
         this.#url = input.#url;
@@ -304,6 +316,9 @@
     get headers() {
       this.#ensureHeaders();
       return this.#headers;
+    }
+    get signal() {
+      return this.#signal;
     }
     clone() {
       return new Request(this);
@@ -430,6 +445,30 @@
   async function fetch(input, init) {
     const request = new Request(input, init);
     const state = request[BODY];
+    const signal = request.signal;
+
+    // An already-aborted signal fails before anything touches the network.
+    if (signal.aborted) throw signal.reason;
+
+    // Wire the abort BEFORE any await. Body materialization below suspends, and
+    // an abort landing in that window must not be missed — so the handle and the
+    // listener are in place before the first suspension point. Firing the handle
+    // drops the transport future host-side (the actual connection teardown);
+    // the JS side owns the rejection *value*, since the spec rejects with the
+    // signal's reason, which may be any value.
+    const abortId = ops.fetch_abort_new();
+    let onAbort = null;
+    // `Promise.race` below attaches a handler to this, so an abort arriving
+    // after the response is still handled and never becomes an unhandled
+    // rejection. `catch` here keeps that true for the pre-race window too.
+    const abortPromise = new Promise((_resolve, reject) => {
+      onAbort = () => {
+        ops.fetch_abort(abortId);
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+    abortPromise.catch(() => {});
 
     // A ReadableStream body streams to the host without buffering; anything else
     // (bytes or a deferred string) is materialized and sent as one buffered body.
@@ -445,7 +484,19 @@
     }
     const hasBody = bodyBytes && bodyBytes.length > 0;
 
-    const args = [request.method, request.url, hasBody ? bodyBytes : null, bodyStreamId];
+    // Materializing the body suspended; the signal may have fired meanwhile.
+    if (signal.aborted) {
+      signal.removeEventListener("abort", onAbort);
+      throw signal.reason;
+    }
+
+    const args = [
+      request.method,
+      request.url,
+      hasBody ? bodyBytes : null,
+      bodyStreamId,
+      abortId,
+    ];
     for (const [name, value] of request._headers()) args.push(name, value);
 
     // Start the request and (for a streaming body) the pump concurrently — the
@@ -462,16 +513,45 @@
           })
         : null;
 
-    const meta = await fetchPromise;
+    let meta;
+    try {
+      meta = await Promise.race([fetchPromise, abortPromise]);
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
     if (pumpPromise) await pumpPromise;
     if (pumpError) throw pumpError;
 
     const bodyId = meta.bodyId;
+    // An abort after the headers arrived errors the body stream and drops the
+    // host-side stream, closing the connection rather than leaving it to drain.
     const stream = new ReadableStream({
+      start(controller) {
+        if (signal.aborted) {
+          ops.fetch_body_cancel(bodyId);
+          controller.error(signal.reason);
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            ops.fetch_body_cancel(bodyId);
+            try {
+              controller.error(signal.reason);
+            } catch {
+              // Already closed or errored — nothing to signal.
+            }
+          },
+          { once: true },
+        );
+      },
       async pull(controller) {
         const chunk = await ops.fetch_body_read(bodyId);
         if (chunk === null) controller.close();
         else controller.enqueue(chunk);
+      },
+      cancel() {
+        ops.fetch_body_cancel(bodyId);
       },
     });
 
