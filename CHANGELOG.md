@@ -10,6 +10,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Headers` reject values containing NUL, CR or LF.** Values were trimmed of
+  surrounding whitespace but never validated, so a CR/LF *inside* a value —
+  reachable from any header built out of untrusted input — could splice extra
+  header lines or a body into the wire format (request/response splitting).
+  Setting such a value now throws `TypeError`, as the Fetch standard requires.
 - **Platform objects are branded with `Symbol.toStringTag`.** Every class-based
   Web API interface — `Blob`, `File`, `FormData`, `URL`, `URLSearchParams`,
   `Event` and friends, `AbortController`/`AbortSignal`, `TextEncoder`/

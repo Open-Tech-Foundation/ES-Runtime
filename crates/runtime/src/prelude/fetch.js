@@ -23,7 +23,15 @@
     return n.toLowerCase();
   }
   function normalizeValue(value) {
-    return String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+    // Strip leading/trailing HTTP whitespace first, then reject anything that
+    // is not a header value byte. NUL/CR/LF *inside* the value would otherwise
+    // let a caller splice extra header lines (or a body) into the wire format
+    // via any header built from untrusted input — request/response splitting.
+    const v = String(value).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+    if (/[\0\n\r]/.test(v)) {
+      throw new TypeError("Invalid header value: contains NUL, CR or LF");
+    }
+    return v;
   }
 
   class Headers {

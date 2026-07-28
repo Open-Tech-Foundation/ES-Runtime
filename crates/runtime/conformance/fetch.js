@@ -38,9 +38,15 @@ test("getSetCookie returns each Set-Cookie separately", () => {
   assertEquals(h.getSetCookie().length, 2);
 });
 
-todo("Headers reject a value containing CR or LF", () => {
+test("Headers reject a value containing NUL, CR or LF", () => {
   assertThrows(() => new Headers().set("a", "v\n1"), "TypeError");
   assertThrows(() => new Headers().set("a", "v\r1"), "TypeError");
+  assertThrows(() => new Headers().set("a", "v\u00001"), "TypeError");
+  assertThrows(() => new Headers().append("a", "v\r\nX-Evil: 1"), "TypeError");
+  // A value that is only whitespace still normalises to the empty string.
+  const h = new Headers();
+  h.set("a", "\r\n");
+  assertEquals(h.get("a"), "");
 });
 
 todo("Headers constructor length matches WebIDL", () => {
