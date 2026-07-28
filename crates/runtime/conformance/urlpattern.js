@@ -92,13 +92,28 @@ test("an unspecified component matches anything", () => {
 });
 
 test("a string pattern splits into components", () => {
-  const p = new URLPattern("https://x.test/u/:id?q=1#f");
+  const p = new URLPattern("https://x.test/u/:id#f");
   assertEquals(p.protocol, "https");
   assertEquals(p.hostname, "x.test");
   assertEquals(p.pathname, "/u/:id");
-  assertEquals(p.search, "q=1");
   assertEquals(p.hash, "f");
-  assertEquals(p.test("https://x.test/u/9?q=1#f"), true);
+  assertEquals(p.test("https://x.test/u/9#f"), true);
+});
+
+test("'?' in a string pattern is a modifier, not the search delimiter", () => {
+  // The constructor-string parser reads `?` directly after a group as that
+  // group's optional modifier, so this is all pathname — "q=1" is literal text,
+  // not a query.
+  const p = new URLPattern("https://x.test/u/:id?q=1");
+  assertEquals(p.pathname, "/u/:id?q=1");
+  // No search was written, so it keeps the default wildcard. A component that
+  // is skipped *before* a later one that is present is exactly empty instead.
+  assertEquals(p.search, "*");
+  assertEquals(new URLPattern("https://x.test/u/:id?q=1#f").search, "");
+  assertEquals(p.test("https://x.test/u/7q=1"), true);
+  assertEquals(p.test("https://x.test/uq=1"), true);
+  // An explicit search component is written as a dictionary instead.
+  assertEquals(new URLPattern({ search: "q=1" }).search, "q=1");
 });
 
 test("exec reports inputs and per-component input, and test rejects a bad URL", () => {
@@ -125,6 +140,17 @@ test("ignoreCase makes matching case-insensitive", () => {
     new URLPattern({ pathname: "/Case" }, { ignoreCase: true }).test("https://x.test/case"),
     true,
   );
+  // A component containing a group must honour it too — a literal-only pattern
+  // can match case-insensitively through a path that never compiles a regex,
+  // so on its own it does not prove the flag is applied.
+  const grouped = new URLPattern({ pathname: "/API/:id" }, { ignoreCase: true });
+  assertEquals(grouped.test("https://x.test/api/123"), true);
+  assertEquals(grouped.exec("https://x.test/api/123").pathname.groups.id, "123");
+  // And across other components.
+  assertEquals(
+    new URLPattern({ hostname: "API.:host" }, { ignoreCase: true }).test("https://api.example/"),
+    true,
+  );
 });
 
 test("a malformed pattern is rejected at construction", () => {
@@ -135,9 +161,20 @@ test("a malformed pattern is rejected at construction", () => {
   assertThrows(() => new URLPattern({ pathname: "/a(" }), "TypeError");
 });
 
-test("a pattern resolves against a base URL", () => {
-  const p = new URLPattern({ pathname: "/u/:id" }, "https://x.test/");
+test("a string pattern resolves against a base URL", () => {
+  const p = new URLPattern("/u/:id", "https://x.test/");
   assertEquals(p.hostname, "x.test");
+  assertEquals(p.protocol, "https");
   assertEquals(p.test("https://x.test/u/1"), true);
   assertEquals(p.test("https://other.test/u/1"), false);
+});
+
+test("a dictionary carries its own baseURL and rejects a separate one", () => {
+  const p = new URLPattern({ pathname: "/u/:id", baseURL: "https://x.test/" });
+  assertEquals(p.hostname, "x.test");
+  assertEquals(p.protocol, "https");
+  assertEquals(p.test("https://x.test/u/1"), true);
+  assertEquals(p.test("https://other.test/u/1"), false);
+  // A dictionary plus a separate base argument is a TypeError.
+  assertThrows(() => new URLPattern({ pathname: "/u/:id" }, "https://x.test/"), "TypeError");
 });

@@ -1,279 +1,19 @@
-// URLPattern (SPEC §2.4). The pattern syntax is the path-to-regexp dialect the
-// URLPattern standard adopts, compiled per component to a RegExp:
+// URLPattern (SPEC §2.4). Parsing and canonicalization are delegated to the
+// host `urlpattern_*` ops (the `urlpattern` crate), the same way URL delegates
+// to the `url` crate. The ops hand back each component's regular expression as
+// *source*; V8 compiles it and the matching happens here.
 //
-//   :name            a named group, matching one segment
-//   :name(\d+)       a named group with a custom regex
-//   (\d+)            an anonymous group with a custom regex, named by index
-//   *                a full wildcard, named by index
-//   ?  +  *          modifiers on the preceding group: optional, one-or-more,
-//                    zero-or-more
-//   {…}              a group, so a modifier can cover literal text too
-//   \x               an escaped literal
-//
-// A group directly preceded by the component's prefix character (`/` for
-// pathname, `.` for hostname) absorbs it, so `/a/:b?` matches `/a` as well as
-// `/a/x` — the separator disappears with the segment rather than being left
-// dangling.
-(function () {
+// That split is deliberate (see urlpattern_ops.rs): compiling the components
+// Rust-side costs ~600µs per pattern against ~6µs for emitting source, and the
+// crate's Rust regex backend silently drops the `ignoreCase` flag. Matching in
+// V8 also means `test()` against a URL string makes no host call at all — the
+// components come off `URL`, which a router's hot path already needs.
+(() => {
   "use strict";
+  const ops = globalThis.__ops;
 
-  // Per-component matching rules. `delimiter` bounds a plain `:name` group;
-  // `prefix` is the character a group absorbs when modified.
-  const COMPONENTS = {
-    protocol: { delimiter: "", prefix: "" },
-    username: { delimiter: "", prefix: "" },
-    password: { delimiter: "", prefix: "" },
-    hostname: { delimiter: ".", prefix: "." },
-    port: { delimiter: "", prefix: "" },
-    pathname: { delimiter: "/", prefix: "/" },
-    search: { delimiter: "", prefix: "" },
-    hash: { delimiter: "", prefix: "" },
-  };
-
-  // Only the characters that are actually special. Escaping others (`:`, `=`,
-  // `!`) would be an invalid escape under the `u` flag, not a harmless one.
-  const escapeRegex = (s) => s.replace(/([.+*?^${}()|[\]/\\])/g, "\\$1");
-
-  // ---- Lexer ---------------------------------------------------------------
-
-  function lex(str) {
-    const tokens = [];
-    let i = 0;
-    while (i < str.length) {
-      const c = str[i];
-      if (c === "\\") {
-        if (i + 1 >= str.length) throw new TypeError("Pattern ends with a trailing backslash");
-        tokens.push({ type: "CHAR", value: str[i + 1] });
-        i += 2;
-        continue;
-      }
-      if (c === "*" || c === "+" || c === "?") {
-        tokens.push({ type: "MODIFIER", value: c });
-        i++;
-        continue;
-      }
-      if (c === "{") {
-        tokens.push({ type: "OPEN" });
-        i++;
-        continue;
-      }
-      if (c === "}") {
-        tokens.push({ type: "CLOSE" });
-        i++;
-        continue;
-      }
-      if (c === ":") {
-        let j = i + 1;
-        let name = "";
-        while (j < str.length && /[A-Za-z0-9_$]/.test(str[j])) name += str[j++];
-        if (name === "") throw new TypeError("Pattern has a ':' with no group name");
-        tokens.push({ type: "NAME", value: name });
-        i = j;
-        continue;
-      }
-      if (c === "(") {
-        // Balanced scan, so a custom regex may itself contain groups.
-        let depth = 1;
-        let j = i + 1;
-        let pattern = "";
-        while (j < str.length) {
-          if (str[j] === "\\") {
-            pattern += str[j] + (str[j + 1] ?? "");
-            j += 2;
-            continue;
-          }
-          if (str[j] === "(") depth++;
-          else if (str[j] === ")") {
-            depth--;
-            if (depth === 0) break;
-          }
-          pattern += str[j];
-          j++;
-        }
-        if (depth !== 0) throw new TypeError("Pattern has an unbalanced '('");
-        if (pattern === "") throw new TypeError("Pattern has an empty group");
-        tokens.push({ type: "PATTERN", value: pattern });
-        i = j + 1;
-        continue;
-      }
-      tokens.push({ type: "CHAR", value: c });
-      i++;
-    }
-    tokens.push({ type: "END" });
-    return tokens;
-  }
-
-  // ---- Parser --------------------------------------------------------------
-
-  // Produces a flat list of `{ type: "literal" }` and `{ type: "group" }` parts.
-  function parse(str, component) {
-    const { delimiter, prefix: prefixChar } = component;
-    const defaultPattern = delimiter ? `[^${escapeRegex(delimiter)}]+?` : "[^]+?";
-    const tokens = lex(str);
-    const parts = [];
-    let literal = "";
-    let index = 0;
-    let i = 0;
-
-    const flush = () => {
-      if (literal !== "") {
-        parts.push({ type: "literal", value: literal });
-        literal = "";
-      }
-    };
-    const takeModifier = () => {
-      if (tokens[i].type === "MODIFIER") return tokens[i++].value;
-      return "";
-    };
-    const takeText = () => {
-      let out = "";
-      while (tokens[i].type === "CHAR") out += tokens[i++].value;
-      return out;
-    };
-
-    while (tokens[i].type !== "END") {
-      const token = tokens[i];
-
-      if (token.type === "CHAR") {
-        literal += token.value;
-        i++;
-        continue;
-      }
-
-      if (token.type === "NAME" || token.type === "PATTERN") {
-        let name;
-        let pattern;
-        if (token.type === "NAME") {
-          name = token.value;
-          i++;
-          pattern = tokens[i].type === "PATTERN" ? tokens[i++].value : defaultPattern;
-        } else {
-          name = index++;
-          pattern = token.value;
-          i++;
-        }
-        // A trailing prefix character belongs to the group, not the literal
-        // before it, so a modifier can take it away with the group.
-        let prefix = "";
-        if (prefixChar && literal.endsWith(prefixChar)) {
-          prefix = prefixChar;
-          literal = literal.slice(0, -prefixChar.length);
-        }
-        flush();
-        parts.push({ type: "group", name, pattern, prefix, suffix: "", modifier: takeModifier() });
-        continue;
-      }
-
-      // A bare `*` is a full wildcard; one directly after a group was already
-      // consumed above as that group's modifier.
-      if (token.type === "MODIFIER" && token.value === "*") {
-        i++;
-        let prefix = "";
-        if (prefixChar && literal.endsWith(prefixChar)) {
-          prefix = prefixChar;
-          literal = literal.slice(0, -prefixChar.length);
-        }
-        flush();
-        parts.push({
-          type: "group",
-          name: index++,
-          pattern: "[^]*?",
-          prefix,
-          suffix: "",
-          modifier: takeModifier(),
-          wildcard: true,
-        });
-        continue;
-      }
-
-      if (token.type === "OPEN") {
-        i++;
-        const prefix = takeText();
-        let name;
-        let pattern;
-        if (tokens[i].type === "NAME") {
-          name = tokens[i++].value;
-          pattern = tokens[i].type === "PATTERN" ? tokens[i++].value : defaultPattern;
-        } else if (tokens[i].type === "PATTERN") {
-          name = index++;
-          pattern = tokens[i++].value;
-        }
-        const suffix = takeText();
-        if (tokens[i].type !== "CLOSE") throw new TypeError("Pattern has an unbalanced '{'");
-        i++;
-        flush();
-        parts.push({
-          type: "group",
-          name: name === undefined ? null : name,
-          pattern: pattern ?? null,
-          prefix,
-          suffix,
-          modifier: takeModifier(),
-        });
-        continue;
-      }
-
-      if (token.type === "CLOSE") throw new TypeError("Pattern has an unbalanced '}'");
-
-      // `?` or `+` with nothing before it is just a literal character.
-      literal += token.value;
-      i++;
-    }
-    flush();
-    return parts;
-  }
-
-  // ---- Compiler ------------------------------------------------------------
-
-  function toRegExp(parts, ignoreCase) {
-    let source = "^";
-    const names = [];
-    for (const part of parts) {
-      if (part.type === "literal") {
-        source += escapeRegex(part.value);
-        continue;
-      }
-      const prefix = escapeRegex(part.prefix);
-      const suffix = escapeRegex(part.suffix);
-      if (part.name === null) {
-        // A text-only `{…}` group: the modifier applies to the literal text.
-        source += `(?:${prefix}${suffix})${part.modifier}`;
-        continue;
-      }
-      names.push(part.name);
-      if (part.modifier === "+" || part.modifier === "*") {
-        // The capture spans the whole repeated run, with the separator between
-        // repetitions rather than around them.
-        const optional = part.modifier === "*" ? "?" : "";
-        source +=
-          `(?:${prefix}((?:${part.pattern})(?:${suffix}${prefix}(?:${part.pattern}))*)${suffix})` +
-          optional;
-      } else {
-        source += `(?:${prefix}(${part.pattern})${suffix})${part.modifier}`;
-      }
-    }
-    source += "$";
-    return { re: new RegExp(source, ignoreCase ? "iu" : "u"), names };
-  }
-
-  const cache = new Map();
-
-  function compile(str, componentName, ignoreCase) {
-    const key = `${componentName}|${ignoreCase}|${str}`;
-    let compiled = cache.get(key);
-    if (compiled === undefined) {
-      const component = COMPONENTS[componentName];
-      // "*" on its own is the everything-matches default for a component; it
-      // still yields one indexed group, as the spec's wildcard does.
-      compiled = toRegExp(parse(str, component), ignoreCase);
-      cache.set(key, compiled);
-    }
-    return compiled;
-  }
-
-  // ---- Pattern input resolution -------------------------------------------
-
-  const COMPONENT_NAMES = [
+  // Component order, matching the ops' wire shape.
+  const COMPONENTS = [
     "protocol",
     "username",
     "password",
@@ -284,118 +24,41 @@
     "hash",
   ];
 
-  function resolvePattern(input, base) {
-    const res = {};
-    for (const name of COMPONENT_NAMES) res[name] = "*";
+  const KIND_STRING = 0;
+  const KIND_INIT = 1;
 
-    if (typeof input === "object" && input !== null) {
-      for (const name of COMPONENT_NAMES) {
-        if (input[name] !== undefined) res[name] = String(input[name]);
-      }
-      if (base !== undefined) {
-        const b = new URL(String(base));
-        if (input.protocol === undefined) res.protocol = b.protocol.replace(":", "");
-        if (input.hostname === undefined) res.hostname = b.hostname;
-        if (input.port === undefined) res.port = b.port;
-      }
-      return res;
-    }
-
-    const str = String(input);
-    const b = base !== undefined ? new URL(String(base)) : null;
-
-    // Split off ?search and #hash first — they are the same wherever the rest
-    // of the pattern came from.
-    const splitTail = (s) => {
-      const hashAt = s.indexOf("#");
-      let hash;
-      if (hashAt !== -1) {
-        hash = s.slice(hashAt + 1);
-        s = s.slice(0, hashAt);
-      }
-      const qAt = s.indexOf("?");
-      let search;
-      if (qAt !== -1) {
-        search = s.slice(qAt + 1);
-        s = s.slice(0, qAt);
-      }
-      return { head: s, search, hash };
-    };
-
-    const protoMatch = str.match(/^([a-zA-Z0-9+.*-]+):\/\//);
-    if (protoMatch) {
-      res.protocol = protoMatch[1];
-      let rest = str.slice(protoMatch[0].length);
-      const pathAt = rest.indexOf("/");
-      let authority = pathAt === -1 ? rest : rest.slice(0, pathAt);
-      const path = pathAt === -1 ? "" : rest.slice(pathAt);
-
-      const atAt = authority.indexOf("@");
-      if (atAt !== -1) {
-        const credentials = authority.slice(0, atAt);
-        authority = authority.slice(atAt + 1);
-        const colon = credentials.indexOf(":");
-        if (colon !== -1) {
-          res.username = credentials.slice(0, colon);
-          res.password = credentials.slice(colon + 1);
-        } else {
-          res.username = credentials;
-        }
-      }
-      // A port is only the part after the *last* colon, and never inside an
-      // IPv6 literal.
-      const portColon = authority.lastIndexOf(":");
-      if (portColon !== -1 && !authority.endsWith("]")) {
-        res.hostname = authority.slice(0, portColon);
-        res.port = authority.slice(portColon + 1);
-      } else {
-        res.hostname = authority;
-      }
-
-      const tail = splitTail(path);
-      res.pathname = tail.head === "" ? "*" : tail.head;
-      if (tail.search !== undefined) res.search = tail.search;
-      if (tail.hash !== undefined) res.hash = tail.hash;
-      return res;
-    }
-
-    if (b) {
-      res.protocol = b.protocol.replace(":", "");
-      res.hostname = b.hostname;
-      res.port = b.port;
-    }
-
-    const tail = splitTail(str);
-    if (tail.head.startsWith("/") || !b) {
-      res.pathname = tail.head;
-    } else {
-      // Relative to the base's directory.
-      const dir = b.pathname.slice(0, b.pathname.lastIndexOf("/") + 1);
-      res.pathname = dir + tail.head;
-    }
-    if (tail.search !== undefined) res.search = tail.search;
-    if (tail.hash !== undefined) res.hash = tail.hash;
-    return res;
+  // Encodes a URLPatternInit as the flat nine-element array the ops take, so no
+  // JS object crosses the boundary. `baseURL` is the ninth slot.
+  function encodeInit(init) {
+    const fields = COMPONENTS.map((name) =>
+      init[name] === undefined || init[name] === null ? null : String(init[name]),
+    );
+    fields.push(
+      init.baseURL === undefined || init.baseURL === null ? null : String(init.baseURL),
+    );
+    return fields;
   }
 
-  // The value each component of a real URL contributes to matching.
-  function componentValues(url) {
-    return {
-      protocol: url.protocol.replace(":", ""),
-      username: url.username,
-      password: url.password,
-      hostname: url.hostname,
-      port: url.port,
-      pathname: url.pathname,
-      search: url.search.replace("?", ""),
-      hash: url.hash.replace("#", ""),
-    };
+  // The component values a URL contributes to matching. Mirrors the crate's
+  // `parse_match_input` for the URL case, so a string input needs no host call.
+  function valuesFromURL(url) {
+    return [
+      url.protocol.slice(0, -1), // strip the trailing ":"
+      url.username,
+      url.password,
+      url.hostname,
+      url.port,
+      url.pathname,
+      url.search.slice(1), // strip the leading "?"
+      url.hash.slice(1), // strip the leading "#"
+    ];
   }
 
   class URLPattern {
-    #patterns = {};
-    #compiled = {};
-    #hasRegExpGroups = false;
+    #patterns = [];
+    #regexps = [];
+    #names = [];
+    #hasRegExpGroups;
 
     constructor(input = {}, baseURL, options) {
       // Both `new URLPattern(input, base, options)` and
@@ -406,80 +69,127 @@
         opts = baseURL;
         base = undefined;
       }
-      const ignoreCase = Boolean(opts && opts.ignoreCase);
-
-      this.#patterns = resolvePattern(input, base);
-      for (const name of COMPONENT_NAMES) {
-        this.#compiled[name] = compile(this.#patterns[name], name, ignoreCase);
+      const isString = typeof input === "string";
+      if (!isString && (input === null || typeof input !== "object")) {
+        throw new TypeError("URLPattern input must be a string or a URLPatternInit");
       }
-      // True when any component uses a custom regex rather than only the
-      // segment/wildcard shorthands.
-      this.#hasRegExpGroups = COMPONENT_NAMES.some((name) =>
-        /\((?!\?)/.test(this.#patterns[name]),
+      if (!isString && base !== undefined && base !== null) {
+        throw new TypeError(
+          "specifying both an init object and a separate base URL is not valid",
+        );
+      }
+
+      const ignoreCase = Boolean(opts && opts.ignoreCase);
+      const parsed = ops.urlpattern_parse(
+        isString ? KIND_STRING : KIND_INIT,
+        isString ? input : encodeInit(input),
+        base === undefined || base === null ? null : String(base),
+        ignoreCase,
       );
+
+      // The crate emits ECMAScript source; the flags belong here, where the
+      // regex is actually compiled. Compiling eagerly also means an invalid
+      // custom regex is a construction-time TypeError, as the spec requires,
+      // rather than a surprise on first match.
+      //
+      // `v` (unicodeSets), not `u`: the standard compiles component regexes
+      // with it, which is what makes set notation like `[\d&&[0-1]]` inside a
+      // custom group work.
+      const flags = ignoreCase ? "vi" : "v";
+      for (let i = 0; i < COMPONENTS.length; i++) {
+        this.#patterns.push(parsed[i * 3]);
+        try {
+          this.#regexps.push(new RegExp(parsed[i * 3 + 1], flags));
+        } catch (e) {
+          throw new TypeError(
+            `Invalid ${COMPONENTS[i]} pattern: ${(e && e.message) || e}`,
+          );
+        }
+        this.#names.push(parsed[i * 3 + 2]);
+      }
+      this.#hasRegExpGroups = parsed[COMPONENTS.length * 3];
     }
 
     get protocol() {
-      return this.#patterns.protocol;
+      return this.#patterns[0];
     }
     get username() {
-      return this.#patterns.username;
+      return this.#patterns[1];
     }
     get password() {
-      return this.#patterns.password;
+      return this.#patterns[2];
     }
     get hostname() {
-      return this.#patterns.hostname;
+      return this.#patterns[3];
     }
     get port() {
-      return this.#patterns.port;
+      return this.#patterns[4];
     }
     get pathname() {
-      return this.#patterns.pathname;
+      return this.#patterns[5];
     }
     get search() {
-      return this.#patterns.search;
+      return this.#patterns[6];
     }
     get hash() {
-      return this.#patterns.hash;
+      return this.#patterns[7];
     }
     get hasRegExpGroups() {
       return this.#hasRegExpGroups;
     }
 
-    test(input, baseURL) {
-      let url;
-      try {
-        url = new URL(input, baseURL);
-      } catch {
-        return false;
+    // The eight canonicalized values to match against, or null when the input
+    // cannot be resolved to a URL — which is a non-match, not an error.
+    #values(input, baseURL) {
+      if (typeof input === "string") {
+        try {
+          return valuesFromURL(new URL(input, baseURL));
+        } catch {
+          return null;
+        }
       }
-      const values = componentValues(url);
-      for (const name of COMPONENT_NAMES) {
-        if (!this.#compiled[name].re.test(values[name])) return false;
+      if (input === null || typeof input !== "object") {
+        throw new TypeError("URLPattern input must be a string or a URLPatternInit");
+      }
+      if (baseURL !== undefined && baseURL !== null) {
+        throw new TypeError(
+          "specifying both an init object and a separate base URL is not valid",
+        );
+      }
+      // Canonicalizing a dictionary needs the spec's per-component rules, so
+      // this one goes to the host.
+      return ops.urlpattern_canonicalize(encodeInit(input));
+    }
+
+    test(input = {}, baseURL) {
+      const values = this.#values(input, baseURL);
+      if (values === null) return false;
+      for (let i = 0; i < COMPONENTS.length; i++) {
+        if (!this.#regexps[i].test(values[i])) return false;
       }
       return true;
     }
 
-    exec(input, baseURL) {
-      let url;
-      try {
-        url = new URL(input, baseURL);
-      } catch {
-        return null;
-      }
-      const values = componentValues(url);
-      const result = { inputs: baseURL !== undefined ? [input, baseURL] : [input] };
-      for (const name of COMPONENT_NAMES) {
-        const compiled = this.#compiled[name];
-        const match = compiled.re.exec(values[name]);
+    exec(input = {}, baseURL) {
+      const values = this.#values(input, baseURL);
+      if (values === null) return null;
+      const matches = [];
+      for (let i = 0; i < COMPONENTS.length; i++) {
+        const match = this.#regexps[i].exec(values[i]);
         if (match === null) return null;
+        matches.push(match);
+      }
+      // `inputs` echoes the arguments as given.
+      const result = { inputs: baseURL !== undefined ? [input, baseURL] : [input] };
+      for (let i = 0; i < COMPONENTS.length; i++) {
+        const names = this.#names[i];
+        const match = matches[i];
         const groups = {};
-        for (let i = 0; i < compiled.names.length; i++) {
-          // An unmatched optional group is `undefined`, not "".
-          groups[compiled.names[i]] = match[i + 1];
+        for (let g = 0; g < names.length; g++) {
+          // A group that did not participate stays `undefined`, not "".
+          groups[names[g]] = match[g + 1];
         }
-        result[name] = { input: values[name], groups };
+        result[COMPONENTS[i]] = { input: values[i], groups };
       }
       return result;
     }

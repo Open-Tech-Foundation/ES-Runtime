@@ -32,6 +32,7 @@ pub mod serialization_ops;
 mod sync_fs_ops;
 mod timer;
 mod url_ops;
+mod urlpattern_ops;
 mod ws_ops;
 
 use std::collections::HashMap;

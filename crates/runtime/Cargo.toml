@@ -17,6 +17,8 @@ futures-channel = { workspace = true, features = ["std", "sink"] }
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
+urlpattern.workspace = true
+regex.workspace = true
 # WebCrypto (DECISIONS.md D9): RustCrypto, vetted constant-time primitives.
 sha1.workspace = true
 sha2.workspace = true

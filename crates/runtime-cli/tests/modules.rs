@@ -682,8 +682,12 @@ fn runtime_urlpattern_works_globally() {
         console.log('SUB=' + exec4.hostname.groups.sub);
         console.log('FILE=' + exec4.pathname.groups.file);
 
-        // Test 5: Ignored case
-        const p5 = new URLPattern({ pathname: '/API/:id' }, 'https://api.example.com', { ignoreCase: true });
+        // Test 5: Ignored case. A dictionary carries its own baseURL — pairing
+        // one with a separate base argument is a TypeError.
+        const p5 = new URLPattern(
+          { pathname: '/API/:id', baseURL: 'https://api.example.com' },
+          { ignoreCase: true },
+        );
         console.log('MATCH6=' + p5.test('https://api.example.com/api/123'));
     ";
     let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");

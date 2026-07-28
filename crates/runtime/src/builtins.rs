@@ -19,6 +19,7 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     // Pure-computation ops (no provider): URL parsing, UTF-8 transcoding,
     // base64.
     crate::url_ops::install(engine)?;
+    crate::urlpattern_ops::install(engine)?;
     crate::encoding_ops::install(engine)?;
     crate::base64_ops::install(engine)?;
     // Compression Streams ops (flate2), pure computation but stateful.

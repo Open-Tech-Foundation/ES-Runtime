@@ -67,6 +67,19 @@ found: it states what the spec requires, is tallied separately so it does not
 fail the build, and fails the build the moment it starts passing — so a fix
 cannot land without being promoted and locked in.
 
+### Web Platform Tests
+
+`URLPattern` is additionally checked against the **official WPT suite**, vendored
+under [`crates/runtime/wpt/urlpattern/`](../wpt/urlpattern/) — 369 cases, all
+passing. It is run on demand rather than from `cargo test`:
+
+```
+./target/debug/esrun crates/runtime/wpt/urlpattern/run.js
+```
+
+A standard WPT subset is post-1.0 (SPEC §7), so that suite is a reference check
+and `conformance/urlpattern.js` remains the gated signal.
+
 ### Files present but not counted
 
 `protobuf.js`, `serialization.js`, `serialization_edge.js` and `jsonl_test.js`

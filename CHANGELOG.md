@@ -10,6 +10,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **`URLPattern` is now spec-conformant: 369/369 on the official WPT suite.**
+  Parsing and canonicalization are delegated to the `urlpattern` crate, the same
+  way `URL` delegates to `url`. The crate emits each component's regular
+  expression as *source* and V8 compiles it, rather than the crate compiling it
+  Rust-side — a split that is measurably better on both axes: constructing a
+  pattern costs ~18 µs instead of ~640 µs (a 50-route table: 0.65 ms instead of
+  35 ms), and it is what makes `ignoreCase` work at all, since `urlpattern`
+  0.6.0's Rust-regex backend discards the flags argument. Matching a URL string
+  makes no host call: the components come off `URL`. Against the previous
+  hand-written parser, `exec()` is ~2x faster and a hot `test()` ~1.3x faster,
+  while conformance goes from 63/369 to 369/369. Component regexes compile with
+  the `v` (unicodeSets) flag, so set notation inside a custom group works.
+  Newly correct behaviour that the old implementation got wrong: `test()`/
+  `exec()` accept a `URLPatternInit`, `baseURL` inside a dictionary is honoured
+  (and pairing one with a separate base argument is a `TypeError`), components
+  are canonicalized (punycode hosts, default ports, percent-encoding), and `?`
+  directly after a group in a constructor string is that group's modifier rather
+  than the search delimiter.
 - **`URLPattern` implements the real pattern syntax.** It was a regex
   escape-and-substitute pass understanding only `:name` and `*`; a custom regex
   group (`/u/:id(\\d+)`), a `?`/`+`/`*` modifier, or a `{…}` group simply
