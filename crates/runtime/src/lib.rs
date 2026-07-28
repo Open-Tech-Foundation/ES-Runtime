@@ -2024,6 +2024,24 @@ mod tests {
     }
 
     #[test]
+    fn object_url_fetch_needs_no_net_capability() {
+        let _g = v8_guard();
+        // The transport errors on any real request; a blob: URL must never
+        // reach it, and must work with Net denied — nothing leaves the isolate.
+        let mut rt = runtime_with_net(Arc::new(MockNet::stub()));
+        rt.set_capabilities(CapabilitySet::none());
+        let out = eval_async(
+            &mut rt,
+            "const u = URL.createObjectURL(new Blob(['local'], { type: 'text/plain' })); \
+             const r = await fetch(u); \
+             const body = await r.text(); \
+             URL.revokeObjectURL(u); \
+             return r.status + '|' + body;",
+        );
+        assert_eq!(out, Value::String("200|local".into()));
+    }
+
+    #[test]
     fn message_port_delivers_asynchronously_and_in_order() {
         let _g = v8_guard();
         let mut rt = runtime();
@@ -3516,7 +3534,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 234;
+        const BASELINE: u32 = 238;
 
         assert!(
             pass >= BASELINE,

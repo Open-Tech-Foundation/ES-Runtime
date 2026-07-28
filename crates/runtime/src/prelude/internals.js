@@ -1,4 +1,4 @@
-// Internal slot keys shared *between* prelude fragments (SPEC §4).
+// Internal slot keys and shared state used *between* prelude fragments (SPEC §4).
 //
 // Each fragment is a separate IIFE, so a fragment-local `Symbol()` is genuinely
 // unreachable from guest code and is the right choice for anything one fragment
@@ -8,6 +8,10 @@
 //   bytes   Blob's backing Uint8Array   — blob.js  → fetch.js, structured-clone.js
 //   encode  FormData multipart encoder  — blob.js  → fetch.js
 //   parts   Response's synchronous parts — fetch.js → runtime_modules/http.js
+//
+// Plus one piece of shared state:
+//
+//   blobURLs  the object-URL store — blob.js registers, fetch.js resolves
 //
 // `parts` is why this object survives rather than being deleted once the
 // prelude has run: `runtime:http` is imported lazily, long after, and must be
@@ -27,6 +31,9 @@
       bytes: Symbol("Blob bytes"),
       encode: Symbol("FormData encode"),
       parts: Symbol("Response parts"),
+      // href -> Blob, for URL.createObjectURL. Entries live until revoked;
+      // there is no document unload to clear them.
+      blobURLs: new Map(),
     }),
     writable: false,
     enumerable: false,

@@ -10,6 +10,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`URL.createObjectURL()` / `URL.revokeObjectURL()`, and `fetch` serves
+  `blob:` URLs.** A `blob:` URL resolves from an in-process store, so fetching
+  one needs **no `Net` capability** — nothing leaves the isolate — and never
+  reaches the transport. Entries live until revoked: there is no document unload
+  to clear them, so a long-lived process must revoke its own URLs.
 - **`MessageChannel`, `MessagePort` and `BroadcastChannel`.** This runtime has a
   single agent — no workers, no second realm — so the other side of a channel is
   always in this isolate and delivery is a queued task rather than a cross-thread

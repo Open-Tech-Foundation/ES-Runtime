@@ -255,6 +255,38 @@
     }
   }
 
+  // ---- Object URLs ---------------------------------------------------------
+  //
+  // `URL.createObjectURL` lives here rather than in url.js because it is a Blob
+  // feature: url.js loads first and has no Blob to register. The store is
+  // shared through __internal so fetch can resolve a blob: URL.
+  const blobURLs = __internal.blobURLs;
+
+  Object.defineProperty(URL, "createObjectURL", {
+    value(obj) {
+      if (!(obj instanceof Blob)) {
+        throw new TypeError("createObjectURL requires a Blob or File");
+      }
+      // There is no origin here, so the serialization uses the opaque form.
+      const url = `blob:null/${crypto.randomUUID()}`;
+      blobURLs.set(url, obj);
+      return url;
+    },
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
+  Object.defineProperty(URL, "revokeObjectURL", {
+    value(url) {
+      // Revoking an unknown or already-revoked URL is a no-op, not an error.
+      blobURLs.delete(String(url));
+    },
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+
   for (const Interface of [Blob, File, FormData]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
       value: Interface.name,

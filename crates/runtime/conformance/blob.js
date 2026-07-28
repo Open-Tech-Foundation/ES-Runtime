@@ -117,3 +117,47 @@ test("FormData delete and has operate on every matching entry", () => {
   fd.delete("a");
   assertEquals(fd.has("a"), false);
 });
+
+// ---- Object URLs -----------------------------------------------------------
+
+test("createObjectURL mints a unique blob: URL and revoke removes it", () => {
+  const b = new Blob(["x"]);
+  const u1 = URL.createObjectURL(b);
+  const u2 = URL.createObjectURL(b);
+  assert(u1.startsWith("blob:"));
+  assert(u1 !== u2);
+  // A blob: URL is a parseable absolute URL.
+  assertEquals(new URL(u1).protocol, "blob:");
+  URL.revokeObjectURL(u1);
+  // Revoking twice, or revoking something unknown, is a no-op.
+  URL.revokeObjectURL(u1);
+  URL.revokeObjectURL("blob:null/not-a-real-one");
+  URL.revokeObjectURL(u2);
+});
+
+test("createObjectURL rejects a non-Blob", () => {
+  assertThrows(() => URL.createObjectURL("nope"), "TypeError");
+  assertThrows(() => URL.createObjectURL({}), "TypeError");
+});
+
+test("fetching an object URL returns the blob's bytes and type", async () => {
+  const u = URL.createObjectURL(new Blob(["hello"], { type: "text/plain" }));
+  const r = await fetch(u);
+  assertEquals(r.status, 200);
+  assertEquals(r.url, u);
+  assertEquals(r.headers.get("content-type"), "text/plain");
+  assertEquals(await r.text(), "hello");
+  URL.revokeObjectURL(u);
+});
+
+test("fetching a revoked object URL fails", async () => {
+  const u = URL.createObjectURL(new Blob(["x"]));
+  URL.revokeObjectURL(u);
+  let name = null;
+  try {
+    await fetch(u);
+  } catch (e) {
+    name = e.name;
+  }
+  assertEquals(name, "TypeError");
+});

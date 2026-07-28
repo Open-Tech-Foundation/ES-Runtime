@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **234 / 234** (100%) |
+| Assertions passing | **238 / 238** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 20 |
 | Last updated | 2026-07-28 |
@@ -41,7 +41,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `performance.js` | performance, User Timing §2.11/§2.1 | 11 | — |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
-| `blob.js` | Blob/File/FormData §2.9 | 14 | — |
+| `blob.js` | Blob/File/FormData, object URLs §2.9 | 18 | — |
 | `channel.js` | MessageChannel/MessagePort/BroadcastChannel | 8 | — |
 | `fetch.js` | Headers/Request/Response object surface | 33 | — |
 | `webidl.js` | Interface shape: branding, arity, iterators | 27 | — |

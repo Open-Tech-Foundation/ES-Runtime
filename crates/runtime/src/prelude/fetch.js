@@ -700,6 +700,24 @@
     // An already-aborted signal fails before anything touches the network.
     if (signal.aborted) throw signal.reason;
 
+    // A blob: URL is served from the in-process object-URL store — no transport
+    // and no Net capability, since nothing leaves the isolate.
+    if (request.url.startsWith("blob:")) {
+      const blob = __internal.blobURLs.get(request.url);
+      if (blob === undefined) {
+        throw new TypeError(`Failed to fetch: no object URL "${request.url}"`);
+      }
+      if (request.method !== "GET") {
+        throw new TypeError("Only GET is supported for blob: URLs");
+      }
+      return new Response(blob, {
+        status: 200,
+        statusText: "OK",
+        url: request.url,
+        [INTERNAL_RESPONSE]: true,
+      });
+    }
+
     // Wire the abort BEFORE any await. Body materialization below suspends, and
     // an abort landing in that window must not be missed — so the handle and the
     // listener are in place before the first suspension point. Firing the handle
