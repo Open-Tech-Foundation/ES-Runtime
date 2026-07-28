@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **211 / 211** (100%) |
-| Known deviations (`todo`) | **1** |
+| Assertions passing | **218 / 218** (100%) |
+| Known deviations (`todo`) | **0** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -38,7 +38,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
-| `performance.js` | performance, microtasks §2.11/§2.1 | 4 | 1 |
+| `performance.js` | performance, User Timing §2.11/§2.1 | 11 | — |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData §2.9 | 14 | — |
@@ -46,22 +46,24 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `webidl.js` | Interface shape: branding, arity, iterators | 27 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
-### Known deviations, by theme
+### Known deviations
 
-The remaining 1 `todo` case group into five themes:
+**None.** Every `todo` recorded by the audit that opened this suite has been
+fixed and promoted to `test`. The themes it found were: missing
+`Symbol.toStringTag` branding, internal members on public prototypes, absent
+argument validation, missing interface members, and outright wrong behaviour —
+see the `[Unreleased]` section of [CHANGELOG.md](../../../CHANGELOG.md) for what
+each turned out to be.
 
-| Theme | Where | Notes |
-| --- | --- | --- |
-| **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every interface. |
-| **Internal members on public prototypes** | `webidl.js` | ☑ Fixed — the slots are symbols now, most of them fragment-local. |
+Two fixes are gated by Rust tests rather than here, because both need a driven
+event loop or host I/O: `fetch` honouring `AbortSignal` (tested against a
+transport that never responds, asserting the in-flight request future is
+dropped) and `setTimeout` forwarding its trailing arguments.
 
-| **Missing members** | `performance.js` | User Timing (`mark`/`measure`/`getEntries*`). |
-
-
-One deviation found alongside these is **not** representable here and is gated
-by a Rust test instead, since it needs a driven event loop: `setTimeout` dropping
-its trailing arguments. (`fetch`/`AbortSignal` cancellation is likewise gated by
-Rust tests, against a transport that never responds.)
+`todo(...)` remains available and is the right way to record the next deviation
+found: it states what the spec requires, is tallied separately so it does not
+fail the build, and fails the build the moment it starts passing — so a fix
+cannot land without being promoted and locked in.
 
 ### Files present but not counted
 

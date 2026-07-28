@@ -10,6 +10,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **User Timing.** `performance.mark()`, `measure()`, `getEntries()`,
+  `getEntriesByType()`, `getEntriesByName()`, `clearMarks()` and
+  `clearMeasures()`, with the `PerformanceEntry`, `PerformanceMark` and
+  `PerformanceMeasure` interfaces. `measure` accepts both the positional
+  mark-name form and the options bag (`start`/`end`/`duration`/`detail`), and
+  measuring against a mark that does not exist is a `SyntaxError`. The entry
+  buffer is unbounded — there is no navigation to clear it — so a long-lived
+  process that marks in a loop must clear its own entries.
 - **`ReadableStream.from()`** adapts any iterable or async iterable into a
   stream, pulling one value per unit of demand (so an infinite generator is
   fine) and forwarding cancellation to the iterator's `return` so it can clean
