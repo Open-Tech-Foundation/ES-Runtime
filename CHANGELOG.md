@@ -10,6 +10,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **The global scope is an `EventTarget`, and `reportError` dispatches.**
+  `addEventListener`/`removeEventListener`/`dispatchEvent` now exist on the
+  global, with `event.target` reporting `globalThis`. `reportError()` builds a
+  cancellable `ErrorEvent` and dispatches it there, falling back to
+  `console.error` only when nothing handled it — so `addEventListener("error",
+  …)` and the `onerror` slot both work. An `error` listener that itself throws
+  is reported straight to the console rather than re-dispatching forever. This
+  closes the `reportError` → `ErrorEvent` deferral in SPEC §7.
+- **`ErrorEvent` and `ProgressEvent`.**
 - **User Timing.** `performance.mark()`, `measure()`, `getEntries()`,
   `getEntriesByType()`, `getEntriesByName()`, `clearMarks()` and
   `clearMeasures()`, with the `PerformanceEntry`, `PerformanceMark` and

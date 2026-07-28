@@ -7,6 +7,10 @@
   const BEGIN = Symbol("Event begin");
   const END = Symbol("Event end");
   const IMMEDIATE_STOPPED = Symbol("Event immediateStopped");
+  // Lets a target dispatch on behalf of another object — used only for the
+  // global scope, so `event.target` is `globalThis` rather than the internal
+  // EventTarget that actually holds the listeners.
+  const FACE = Symbol("dispatch face");
 
   class Event {
     #type;
@@ -201,7 +205,7 @@
         throw new TypeError("dispatchEvent argument must be an Event");
       }
       const list = this.#listeners.get(event.type);
-      event[BEGIN](this);
+      event[BEGIN](this[FACE] ?? this);
       if (list) {
         for (const entry of list.slice()) {
           if (event[IMMEDIATE_STOPPED]) break;
@@ -287,11 +291,92 @@
     }
   }
 
-  for (const Interface of [Event, CustomEvent, EventTarget, MessageEvent, CloseEvent]) {
+  // ErrorEvent — an uncaught exception or a `reportError()` call, carrying both
+  // the thrown value and where it came from.
+  class ErrorEvent extends Event {
+    #message;
+    #filename;
+    #lineno;
+    #colno;
+    #error;
+    constructor(type, options = {}) {
+      super(type, options);
+      this.#message = options.message !== undefined ? String(options.message) : "";
+      this.#filename = options.filename !== undefined ? String(options.filename) : "";
+      this.#lineno = options.lineno !== undefined ? Number(options.lineno) : 0;
+      this.#colno = options.colno !== undefined ? Number(options.colno) : 0;
+      this.#error = options.error;
+    }
+    get message() {
+      return this.#message;
+    }
+    get filename() {
+      return this.#filename;
+    }
+    get lineno() {
+      return this.#lineno;
+    }
+    get colno() {
+      return this.#colno;
+    }
+    get error() {
+      return this.#error;
+    }
+  }
+
+  // ProgressEvent — progress of a length-bounded transfer.
+  class ProgressEvent extends Event {
+    #lengthComputable;
+    #loaded;
+    #total;
+    constructor(type, options = {}) {
+      super(type, options);
+      this.#lengthComputable = Boolean(options.lengthComputable);
+      this.#loaded = options.loaded !== undefined ? Number(options.loaded) : 0;
+      this.#total = options.total !== undefined ? Number(options.total) : 0;
+    }
+    get lengthComputable() {
+      return this.#lengthComputable;
+    }
+    get loaded() {
+      return this.#loaded;
+    }
+    get total() {
+      return this.#total;
+    }
+  }
+
+  for (const Interface of [
+    Event,
+    CustomEvent,
+    EventTarget,
+    MessageEvent,
+    CloseEvent,
+    ErrorEvent,
+    ProgressEvent,
+  ]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
       value: Interface.name,
       configurable: true,
     });
     globalThis[Interface.name] = Interface;
+  }
+
+  // ---- The global scope is an EventTarget ---------------------------------
+  //
+  // WindowOrWorkerGlobalScope inherits EventTarget, which is what
+  // `addEventListener("error", …)` on the global relies on. The global object
+  // cannot itself be an EventTarget instance here (its private fields would
+  // have no brand), so listeners live on a hidden target whose dispatch reports
+  // `globalThis` as the event target — the observable half of the contract.
+  const globalTarget = new EventTarget();
+  globalTarget[FACE] = globalThis;
+  for (const method of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+    Object.defineProperty(globalThis, method, {
+      value: EventTarget.prototype[method].bind(globalTarget),
+      writable: true,
+      enumerable: false,
+      configurable: true,
+    });
   }
 })();

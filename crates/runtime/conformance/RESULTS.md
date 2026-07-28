@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **218 / 218** (100%) |
+| Assertions passing | **225 / 225** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
@@ -34,7 +34,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `base64.js` | atob/btoa §2.3 | 6 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 17 | — |
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |
-| `events.js` | Event/EventTarget §2.7 | 16 | — |
+| `events.js` | Event/EventTarget, ErrorEvent, global scope §2.7 | 23 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
@@ -82,7 +82,7 @@ under `esrun` instead.
 ## Not yet covered
 
 Deferred surface (tracked in SPEC §7) is deliberately untested here. The pure-JS
-pending items are: `reportError` → global `ErrorEvent` dispatch (§2.1), AES-CTR
+pending items are: AES-CTR
 counter widths other than 32/64/128 bits (§2.10), and RSA-OAEP non-UTF-8 labels
 (§2.10). Surface that needs host I/O — streaming `fetch` request bodies, the
 WebSocket and `node_modules` edges — is covered (where covered at all) by the

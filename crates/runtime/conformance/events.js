@@ -144,3 +144,104 @@ test("an event can be dispatched again once the first dispatch is over", () => {
   t.dispatchEvent(e);
   assertEquals(n, 2);
 });
+
+// ---- ErrorEvent / ProgressEvent / the global scope ------------------------
+
+test("ErrorEvent carries the thrown value and its location", () => {
+  const err = new TypeError("boom");
+  const e = new ErrorEvent("error", {
+    message: "boom",
+    filename: "a.js",
+    lineno: 3,
+    colno: 7,
+    error: err,
+  });
+  assertEquals(e.type, "error");
+  assertEquals(e.message, "boom");
+  assertEquals(e.filename, "a.js");
+  assertEquals(e.lineno, 3);
+  assertEquals(e.colno, 7);
+  assertEquals(e.error, err);
+  assert(e instanceof Event);
+});
+
+test("ErrorEvent defaults are empty rather than undefined", () => {
+  const e = new ErrorEvent("error");
+  assertEquals(e.message, "");
+  assertEquals(e.filename, "");
+  assertEquals(e.lineno, 0);
+  assertEquals(e.colno, 0);
+  assertEquals(e.error, undefined);
+});
+
+test("ProgressEvent reports transfer progress", () => {
+  const e = new ProgressEvent("progress", {
+    lengthComputable: true,
+    loaded: 30,
+    total: 100,
+  });
+  assertEquals(e.lengthComputable, true);
+  assertEquals(e.loaded, 30);
+  assertEquals(e.total, 100);
+  const bare = new ProgressEvent("progress");
+  assertEquals(bare.lengthComputable, false);
+  assertEquals(bare.loaded, 0);
+  assertEquals(bare.total, 0);
+});
+
+test("the global scope is an EventTarget", () => {
+  assertEquals(typeof globalThis.addEventListener, "function");
+  assertEquals(typeof globalThis.removeEventListener, "function");
+  assertEquals(typeof globalThis.dispatchEvent, "function");
+  let seen = null;
+  const handler = (e) => {
+    seen = e.target;
+  };
+  globalThis.addEventListener("conformance-ping", handler);
+  globalThis.dispatchEvent(new Event("conformance-ping"));
+  globalThis.removeEventListener("conformance-ping", handler);
+  // The event targets the global itself, not the internal listener store.
+  assertEquals(seen, globalThis);
+});
+
+test("reportError dispatches an error event on the global", () => {
+  const err = new RangeError("reported");
+  let got = null;
+  const handler = (e) => {
+    got = e;
+    e.preventDefault(); // handled: no console fallback
+  };
+  globalThis.addEventListener("error", handler);
+  reportError(err);
+  globalThis.removeEventListener("error", handler);
+  assert(got instanceof ErrorEvent);
+  assertEquals(got.error, err);
+  assertEquals(got.message, "reported");
+  assertEquals(got.cancelable, true);
+});
+
+test("onerror is a single replaceable handler slot", () => {
+  let count = 0;
+  globalThis.onerror = () => count++;
+  globalThis.onerror = (e) => {
+    count += 10;
+    e.preventDefault();
+  };
+  reportError(new Error("x"));
+  globalThis.onerror = null;
+  // Only the second handler ran: the slot replaces, it does not accumulate.
+  assertEquals(count, 10);
+});
+
+test("a throwing error listener does not recurse forever", () => {
+  let calls = 0;
+  const handler = (e) => {
+    calls++;
+    e.preventDefault();
+    throw new Error("listener blew up");
+  };
+  globalThis.addEventListener("error", handler);
+  reportError(new Error("original"));
+  globalThis.removeEventListener("error", handler);
+  assertEquals(calls, 1);
+});
