@@ -8,8 +8,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`ReadableStream.from()`** adapts any iterable or async iterable into a
+  stream, pulling one value per unit of demand (so an infinite generator is
+  fine) and forwarding cancellation to the iterator's `return` so it can clean
+  up.
+
 ### Fixed
 
+- An unknown `ReadableStream` `type` now throws `TypeError` rather than
+  `RangeError` — the spec treats it as an invalid enum value, not a bad range.
 - **`Blob` validates its arguments.** `new Blob(123)` produced an empty blob
   instead of throwing — `Array.from` turned the mistake into silence. A
   non-iterable `blobParts` is now a `TypeError`. An invalid MIME type was echoed

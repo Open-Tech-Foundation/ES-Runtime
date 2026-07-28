@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **206 / 206** (100%) |
-| Known deviations (`todo`) | **3** |
+| Assertions passing | **211 / 211** (100%) |
+| Known deviations (`todo`) | **1** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -37,7 +37,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `events.js` | Event/EventTarget §2.7 | 16 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
-| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 12 | 2 |
+| `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
 | `performance.js` | performance, microtasks §2.11/§2.1 | 4 | 1 |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
@@ -48,14 +48,14 @@ every known deviation an executable, self-retiring entry rather than prose.
 
 ### Known deviations, by theme
 
-The remaining 3 `todo` cases group into five themes:
+The remaining 1 `todo` case group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
 | **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every interface. |
 | **Internal members on public prototypes** | `webidl.js` | ☑ Fixed — the slots are symbols now, most of them fragment-local. |
 
-| **Missing members** | `performance.js`, `streams.js` | User Timing, `ReadableStream.from`. |
+| **Missing members** | `performance.js` | User Timing (`mark`/`measure`/`getEntries*`). |
 
 
 One deviation found alongside these is **not** representable here and is gated

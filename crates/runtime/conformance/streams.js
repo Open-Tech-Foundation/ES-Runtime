@@ -124,10 +124,60 @@ test("stream readers are branded", () => {
   );
 });
 
-todo("an unknown ReadableStream type is a TypeError, not a RangeError", () => {
+test("an unknown ReadableStream type is a TypeError, not a RangeError", () => {
   assertThrows(() => new ReadableStream({ type: "nope" }), "TypeError");
 });
 
-todo("ReadableStream.from adapts an iterable", () => {
+test("ReadableStream.from adapts an iterable", async () => {
   assertEquals(typeof ReadableStream.from, "function");
+  const chunks = [];
+  for await (const v of ReadableStream.from([1, 2, 3])) chunks.push(v);
+  assertEquals(chunks.join(","), "1,2,3");
+});
+
+test("ReadableStream.from adapts an async iterable", async () => {
+  async function* gen() {
+    yield "a";
+    yield "b";
+  }
+  const reader = ReadableStream.from(gen()).getReader();
+  let out = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    out += value;
+  }
+  assertEquals(out, "ab");
+});
+
+test("ReadableStream.from pulls lazily and cancels the iterator", async () => {
+  let produced = 0;
+  let returned = false;
+  const iterable = {
+    [Symbol.iterator]() {
+      return {
+        next() {
+          produced++;
+          return { value: produced, done: false };
+        },
+        return() {
+          returned = true;
+          return { done: true };
+        },
+      };
+    },
+  };
+  const stream = ReadableStream.from(iterable);
+  const reader = stream.getReader();
+  assertEquals((await reader.read()).value, 1);
+  reader.releaseLock();
+  await stream.cancel("done with it");
+  assertEquals(returned, true);
+  // An infinite iterator is not drained: demand drives production.
+  assert(produced < 5);
+});
+
+test("ReadableStream.from rejects a non-iterable", () => {
+  assertThrows(() => ReadableStream.from(123), "TypeError");
+  assertThrows(() => ReadableStream.from(null), "TypeError");
 });

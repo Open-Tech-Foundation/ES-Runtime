@@ -79,11 +79,37 @@
         return;
       }
       if (source.type !== undefined) {
-        throw new RangeError(`unsupported stream type: ${source.type}`);
+        // A bad `type` is a TypeError here (unlike the RangeError a bad
+        // strategy gets) — the spec treats it as an invalid enum value.
+        throw new TypeError(`unsupported stream type: ${source.type}`);
       }
       const sizeAlgorithm = makeSizeAlgorithm(strategy.size);
       const highWaterMark = normalizeHWM(strategy.highWaterMark, 1);
       setUpDefaultControllerFromSource(this, source, highWaterMark, sizeAlgorithm);
+    }
+
+    // Adapts any (async) iterable into a stream. Pulls one value per demand,
+    // so an infinite generator is fine, and forwards cancellation to the
+    // iterator's `return` so it can run its own cleanup.
+    static from(iterable) {
+      const method =
+        iterable === null || iterable === undefined
+          ? undefined
+          : iterable[Symbol.asyncIterator] ?? iterable[Symbol.iterator];
+      if (typeof method !== "function") {
+        throw new TypeError("ReadableStream.from requires an iterable or async iterable");
+      }
+      const iterator = method.call(iterable);
+      return new ReadableStream({
+        async pull(controller) {
+          const result = await iterator.next();
+          if (result.done) controller.close();
+          else controller.enqueue(result.value);
+        },
+        async cancel(reason) {
+          if (typeof iterator.return === "function") await iterator.return(reason);
+        },
+      });
     }
 
     get locked() {
