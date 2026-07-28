@@ -67,12 +67,45 @@
     });
   }
 
+  // A MIME type is only kept if it parses: `type/subtype` in HTTP token
+  // characters, optionally followed by parameters, all printable ASCII.
+  // Anything else is dropped to "" rather than echoed back.
+  const MIME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+\/[!#$%&'*+\-.^_`|~0-9A-Za-z]+([ \t]*;.*)?$/;
+  function normalizeType(value) {
+    if (value === undefined || value === null) return "";
+    const s = String(value);
+    // Any C0 control or non-ASCII byte disqualifies it outright.
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 0x20 || c > 0x7e) return "";
+    }
+    return MIME_RE.test(s) ? s.toLowerCase() : "";
+  }
+  // `endings: "native"` normalises CRLF and CR to the platform newline. This
+  // runtime targets unix-like hosts, where that is LF.
+  function normalizeEndings(parts) {
+    return parts.map((p) =>
+      typeof p === "string" ? p.replace(/\r\n|\r/g, "\n") : p,
+    );
+  }
+
   class Blob {
     #bytes;
     #type;
     constructor(parts = [], options = {}) {
-      this.#bytes = concatBytes(Array.from(parts ?? [], partToBytes));
-      this.#type = options.type ? String(options.type).toLowerCase() : "";
+      let list;
+      if (parts === undefined || parts === null) {
+        list = [];
+      } else if (typeof parts !== "object" || typeof parts[Symbol.iterator] !== "function") {
+        // Array.from would happily turn a number into [], hiding the mistake.
+        throw new TypeError("Blob parts must be an iterable sequence");
+      } else {
+        list = [...parts];
+      }
+      const opts = options ?? {};
+      if (opts.endings === "native") list = normalizeEndings(list);
+      this.#bytes = concatBytes(list.map(partToBytes));
+      this.#type = normalizeType(opts.type);
     }
     get size() {
       return this.#bytes.length;
@@ -85,9 +118,7 @@
       return this.#bytes;
     }
     slice(start, end, contentType) {
-      return new Blob([this.#bytes.slice(start, end)], {
-        type: contentType ? String(contentType) : "",
-      });
+      return new Blob([this.#bytes.slice(start, end)], { type: contentType });
     }
     async text() {
       return decoder.decode(this.#bytes);
@@ -120,6 +151,11 @@
     }
     get lastModified() {
       return this.#lastModified;
+    }
+    // Always empty: there is no directory picker to populate it, but code that
+    // reads it should get the spec's empty string rather than undefined.
+    get webkitRelativePath() {
+      return "";
     }
   }
 

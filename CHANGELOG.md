@@ -10,6 +10,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Blob` validates its arguments.** `new Blob(123)` produced an empty blob
+  instead of throwing — `Array.from` turned the mistake into silence. A
+  non-iterable `blobParts` is now a `TypeError`. An invalid MIME type was echoed
+  back verbatim, so `new Blob([], { type: "not a type" }).type` returned the
+  garbage rather than `""`; the type is now parsed and dropped if it does not
+  match `type/subtype`, in `slice()` as well as the constructor. The
+  `endings: "native"` option is honoured, normalising CRLF and CR in string
+  parts. `File.webkitRelativePath` exists and reads `""`.
 - **`Event` gained its legacy members, and re-entrant dispatch is an error.**
   `cancelBubble`, `returnValue` and `initEvent()` were absent — still normative
   in the DOM standard, and what older libraries feature-detect on. Dispatching

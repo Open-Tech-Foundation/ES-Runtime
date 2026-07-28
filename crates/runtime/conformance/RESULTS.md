@@ -14,8 +14,8 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **202 / 202** (100%) |
-| Known deviations (`todo`) | **7** |
+| Assertions passing | **206 / 206** (100%) |
+| Known deviations (`todo`) | **3** |
 | Files | 19 |
 | Last updated | 2026-07-28 |
 
@@ -41,20 +41,20 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `performance.js` | performance, microtasks §2.11/§2.1 | 4 | 1 |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
-| `blob.js` | Blob/File/FormData §2.9 | 10 | 4 |
+| `blob.js` | Blob/File/FormData §2.9 | 14 | — |
 | `fetch.js` | Headers/Request/Response object surface | 33 | — |
 | `webidl.js` | Interface shape: branding, arity, iterators | 27 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 
 ### Known deviations, by theme
 
-The remaining 7 `todo` cases group into five themes:
+The remaining 3 `todo` cases group into five themes:
 
 | Theme | Where | Notes |
 | --- | --- | --- |
 | **`Symbol.toStringTag` branding** | `webidl.js` | ☑ Fixed for every interface. |
 | **Internal members on public prototypes** | `webidl.js` | ☑ Fixed — the slots are symbols now, most of them fragment-local. |
-| **Missing arg validation** | `blob.js` | `Blob` accepts a non-iterable `blobParts` and an invalid MIME type. |
+
 | **Missing members** | `performance.js`, `streams.js` | User Timing, `ReadableStream.from`. |
 
 
