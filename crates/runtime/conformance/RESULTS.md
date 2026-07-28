@@ -58,7 +58,7 @@ each turned out to be.
 Two fixes are gated by Rust tests rather than here, because both need a driven
 event loop or host I/O: `fetch` honouring `AbortSignal` (tested against a
 transport that never responds, asserting the in-flight request future is
-dropped) and `setTimeout` forwarding its trailing arguments.
+dropped) and `setTimeout`/`setInterval` forwarding their trailing arguments.
 
 `todo(...)` remains available and is the right way to record the next deviation
 found: it states what the spec requires, is tallied separately so it does not

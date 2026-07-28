@@ -2024,6 +2024,49 @@ mod tests {
     }
 
     #[test]
+    fn set_timeout_forwards_trailing_arguments_to_the_callback() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "return await new Promise((resolve) => \
+               setTimeout((a, b, c) => resolve(`${a}|${b}|${c}`), 0, 1, 'two', null));",
+        );
+        assert_eq!(out, Value::String("1|two|null".into()));
+    }
+
+    #[test]
+    fn set_timeout_with_no_extra_arguments_passes_none() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "return await new Promise((resolve) => \
+               setTimeout((...args) => resolve(args.length), 0));",
+        );
+        assert_eq!(out, Value::Number(0.0));
+    }
+
+    #[test]
+    fn set_interval_forwards_its_arguments_on_every_firing() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        // A repeating timer keeps its arguments across firings, not just the
+        // first — they are stored with the timer, not consumed by it.
+        let out = eval_async(
+            &mut rt,
+            "return await new Promise((resolve) => { \
+               let seen = ''; \
+               const id = setInterval((tag) => { \
+                 seen += tag; \
+                 if (seen.length === 3) { clearInterval(id); resolve(seen); } \
+               }, 0, 'x'); \
+             });",
+        );
+        assert_eq!(out, Value::String("xxx".into()));
+    }
+
+    #[test]
     fn fetch_rejects_an_already_aborted_signal_without_touching_the_network() {
         let _g = v8_guard();
         let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));

@@ -171,6 +171,9 @@ struct PendingAsync {
 struct TimerEntry {
     callback: v8::Global<v8::Function>,
     repeat: bool,
+    /// Arguments after `delay`, forwarded to the callback on every firing
+    /// (`setTimeout(fn, ms, a, b)` calls `fn(a, b)`).
+    args: Vec<v8::Global<v8::Value>>,
 }
 
 /// Op table and pending-work registries, shared with the in-isolate dispatch
@@ -693,6 +696,10 @@ fn timer_set_inner(
         0
     };
     let repeat = args.data().boolean_value(scope);
+    // Everything after `delay` is forwarded to the callback on each firing.
+    let extra: Vec<v8::Global<v8::Value>> = (2..args.length())
+        .map(|i| v8::Global::new(scope, args.get(i)))
+        .collect();
 
     let Some(state_rc) = op_state(scope) else {
         throw(
@@ -706,7 +713,14 @@ fn timer_set_inner(
         let mut state = state_rc.borrow_mut();
         let id = state.next_timer_id;
         state.next_timer_id += 1;
-        state.timers.insert(id, TimerEntry { callback, repeat });
+        state.timers.insert(
+            id,
+            TimerEntry {
+                callback,
+                repeat,
+                args: extra,
+            },
+        );
         state.new_timers.push((id, delay_ms, repeat));
         id
     };
@@ -760,10 +774,15 @@ pub(crate) fn fire_timer(
     let scope = &mut v8::ContextScope::new(scope, context);
     v8::tc_scope!(let scope, scope);
 
-    let (callback, repeat) = {
+    let (callback, repeat, args) = {
         let state = op_state.borrow();
         let entry = state.timers.get(&id).expect("checked above");
-        (v8::Local::new(scope, &entry.callback), entry.repeat)
+        let args: Vec<v8::Local<v8::Value>> = entry
+            .args
+            .iter()
+            .map(|a| v8::Local::new(scope, a))
+            .collect();
+        (v8::Local::new(scope, &entry.callback), entry.repeat, args)
     };
     if !repeat {
         op_state.borrow_mut().timers.remove(&id);
@@ -772,7 +791,7 @@ pub(crate) fn fire_timer(
     let recv: v8::Local<v8::Value> = v8::undefined(scope).into();
     // A throw inside the callback is caught by the TryCatch (no host unwind);
     // surfacing it as an unhandled error is a later-phase concern.
-    let _ = callback.call(scope, recv, &[]);
+    let _ = callback.call(scope, recv, &args);
     true
 }
 
