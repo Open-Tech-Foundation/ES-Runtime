@@ -59,6 +59,34 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
+      # The same conformance suite the `conformance_suite_passes` gate runs,
+      # driven instead by the real CLI: a real event loop, a real filesystem,
+      # real process exit. It exits non-zero on any failure. One platform is
+      # enough — this checks the driver, not platform semantics — and the binary
+      # is already built by the step above.
+      - if: matrix.os == 'ubuntu-latest'
+        run: cargo run -p es-runtime-cli -- crates/runtime/conformance/run.js
+
+  # The pure-JS half of `runtime:serialization` (the Protobuf implementation) is
+  # written in TypeScript under crates/runtime/js and bundled into the embedded
+  # module. Its own test suite is not reachable from `cargo test`, so without
+  # this job the largest hand-written JS subsystem in the repo gates on nothing.
+  js:
+    name: js (bun test + bundle)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/runtime/js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      # The bundle is committed (the runtime embeds it at compile time), so it
+      # can drift from the source it was built from and nothing would notice
+      # until a behaviour bug. Rebuild and require the tree to be unchanged.
+      - run: bun run build
+      - run: git diff --exit-code -- ../src/runtime_modules/serialization.js
 
   msrv:
     name: msrv build (1.95)

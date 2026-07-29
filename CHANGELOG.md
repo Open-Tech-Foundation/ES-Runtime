@@ -10,6 +10,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **CI now runs the JavaScript test suite and checks the generated bundle.** The
+  pure-JS Protobuf implementation under `crates/runtime/js` has 41 tests that
+  nothing ever ran: they are not reachable from `cargo test`, and there was no
+  `bun` step, so the largest hand-written JS subsystem in the repo gated on
+  nothing. The new `js` job runs `bun test`, then rebuilds the committed
+  `runtime:serialization` bundle and requires the tree to be unchanged — the
+  bundle is embedded at compile time, so source and artifact could silently
+  diverge. The Linux test job also runs the conformance suite through the real
+  CLI (`esrun crates/runtime/conformance/run.js`).
+
 - **The conformance gate was silently dropping 22 assertions — it now runs
   278/278, up from a recorded 256.** Four files (`protobuf.js`,
   `serialization.js`, `serialization_edge.js`, `jsonl_test.js`) open with

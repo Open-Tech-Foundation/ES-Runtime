@@ -103,7 +103,7 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 - **Soak / leak:** ◐ opt-in soak tests (`#[ignore]`, run with `cargo test -- --ignored soak`) hammer a subsystem over many iterations and assert it neither leaks nor deadlocks. The first, `soak_streaming_fetch_does_not_leak`, runs 20k streaming-`fetch` uploads and asserts (a) the three request/response **body registries drain to zero every iteration** — the precise native-leak guard, via the test-only `__fetch_inflight` op — and (b) steady-state RSS stays bounded. Broad cross-subsystem soak coverage is a Phase-14 item.
 - **Fuzzing:** `cargo-fuzz` on URL parsing, streams, encoding, and the JS↔Rust marshaler.
 - **Soundness:** Miri on the safe core where applicable; ASAN/valgrind on the FFI surface in CI; isolate/handle release verified.
-- **CI gates (all required):** `cargo fmt --check`, `cargo clippy -D warnings`, tests (Linux/Windows/macOS), `cargo-deny`, `cargo-audit`, MSRV build, conformance run.
+- **CI gates (all required):** `cargo fmt --check`, `cargo clippy -D warnings`, tests (Linux/Windows/macOS), `cargo-deny`, `cargo-audit`, MSRV build, conformance run (both the `cargo test` gate and the driven `esrun` runner), and the **JS job** — `bun test` over the TypeScript sources under `crates/runtime/js` plus a rebuild of the committed `runtime:serialization` bundle asserting it matches those sources.
 
 ---
 
