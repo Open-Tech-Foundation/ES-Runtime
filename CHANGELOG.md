@@ -10,6 +10,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **The async-WebAssembly tests no longer flake under load.** They waited on a
+  compile with a fixed 200-tick spin, but a compile lands on V8's *background*
+  threads — how many ticks that takes is a property of how busy the machine is,
+  not of the runtime, so `cargo test --workspace` (where the other test binaries
+  run alongside) could exhaust the count and then assert against a result that
+  had simply not arrived. Waiting is now wall-clock bounded and, critically,
+  running out of time **panics naming what was awaited** instead of falling
+  through silently and reporting the miss as a behaviour failure. Tests only —
+  no runtime change.
+
 - **`clearTimeout`/`clearInterval` now release the event loop.** Clearing a timer
   deactivated its callback engine-side but left the entry in the runtime's
   schedule, so `has_pending_work()` stayed true and `next_timer_deadline_ms`

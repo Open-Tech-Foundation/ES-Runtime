@@ -797,6 +797,58 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// Ticks `rt` until `ready` holds, bounded by **wall-clock time** rather
+    /// than a tick count, and panics naming `what` if the budget runs out.
+    ///
+    /// Some work the loop waits on happens off-thread: a WebAssembly compile
+    /// runs on V8's background threads and only lands once the platform's
+    /// foreground queue is pumped. How many ticks that takes is a property of
+    /// how busy the machine is, not of the runtime — so a fixed spin count
+    /// passes on an idle box and fails on a loaded CI runner (or a full
+    /// `cargo test --workspace`, where the other test binaries run alongside).
+    /// Worse, a count-bounded loop *falls through silently*: the test then
+    /// asserts against a result that simply had not arrived yet.
+    ///
+    /// The first `HOT_SPINS` iterations spin, which is what everything settling
+    /// inside a single tick needs and keeps `eval_async` cheap enough for the
+    /// 20k-iteration soak. Past that the loop sleeps a millisecond per
+    /// turn, which also hands the core to the background threads it is waiting
+    /// on instead of starving them.
+    fn pump_until(rt: &mut Runtime, what: &str, ready: impl FnMut(&mut Runtime) -> bool) {
+        /// Generous enough that only a genuine hang trips it.
+        const BUDGET: std::time::Duration = std::time::Duration::from_secs(10);
+        pump_until_within(rt, BUDGET, what, ready);
+    }
+
+    /// [`pump_until`] with an explicit budget, so the timeout path is testable
+    /// without a ten-second test.
+    fn pump_until_within(
+        rt: &mut Runtime,
+        budget: std::time::Duration,
+        what: &str,
+        mut ready: impl FnMut(&mut Runtime) -> bool,
+    ) {
+        /// Iterations run without sleeping before falling back to 1ms naps.
+        const HOT_SPINS: u32 = 256;
+
+        let deadline = std::time::Instant::now() + budget;
+        let mut spins = 0u32;
+        loop {
+            rt.tick(0);
+            if ready(rt) {
+                return;
+            }
+            spins += 1;
+            if spins > HOT_SPINS {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out after {budget:?} waiting for {what}"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+    }
+
     /// A capturing console sink for assertions.
     #[derive(Default)]
     struct TestConsole {
@@ -1377,6 +1429,40 @@ mod tests {
         7,7,1,3,97,100,100,0,0,\
         10,9,1,7,0,32,0,32,1,106,11])";
 
+    /// The waiting helper must stop the moment the condition holds — the hot
+    /// path is every `eval_async` in this file, including a 20k-iteration soak.
+    #[test]
+    fn pump_until_returns_as_soon_as_the_condition_holds() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let mut ticks = 0u32;
+        let started = std::time::Instant::now();
+        pump_until(&mut rt, "three ticks", |_| {
+            ticks += 1;
+            ticks == 3
+        });
+        assert_eq!(ticks, 3);
+        // Three spins, no sleeps: this is microseconds, not milliseconds.
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+    }
+
+    /// The bug this helper replaced: a count-bounded loop gave up *silently*,
+    /// so the test went on to assert against a result that had not arrived and
+    /// reported the miss as a behaviour failure. Running out of time must be a
+    /// panic that names what was awaited.
+    #[test]
+    #[should_panic(expected = "waiting for something that never happens")]
+    fn pump_until_panics_instead_of_falling_through() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        pump_until_within(
+            &mut rt,
+            std::time::Duration::from_millis(50),
+            "something that never happens",
+            |_| false,
+        );
+    }
+
     /// An async WebAssembly compile settles only because the loop pumps V8's
     /// foreground task queue, and counts as pending work until it does — without
     /// which a driver would exit (or park forever) mid-compile. The conformance
@@ -1400,13 +1486,11 @@ mod tests {
             "an in-flight wasm compile must keep the loop alive"
         );
 
-        // Ticking pumps the platform until V8's compile task lands.
-        for _ in 0..200 {
-            rt.tick(0);
-            if !rt.has_pending_work() {
-                break;
-            }
-        }
+        // Ticking pumps the platform until V8's compile task lands. How long
+        // that takes is up to V8's background threads, so wait on the clock.
+        pump_until(&mut rt, "the wasm compile to settle", |rt| {
+            !rt.has_pending_work()
+        });
 
         assert_eq!(
             rt.eval("globalThis.mod instanceof WebAssembly.Module")
@@ -1433,12 +1517,9 @@ mod tests {
         )
         .unwrap();
 
-        for _ in 0..200 {
-            rt.tick(0);
-            if !rt.has_pending_work() {
-                break;
-            }
-        }
+        pump_until(&mut rt, "the failed wasm compile to settle", |rt| {
+            !rt.has_pending_work()
+        });
 
         assert_eq!(
             rt.eval("globalThis.err").unwrap(),
@@ -3953,11 +4034,9 @@ mod tests {
         .expect("load");
         // The graph is async (TLA), so it is not done before any tick runs.
         assert_eq!(rt.module_eval_state(), ModuleEvalState::Pending);
-        for _ in 0..200 {
-            if !rt.tick(0).has_pending_work {
-                break;
-            }
-        }
+        pump_until(&mut rt, "the top-level await to complete", |rt| {
+            !rt.has_pending_work()
+        });
         assert_eq!(rt.module_eval_state(), ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.tla").unwrap(), Value::Number(7.0));
     }
@@ -4018,11 +4097,9 @@ mod tests {
         let loader = MapLoader::new(&[]);
         // No imports → the loader is never consulted → no capability needed.
         block_on(rt.load_module_source(ENTRY, "globalThis.ok = 5;", loader.clone())).expect("load");
-        for _ in 0..200 {
-            if !rt.tick(0).has_pending_work {
-                break;
-            }
-        }
+        pump_until(&mut rt, "the module to evaluate", |rt| {
+            !rt.has_pending_work()
+        });
         assert_eq!(rt.module_eval_state(), ModuleEvalState::Completed);
         assert_eq!(rt.eval("globalThis.ok").unwrap(), Value::Number(5.0));
     }
