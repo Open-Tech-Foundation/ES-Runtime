@@ -8,7 +8,7 @@ import { Callout } from "@opentf/web-docs";
 # Module system
 
 esrun loads standard ES Modules. Static imports, dynamic `import()`, top-level
-await, and `import.meta.url` all behave as specified.
+await, and `import.meta` all behave as specified.
 
 <Callout type="info" title="Supported by design">
   JSON module imports (`import data from "./x.json" with { type: "json" }`) are
@@ -44,6 +44,22 @@ export const message = greet("world");
 const { default: plugin } = await import("./plugins/auth.js");
 await plugin.init();
 ```
+
+## import.meta
+
+```js
+import.meta.url;                          // "file:///app/server.js"
+import.meta.resolve("./schema.json");     // "file:///app/schema.json"
+import.meta.resolve("runtime:process");   // "runtime:process"
+```
+
+`resolve` is pure URL resolution against the current module: no I/O, and no
+check that the target exists — resolving a path and importing it are separate
+questions.
+
+A **bare specifier throws**. Resolving one means reading `package.json` files and
+probing the filesystem, and `resolve` is synchronous, so it refuses rather than
+return a URL it never resolved. Use `import()`.
 
 ## Resolving packages
 

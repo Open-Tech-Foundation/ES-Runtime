@@ -703,3 +703,32 @@ fn runtime_urlpattern_works_globally() {
     assert!(s.contains("FILE=document.txt"), "{}", s);
     assert!(s.contains("MATCH6=true"), "{}", s);
 }
+
+#[test]
+fn import_meta_resolve_resolves_against_the_module() {
+    let out = run_file("resolve.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+
+    assert!(stdout.contains("TYPE:function"), "{stdout}");
+    // Relative and parent specifiers resolve against import.meta.url, so the
+    // result is an absolute file: URL naming the sibling / parent file.
+    assert!(stdout.contains("REL:file://"), "{stdout}");
+    assert!(stdout.contains("/fixtures/greet.mjs"), "{stdout}");
+    assert!(stdout.contains("PARENT:file://"), "{stdout}");
+    assert!(
+        stdout.contains("/up.mjs") && !stdout.contains("/fixtures/up.mjs"),
+        "`../` must climb out of the fixtures directory: {stdout}"
+    );
+    assert!(stdout.contains("ABS:file:///abs/z.mjs"), "{stdout}");
+    assert!(stdout.contains("URL:file:///q.mjs"), "{stdout}");
+    // A `runtime:` builtin is already absolute and resolves to itself.
+    assert!(stdout.contains("BUILTIN:runtime:process"), "{stdout}");
+    // Resolution does no I/O: a path that does not exist still resolves.
+    assert!(stdout.contains("MISSING:file://"), "{stdout}");
+    assert!(stdout.contains("/definitely-not-here.mjs"), "{stdout}");
+    // A bare specifier would need node_modules read synchronously; rather than
+    // answer with a URL it never resolved, it refuses.
+    assert!(stdout.contains("BARE!TypeError"), "{stdout}");
+    assert!(stdout.contains("NODE!TypeError"), "{stdout}");
+}

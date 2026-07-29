@@ -50,16 +50,18 @@
   // runs, so reassigning the global cannot reach them, and the host counter
   // saturates so a forged call can only keep the loop alive, never end it early.
 
-  // Lock the host dispatch hooks. The engine calls these by name to hand the
-  // guest a failure it is about to report — an exception out of a timer, a
-  // rejection nobody handled — and reads the return value to decide whether the
-  // guest claimed it. A guest that could replace one could make the host report
-  // failures that were handled, or stay silent about ones that were not.
+  // Lock the functions the engine calls by name. Three of them hand the guest a
+  // failure the host is about to report — an exception out of a timer, a
+  // rejection nobody handled — and their return value decides whether the guest
+  // claimed it; a guest that could replace one could make the host report
+  // failures that were handled, or stay silent about ones that were not. The
+  // fourth builds `import.meta.resolve`, so replacing it would let guest code
+  // decide what every later module's `resolve` returns.
   //
-  // This is honesty of reporting, not a capability: `preventDefault()` on the
-  // event is the *supported* way to take responsibility for a failure, and it
-  // stays available.
+  // This is honesty, not a capability: `preventDefault()` on the event remains
+  // the supported way to take responsibility for a failure.
   for (const hook of [
+    "__make_import_meta_resolve",
     "__dispatch_error_event",
     "__dispatch_unhandled_rejection",
     "__dispatch_rejection_handled",

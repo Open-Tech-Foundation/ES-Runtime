@@ -485,11 +485,47 @@ fn import_meta_inner(
             .get(&hash)
             .and_then(|id| reg.specifier_by_id.get(id).cloned())
     };
-    if let Some(url) = url
-        && let (Some(key), Some(value)) =
-            (v8::String::new(scope, "url"), v8::String::new(scope, &url))
-    {
-        meta.create_data_property(scope, key.into(), value.into());
+    let Some(url) = url else { return };
+    let (Some(key), Some(value)) = (v8::String::new(scope, "url"), v8::String::new(scope, &url))
+    else {
+        return;
+    };
+    meta.create_data_property(scope, key.into(), value.into());
+    install_import_meta_resolve(scope, meta, value);
+}
+
+/// Adds `import.meta.resolve`, bound to this module's URL.
+///
+/// The resolver is *made* in JS: the prelude installs a factory that closes over
+/// the module's URL, and this hands it that URL and stores what comes back. The
+/// alternative — building the function here — would mean reimplementing URL
+/// resolution against the V8 API when the realm already has a `URL` that does it
+/// to spec. A realm without a prelude (the engine's own tests) has no factory,
+/// and simply gets an `import.meta` with only `url`.
+fn install_import_meta_resolve(
+    scope: &mut v8::PinScope<'_, '_>,
+    meta: v8::Local<'_, v8::Object>,
+    url: v8::Local<'_, v8::String>,
+) {
+    let global = scope.get_current_context().global(scope);
+    let (Some(factory_key), Some(resolve_key)) = (
+        v8::String::new(scope, "__make_import_meta_resolve"),
+        v8::String::new(scope, "resolve"),
+    ) else {
+        return;
+    };
+    let Some(factory) = global
+        .get(scope, factory_key.into())
+        .and_then(|f| v8::Local::<v8::Function>::try_from(f).ok())
+    else {
+        return;
+    };
+    // The factory is prelude code and does not throw, but it is still guest-side
+    // JS: a throw must not escape into V8's callback frames.
+    v8::tc_scope!(let scope, scope);
+    let recv: v8::Local<v8::Value> = v8::undefined(scope).into();
+    if let Some(resolve) = factory.call(scope, recv, &[url.into()]) {
+        meta.create_data_property(scope, resolve_key.into(), resolve);
     }
 }
 

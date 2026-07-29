@@ -79,6 +79,40 @@
     }
   };
 
+  // ---- import.meta.resolve -------------------------------------------------
+  //
+  // The engine calls this once per module, with that module's URL, and stores
+  // the returned function as `import.meta.resolve`. It lives here rather than in
+  // the engine because resolution is URL work and the realm already has a
+  // spec-correct `URL`.
+  //
+  // Like Node's, this is pure URL resolution: no I/O, and no check that the
+  // target exists — resolving a path and importing it are separate questions.
+  globalThis.__make_import_meta_resolve = (base) => (specifier) => {
+    const target = String(specifier);
+    if (target.startsWith("node:")) {
+      throw new TypeError(`node: builtins are not supported (cannot resolve ${JSON.stringify(target)})`);
+    }
+    // Relative and absolute-path specifiers resolve against this module; an
+    // absolute URL (file:, runtime:, …) resolves to itself.
+    if (
+      target.startsWith("./") ||
+      target.startsWith("../") ||
+      target.startsWith("/") ||
+      URL.canParse(target)
+    ) {
+      return new URL(target, base).href;
+    }
+    // A bare specifier means walking node_modules — reading package.json files
+    // and probing the filesystem — which is host I/O, and `resolve` is
+    // synchronous. Rather than answer with a URL that was never resolved, say so.
+    throw new TypeError(
+      `import.meta.resolve cannot resolve the bare specifier ${JSON.stringify(target)}: ` +
+        "resolving one requires reading node_modules, which cannot be done synchronously. " +
+        "Use import() instead.",
+    );
+  };
+
   // ---- Host dispatch hooks -------------------------------------------------
   //
   // The engine holds the failing values (a thrown exception, a rejected

@@ -10,6 +10,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`import.meta.resolve`.** It was `undefined`, so the standard way to turn a
+  path relative to a module into a URL — the usual reason to reach for
+  `import.meta` at all — did not exist. It is pure URL resolution against the
+  current module, with no I/O and no check that the target exists, which is
+  exactly what Node's does. Relative, absolute-path and absolute-URL specifiers
+  all resolve, including the `runtime:` scheme. A **bare specifier throws a
+  `TypeError` naming it**: resolving one means reading `package.json` files and
+  probing the filesystem, and `resolve` is synchronous — so it refuses rather
+  than answer with a URL it never resolved. Recorded as a deviation in SPEC §7.
+
 - **`console` implements the whole Console Standard.** Four methods were missing
   outright (`dirxml`, `clear`, `countReset`, `timeLog`) and four more were
   present but did nothing: `count`, `time` and `timeEnd` were empty functions,
