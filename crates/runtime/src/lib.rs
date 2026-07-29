@@ -1906,6 +1906,131 @@ mod tests {
         );
     }
 
+    /// Captures everything the guest logged, as `level: message` lines.
+    fn console_lines(script: &str) -> Vec<String> {
+        let console = Arc::new(TestConsole::default());
+        let mut rt = runtime_with(
+            console.clone(),
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+        );
+        rt.eval(script).unwrap();
+        let lines = console.lines.lock().unwrap().clone();
+        lines
+            .into_iter()
+            .map(|(level, message)| format!("{level:?}: {message}").to_lowercase())
+            .collect()
+    }
+
+    /// The Console Standard's Formatter: `%s`/`%d`/`%i`/`%f`/`%o`/`%O`/`%j`
+    /// consume the following arguments, `%%` is a literal, and anything left
+    /// over is appended.
+    #[test]
+    fn console_applies_format_specifiers() {
+        let _g = v8_guard();
+        let lines = console_lines(
+            r#"console.log("%s is %d and %f", "Ada", 36.7, 1.5);
+               console.log("%o|%j", { a: [1, 2] }, { b: 2 });
+               console.log("100%% sure");
+               console.log("%s", "one", "extra", 2);
+               console.log("%d", "not a number");
+               console.log("no specifiers", 1, { a: 1 });"#,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                "log: ada is 36 and 1.5",
+                "log: { a: [ 1, 2 ] }|{\"b\":2}",
+                // A lone string with no arguments is not a format string.
+                "log: 100%% sure",
+                "log: one extra 2",
+                "log: nan",
+                "log: no specifiers 1 { a: 1 }",
+            ]
+        );
+    }
+
+    /// A group indents everything until it closes, including the inner lines of
+    /// a multi-line value.
+    #[test]
+    fn console_group_indents_until_closed() {
+        let _g = v8_guard();
+        let lines = console_lines(
+            r#"console.group("outer");
+               console.log("a\nb");
+               console.group();
+               console.log("deep");
+               console.groupEnd();
+               console.groupEnd();
+               console.log("flush left");"#,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                "log: outer",
+                "log:   a\n  b",
+                "log:     deep",
+                "log: flush left",
+            ]
+        );
+    }
+
+    /// `count`/`countReset` and `time`/`timeLog`/`timeEnd` were no-ops that
+    /// silently discarded what they were asked to measure.
+    #[test]
+    fn console_counts_and_times() {
+        let _g = v8_guard();
+        let lines = console_lines(
+            r#"console.count(); console.count(); console.count("x");
+               console.countReset(); console.count();
+               console.time("t"); console.timeLog("t", "mid"); console.timeEnd("t");
+               console.timeEnd("t");
+               console.time("t"); console.time("t");"#,
+        );
+        assert_eq!(lines[0], "log: default: 1");
+        assert_eq!(lines[1], "log: default: 2");
+        assert_eq!(lines[2], "log: x: 1");
+        assert_eq!(lines[3], "log: default: 1");
+        assert!(lines[4].starts_with("log: t: "), "{}", lines[4]);
+        assert!(lines[4].ends_with("ms mid"), "{}", lines[4]);
+        assert!(lines[5].starts_with("log: t: "), "{}", lines[5]);
+        // Ending a timer that is not running, and starting one twice, both warn.
+        assert_eq!(lines[6], "warn: timer 't' does not exist");
+        assert_eq!(lines[7], "warn: timer 't' already exists");
+    }
+
+    /// `table` renders rows and columns; dumping the object would have made the
+    /// method pointless.
+    #[test]
+    fn console_table_renders_a_table() {
+        let _g = v8_guard();
+        let lines = console_lines(r#"console.table([{ a: 1, b: "x" }, { a: 22 }]);"#);
+        assert_eq!(
+            lines[0],
+            "log: ┌─────────┬────┬─────┐\n\
+             │ (index) │ a  │ b   │\n\
+             ├─────────┼────┼─────┤\n\
+             │ 0       │ 1  │ 'x' │\n\
+             │ 1       │ 22 │     │\n\
+             └─────────┴────┴─────┘"
+        );
+
+        // Primitive rows go in a Values column, and an object's keys index it.
+        let lines = console_lines(r#"console.table({ r: 1 });"#);
+        assert!(lines[0].contains("(key)"), "{}", lines[0]);
+        assert!(lines[0].contains("values"), "{}", lines[0]);
+    }
+
+    #[test]
+    fn console_trace_includes_the_stack() {
+        let _g = v8_guard();
+        let lines = console_lines(r#"console.trace("why");"#);
+        assert!(lines[0].starts_with("error: trace: why\n"), "{}", lines[0]);
+        assert!(lines[0].contains("    at "), "{}", lines[0]);
+    }
+
     #[test]
     fn performance_reads_the_clock_provider() {
         let _g = v8_guard();
@@ -4017,7 +4142,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 304;
+        const BASELINE: u32 = 307;
 
         assert!(
             pass >= BASELINE,

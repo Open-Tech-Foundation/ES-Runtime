@@ -16,11 +16,28 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | --- | --- |
 | `globalThis` | |
 | `self` | |
-| `console` | |
+| `console` | full Console Standard set — see below |
 | `queueMicrotask` | |
 | `structuredClone` | |
 | `reportError` | |
 | `navigator` | `userAgent` — `"ES-Runtime/<version>"` |
+
+## console
+
+| Group | Methods |
+| --- | --- |
+| Output | `log`, `info`, `warn`, `error`, `debug`, `dir`, `dirxml`, `trace` |
+| Grouping | `group`, `groupCollapsed`, `groupEnd` |
+| Counting | `count`, `countReset` |
+| Timing | `time`, `timeLog`, `timeEnd` |
+| Other | `assert`, `table`, `clear` |
+
+Format specifiers: `%s`, `%d`/`%i`, `%f`, `%o`/`%O`, `%j`, `%%`, `%c`.
+
+```js
+console.table([{ id: 1, name: "a" }, { id: 2, name: "b" }]);
+console.time("query"); await db.run(); console.timeEnd("query");
+```
 
 ## Timers
 

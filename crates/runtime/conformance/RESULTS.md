@@ -14,9 +14,9 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **304 / 304** (100%) |
+| Assertions passing | **307 / 307** (100%) |
 | Known deviations (`todo`) | **0** |
-| Files | 22 |
+| Files | 23 |
 | Last updated | 2026-07-30 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
@@ -32,6 +32,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | --- | --- | --- | --- |
 | `encoding.js` | TextEncoder/TextDecoder, all encodings §2.3 | 22 | — |
 | `base64.js` | atob/btoa §2.3 | 6 | — |
+| `console.js` | console method set §2.2 | 3 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 19 | — |
 | `urlpattern.js` | URLPattern §2.4 | 18 | — |
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |

@@ -53,7 +53,7 @@ The global scope tracks the WinterTC Minimum Common Web Platform API. Host
 capabilities (filesystem, process, network) are **not** globals — they live in
 [`runtime:` modules](#the-runtime-scheme).
 
-- **Core:** `globalThis`, `self`, `console`, `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` only — `"ES-Runtime/<version>"`)
+- **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` only — `"ES-Runtime/<version>"`)
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **URL:** `URL`, `URLSearchParams`
 - **Fetch:** `fetch`, `Request`, `Response`, `Headers` — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
@@ -66,6 +66,25 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
 - **Performance:** `performance` (`now()`, `timeOrigin`)
 - **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
+
+### `console`
+
+The whole Console Standard method set, routed to the injected `Console` provider
+rather than to stdout — an embedder decides where guest output goes.
+
+| Group | Methods |
+| --- | --- |
+| Output | `log`, `info`, `warn`, `error`, `debug`, `dir`, `dirxml`, `trace` |
+| Grouping | `group`, `groupCollapsed`, `groupEnd` — indent subsequent output |
+| Counting | `count`, `countReset` |
+| Timing | `time`, `timeLog`, `timeEnd` |
+| Other | `assert`, `table` (rendered as a table), `clear` |
+
+Format specifiers work as the standard defines them: `%s`, `%d`/`%i`, `%f`,
+`%o`/`%O`, `%j`, `%%`, and `%c` (whose argument is consumed and discarded —
+there is no styling to apply to a provider sink). Values are inspected
+structurally: functions as `[Function: name]`, `Map`/`Set`/`Date`/`RegExp` in
+their own notation, cycles as `[Circular]`.
 
 ### `crypto.subtle` algorithms
 

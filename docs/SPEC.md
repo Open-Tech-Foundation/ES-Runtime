@@ -29,7 +29,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ☑ **Failures that reach the global scope.** An exception out of a timer callback fires a cancelable `error` (`ErrorEvent`); a promise rejection with no handler fires a cancelable `unhandledrejection` (`PromiseRejectionEvent`), and attaching a handler after the report has gone out fires `rejectionhandled`. `preventDefault()` is how guest code takes responsibility: a claimed failure is not reported to the embedder. `onerror`/`onunhandledrejection`/`onrejectionhandled` are single-handler slots over the same events. What no listener claims reaches the embedder on `TickStatus` (`unhandled_rejections`, `uncaught_errors`); `esrun` prints it and exits non-zero.
 
 ### 2.2 Console
-- ◐ `console` (log/info/warn/error/debug ☑) → the injected `Console` sink, not stdout (DECISIONS D17). group/table minimal. *(Phase 4.)*
+- ☑ `console` — the full Console Standard method set, routed to the injected `Console` sink rather than stdout (DECISIONS D17): the log family, `dir`/`dirxml`, `trace` (with a stack), `assert`, `group`/`groupCollapsed`/`groupEnd` (indenting subsequent output, per line), `count`/`countReset`, `time`/`timeLog`/`timeEnd`, `table` (rendered), `clear`, and the `%s`/`%d`/`%i`/`%f`/`%o`/`%O`/`%j`/`%c` format specifiers. *(Phase 4.)*
 
 ### 2.3 Encoding
 - ☑ `TextEncoder` (UTF-8, as the spec fixes it), `TextDecoder` — **every encoding and label the WHATWG Encoding Standard defines** (UTF-8/16LE/16BE, the single-byte legacy sets, and the multi-byte CJK ones), via `encoding_rs`; `fatal`, `ignoreBOM` and streaming decode across chunk boundaries all honoured. `atob`, `btoa` *(Phase 4)*; `TextEncoderStream`/`TextDecoderStream` *(Phase 5, on `TransformStream`)*.

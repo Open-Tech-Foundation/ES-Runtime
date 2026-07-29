@@ -10,6 +10,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`console` implements the whole Console Standard.** Four methods were missing
+  outright (`dirxml`, `clear`, `countReset`, `timeLog`) and four more were
+  present but did nothing: `count`, `time` and `timeEnd` were empty functions,
+  so code that instrumented itself with them silently measured and reported
+  nothing, and `group`/`groupEnd` did not indent, so grouping structure was lost.
+  Now: `count`/`countReset` keep per-label tallies, `time`/`timeLog`/`timeEnd`
+  report elapsed milliseconds (and warn about a timer that does not exist or is
+  started twice), `group`/`groupCollapsed`/`groupEnd` indent every following
+  line — including the inner lines of a multi-line value — and `trace` prints an
+  actual stack.
+- **`console.table` renders a table** instead of dumping the object through
+  `log`, which made the method pointless. Array indices or object keys become
+  the first column, each row's own keys become columns, and rows that are
+  primitives go under `Values`.
+- **`console` format specifiers.** `%s`, `%d`/`%i`, `%f`, `%o`/`%O`, `%j`, `%%`
+  and `%c` are applied per the standard's Formatter; leftover arguments are
+  appended as before. `%c`'s CSS argument is consumed and discarded — there is
+  no styling to apply to a provider sink, and printing the CSS would be worse.
+
 - **`TextDecoder` now accepts every encoding the WHATWG Encoding Standard
   defines.** It was UTF-8 only: `new TextDecoder("utf-16le")` — or
   `windows-1252`, `latin1`, `shift_jis`, `gb18030`, or any of the other labels —
