@@ -98,6 +98,59 @@ jobs:
       - run: rustup toolchain install 1.95.0 --profile minimal
       - run: cargo +1.95.0 build --workspace --all-features
 
+  # Fuzzing (SPEC §5). Each target gets a bounded run seeded from the committed
+  # corpus in `fuzz/seeds/` — which includes the inputs that have found bugs, so
+  # a regression is caught in the first seconds rather than rediscovered. This is
+  # a smoke run, not a campaign: long-running fuzzing belongs on dedicated
+  # infrastructure, and the point here is that the targets build and that no
+  # committed seed crashes.
+  fuzz:
+    name: cargo-fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\nfuzz -> fuzz/target"
+      # cargo-fuzz builds with a sanitizer, which needs nightly.
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Run each target for 60s
+        run: |
+          set -euo pipefail
+          for target in url encoding urlpattern compression serialization keys; do
+            echo "::group::fuzz $target"
+            # New coverage-increasing inputs go to the (gitignored) corpus
+            # directory; the seeds are read-only, so a run cannot bloat them.
+            cargo +nightly fuzz run "$target" \
+              "fuzz/corpus/$target" "fuzz/seeds/$target" \
+              -- -max_total_time=60 -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+      # A crash writes its input here; keep it so the failure is reproducible
+      # from the run rather than only from whoever can rerun the fuzzer.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+
+  # Miri (SPEC §5) over the crates that do not link V8. `engine` and everything
+  # above it cannot run here: Miri interprets Rust, and V8 is a prebuilt native
+  # library it cannot execute. Checking that boundary needs ASAN over a V8 built
+  # from source with `-fsanitize=address` — see SPEC §5 for why that is not a job
+  # here yet.
+  miri:
+    name: miri
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install nightly --profile minimal --component miri
+      - run: cargo +nightly miri test -p es-runtime-common -p es-runtime-providers
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest

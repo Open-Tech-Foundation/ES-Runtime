@@ -210,6 +210,15 @@ fn import_spki(curve: Curve, der: &[u8]) -> std::result::Result<Vec<u8>, OpError
     Ok(der[12..SPKI_LEN].to_vec())
 }
 
+/// Fuzz entry: the hand-written RFC 8410 DER parsers (see [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_import(curve: &str, der: &[u8]) {
+    if let Ok(curve) = Curve::parse(curve) {
+        let _ = import_pkcs8(curve, der);
+        let _ = import_spki(curve, der);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

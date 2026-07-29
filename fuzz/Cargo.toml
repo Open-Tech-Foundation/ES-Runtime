@@ -1,0 +1,74 @@
+# Fuzz targets for ES-Runtime (SPEC §5).
+#
+# Its own workspace: `cargo fuzz` builds with `-Z sanitizer=address` on nightly,
+# which the main workspace neither pins nor needs. Run one with
+#
+#     cargo +nightly fuzz run <target> -- -max_total_time=60
+#
+# The targets reach the runtime's parsers through `es-runtime`'s `fuzzing`
+# feature, which exists for exactly this and is not public API.
+[package]
+name = "es-runtime-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.es-runtime]
+path = "../crates/runtime"
+features = ["fuzzing"]
+
+# Fuzzing is pointless without optimization, and a panic must abort so libFuzzer
+# sees it as a crash rather than an unwind that the harness swallows.
+[profile.release]
+debug = 1
+
+[workspace]
+
+[[bin]]
+name = "url"
+path = "fuzz_targets/url.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "encoding"
+path = "fuzz_targets/encoding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "urlpattern"
+path = "fuzz_targets/urlpattern.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compression"
+path = "fuzz_targets/compression.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serialization"
+path = "fuzz_targets/serialization.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keys"
+path = "fuzz_targets/keys.rs"
+test = false
+doc = false
+bench = false

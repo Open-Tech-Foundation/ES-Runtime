@@ -49,5 +49,10 @@ serde = "1.0.228"
 serde-transcode = "1.1.1"
 brotli = "8"
 
+[features]
+# Exposes `crate::fuzz` for the targets under `fuzz/` (SPEC §5). Not public API
+# and never enabled by a dependant — only the fuzz crate turns it on.
+fuzzing = []
+
 [lints]
 workspace = true

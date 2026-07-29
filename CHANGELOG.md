@@ -10,6 +10,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A malformed `URLPattern` no longer panics inside the host.** Found by the new
+  fuzzing: `new URLPattern("**:]:")` — an unmatched `]` where the hostname would
+  be — underflows `urlpattern` 0.6.0's IPv6 bracket-depth counter. The op
+  boundary already contained it (D15), but as a generic "internal error in host
+  op" rather than the `TypeError` the spec names for a pattern that cannot be
+  parsed. It is now caught where it happens and reported as a `TypeError`, with
+  the crashing input kept as a fuzz seed so it can never come back unnoticed.
+- **Release builds check integer overflow.** A wrapped counter in a parser
+  reading guest-chosen input is a security bug, not a performance trade — the
+  `URLPattern` finding above is exactly that shape. `overflow-checks` is now on
+  in the release profile, so an overflow is a contained exception rather than a
+  parser silently continuing in a state that cannot occur. The cost does not
+  show: the hot paths are V8's, and V8 is a prebuilt static library this never
+  touches.
+
 - **`esrun types` was missing three of the eight `runtime:` modules.** The
   bundle is a hand-written list, so `runtime:websocket`, `runtime:serialization`
   and `runtime:wasi` had never been added to it — anyone who ran
@@ -32,6 +47,20 @@ namespace) is unstable and may change between minor releases until the API freez
   `runtime:fs` as remaining. All corrected.
 
 ### Added
+
+- **Fuzzing and Miri in CI** — the two pre-1.0 gates SPEC §5 has been asking for.
+  Six `cargo-fuzz` targets under `fuzz/` cover the parsers that read untrusted
+  bytes: URL parsing and component read-back (where the UTF-16 offset arithmetic
+  lives), `TextDecoder` across every label in both lossy and fatal modes,
+  URLPattern constructor strings, decompression, XML, and the hand-written
+  RFC 8410 key DER plus `atob`. CI runs each for 60 seconds seeded from
+  `fuzz/seeds/`, which is committed and includes every input that has found a
+  bug — the first run found one (see Fixed). Miri runs over `common` and
+  `providers`, the crates that do not link V8.
+  ASAN over the FFI surface is **not** included, and SPEC §5 now says why: the
+  `v8` crate links a prebuilt static library, so a sanitizer would report that
+  library's own allocations rather than any misuse of it. Doing it properly needs
+  a source build of V8 with `-fsanitize=address`.
 
 - **`import.meta.resolve`.** It was `undefined`, so the standard way to turn a
   path relative to a module into a URL — the usual reason to reach for

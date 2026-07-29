@@ -191,6 +191,21 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     Ok(())
 }
 
+/// Fuzz entry: decode arbitrary bytes under an arbitrary label (see
+/// [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_decode(label: &str, bytes: &[u8], fatal: bool, ignore_bom: bool) {
+    if let Ok(enc) = encoding_for(label) {
+        let mut decoder = new_decoder(enc, ignore_bom);
+        // Two chunks then a final empty one, so the streaming path — where a
+        // sequence spans the boundary — is exercised as well as the one-shot.
+        let mid = bytes.len() / 2;
+        let _ = decode(&mut decoder, &bytes[..mid], fatal, false);
+        let _ = decode(&mut decoder, &bytes[mid..], fatal, false);
+        let _ = decode(&mut decoder, &[], fatal, true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

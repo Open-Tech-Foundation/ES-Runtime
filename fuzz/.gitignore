@@ -1,0 +1,7 @@
+# libFuzzer's working files. The *seeds* directory is committed instead: an
+# input that found a bug is a regression test, and starting a run from it is
+# what keeps the fuzzer from having to rediscover it.
+target/
+corpus/
+artifacts/
+coverage/

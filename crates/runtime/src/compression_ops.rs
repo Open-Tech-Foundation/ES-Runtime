@@ -242,3 +242,19 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
     Ok(())
 }
+
+/// Fuzz entry: feed arbitrary bytes to a decompressor in chunks, then finish
+/// (see [`crate::fuzz`]). Corrupt input, trailing junk and truncation must all
+/// be errors, never panics.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_decompress(format: &str, chunks: &[&[u8]]) {
+    let Some(mut codec) = Codec::new(format, true) else {
+        return;
+    };
+    for chunk in chunks {
+        if codec.write(chunk).is_err() {
+            return; // a failed write leaves the codec unusable, as in the op
+        }
+    }
+    let _ = codec.finish();
+}

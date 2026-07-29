@@ -93,6 +93,12 @@ fn decode(s: &str) -> Option<String> {
     }
 }
 
+/// Fuzz entry: `atob`'s decoder (see [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_decode(input: &str) {
+    let _ = decode(input);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

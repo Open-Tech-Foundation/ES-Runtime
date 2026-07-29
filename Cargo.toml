@@ -197,6 +197,15 @@ debug = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# Integer overflow is a bug, and a silently wrapped counter in a parser reading
+# untrusted input is a security bug — the guest chooses the input. Fuzzing found
+# exactly that in `urlpattern` 0.6.0 (an unmatched `]` underflows its IPv6
+# bracket depth), where wrapping would have left the parser in a nonsense state
+# and misparsed the pattern rather than failing. Checked here so it is a
+# contained exception instead, at a cost that does not show in the benchmarks
+# (the hot paths are V8's, and V8 is a prebuilt static library this never
+# touches).
+overflow-checks = true
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1

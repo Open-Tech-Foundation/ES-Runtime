@@ -23,6 +23,9 @@ mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
 mod fs_ops;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz;
 mod http_ops;
 mod net_ops;
 mod prelude;

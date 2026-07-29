@@ -575,6 +575,15 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
     Ok(())
 }
 
+/// Fuzz entry: parse XML into the runtime's value tree (see [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_parse_xml(input: &str) {
+    let mut reader = Reader::from_str(input);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let _ = parse_xml_node(&mut reader, &mut buf, None, 0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

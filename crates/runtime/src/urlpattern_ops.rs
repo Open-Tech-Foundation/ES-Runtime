@@ -137,6 +137,38 @@ fn push_component(out: &mut Vec<Value>, component: &quirks::UrlPatternComponent)
     ));
 }
 
+/// Parses a pattern, turning a panic out of the `urlpattern` crate into the
+/// `TypeError` the spec requires for a pattern it cannot parse.
+///
+/// Found by fuzzing: `new URLPattern("**:]:")` — an unmatched `]` where the
+/// hostname would be — underflows the crate's IPv6 bracket-depth counter
+/// (`urlpattern` 0.6.0, `constructor_parser.rs`). With overflow checks that is a
+/// panic; without them the counter wraps and the parser carries on in a state
+/// that cannot occur, misparsing the pattern. For a router, silently matching
+/// the wrong routes is the worse outcome of the two, so the workspace turns
+/// overflow checks on in release and this converts what they catch into a clean
+/// rejection.
+///
+/// The op boundary already contains panics (D15), but as a generic internal
+/// error; a malformed pattern deserves the class the spec names.
+fn parse_pattern_guarded(
+    kind: f64,
+    input: Option<&Value>,
+    base: Option<&str>,
+    ignore_case: bool,
+) -> std::result::Result<quirks::UrlPattern, OpError> {
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let init = init_from_args(kind, input, base)?;
+        quirks::parse_pattern::<EcmaRegexp>(init, options(ignore_case))
+            .map_err(|e| type_error(e.to_string()))
+    }));
+    parsed.unwrap_or_else(|_| {
+        Err(type_error(
+            "the pattern could not be parsed (unbalanced brackets in the hostname?)",
+        ))
+    })
+}
+
 /// Registers `urlpattern_parse` and `urlpattern_canonicalize`.
 ///
 /// No capability is required: these ops are pure computation over their
@@ -147,9 +179,7 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
         let base = args.get(2).and_then(Value::as_str);
         let ignore_case = matches!(args.get(3), Some(Value::Bool(true)));
 
-        let init = init_from_args(kind, args.get(1), base)?;
-        let pattern = quirks::parse_pattern::<EcmaRegexp>(init, options(ignore_case))
-            .map_err(|e| type_error(e.to_string()))?;
+        let pattern = parse_pattern_guarded(kind, args.get(1), base, ignore_case)?;
 
         let mut out = Vec::with_capacity(COMPONENT_COUNT * 3 + 1);
         for component in [
@@ -209,8 +239,57 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
     Ok(())
 }
 
+/// Fuzz entry: parse a pattern string through the same guard the op uses, and
+/// read back each component's emitted regex source and group names (see
+/// [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_component(pattern: &str) {
+    // libFuzzer aborts on *any* panic, including one the code under test
+    // catches — so without this, every run would stop at the known upstream
+    // bracket-depth panic (see `parse_pattern_guarded`) and the target could
+    // never explore past it. The hook is silenced only around that call, which
+    // is the third-party parser; a panic in the read-back below still aborts,
+    // which is what should happen if our own code is at fault.
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let parsed = parse_pattern_guarded(0.0, Some(&Value::String(pattern.to_string())), None, false);
+    std::panic::set_hook(previous);
+
+    let Ok(parsed) = parsed else {
+        return;
+    };
+    let mut out = Vec::new();
+    for component in [
+        &parsed.protocol,
+        &parsed.username,
+        &parsed.password,
+        &parsed.hostname,
+        &parsed.port,
+        &parsed.pathname,
+        &parsed.search,
+        &parsed.hash,
+    ] {
+        push_component(&mut out, component);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// Found by fuzzing (`fuzz/fuzz_targets/urlpattern.rs`): an unmatched `]`
+    /// where the hostname would be underflows `urlpattern` 0.6.0's IPv6
+    /// bracket-depth counter. It must come back as a `TypeError`, not a panic
+    /// and — worse — not a wrapped counter that misparses the pattern.
+    #[test]
+    fn an_unbalanced_hostname_bracket_is_a_type_error() {
+        use es_runtime_common::IntoException as _;
+        let err = parse_pattern_guarded(0.0, Some(&Value::String("**:]:".into())), None, false)
+            .expect_err("must not parse");
+        assert!(
+            matches!(err.exception_class(), ExceptionClass::TypeError),
+            "{err}"
+        );
+    }
+
     use super::*;
 
     fn parse(pathname: &str, ignore_case: bool) -> quirks::UrlPattern {

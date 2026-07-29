@@ -247,6 +247,22 @@ fn remap_to_utf16(s: &str, offsets: &mut [u32; 15]) {
     *offsets = remapped;
 }
 
+/// Fuzz entry: parse and read back every component (see [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_parse(input: &str, base: Option<&str>) {
+    if let Some(url) = parse(input, base) {
+        let _ = components_value(&url);
+    }
+}
+
+/// Fuzz entry: apply one component setter (see [`crate::fuzz`]).
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_set(href: &str, component: &str, value: &str) {
+    if let Some(url) = set_component(href, component, value) {
+        let _ = components_value(&url);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
