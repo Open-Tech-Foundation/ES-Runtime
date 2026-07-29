@@ -75,11 +75,11 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | `crypto.subtle` | Algorithms |
 | --- | --- |
 | `digest` | SHA-1/256/384/512 |
-| `sign` / `verify` | HMAC, ECDSA (P-256/384/521), RSASSA-PKCS1-v1_5, RSA-PSS |
+| `sign` / `verify` | HMAC, Ed25519, ECDSA (P-256/384/521), RSASSA-PKCS1-v1_5, RSA-PSS |
 | `encrypt` / `decrypt` | AES-GCM/CBC/CTR, RSA-OAEP |
 | `wrapKey` / `unwrapKey` | AES-KW, AES-GCM/CBC/CTR, RSA-OAEP |
-| `deriveBits` / `deriveKey` | HKDF, PBKDF2, ECDH |
-| key formats | `raw`, `spki`, `pkcs8`, `jwk` |
+| `deriveBits` / `deriveKey` | HKDF, PBKDF2, ECDH, X25519 |
+| key formats | `raw`, `spki`, `pkcs8`, `jwk` (`oct` for symmetric, `OKP` for Ed25519/X25519) |
 
 ## Events
 

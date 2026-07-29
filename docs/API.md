@@ -60,22 +60,32 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Compression:** `CompressionStream`, `DecompressionStream` — all four spec formats: `"brotli"`, `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
-- **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `CryptoKey`, and `crypto.subtle`:
+- **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `CryptoKey`, `crypto.subtle` — [algorithms below](#cryptosubtle-algorithms)
+- **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `ErrorEvent`, `ProgressEvent`, `PromiseRejectionEvent`, `AbortController`, `AbortSignal` — plus `addEventListener`/`removeEventListener`/`dispatchEvent` on the global scope itself
+- **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
+- **Data:** `Blob`, `File`, `FormData`, `DOMException`
+- **Performance:** `performance` (`now()`, `timeOrigin`)
+- **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
+
+### `crypto.subtle` algorithms
 
 | Operation | Algorithms |
 | --- | --- |
 | `digest` | SHA-1, SHA-256, SHA-384, SHA-512 |
-| `sign` / `verify` | HMAC, ECDSA (P-256/384/521), RSASSA-PKCS1-v1_5, RSA-PSS |
+| `sign` / `verify` | HMAC, Ed25519, ECDSA (P-256/384/521), RSASSA-PKCS1-v1_5, RSA-PSS |
 | `encrypt` / `decrypt` | AES-GCM, AES-CBC, AES-CTR, RSA-OAEP |
 | `wrapKey` / `unwrapKey` | AES-KW, AES-GCM, AES-CBC, AES-CTR, RSA-OAEP |
-| `deriveBits` / `deriveKey` | HKDF, PBKDF2, ECDH |
-| key formats | `raw`, `spki`, `pkcs8`, `jwk` (symmetric keys as `kty: "oct"`) |
+| `deriveBits` / `deriveKey` | HKDF, PBKDF2, ECDH, X25519 |
+| key formats | `raw`, `spki`, `pkcs8`, `jwk` (symmetric keys as `kty: "oct"`, Ed25519/X25519 as `kty: "OKP"`) |
 
 `AES-KW` wraps key material only — it is not reachable from `encrypt`/`decrypt`,
 and its integrity check makes an unwrap of tampered ciphertext fail rather than
 return wrong key material. Wrapping a key still requires `extractable: true`
 (wrapping *is* an export) and the wrapping key's `wrapKey` usage.
-- **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `ErrorEvent`, `ProgressEvent`, `PromiseRejectionEvent`, `AbortController`, `AbortSignal` — plus `addEventListener`/`removeEventListener`/`dispatchEvent` on the global scope itself
+
+Ed25519 and X25519 are the WebCrypto Secure Curves: one 32-byte key each, with
+no curve to choose. X25519 rejects a low-order peer key rather than returning the
+all-zero shared secret it would otherwise produce.
 
 ### Failures that reach the global scope
 
@@ -109,11 +119,6 @@ slots over the same events: assigning twice replaces rather than accumulates.
 rejection is unclaimed at the end of a tick; attaching a handler afterwards tells
 you the report has been superseded, but the process still fails — a rejection
 that was unhandled when it mattered is a bug worth surfacing.
-- **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
-- **Data:** `Blob`, `File`, `FormData`, `DOMException`
-- **Performance:** `performance` (`now()`, `timeOrigin`)
-- **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
-
 **Not available:** `process`/`Buffer`/`require` (Node), `Worker`,
 `localStorage`/`window` (browser). `navigator` exists but carries only
 `userAgent`: the rest of the browser `Navigator` is document, device and

@@ -30,6 +30,10 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::crypto_ops::install(engine, providers.entropy())?;
     // Elliptic-curve WebCrypto (ECDSA/ECDH), also Entropy-backed for key gen.
     crate::ec_ops::install(engine, providers.entropy())?;
+    // Curve25519 WebCrypto (Ed25519 signatures, X25519 agreement). Needs no
+    // entropy of its own: keys are built from Entropy bytes the prelude draws,
+    // and Ed25519 signing is deterministic.
+    crate::curve25519_ops::install(engine)?;
     // RSA WebCrypto (PKCS1-v1_5 / PSS / OAEP), Entropy-backed for key gen/salt.
     crate::rsa_ops::install(engine, providers.entropy())?;
     // runtime:process ops, gated on Env; `exit` halts via the interrupt handle.

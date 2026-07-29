@@ -58,6 +58,9 @@
   const ALL_AES = new Set([...AES_ALGS, AES_KW]);
   const KDF_ALGS = new Set(["HKDF", "PBKDF2"]);
   const EC_ALGS = new Set(["ECDSA", "ECDH"]);
+  // The Secure Curves: one 32-byte scalar each, no curve parameter to pick.
+  // JWK calls them OKP ("octet key pair"), which is the name used throughout.
+  const OKP_ALGS = new Set(["Ed25519", "X25519"]);
   const RSA_ALGS = new Set(["RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP"]);
   const HASH_BITS = { "SHA-1": 160, "SHA-256": 256, "SHA-384": 384, "SHA-512": 512 };
   // Field byte length (and so the JWK coordinate width) per named curve.
@@ -111,6 +114,77 @@
       throw new DOMException(`unsupported named curve: ${curve}`, "NotSupportedError");
     }
     return curve;
+  }
+
+  // ---- Ed25519 / X25519 (OKP) ---------------------------------------------
+  //
+  // A private key is the 32-byte seed and a public key the 32-byte point, so
+  // every format is a wrapper around those bytes: `raw` is the point itself,
+  // `pkcs8`/`spki` the RFC 8410 DER, `jwk` an OKP with `x` (and `d` when
+  // private).
+
+  function importOkpKey(format, keyData, algo, extractable, usages) {
+    const name = algo.name;
+    const alg = { name };
+    if (format === "raw") {
+      // `raw` is public-only, matching the EC family.
+      return new CryptoKey("public", extractable, alg, usages, toBytes(keyData).slice());
+    }
+    if (format === "spki") {
+      return new CryptoKey("public", extractable, alg, usages, ops.okp_import_spki(name, toBytes(keyData)));
+    }
+    if (format === "pkcs8") {
+      return new CryptoKey("private", extractable, alg, usages, ops.okp_import_pkcs8(name, toBytes(keyData)));
+    }
+    if (format === "jwk") {
+      const jwk = keyData;
+      if (jwk == null || typeof jwk !== "object") {
+        throw new DOMException("JWK must be an object", "DataError");
+      }
+      if (jwk.kty !== "OKP") throw new DOMException("JWK kty must be OKP", "DataError");
+      if (jwk.crv !== name) throw new DOMException("JWK crv does not match algorithm", "DataError");
+      if (jwk.d != null) {
+        return new CryptoKey("private", extractable, alg, usages, b64uToBytes(jwk.d));
+      }
+      if (jwk.x == null) throw new DOMException("JWK is missing x", "DataError");
+      return new CryptoKey("public", extractable, alg, usages, b64uToBytes(jwk.x));
+    }
+    throw new DOMException(`unsupported import format: ${format}`, "NotSupportedError");
+  }
+
+  function exportOkpKey(format, key) {
+    if (!key.extractable) {
+      throw new DOMException("key is not extractable", "InvalidAccessError");
+    }
+    const name = key.algorithm.name;
+    const isPrivate = key.type === "private";
+    // The stored material is the seed for a private key; the public point is
+    // derived rather than kept, so the two can never disagree.
+    const publicBytes = isPrivate ? ops.okp_public(name, key[KEY]) : key[KEY];
+    if (format === "raw") {
+      if (isPrivate) throw new DOMException("raw export is public-only", "InvalidAccessError");
+      return asArrayBuffer(key[KEY].slice());
+    }
+    if (format === "spki") {
+      if (isPrivate) throw new DOMException("spki export is public-only", "InvalidAccessError");
+      return asArrayBuffer(ops.okp_export_spki(name, key[KEY]));
+    }
+    if (format === "pkcs8") {
+      if (!isPrivate) throw new DOMException("pkcs8 export is private-only", "InvalidAccessError");
+      return asArrayBuffer(ops.okp_export_pkcs8(name, key[KEY]));
+    }
+    if (format === "jwk") {
+      const jwk = {
+        kty: "OKP",
+        crv: name,
+        x: bytesToB64u(publicBytes),
+        key_ops: [...key.usages],
+        ext: key.extractable,
+      };
+      if (isPrivate) jwk.d = bytesToB64u(key[KEY]);
+      return jwk;
+    }
+    throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
   }
 
   function importEcKey(format, keyData, algo, extractable, usages) {
@@ -328,6 +402,21 @@
         const material = ops.random_bytes(algo.length / 8);
         return new CryptoKey("secret", extractable, { name: algo.name, length: algo.length }, usages, material);
       }
+      if (OKP_ALGS.has(algo.name)) {
+        // The seed is simply 32 bytes of entropy — there is no rejection
+        // sampling or curve arithmetic to get wrong, which is why key
+        // generation for these curves needs no host RNG of its own.
+        const seed = ops.random_bytes(32);
+        const publicKey = ops.okp_public(algo.name, seed);
+        const alg = { name: algo.name };
+        const isSigning = algo.name === "Ed25519";
+        const privOps = isSigning ? ["sign"] : ["deriveBits", "deriveKey"];
+        const pubOps = isSigning ? ["verify"] : [];
+        return {
+          privateKey: new CryptoKey("private", extractable, alg, usages.filter((u) => privOps.includes(u)), seed),
+          publicKey: new CryptoKey("public", true, alg, usages.filter((u) => pubOps.includes(u)), publicKey),
+        };
+      }
       if (EC_ALGS.has(algo.name)) {
         const curve = ecCurve(algo);
         const alg = { name: algo.name, namedCurve: curve };
@@ -368,6 +457,9 @@
 
     async importKey(format, keyData, algorithm, extractable, usages) {
       const algo = normalizeAlgorithm(algorithm);
+      if (OKP_ALGS.has(algo.name)) {
+        return importOkpKey(format, keyData, algo, extractable, usages);
+      }
       if (EC_ALGS.has(algo.name)) {
         return importEcKey(format, keyData, algo, extractable, usages);
       }
@@ -408,6 +500,9 @@
     },
 
     async exportKey(format, key) {
+      if (OKP_ALGS.has(key.algorithm.name)) {
+        return exportOkpKey(format, key);
+      }
       if (EC_ALGS.has(key.algorithm.name)) {
         return exportEcKey(format, key);
       }
@@ -426,6 +521,11 @@
 
     async sign(algorithm, key, data) {
       const algo = normalizeAlgorithm(algorithm);
+      if (algo.name === "Ed25519") {
+        // No hash to choose and no nonce to source: Ed25519 fixes SHA-512 and
+        // derives its nonce from the key and message (RFC 8032).
+        return asArrayBuffer(ops.ed25519_sign(key[KEY], toBytes(data)));
+      }
       if (algo.name === "HMAC") {
         return asArrayBuffer(
           ops.subtle_hmac_sign(key.algorithm.hash.name, key[KEY], toBytes(data)),
@@ -449,6 +549,9 @@
 
     async verify(algorithm, key, signature, data) {
       const algo = normalizeAlgorithm(algorithm);
+      if (algo.name === "Ed25519") {
+        return ops.ed25519_verify(key[KEY], toBytes(signature), toBytes(data));
+      }
       if (algo.name === "HMAC") {
         return ops.subtle_hmac_verify(
           key.algorithm.hash.name,
@@ -528,6 +631,20 @@
 
     async deriveBits(algorithm, baseKey, length) {
       const algo = normalizeAlgorithm(algorithm);
+      if (algo.name === "X25519") {
+        // The shared secret is the full 32-byte X coordinate; a null length
+        // returns all of it, otherwise the leading bits.
+        const shared = ops.x25519_derive(baseKey[KEY], algo.public[KEY]);
+        if (length == null) return asArrayBuffer(shared);
+        if (length % 8 !== 0) {
+          throw new DOMException("X25519 length must be a multiple of 8", "OperationError");
+        }
+        const bytes = length / 8;
+        if (bytes > shared.length) {
+          throw new DOMException("requested X25519 length exceeds the shared secret", "OperationError");
+        }
+        return asArrayBuffer(shared.subarray(0, bytes));
+      }
       if (algo.name === "ECDH") {
         // The full shared secret is the agreed X coordinate (field width).
         // A null length returns all of it; otherwise take the leading bits.

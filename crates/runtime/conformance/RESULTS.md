@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **293 / 293** (100%) |
+| Assertions passing | **298 / 298** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 22 |
 | Last updated | 2026-07-29 |
@@ -37,7 +37,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |
 | `events.js` | Event/EventTarget, ErrorEvent, global failure events §2.7 | 27 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
-| `crypto.js` | crypto/subtle, key wrapping §2.10 | 16 | — |
+| `crypto.js` | crypto/subtle, key wrapping, secure curves §2.10 | 21 | — |
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
 | `performance.js` | performance, User Timing §2.11/§2.1 | 11 | — |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |

@@ -56,7 +56,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 
 ### 2.10 WebCrypto
 - ☑ `crypto.getRandomValues` (Entropy provider), `crypto.randomUUID`. *(Phase 7.)*
-- ☑ `crypto.subtle`: digest (SHA-1/256/384/512), HMAC, AES-GCM, AES-CBC, AES-CTR, **AES-KW**, `wrapKey`/`unwrapKey`, `deriveBits`/`deriveKey` via HKDF + PBKDF2, ECDSA + ECDH over P-256/P-384/P-521, and RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP) — raw/spki/pkcs8/jwk key formats (symmetric keys as `kty: "oct"`) *(Phase 7/7b, RustCrypto — DECISIONS D9)*. RSA carries an accepted timing-sidechannel advisory (SECURITY.md); RSA-OAEP labels are UTF-8 only (§7).
+- ☑ `crypto.subtle`: digest (SHA-1/256/384/512), HMAC, AES-GCM, AES-CBC, AES-CTR, **AES-KW**, `wrapKey`/`unwrapKey`, `deriveBits`/`deriveKey` via HKDF + PBKDF2, ECDSA + ECDH over P-256/P-384/P-521, **Ed25519** signatures and **X25519** agreement (the Secure Curves), and RSA (RSASSA-PKCS1-v1_5, RSA-PSS, RSA-OAEP) — raw/spki/pkcs8/jwk key formats (symmetric keys as `kty: "oct"`, the Secure Curves as `kty: "OKP"`) *(Phase 7/7b, RustCrypto — DECISIONS D9)*. RSA carries an accepted timing-sidechannel advisory (SECURITY.md); RSA-OAEP labels are UTF-8 only (§7).
 
 ### 2.11 Performance
 - ☑ `performance.now()`, `performance.timeOrigin` (Clock provider) — sub-millisecond (fractional-ms) resolution. *(Phase 4.)*

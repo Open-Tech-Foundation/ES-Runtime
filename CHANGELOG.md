@@ -10,6 +10,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Ed25519 and X25519 — the WebCrypto Secure Curves.** Both were
+  `NotSupportedError`, while Node, Deno, Bun and Workers all ship them, so
+  EdDSA-signed tokens and X25519 key agreement had no path through
+  `crypto.subtle` at all. Ed25519 covers `generateKey`/`sign`/`verify` and
+  X25519 `generateKey`/`deriveBits`/`deriveKey`, in every key format:
+  `raw`/`spki` for public keys, `pkcs8` for private (RFC 8410 DER), and `jwk`
+  as `kty: "OKP"`. Verified against the published vectors — RFC 8032 §7.1 for
+  Ed25519, RFC 7748 §6.1 for X25519 — rather than only against themselves.
+  X25519 **rejects a low-order peer key** instead of returning the all-zero
+  shared secret it would otherwise produce, and a key exported for one curve
+  cannot be imported as the other (the DER OID and the JWK `crv` are both
+  checked). Backed by `ed25519-dalek`/`x25519-dalek` on the `sha2` generation
+  already in the tree; neither draws its own randomness — a key is built from
+  32 bytes of Entropy-provider output, and Ed25519 signing is deterministic, so
+  every byte of key material still traces to the injected provider (D9).
+
 - **`crypto.subtle.wrapKey` / `unwrapKey`, the AES-KW algorithm, and `jwk` for
   symmetric keys.** `wrapKey`/`unwrapKey` are required members of
   `SubtleCrypto` and were absent from the prototype entirely — so the one
