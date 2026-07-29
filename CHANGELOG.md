@@ -8,6 +8,29 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **`esrun types` was missing three of the eight `runtime:` modules.** The
+  bundle is a hand-written list, so `runtime:websocket`, `runtime:serialization`
+  and `runtime:wasi` had never been added to it — anyone who ran
+  `esrun types --install` got no types for them at all, with no error to say
+  why. All eight now ship, and two tests walk `types/` rather than trusting the
+  list: one asserts every `runtime-*.d.ts` is in the bundle, the other that it is
+  referenced by `index.d.ts` (the npm package's entry point).
+- **`runtime:websocket` had no TypeScript definitions at all**, though it has
+  shipped since 0.11. Added, covering `serve`, `broadcast`, `WebSocketServer`
+  and the connection surface.
+- **Documentation caught up with what actually ships.** `API.md` and the site
+  both listed `MessageChannel` under "not available" while it, `MessagePort` and
+  `BroadcastChannel` had shipped. Undocumented in both: `URLPattern`,
+  `URL.createObjectURL`/`revokeObjectURL`, User Timing, `ReadableStream.from`,
+  byte/BYOB streams, `Headers.getSetCookie`, the `Response` statics, and
+  `CompressionStream`/`DecompressionStream` on the site. In `SPEC.md`: §2.4 still
+  described `URLPattern` as a hand-written JS implementation, §2.5 marked timers
+  in progress, §3 listed the `FileSystem` provider as "later" (and omitted the
+  five providers added since), and phase 11 still listed `runtime:path` and
+  `runtime:fs` as remaining. All corrected.
+
 ### Added
 
 - **`import.meta.resolve`.** It was `undefined`, so the standard way to turn a

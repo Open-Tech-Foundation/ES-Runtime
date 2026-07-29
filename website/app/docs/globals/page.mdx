@@ -50,9 +50,9 @@ console.time("query"); await db.run(); console.timeEnd("query");
 
 | Global | Notes |
 | --- | --- |
-| `URL` | |
+| `URL` | `canParse`, `parse`, `createObjectURL` / `revokeObjectURL` |
 | `URLSearchParams` | |
-| `URLPattern` | |
+| `URLPattern` | 369/369 on the official WPT suite |
 
 ## Fetch & networking
 
@@ -61,8 +61,9 @@ console.time("query"); await db.run(); console.timeEnd("query");
 | `fetch` | streaming request + response bodies |
 | `Request` | |
 | `Response` | |
-| `Headers` | |
+| `Headers` | incl. `getSetCookie` |
 | `WebSocket` | client; server is `runtime:websocket` |
+| `WebSocketStream` | streams interface over the same connection |
 
 ## Encoding
 
@@ -76,11 +77,12 @@ console.time("query"); await db.run(); console.timeEnd("query");
 
 | Global | Notes |
 | --- | --- |
-| `ReadableStream` | |
+| `ReadableStream` | default + byte/BYOB, `from`, async iteration |
 | `WritableStream` | |
 | `TransformStream` | |
 | `ByteLengthQueuingStrategy` | |
 | `CountQueuingStrategy` | |
+| `CompressionStream` / `DecompressionStream` | `gzip`, `deflate`, `deflate-raw`, `brotli` |
 
 ## Crypto
 
@@ -130,6 +132,20 @@ globalThis.addEventListener("unhandledrejection", (event) => {
 slots over the same events. `rejectionhandled` does not retract a report that has
 already gone out.
 
+## Messaging
+
+One agent — no workers, no second realm — so the other end of a channel is
+always in this isolate and delivery is a queued task, not a cross-thread hop.
+Messages are still structured-cloned at `postMessage` and delivered in order.
+
+| Global | Notes |
+| --- | --- |
+| `MessageChannel` / `MessagePort` | a port buffers until `start()`; assigning `onmessage` starts it |
+| `BroadcastChannel` | reaches every open channel of the same name except itself |
+
+Transferring a `MessagePort` is a `DataCloneError`: with one agent there is
+nowhere to transfer it to.
+
 ## Data
 
 | Global | Notes |
@@ -143,7 +159,8 @@ already gone out.
 
 | Global | Notes |
 | --- | --- |
-| `performance` | `now()`, `timeOrigin` |
+| `performance` | `now()`, `timeOrigin`, User Timing (`mark`/`measure`/`getEntries*`/`clear*`) |
+| `PerformanceEntry` / `PerformanceMark` / `PerformanceMeasure` | |
 
 ## WebAssembly
 
@@ -185,6 +202,6 @@ await fetch("https://example.com/upload", { method: "POST", body });
 | Global | Why not |
 | --- | --- |
 | `process` / `Buffer` / `require` | Node.js globals — not provided (use `runtime:` modules) |
-| `Worker` / `MessageChannel` | no Workers in Layer A (see [Scope](/docs/scope)) |
+| `Worker` | no Workers in Layer A (see [Scope](/docs/scope)) |
 | `localStorage` / `window` | browser globals — out of scope |
 | `navigator.*` beyond `userAgent` | document/device/permission surface — out of scope |

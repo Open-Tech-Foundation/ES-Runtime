@@ -56,16 +56,17 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` only — `"ES-Runtime/<version>"`)
 - **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — pure URL resolution against the current module, with no I/O and no existence check. A **bare specifier throws**: resolving one means reading `node_modules`, which cannot be done synchronously — use `import()`.
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
-- **URL:** `URL`, `URLSearchParams`
-- **Fetch:** `fetch`, `Request`, `Response`, `Headers` — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
+- **URL:** `URL` (incl. `canParse`, `parse`, and `createObjectURL`/`revokeObjectURL` for in-process `blob:` URLs), `URLSearchParams`, `URLPattern`
+- **Fetch:** `fetch`, `Request`, `Response` (incl. `Response.json`/`error`/`redirect`), `Headers` (incl. `getSetCookie`) — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa` — `TextDecoder` accepts every label the WHATWG Encoding Standard defines (`utf-8`, `utf-16le`/`be`, `windows-1252`, `shift_jis`, `gb18030`, …), with `fatal`, `ignoreBOM` and streaming decode
-- **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
+- **Streams:** `ReadableStream` (default + byte/BYOB, `ReadableStream.from`, async iteration), `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Compression:** `CompressionStream`, `DecompressionStream` — all four spec formats: `"brotli"`, `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
 - **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `CryptoKey`, `crypto.subtle` — [algorithms below](#cryptosubtle-algorithms)
 - **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `ErrorEvent`, `ProgressEvent`, `PromiseRejectionEvent`, `AbortController`, `AbortSignal` — plus `addEventListener`/`removeEventListener`/`dispatchEvent` on the global scope itself
 - **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
-- **Performance:** `performance` (`now()`, `timeOrigin`)
+- **Messaging:** `MessageChannel`, `MessagePort`, `BroadcastChannel` — one agent, so the other end of a channel is always in this isolate and delivery is a queued task rather than a cross-thread hop. Messages are still structured-cloned at `postMessage`, delivered asynchronously and in order, and a port buffers until `start()` (which assigning `onmessage` does implicitly). Transferring a `MessagePort` is a `DataCloneError`: with one agent there is nowhere to transfer it to.
+- **Performance:** `performance` — `now()`, `timeOrigin`, and User Timing (`mark`, `measure`, `getEntries`/`getEntriesByName`/`getEntriesByType`, `clearMarks`, `clearMeasures`), with `PerformanceEntry`, `PerformanceMark`, `PerformanceMeasure`
 - **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
 
 ### `console`

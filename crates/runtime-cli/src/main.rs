@@ -84,6 +84,12 @@ const TYPES: &str = concat!(
     include_str!("../../../types/runtime-net.d.ts"),
     "\n",
     include_str!("../../../types/runtime-http.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-websocket.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-serialization.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-wasi.d.ts"),
 );
 
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
@@ -602,5 +608,61 @@ fn timeout_message(timeout: Option<Duration>) -> String {
     match timeout {
         Some(d) => format!("execution timed out after {} ms", d.as_millis()),
         None => "execution timed out".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TYPES;
+
+    /// `esrun types` must ship definitions for *every* `runtime:` module.
+    ///
+    /// The bundle is a hand-written `concat!`, so adding a module's `.d.ts` to
+    /// `types/` does not add it here — and the symptom is silent: the module
+    /// simply has no types, in an editor, for whoever installed them. This walks
+    /// the directory instead of trusting the list.
+    #[test]
+    fn every_types_file_is_bundled() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../types");
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir).expect("read types dir") {
+            let path = entry.expect("dir entry").path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // `index.d.ts` is the reference list for the npm package, not a
+            // module declaration, and carries no `declare module` of its own.
+            if !name.starts_with("runtime-") || !name.ends_with(".d.ts") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("read types file");
+            let declaration = source
+                .lines()
+                .find(|line| line.starts_with("declare module "))
+                .unwrap_or_else(|| panic!("{name} has no `declare module` line"));
+            assert!(
+                TYPES.contains(declaration),
+                "{name} is not bundled into `esrun types` (missing {declaration})"
+            );
+            checked += 1;
+        }
+        assert!(checked >= 8, "only found {checked} module definitions");
+    }
+
+    /// `index.d.ts` is what the published npm package loads, so a file missing
+    /// from it is invisible to anyone consuming the package.
+    #[test]
+    fn every_types_file_is_referenced_by_the_index() {
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../types"));
+        let index = std::fs::read_to_string(dir.join("index.d.ts")).expect("read index.d.ts");
+        for entry in std::fs::read_dir(dir).expect("read types dir") {
+            let path = entry.expect("dir entry").path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !name.starts_with("runtime-") || !name.ends_with(".d.ts") {
+                continue;
+            }
+            assert!(
+                index.contains(name),
+                "{name} is not referenced by types/index.d.ts"
+            );
+        }
     }
 }

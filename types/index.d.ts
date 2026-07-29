@@ -12,5 +12,6 @@
 /// <reference path="./runtime-fs.d.ts" />
 /// <reference path="./runtime-net.d.ts" />
 /// <reference path="./runtime-http.d.ts" />
+/// <reference path="./runtime-websocket.d.ts" />
 /// <reference path="./runtime-serialization.d.ts" />
 /// <reference path="./runtime-wasi.d.ts" />

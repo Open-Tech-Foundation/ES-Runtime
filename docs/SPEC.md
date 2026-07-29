@@ -35,10 +35,10 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ☑ `TextEncoder` (UTF-8, as the spec fixes it), `TextDecoder` — **every encoding and label the WHATWG Encoding Standard defines** (UTF-8/16LE/16BE, the single-byte legacy sets, and the multi-byte CJK ones), via `encoding_rs`; `fatal`, `ignoreBOM` and streaming decode across chunk boundaries all honoured. `atob`, `btoa` *(Phase 4)*; `TextEncoderStream`/`TextDecoderStream` *(Phase 5, on `TransformStream`)*.
 
 ### 2.4 URL
-- ☑ `URL`, `URLSearchParams`, `URLPattern` (custom efficient JS implementation); component parsing, relative-reference resolution, default-port dropping, and `hostname`/`host` setter port handling are covered by the conformance suite. *(Phase 4.)*
+- ☑ `URL`, `URLSearchParams` (via the `url` crate — D18), `URL.createObjectURL`/`revokeObjectURL` (an in-process `blob:` store; no `Net` capability, since nothing leaves the isolate), and `URLPattern` (via the `urlpattern` crate, with V8 compiling the emitted component regexes — **369/369 on the official WPT suite**). Component parsing, relative-reference resolution, default-port dropping, and `hostname`/`host` setter port handling are covered by the conformance suite. *(Phase 4.)*
 
 ### 2.5 Timers (provider-backed)
-- ◐ `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`. Mechanism in place (Phase 2): engine builtins + runtime-owned schedule, embedder-supplied time. Provider-backing (`Clock`/`Timers`) lands in Phase 3.
+- ☑ `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval` — engine builtins over a runtime-owned schedule with embedder-supplied time, provider-backed by `Clock`/`Timers` (Phase 3). Trailing arguments are forwarded to the callback, and clearing a timer releases the loop immediately rather than at its original deadline.
 
 ### 2.6 Abort
 - ☑ `AbortController`, `AbortSignal` (incl. `AbortSignal.timeout`, `AbortSignal.any`). *(Phase 4.)*
@@ -75,7 +75,12 @@ Traits the embedder must satisfy (defaults shipped in `default-providers`):
 - ☑ `TaskSpawner` — offload blocking work. *(Phase 3: trait + `TokioTaskSpawner`/`InlineTaskSpawner`.)*
 - ☑ `Console` — guest output sink (the lightest provider; DECISIONS D17). *(Phase 4: trait + `TracingConsole`/`NullConsole`/`CapturingConsole`.)*
 - ☑ `NetTransport` — outbound HTTP for `fetch`. *(Phase 6: trait + `ReqwestTransport`/`MockTransport`; DECISIONS D20.)*
-- ☐ `FileSystem` — capability-scoped, async, optional/deniable. *(Later.)*
+- ☑ `FileSystem` — capability-scoped (`FileRead`/`FileWrite`), async, optional/deniable; backs `runtime:fs`. *(Phase 11: trait + `SystemFs`, root-jailed per D25.)*
+- ☑ `SyncFileSystem` — the blocking seam WASI's syscalls need, same gates and jail (DECISIONS D36). *(Phase 12.)*
+- ☑ `Process` — env/args/cwd/platform/exit, gated on `Env` (DECISIONS D26). *(Phase 11.)*
+- ☑ `NetProvider` — sockets + listener for `runtime:net`, gated on `Net`/`NetListen` (DECISIONS D28). *(Phase 12.)*
+- ☑ `HttpServerProvider` — the `runtime:http` `serve()` seam, streaming both directions (DECISIONS D31). *(Phase 12.)*
+- ☑ `WebSocketProvider` — client and server framing for `WebSocket` / `runtime:websocket` (DECISIONS D29). *(Phase 12.)*
 
 All calls: async-friendly, cancellable, capability-checked, typed errors. No provider, no capability ⇒ clean JS exception.
 
@@ -127,7 +132,7 @@ Each phase must compile, pass CI, and be independently reviewable. At each phase
 Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM module support (static + dynamic, `node_modules` ESM) landed ahead of these (D21/D22/D23).
 
 10. ◐ **FS sandbox + symlink-correct resolution** — module/file resolution **realpaths** resolved modules (Node-default, preserve-symlinks off) so pnpm's symlinked store resolves transitive deps; resolution is **root-jailed** to the detected project root by default (DECISIONS D25). The behavioral test job now runs on **Linux + Windows + macOS** (CI matrix), so the platform-divergent path/jail behavior is exercised on each.
-11. ◐ **`runtime:` standard modules I** — ☑ the `runtime:` built-in scheme (served by the runtime, loader-independent; ops are the capability boundary) and ☑ **`runtime:process`** (`env` mutable-in-process / `args` / `cwd()` / `platform` OS-native / `exit(code=0)`), gated on `Capability::Env`, backed by the new `Process` provider (DECISIONS D26). Remaining: **`runtime:path`** (pure; uses `cwd`/`platform`) and **`runtime:fs`** (async file ops, jailed) + the `FileSystem` provider.
+11. ☑ **`runtime:` standard modules I** — ☑ the `runtime:` built-in scheme (served by the runtime, loader-independent; ops are the capability boundary) and ☑ **`runtime:process`** (`env` mutable-in-process / `args` / `cwd()` / `platform` OS-native / `exit(code=0)`), gated on `Capability::Env`, backed by the new `Process` provider (DECISIONS D26). ☑ **`runtime:path`** (pure; uses `cwd`/`platform`) and ☑ **`runtime:fs`** (async file ops, jailed, incl. `Glob`) over the new `FileSystem` provider. Phase 11 is complete.
 12. ☑ **`runtime:` standard modules II** — ☑ **`runtime:serialization`** (XML validation, XML parser, and XML builder backed natively by `quick-xml`). ☑ **`runtime:net`** (sockets + listener provider, client/server TLS per the WinterTC Sockets API; DECISIONS D28). ☑ **`runtime:http`** (the HTTP **server** capstone — `serve((req) => res)` over the `HttpServerProvider` seam, bodies **streaming both directions** with backpressure; DECISIONS D31). ☑ Streaming `fetch` request bodies (chunked upload with backpressure; DECISIONS D20).
 13. ☑ **Diagnostics & DX** — error model standardization. ☑ JS **stack traces + source position** (`engine` extracts `Error.stack` with a `v8::Message` `file:line:col` fallback, preserving the error class), ☑ **one coherent CLI error block** with ☑ **optional color** (bold-red `error`, dimmed `at …` frames; terminal-detected + `NO_COLOR`-aware). ☑ **Stable guest-facing error codes**: a documented `ErrorCode` set in `common` (`ERR_NOT_FOUND`, `ERR_CAPABILITY_DENIED`, `ERR_JAIL_ESCAPE`, `ERR_TLS`, …, API.md §Error codes) surfaces as an own `code` string property on the thrown JS exception via `IntoException::exception_code` — messages stay prose, the code is the contract; providers classify io/TLS/DNS failures (`ProviderError::Coded`/`from_io`), and an unclassified error simply carries no code. (SPEC §7 deferral promoted.)
 14. ◐ **Production hardening & release** — ☑ cross-platform test CI (Linux + Windows + macOS matrix); ◐ soak/leak tests (the streaming-`fetch` leak soak landed; broad cross-subsystem coverage remains). Remaining: fuzzing + sanitizers/Miri in CI, external security review, API freeze + semver commitment, embedder guide + supported-platforms statement. *(A standard **WPT subset** is **deferred to post-1.0**: this is a server-side WinterTC runtime, so full Web Platform Tests — built around DOM/document/worker semantics and legacy encodings — are disproportionate; the curated in-repo `conformance/*.js` suite is the pre-1.0 conformance signal and keeps trending up.)*
