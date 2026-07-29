@@ -57,7 +57,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **URL:** `URL`, `URLSearchParams`
 - **Fetch:** `fetch`, `Request`, `Response`, `Headers` — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
-- **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`
+- **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa` — `TextDecoder` accepts every label the WHATWG Encoding Standard defines (`utf-8`, `utf-16le`/`be`, `windows-1252`, `shift_jis`, `gb18030`, …), with `fatal`, `ignoreBOM` and streaming decode
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Compression:** `CompressionStream`, `DecompressionStream` — all four spec formats: `"brotli"`, `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
 - **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `CryptoKey`, `crypto.subtle` — [algorithms below](#cryptosubtle-algorithms)

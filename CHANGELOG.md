@@ -10,6 +10,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`TextDecoder` now accepts every encoding the WHATWG Encoding Standard
+  defines.** It was UTF-8 only: `new TextDecoder("utf-16le")` — or
+  `windows-1252`, `latin1`, `shift_jis`, `gb18030`, or any of the other labels —
+  threw `RangeError`, which is a hard stop for anything reading a file, a
+  database column, or an HTTP response that is not UTF-8. Decoding and the label
+  table both come from `encoding_rs`, the implementation Firefox ships, so
+  `latin1` resolves to `windows-1252` and `utf-16` to `utf-16le` exactly as the
+  standard says rather than by a hand-written subset. `fatal` and `ignoreBOM`
+  work for every encoding, and a BOM is stripped only for the decoder's *own*
+  encoding — a UTF-16 BOM handed to a `windows-1252` decoder is data, not a
+  signal to switch.
+  Streaming decode is now the host decoder's job rather than a UTF-8-shaped
+  guess in JS: a character split across chunks survives the boundary for any
+  encoding, including ISO-2022-JP's shift state, which no amount of
+  byte-counting could have handled. A one-shot `decode(bytes)` still allocates
+  nothing — only a `{ stream: true }` call takes a native context, released when
+  the stream ends, with a `FinalizationRegistry` backstop for a decoder
+  abandoned mid-stream.
+
 - **Ed25519 and X25519 — the WebCrypto Secure Curves.** Both were
   `NotSupportedError`, while Node, Deno, Bun and Workers all ship them, so
   EdDSA-signed tokens and X25519 key agreement had no path through

@@ -32,7 +32,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 - ◐ `console` (log/info/warn/error/debug ☑) → the injected `Console` sink, not stdout (DECISIONS D17). group/table minimal. *(Phase 4.)*
 
 ### 2.3 Encoding
-- ☑ `TextEncoder`, `TextDecoder` (UTF-8), `atob`, `btoa` *(Phase 4)*; `TextEncoderStream`/`TextDecoderStream` *(Phase 5, on `TransformStream`)*.
+- ☑ `TextEncoder` (UTF-8, as the spec fixes it), `TextDecoder` — **every encoding and label the WHATWG Encoding Standard defines** (UTF-8/16LE/16BE, the single-byte legacy sets, and the multi-byte CJK ones), via `encoding_rs`; `fatal`, `ignoreBOM` and streaming decode across chunk boundaries all honoured. `atob`, `btoa` *(Phase 4)*; `TextEncoderStream`/`TextDecoderStream` *(Phase 5, on `TransformStream`)*.
 
 ### 2.4 URL
 - ☑ `URL`, `URLSearchParams`, `URLPattern` (custom efficient JS implementation); component parsing, relative-reference resolution, default-port dropping, and `hostname`/`host` setter port handling are covered by the conformance suite. *(Phase 4.)*

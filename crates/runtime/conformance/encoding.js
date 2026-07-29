@@ -106,3 +106,76 @@ test("a fatal decoder still buffers a split sequence rather than erroring", () =
   assertEquals(d.decode(new Uint8Array([0xe2, 0x82]), { stream: true }), "");
   assertEquals(d.decode(new Uint8Array([0xac]), { stream: true }), "\u20ac");
 });
+
+// ---- Encodings beyond UTF-8 -----------------------------------------------
+
+test("labels resolve through the spec's table", () => {
+  // The `encoding` attribute reports the canonical name, not the label given.
+  assertEquals(new TextDecoder("UTF8").encoding, "utf-8");
+  assertEquals(new TextDecoder("  unicode-1-1-utf-8 ").encoding, "utf-8");
+  assertEquals(new TextDecoder("latin1").encoding, "windows-1252");
+  assertEquals(new TextDecoder("ISO-8859-1").encoding, "windows-1252");
+  assertEquals(new TextDecoder("utf-16").encoding, "utf-16le");
+  assertEquals(new TextDecoder("sjis").encoding, "shift_jis");
+  assertEquals(new TextDecoder("gb2312").encoding, "gbk");
+  assertThrows(() => new TextDecoder("definitely-not-an-encoding"), "RangeError");
+});
+
+test("the non-UTF-8 encodings decode", () => {
+  assertEquals(new TextDecoder("utf-16le").decode(new Uint8Array([0x61, 0, 0xe9, 0])), "aé");
+  assertEquals(new TextDecoder("utf-16be").decode(new Uint8Array([0, 0x61, 0, 0xe9])), "aé");
+  // 0x80 is the euro sign in windows-1252 — the byte that distinguishes it from
+  // ISO-8859-1, which the spec maps to this same encoding.
+  assertEquals(new TextDecoder("windows-1252").decode(new Uint8Array([0x61, 0xe9, 0x80])), "aé€");
+  assertEquals(new TextDecoder("shift_jis").decode(new Uint8Array([0x82, 0xa0])), "あ");
+  assertEquals(new TextDecoder("gb18030").decode(new Uint8Array([0xd6, 0xd0])), "中");
+});
+
+test("a character split across chunks survives the boundary", () => {
+  const utf16 = new TextDecoder("utf-16le");
+  assertEquals(utf16.decode(new Uint8Array([0x61, 0, 0xe9]), { stream: true }), "a");
+  assertEquals(utf16.decode(new Uint8Array([0]), { stream: true }), "é");
+  assertEquals(utf16.decode(), "");
+
+  // The same for a 4-byte UTF-8 sequence cut in half.
+  const utf8 = new TextDecoder();
+  const emoji = new TextEncoder().encode("😀");
+  assertEquals(utf8.decode(emoji.subarray(0, 2), { stream: true }), "");
+  assertEquals(utf8.decode(emoji.subarray(2), { stream: true }), "😀");
+  assertEquals(utf8.decode(), "");
+});
+
+test("ending a stream mid-character is an error, not a wait", () => {
+  // Streaming holds a partial sequence back; ending the stream flushes it.
+  const lossy = new TextDecoder("utf-16le");
+  assertEquals(lossy.decode(new Uint8Array([0x61, 0, 0xe9]), { stream: false }), "a�");
+  const strict = new TextDecoder("utf-16le", { fatal: true });
+  assertThrows(() => strict.decode(new Uint8Array([0x61, 0, 0xe9])), "TypeError");
+});
+
+test("a BOM is stripped for its own encoding only", () => {
+  assertEquals(new TextDecoder("utf-16le").decode(new Uint8Array([0xff, 0xfe, 0x61, 0])), "a");
+  assertEquals(
+    new TextDecoder("utf-16le", { ignoreBOM: true }).decode(new Uint8Array([0xff, 0xfe, 0x61, 0])),
+    "﻿a",
+  );
+  // A UTF-16 BOM handed to a windows-1252 decoder is data: the decoder must not
+  // morph into a decoder for another encoding.
+  assertEquals(new TextDecoder("windows-1252").decode(new Uint8Array([0xff, 0xfe, 0x61])), "ÿþa");
+});
+
+test("TextDecoderStream carries the label through", async () => {
+  const stream = new TextDecoderStream("utf-16le");
+  assertEquals(stream.encoding, "utf-16le");
+  const readable = new ReadableStream({
+    start(c) {
+      // Split mid-character, so the transform has to hold state too.
+      c.enqueue(new Uint8Array([0x61, 0, 0xe9]));
+      c.enqueue(new Uint8Array([0]));
+      c.close();
+    },
+  });
+  let out = "";
+  for await (const chunk of readable.pipeThrough(stream)) out += chunk;
+  assertEquals(out, "aé");
+});

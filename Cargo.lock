@@ -834,6 +834,7 @@ dependencies = [
  "cbc",
  "ctr",
  "ed25519-dalek 3.0.0",
+ "encoding_rs",
  "es-runtime-common",
  "es-runtime-engine",
  "es-runtime-providers",

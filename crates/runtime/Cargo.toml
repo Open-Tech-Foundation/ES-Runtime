@@ -18,6 +18,7 @@ thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true
 urlpattern.workspace = true
+encoding_rs.workspace = true
 regex.workspace = true
 # WebCrypto (DECISIONS.md D9): RustCrypto, vetted constant-time primitives.
 sha1.workspace = true

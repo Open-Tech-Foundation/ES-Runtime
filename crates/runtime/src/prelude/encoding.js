@@ -48,47 +48,34 @@
     throw new TypeError("TextDecoder input must be a BufferSource");
   }
 
-  // Length of a trailing *incomplete but valid* UTF-8 sequence, i.e. how many
-  // bytes must be held back until the next chunk arrives. An invalid lead byte
-  // is not a prefix of anything, so it is decoded now (as U+FFFD) rather than
-  // held forever.
-  function incompleteTailLength(bytes) {
-    const n = bytes.length;
-    for (let back = 1; back <= 3 && back <= n; back++) {
-      const b = bytes[n - back];
-      if ((b & 0xc0) === 0x80) continue; // continuation byte: keep scanning back
-      let needed;
-      if ((b & 0x80) === 0) needed = 1;
-      else if ((b & 0xe0) === 0xc0) needed = 2;
-      else if ((b & 0xf0) === 0xe0) needed = 3;
-      else if ((b & 0xf8) === 0xf0) needed = 4;
-      else return 0; // invalid lead byte
-      return back < needed ? back : 0;
-    }
-    return 0;
-  }
+  // A decoder abandoned mid-stream — created, fed a `{ stream: true }` chunk,
+  // then dropped without a final decode — would leave its native context in the
+  // host registry forever. Normal use frees it when the stream ends; this is the
+  // backstop for the case where nothing ever ends it.
+  const reclaim = new FinalizationRegistry((handle) => {
+    ops.decoder_free(handle);
+  });
 
   class TextDecoder {
+    #encoding;
     #fatal;
     #ignoreBOM;
-    // Streaming state: bytes held back from a `{ stream: true }` call, and
-    // whether the next decode is the start of a stream (only there is a BOM
-    // stripped — it must not be re-stripped at every chunk boundary).
-    #pending = null;
-    #atStreamStart = true;
+    // The native decoder for an in-flight stream, or null. It is allocated
+    // lazily: a one-shot `decode(bytes)` — the common case by far — carries no
+    // state across calls and so needs no context at all.
+    #handle = null;
 
     constructor(label = "utf-8", options = {}) {
-      const enc = String(label).trim().toLowerCase();
-      if (enc !== "utf-8" && enc !== "utf8" && enc !== "unicode-1-1-utf-8") {
-        // WinterTC baseline is UTF-8; other labels are not supported yet.
-        throw new RangeError(`unsupported encoding label: ${label}`);
-      }
+      // The label table is the spec's, resolved host-side: `latin1` is
+      // windows-1252, `utf-16` is utf-16le, and an unknown label is a
+      // RangeError, which the op raises.
+      this.#encoding = ops.encoding_for_label(String(label));
       this.#fatal = Boolean(options.fatal);
       this.#ignoreBOM = Boolean(options.ignoreBOM);
     }
 
     get encoding() {
-      return "utf-8";
+      return this.#encoding;
     }
     get fatal() {
       return this.#fatal;
@@ -99,37 +86,32 @@
 
     decode(input, options = {}) {
       const streaming = Boolean(options && options.stream);
-      let bytes = bytesOf(input);
+      const bytes = bytesOf(input);
 
-      // Prepend anything held back from the previous streaming call.
-      if (this.#pending !== null) {
-        const joined = new Uint8Array(this.#pending.length + bytes.length);
-        joined.set(this.#pending, 0);
-        joined.set(bytes, this.#pending.length);
-        bytes = joined;
-        this.#pending = null;
+      // No stream in flight and none being started: decode and be done.
+      if (!streaming && this.#handle === null) {
+        return ops.decode_once(this.#encoding, bytes, this.#fatal, this.#ignoreBOM);
       }
 
-      if (streaming) {
-        // Hold back a trailing sequence that is not yet complete, so a code
-        // point split across chunks is not decoded as two replacements.
-        const keep = incompleteTailLength(bytes);
-        if (keep > 0) {
-          this.#pending = bytes.slice(bytes.length - keep);
-          bytes = bytes.subarray(0, bytes.length - keep);
-        }
+      if (this.#handle === null) {
+        this.#handle = ops.decoder_new(this.#encoding, this.#ignoreBOM);
+        reclaim.register(this, this.#handle, this);
       }
-
-      // A BOM belongs to the stream, not to each chunk.
-      const ignoreBOM = this.#ignoreBOM || !this.#atStreamStart;
-      // Rust validates/replaces and V8 builds the string natively.
-      const text = ops.utf8_decode(bytes, this.#fatal, ignoreBOM);
-
-      // A non-streaming call ends the stream: reset for the next one. (Any
-      // bytes still held back were flushed above, becoming U+FFFD or, under
-      // `fatal`, an error — both from the op.)
-      this.#atStreamStart = !streaming;
+      // The host decoder holds any incomplete sequence — a multi-byte character
+      // split across chunks, or a shift state — so nothing needs to be held
+      // back here. `last` tells it the stream is over, which is when a trailing
+      // partial sequence stops being "wait for more" and becomes an error.
+      const text = ops.decoder_decode(this.#handle, bytes, this.#fatal, !streaming);
+      if (!streaming) this.#release();
       return text;
+    }
+
+    // Ends the stream: the native decoder is done, and the finalizer must not
+    // free a handle that has already been freed (or, worse, reused).
+    #release() {
+      ops.decoder_free(this.#handle);
+      reclaim.unregister(this);
+      this.#handle = null;
     }
   }
 
