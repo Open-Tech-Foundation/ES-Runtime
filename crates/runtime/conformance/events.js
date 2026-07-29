@@ -245,3 +245,95 @@ test("a throwing error listener does not recurse forever", () => {
   globalThis.removeEventListener("error", handler);
   assertEquals(calls, 1);
 });
+
+// ---- Failures that reach the global scope ---------------------------------
+//
+// Every listener here claims the failure it sees with `preventDefault()`. That
+// is what the assertions are about — and it is also load-bearing for the suite:
+// an unclaimed rejection or timer throw is reported by the host, and under the
+// `esrun` runner that fails the process.
+//
+// Test bodies in this harness all *start* synchronously, so several of them can
+// have a failure in flight at once and every global listener sees every one of
+// them. Each case therefore matches on its own value and ignores the rest.
+
+const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+// The host drains failures at the *end* of a tick — after the checkpoint that
+// would resume an awaiting body — so a dispatch lands one turn later than the
+// timer that triggered it.
+const twoTurns = async () => {
+  await nextTick();
+  await nextTick();
+};
+
+test("an unhandled rejection fires unhandledrejection at the global", async () => {
+  const reason = new Error("nobody handles me");
+  let got = null;
+  const handler = (e) => {
+    e.preventDefault();
+    if (e.reason === reason) got = e;
+  };
+  globalThis.addEventListener("unhandledrejection", handler);
+  const promise = Promise.reject(reason);
+  await twoTurns();
+  globalThis.removeEventListener("unhandledrejection", handler);
+
+  assert(got instanceof PromiseRejectionEvent, "not a PromiseRejectionEvent");
+  assertEquals(got.type, "unhandledrejection");
+  assertEquals(got.reason, reason);
+  assert(got.promise === promise, "the event must carry the rejected promise");
+  // Cancelable is what makes preventDefault meaningful: it is how guest code
+  // takes responsibility and suppresses the host's report.
+  assertEquals(got.cancelable, true);
+  assertEquals(got.defaultPrevented, true);
+});
+
+test("onunhandledrejection is a single replaceable handler slot", async () => {
+  const reason = new Error("slot");
+  let count = 0;
+  globalThis.onunhandledrejection = (e) => {
+    e.preventDefault();
+    if (e.reason === reason) count += 1;
+  };
+  globalThis.onunhandledrejection = (e) => {
+    e.preventDefault();
+    if (e.reason === reason) count += 10;
+  };
+  Promise.reject(reason);
+  await twoTurns();
+  globalThis.onunhandledrejection = null;
+  // Only the second handler ran: the slot replaces, it does not accumulate.
+  assertEquals(count, 10);
+});
+
+test("an exception out of a timer callback fires error at the global", async () => {
+  const thrown = new TypeError("from a timer");
+  let got = null;
+  const handler = (e) => {
+    e.preventDefault();
+    if (e.error === thrown) got = e;
+  };
+  globalThis.addEventListener("error", handler);
+  setTimeout(() => {
+    throw thrown;
+  }, 0);
+  await twoTurns();
+  globalThis.removeEventListener("error", handler);
+
+  assert(got instanceof ErrorEvent, "not an ErrorEvent");
+  assertEquals(got.error, thrown);
+  assertEquals(got.message, "from a timer");
+  assertEquals(got.cancelable, true);
+});
+
+test("PromiseRejectionEvent requires a promise and is branded", () => {
+  assertThrows(() => new PromiseRejectionEvent("unhandledrejection"), "TypeError");
+  assertThrows(() => new PromiseRejectionEvent("unhandledrejection", {}), "TypeError");
+  const p = Promise.resolve();
+  const e = new PromiseRejectionEvent("rejectionhandled", { promise: p });
+  assertEquals(e.promise, p);
+  assertEquals(e.reason, undefined);
+  assertEquals(e.cancelable, false);
+  assertEquals(Object.prototype.toString.call(e), "[object PromiseRejectionEvent]");
+});

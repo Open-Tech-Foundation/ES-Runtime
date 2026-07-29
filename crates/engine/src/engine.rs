@@ -230,7 +230,19 @@ pub trait Engine {
 
     /// Drains promise rejections that went unhandled since the last call, as
     /// their stringified messages (ARCHITECTURE.md §5).
+    ///
+    /// Each is first offered to the guest as an `unhandledrejection` event; one
+    /// a listener claims with `preventDefault()` is the guest's responsibility
+    /// and is **not** returned here.
     fn take_unhandled_rejections(&mut self) -> Vec<String>;
+
+    /// Drains exceptions that escaped a callback the host invoked — today, a
+    /// timer callback — and that no `error` listener claimed.
+    ///
+    /// There is no caller left to propagate such a throw to, so it would
+    /// otherwise vanish. The embedder decides what to do with it (`esrun`
+    /// reports it and exits non-zero).
+    fn take_uncaught_errors(&mut self) -> Vec<String>;
 
     /// Returns a thread-safe handle for interrupting this engine's execution
     /// (e.g. from a watchdog thread). See [`InterruptHandle`].
@@ -749,6 +761,10 @@ impl Engine for V8Engine {
 
     fn take_unhandled_rejections(&mut self) -> Vec<String> {
         crate::op::take_unhandled_rejections(&mut self.isolate, &self.context, &self.op_state)
+    }
+
+    fn take_uncaught_errors(&mut self) -> Vec<String> {
+        crate::op::take_uncaught_errors(&self.op_state)
     }
 
     fn interrupt_handle(&self) -> InterruptHandle {

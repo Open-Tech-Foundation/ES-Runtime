@@ -50,6 +50,31 @@
   // runs, so reassigning the global cannot reach them, and the host counter
   // saturates so a forged call can only keep the loop alive, never end it early.
 
+  // Lock the host dispatch hooks. The engine calls these by name to hand the
+  // guest a failure it is about to report — an exception out of a timer, a
+  // rejection nobody handled — and reads the return value to decide whether the
+  // guest claimed it. A guest that could replace one could make the host report
+  // failures that were handled, or stay silent about ones that were not.
+  //
+  // This is honesty of reporting, not a capability: `preventDefault()` on the
+  // event is the *supported* way to take responsibility for a failure, and it
+  // stays available.
+  for (const hook of [
+    "__dispatch_error_event",
+    "__dispatch_unhandled_rejection",
+    "__dispatch_rejection_handled",
+  ]) {
+    const fn = globalThis[hook];
+    if (typeof fn === "function") {
+      Object.defineProperty(globalThis, hook, {
+        value: fn,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      });
+    }
+  }
+
   // Freeze the runtime's plain namespace objects so their methods can't be
   // swapped out from under code that reaches them by reference. `crypto` and
   // `performance` are interface instances whose members live on their

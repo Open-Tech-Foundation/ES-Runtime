@@ -61,7 +61,40 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Compression:** `CompressionStream`, `DecompressionStream` — all four spec formats: `"brotli"`, `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
 - **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `crypto.subtle` (digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2), `CryptoKey`
-- **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `AbortController`, `AbortSignal`
+- **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `ErrorEvent`, `ProgressEvent`, `PromiseRejectionEvent`, `AbortController`, `AbortSignal` — plus `addEventListener`/`removeEventListener`/`dispatchEvent` on the global scope itself
+
+### Failures that reach the global scope
+
+A failure with no code left to catch it is reported to the global scope before
+the host sees it. A listener that calls `preventDefault()` has taken
+responsibility, and the host stays quiet; otherwise `esrun` prints it and exits
+non-zero.
+
+| Event | Fired when | Interface | Cancelable |
+| --- | --- | --- | --- |
+| `error` | an exception escapes a timer callback, or `reportError()` is called | `ErrorEvent` | yes |
+| `unhandledrejection` | a promise rejection is still unhandled at the end of a tick | `PromiseRejectionEvent` | yes |
+| `rejectionhandled` | a handler is attached to a rejection already reported | `PromiseRejectionEvent` | no |
+
+```js
+globalThis.addEventListener("unhandledrejection", (event) => {
+  logger.warn("unhandled", event.reason);
+  event.preventDefault(); // mine now — do not fail the process
+});
+
+globalThis.onerror = (event) => {
+  logger.error(event.message, event.error);
+  event.preventDefault();
+};
+```
+
+`onerror`, `onunhandledrejection` and `onrejectionhandled` are single-handler
+slots over the same events: assigning twice replaces rather than accumulates.
+
+`rejectionhandled` does **not** retract the report. The report goes out when the
+rejection is unclaimed at the end of a tick; attaching a handler afterwards tells
+you the report has been superseded, but the process still fails — a rejection
+that was unhandled when it mattered is a bug worth surfacing.
 - **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
 - **Performance:** `performance` (`now()`, `timeOrigin`)

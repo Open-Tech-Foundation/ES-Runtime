@@ -10,6 +10,31 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Failures that reach the global scope are now dispatched as events, and an
+  exception out of a timer callback is no longer swallowed.** Three gaps closed
+  together, because they are one story: what happens to a failure with no code
+  left to catch it.
+  - **`setTimeout(() => { throw x })` used to vanish.** The throw was caught to
+    keep it from unwinding into V8 and then simply dropped — no output, exit 0,
+    no trace that anything went wrong. It now fires a cancelable `error`
+    (`ErrorEvent`) on the global scope, and `esrun` reports it and exits
+    non-zero if nothing claims it.
+  - **`unhandledrejection` fires.** `addEventListener("unhandledrejection", …)`
+    registered fine and was never called; there was no way for guest code to
+    observe a rejection, log it, or suppress it. It now receives a cancelable
+    `PromiseRejectionEvent` carrying both `reason` and `promise`.
+  - **`rejectionhandled` fires** when a handler is attached to a rejection whose
+    report has already gone out. It does **not** retract that report: the
+    process still fails, the same stance Node and Deno take.
+
+  `preventDefault()` is how guest code takes responsibility — a claimed failure
+  never reaches the embedder. `onerror`, `onunhandledrejection` and
+  `onrejectionhandled` are single-handler slots over the same events;
+  `PromiseRejectionEvent` is a new global. `TickStatus` gains `uncaught_errors`
+  alongside `unhandled_rejections`, and `Driver::run_to_completion` now returns a
+  `DriveOutcome` carrying both instead of a bare `Vec<String>` (**breaking** for
+  embedders driving the runtime themselves).
+
 - **`navigator.userAgent`.** The WinterTC Minimum Common API requires it and the
   global was missing entirely — while the docs listed `navigator` under "browser
   globals, out of scope", which contradicted the compliance claim. It reports

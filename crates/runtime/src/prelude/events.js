@@ -324,6 +324,32 @@
     }
   }
 
+  // PromiseRejectionEvent — a promise rejection that reached the global scope,
+  // carrying both the promise and the reason it rejected with. Fired as
+  // `unhandledrejection` (cancelable: preventing the default suppresses the
+  // host's report) and as `rejectionhandled` (not cancelable: the report has
+  // already gone out, this retracts it).
+  class PromiseRejectionEvent extends Event {
+    #promise;
+    #reason;
+    constructor(type, options = {}) {
+      super(type, options);
+      if (!options || !("promise" in options)) {
+        throw new TypeError(
+          "Failed to construct 'PromiseRejectionEvent': required member promise is undefined",
+        );
+      }
+      this.#promise = options.promise;
+      this.#reason = options.reason;
+    }
+    get promise() {
+      return this.#promise;
+    }
+    get reason() {
+      return this.#reason;
+    }
+  }
+
   // ProgressEvent — progress of a length-bounded transfer.
   class ProgressEvent extends Event {
     #lengthComputable;
@@ -354,6 +380,7 @@
     CloseEvent,
     ErrorEvent,
     ProgressEvent,
+    PromiseRejectionEvent,
   ]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
       value: Interface.name,

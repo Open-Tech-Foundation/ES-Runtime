@@ -43,6 +43,30 @@ pub struct Driver {
     timers: Arc<dyn Timers>,
 }
 
+/// What a drive to quiescence surfaced that the guest did not take
+/// responsibility for.
+///
+/// Both kinds are already past the guest's own chance to claim them: an
+/// `unhandledrejection` or `error` listener calling `preventDefault()` keeps the
+/// failure out of here entirely. What is left is for the embedder to report.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct DriveOutcome {
+    /// Promise rejections that reached quiescence with no handler.
+    pub unhandled_rejections: Vec<String>,
+    /// Exceptions that escaped a timer callback. These have no caller to
+    /// propagate to, so without this they would be lost.
+    pub uncaught_errors: Vec<String>,
+}
+
+impl DriveOutcome {
+    /// Whether the drive finished with nothing unclaimed.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.unhandled_rejections.is_empty() && self.uncaught_errors.is_empty()
+    }
+}
+
 impl Driver {
     /// Builds a driver from a clock and a timer source.
     pub fn new(clock: Arc<dyn Clock>, timers: Arc<dyn Timers>) -> Self {
@@ -50,14 +74,14 @@ impl Driver {
     }
 
     /// Advances `runtime` until no async ops or timers remain, parking between
-    /// ticks rather than busy-waiting on timers. Returns every
-    /// unhandled-rejection message observed along the way.
+    /// ticks rather than busy-waiting on timers. Returns everything the guest
+    /// left unclaimed along the way (see [`DriveOutcome`]).
     ///
     /// Note: a never-completing async op would loop forever here by design — the
     /// execution-time watchdog that bounds that is a hardening-phase concern
     /// (SPEC.md §6.9), not the driver's.
-    pub async fn run_to_completion(&self, runtime: &mut Runtime) -> Vec<String> {
-        let mut rejections = Vec::new();
+    pub async fn run_to_completion(&self, runtime: &mut Runtime) -> DriveOutcome {
+        let mut outcome = DriveOutcome::default();
 
         // Wire a real waker: a ready op-future will notify us so we re-tick at
         // once, rather than re-polling on a fixed interval (the latency floor
@@ -71,13 +95,18 @@ impl Driver {
         loop {
             let now = self.clock.monotonic_ms();
             let status = runtime.tick(now);
-            rejections.extend(status.unhandled_rejections);
+            outcome
+                .unhandled_rejections
+                .extend(status.unhandled_rejections);
+            outcome.uncaught_errors.extend(status.uncaught_errors);
 
             // Resolve + load any dynamic import()s raised this tick (async I/O),
             // linking each so a later tick settles its promise. A processing
             // error here is an internal failure, not a guest rejection.
             if let Err(err) = runtime.process_dynamic_imports().await {
-                rejections.push(format!("dynamic import failed: {err}"));
+                outcome
+                    .unhandled_rejections
+                    .push(format!("dynamic import failed: {err}"));
                 break;
             }
 
@@ -112,7 +141,7 @@ impl Driver {
                 }
             }
         }
-        rejections
+        outcome
     }
 }
 
@@ -157,9 +186,9 @@ mod tests {
         let timers = ManualTimers::new(clock.clone());
         let driver = Driver::new(Arc::new(clock.clone()), Arc::new(timers));
 
-        let rejections = driver.run_to_completion(&mut rt).await;
+        let outcome = driver.run_to_completion(&mut rt).await;
 
-        assert!(rejections.is_empty(), "got {rejections:?}");
+        assert!(outcome.is_clean(), "got {outcome:?}");
         assert_eq!(rt.eval("globalThis.answer").unwrap(), Value::Number(42.0));
         assert_eq!(rt.eval("globalThis.fired").unwrap(), Value::Bool(true));
         assert!(clock.monotonic_ms() >= 50);

@@ -537,9 +537,9 @@ async fn run() -> Result<(), String> {
     // preempt them).
     let driver = Driver::new(clock, timers);
     let drive = driver.run_to_completion(&mut runtime);
-    let rejections = match config.timeout {
+    let outcome = match config.timeout {
         Some(deadline) => match tokio::time::timeout(deadline, drive).await {
-            Ok(rejections) => rejections,
+            Ok(outcome) => outcome,
             Err(_) => {
                 runtime.interrupt_handle().terminate();
                 return Err(timeout_message(config.timeout));
@@ -561,17 +561,41 @@ async fn run() -> Result<(), String> {
         return Err(format!("uncaught exception in {label}\n{message}"));
     }
 
-    if !rejections.is_empty() {
-        let mut msg = format!("{} unhandled promise rejection(s)\n", rejections.len());
-        for (i, message) in rejections.iter().enumerate() {
-            if i > 0 {
-                msg.push('\n');
-            }
-            msg.push_str(message);
-        }
-        return Err(msg);
+    // An exception out of a timer callback has no caller to propagate to, so
+    // this is where it surfaces. Reported before rejections: it is a throw that
+    // already happened, not a promise nobody got around to handling.
+    if !outcome.uncaught_errors.is_empty() {
+        return Err(joined(
+            &format!(
+                "{} uncaught exception(s) in a timer callback",
+                outcome.uncaught_errors.len()
+            ),
+            &outcome.uncaught_errors,
+        ));
+    }
+
+    if !outcome.unhandled_rejections.is_empty() {
+        return Err(joined(
+            &format!(
+                "{} unhandled promise rejection(s)",
+                outcome.unhandled_rejections.len()
+            ),
+            &outcome.unhandled_rejections,
+        ));
     }
     Ok(())
+}
+
+/// A headline followed by one blank-line-separated message per failure.
+fn joined(headline: &str, messages: &[String]) -> String {
+    let mut msg = format!("{headline}\n");
+    for (i, message) in messages.iter().enumerate() {
+        if i > 0 {
+            msg.push('\n');
+        }
+        msg.push_str(message);
+    }
+    msg
 }
 
 fn timeout_message(timeout: Option<Duration>) -> String {

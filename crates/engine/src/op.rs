@@ -31,6 +31,10 @@ use crate::value::Value;
 /// Identifier for a scheduled timer, returned by `setTimeout`/`setInterval`.
 pub type TimerId = u64;
 
+/// A rejected promise and the reason it rejected with — the two values an
+/// `unhandledrejection` event carries.
+type Rejection = (v8::Global<v8::Promise>, v8::Global<v8::Value>);
+
 /// The result a host op produces: a [`Value`] or an [`OpError`] to throw.
 pub type OpResult = std::result::Result<Value, OpError>;
 
@@ -189,8 +193,21 @@ pub(crate) struct OpState {
     new_timers: Vec<(TimerId, u64, bool)>,
     next_timer_id: TimerId,
     /// Promises rejected without a handler, keyed by identity hash so a later
-    /// "handler added" event can revoke the entry.
-    unhandled_rejections: HashMap<i32, v8::Global<v8::Value>>,
+    /// "handler added" event can revoke the entry. The promise is kept
+    /// alongside the reason because the `unhandledrejection` event carries both.
+    unhandled_rejections: HashMap<i32, Rejection>,
+    /// Identity hashes of rejections already dispatched *and* reported, so that
+    /// attaching a handler afterwards can fire `rejectionhandled` — the spec's
+    /// retraction of a report that has already gone out. Only the key is kept
+    /// (four bytes): V8 hands the promise itself back in the callback, so
+    /// nothing needs to be retained alive for it.
+    reported_rejections: std::collections::HashSet<i32>,
+    /// Promises whose earlier unhandled report has just been retracted, awaiting
+    /// a `rejectionhandled` dispatch on the next drain.
+    rejections_handled: Vec<v8::Global<v8::Promise>>,
+    /// Exceptions that escaped a host-invoked callback (a timer) and that no
+    /// `error` listener claimed, formatted for the embedder to report.
+    uncaught_errors: Vec<String>,
     /// Upper bound on concurrently pending async ops (DECISIONS.md D7 / SPEC §4).
     /// Dispatching a new async op past this throws, so adversarial JS can't pile
     /// up unbounded host work. `usize::MAX` until set from the engine's limits.
@@ -223,6 +240,9 @@ impl OpState {
             new_timers: Vec::new(),
             next_timer_id: 1,
             unhandled_rejections: HashMap::new(),
+            reported_rejections: std::collections::HashSet::new(),
+            rejections_handled: Vec::new(),
+            uncaught_errors: Vec::new(),
             max_pending_ops: usize::MAX,
             async_waker: None,
             pending_wasm: 0,
@@ -789,9 +809,16 @@ pub(crate) fn fire_timer(
     }
 
     let recv: v8::Local<v8::Value> = v8::undefined(scope).into();
-    // A throw inside the callback is caught by the TryCatch (no host unwind);
-    // surfacing it as an unhandled error is a later-phase concern.
-    let _ = callback.call(scope, recv, &args);
+    // A throw inside the callback is caught by the TryCatch (no host unwind).
+    // It is *not* swallowed: there is no caller left to propagate it to, so the
+    // platform reports it — an `error` event on the global scope, then the
+    // embedder's report if no listener claimed it. Silently dropping it, as this
+    // used to, loses the failure entirely.
+    if callback.call(scope, recv, &args).is_none()
+        && let Some(error) = scope.exception()
+    {
+        report_uncaught(scope, op_state, error);
+    }
     true
 }
 
@@ -824,48 +851,128 @@ fn promise_reject_callback_inner(message: v8::PromiseRejectMessage) {
         v8::PromiseRejectEvent::PromiseRejectWithNoHandler => {
             if let Some(value) = message.get_value() {
                 let value = v8::Global::new(scope, value);
+                let promise = v8::Global::new(scope, promise);
                 state_rc
                     .borrow_mut()
                     .unhandled_rejections
-                    .insert(key, value);
+                    .insert(key, (promise, value));
             }
         }
         v8::PromiseRejectEvent::PromiseHandlerAddedAfterReject => {
-            state_rc.borrow_mut().unhandled_rejections.remove(&key);
+            let mut state = state_rc.borrow_mut();
+            state.unhandled_rejections.remove(&key);
+            // A handler arriving *after* the rejection was already reported
+            // retracts that report: the spec fires `rejectionhandled`. A handler
+            // arriving before the drain simply cancels the pending entry above,
+            // and nothing was ever announced.
+            if state.reported_rejections.remove(&key) {
+                let promise = v8::Global::new(scope, promise);
+                state.rejections_handled.push(promise);
+            }
         }
         // Resolve-after-resolved / reject-after-resolved: not unhandled.
         _ => {}
     }
 }
 
-/// Drains and stringifies promise rejections that remained unhandled.
+/// Calls a prelude-installed dispatch hook, if the guest realm has one.
+///
+/// This is the seam that lets the *engine* — which knows nothing of `Event`,
+/// `ErrorEvent` or `PromiseRejectionEvent` — hand a failure to the JS layer that
+/// does. The prelude installs these functions and `harden.js` locks the
+/// bindings; a realm without a prelude (the engine's own tests) simply has none,
+/// and the caller falls back to reporting directly.
+///
+/// Returns `Some(true)` when the hook ran and the guest **claimed** the failure
+/// (a listener called `preventDefault`), `Some(false)` when it ran and nothing
+/// claimed it, and `None` when there is no hook.
+fn call_dispatch_hook(
+    scope: &mut v8::PinScope<'_, '_>,
+    name: &str,
+    args: &[v8::Local<'_, v8::Value>],
+) -> Option<bool> {
+    let global = scope.get_current_context().global(scope);
+    let key = v8::String::new(scope, name)?;
+    let hook = global.get(scope, key.into())?;
+    let hook = v8::Local::<v8::Function>::try_from(hook).ok()?;
+
+    // The hook is prelude code, but it dispatches to *guest* listeners, which
+    // may throw. A throw here must not escape into V8's callback frames.
+    v8::tc_scope!(let scope, scope);
+    let recv: v8::Local<v8::Value> = v8::undefined(scope).into();
+    let handled = hook.call(scope, recv, args);
+    Some(handled.is_some_and(|v| v.is_true()))
+}
+
+/// Routes an exception that escaped a host-invoked callback to the guest's
+/// `error` listeners, and records it for the embedder if nothing claimed it.
+fn report_uncaught(
+    scope: &mut v8::PinScope<'_, '_>,
+    state_rc: &Rc<RefCell<OpState>>,
+    error: v8::Local<'_, v8::Value>,
+) {
+    let handled = call_dispatch_hook(scope, "__dispatch_error_event", &[error]);
+    if handled == Some(true) {
+        return;
+    }
+    let message = crate::convert::format_exception(scope, error);
+    state_rc.borrow_mut().uncaught_errors.push(message);
+}
+
+/// Fires `unhandledrejection` for each rejection that is still unclaimed, then
+/// drains and stringifies the ones no listener took responsibility for.
+///
+/// A listener calling `preventDefault()` is the spec's way for guest code to say
+/// "this rejection is mine, do not report it" — so a prevented rejection is
+/// dropped here and never reaches the embedder. Anything left is remembered by
+/// identity hash, so attaching a handler later can retract the report with
+/// `rejectionhandled`.
 pub(crate) fn take_unhandled_rejections(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     op_state: &Rc<RefCell<OpState>>,
 ) -> Vec<String> {
-    let rejections: Vec<v8::Global<v8::Value>> = {
+    let (rejections, handled) = {
         let mut state = op_state.borrow_mut();
-        state
-            .unhandled_rejections
-            .drain()
-            .map(|(_, value)| value)
-            .collect()
+        let rejections: Vec<(i32, Rejection)> = state.unhandled_rejections.drain().collect();
+        let handled: Vec<v8::Global<v8::Promise>> = state.rejections_handled.drain(..).collect();
+        (rejections, handled)
     };
-    if rejections.is_empty() {
+    if rejections.is_empty() && handled.is_empty() {
         return Vec::new();
     }
 
     v8::scope!(let scope, isolate);
     let context = v8::Local::new(scope, context);
     let scope = &mut v8::ContextScope::new(scope, context);
-    rejections
-        .iter()
-        .map(|value| {
-            let value = v8::Local::new(scope, value);
-            crate::convert::format_exception(scope, value)
-        })
-        .collect()
+
+    for promise in &handled {
+        let promise = v8::Local::new(scope, promise);
+        call_dispatch_hook(scope, "__dispatch_rejection_handled", &[promise.into()]);
+    }
+
+    let mut reported = Vec::new();
+    for (key, (promise, value)) in &rejections {
+        let value = v8::Local::new(scope, value);
+        let promise = v8::Local::new(scope, promise);
+        if call_dispatch_hook(
+            scope,
+            "__dispatch_unhandled_rejection",
+            &[value, promise.into()],
+        ) == Some(true)
+        {
+            continue;
+        }
+        op_state.borrow_mut().reported_rejections.insert(*key);
+        reported.push(crate::convert::format_exception(scope, value));
+    }
+    reported
+}
+
+/// Drains exceptions that escaped a host-invoked callback and were not claimed
+/// by an `error` listener.
+pub(crate) fn take_uncaught_errors(op_state: &Rc<RefCell<OpState>>) -> Vec<String> {
+    std::mem::take(&mut op_state.borrow_mut().uncaught_errors)
 }
 
 /// Builds a V8 string, mapping the (vanishingly rare) over-length failure to a

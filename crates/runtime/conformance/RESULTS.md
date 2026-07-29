@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **283 / 283** (100%) |
+| Assertions passing | **287 / 287** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 22 |
 | Last updated | 2026-07-29 |
@@ -35,7 +35,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `url.js` | URL/URLSearchParams §2.4 | 19 | — |
 | `urlpattern.js` | URLPattern §2.4 | 18 | — |
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |
-| `events.js` | Event/EventTarget, ErrorEvent, global scope §2.7 | 23 | — |
+| `events.js` | Event/EventTarget, ErrorEvent, global failure events §2.7 | 27 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
 | `crypto.js` | crypto/subtle §2.10 | 10 | — |
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
@@ -62,10 +62,13 @@ argument validation, missing interface members, and outright wrong behaviour —
 see the `[Unreleased]` section of [CHANGELOG.md](../../../CHANGELOG.md) for what
 each turned out to be.
 
-Two fixes are gated by Rust tests rather than here, because both need a driven
-event loop or host I/O: `fetch` honouring `AbortSignal` (tested against a
-transport that never responds, asserting the in-flight request future is
-dropped) and `setTimeout`/`setInterval` forwarding their trailing arguments.
+Some fixes are gated by Rust tests rather than here, because they need a driven
+event loop, host I/O, or an outcome this suite cannot survive: `fetch` honouring
+`AbortSignal` (tested against a transport that never responds, asserting the
+in-flight request future is dropped), `setTimeout`/`setInterval` forwarding their
+trailing arguments, and `rejectionhandled` — which requires *leaving* a rejection
+unclaimed, and an unclaimed rejection fails the `esrun` runner this suite also
+runs under.
 
 `todo(...)` remains available and is the right way to record the next deviation
 found: it states what the spec requires, is tallied separately so it does not

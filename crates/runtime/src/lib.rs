@@ -97,8 +97,14 @@ pub struct TickStatus {
     pub timers_fired: usize,
     /// Async ops whose promises were settled this tick.
     pub async_ops_settled: usize,
-    /// Messages of promise rejections that went unhandled this tick.
+    /// Messages of promise rejections that went unhandled this tick — those the
+    /// guest did not claim with `preventDefault()` on an `unhandledrejection`
+    /// listener.
     pub unhandled_rejections: Vec<String>,
+    /// Messages of exceptions that escaped a timer callback this tick and that
+    /// no `error` listener claimed. A timer throw has no caller to propagate to,
+    /// so this is the only place it surfaces.
+    pub uncaught_errors: Vec<String>,
     /// Whether any async op or timer remains after this tick.
     pub has_pending_work: bool,
     /// The earliest pending timer deadline (embedder ms), if any — a hint for
@@ -739,8 +745,12 @@ impl Runtime {
         self.engine.run_microtasks();
         self.drain_new_timers(now_ms);
 
-        // 4. Collect rejections that remained unhandled.
+        // 4. Collect failures the guest did not claim: rejections that stayed
+        //    unhandled, and exceptions that escaped a timer callback. Both are
+        //    offered to the guest's listeners first (inside the engine, which is
+        //    where the values live); what comes back is what nothing claimed.
         let unhandled_rejections = self.engine.take_unhandled_rejections();
+        let uncaught_errors = self.engine.take_uncaught_errors();
 
         // A kicked-off module evaluation stops being pending work once its
         // promise settles (completed or failed); the outcome is read by the
@@ -753,6 +763,7 @@ impl Runtime {
             timers_fired,
             async_ops_settled,
             unhandled_rejections,
+            uncaught_errors,
             has_pending_work: self.has_pending_work(),
             next_timer_deadline_ms: self.timers.next_deadline_ms(),
         }
@@ -1502,6 +1513,117 @@ mod tests {
              return v;",
         );
         assert_eq!(out, Value::Number(7.0));
+    }
+
+    /// A throw out of a timer callback used to be swallowed whole: the callback
+    /// has no caller left to propagate to, and nothing reported it. It must
+    /// reach the embedder.
+    #[test]
+    fn an_exception_out_of_a_timer_reaches_the_embedder() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval("setTimeout(() => { throw new TypeError('from a timer'); }, 0);")
+            .unwrap();
+        let status = rt.tick(0);
+        assert_eq!(status.timers_fired, 1);
+        assert_eq!(
+            status.uncaught_errors.len(),
+            1,
+            "{:?}",
+            status.uncaught_errors
+        );
+        assert!(
+            status.uncaught_errors[0].contains("from a timer"),
+            "{}",
+            status.uncaught_errors[0]
+        );
+        // Drained, not repeated on the next tick.
+        assert!(rt.tick(1).uncaught_errors.is_empty());
+    }
+
+    /// …unless a listener claims it. `preventDefault()` is how guest code takes
+    /// responsibility, and the host must then stay quiet.
+    #[test]
+    fn an_error_listener_can_claim_a_timer_exception() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval(
+            "globalThis.seen = null; \
+             globalThis.addEventListener('error', (e) => { \
+               globalThis.seen = e.message; e.preventDefault(); }); \
+             setTimeout(() => { throw new TypeError('claimed'); }, 0);",
+        )
+        .unwrap();
+        let status = rt.tick(0);
+        assert!(
+            status.uncaught_errors.is_empty(),
+            "{:?}",
+            status.uncaught_errors
+        );
+        assert_eq!(
+            rt.eval("globalThis.seen").unwrap(),
+            Value::String("claimed".into())
+        );
+    }
+
+    /// A rejection nobody handled is reported — and a listener that claims it
+    /// with `preventDefault()` keeps it away from the embedder entirely.
+    #[test]
+    fn an_unhandled_rejection_can_be_claimed_by_a_listener() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval("Promise.reject(new Error('unclaimed'));").unwrap();
+        let status = rt.tick(0);
+        assert_eq!(
+            status.unhandled_rejections.len(),
+            1,
+            "{:?}",
+            status.unhandled_rejections
+        );
+
+        let mut rt = runtime();
+        rt.eval(
+            "globalThis.reason = null; \
+             globalThis.addEventListener('unhandledrejection', (e) => { \
+               globalThis.reason = e.reason.message; e.preventDefault(); }); \
+             Promise.reject(new Error('claimed'));",
+        )
+        .unwrap();
+        let status = rt.tick(0);
+        assert!(
+            status.unhandled_rejections.is_empty(),
+            "{:?}",
+            status.unhandled_rejections
+        );
+        assert_eq!(
+            rt.eval("globalThis.reason").unwrap(),
+            Value::String("claimed".into())
+        );
+    }
+
+    /// Attaching a handler *after* the report has gone out fires
+    /// `rejectionhandled` — the spec's retraction. It cannot be covered by the
+    /// conformance suite, which would have to leave the report unclaimed and so
+    /// fail the `esrun` runner it also runs under.
+    #[test]
+    fn a_late_handler_fires_rejectionhandled() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.eval(
+            "globalThis.retracted = 0; \
+             globalThis.addEventListener('rejectionhandled', (e) => { \
+               if (e.promise === globalThis.p) globalThis.retracted++; }); \
+             globalThis.p = Promise.reject(new Error('late'));",
+        )
+        .unwrap();
+        // The report goes out: no listener claimed it.
+        assert_eq!(rt.tick(0).unhandled_rejections.len(), 1);
+        assert_eq!(rt.eval("globalThis.retracted").unwrap(), Value::Number(0.0));
+
+        // Now a handler arrives, retracting it.
+        rt.eval("globalThis.p.catch(() => {});").unwrap();
+        rt.tick(1);
+        assert_eq!(rt.eval("globalThis.retracted").unwrap(), Value::Number(1.0));
     }
 
     #[test]
@@ -3846,7 +3968,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 283;
+        const BASELINE: u32 = 287;
 
         assert!(
             pass >= BASELINE,

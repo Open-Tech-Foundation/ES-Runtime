@@ -79,7 +79,31 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | --- | --- |
 | `Event` / `EventTarget` / `CustomEvent` | |
 | `MessageEvent` / `CloseEvent` | |
+| `ErrorEvent` / `ProgressEvent` / `PromiseRejectionEvent` | |
 | `AbortController` / `AbortSignal` | |
+| `addEventListener` / `removeEventListener` / `dispatchEvent` | on the global scope |
+
+## Unhandled failures
+
+A failure with nothing left to catch it is offered to the global scope first.
+`preventDefault()` claims it; anything unclaimed is printed and exits non-zero.
+
+| Event | Fired when | Cancelable |
+| --- | --- | --- |
+| `error` | an exception escapes a timer callback, or `reportError()` | yes |
+| `unhandledrejection` | a rejection is unhandled at the end of a tick | yes |
+| `rejectionhandled` | a handler attaches to an already-reported rejection | no |
+
+```js
+globalThis.addEventListener("unhandledrejection", (event) => {
+  logger.warn("unhandled", event.reason);
+  event.preventDefault(); // mine now — do not fail the process
+});
+```
+
+`onerror` / `onunhandledrejection` / `onrejectionhandled` are single-handler
+slots over the same events. `rejectionhandled` does not retract a report that has
+already gone out.
 
 ## Data
 
