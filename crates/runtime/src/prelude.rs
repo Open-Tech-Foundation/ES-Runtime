@@ -6,6 +6,10 @@
 //! Phase 8 (SPEC.md §6.8). Each fragment is a self-contained IIFE that installs
 //! its globals on `globalThis`, using the host ops under `globalThis.__ops`.
 
+/// The token `navigator.js` carries in place of the runtime's version, filled
+/// in below so `navigator.userAgent` cannot drift from the binary reporting it.
+const VERSION_TOKEN: &str = "__ES_RUNTIME_VERSION__";
+
 /// The concatenated prelude source, in load order. `console` first so later
 /// fragments (e.g. `globals`' `reportError`) can route through it.
 pub(crate) fn source() -> String {
@@ -17,6 +21,7 @@ pub(crate) fn source() -> String {
         // console before globals: reportError routes through it.
         include_str!("prelude/console.js"),
         include_str!("prelude/performance.js"),
+        include_str!("prelude/navigator.js"),
         include_str!("prelude/globals.js"),
         include_str!("prelude/encoding.js"),
         include_str!("prelude/base64.js"),
@@ -44,6 +49,7 @@ pub(crate) fn source() -> String {
         include_str!("prelude/harden.js"),
     ]
     .join("\n")
+    .replace(VERSION_TOKEN, env!("CARGO_PKG_VERSION"))
 }
 
 /// Prelude fragments that must run per-launch rather than being snapshot-baked.

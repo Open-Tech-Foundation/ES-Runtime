@@ -1800,6 +1800,24 @@ mod tests {
         );
     }
 
+    /// `navigator.userAgent` reports the crate's own version. The conformance
+    /// suite can only check the *shape* of the string; this is what stops the
+    /// substituted version drifting from the binary doing the reporting.
+    #[test]
+    fn navigator_user_agent_carries_the_crate_version() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_eq!(
+            rt.eval("navigator.userAgent").unwrap(),
+            Value::String(concat!("ES-Runtime/", env!("CARGO_PKG_VERSION")).into())
+        );
+        // The placeholder must be substituted everywhere, not just here.
+        assert!(
+            !prelude::source().contains("__ES_RUNTIME_VERSION__"),
+            "an unsubstituted version token is left in the prelude"
+        );
+    }
+
     #[test]
     fn queue_microtask_runs_at_the_checkpoint() {
         let _g = v8_guard();
@@ -3828,7 +3846,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 278;
+        const BASELINE: u32 = 283;
 
         assert!(
             pass >= BASELINE,

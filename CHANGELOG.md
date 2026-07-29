@@ -8,6 +8,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`navigator.userAgent`.** The WinterTC Minimum Common API requires it and the
+  global was missing entirely — while the docs listed `navigator` under "browser
+  globals, out of scope", which contradicted the compliance claim. It reports
+  `"ES-Runtime/<version>"`, substituted from the crate's own version when the
+  prelude is assembled, so the string cannot drift from the binary reporting it
+  (a Rust test asserts exactly that). `navigator` is a branded `Navigator`
+  instance with `userAgent` on the prototype, and the constructor is not
+  callable from a script. **`userAgent` is the whole interface:** the rest of the
+  browser `Navigator` is document, device and permission surface, and answering
+  those with plausible constants would make a feature check pass and then lie.
+
 ### Fixed
 
 - **CI now runs the JavaScript test suite and checks the generated bundle.** The

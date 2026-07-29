@@ -25,7 +25,7 @@ Generic and target-agnostic — no assumptions about a specific workload (multi-
 Implement to spec; track conformance against the official Minimum Common Web API test suite and relevant Web Platform Tests.
 
 ### 2.1 Globals & structure
-- ◐ `globalThis` wiring (+ `self`) ☑, `queueMicrotask` ☑, `structuredClone` ☑ (standard cloneable types + cycles), `reportError` ◐ (minimal: routes to console.error; ErrorEvent dispatch later). *(Phase 4.)*
+- ◐ `globalThis` wiring (+ `self`) ☑, `queueMicrotask` ☑, `structuredClone` ☑ (standard cloneable types + cycles), `navigator.userAgent` ☑ (`"ES-Runtime/<version>"`, substituted from the crate version; the rest of the browser `Navigator` is deliberately absent — §7), `reportError` ◐ (minimal: routes to console.error; ErrorEvent dispatch later). *(Phase 4.)*
 
 ### 2.2 Console
 - ◐ `console` (log/info/warn/error/debug ☑) → the injected `Console` sink, not stdout (DECISIONS D17). group/table minimal. *(Phase 4.)*

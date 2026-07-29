@@ -20,6 +20,7 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | `queueMicrotask` | |
 | `structuredClone` | |
 | `reportError` | |
+| `navigator` | `userAgent` — `"ES-Runtime/<version>"` |
 
 ## Timers
 
@@ -136,4 +137,5 @@ await fetch("https://example.com/upload", { method: "POST", body });
 | --- | --- |
 | `process` / `Buffer` / `require` | Node.js globals — not provided (use `runtime:` modules) |
 | `Worker` / `MessageChannel` | no Workers in Layer A (see [Scope](/docs/scope)) |
-| `navigator` / `localStorage` / `window` | browser globals — out of scope |
+| `localStorage` / `window` | browser globals — out of scope |
+| `navigator.*` beyond `userAgent` | document/device/permission surface — out of scope |

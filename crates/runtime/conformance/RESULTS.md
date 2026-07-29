@@ -14,9 +14,9 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **278 / 278** (100%) |
+| Assertions passing | **283 / 283** (100%) |
 | Known deviations (`todo`) | **0** |
-| Files | 21 |
+| Files | 22 |
 | Last updated | 2026-07-29 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
@@ -41,6 +41,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `streams.js` | Readable/Writable/Transform + byte/BYOB §2.8 | 17 | — |
 | `performance.js` | performance, User Timing §2.11/§2.1 | 11 | — |
 | `exceptions.js` | DOMException / error classes §2.1 | 4 | — |
+| `navigator.js` | navigator.userAgent §2.1 | 5 | — |
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData, object URLs §2.9 | 18 | — |
 | `channel.js` | MessageChannel/MessagePort/BroadcastChannel | 8 | — |

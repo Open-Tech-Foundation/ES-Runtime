@@ -53,7 +53,7 @@ The global scope tracks the WinterTC Minimum Common Web Platform API. Host
 capabilities (filesystem, process, network) are **not** globals — they live in
 [`runtime:` modules](#the-runtime-scheme).
 
-- **Core:** `globalThis`, `self`, `console`, `queueMicrotask`, `structuredClone`, `reportError`
+- **Core:** `globalThis`, `self`, `console`, `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` only — `"ES-Runtime/<version>"`)
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **URL:** `URL`, `URLSearchParams`
 - **Fetch:** `fetch`, `Request`, `Response`, `Headers` — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
@@ -67,8 +67,11 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Performance:** `performance` (`now()`, `timeOrigin`)
 - **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
 
-**Not available:** `process`/`Buffer`/`require` (Node), `Worker`/`MessageChannel`,
-`navigator`/`localStorage`/`window` (browser).
+**Not available:** `process`/`Buffer`/`require` (Node), `Worker`,
+`localStorage`/`window` (browser). `navigator` exists but carries only
+`userAgent`: the rest of the browser `Navigator` is document, device and
+permission surface, and answering those with plausible constants would make a
+feature check pass and then lie.
 
 ---
 
