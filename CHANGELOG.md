@@ -10,6 +10,32 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **The conformance gate was silently dropping 22 assertions — it now runs
+  278/278, up from a recorded 256.** Four files (`protobuf.js`,
+  `serialization.js`, `serialization_edge.js`, `jsonl_test.js`) open with
+  `await import("runtime:serialization")`. The engine raises that as a pending
+  *dynamic import* — host work the runtime resolves in its async step, not a
+  microtask — so ticking alone could never settle them. The runner gave up after
+  a fixed tick count and read the tallies anyway, which made every assertion in
+  those files **uncounted rather than failing**: the whole
+  `runtime:serialization` surface, the largest pure-JS subsystem in the repo,
+  was gated by nothing. The runner now drives dynamic imports, supplies an
+  in-memory `FileSystem` so the `runtime:fs` pipeline runs without touching a
+  disk, and **panics if the queue does not settle** instead of proceeding.
+  Confirmed by sabotage: a deliberate failure inside one of those files now
+  fails the build. The same silent-give-up existed in `eval_async`, used by
+  dozens of tests, and is fixed with it.
+- **The conformance suite runs under `esrun` for real.**
+  `conformance/RESULTS.md` told readers to verify the uncounted files "under
+  `esrun`, not by this number" — which was impossible: the files call harness
+  globals that only the Rust runner injected, so running one directly failed
+  with `ReferenceError: test is not defined`. The harness moved into
+  `conformance/harness.js`, which the Rust gate `include_str!`s and the new
+  `conformance/run.js` loads, so the two runners cannot drift. `esrun
+  crates/runtime/conformance/run.js` now runs the whole suite over a real event
+  loop, a real filesystem and the real CLI, printing a summary and exiting
+  non-zero on failure.
+
 - **The async-WebAssembly tests no longer flake under load.** They waited on a
   compile with a fixed 200-tick spin, but a compile lands on V8's *background*
   threads — how many ticks that takes is a property of how busy the machine is,

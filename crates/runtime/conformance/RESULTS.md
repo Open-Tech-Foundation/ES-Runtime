@@ -14,10 +14,10 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **256 / 256** (100%) |
+| Assertions passing | **278 / 278** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 21 |
-| Last updated | 2026-07-28 |
+| Last updated | 2026-07-29 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
 **has** — it is counted above and gated as a non-regression floor. `todo(...)`
@@ -33,7 +33,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `encoding.js` | TextEncoder/TextDecoder §2.3 | 16 | — |
 | `base64.js` | atob/btoa §2.3 | 6 | — |
 | `url.js` | URL/URLSearchParams §2.4 | 19 | — |
-| `urlpattern.js` | URLPattern §2.4 | 16 | — |
+| `urlpattern.js` | URLPattern §2.4 | 18 | — |
 | `structured-clone.js` | structuredClone §2.1 | 18 | — |
 | `events.js` | Event/EventTarget, ErrorEvent, global scope §2.7 | 23 | — |
 | `abort.js` | AbortController/Signal §2.6 | 8 | — |
@@ -45,8 +45,12 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `blob.js` | Blob/File/FormData, object URLs §2.9 | 18 | — |
 | `channel.js` | MessageChannel/MessagePort/BroadcastChannel | 8 | — |
 | `fetch.js` | Headers/Request/Response object surface | 33 | — |
-| `webidl.js` | Interface shape: branding, arity, iterators | 27 | — |
+| `webidl.js` | Interface shape: branding, arity, iterators | 28 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |
+| `protobuf.js` | `runtime:serialization` Protobuf | 11 | — |
+| `serialization_edge.js` | `runtime:serialization` edge cases | 7 | — |
+| `serialization.js` | `runtime:serialization` YAML/XML/TOML/MessagePack | 1 | — |
+| `jsonl_test.js` | JSONL streams over `runtime:fs` | 1 | — |
 
 ### Known deviations
 
@@ -80,19 +84,31 @@ passing. It is run on demand rather than from `cargo test`:
 A standard WPT subset is post-1.0 (SPEC §7), so that suite is a reference check
 and `conformance/urlpattern.js` remains the gated signal.
 
-### Files present but not counted
+### Running the suite
 
-`protobuf.js`, `serialization.js`, `serialization_edge.js` and `jsonl_test.js`
-load and run, but every assertion in them is `async`. This harness settles the
-async queue by ticking the runtime directly rather than through a driver, and
-those tests await work it does not advance, so they contribute **0** to the count
-above — uncounted, not failing. Verify them under `esrun`, not by this number.
+Two runners drive the same files against the same `harness.js`, so they cannot
+drift apart:
 
-That limitation is why `wasm.js` asserts only the synchronous WebAssembly API
-plus the streaming paths that reject before reaching V8. The resolving async
-paths (`compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`)
-depend on the driver pumping V8's foreground task queue, so they are verified
-under `esrun` instead.
+```
+cargo test -p es-runtime conformance_suite_passes   # the gate
+./target/debug/esrun crates/runtime/conformance/run.js
+```
+
+The **gate** is the `cargo test` one: it is part of `cargo test --workspace` and
+enforces the count above as a floor. The `esrun` runner is the second opinion —
+the same assertions over a real event loop, a real filesystem and the real CLI,
+so anything whose behaviour depends on being driven for real is exercised the
+way a user's program would exercise it. It exits non-zero on any failure.
+
+Every file is counted by both. Until 2026-07-29 four of them (`protobuf.js`,
+`serialization.js`, `serialization_edge.js`, `jsonl_test.js`) contributed **0**:
+each opens with `await import("runtime:serialization")`, which the engine raises
+as a pending *dynamic import* — host work resolved in the runtime's async step,
+not a microtask — so ticking alone never settled them. The gate gave up after a
+fixed tick count and read the tallies anyway, which made those assertions
+silently uncounted rather than failing. The gate now drives dynamic imports and
+panics if the queue does not settle, and it supplies an in-memory `FileSystem`
+so the `runtime:fs` pipeline in `jsonl_test.js` runs without touching a disk.
 
 ## Not yet covered
 
@@ -104,3 +120,9 @@ WebSocket and `node_modules` edges — is covered (where covered at all) by the
 Rust integration tests; `fetch` itself is exercised there too (it needs a mock
 transport, not available in this pure-JS harness). Adding assertions here as
 features land is how the pass count grows.
+
+`wasm.js` asserts the synchronous WebAssembly API plus the streaming paths that
+reject before reaching V8. The *resolving* async paths (`compile`, `instantiate`,
+`compileStreaming`, `instantiateStreaming`) settle only once V8's foreground task
+queue is pumped, and are covered by the `async_wasm_compile_*` Rust tests and by
+the `esrun` runner.

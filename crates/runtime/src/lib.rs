@@ -1190,6 +1190,177 @@ mod tests {
         Runtime::new(Box::new(engine), test_providers().with_sync_file_system(fs)).expect("runtime")
     }
 
+    /// An in-memory [`FileSystem`], so a test can exercise `runtime:fs` without
+    /// a real disk — no temp directory to clean up, no file left in the repo,
+    /// and every future resolves immediately, which is what lets a synchronous
+    /// runner drive it. Path strings are keys: jailing and realpath resolution
+    /// belong to the *default* provider (D25), not to this trait.
+    #[derive(Default)]
+    struct MemoryFs {
+        files: Mutex<std::collections::BTreeMap<String, Vec<u8>>>,
+    }
+
+    impl MemoryFs {
+        /// Boxes an immediately-ready result as the trait's future.
+        fn ready<T: Send + 'static>(
+            value: std::result::Result<T, es_runtime_providers::ProviderError>,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<T, es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(std::future::ready(value))
+        }
+
+        /// The error a real filesystem raises for a path that is not there.
+        fn not_found(path: &str) -> es_runtime_providers::ProviderError {
+            es_runtime_providers::ProviderError::Coded {
+                code: es_runtime_common::ErrorCode::NotFound,
+                message: format!("no such file or directory: {path}"),
+            }
+        }
+    }
+
+    impl FileSystem for MemoryFs {
+        fn read(
+            &self,
+            path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<Vec<u8>, es_runtime_providers::ProviderError>,
+        > {
+            let found = self.files.lock().unwrap().get(&path).cloned();
+            Self::ready(found.ok_or_else(|| Self::not_found(&path)))
+        }
+
+        fn write(
+            &self,
+            path: String,
+            data: Vec<u8>,
+            append: bool,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<u64, es_runtime_providers::ProviderError>,
+        > {
+            let written = data.len() as u64;
+            let mut files = self.files.lock().unwrap();
+            let entry = files.entry(path).or_default();
+            if !append {
+                entry.clear();
+            }
+            entry.extend_from_slice(&data);
+            Self::ready(Ok(written))
+        }
+
+        fn stat(
+            &self,
+            path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                es_runtime_providers::FileStat,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            let size = self.files.lock().unwrap().get(&path).map(Vec::len);
+            Self::ready(size.map_or_else(
+                || Err(Self::not_found(&path)),
+                |size| {
+                    Ok(es_runtime_providers::FileStat {
+                        size: size as u64,
+                        is_file: true,
+                        is_dir: false,
+                        is_symlink: false,
+                        mtime_ms: None,
+                    })
+                },
+            ))
+        }
+
+        fn exists(
+            &self,
+            path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<bool, es_runtime_providers::ProviderError>,
+        > {
+            Self::ready(Ok(self.files.lock().unwrap().contains_key(&path)))
+        }
+
+        fn read_dir(
+            &self,
+            _path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                Vec<es_runtime_providers::DirEntry>,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            Self::ready(Ok(Vec::new()))
+        }
+
+        fn mkdir(
+            &self,
+            _path: String,
+            _recursive: bool,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            // A flat map has no directories to create; a write makes its own path.
+            Self::ready(Ok(()))
+        }
+
+        fn remove(
+            &self,
+            path: String,
+            _recursive: bool,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            let removed = self.files.lock().unwrap().remove(&path);
+            Self::ready(if removed.is_some() {
+                Ok(())
+            } else {
+                Err(Self::not_found(&path))
+            })
+        }
+
+        fn rename(
+            &self,
+            from: String,
+            to: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            let mut files = self.files.lock().unwrap();
+            let moved = files.remove(&from);
+            Self::ready(match moved {
+                Some(bytes) => {
+                    files.insert(to, bytes);
+                    Ok(())
+                }
+                None => Err(Self::not_found(&from)),
+            })
+        }
+
+        fn glob_match(
+            &self,
+            _pattern: &str,
+            _path: &str,
+        ) -> std::result::Result<bool, es_runtime_providers::ProviderError> {
+            Err(es_runtime_providers::ProviderError::Other(
+                "the in-memory test filesystem does not implement globbing".into(),
+            ))
+        }
+
+        fn glob_scan(
+            &self,
+            _base: String,
+            _pattern: String,
+            _opts: es_runtime_providers::GlobScanOptions,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<Vec<String>, es_runtime_providers::ProviderError>,
+        > {
+            Self::ready(Err(es_runtime_providers::ProviderError::Other(
+                "the in-memory test filesystem does not implement globbing".into(),
+            )))
+        }
+    }
+
     /// The synchronous filesystem is behind the same gates as the async one:
     /// without `FileWrite`, a mutating op is denied before the provider is
     /// consulted at all.
@@ -1656,6 +1827,12 @@ mod tests {
     /// Runs an async JS `body` (which should `return` a value) to completion by
     /// ticking the microtask loop, then returns the resolved value. A rejection
     /// is returned as a `Value::String` prefixed with `ERR:`.
+    ///
+    /// A body that never settles is a **panic**, not an `undefined` result: this
+    /// used to give up after a fixed tick count and read `__result` regardless,
+    /// so work that had not finished was indistinguishable from work that
+    /// finished with no value — and a caller's assertion then blamed the
+    /// behaviour under test rather than the wait.
     fn eval_async(rt: &mut Runtime, body: &str) -> Value {
         rt.eval(&format!(
             "globalThis.__done = false; globalThis.__result = undefined; \
@@ -1665,12 +1842,9 @@ mod tests {
                          globalThis.__done = true; }});"
         ))
         .unwrap();
-        for _ in 0..200 {
-            rt.tick(0);
-            if rt.eval("globalThis.__done").unwrap() == Value::Bool(true) {
-                break;
-            }
-        }
+        pump_until(rt, "the async body to settle", |rt| {
+            rt.eval("globalThis.__done").unwrap() == Value::Bool(true)
+        });
         rt.eval("globalThis.__result").unwrap()
     }
 
@@ -3558,54 +3732,17 @@ mod tests {
         assert_eq!(out, Value::Number(7.0));
     }
 
-    /// In-JS test harness for the conformance suite: `test(name, fn)` (sync or
-    /// async), `todo(name, fn)` for known deviations, `assert*` helpers, and a
-    /// `__results` tally read back by the runner.
+    /// The in-JS harness the suite is written against — `test`/`todo`, the
+    /// `assert*` helpers, and the `__results` tally.
     ///
-    /// `todo` is the inverse of `test`: the assertion documents what the spec
-    /// requires *today*, while the runtime is known not to satisfy it yet. A
-    /// throwing `todo` is tallied as `todo` (not `fail`, so the gate stays
-    /// green); a *passing* one is an error — the deviation is fixed and the
-    /// case must be promoted to `test` so it can never silently regress.
-    const CONFORMANCE_HARNESS: &str = r#"
-        globalThis.__results = { pass: 0, fail: 0, todo: 0, failures: [], fixed: [] };
-        globalThis.__pending = [];
-        globalThis.test = (name, fn) => {
-          let r;
-          try { r = fn(); }
-          catch (e) { __results.fail++; __results.failures.push(name + ": " + ((e && e.message) || e)); return; }
-          if (r && typeof r.then === "function") {
-            __pending.push(r.then(
-              () => { __results.pass++; },
-              (e) => { __results.fail++; __results.failures.push(name + ": " + ((e && e.message) || e)); },
-            ));
-          } else { __results.pass++; }
-        };
-        globalThis.todo = (name, fn) => {
-          let r;
-          try { r = fn(); }
-          catch { __results.todo++; return; }
-          if (r && typeof r.then === "function") {
-            __pending.push(r.then(
-              () => { __results.fixed.push(name); },
-              () => { __results.todo++; },
-            ));
-          } else { __results.fixed.push(name); }
-        };
-        globalThis.assert = (cond, msg) => { if (!cond) throw new Error(msg || "assertion failed"); };
-        globalThis.assertEquals = (actual, expected, msg) => {
-          if (actual !== expected) {
-            throw new Error((msg ? msg + ": " : "") + `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
-          }
-        };
-        globalThis.assertThrows = (fn, name) => {
-          let threw = null;
-          try { fn(); } catch (e) { threw = e; }
-          if (!threw) throw new Error("expected a throw, but none occurred");
-          if (name && threw.name !== name) throw new Error(`expected ${name}, got ${threw.name}`);
-        };
-        globalThis.__await_all = () => Promise.all(__pending);
-    "#;
+    /// Read from the same file `conformance/run.js` loads, so the CI gate and
+    /// the `esrun` runner cannot drift apart.
+    const CONFORMANCE_HARNESS: &str = include_str!("../conformance/harness.js");
+
+    /// Suite files skipped when collecting `conformance/*.js`: the harness
+    /// itself (loading it again would reset the tally mid-run) and the `esrun`
+    /// runner (a module, and it would recurse).
+    const CONFORMANCE_NON_SUITE: &[&str] = &["harness.js", "run.js"];
 
     /// Runs every `conformance/*.js` spec-assertion file and records the
     /// pass-rate (SPEC §5 / §8). Gated on zero failures and a non-regressing
@@ -3614,7 +3751,16 @@ mod tests {
     #[allow(clippy::print_stdout)] // reports the pass-rate under `--nocapture`
     fn conformance_suite_passes() {
         let _g = v8_guard();
-        let mut rt = runtime();
+        // An in-memory filesystem and a full capability set, so files exercising
+        // `runtime:fs` are gated here rather than needing a real disk (and
+        // leaving artifacts in the working tree).
+        let engine = V8Engine::new(Limits::default()).expect("engine");
+        let mut rt = Runtime::new(
+            Box::new(engine),
+            test_providers().with_file_system(Arc::new(MemoryFs::default())),
+        )
+        .expect("runtime");
+        rt.set_capabilities(CapabilitySet::all());
         rt.eval(CONFORMANCE_HARNESS).expect("conformance harness");
 
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/conformance");
@@ -3622,6 +3768,11 @@ mod tests {
             .expect("read conformance dir")
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "js"))
+            .filter(|p| {
+                !p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| CONFORMANCE_NON_SUITE.contains(&n))
+            })
             .collect();
         files.sort();
         assert!(!files.is_empty(), "no conformance files found in {dir}");
@@ -3633,7 +3784,24 @@ mod tests {
         }
 
         // Settle the async tests, then read the tallies.
-        eval_async(&mut rt, "await globalThis.__await_all(); return 'done';");
+        //
+        // Several of them `await import("runtime:…")`. The engine raises that as
+        // a *pending dynamic import* — host work the runtime resolves in the
+        // async step, not a microtask — so ticking alone can never settle it.
+        // That is why four files (every `runtime:serialization` assertion, plus
+        // the `runtime:fs` pipeline) used to contribute nothing at all: the old
+        // wait gave up after a fixed tick count and read the tallies anyway, so
+        // they were silently uncounted rather than failing.
+        rt.eval(
+            "globalThis.__settled = false; \
+             globalThis.__await_all().then(() => { globalThis.__settled = true; }, \
+                                           () => { globalThis.__settled = true; });",
+        )
+        .expect("start settling the async assertions");
+        pump_until(&mut rt, "the async conformance assertions", |rt| {
+            block_on(rt.process_dynamic_imports()).expect("process dynamic imports");
+            rt.eval("globalThis.__settled").unwrap() == Value::Bool(true)
+        });
 
         let number = |rt: &mut Runtime, expr: &str| match rt.eval(expr).unwrap() {
             Value::Number(n) => n as u32,
@@ -3660,7 +3828,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 256;
+        const BASELINE: u32 = 278;
 
         assert!(
             pass >= BASELINE,
