@@ -106,6 +106,12 @@ aes-gcm = "0.10.3"
 aes = "0.8.4"
 cbc = { version = "0.1.2", features = ["alloc"] }
 ctr = "0.9.2"
+# AES-KW (NIST SP 800-38F / RFC 3394), the key-wrapping algorithm
+# `subtle.wrapKey`/`unwrapKey` accept alongside AES-GCM/CBC/CTR and RSA-OAEP.
+# Pinned to the 0.2 line for the same reason as `cbc`/`ctr`: it reuses the
+# `aes` 0.8 / `cipher` 0.4 already in the tree, where 0.3 would pull a third
+# `aes` generation (0.9 / `cipher` 0.5) in alongside.
+aes-kw = { version = "0.2.1", features = ["alloc"] }
 hkdf = "0.13.0"
 pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
 # Elliptic curves for ECDSA/ECDH (SPEC §2.10). These sit on the older

@@ -102,6 +102,21 @@ pub(crate) fn install(engine: &mut dyn Engine, entropy: Arc<dyn Entropy>) -> Res
         Ok(Value::Bytes(aes_ctr(&key, &counter, length, &data)?))
     }))?;
 
+    // AES-KW (NIST SP 800-38F / RFC 3394). Unlike the other AES modes this one
+    // takes no IV and is only ever applied to key material: `subtle.wrapKey` and
+    // `subtle.unwrapKey` reach it, `encrypt`/`decrypt` deliberately do not.
+    engine.register_op(OpDecl::sync("subtle_aes_kw_wrap", |args| {
+        let key = arg_bytes(&args, 0)?;
+        let data = arg_bytes(&args, 1)?;
+        Ok(Value::Bytes(aes_kw_wrap(&key, &data)?))
+    }))?;
+
+    engine.register_op(OpDecl::sync("subtle_aes_kw_unwrap", |args| {
+        let key = arg_bytes(&args, 0)?;
+        let data = arg_bytes(&args, 1)?;
+        Ok(Value::Bytes(aes_kw_unwrap(&key, &data)?))
+    }))?;
+
     // Key derivation (`deriveBits`/`deriveKey`). `length` is in bytes — the
     // prelude converts from the spec's bit length.
     engine.register_op(OpDecl::sync("subtle_hkdf", |args| {
@@ -308,6 +323,50 @@ fn aes_cbc_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> std::result::Result<Ve
         32 => cbc_decrypt::<cbc::Decryptor<Aes256>>(key, iv, data),
         _ => Err(operation_error("AES-CBC key must be 16, 24, or 32 bytes")),
     }
+}
+
+// ---- AES-KW ----------------------------------------------------------------
+//
+// NIST SP 800-38F key wrap (RFC 3394). Wrapping adds one 8-byte semiblock: the
+// integrity check value, which is what makes an unwrap of tampered ciphertext
+// fail rather than yield garbage key material. Only the unpadded variant (KW)
+// is exposed — WebCrypto's AES-KW requires the plaintext to be a multiple of 8
+// bytes and does not define the padded KWP mode.
+
+fn aes_kw_wrap(key: &[u8], data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
+    if !data.len().is_multiple_of(8) || data.len() < 16 {
+        return Err(operation_error(
+            "AES-KW input must be a multiple of 8 bytes and at least 16",
+        ));
+    }
+    let wrapped = match key.len() {
+        16 => aes_kw::KekAes128::try_from(key).map(|k| k.wrap_vec(data)),
+        24 => aes_kw::KekAes192::try_from(key).map(|k| k.wrap_vec(data)),
+        32 => aes_kw::KekAes256::try_from(key).map(|k| k.wrap_vec(data)),
+        _ => return Err(operation_error("AES-KW key must be 16, 24, or 32 bytes")),
+    };
+    wrapped
+        .map_err(|_| operation_error("invalid AES-KW key"))?
+        .map_err(|_| operation_error("AES-KW wrap failed"))
+}
+
+fn aes_kw_unwrap(key: &[u8], data: &[u8]) -> std::result::Result<Vec<u8>, OpError> {
+    if !data.len().is_multiple_of(8) || data.len() < 24 {
+        return Err(operation_error(
+            "AES-KW ciphertext must be a multiple of 8 bytes and at least 24",
+        ));
+    }
+    let unwrapped = match key.len() {
+        16 => aes_kw::KekAes128::try_from(key).map(|k| k.unwrap_vec(data)),
+        24 => aes_kw::KekAes192::try_from(key).map(|k| k.unwrap_vec(data)),
+        32 => aes_kw::KekAes256::try_from(key).map(|k| k.unwrap_vec(data)),
+        _ => return Err(operation_error("AES-KW key must be 16, 24, or 32 bytes")),
+    };
+    unwrapped
+        .map_err(|_| operation_error("invalid AES-KW key"))?
+        // A failed integrity check is indistinguishable from a wrong key, and
+        // deliberately so: the message must not say which.
+        .map_err(|_| operation_error("AES-KW unwrap failed"))
 }
 
 // ---- AES-CTR ---------------------------------------------------------------

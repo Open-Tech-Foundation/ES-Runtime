@@ -60,7 +60,21 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa`
 - **Streams:** `ReadableStream`, `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Compression:** `CompressionStream`, `DecompressionStream` — all four spec formats: `"brotli"`, `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
-- **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `crypto.subtle` (digest, HMAC, AES-GCM/CBC/CTR, HKDF, PBKDF2), `CryptoKey`
+- **Crypto:** `crypto` (`getRandomValues`, `randomUUID`), `CryptoKey`, and `crypto.subtle`:
+
+| Operation | Algorithms |
+| --- | --- |
+| `digest` | SHA-1, SHA-256, SHA-384, SHA-512 |
+| `sign` / `verify` | HMAC, ECDSA (P-256/384/521), RSASSA-PKCS1-v1_5, RSA-PSS |
+| `encrypt` / `decrypt` | AES-GCM, AES-CBC, AES-CTR, RSA-OAEP |
+| `wrapKey` / `unwrapKey` | AES-KW, AES-GCM, AES-CBC, AES-CTR, RSA-OAEP |
+| `deriveBits` / `deriveKey` | HKDF, PBKDF2, ECDH |
+| key formats | `raw`, `spki`, `pkcs8`, `jwk` (symmetric keys as `kty: "oct"`) |
+
+`AES-KW` wraps key material only — it is not reachable from `encrypt`/`decrypt`,
+and its integrity check makes an unwrap of tampered ciphertext fail rather than
+return wrong key material. Wrapping a key still requires `extractable: true`
+(wrapping *is* an export) and the wrapping key's `wrapKey` usage.
 - **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `ErrorEvent`, `ProgressEvent`, `PromiseRejectionEvent`, `AbortController`, `AbortSignal` — plus `addEventListener`/`removeEventListener`/`dispatchEvent` on the global scope itself
 
 ### Failures that reach the global scope

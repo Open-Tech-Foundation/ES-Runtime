@@ -3572,6 +3572,54 @@ mod tests {
         );
     }
 
+    /// RFC 3394 §4.1: wrap 128 bits of key data with a 128-bit KEK. A published
+    /// vector is the only way to know the wrap is AES-KW and not merely
+    /// something that round-trips with itself.
+    #[test]
+    fn subtle_aes_kw_rfc3394_vector() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const hex = (s) => Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16))); \
+             const toHex = (a) => [...new Uint8Array(a)].map((b) => b.toString(16).padStart(2, '0')).join(''); \
+             const kek = await crypto.subtle.importKey('raw', hex('000102030405060708090a0b0c0d0e0f'), 'AES-KW', false, ['wrapKey', 'unwrapKey']); \
+             const target = await crypto.subtle.importKey('raw', hex('00112233445566778899aabbccddeeff'), { name: 'AES-CBC' }, true, ['encrypt']); \
+             const wrapped = await crypto.subtle.wrapKey('raw', target, kek, 'AES-KW'); \
+             const back = await crypto.subtle.unwrapKey('raw', wrapped, kek, 'AES-KW', { name: 'AES-CBC' }, true, ['encrypt']); \
+             const raw = await crypto.subtle.exportKey('raw', back); \
+             return toHex(wrapped) + '|' + toHex(raw);",
+        );
+        assert_eq!(
+            out,
+            Value::String(
+                "1fa68b0a8112b447aef34bd8fb5a7b829d3e862371d2cfe5\
+                 |00112233445566778899aabbccddeeff"
+                    .into()
+            )
+        );
+    }
+
+    /// The integrity check is the point of AES-KW: a flipped bit must fail the
+    /// unwrap rather than hand back wrong key material.
+    #[test]
+    fn subtle_aes_kw_rejects_tampered_ciphertext() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let out = eval_async(
+            &mut rt,
+            "const kek = await crypto.subtle.generateKey({ name: 'AES-KW', length: 256 }, true, ['wrapKey', 'unwrapKey']); \
+             const target = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 128 }, true, ['encrypt']); \
+             const wrapped = new Uint8Array(await crypto.subtle.wrapKey('raw', target, kek, 'AES-KW')); \
+             wrapped[3] ^= 1; \
+             try { \
+               await crypto.subtle.unwrapKey('raw', wrapped, kek, 'AES-KW', { name: 'AES-GCM' }, true, ['encrypt']); \
+               return 'accepted'; \
+             } catch (e) { return e.name; }",
+        );
+        assert_eq!(out, Value::String("OperationError".into()));
+    }
+
     #[test]
     fn subtle_aes_ctr_round_trips() {
         let _g = v8_guard();
@@ -3968,7 +4016,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 287;
+        const BASELINE: u32 = 293;
 
         assert!(
             pass >= BASELINE,

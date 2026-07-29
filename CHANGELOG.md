@@ -10,6 +10,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`crypto.subtle.wrapKey` / `unwrapKey`, the AES-KW algorithm, and `jwk` for
+  symmetric keys.** `wrapKey`/`unwrapKey` are required members of
+  `SubtleCrypto` and were absent from the prototype entirely — so the one
+  operation whose whole point is moving a key without its material ever becoming
+  a readable JS value could not be performed at all. Wrapping accepts AES-KW
+  (NIST SP 800-38F / RFC 3394, verified against the RFC's published vector),
+  AES-GCM, AES-CBC, AES-CTR and RSA-OAEP. AES-KW is reachable **only** through
+  wrapping — `encrypt({name:"AES-KW"})` is a `NotSupportedError` — and its
+  integrity check makes an unwrap of tampered ciphertext fail rather than hand
+  back wrong key material. Wrapping still requires `extractable: true` (wrapping
+  is an export) and the wrapping key's `wrapKey` usage.
+  AES and HMAC keys now also import and export as `kty: "oct"` JWKs, without
+  which `wrapKey("jwk", …)` — the common shape — had nothing to serialize; the
+  JWK's `alg` is checked on import, so a key labelled `A128GCM` cannot silently
+  become an AES-CBC key.
+
 - **Failures that reach the global scope are now dispatched as events, and an
   exception out of a timer callback is no longer swallowed.** Three gaps closed
   together, because they are one story: what happens to a failure with no code

@@ -50,7 +50,12 @@
   // ---- subtle helpers -----------------------------------------------------
 
   const KEY = Symbol("cryptoKeyMaterial");
+  // AES modes that encrypt data. AES-KW is deliberately not among them: it
+  // wraps key material and is reachable only through wrapKey/unwrapKey.
   const AES_ALGS = new Set(["AES-GCM", "AES-CBC", "AES-CTR"]);
+  const AES_KW = "AES-KW";
+  // Every AES variant, for the paths that only care about key material.
+  const ALL_AES = new Set([...AES_ALGS, AES_KW]);
   const KDF_ALGS = new Set(["HKDF", "PBKDF2"]);
   const EC_ALGS = new Set(["ECDSA", "ECDH"]);
   const RSA_ALGS = new Set(["RSASSA-PKCS1-v1_5", "RSA-PSS", "RSA-OAEP"]);
@@ -312,7 +317,7 @@
         const material = ops.random_bytes(Math.ceil(lengthBits / 8));
         return new CryptoKey("secret", extractable, { name: "HMAC", hash: { name: hash }, length: lengthBits }, usages, material);
       }
-      if (AES_ALGS.has(algo.name)) {
+      if (ALL_AES.has(algo.name)) {
         const allowed = algo.name === "AES-GCM" ? [128, 256] : [128, 192, 256];
         if (!allowed.includes(algo.length)) {
           throw new DOMException(
@@ -369,10 +374,11 @@
       if (RSA_ALGS.has(algo.name)) {
         return importRsaKey(format, keyData, algo, extractable, usages);
       }
-      if (format !== "raw") {
+      if (format !== "raw" && format !== "jwk") {
         throw new DOMException(`unsupported import format: ${format}`, "NotSupportedError");
       }
-      const material = toBytes(keyData).slice();
+      const material =
+        format === "jwk" ? octetJwkToBytes(keyData, algo) : toBytes(keyData).slice();
       if (algo.name === "HMAC") {
         return new CryptoKey(
           "secret",
@@ -382,7 +388,7 @@
           material,
         );
       }
-      if (AES_ALGS.has(algo.name)) {
+      if (ALL_AES.has(algo.name)) {
         const bits = material.length * 8;
         if (bits !== 128 && bits !== 192 && bits !== 256) {
           throw new DOMException(`invalid ${algo.name} key length`, "DataError");
@@ -408,12 +414,13 @@
       if (RSA_ALGS.has(key.algorithm.name)) {
         return exportRsaKey(format, key);
       }
-      if (format !== "raw") {
+      if (format !== "raw" && format !== "jwk") {
         throw new DOMException(`unsupported export format: ${format}`, "NotSupportedError");
       }
       if (!key.extractable) {
         throw new DOMException("key is not extractable", "InvalidAccessError");
       }
+      if (format === "jwk") return octetJwkFromKey(key);
       return asArrayBuffer(key[KEY].slice());
     },
 
@@ -576,7 +583,122 @@
       const derived = await subtle.deriveBits(algorithm, baseKey, bits);
       return subtle.importKey("raw", derived, dka, extractable, usages);
     },
+
+    // ---- Key wrapping ------------------------------------------------------
+    //
+    // Wrapping is export-then-encrypt and unwrapping is decrypt-then-import,
+    // with one thing the two-step version cannot give you: the key material
+    // never becomes a JS value the caller can read. `wrapKey` on a key that is
+    // *not* extractable is still refused, though — wrapping is an export, and
+    // the flag governs exports.
+
+    async wrapKey(format, key, wrappingKey, wrapAlgorithm) {
+      const algo = normalizeAlgorithm(wrapAlgorithm);
+      requireUsage(wrappingKey, "wrapKey");
+      if (!key.extractable) {
+        throw new DOMException("key is not extractable", "InvalidAccessError");
+      }
+      const exported = await subtle.exportKey(format, key);
+      const bytes = format === "jwk" ? jwkToBytes(exported) : toBytes(exported);
+      if (algo.name === AES_KW) {
+        return asArrayBuffer(ops.subtle_aes_kw_wrap(wrappingKey[KEY], bytes));
+      }
+      return subtle.encrypt(algo, wrappingKey, bytes);
+    },
+
+    async unwrapKey(
+      format,
+      wrappedKey,
+      unwrappingKey,
+      unwrapAlgorithm,
+      unwrappedKeyAlgorithm,
+      extractable,
+      keyUsages,
+    ) {
+      const algo = normalizeAlgorithm(unwrapAlgorithm);
+      requireUsage(unwrappingKey, "unwrapKey");
+      const bytes =
+        algo.name === AES_KW
+          ? ops.subtle_aes_kw_unwrap(unwrappingKey[KEY], toBytes(wrappedKey))
+          : new Uint8Array(await subtle.decrypt(algo, unwrappingKey, toBytes(wrappedKey)));
+      const keyData = format === "jwk" ? bytesToJwk(bytes) : bytes;
+      return subtle.importKey(
+        format,
+        keyData,
+        unwrappedKeyAlgorithm,
+        extractable,
+        keyUsages,
+      );
+    },
   };
+
+  // ---- Octet JWK (symmetric keys) ------------------------------------------
+  //
+  // AES and HMAC keys are `kty: "oct"`: the material is one base64url field.
+  // `alg` names the exact algorithm, so it is checked on import rather than
+  // trusted — a JWK labelled A128GCM must not silently become an AES-CBC key.
+
+  function octetAlg(algo, bits) {
+    if (algo.name === "HMAC") {
+      const suffix = hashName(algo.hash) === "SHA-1" ? "1" : hashName(algo.hash).slice(4);
+      return `HS${suffix}`;
+    }
+    const mode = { "AES-GCM": "GCM", "AES-CBC": "CBC", "AES-CTR": "CTR", "AES-KW": "KW" }[algo.name];
+    return mode ? `A${bits}${mode}` : undefined;
+  }
+
+  function octetJwkToBytes(jwk, algo) {
+    if (jwk == null || typeof jwk !== "object") {
+      throw new DOMException("JWK must be an object", "DataError");
+    }
+    if (jwk.kty !== "oct") {
+      throw new DOMException("JWK kty must be oct", "DataError");
+    }
+    if (typeof jwk.k !== "string") {
+      throw new DOMException("JWK is missing k", "DataError");
+    }
+    const material = b64uToBytes(jwk.k);
+    const expected = octetAlg(algo, material.length * 8);
+    if (jwk.alg !== undefined && expected !== undefined && jwk.alg !== expected) {
+      throw new DOMException(
+        `JWK alg ${jwk.alg} does not match ${algo.name}`,
+        "DataError",
+      );
+    }
+    return material;
+  }
+
+  function octetJwkFromKey(key) {
+    const jwk = {
+      kty: "oct",
+      k: bytesToB64u(key[KEY]),
+      key_ops: [...key.usages],
+      ext: key.extractable,
+    };
+    const alg = octetAlg(key.algorithm, key[KEY].length * 8);
+    if (alg !== undefined) jwk.alg = alg;
+    return jwk;
+  }
+
+  function requireUsage(key, usage) {
+    if (!key.usages.includes(usage)) {
+      throw new DOMException(`key does not allow ${usage}`, "InvalidAccessError");
+    }
+  }
+  // A JWK crosses the wrapping boundary as its UTF-8 JSON serialization, which
+  // is what the spec's "key data" is for that format.
+  function jwkToBytes(jwk) {
+    return new TextEncoder().encode(JSON.stringify(jwk));
+  }
+  function bytesToJwk(bytes) {
+    try {
+      return JSON.parse(new TextDecoder().decode(bytes));
+    } catch {
+      // The bytes decrypted but are not a JWK: with AES-KW the integrity check
+      // has already passed, so this is a format mismatch, not a bad key.
+      throw new DOMException("unwrapped data is not a valid JWK", "DataError");
+    }
+  }
 
   globalThis.CryptoKey = CryptoKey;
   // Expose `crypto` and `crypto.subtle` as instances of branded interfaces with

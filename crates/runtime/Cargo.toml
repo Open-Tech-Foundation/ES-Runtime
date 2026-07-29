@@ -27,6 +27,7 @@ aes-gcm.workspace = true
 aes.workspace = true
 cbc.workspace = true
 ctr.workspace = true
+aes-kw.workspace = true
 hkdf.workspace = true
 pbkdf2.workspace = true
 p256.workspace = true
