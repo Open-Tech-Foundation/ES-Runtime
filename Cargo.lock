@@ -938,6 +938,7 @@ dependencies = [
  "rcgen",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

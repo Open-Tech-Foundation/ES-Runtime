@@ -857,3 +857,24 @@ fn serve_rejects_incomplete_tls_options() {
     assert!(!stdout.contains("NO THROW"), "{stdout}");
     assert!(stdout.contains("TLS_OPTS_OK"), "{stdout}");
 }
+
+#[test]
+fn the_added_fs_surface_works_against_a_real_disk() {
+    // The in-process tests use an in-memory filesystem, so this is the one that
+    // exercises the real jail, real temp-name generation, and real permissions.
+    let out = run_file("fs-surface.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("TEMPDIR named:true"), "{stdout}");
+    assert!(stdout.contains("TEMPDIR unique:true"), "{stdout}");
+    assert!(stdout.contains("TEMPFILE inside:true"), "{stdout}");
+    assert!(stdout.contains("COPY bytes:11 same:true"), "{stdout}");
+    assert!(stdout.contains("TRUNCATE text:hello"), "{stdout}");
+    assert!(stdout.contains("REALPATH clean:true"), "{stdout}");
+    assert!(stdout.contains("CHMOD ok:true"), "{stdout}");
+    assert!(
+        stdout.contains("REALPATH missing:ERR_NOT_FOUND"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("FS_SURFACE_OK"), "{stdout}");
+}

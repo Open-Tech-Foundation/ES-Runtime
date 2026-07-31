@@ -188,5 +188,86 @@ async function rename(from, to) {
   return ops.fs_rename(pathOf(from), pathOf(to));
 }
 
-export { file, write, readDir, stat, exists, mkdir, remove, rename, Glob };
-export default { file, write, readDir, stat, exists, mkdir, remove, rename, Glob };
+// Copies a file, overwriting the destination; resolves to bytes copied. The op
+// needs both FileRead and FileWrite — it reads one path and writes another, and
+// gating it on the write alone would let a guest duplicate a file it cannot
+// read into somewhere it can reach another way.
+async function copy(from, to) {
+  return ops.fs_copy(pathOf(from), pathOf(to));
+}
+
+// The canonical location of `path`: symlinks followed, `.`/`..` removed. Throws
+// if it does not exist, or resolves outside the root jail.
+async function realPath(path) {
+  return ops.fs_real_path(pathOf(path));
+}
+
+// The stored target of a symbolic link, verbatim — possibly relative, possibly
+// dangling. `realPath` is what resolves it.
+async function readLink(path) {
+  return ops.fs_read_link(pathOf(path));
+}
+
+// Sets the file's length exactly, zero-filling if it grows.
+async function truncate(path, len = 0) {
+  return ops.fs_truncate(pathOf(path), Number(len) || 0);
+}
+
+// Sets permission bits (a Unix mode such as 0o600). On Windows only the
+// owner-write bit is representable, as the read-only flag.
+async function chmod(path, mode) {
+  if (typeof mode !== "number" || !Number.isInteger(mode) || mode < 0) {
+    throw new TypeError("chmod: mode must be a non-negative integer (e.g. 0o600)");
+  }
+  return ops.fs_chmod(pathOf(path), mode);
+}
+
+// Creates a directory (or file) with an unpredictable name and returns its
+// path. `dir` defaults to the base directory rather than the OS temp directory:
+// that lives outside the root jail, so writing there would be the one
+// filesystem call that escapes it. The caller owns what it gets — nothing is
+// cleaned up automatically.
+async function makeTempDir({ dir = "", prefix = "" } = {}) {
+  return ops.fs_make_temp_dir(dir ? pathOf(dir) : "", String(prefix));
+}
+
+async function makeTempFile({ dir = "", prefix = "" } = {}) {
+  return ops.fs_make_temp_file(dir ? pathOf(dir) : "", String(prefix));
+}
+
+export {
+  file,
+  write,
+  readDir,
+  stat,
+  exists,
+  mkdir,
+  remove,
+  rename,
+  copy,
+  realPath,
+  readLink,
+  truncate,
+  chmod,
+  makeTempDir,
+  makeTempFile,
+  Glob,
+};
+export default {
+  file,
+  write,
+  readDir,
+  stat,
+  exists,
+  mkdir,
+  remove,
+  rename,
+  copy,
+  realPath,
+  readLink,
+  truncate,
+  chmod,
+  makeTempDir,
+  makeTempFile,
+  Glob,
+};

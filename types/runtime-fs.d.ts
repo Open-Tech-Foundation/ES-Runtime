@@ -119,6 +119,58 @@ declare module "runtime:fs" {
   /** Rename/move an entry (both jailed). Needs `FileWrite`. */
   export function rename(from: PathLike, to: PathLike): Promise<void>;
 
+  /**
+   * Copy a file, overwriting `to`; resolves to bytes copied. Needs **both**
+   * `FileRead` and `FileWrite` — it reads one path and writes another, and
+   * gating it on the write alone would let a caller duplicate a file it cannot
+   * read into somewhere it can reach another way.
+   */
+  export function copy(from: PathLike, to: PathLike): Promise<number>;
+
+  /**
+   * The canonical location of `path`: symlinks followed, `.`/`..` removed.
+   * Rejects if it does not exist (`ERR_NOT_FOUND`) or resolves outside the root
+   * jail (`ERR_JAIL_ESCAPE`). Needs `FileRead`.
+   */
+  export function realPath(path: PathLike): Promise<string>;
+
+  /**
+   * The stored target of a symbolic link, **verbatim** — it may be relative and
+   * may not exist. Use {@link realPath} to resolve it. Needs `FileRead`.
+   */
+  export function readLink(path: PathLike): Promise<string>;
+
+  /** Set the file's length exactly, zero-filling if it grows. Needs `FileWrite`. */
+  export function truncate(path: PathLike, len?: number): Promise<void>;
+
+  /**
+   * Set permission bits — a Unix mode such as `0o600`. Needs `FileWrite`.
+   *
+   * Windows has no mode bits: only the owner-write bit is honoured, as the
+   * read-only flag.
+   */
+  export function chmod(path: PathLike, mode: number): Promise<void>;
+
+  /** Options for {@link makeTempDir} / {@link makeTempFile}. */
+  export interface TempOptions {
+    /**
+     * Where to create it. Defaults to the base directory — **not** the OS temp
+     * directory, which is outside the root jail.
+     */
+    dir?: PathLike;
+    /** Prefix for the generated name. */
+    prefix?: string;
+  }
+
+  /**
+   * Create a directory with an unpredictable name and return its path. Nothing
+   * is cleaned up automatically — the caller owns it. Needs `FileWrite`.
+   */
+  export function makeTempDir(options?: TempOptions): Promise<string>;
+
+  /** Create an empty file with an unpredictable name and return its path. Needs `FileWrite`. */
+  export function makeTempFile(options?: TempOptions): Promise<string>;
+
   const fs: {
     file: typeof file;
     write: typeof write;
@@ -128,6 +180,13 @@ declare module "runtime:fs" {
     mkdir: typeof mkdir;
     remove: typeof remove;
     rename: typeof rename;
+    copy: typeof copy;
+    realPath: typeof realPath;
+    readLink: typeof readLink;
+    truncate: typeof truncate;
+    chmod: typeof chmod;
+    makeTempDir: typeof makeTempDir;
+    makeTempFile: typeof makeTempFile;
     Glob: typeof Glob;
   };
   export default fs;

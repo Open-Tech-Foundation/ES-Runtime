@@ -49,6 +49,10 @@ getrandom = "0.4.2"
 # accepts. The same implementation Firefox ships, so the legacy encodings are
 # the spec's tables rather than a hand-written subset.
 encoding_rs = "0.8.35"
+# Unpredictable temp file/directory names for `runtime:fs`. Already in the tree
+# (via self_update); named here so the dependency is deliberate rather than
+# inherited. Confined to `default-providers`.
+tempfile = "3.27.0"
 # WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
 url = "2.5.8"
 # URLPattern, used by `runtime` for the URLPattern global. Same reasoning as

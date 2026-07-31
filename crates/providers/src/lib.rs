@@ -530,6 +530,56 @@ pub trait FileSystem: Send + Sync {
     /// Renames/moves `from` to `to` (both jailed).
     fn rename(&self, from: String, to: String) -> BoxFuture<Result<(), ProviderError>>;
 
+    /// Copies the file `from` to `to` (both jailed), overwriting `to`. Resolves
+    /// to the number of bytes copied.
+    fn copy(&self, from: String, to: String) -> BoxFuture<Result<u64, ProviderError>>;
+
+    /// Resolves `path` to its canonical location — symlinks followed, `.`/`..`
+    /// removed. Errors if the target does not exist, or if it lands outside the
+    /// jail: this is precisely the operation a caller uses to ask "where does
+    /// this really point?", so it must not answer with somewhere unreachable.
+    fn real_path(&self, path: String) -> BoxFuture<Result<String, ProviderError>>;
+
+    /// Reads the target of the symbolic link at `path`, verbatim — the stored
+    /// value, which may be relative and may not exist. Use
+    /// [`real_path`](Self::real_path) to resolve it.
+    fn read_link(&self, path: String) -> BoxFuture<Result<String, ProviderError>>;
+
+    /// Truncates or extends the file at `path` to exactly `len` bytes. Extending
+    /// zero-fills.
+    fn truncate(&self, path: String, len: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Sets the permission bits of `path` to `mode` (a Unix mode such as
+    /// `0o600`).
+    ///
+    /// Unix applies it as given. Windows has no such bits, so an implementation
+    /// there can honour only the owner-write bit as the read-only flag — a
+    /// partial mapping that must be documented rather than silently pretended.
+    fn chmod(&self, path: String, mode: u32) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Creates a new directory with an unpredictable name under `dir` (jailed;
+    /// the base directory when empty), named `<prefix>XXXXXX`, and resolves to
+    /// its path.
+    ///
+    /// The name comes from the host's temp-file machinery rather than being
+    /// composed by the caller: a guessable temp name in a shared directory is a
+    /// symlink-attack invitation, and getting that right is not something each
+    /// caller should re-derive.
+    fn make_temp_dir(
+        &self,
+        dir: String,
+        prefix: String,
+    ) -> BoxFuture<Result<String, ProviderError>>;
+
+    /// Creates a new empty file with an unpredictable name under `dir`, on the
+    /// same terms as [`make_temp_dir`](Self::make_temp_dir), and resolves to its
+    /// path.
+    fn make_temp_file(
+        &self,
+        dir: String,
+        prefix: String,
+    ) -> BoxFuture<Result<String, ProviderError>>;
+
     /// Tests whether `path` matches the glob `pattern` (pure; no I/O). Supports
     /// `*`, `**`, `?`, character classes, and `{a,b}` alternation.
     fn glob_match(&self, pattern: &str, path: &str) -> Result<bool, ProviderError>;

@@ -22,6 +22,7 @@ reqwest.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
+tempfile.workspace = true
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 webpki-roots.workspace = true

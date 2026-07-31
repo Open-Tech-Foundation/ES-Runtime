@@ -67,6 +67,41 @@ impl SystemFileSystem {
     /// symlink swaps depends on it, so the result must never be cached across
     /// calls (the filesystem is mutable, and a path validated once can later
     /// become a symlink escape).
+    /// The jailed directory a temp entry goes in: `dir`, or the base directory
+    /// when empty. Deliberately *not* the OS temp directory — that lives outside
+    /// the root jail, so writing there would be the one filesystem call that
+    /// escapes it.
+    fn temp_base(&self, dir: &str) -> Result<PathBuf, ProviderError> {
+        if dir.is_empty() {
+            confine(&self.base.clone(), &self.root)
+        } else {
+            self.jailed(dir)
+        }
+    }
+
+    /// Like [`jailed`](Self::jailed) but without resolving the **final**
+    /// component: the parent chain is canonicalized and confined, then the last
+    /// name is reattached literally.
+    ///
+    /// `read_link` needs this. Resolving the whole path follows the very link it
+    /// is being asked about, so it would read the target's target — or, for a
+    /// link to a regular file, fail with `EINVAL`. The parent is still fully
+    /// resolved and jailed, so the link being read is provably inside the root.
+    fn jailed_nofollow(&self, p: &str) -> Result<PathBuf, ProviderError> {
+        let raw = Path::new(p);
+        let abs = if raw.is_absolute() {
+            raw.to_path_buf()
+        } else {
+            self.base.join(raw)
+        };
+        let (parent, name) = match (abs.parent(), abs.file_name()) {
+            (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
+            // No final component to hold back (a bare root); fall through.
+            _ => return confine(&abs, &self.root),
+        };
+        Ok(confine(&parent, &self.root)?.join(name))
+    }
+
     fn jailed(&self, p: &str) -> Result<PathBuf, ProviderError> {
         let raw = Path::new(p);
         let abs = if raw.is_absolute() {
@@ -319,6 +354,127 @@ impl FileSystem for SystemFileSystem {
         })
     }
 
+    fn copy(&self, from: String, to: String) -> BoxFuture<Result<u64, ProviderError>> {
+        let from_r = self.jailed(&from);
+        let to_r = self.jailed(&to);
+        Box::pin(async move {
+            let (a, b) = (from_r?, to_r?);
+            tokio::fs::copy(&a, &b).await.map_err(|e| other(&from, e))
+        })
+    }
+
+    fn real_path(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
+        let resolved = self.jailed(&path);
+        let root = self.root.clone();
+        Box::pin(async move {
+            let p = resolved?;
+            // `jailed` already canonicalizes what exists, but a path whose tail
+            // does not exist is reattached literally — so canonicalize again and
+            // re-check. Answering with a real location outside the jail would
+            // defeat the point of the jail.
+            let real = tokio::fs::canonicalize(&p)
+                .await
+                .map_err(|e| other(&path, e))?;
+            let real = confine(&real, &root)?;
+            Ok(real.to_string_lossy().into_owned())
+        })
+    }
+
+    fn read_link(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
+        // Not `jailed`: that would resolve the link being asked about.
+        let resolved = self.jailed_nofollow(&path);
+        Box::pin(async move {
+            let p = resolved?;
+            // The stored target, verbatim — it may be relative, and may not
+            // exist. Not jailed, because it is data read out of the link rather
+            // than a path being accessed; `real_path` is what resolves it, and
+            // that is jailed.
+            let target = tokio::fs::read_link(&p)
+                .await
+                .map_err(|e| other(&path, e))?;
+            Ok(target.to_string_lossy().into_owned())
+        })
+    }
+
+    fn truncate(&self, path: String, len: u64) -> BoxFuture<Result<(), ProviderError>> {
+        let resolved = self.jailed(&path);
+        Box::pin(async move {
+            let p = resolved?;
+            let file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .open(&p)
+                .await
+                .map_err(|e| other(&path, e))?;
+            file.set_len(len).await.map_err(|e| other(&path, e))
+        })
+    }
+
+    fn chmod(&self, path: String, mode: u32) -> BoxFuture<Result<(), ProviderError>> {
+        let resolved = self.jailed(&path);
+        Box::pin(async move {
+            let p = resolved?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                tokio::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))
+                    .await
+                    .map_err(|e| other(&path, e))
+            }
+            #[cfg(not(unix))]
+            {
+                // Windows has no mode bits — only a read-only flag. Honour the
+                // owner-write bit and nothing else, which is the whole of what
+                // the platform can represent (the same mapping Node makes).
+                let mut perms = tokio::fs::metadata(&p)
+                    .await
+                    .map_err(|e| other(&path, e))?
+                    .permissions();
+                perms.set_readonly(mode & 0o200 == 0);
+                tokio::fs::set_permissions(&p, perms)
+                    .await
+                    .map_err(|e| other(&path, e))
+            }
+        })
+    }
+
+    fn make_temp_dir(
+        &self,
+        dir: String,
+        prefix: String,
+    ) -> BoxFuture<Result<String, ProviderError>> {
+        let resolved = self.temp_base(&dir);
+        Box::pin(async move {
+            let base = resolved?;
+            // Built by tempfile, so the name is unpredictable: a guessable temp
+            // name in a shared directory is a symlink-attack invitation, and it
+            // is not something each caller should have to get right.
+            let made = tempfile::Builder::new()
+                .prefix(&prefix)
+                .tempdir_in(&base)
+                .map_err(|e| other(&dir, e))?;
+            // Hand ownership to the guest: it decides when to remove it, exactly
+            // as with any other directory it created.
+            Ok(made.keep().to_string_lossy().into_owned())
+        })
+    }
+
+    fn make_temp_file(
+        &self,
+        dir: String,
+        prefix: String,
+    ) -> BoxFuture<Result<String, ProviderError>> {
+        let resolved = self.temp_base(&dir);
+        Box::pin(async move {
+            let base = resolved?;
+            let made = tempfile::Builder::new()
+                .prefix(&prefix)
+                .tempfile_in(&base)
+                .map_err(|e| other(&dir, e))?;
+            let (_file, path) = made.keep().map_err(|e| other(&dir, e.error))?;
+            Ok(path.to_string_lossy().into_owned())
+        })
+    }
+
     fn glob_match(&self, pattern: &str, path: &str) -> Result<bool, ProviderError> {
         let (matcher, negated) = parse_glob(pattern)?;
         Ok(negated ^ matcher.is_match(path))
@@ -376,6 +532,132 @@ impl FileSystem for SystemFileSystem {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// A fresh empty jail rooted at its own temp directory, plus a `SystemFileSystem`
+    /// based there. Named per test so cases cannot collide.
+    fn jail(name: &str) -> (std::path::PathBuf, SystemFileSystem) {
+        let root = std::env::temp_dir().join(format!("esrun-fs-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let fs = SystemFileSystem::new(&root, &root);
+        (root, fs)
+    }
+
+    #[tokio::test]
+    async fn copy_duplicates_a_file_and_reports_its_size() {
+        let (root, fs) = jail("copy");
+        std::fs::write(root.join("src.txt"), b"hello world").unwrap();
+        let n = fs.copy("src.txt".into(), "dst.txt".into()).await.unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(std::fs::read(root.join("dst.txt")).unwrap(), b"hello world");
+    }
+
+    #[tokio::test]
+    async fn copy_refuses_a_destination_outside_the_jail() {
+        let (root, fs) = jail("copy-escape");
+        std::fs::write(root.join("src.txt"), b"secret").unwrap();
+        let err = fs
+            .copy("src.txt".into(), "../escaped.txt".into())
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+    }
+
+    #[tokio::test]
+    async fn truncate_shortens_and_extends() {
+        let (root, fs) = jail("truncate");
+        std::fs::write(root.join("f"), b"0123456789").unwrap();
+        fs.truncate("f".into(), 4).await.unwrap();
+        assert_eq!(std::fs::read(root.join("f")).unwrap(), b"0123");
+        // Growing zero-fills rather than leaving the old bytes behind.
+        fs.truncate("f".into(), 6).await.unwrap();
+        assert_eq!(std::fs::read(root.join("f")).unwrap(), b"0123\0\0");
+    }
+
+    /// A temp name must be unpredictable and land inside the jail — the OS temp
+    /// directory is outside it, and writing there would be the one filesystem
+    /// call that escapes.
+    #[tokio::test]
+    async fn temp_entries_are_created_inside_the_jail() {
+        let (root, fs) = jail("temp");
+        let dir = fs.make_temp_dir(String::new(), "d-".into()).await.unwrap();
+        let file = fs.make_temp_file(String::new(), "f-".into()).await.unwrap();
+        for made in [&dir, &file] {
+            let real = std::fs::canonicalize(made).unwrap();
+            assert!(
+                real.starts_with(std::fs::canonicalize(&root).unwrap()),
+                "{made} must be inside the jail"
+            );
+        }
+        assert!(std::path::Path::new(&dir).is_dir());
+        assert!(std::path::Path::new(&file).is_file());
+
+        // Two calls must not collide, or "temp" means nothing.
+        let again = fs.make_temp_dir(String::new(), "d-".into()).await.unwrap();
+        assert_ne!(dir, again);
+    }
+
+    #[tokio::test]
+    async fn real_path_resolves_dot_segments() {
+        let (root, fs) = jail("realpath");
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("a/b/f"), b"x").unwrap();
+        let real = fs.real_path("a/../a/b/f".into()).await.unwrap();
+        assert!(real.ends_with("f"), "{real}");
+        assert!(!real.contains(".."), "{real}");
+    }
+
+    #[tokio::test]
+    async fn real_path_errors_on_a_missing_target() {
+        // It answers "where does this really point?", and there is no honest
+        // answer for something that is not there.
+        let (_root, fs) = jail("realpath-missing");
+        assert!(fs.real_path("nope".into()).await.is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_link_returns_the_stored_target_and_real_path_follows_it() {
+        let (root, fs) = jail("readlink");
+        std::fs::write(root.join("target.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink("target.txt", root.join("link")).unwrap();
+
+        // Verbatim: the relative target as stored, not a resolved path.
+        assert_eq!(fs.read_link("link".into()).await.unwrap(), "target.txt");
+        assert!(
+            fs.real_path("link".into())
+                .await
+                .unwrap()
+                .ends_with("target.txt")
+        );
+    }
+
+    /// A link out of the jail must not be followed. `read_link` reads data out
+    /// of the link, but `real_path` is an access, and it has to refuse.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_path_refuses_a_link_that_escapes_the_jail() {
+        let (root, fs) = jail("readlink-escape");
+        let outside = root.parent().unwrap().join("esrun-fs-outside-target");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("out")).unwrap();
+        let err = fs.real_path("out".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn chmod_sets_the_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, fs) = jail("chmod");
+        std::fs::write(root.join("k"), b"secret").unwrap();
+        fs.chmod("k".into(), 0o600).await.unwrap();
+        let mode = std::fs::metadata(root.join("k"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "got {mode:o}");
+    }
 
     /// Resolution must re-canonicalize on every call: a path that resolves
     /// safely while it does not yet exist must be rejected once it becomes a

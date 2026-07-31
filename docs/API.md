@@ -626,6 +626,24 @@ Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 | `mkdir(path, opts?)`  | `(path, { recursive? }) => Promise<void>`       | Creates a directory; `recursive` creates parents.                           |
 | `remove(path, opts?)` | `(path, { recursive? }) => Promise<void>`       | Removes a file or (with `recursive`) a directory tree.                      |
 | `rename(from, to)`    | `(path, path) => Promise<void>`                 | Renames/moves an entry (both jailed).                                       |
+| `copy(from, to)`      | `(path, path) => Promise<number>`               | Copies a file, overwriting `to`; resolves to bytes copied. Needs **both** `FileRead` and `FileWrite`. |
+| `realPath(path)`      | `(path) => Promise<string>`                     | The canonical location — symlinks followed, `.`/`..` removed. `ERR_NOT_FOUND` if missing, `ERR_JAIL_ESCAPE` if it resolves outside the jail. `FileRead`. |
+| `readLink(path)`      | `(path) => Promise<string>`                     | The stored target of a symlink, verbatim (may be relative, may dangle). `FileRead`. |
+| `truncate(path, len?)`| `(path, number) => Promise<void>`               | Sets the file's length exactly, zero-filling if it grows.                   |
+| `chmod(path, mode)`   | `(path, number) => Promise<void>`               | Sets permission bits (`0o600`). Windows honours only the owner-write bit, as the read-only flag. |
+| `makeTempDir(opts?)`  | `({ dir?, prefix? }) => Promise<string>`        | Creates a directory with an unpredictable name; resolves to its path.       |
+| `makeTempFile(opts?)` | `({ dir?, prefix? }) => Promise<string>`        | Creates an empty file with an unpredictable name; resolves to its path.     |
+
+**Temporary entries** default to the base directory, **not** the OS temp
+directory — that lives outside the root jail, so writing there would be the one
+filesystem call that escapes it. Pass `dir` to place them elsewhere inside the
+jail. The name comes from the host's temp-file machinery, so it is
+unpredictable: a guessable name in a shared directory is a symlink-attack
+invitation. Nothing is cleaned up automatically — what you create, you remove.
+
+**`copy` needs both capabilities.** It reads one path and writes another;
+gating it on the write alone would let a guest with no read access duplicate a
+file it cannot see into somewhere it can reach by another route.
 
 ### `FsFile` (from `file(path)`)
 

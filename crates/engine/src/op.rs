@@ -117,14 +117,16 @@ pub enum OpHandler {
     Async(Box<dyn FnMut(Vec<Value>) -> AsyncOp>),
 }
 
-/// A registration request for one op: its JS name, the capability it requires
+/// A registration request for one op: its JS name, the capabilities it requires
 /// (if any), and its handler.
 pub struct OpDecl {
     /// The name the op is exposed as: `globalThis.__ops.<name>`.
     pub name: String,
-    /// The capability checked before dispatch (ARCHITECTURE.md §4); `None` for
-    /// pure, non-side-effecting ops.
-    pub required_capability: Option<Capability>,
+    /// Every capability checked before dispatch (ARCHITECTURE.md §4); empty for
+    /// pure, non-side-effecting ops. **All** must be held — an op that both
+    /// reads and writes (a file copy, say) is only as available as its
+    /// scarcer grant, and gating it on one of the two would be a hole.
+    pub required_capabilities: Vec<Capability>,
     /// The handler to invoke.
     pub handler: OpHandler,
 }
@@ -137,7 +139,7 @@ impl OpDecl {
     ) -> Self {
         OpDecl {
             name: name.into(),
-            required_capability: None,
+            required_capabilities: Vec::new(),
             handler: OpHandler::Sync(Box::new(handler)),
         }
     }
@@ -149,21 +151,27 @@ impl OpDecl {
     ) -> Self {
         OpDecl {
             name: name.into(),
-            required_capability: None,
+            required_capabilities: Vec::new(),
             handler: OpHandler::Async(Box::new(handler)),
         }
     }
 
-    /// Sets the capability required before this op may dispatch (builder style).
+    /// Adds a capability required before this op may dispatch (builder style).
+    ///
+    /// Additive: calling it twice demands both. An op is expected to name every
+    /// authority it actually exercises, so a call that reads one path and writes
+    /// another says so rather than picking whichever gate is convenient.
     #[must_use]
     pub fn requires(mut self, capability: Capability) -> Self {
-        self.required_capability = Some(capability);
+        if !self.required_capabilities.contains(&capability) {
+            self.required_capabilities.push(capability);
+        }
         self
     }
 }
 
 struct OpEntry {
-    required_capability: Option<Capability>,
+    required_capabilities: Vec<Capability>,
     handler: OpHandler,
 }
 
@@ -264,12 +272,12 @@ impl OpState {
     /// Adds an op to the table and returns its id (its index).
     pub(crate) fn add_op(
         &mut self,
-        required_capability: Option<Capability>,
+        required_capabilities: Vec<Capability>,
         handler: OpHandler,
     ) -> i32 {
         let id = self.ops.len() as i32;
         self.ops.push(OpEntry {
-            required_capability,
+            required_capabilities,
             handler,
         });
         id
@@ -353,11 +361,16 @@ fn op_dispatch_inner(
 
     // Capability check first: a denial is a clean exception, never a partial
     // effect (ARCHITECTURE.md §4).
-    if let Some(cap) = state.ops[idx].required_capability
-        && !state.capabilities.contains(cap)
+    // Every named capability must be held: the first one missing is the one
+    // reported, so the message names something the caller can act on.
+    if let Some(missing) = state.ops[idx]
+        .required_capabilities
+        .iter()
+        .copied()
+        .find(|cap| !state.capabilities.contains(*cap))
     {
         drop(state);
-        throw(scope, &CommonError::CapabilityDenied(cap));
+        throw(scope, &CommonError::CapabilityDenied(missing));
         return;
     }
 

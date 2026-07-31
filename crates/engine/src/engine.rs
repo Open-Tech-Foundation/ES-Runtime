@@ -642,7 +642,7 @@ impl Engine for V8Engine {
         let op_id = self
             .op_state
             .borrow_mut()
-            .add_op(op.required_capability, op.handler);
+            .add_op(op.required_capabilities, op.handler);
         // When the op shells are baked into a restored snapshot, the JS function
         // already exists — binding the handler (above) is all that is needed, and
         // re-creating the shell would be wasted work (DECISIONS.md D8).

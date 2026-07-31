@@ -159,14 +159,128 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
         .requires(Capability::FileRead),
     )?;
 
+    let f = fs.clone();
     engine.register_op(
         OpDecl::r#async("fs_rename", move |args| {
-            let f = fs.clone();
+            let f = f.clone();
             let from = arg_str(&args, 0);
             let to = arg_str(&args, 1);
             Box::pin(async move {
                 require(&f)?.rename(from, to).await.map_err(map_err)?;
                 Ok(Value::Undefined)
+            })
+        })
+        .requires(Capability::FileWrite),
+    )?;
+
+    // A copy reads one path and writes another, so it names both grants. Gating
+    // it on the write alone would let a guest with no read access duplicate a
+    // file it cannot see into somewhere it can reach by another route.
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_copy", move |args| {
+            let f = f.clone();
+            let from = arg_str(&args, 0);
+            let to = arg_str(&args, 1);
+            Box::pin(async move {
+                let n = require(&f)?.copy(from, to).await.map_err(map_err)?;
+                Ok(Value::Number(n as f64))
+            })
+        })
+        .requires(Capability::FileRead)
+        .requires(Capability::FileWrite),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_real_path", move |args| {
+            let f = f.clone();
+            let path = arg_str(&args, 0);
+            Box::pin(async move {
+                let real = require(&f)?.real_path(path).await.map_err(map_err)?;
+                Ok(Value::String(real))
+            })
+        })
+        .requires(Capability::FileRead),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_read_link", move |args| {
+            let f = f.clone();
+            let path = arg_str(&args, 0);
+            Box::pin(async move {
+                let target = require(&f)?.read_link(path).await.map_err(map_err)?;
+                Ok(Value::String(target))
+            })
+        })
+        .requires(Capability::FileRead),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_truncate", move |args| {
+            let f = f.clone();
+            let path = arg_str(&args, 0);
+            let len = args
+                .get(1)
+                .and_then(Value::as_number)
+                .unwrap_or(0.0)
+                .max(0.0) as u64;
+            Box::pin(async move {
+                require(&f)?.truncate(path, len).await.map_err(map_err)?;
+                Ok(Value::Undefined)
+            })
+        })
+        .requires(Capability::FileWrite),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_chmod", move |args| {
+            let f = f.clone();
+            let path = arg_str(&args, 0);
+            let mode = args
+                .get(1)
+                .and_then(Value::as_number)
+                .unwrap_or(0.0)
+                .max(0.0) as u32;
+            Box::pin(async move {
+                require(&f)?.chmod(path, mode).await.map_err(map_err)?;
+                Ok(Value::Undefined)
+            })
+        })
+        .requires(Capability::FileWrite),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_make_temp_dir", move |args| {
+            let f = f.clone();
+            let dir = arg_str(&args, 0);
+            let prefix = arg_str(&args, 1);
+            Box::pin(async move {
+                let made = require(&f)?
+                    .make_temp_dir(dir, prefix)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::String(made))
+            })
+        })
+        .requires(Capability::FileWrite),
+    )?;
+
+    engine.register_op(
+        OpDecl::r#async("fs_make_temp_file", move |args| {
+            let f = fs.clone();
+            let dir = arg_str(&args, 0);
+            let prefix = arg_str(&args, 1);
+            Box::pin(async move {
+                let made = require(&f)?
+                    .make_temp_file(dir, prefix)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::String(made))
             })
         })
         .requires(Capability::FileWrite),

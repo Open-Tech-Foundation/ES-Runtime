@@ -137,6 +137,35 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:fs` gained the file operations it was missing** — `copy`,
+  `realPath`, `readLink`, `truncate`, `chmod`, `makeTempDir` and `makeTempFile`.
+  The module had ten exports and none of these, so copying a file meant reading
+  it whole into memory and writing it back, resolving a symlink was impossible,
+  and there was no way to create a scratch directory or to write a key file with
+  `0600` on it.
+  Temporary entries land in the **base directory**, not the OS temp directory:
+  that is outside the root jail, so writing there would be the one filesystem
+  call that escapes it. Names come from the host's temp-file machinery rather
+  than being composed by the caller, because a guessable name in a shared
+  directory is a symlink-attack invitation. Nothing is cleaned up automatically.
+  `realPath` re-canonicalizes and re-checks the jail before answering — it is
+  exactly the call that asks "where does this really point?", so answering with
+  somewhere unreachable would defeat the point. `readLink` deliberately does not
+  resolve the link it is asked about (which would read the target's target, or
+  fail outright on a link to a regular file); its parent chain is still resolved
+  and jailed.
+  `chmod` applies a Unix mode as given. Windows has no such bits, so only the
+  owner-write one is honoured, as the read-only flag — stated rather than
+  silently pretended.
+
+- **An op can now require more than one capability.** `copy` reads one path and
+  writes another, and gating it on `FileWrite` alone would have let a guest with
+  no read access duplicate a file it cannot see into somewhere it can reach by
+  another route — an exfiltration primitive out of a write-only grant.
+  `OpDecl::requires` is additive, so an op names every authority it actually
+  exercises instead of whichever gate is convenient. Existing single-capability
+  ops are unchanged.
+
 - **`runtime:http` terminates TLS — `serve({ secureTransport: "on", cert, key })`.**
   It served plain HTTP only, so putting an ES-Runtime server on a public port
   meant a reverse proxy in front of it, no matter how small the deployment. The

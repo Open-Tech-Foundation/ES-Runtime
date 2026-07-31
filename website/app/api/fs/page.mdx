@@ -24,7 +24,7 @@ writes that accept any web body.
 ## Import
 
 ```js
-import { file, write, readDir, stat, mkdir, remove, rename, Glob } from "runtime:fs";
+import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "runtime:fs";
 ```
 
 ## Functions
@@ -39,6 +39,13 @@ import { file, write, readDir, stat, mkdir, remove, rename, Glob } from "runtime
 | `mkdir(path, options?)` | `(path, { recursive? }) => Promise<void>` | Creates a directory; `recursive` creates missing parents. | `await mkdir("./logs/2026", { recursive: true })` |
 | `remove(path, options?)` | `(path, { recursive? }) => Promise<void>` | Removes a file or (with `recursive`) a directory tree. | `await remove("./tmp", { recursive: true })` |
 | `rename(from, to)` | `(from, to) => Promise<void>` | Renames or moves an entry (both jailed). | `await rename("./draft.md", "./final.md")` |
+| `copy(from, to)` | `(from, to) => Promise<number>` | Copies a file, overwriting the destination; resolves to bytes copied. Needs **both** FileRead and FileWrite. | `await copy("./a.txt", "./b.txt")` |
+| `realPath(path)` | `(path) => Promise<string>` | Canonical location — symlinks followed, `.`/`..` removed. Throws if missing or outside the jail. | `await realPath("./a/../b")` |
+| `readLink(path)` | `(path) => Promise<string>` | The stored symlink target, verbatim (may be relative or dangling). | `await readLink("./link")` |
+| `truncate(path, len?)` | `(path, len) => Promise<void>` | Sets the file's length exactly, zero-filling if it grows. | `await truncate("./log", 0)` |
+| `chmod(path, mode)` | `(path, mode) => Promise<void>` | Sets permission bits. Windows honours only the owner-write bit, as the read-only flag. | `await chmod("./key.pem", 0o600)` |
+| `makeTempDir(opts?)` | `({ dir?, prefix? }) => Promise<string>` | Creates a directory with an unpredictable name; returns its path. | `await makeTempDir({ prefix: "build-" })` |
+| `makeTempFile(opts?)` | `({ dir?, prefix? }) => Promise<string>` | Creates an empty file with an unpredictable name; returns its path. | `await makeTempFile({ prefix: "up-" })` |
 | `new Glob(pattern)` | `Glob` | Glob matcher/scanner. `match(path)` is pure; `scan(cwd \| options)` is an async iterator over the jailed tree. Patterns: `*`, `**`, `?`, `[a-z]`, `[!x]`, `{a,b}`, leading `!`. | `new Glob("**/*.ts").match("src/app.ts") // true` |
 
 ## FsFile — the `file(path)` handle
@@ -57,10 +64,26 @@ import { file, write, readDir, stat, mkdir, remove, rename, Glob } from "runtime
 | `writable(options?)` | `WritableStream` | A sink for piped/incremental writes. First chunk truncates unless `{ append: true }` is set, rest append. |
 | `delete()` | `Promise<void>` | Delete this file. |
 
+## Temporary entries
+
+`makeTempDir` / `makeTempFile` default to the **base directory**, not the OS
+temp directory — that is outside the root jail. Pass `dir` to place them
+elsewhere inside it. Names are unpredictable, and nothing is cleaned up
+automatically.
+
+```js
+const dir = await makeTempDir({ prefix: "build-" });
+try {
+  // …
+} finally {
+  await remove(dir, { recursive: true });
+}
+```
+
 ## Errors
 
 | Error | When |
 | --- | --- |
-| `TypeError` | A path isn't a string, URL, or `file()` handle; a non-`file:` URL is passed; or `write()` gets an unsupported input type. |
+| `TypeError` | A path isn't a string, URL, or `file()` handle; a non-`file:` URL is passed; `write()` gets an unsupported input type; or `chmod()` gets a non-integer mode. |
 | `DOMException` | name `"NotAllowedError"` — the FileRead or FileWrite capability is not granted. |
 | `Error` | A filesystem failure surfaced by the OS (not found, permission denied, etc.). |

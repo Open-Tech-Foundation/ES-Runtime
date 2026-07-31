@@ -1654,6 +1654,171 @@ mod tests {
                 "the in-memory test filesystem does not implement globbing".into(),
             )))
         }
+
+        fn copy(
+            &self,
+            from: String,
+            to: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<u64, es_runtime_providers::ProviderError>,
+        > {
+            let mut files = self.files.lock().unwrap();
+            match files.get(&from).cloned() {
+                Some(bytes) => {
+                    let n = bytes.len() as u64;
+                    files.insert(to, bytes);
+                    Self::ready(Ok(n))
+                }
+                None => Self::ready(Err(Self::not_found(&from))),
+            }
+        }
+
+        fn real_path(
+            &self,
+            path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<String, es_runtime_providers::ProviderError>,
+        > {
+            // Path strings are keys here — there is nothing to canonicalize.
+            if self.files.lock().unwrap().contains_key(&path) {
+                Self::ready(Ok(path))
+            } else {
+                Self::ready(Err(Self::not_found(&path)))
+            }
+        }
+
+        fn read_link(
+            &self,
+            path: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<String, es_runtime_providers::ProviderError>,
+        > {
+            // No links in an in-memory map; the real jail behaviour is tested
+            // against the default provider.
+            Self::ready(Err(Self::not_found(&path)))
+        }
+
+        fn truncate(
+            &self,
+            path: String,
+            len: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            let mut files = self.files.lock().unwrap();
+            match files.get_mut(&path) {
+                Some(bytes) => {
+                    bytes.resize(len as usize, 0);
+                    Self::ready(Ok(()))
+                }
+                None => Self::ready(Err(Self::not_found(&path))),
+            }
+        }
+
+        fn chmod(
+            &self,
+            _path: String,
+            _mode: u32,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            // No permission bits to set; accepted so a caller's flow still runs.
+            Self::ready(Ok(()))
+        }
+
+        fn make_temp_dir(
+            &self,
+            dir: String,
+            prefix: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<String, es_runtime_providers::ProviderError>,
+        > {
+            Self::ready(Ok(format!("{dir}/{prefix}memtmp")))
+        }
+
+        fn make_temp_file(
+            &self,
+            dir: String,
+            prefix: String,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<String, es_runtime_providers::ProviderError>,
+        > {
+            let path = format!("{dir}/{prefix}memtmp");
+            self.files.lock().unwrap().insert(path.clone(), Vec::new());
+            Self::ready(Ok(path))
+        }
+    }
+
+    fn runtime_with_memory_fs() -> Runtime {
+        let engine = V8Engine::new(Limits::default()).expect("engine");
+        Runtime::new(
+            Box::new(engine),
+            test_providers().with_file_system(Arc::new(MemoryFs::default())),
+        )
+        .expect("runtime")
+    }
+
+    /// A copy reads one path and writes another, so it must hold **both**
+    /// grants. Gating it on the write alone would let a guest with no read
+    /// access duplicate a file it cannot see into somewhere it can reach by
+    /// another route — an exfiltration primitive out of a write-only grant.
+    #[test]
+    fn copy_requires_both_file_capabilities() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_memory_fs();
+
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileWrite));
+        assert!(
+            rt.eval("__ops.fs_copy('/a', '/b')").is_err(),
+            "FileWrite alone must not permit a copy"
+        );
+
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
+        assert!(
+            rt.eval("__ops.fs_copy('/a', '/b')").is_err(),
+            "FileRead alone must not permit a copy"
+        );
+
+        // Both together dispatch (and fail on the missing source, not the gate).
+        rt.set_capabilities(
+            CapabilitySet::none()
+                .with(Capability::FileRead)
+                .with(Capability::FileWrite),
+        );
+        let out = eval_async(
+            &mut rt,
+            "try { await __ops.fs_copy('/a', '/b'); return 'no throw'; } catch (e) { return e.code; }",
+        );
+        assert_eq!(out, Value::String("ERR_NOT_FOUND".into()));
+    }
+
+    /// The read-side and write-side additions land on the gate that matches what
+    /// they do, rather than all defaulting to one.
+    #[test]
+    fn the_new_fs_ops_are_gated_by_what_they_do() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_memory_fs();
+
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileWrite));
+        for read_op in ["__ops.fs_real_path('/a')", "__ops.fs_read_link('/a')"] {
+            assert!(
+                rt.eval(read_op).is_err(),
+                "{read_op} must need FileRead, not FileWrite"
+            );
+        }
+
+        rt.set_capabilities(CapabilitySet::none().with(Capability::FileRead));
+        for write_op in [
+            "__ops.fs_truncate('/a', 0)",
+            "__ops.fs_chmod('/a', 384)",
+            "__ops.fs_make_temp_dir('', 't-')",
+            "__ops.fs_make_temp_file('', 't-')",
+        ] {
+            assert!(
+                rt.eval(write_op).is_err(),
+                "{write_op} must need FileWrite, not FileRead"
+            );
+        }
     }
 
     /// The synchronous filesystem is behind the same gates as the async one:
