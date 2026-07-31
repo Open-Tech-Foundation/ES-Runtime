@@ -1,52 +1,63 @@
 const items = [
   {
-    title: "One core, two shapes",
-    body: "The esrun binary and the embeddable Rust library ship from the same engine.",
+    title: "Parsers already inside",
+    body: "XML, YAML, TOML, JSONL, MessagePack, and Protobuf ship in the binary. No install step.",
+    href: "/docs/serialization/xml",
+    linkText: "Serialization docs →",
     icon: (
       <>
-        <rect x="3" y="3" width="7" height="7" rx="1.5" />
-        <rect x="14" y="14" width="7" height="7" rx="1.5" />
-        <path d="M10 6.5h4.5a2 2 0 0 1 2 2V14" />
+        <path d="M9 3H5a2 2 0 0 0-2 2v4" />
+        <path d="M15 3h4a2 2 0 0 1 2 2v4" />
+        <path d="M9 21H5a2 2 0 0 1-2-2v-4" />
+        <path d="M15 21h4a2 2 0 0 0 2-2v-4" />
+        <path d="M8 12h8" />
       </>
     ),
   },
   {
-    title: "I/O you inject",
-    body: "Filesystem, network, clock, and env arrive as provider traits. Nothing is ambient.",
+    title: "A server, not a framework",
+    body: "HTTP and WebSockets are built in and speak plain Request and Response.",
+    href: "/docs/http",
+    linkText: "HTTP docs →",
     icon: (
       <>
-        <path d="M12 3v6" />
-        <path d="m9 6 3-3 3 3" />
-        <rect x="3" y="11" width="18" height="10" rx="2" />
-        <path d="M7 16h.01M11 16h6" />
+        <rect x="2" y="3" width="20" height="7" rx="2" />
+        <rect x="2" y="14" width="20" height="7" rx="2" />
+        <path d="M6 6.5h.01M6 17.5h.01" />
       </>
     ),
   },
   {
-    title: "A loop you drive",
-    body: "No owned thread. Tick the runtime from your host loop and keep scheduling and lifetime.",
+    title: "Subprocesses that stream",
+    body: "Pipe a request body straight into ffmpeg or git, and the output straight back out.",
+    href: "/docs/guides/subprocess",
+    linkText: "Subprocess docs →",
     icon: (
       <>
-        <path d="M21 12a9 9 0 1 1-3.5-7.1" />
-        <path d="M21 3v5h-5" />
-        <circle cx="12" cy="12" r="2.5" />
+        <rect x="2.5" y="4" width="19" height="16" rx="2" />
+        <path d="m7 9 3 3-3 3" />
+        <path d="M13 15h4" />
       </>
     ),
   },
   {
-    title: "Capabilities are granted",
-    body: "Embedded code starts with zero powers. The host hands out exactly what it needs.",
+    title: "Web standards, no dialect",
+    body: "fetch, URL, URLPattern, streams, WebCrypto. Host powers arrive as runtime: modules, not new globals.",
+    href: "/docs/globals",
+    linkText: "Global objects →",
     icon: (
       <>
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        <path d="m9 12 2 2 4-4" />
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18" />
+        <path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z" />
       </>
     ),
   },
   {
-    title: "Snapshot boot",
-    body: "A baked V8 snapshot opens a full WinterTC realm in 7 ms, at 20 MB peak resident memory.",
+    title: "Starts in 7 ms",
+    body: "A baked V8 snapshot opens a full WinterTC realm at 20 MB peak resident memory.",
     href: "/docs/benchmarks",
+    linkText: "See benchmarks →",
     icon: (
       <>
         <path d="M13 2 4.5 13.5H11l-1 8.5 9.5-11.5H13z" />
@@ -54,8 +65,10 @@ const items = [
     ),
   },
   {
-    title: "One binary",
-    body: "Self-contained, checksum-verified, no asset directory and no runtime dependencies.",
+    title: "One binary to ship",
+    body: "Self-contained and checksum-verified. No asset directory, no runtime dependencies.",
+    href: "/docs/install",
+    linkText: "Install →",
     icon: (
       <>
         <path d="m12 2 8.5 4.8v10.4L12 22l-8.5-4.8V6.8z" />
@@ -81,7 +94,7 @@ export default function UniqueFeaturesSection() {
 
         <div className="relative z-10 grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
           {items.map((item) => (
-            <div className="group flex flex-col rounded-xl border-t-4 border-zinc-800 border-t-brand-500 bg-zinc-900/80 p-5 shadow-lg transition-colors hover:bg-zinc-900">
+            <div className="flex flex-col rounded-xl border-t-4 border-zinc-800 border-t-brand-500 bg-zinc-900/80 p-5 shadow-lg transition-colors hover:bg-zinc-900">
               <svg
                 width="24"
                 height="24"
@@ -102,14 +115,12 @@ export default function UniqueFeaturesSection() {
               <p className="mt-2 text-[13px] leading-relaxed text-zinc-400">
                 {item.body}
               </p>
-              {item.href ? (
-                <a
-                  href={item.href}
-                  className="mt-3 text-xs font-medium text-brand-400 hover:text-brand-300"
-                >
-                  See benchmarks →
-                </a>
-              ) : null}
+              <a
+                href={item.href}
+                className="mt-auto pt-3 text-xs font-medium text-brand-400 hover:text-brand-300"
+              >
+                {item.linkText}
+              </a>
             </div>
           ))}
         </div>
