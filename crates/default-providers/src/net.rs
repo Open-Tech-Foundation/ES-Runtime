@@ -19,6 +19,23 @@ const MAX_REDIRECTS: usize = 20;
 /// header overrides this.
 const USER_AGENT: &str = concat!("ES-Runtime/", env!("CARGO_PKG_VERSION"));
 
+/// How long establishing the connection (DNS + TCP + TLS) may take before the
+/// attempt fails with `ERR_TIMED_OUT`.
+///
+/// This deliberately bounds only the *connect* phase. A cap on the whole request
+/// would be wrong here: Fetch defines no timeout, and a response body may be
+/// long-lived by design — server-sent events, a log tail, a large download —
+/// so a total deadline would break correct programs. Bounding the whole
+/// operation is the caller's call, and Fetch already gives them the tool:
+/// `fetch(url, { signal: AbortSignal.timeout(ms) })`. What is *never* the
+/// caller's intent is waiting forever on a peer that never completes a
+/// handshake, which is what an unbounded connect does.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// TCP keepalive on pooled connections, so a peer that disappears without a FIN
+/// is detected instead of leaving a dead socket to be handed to a later request.
+const TCP_KEEPALIVE: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// A [`NetTransport`] backed by `reqwest` with rustls TLS (no OpenSSL). HTTP/1.1
 /// and HTTP/2; response bodies stream.
 ///
@@ -68,6 +85,8 @@ impl ReqwestTransport {
             reqwest::Client::builder()
                 .redirect(policy)
                 .user_agent(USER_AGENT)
+                .connect_timeout(CONNECT_TIMEOUT)
+                .tcp_keepalive(TCP_KEEPALIVE)
                 .build()
                 .map_err(|e| format!("http client: {e}"))
         })

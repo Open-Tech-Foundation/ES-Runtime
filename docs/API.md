@@ -101,6 +101,24 @@ would make the mode useless — the reason to ask for `"manual"` server-side is 
 read `Location`. The real response is returned instead, as Node, Deno and Bun
 all do.
 
+### Timeouts
+
+The default transport bounds the **connect** phase — DNS, TCP and TLS — at 30
+seconds, failing with `ERR_TIMED_OUT`; pooled connections carry a 60-second TCP
+keepalive, so a peer that vanishes without a FIN is not handed to a later
+request.
+
+There is deliberately **no cap on the request as a whole**. Fetch defines none,
+and a response body may be long-lived by design — server-sent events, a log
+tail, a large download — so a total deadline would break correct programs.
+Bounding the whole operation is the caller's call, and Fetch already gives them
+the tool:
+
+```js
+// Rejects with a TimeoutError DOMException if the whole thing takes too long.
+await fetch(url, { signal: AbortSignal.timeout(5000) });
+```
+
 ### Compressed responses
 
 The default transport negotiates and decodes content-codings, so a compressed

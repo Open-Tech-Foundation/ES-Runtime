@@ -170,6 +170,21 @@ fn a_server_handler_learns_the_client_hung_up() {
 }
 
 #[test]
+fn a_deadline_ends_a_request_the_server_never_answers() {
+    // The connect timeout cannot help here — the peer accepts and then goes
+    // silent — so this pins the documented answer for bounding a whole request.
+    let out = run_file("fetch-timeout.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(
+        stdout.contains("TIMEOUT name:TimeoutError promptly:true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("NORMAL body:prompt"), "{stdout}");
+    assert!(stdout.contains("TIMEOUT_OK"), "{stdout}");
+}
+
+#[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
         .arg("-e")

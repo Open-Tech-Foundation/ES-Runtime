@@ -35,6 +35,20 @@ namespace) is unstable and may change between minor releases until the API freez
   redirect: "manaul" })` used to be accepted and stored verbatim; now that the
   value decides whether a `3xx` is followed, a typo silently meaning `"follow"`
   is a bug that only shows up in production.
+- **A `fetch` could hang forever on a peer that never completed a handshake.**
+  The client was built with `Client::builder().build()` and nothing else, so it
+  carried no connect timeout at all: a host that accepted a TCP connection and
+  then stalled in TLS, or a black-holed address, parked the request until the
+  process died. DNS + TCP + TLS is now capped at 30 seconds, failing with the
+  existing `ERR_TIMED_OUT`, and pooled connections carry a 60-second TCP
+  keepalive so a peer that vanishes without a FIN is not handed to a later
+  request.
+  The request **as a whole** is deliberately left uncapped. Fetch defines no
+  timeout, and a response body may be long-lived by design — server-sent events,
+  a log tail, a large download — so a default deadline would break correct
+  programs. That call belongs to the caller, and Fetch already hands them the
+  tool: `fetch(url, { signal: AbortSignal.timeout(ms) })`, which works and is now
+  documented as the answer.
 - **A `runtime:http` handler now learns that the client hung up.** The
   `request.signal` handed to a handler was a fresh `AbortController`'s signal
   that nothing was ever wired to, so it could not fire: a handler had no way to

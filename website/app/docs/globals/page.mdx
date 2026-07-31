@@ -197,6 +197,18 @@ await fetch("https://example.com/upload", { method: "POST", body });
 // Anything else (string, Blob, FormData, Uint8Array) is sent buffered.
 ```
 
+## Timeouts
+
+| | |
+| --- | --- |
+| Connect (DNS + TCP + TLS) | 30s → `ERR_TIMED_OUT` |
+| TCP keepalive | 60s on pooled connections |
+| Whole request | uncapped — a streaming body may be long-lived by design |
+
+```js
+await fetch(url, { signal: AbortSignal.timeout(5000) }); // TimeoutError
+```
+
 ## Compressed responses
 
 | | |
