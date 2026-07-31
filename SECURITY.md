@@ -33,6 +33,34 @@ security review. **Until those land, do not run hostile/untrusted code** with
 `esrun` (which also grants all capabilities); the embeddable library lets an
 embedder restrict capabilities and inject its own providers.
 
+## Child processes (`Capability::Run`)
+
+Spawning is the one grant that **ends the sandbox**, and it is treated as such
+(DECISIONS D37):
+
+- **`Run` is never implied** by another capability. A child process runs outside
+  every confinement here — no capability check, no filesystem root jail, no
+  execution watchdog reaches it. Granting `Run` to guest code is granting
+  everything the host user can do. Withhold it from anything untrusted.
+- **No shell.** `runtime:system` has no `exec`, no `shell: true`, and no
+  template form. A command is a program plus an argv, so a guest-supplied
+  argument reaches the child as data and can never become a second command. On
+  Windows, `.bat`/`.cmd` files are refused rather than run through the command
+  interpreter (CVE-2024-27980).
+- **No inherited environment.** A child gets exactly the `env` it is passed.
+  Inheriting is opt-in (`inheritEnv: true`) and **additionally requires `Env`**,
+  so a runtime granted `Run` alone cannot launder the host's environment out
+  through a child. A masked `Secret` is unwrapped only on its way into a child's
+  environment, never into a log.
+- **Policy belongs to the provider.** An embedder that must grant `Run` can
+  still bound it: `SystemCommands::with_allowlist(["git", "ffmpeg"])` and
+  `with_max_children(n)` are enforced in Rust, below the capability check.
+- **No orphans.** Children still running when the runtime is torn down are
+  killed, not reparented.
+
+**Not covered:** killing a process *tree*. `kill()` signals the direct child
+only, so a child that spawns its own children can leave grandchildren running.
+
 ## Environment files & secret masking
 
 `.env` support (DECISIONS D30) is built so that **what the guest can read from

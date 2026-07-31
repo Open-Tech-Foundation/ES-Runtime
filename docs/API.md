@@ -23,6 +23,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:websocket`](#runtimewebsocket)
 - [`runtime:serialization`](#runtimeserialization)
 - [`runtime:wasi`](#runtimewasi)
+- [`runtime:system`](#runtimesystem)
 - [Error codes](#error-codes)
 
 ---
@@ -417,6 +418,7 @@ different module path.
 | `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`). |
 | `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen`, `runtime:http` `serve`). |
 | `Signals`   | Watch OS signals — `runtime:process` `onSignal`. Separate from `Env` because a watch **suppresses the signal's default action**: it is the privilege to decline to die on request, not a read of process state. |
+| `Run`       | Spawn a child process — `runtime:system`. Never implied by another capability: a child runs **outside** every confinement here (no capability check, no root jail, no execution deadline), so granting it to guest code grants everything the host user can do. |
 | `HrTime`    | Access high-resolution timing.                                      |
 
 Filesystem access (including module resolution) is confined to a project **root
@@ -1060,6 +1062,105 @@ immediate end-of-file.
 
 ---
 
+## `runtime:system`
+
+Child processes (DECISIONS D37). A command is a **program plus an argv** — there
+is no shell, so nothing is word-split, glob-expanded, or re-parsed, and a
+guest-supplied argument can never become a second command. Output moves over web
+streams, so a child's stdout can be handed straight to `new Response(...)` and a
+request body can be piped straight into its stdin.
+
+- **Capability:** `Run` (spawning). `inheritEnv: true` additionally needs `Env`.
+- **Status:** Available
+- **Loading:** on demand.
+
+```js
+import { Command } from "runtime:system";
+
+const { success, code, stdout } = await new Command("git", {
+  args: ["rev-parse", "HEAD"],
+}).output();
+```
+
+### Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `Command` | `class` | A command to run: `new Command(program, options?)`. |
+| `ChildProcess` | `class` | A running child, from `spawn()`. Not constructed directly. |
+| `default` | `object` | An aggregate bundling both. |
+
+### `new Command(program, options?)`
+
+`program` is a path (absolute, or relative to `cwd`) or a bare name looked up on
+the **host** `PATH`. Program lookup is host authority: the `env` you pass
+describes the child's environment, never where the runtime looks for
+executables. On Windows the `PATHEXT` spellings are tried too; `.bat`/`.cmd`
+files are refused, because running one requires handing the command interpreter
+a line to re-parse (CVE-2024-27980) and this runtime does not spawn a shell.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `args` | `(string \| number \| boolean)[]` | `[]` | Passed verbatim — no quoting or escaping needed. |
+| `cwd` | `string \| URL` | the parent's | The child's working directory. |
+| `env` | `Record<string, string \| Secret \| undefined>` | `{}` | The child's environment. A `Secret` from `runtime:process` is unwrapped for the child (it would otherwise arrive as the literal `"[redacted]"`); `undefined` removes an inherited key. |
+| `inheritEnv` | `boolean` | `false` | Start from the host environment. **Needs `Env` as well as `Run`.** |
+| `stdin` | `"null" \| "piped" \| "inherit"`, or a body | `"null"` | A body — string, bytes, `Blob`, `Response`, or `ReadableStream` — is written to the child and stdin then closed. |
+| `stdout` / `stderr` | `"piped" \| "inherit" \| "null"` | `"piped"` | How the output is connected. |
+| `signal` | `AbortSignal` | — | Aborting kills the child; `output()` rejects with the abort reason. |
+| `timeout` | `number` (ms) | — | Kill the child after this long. `output()` rejects with a `TimeoutError`. |
+| `killSignal` | `SignalName` | `"SIGTERM"` | The signal used by `kill()`, a timeout, or an abort. |
+| `maxBuffer` | `number` (bytes) | `16777216` | `output()` only: past this, the child is killed and the call throws `ERR_MAX_BUFFER`. |
+
+| Method | Type | Description |
+| --- | --- | --- |
+| `output()` | `Promise<CommandOutput>` | Run to completion, collecting output. Both streams are read **while** the child runs, so a child that fills its pipe cannot deadlock against the wait. |
+| `spawn()` | `Promise<ChildProcess>` | Start the child. **Async** (unlike Deno's sync `spawn()`): a failure to *start* — no such program, permission denied — belongs to this call, not to a stream or a status settled later. |
+
+`CommandOutput` is `{ success: boolean, code: number | null, signal: string |
+null, stdout: Uint8Array, stderr: Uint8Array }`. `code` is `null` when a signal
+ended the process; `signal` is its name.
+
+### `ChildProcess`
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `pid` | `number` | The OS process id. |
+| `stdin` | `WritableStream \| null` | `null` unless stdin was `"piped"`. Closing it is the child's EOF. |
+| `stdout` / `stderr` | `ReadableStream<Uint8Array> \| null` | `null` unless that channel was `"piped"`. Pulled chunk by chunk, so a child that outruns its reader is stopped by a full pipe rather than buffered without limit. |
+| `status` | `Promise<{ success, code, signal }>` | Resolves when the child exits. |
+| `kill(signal?)` | `(SignalName?) => Promise<void>` | Defaults to `killSignal`. Signalling an already-exited child is a no-op, not an error. |
+| `[Symbol.asyncDispose]()` | | `await using child = await cmd.spawn()` kills and reaps at the end of the scope. |
+
+The streams are created on **first use**, and reading `status` is what keeps the
+program alive until the child exits (a pending host op is pending work). So a
+child nobody waits on holds nothing open: spawn it, ignore it, and the program
+can still exit — the child is killed on the way out, never orphaned.
+
+Only the direct child is signalled by `kill()`. A child that spawned its own
+children does not pass it on, so grandchildren can outlive a kill.
+
+### Not provided
+
+| Absent | Why |
+| --- | --- |
+| A shell (`exec`, `shell: true`, `` $`…` ``) | The whole shell-injection class stays out. A `Command` takes an argv. |
+| `fork()` / IPC | Worker processes with structured-clone messaging want their own design, not a flag on `Command`. |
+| `stdio` arrays, raw fd numbers | An fd hands the guest authority over anything the host inherited — incompatible with the capability model. |
+| `detached`, `uid`/`gid`, `argv0` | Privilege and identity manipulation belong to the embedder's provider, not to guest code. |
+| Sync variants (`outputSync`) | Ops run inside the async runtime; a blocking spawn would stall the loop (the same wall DECISIONS D36 describes). |
+| PTY | This runtime pipes; allocating a terminal is a different feature. |
+
+### Embedding
+
+`HostProviders::with_commands` installs a `CommandProvider`. Without one, the
+`runtime:system` ops fail cleanly like a denied capability. The default
+`SystemCommands` accepts a policy — `with_allowlist(["git", "ffmpeg"])` and
+`with_max_children(n)` — for an embedder that must grant `Run` without granting
+a shell.
+
+---
+
 ## Error codes
 
 Host-side failures carry a **stable string `code`** on the thrown exception —
@@ -1097,6 +1198,7 @@ try {
 | `ERR_TOO_MANY_REDIRECTS` | A redirect chain exceeded the Fetch specification's cap of 20. |
 | `ERR_CANCELLED` | The operation was cancelled. |
 | `ERR_ENTROPY` | The entropy source failed. |
+| `ERR_MAX_BUFFER` | A child process wrote more than `runtime:system` `output()`'s `maxBuffer`. |
 | `ERR_IO` | An I/O failure with no finer classification. |
 
 The code rides on whatever exception class the failure surfaces as (`Error`,

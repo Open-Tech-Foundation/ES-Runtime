@@ -1,0 +1,161 @@
+---
+title: Subprocesses
+description: Run programs with runtime:system — web streams in and out, no shell, no inherited environment.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Subprocesses
+
+`runtime:system` runs programs: [`Command`](/api/system) describes one,
+`output()` collects it, `spawn()` streams it. A command is a program plus an
+argv — there is no shell.
+
+## Run and collect
+
+```js
+import { Command } from "runtime:system";
+
+const { success, code, stdout, stderr } = await new Command("git", {
+  args: ["rev-parse", "HEAD"],
+}).output();
+
+const sha = new TextDecoder().decode(stdout).trim();
+```
+
+`code` is `null` when a signal ended the process; `signal` names it.
+
+## Stream both ways
+
+`stdin` takes any web body, `stdout` is a `ReadableStream` — so a request can
+flow through a program and back out without buffering.
+
+```js
+import { Command } from "runtime:system";
+
+const child = await new Command("ffmpeg", {
+  args: ["-i", "pipe:0", "-f", "mp3", "pipe:1"],
+  stdin: request.body,                     // string, bytes, Blob, Response, stream
+  stderr: "inherit",                       // straight to this process's stderr
+}).spawn();
+
+return new Response(child.stdout);
+```
+
+Writing incrementally instead:
+
+```js
+const child = await new Command("cat", { stdin: "piped" }).spawn();
+const writer = child.stdin.getWriter();
+await writer.write(new TextEncoder().encode("a line\n"));
+await writer.close();                      // the child's EOF
+
+for await (const chunk of child.stdout.pipeThrough(new TextDecoderStream())) {
+  console.log(chunk);
+}
+```
+
+## Environment
+
+A child gets **exactly** the `env` you pass. Nothing is inherited unless you ask.
+
+```js
+import { Command } from "runtime:system";
+import { env } from "runtime:process";
+
+// Explicit: the child sees these two variables and nothing else.
+await new Command("./deploy.sh", {
+  env: { PATH: env.PATH, API_TOKEN: env.API_TOKEN },
+}).output();
+
+// Or inherit the lot — needs the Env capability as well as Run.
+await new Command("git", { args: ["status"], inheritEnv: true }).output();
+```
+
+<Callout type="tip" title="Secrets pass through unmasked">
+  A `Secret` from [`runtime:process`](/api/process) reaches the child as its real
+  value — passing it needs no `unmask()`. It still prints as `[redacted]`
+  everywhere else.
+</Callout>
+
+<Callout type="warning" title="Bare names resolve on the host PATH">
+  `new Command("git")` finds `git` on the **host's** `PATH`, not the `env` you
+  pass — so an empty `env` does not break program lookup.
+</Callout>
+
+## Stopping a child
+
+```js
+const child = await new Command("sleep", { args: ["300"] }).spawn();
+await child.kill("SIGTERM");
+const { signal } = await child.status;     // "SIGTERM"
+```
+
+Bound it up front instead:
+
+```js
+// Rejects with a TimeoutError; the child is killed with killSignal.
+await new Command("slow-tool", { timeout: 30_000, killSignal: "SIGKILL" }).output();
+
+// Or share a signal with the rest of the request.
+await new Command("slow-tool", { signal: request.signal }).output();
+```
+
+<Callout type="note" title="kill() reaches the child, not its children">
+  A child that spawned its own children does not pass the signal on, so
+  grandchildren can outlive a kill.
+</Callout>
+
+## Bounded output
+
+`output()` stops at `maxBuffer` (16 MiB by default), kills the child, and throws
+with `code === "ERR_MAX_BUFFER"`. Stream with `spawn()` when the output is large
+by design.
+
+## Capability
+
+<Callout type="danger" title="Run ends the sandbox">
+  A child process runs outside every confinement here — no capability check, no
+  filesystem root jail, no execution deadline. Granting **Run** grants everything
+  the host user can do. The `esrun` CLI grants it; an embedder should withhold it
+  from untrusted code, or bound it with a provider allowlist. See the
+  [security model](/docs/security).
+</Callout>
+
+## How this compares
+
+Node, Deno, and Bun all spawn processes. The differences are in what is on by
+default.
+
+| | esrun `runtime:system` | Node `child_process` | execa (npm) | Bun `spawn` | Deno `Command` |
+| --- | --- | --- | --- | --- | --- |
+| Entry point | `new Command()` | `spawn`/`exec`/`execFile`/`fork` + 3 sync | `execa()`, `` $`…` `` | `Bun.spawn` / `spawnSync` | `new Deno.Command()` |
+| Async model | Promise | EventEmitter + callbacks | Promise | Promise + `onExit` | Promise |
+| stdout type | web `ReadableStream` | Node `Readable` | Node stream / string | web `ReadableStream` | web `ReadableStream` |
+| stdin takes a body | ✅ | ❌ | 🟡 | ✅ | ❌ |
+| Shell | ❌ none | `exec` = real shell | ❌ by design | `Bun.$` | ❌ none |
+| Env inherited by default | ❌ opt in | ✅ | ✅ | ✅ | ✅ |
+| Authorization | capability + allowlist | ambient | ambient | ambient | `--allow-run` |
+| `output()` bounded by default | ✅ 16 MiB | 🟡 `exec` only, 1 MiB | 🟡 | 🟡 opt-in | ❌ |
+| Children killed at shutdown | ✅ | ❌ | 🟡 via `signal-exit` | 🟡 | 🟡 |
+| Sync variants | ❌ | ✅ | ❌ | ✅ | ✅ |
+| `fork()` / IPC | ❌ | ✅ | ✅ | ✅ | ❌ |
+| PTY | ❌ | via `node-pty` | ❌ | ✅ | ❌ |
+
+**Legend:** ✅ Supported · 🟡 Partial / opt-in · ❌ Not supported
+
+<br />
+
+> **Why no shell.** `exec("git log " + branch)` is the largest CVE class in this
+> API. An argv cannot be re-parsed, so a guest-supplied argument is data. The
+> cost is real: no pipelines, globs, or `&&` — compose `Command`s instead.
+
+> **Why the empty environment.** Every other runtime hands a child the whole
+> parent environment, which quietly turns "may run `git`" into "may read every
+> secret this process holds". Here the two are separate grants that compose:
+> **Run** starts a program, **Env** is what lets you hand it your environment.
+
+> **On the npm ecosystem.** `execa`, `cross-spawn`, `zx`, and `tinyexec` import
+> `node:child_process`, which esrun does not provide — so they do not run here.
+> The things they exist to fix (a promise API, no shell, Windows `PATHEXT`
+> resolution, bounded output, killing children at exit) are built in instead.

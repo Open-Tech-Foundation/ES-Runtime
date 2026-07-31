@@ -17,6 +17,7 @@ const NAV = [
       { title: "runtime:http", path: "/api/http" },
       { title: "runtime:websocket", path: "/api/websocket" },
       { title: "runtime:serialization", path: "/api/serialization" },
+      { title: "runtime:system", path: "/api/system" },
     ],
   },
 ];

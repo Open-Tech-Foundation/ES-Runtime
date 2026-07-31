@@ -320,11 +320,17 @@ impl From<String> for ModuleSource {
     }
 }
 
-/// An OS signal the runtime can observe.
+/// An OS signal the runtime can observe — or send to a child process.
 ///
 /// A closed set rather than a raw number: the runtime never delivers a signal
 /// whose default action it cannot sensibly suppress, and a fixed set is what
 /// lets the same names mean the same thing on every platform the CLI ships for.
+///
+/// Two of the variants are **send-only**: `SIGKILL` cannot be caught at all and
+/// `SIGQUIT` is not something this runtime offers to intercept, so neither
+/// appears in [`Signals::available`] and [`Signals::watch`] rejects them. They
+/// exist because [`CommandProvider::kill`] must be able to escalate past a
+/// `SIGTERM` a child chose to ignore.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Signal {
     /// Interactive interrupt — Ctrl+C (`SIGINT`; Windows Ctrl+C).
@@ -341,6 +347,12 @@ pub enum Signal {
     Usr2,
     /// Windows Ctrl+Break (`SIGBREAK`). Windows only.
     Break,
+    /// Unconditional termination (`SIGKILL`). Send-only: it cannot be caught,
+    /// blocked, or watched — it is the escalation after `SIGTERM`.
+    Kill,
+    /// Quit from keyboard, conventionally with a core dump (`SIGQUIT`).
+    /// Send-only here.
+    Quit,
 }
 
 impl Signal {
@@ -353,6 +365,8 @@ impl Signal {
             Signal::Usr1 => "SIGUSR1",
             Signal::Usr2 => "SIGUSR2",
             Signal::Break => "SIGBREAK",
+            Signal::Kill => "SIGKILL",
+            Signal::Quit => "SIGQUIT",
         }
     }
 
@@ -367,6 +381,8 @@ impl Signal {
             "SIGUSR1" => Some(Signal::Usr1),
             "SIGUSR2" => Some(Signal::Usr2),
             "SIGBREAK" => Some(Signal::Break),
+            "SIGKILL" => Some(Signal::Kill),
+            "SIGQUIT" => Some(Signal::Quit),
             _ => None,
         }
     }
@@ -382,6 +398,8 @@ impl Signal {
             Signal::Usr1 => 138,  // 128 + 10
             Signal::Usr2 => 140,  // 128 + 12
             Signal::Break => 149, // 128 + 21 (SIGBREAK)
+            Signal::Kill => 137,  // 128 + 9
+            Signal::Quit => 131,  // 128 + 3
         }
     }
 }
@@ -447,6 +465,129 @@ pub trait Process: Send + Sync {
 
     /// The exit code requested via [`exit`](Self::exit), if any.
     fn requested_exit_code(&self) -> Option<i32>;
+}
+
+/// How one of a child process's standard streams is connected
+/// ([`CommandSpec`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Stdio {
+    /// A pipe the guest reads from / writes to.
+    Piped,
+    /// The parent's own stream — the child shares this process's console.
+    Inherit,
+    /// The null device: reads see EOF, writes are discarded.
+    #[default]
+    Null,
+}
+
+/// Which of a child's output streams a [`CommandProvider::read`] targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildStream {
+    /// The child's standard output.
+    Stdout,
+    /// The child's standard error.
+    Stderr,
+}
+
+/// What to launch, for [`CommandProvider::spawn`].
+///
+/// The environment is **always complete and explicit**: the provider does not
+/// merge the host's environment into it. A guest that wants inheritance reads
+/// the environment through the `Env`-gated `runtime:process` ops and passes the
+/// pairs here, so a `Run` grant alone never leaks the host environment into a
+/// child (DECISIONS D37). `program` resolution is still the provider's job —
+/// it may consult the host `PATH`, which is host authority, not the guest's.
+#[derive(Default)]
+pub struct CommandSpec {
+    /// The executable: a path (absolute, or relative to `cwd`), or a bare name
+    /// to look up on the host `PATH`. Never a shell command line — there is no
+    /// shell, so nothing here is word-split, glob-expanded, or interpolated.
+    pub program: String,
+    /// Arguments, passed to the child verbatim (no quoting or escaping needed).
+    pub args: Vec<String>,
+    /// Working directory. `None` ⇒ inherit the parent's.
+    pub cwd: Option<String>,
+    /// The child's complete environment as `(name, value)` pairs.
+    pub env: Vec<(String, String)>,
+    /// How to connect the child's standard input.
+    pub stdin: Stdio,
+    /// How to connect the child's standard output.
+    pub stdout: Stdio,
+    /// How to connect the child's standard error.
+    pub stderr: Stdio,
+}
+
+/// How a child process ended, from [`CommandProvider::wait`].
+#[derive(Debug, Clone, Default)]
+pub struct ChildStatus {
+    /// Whether the child exited with status 0.
+    pub success: bool,
+    /// The exit status, or `None` when a signal ended the process.
+    pub code: Option<i32>,
+    /// The name of the signal that ended the process (`"SIGKILL"`), if one did.
+    /// A free string rather than a [`Signal`]: a child can die from any signal
+    /// the OS has, far beyond the set this runtime watches or sends.
+    pub signal: Option<String>,
+}
+
+/// Child processes, backing the `runtime:system` module (DECISIONS D37).
+///
+/// [`spawn`](Self::spawn) is capability-checked on `Capability::Run` before it
+/// is ever called; the rest operate on the id it returns, which is already
+/// proof of an authorized spawn (D7), exactly like [`NetProvider`]'s read/write.
+///
+/// The implementation owns every child and its pipes, keyed by that opaque id.
+/// Two properties an implementation is expected to hold:
+///
+/// - **No shell.** `program` and `args` reach the OS as an argv, never a command
+///   line a shell re-parses. This is what makes guest-supplied arguments
+///   inert rather than an injection vector.
+/// - **No orphans.** Children still running when the provider is dropped are
+///   killed. A server that restarts must not accumulate abandoned processes.
+///
+/// An embedder that installs no `CommandProvider` has no `runtime:system`
+/// access at all, whatever the capability set says.
+pub trait CommandProvider: Send + Sync {
+    /// Launches `spec`; resolves to (child id, OS process id).
+    ///
+    /// Failure to *find or start* the program is an error here. A program that
+    /// starts and then fails is not: that is an exit status from
+    /// [`wait`](Self::wait).
+    fn spawn(&self, spec: CommandSpec) -> BoxFuture<Result<(u64, u32), ProviderError>>;
+
+    /// Reads the next chunk from child `id`'s `stream`; `None` signals EOF.
+    /// Errors if that stream was not [`Stdio::Piped`].
+    fn read(
+        &self,
+        id: u64,
+        stream: ChildStream,
+    ) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;
+
+    /// Writes `data` to child `id`'s standard input.
+    fn write(&self, id: u64, data: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Closes child `id`'s standard input (sends EOF). Idempotent.
+    fn close_stdin(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Resolves once child `id` has exited, with how it ended. Callable more
+    /// than once: after the child is reaped, later calls return the same
+    /// recorded status rather than an error.
+    fn wait(&self, id: u64) -> BoxFuture<Result<ChildStatus, ProviderError>>;
+
+    /// Sends `signal` to child `id`. Sending to an already-exited child is not
+    /// an error (it is a race the caller cannot avoid), it is a no-op.
+    ///
+    /// Only the direct child is signalled — descendants it spawned are not, so
+    /// a child that forks can leave the grandchildren running. Platforms
+    /// without POSIX signals may terminate the child whatever the signal.
+    fn kill(&self, id: u64, signal: Signal) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Releases child `id` and everything held for it (idempotent). A child
+    /// still running is killed first. The runtime calls this once the guest can
+    /// no longer observe the child — its status is settled and its piped
+    /// streams are finished — so a long-lived server does not accumulate the
+    /// pipes and buffers of every process it has ever spawned.
+    fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
 
 /// Metadata about a filesystem entry, from [`FileSystem::stat`].

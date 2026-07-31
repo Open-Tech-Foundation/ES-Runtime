@@ -28,9 +28,15 @@ tokio-tungstenite.workspace = true
 webpki-roots.workspace = true
 bytes.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros", "signal"] }
+tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros", "signal", "process"] }
 tracing.workspace = true
 url.workspace = true
+
+# Safe (no `unsafe` in this crate) syscall wrappers, for sending a chosen signal
+# to a child process — `Child::kill` can only ever send SIGKILL. Unix-only;
+# already in the tree via tempfile, so no new crate in the graph.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime.

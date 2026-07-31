@@ -31,7 +31,35 @@ with the `NotAllowedError` name.
 | `Net` | Open outbound network connections (`runtime:net` connect, fetch, WebSocket). |
 | `NetListen` | Bind a listening socket and accept connections (`runtime:net` listen, `runtime:http` / `runtime:websocket` serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed. |
 | `Signals` | Watch OS signals (`runtime:process` onSignal). Separate from `Env` because a watch **suppresses the signal's default action** — the privilege to decline to die on request, not a read of process state. |
+| `Run` | Spawn a child process (`runtime:system`). Never implied by another capability — see below. |
 | `HrTime` | Access high-resolution timing. |
+
+## Child processes
+
+<Callout type="danger" title="Run ends the sandbox">
+  A child process runs **outside** every confinement here: no capability check,
+  no root jail, no execution deadline reaches it. Granting **Run** to guest code
+  grants everything the host user can do.
+</Callout>
+
+<Callout type="note" title="No shell">
+  `runtime:system` has no `exec`, no `shell: true`, and no template form. A
+  command is a program plus an argv, so a guest-supplied argument is data and
+  can never become a second command. Windows `.bat`/`.cmd` files are refused
+  rather than run through the command interpreter.
+</Callout>
+
+<Callout type="note" title="No inherited environment">
+  A child gets exactly the `env` it is passed. Inheriting is opt-in and needs
+  **Env** as well as **Run**, so `Run` alone cannot launder the host's
+  environment out through a child.
+</Callout>
+
+<Callout type="tip" title="Policy below the capability">
+  An embedder that must grant `Run` can still bound it: the default provider
+  takes an allowlist of programs and a cap on concurrent children, both enforced
+  in Rust. Children still running at shutdown are killed, not orphaned.
+</Callout>
 
 ## The filesystem root jail
 

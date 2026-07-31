@@ -14,6 +14,12 @@ const REDACTED = "[redacted]";
 // A global-registry symbol the console inspector checks to render "[redacted]"
 // without importing this module (console lives in the prelude snapshot).
 const REDACTED_MARK = Symbol.for("runtime.secret.redacted");
+// The real value, for a deliberate reader in another runtime: module —
+// `runtime:system` has to unwrap a Secret before handing it to a child process,
+// or the child would receive the literal "[redacted]". Symbol-keyed, so it stays
+// invisible to console, JSON.stringify, and string coercion: the accidental
+// paths are exactly what masking covers, and this is not one of them.
+const REDACTED_VALUE = Symbol.for("runtime.secret.value");
 // A key is treated as secret-bearing (case-insensitive) when it either ends in
 // `_SECRET(S)`, `_PASSWORD(S)`, `_PASS`, `_KEY(S)`, or `_TOKEN(S)` — the leading
 // `_` avoids false hits like MONKEY/BYPASS — or contains `CREDENTIAL(S)` or
@@ -41,6 +47,9 @@ class Secret {
   }
   get [REDACTED_MARK]() {
     return true;
+  }
+  get [REDACTED_VALUE]() {
+    return secrets.get(this);
   }
 }
 

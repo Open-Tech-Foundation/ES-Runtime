@@ -110,7 +110,12 @@ fn spawn_forwarder(signal: Signal, tx: mpsc::Sender<Signal>) -> Result<AbortHand
         Signal::Hup => SignalKind::hangup(),
         Signal::Usr1 => SignalKind::user_defined1(),
         Signal::Usr2 => SignalKind::user_defined2(),
-        Signal::Break => return Err(SystemSignals::unsupported(signal)),
+        // Windows-only, plus the two send-only signals: `SIGKILL` cannot be
+        // caught at all and `SIGQUIT` is not offered for interception — they
+        // exist so a child process can be killed, never watched.
+        Signal::Break | Signal::Kill | Signal::Quit => {
+            return Err(SystemSignals::unsupported(signal));
+        }
     };
     let mut stream = unix_signal(kind).map_err(|e| ProviderError::Coded {
         code: ErrorCode::from_io_kind(e.kind()),

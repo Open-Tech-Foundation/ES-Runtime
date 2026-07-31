@@ -1,0 +1,111 @@
+---
+title: runtime:system
+description: Child processes — run a program, stream its input and output, and reap it.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:system
+
+Child processes. A command is a **program plus an argv** — there is no shell, so
+nothing is word-split, glob-expanded, or re-parsed. Output moves over web
+streams.
+
+<Callout type="danger" title="Capability: Run">
+  Spawning is the one grant that ends the sandbox: a child runs outside every
+  confinement here — no capability check, no root jail, no execution deadline.
+  Never implied by another capability. Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import { Command } from "runtime:system";
+
+// Or the default aggregate:
+import system from "runtime:system";
+```
+
+## Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `Command` | `class` | A command to run: `new Command(program, options?)`. |
+| `ChildProcess` | `class` | A running child, from `spawn()`. Not constructed directly. |
+
+## new Command(program, options?)
+
+`program` is a path (absolute, or relative to `cwd`) or a bare name looked up on
+the **host** `PATH`. The `env` you pass describes the child's environment, never
+where the runtime looks for executables.
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `args` | `(string \| number \| boolean)[]` | `[]` | Passed verbatim — no quoting or escaping needed. |
+| `cwd` | `string \| URL` | the parent's | The child's working directory. |
+| `env` | `Record<string, string \| Secret \| undefined>` | `{}` | The child's environment. A `Secret` is unwrapped for the child; `undefined` removes an inherited key. |
+| `inheritEnv` | `boolean` | `false` | Start from the host environment. **Needs Env as well as Run.** |
+| `stdin` | `"null" \| "piped" \| "inherit"`, or a body | `"null"` | A body — string, bytes, `Blob`, `Response`, `ReadableStream` — is written to the child, then stdin closed. |
+| `stdout` / `stderr` | `"piped" \| "inherit" \| "null"` | `"piped"` | How the output is connected. |
+| `signal` | `AbortSignal` | — | Aborting kills the child; `output()` rejects with the reason. |
+| `timeout` | `number` (ms) | — | Kill the child after this long; `output()` rejects with a `TimeoutError`. |
+| `killSignal` | `SignalName` | `"SIGTERM"` | Signal used by `kill()`, a timeout, or an abort. |
+| `maxBuffer` | `number` (bytes) | `16777216` | `output()` only: past this the child is killed and the call throws `ERR_MAX_BUFFER`. |
+
+| Method | Type | Description |
+| --- | --- | --- |
+| `output()` | `Promise<CommandOutput>` | Run to completion, collecting output. Both streams are read while the child runs, so a full pipe cannot deadlock the wait. |
+| `spawn()` | `Promise<ChildProcess>` | Start the child. Async: a failure to start belongs to this call, not to a stream settled later. |
+
+`CommandOutput` is `{ success, code, signal, stdout, stderr }` — `code` is `null`
+when a signal ended the process, `stdout`/`stderr` are `Uint8Array`.
+
+## ChildProcess
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `pid` | `number` | The OS process id. |
+| `stdin` | `WritableStream \| null` | `null` unless piped. Closing it is the child's EOF. |
+| `stdout` / `stderr` | `ReadableStream<Uint8Array> \| null` | `null` unless piped. Pulled chunk by chunk. |
+| `status` | `Promise<{ success, code, signal }>` | Resolves when the child exits. |
+| `kill(signal?)` | `(SignalName?) => Promise<void>` | Defaults to `killSignal`. A no-op on an exited child. |
+| `[Symbol.asyncDispose]()` | | `await using` kills and reaps at end of scope. |
+
+<Callout type="note" title="What keeps the program alive">
+  Streams are created on first use, and reading `status` is what holds the
+  program open. A child nobody waits on keeps nothing alive — and is killed, not
+  orphaned, when the runtime exits.
+</Callout>
+
+## Examples
+
+```js
+import { Command } from "runtime:system";
+
+// Buffered
+const { success, code, stdout } = await new Command("git", {
+  args: ["rev-parse", "HEAD"],
+}).output();
+
+// Streaming, both ways
+const child = await new Command("ffmpeg", {
+  args: ["-i", "pipe:0", "-f", "mp3", "pipe:1"],
+  stdin: request.body,
+  stderr: "inherit",
+}).spawn();
+return new Response(child.stdout);
+
+// Bounded
+await new Command("slow-tool", { timeout: 30_000, killSignal: "SIGKILL" }).output();
+```
+
+## Not provided
+
+| Absent | Why |
+| --- | --- |
+| A shell (`exec`, `shell: true`, `` $`…` ``) | The shell-injection class stays out. |
+| `fork()` / IPC | Worker processes want their own design. |
+| `stdio` arrays, raw fds | An fd hands the guest authority over anything inherited. |
+| `detached`, `uid`/`gid` | Privilege manipulation belongs to the embedder. |
+| Sync variants | Ops run inside the async runtime. |
+| PTY | This runtime pipes. |

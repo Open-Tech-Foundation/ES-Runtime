@@ -50,6 +50,8 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::http_ops::install(engine, providers.http_server())?;
     // WebSocket global ops: connect (Net); send/recv/close by id (DECISIONS D29).
     crate::ws_ops::install(engine, providers.web_socket())?;
+    // runtime:system ops: spawn (Run); read/write/wait/kill by child id.
+    crate::system_ops::install(engine, providers.commands())?;
     crate::serialization_ops::install(engine)?;
     Ok(())
 }

@@ -34,9 +34,9 @@ use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, 
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemHttpServer,
-    SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem, SystemWebSocket, TokioTimers,
-    path,
+    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
+    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
+    SystemWebSocket, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, Signal};
 use url::Url;
@@ -94,6 +94,8 @@ const TYPES: &str = concat!(
     include_str!("../../../types/runtime-serialization.d.ts"),
     "\n",
     include_str!("../../../types/runtime-wasi.d.ts"),
+    "\n",
+    include_str!("../../../types/runtime-system.d.ts"),
 );
 
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
@@ -610,7 +612,11 @@ async fn run() -> Result<(), String> {
     .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(SystemNet::new()))
     .with_http_server(http_server.clone())
-    .with_web_socket(Arc::new(SystemWebSocket::new()));
+    .with_web_socket(Arc::new(SystemWebSocket::new()))
+    // Child processes for runtime:system. Unrestricted here (the CLI grants
+    // every capability to a local script); an embedder can hand this provider
+    // an allowlist instead.
+    .with_commands(Arc::new(SystemCommands::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project

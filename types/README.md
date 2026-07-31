@@ -41,3 +41,4 @@ esrun targets the WinterTC web-platform surface, so web globals (`URL`, `Blob`,
 - `runtime:process` — `env`, `args`, `platform`, `arch`, `cwd()`, `exit()`
 - `runtime:path` — `join`, `resolve`, `normalize`, `dirname`, `basename`, `extname`, `parse`, `relative`, `isAbsolute`, `sep`, `delimiter`, `fromFileURL`, `toFileURL`
 - `runtime:fs` — `file()`, `write()`, `readDir`, `stat`, `exists`, `mkdir`, `remove`, `rename`, `Glob`
+- `runtime:system` — `Command`, `ChildProcess`

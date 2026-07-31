@@ -11,7 +11,8 @@
     "runtime-net.d.ts",
     "runtime-http.d.ts",
     "runtime-serialization.d.ts",
-    "runtime-wasi.d.ts"
+    "runtime-wasi.d.ts",
+    "runtime-system.d.ts"
   ],
   "keywords": ["esrun", "es-runtime", "opentf", "types", "runtime"],
   "license": "Apache-2.0",

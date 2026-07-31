@@ -51,12 +51,21 @@ pub enum Capability {
     /// intercepts process *control* — a handler suppresses the default
     /// termination, so it is the privilege to refuse to die on request.
     Signals,
+    /// Spawn a child process (`CommandProvider`; backs `runtime:system`).
+    ///
+    /// The most consequential grant in the set, and never implied by another: a
+    /// child process runs **outside** every confinement this runtime applies —
+    /// no capability check, no filesystem root jail, no execution deadline. In
+    /// practice, granting `Run` to guest code grants everything the host user
+    /// can do. Withhold it from anything untrusted, and prefer a provider-side
+    /// allowlist when it must be granted.
+    Run,
 }
 
 impl Capability {
     /// All capabilities, in a fixed order. Used to build [`CapabilitySet::all`]
     /// and to keep the bit assignment in [`bit`](Self::bit) exhaustive.
-    const ALL: [Capability; 11] = [
+    const ALL: [Capability; 12] = [
         Capability::Clock,
         Capability::Entropy,
         Capability::Timers,
@@ -68,6 +77,7 @@ impl Capability {
         Capability::FileWrite,
         Capability::NetListen,
         Capability::Signals,
+        Capability::Run,
     ];
 
     /// This capability's single-bit mask within a [`CapabilitySet`].
@@ -85,6 +95,7 @@ impl Capability {
             Capability::FileWrite => 1 << 8,
             Capability::NetListen => 1 << 9,
             Capability::Signals => 1 << 10,
+            Capability::Run => 1 << 11,
         }
     }
 }

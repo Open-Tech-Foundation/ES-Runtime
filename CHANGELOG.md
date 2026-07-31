@@ -8,6 +8,52 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:system` — child processes** (DECISIONS D37). The last "a server has
+  to shell out" gap: transcode an upload with `ffmpeg`, read a repo with `git`,
+  drive a sidecar over pipes, run a deploy step.
+
+  ```js
+  import { Command } from "runtime:system";
+
+  const { stdout } = await new Command("git", { args: ["rev-parse", "HEAD"] }).output();
+
+  const child = await new Command("ffmpeg", {
+    args: ["-i", "pipe:0", "-f", "mp3", "pipe:1"],
+    stdin: request.body,          // any web body pipes straight in
+  }).spawn();
+  return new Response(child.stdout);   // and straight back out
+  ```
+
+  `Command` carries `args`, `cwd`, `env`, `inheritEnv`, `stdin`/`stdout`/
+  `stderr`, `signal`, `timeout`, `killSignal` and `maxBuffer`; `output()`
+  collects, `spawn()` gives a `ChildProcess` with web-stream `stdin`/`stdout`/
+  `stderr`, a `status` promise, `kill(signal?)`, and `Symbol.asyncDispose`.
+
+  Four choices worth knowing about, each different from Node/Deno/Bun:
+  - **A new `Capability::Run`, never implied by another.** A child runs outside
+    every confinement here — no capability check, no root jail, no execution
+    deadline — so granting it grants everything the host user can do. The
+    default provider takes a policy for embedders that must grant it anyway:
+    `SystemCommands::with_allowlist([...])`, `with_max_children(n)`.
+  - **No shell.** No `exec`, no `shell: true`, no template form: a command is a
+    program plus an argv, so a guest-supplied argument can never become a second
+    command. Windows `.bat`/`.cmd` are refused rather than run through
+    `cmd.exe` (CVE-2024-27980).
+  - **No inherited environment.** A child gets exactly the `env` passed;
+    `inheritEnv: true` additionally requires `Env`. This closes the D26/D30
+    deferral on env propagation. A `Secret` is unwrapped for the child (it would
+    otherwise arrive as the literal `"[redacted]"`) while still masking
+    everywhere else.
+  - **`output()` is bounded** by `maxBuffer` (16 MiB default, `ERR_MAX_BUFFER`
+    past it), and children still running at shutdown are killed rather than
+    orphaned.
+
+  `Signal` gains send-only `SIGKILL`/`SIGQUIT` (never watchable) so a kill can
+  escalate. Embedders wire it up with `HostProviders::with_commands`; without a
+  provider the ops fail cleanly, like a denied capability.
+
 ### Fixed
 
 - **`fetch` honours `redirect: "manual"` and `"error"`.** It never had: the mode

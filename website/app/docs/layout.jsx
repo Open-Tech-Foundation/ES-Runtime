@@ -28,6 +28,7 @@ const NAV = [
       { title: "Process & Env", path: "/docs/process" },
       { title: "Path handling", path: "/docs/path" },
       { title: "Sockets", path: "/docs/guides/networking" },
+      { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "HTTP server", path: "/docs/http" },
       { title: "WebSockets", path: "/docs/guides/websocket" },
       { title: "URLPattern", path: "/docs/urlpattern" },
