@@ -17,8 +17,9 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
 <Callout type="warning" title="All I/O is async">
   A handler error or a non-`Response` return becomes a `500`. Request and
   response bodies stream with backpressure; string/byte bodies use the buffered
-  fast path (`Content-Length`). TLS is not supported yet — terminate it at a
-  proxy. See the [HTTP server guide](/docs/http) for patterns and examples.
+  fast path (`Content-Length`). HTTP/1.1 only; TLS terminates in-process with
+  `secureTransport: "on"`. See the [HTTP server guide](/docs/http) for patterns
+  and examples.
 </Callout>
 
 ## Functions
@@ -26,7 +27,7 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
 | Function | Type | Description | Example |
 | --- | --- | --- | --- |
 | `serve(handler)` | `(Handler) => Server` | Start a server on an ephemeral port (read it from `server.addr`). `handler` is `(request) => response`. | `serve((req) => new Response("hi"))` |
-| `serve(options, handler)` | `({ hostname?, port? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. | `serve({ hostname: "127.0.0.1", port: 8080 }, handler)` |
+| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["http/1.1"]`). | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
 
 ## Serve
 
@@ -77,9 +78,10 @@ await server.stop();                    // stop accepting; finished resolves
 
 | Error | When |
 | --- | --- |
-| `TypeError` | The `serve()` handler isn't a function, or a `Request` / `Response` is built with an invalid init (the Fetch API's own checks). |
+| `TypeError` | The `serve()` handler isn't a function; `secureTransport` is `"on"` without both `cert` and `key`, or is a value other than `"on"`/`"off"`; or a `Request` / `Response` is built with an invalid init (the Fetch API's own checks). |
+| `Error` | code `"ERR_TLS"` — the `cert` or `key` could not be parsed. Raised by `serve()` itself, so a bad cert never becomes a port that rejects every handshake. |
 | `DOMException` | name `"NotAllowedError"` — the NetListen capability is not granted. |
 
 ## See also
 
-- [HTTP server guide](/docs/http) — routing, streaming bodies, lifecycle, TLS deployment
+- [HTTP server guide](/docs/http) — routing, streaming bodies, lifecycle, HTTPS

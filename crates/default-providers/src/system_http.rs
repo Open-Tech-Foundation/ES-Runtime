@@ -26,8 +26,8 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use es_runtime_providers::{
-    BoxFuture, HttpServerBody, HttpServerProvider, HttpServerRequest, HttpServerResponse,
-    ProviderError, SocketInfo,
+    BoxFuture, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerRequest,
+    HttpServerResponse, ProviderError, SocketInfo,
 };
 use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -209,10 +209,14 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
 /// Turns a parsed hyper request into the [`HttpServerRequest`] handoff shape
 /// without touching the body: the `Incoming` body crosses as a chunk stream the
 /// guest pulls (hyper feeds it while the connection task awaits the response).
-/// The absolute URL is reconstructed from the `Host` header (or `authority`
-/// fallback — the bound address).
-fn to_server_request(req: Request<Incoming>, authority: &str) -> HttpServerRequest {
+/// The absolute URL is reconstructed from the listener's scheme plus the `Host`
+/// header (falling back to the bound address).
+fn to_server_request(req: Request<Incoming>, origin: &str) -> HttpServerRequest {
     let method = req.method().to_string();
+    // `origin` is "<scheme>://<bound address>", the fallback when a request
+    // carries no Host. A Host header replaces only the authority — the scheme
+    // is the listener's, and a client cannot talk this into claiming https:.
+    let (scheme, authority) = origin.split_once("://").unwrap_or(("http", origin));
     let host = req
         .headers()
         .get(hyper::header::HOST)
@@ -224,7 +228,7 @@ fn to_server_request(req: Request<Incoming>, authority: &str) -> HttpServerReque
         .path_and_query()
         .map(|p| p.as_str())
         .unwrap_or("/");
-    let url = format!("http://{host}{path}");
+    let url = format!("{scheme}://{host}{path}");
     let headers = req
         .headers()
         .iter()
@@ -289,19 +293,94 @@ fn status_only(status: StatusCode) -> Response<OutBody> {
         .expect("status-only response is always valid")
 }
 
+/// Serves one accepted connection to completion, honouring the drain signal.
+///
+/// Generic over the transport so a plain `TcpStream` and a TLS stream share one
+/// path: everything above the socket — the service, the response handoff, the
+/// graceful shutdown — is identical, and duplicating it per scheme is how the
+/// two quietly drift apart.
+async fn serve_connection<S>(
+    io: S,
+    tx: mpsc::Sender<Pending>,
+    origin: String,
+    mut drain_rx: watch::Receiver<bool>,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let service = service_fn(move |req: Request<Incoming>| {
+        let tx = tx.clone();
+        let origin = origin.clone();
+        async move {
+            let server_req = to_server_request(req, &origin);
+            let (rtx, rrx) = oneshot::channel();
+            let (dtx, drx) = oneshot::channel();
+            if tx.send((server_req, rtx, drx)).await.is_err() {
+                // Server closed: the request channel is gone.
+                return Ok::<_, Infallible>(status_only(StatusCode::SERVICE_UNAVAILABLE));
+            }
+            match rrx.await {
+                Ok(resp) => {
+                    // Say "delivered" before building, so a handler awaiting the
+                    // disconnect signal learns the request completed. If this
+                    // future is instead dropped — which is what a vanished
+                    // client does to it — `dtx` drops unsent and the watcher
+                    // sees the disconnect.
+                    let _ = dtx.send(());
+                    Ok(build_response(resp))
+                }
+                // Guest dropped the request without responding.
+                Err(_) => {
+                    let _ = dtx.send(());
+                    Ok(status_only(StatusCode::INTERNAL_SERVER_ERROR))
+                }
+            }
+        }
+    });
+
+    let conn = http1::Builder::new().serve_connection(TokioIo::new(io), service);
+    tokio::pin!(conn);
+    // Race the connection against the drain signal. On shutdown,
+    // `graceful_shutdown` stops reading new requests but still finishes the one
+    // in flight and writes its response — the difference between draining and
+    // dropping. Awaiting the connection afterwards is what makes the response
+    // actually reach the socket.
+    tokio::select! {
+        _ = conn.as_mut() => {}
+        // Wrapped so the borrow `wait_for` hands back — a read guard — is
+        // dropped at the end of the statement, rather than living across the
+        // await below and making this task non-`Send`.
+        _ = async {
+            let _ = drain_rx.wait_for(|draining| *draining).await;
+        } => {
+            conn.as_mut().graceful_shutdown();
+            let _ = conn.await;
+        }
+    }
+}
+
 impl HttpServerProvider for SystemHttpServer {
     fn serve(
         &self,
-        host: String,
-        port: u16,
+        options: HttpServeOptions,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            let listener = TcpListener::bind((host.as_str(), port))
+            // Build the TLS acceptor before binding: a bad cert should fail the
+            // `serve` call, not each connection after the port is already open.
+            let tls = match &options.tls {
+                Some(tls) => Some(crate::tls::server_acceptor(&tls.cert, &tls.key, &tls.alpn)?),
+                None => None,
+            };
+            let listener = TcpListener::bind((options.host.as_str(), options.port))
                 .await
                 .map_err(err)?;
             let local = listener.local_addr().ok();
             let authority = local.map(|a| a.to_string()).unwrap_or_default();
+            // The scheme the guest sees in `request.url`. A TLS listener serves
+            // https:, and reporting http: there would misdescribe the request to
+            // any handler that builds an absolute URL from it.
+            let scheme = if tls.is_some() { "https" } else { "http" };
+            let origin = format!("{scheme}://{authority}");
             // Roomy buffer so many connections can have a request queued for the
             // consumer to drain in one batch (see `next_requests`), rather than
             // stalling on backpressure between crossings.
@@ -312,66 +391,24 @@ impl HttpServerProvider for SystemHttpServer {
             let acceptor = tokio::spawn(async move {
                 while let Ok((stream, _peer)) = listener.accept().await {
                     let _ = stream.set_nodelay(true);
-                    let io = TokioIo::new(stream);
                     let tx = tx.clone();
-                    let authority = authority.clone();
+                    let origin = origin.clone();
                     let live = live.clone();
-                    let mut drain_rx = drain_rx.clone();
+                    let drain_rx = drain_rx.clone();
+                    let tls = tls.clone();
                     live.enter();
                     tokio::spawn(async move {
-                        let service = service_fn(move |req: Request<Incoming>| {
-                            let tx = tx.clone();
-                            let authority = authority.clone();
-                            async move {
-                                let server_req = to_server_request(req, &authority);
-                                let (rtx, rrx) = oneshot::channel();
-                                let (dtx, drx) = oneshot::channel();
-                                if tx.send((server_req, rtx, drx)).await.is_err() {
-                                    // Server closed: the request channel is gone.
-                                    return Ok::<_, Infallible>(status_only(
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                    ));
-                                }
-                                match rrx.await {
-                                    Ok(resp) => {
-                                        // Say "delivered" before building, so a
-                                        // handler awaiting the disconnect signal
-                                        // learns the request completed. If this
-                                        // future is instead dropped — which is
-                                        // what a vanished client does to it —
-                                        // `dtx` drops unsent and the watcher
-                                        // sees the disconnect.
-                                        let _ = dtx.send(());
-                                        Ok(build_response(resp))
-                                    }
-                                    // Guest dropped the request without responding.
-                                    Err(_) => {
-                                        let _ = dtx.send(());
-                                        Ok(status_only(StatusCode::INTERNAL_SERVER_ERROR))
-                                    }
+                        match tls {
+                            // A failed handshake ends this connection only. It is
+                            // an ordinary event on a public port — a scanner, a
+                            // client with no shared cipher — and must never take
+                            // the acceptor down with it.
+                            Some(acceptor) => {
+                                if let Ok(stream) = acceptor.accept(stream).await {
+                                    serve_connection(stream, tx, origin, drain_rx).await;
                                 }
                             }
-                        });
-                        let conn = http1::Builder::new().serve_connection(io, service);
-                        tokio::pin!(conn);
-                        // Race the connection against the drain signal. On
-                        // shutdown, `graceful_shutdown` stops reading new
-                        // requests but still finishes the one in flight and
-                        // writes its response — the difference between draining
-                        // and dropping. Awaiting the connection afterwards is
-                        // what makes the response actually reach the socket.
-                        tokio::select! {
-                            _ = conn.as_mut() => {}
-                            // Wrapped so the borrow `wait_for` hands back — a
-                            // read guard — is dropped at the end of the
-                            // statement, rather than living across the await
-                            // below and making this task non-`Send`.
-                            _ = async {
-                                let _ = drain_rx.wait_for(|draining| *draining).await;
-                            } => {
-                                conn.as_mut().graceful_shutdown();
-                                let _ = conn.await;
-                            }
+                            None => serve_connection(stream, tx, origin, drain_rx).await,
                         }
                         live.leave();
                     });
@@ -501,6 +538,7 @@ impl HttpServerProvider for SystemHttpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use es_runtime_providers::HttpServerTls;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
 
@@ -515,8 +553,19 @@ mod tests {
     }
 
     async fn bound() -> (SystemHttpServer, u64, u16) {
+        bound_with(None).await
+    }
+
+    pub(super) async fn bound_with(tls: Option<HttpServerTls>) -> (SystemHttpServer, u64, u16) {
         let http = SystemHttpServer::new();
-        let (id, info) = http.serve("127.0.0.1".into(), 0).await.unwrap();
+        let (id, info) = http
+            .serve(HttpServeOptions {
+                host: "127.0.0.1".into(),
+                port: 0,
+                tls,
+            })
+            .await
+            .unwrap();
         (http, id, info.local_port)
     }
 
@@ -578,5 +627,167 @@ mod tests {
     async fn request_disconnected_is_false_for_an_unknown_id() {
         let (http, _id, _port) = bound().await;
         assert!(!http.request_disconnected(9_999).await);
+    }
+}
+
+#[cfg(test)]
+mod tls_tests {
+    use super::*;
+    use es_runtime_providers::HttpServerTls;
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio_rustls::TlsConnector;
+    use tokio_rustls::rustls::crypto::aws_lc_rs;
+    use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName};
+    use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+
+    /// A throwaway cert for `localhost`: (PEM cert, PEM key, DER cert). The DER
+    /// copy is what the test client trusts, so nothing depends on the host's
+    /// certificate store.
+    fn self_signed() -> (Vec<u8>, Vec<u8>, CertificateDer<'static>) {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        (
+            ck.cert.pem().into_bytes(),
+            ck.signing_key.serialize_pem().into_bytes(),
+            ck.cert.der().clone(),
+        )
+    }
+
+    fn tls_options(cert: Vec<u8>, key: Vec<u8>) -> HttpServerTls {
+        HttpServerTls {
+            cert,
+            key,
+            alpn: vec!["http/1.1".to_string()],
+        }
+    }
+
+    /// A real handshake against the real listener, then a real HTTP request over
+    /// it — the only way to know TLS termination is wired to the same request
+    /// path as plain HTTP rather than to a parallel one that has drifted.
+    #[tokio::test]
+    async fn a_tls_listener_terminates_and_serves() {
+        let (cert_pem, key_pem, cert_der) = self_signed();
+        let (http, id, port) = super::tests::bound_with(Some(tls_options(cert_pem, key_pem))).await;
+
+        // A client trusting only this cert.
+        let mut roots = RootCertStore::empty();
+        roots.add(cert_der).unwrap();
+        let config = ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(config));
+
+        let request = tokio::spawn(async move {
+            let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let name = ServerName::try_from("localhost").unwrap();
+            let mut tls = connector.connect(name, tcp).await.expect("handshake");
+            tls.write_all(b"GET /x HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut got = Vec::new();
+            tls.read_to_end(&mut got).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, req) = reqs.into_iter().next().expect("one request");
+        // The listener's scheme, not the client's Host header, decides this.
+        assert_eq!(req.url, "https://localhost/x");
+
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(b"secure".to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = request.await.unwrap();
+        assert!(response.contains("200 OK"), "{response}");
+        assert!(response.contains("secure"), "{response}");
+    }
+
+    /// A bad cert must fail `serve` itself. Binding the port first and then
+    /// rejecting every handshake would look like a working server that nothing
+    /// can talk to.
+    #[tokio::test]
+    async fn an_unusable_certificate_fails_the_bind() {
+        let (_, key_pem, _) = self_signed();
+        let http = SystemHttpServer::new();
+        let result = http
+            .serve(HttpServeOptions {
+                host: "127.0.0.1".into(),
+                port: 0,
+                tls: Some(tls_options(b"not a certificate".to_vec(), key_pem)),
+            })
+            .await;
+        assert!(result.is_err(), "an unparseable cert must not bind");
+    }
+
+    /// A failed handshake ends that connection only. On a public port this is an
+    /// ordinary event — a scanner, a plain-HTTP client — and taking the acceptor
+    /// down with it would be a one-packet denial of service.
+    #[tokio::test]
+    async fn a_failed_handshake_does_not_stop_the_server() {
+        let (cert_pem, key_pem, cert_der) = self_signed();
+        let (http, id, port) = super::tests::bound_with(Some(tls_options(cert_pem, key_pem))).await;
+
+        // Plain HTTP at a TLS port: garbage to the handshake.
+        {
+            let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let _ = tcp.write_all(b"GET / HTTP/1.1\r\n\r\n").await;
+        }
+
+        // The server must still serve a proper TLS client afterwards.
+        let mut roots = RootCertStore::empty();
+        roots.add(cert_der).unwrap();
+        let config = ClientConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(config));
+        let request = tokio::spawn(async move {
+            let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            let name = ServerName::try_from("localhost").unwrap();
+            let mut tls = connector.connect(name, tcp).await.expect("handshake");
+            tls.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut got = Vec::new();
+            tls.read_to_end(&mut got).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+
+        let reqs = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            http.next_requests(id, 8),
+        )
+        .await
+        .expect("the acceptor survived the bad handshake")
+        .unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(b"still here".to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(request.await.unwrap().contains("still here"));
     }
 }

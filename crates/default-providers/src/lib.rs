@@ -33,6 +33,7 @@ mod system_sync_fs;
 mod system_websocket;
 mod task;
 mod timers;
+mod tls;
 
 pub mod path;
 pub mod testing;

@@ -18,9 +18,8 @@ import { Callout } from "@opentf/web-docs";
 </Callout>
 
 <Callout type="warning" title="Current limits">
-  **No TLS** — `runtime:http` serves plain HTTP only. Terminate TLS at a reverse
-  proxy, or use [`runtime:net`](/docs/guides/networking) for a raw TLS listener
-  if you need to terminate in-process.
+  **HTTP/1.1 only** — no HTTP/2 or HTTP/3. TLS terminates in-process; see
+  [HTTPS](#https).
 </Callout>
 
 ## Basic server
@@ -190,17 +189,36 @@ onSignal("SIGINT", shutdown);
 onSignal("SIGTERM", shutdown);
 ```
 
-## TLS and production deployment
+## HTTPS
 
-`runtime:http` does not terminate TLS. Typical production setups:
+`secureTransport: "on"` terminates TLS on accept. Cert and key are passed
+**inline**, not as paths — reading a file is the filesystem's privilege, so you
+read it yourself and serving needs nothing beyond `NetListen`.
 
-1. **Reverse proxy** — nginx, Caddy, or a cloud load balancer terminates HTTPS
-   and forwards plain HTTP to your esrun process.
-2. **Raw TLS socket** — bind with `runtime:net` `listen({ secureTransport: "on", cert, key })`
-   and speak HTTP/1.1 yourself, or proxy to a local `serve()` port. See
-   [Sockets](/docs/guides/networking).
+```js
+import { serve } from "runtime:http";
+import { file } from "runtime:fs";
 
-WebSocket servers over `wss:` follow the same split today — see
+serve(
+  {
+    port: 443,
+    secureTransport: "on",
+    cert: await file("/etc/certs/fullchain.pem").text(),
+    key: await file("/etc/certs/privkey.pem").text(),
+  },
+  (request) => new Response(request.url), // https://…
+);
+```
+
+| | |
+| --- | --- |
+| `request.url` scheme | `https:` — from the listener, not a `Host` header |
+| `alpn` | defaults to `["http/1.1"]` |
+| Bad cert or key | fails `serve()`, not each handshake |
+| `"on"` without cert/key | `TypeError` |
+| Failed handshake | ends that connection only |
+
+`wss:` WebSocket servers are still a follow-up — see
 [WebSockets](/docs/guides/websocket).
 
 ## Usage with Hono

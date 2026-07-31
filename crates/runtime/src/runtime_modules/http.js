@@ -19,6 +19,28 @@ function parseAddress(options) {
   };
 }
 
+// TLS options, in the same shape runtime:net `listen` takes them (D28): the
+// cert and key travel inline rather than as paths, because reading a file is
+// the filesystem's privilege — a guest serving HTTPS from a cert on disk reads
+// it with runtime:fs under its own gate, and serving needs nothing beyond
+// NetListen.
+function parseTls(options) {
+  const o = options ?? {};
+  if (o.secureTransport === undefined || o.secureTransport === "off") return null;
+  if (o.secureTransport !== "on") {
+    throw new TypeError(
+      `serve: secureTransport must be "on" or "off", got ${JSON.stringify(o.secureTransport)}`,
+    );
+  }
+  // Failing here beats binding a port and then rejecting every handshake.
+  if (!o.cert || !o.key) {
+    throw new TypeError('serve: secureTransport "on" requires both cert and key (PEM)');
+  }
+  const alpn = o.alpn ?? [];
+  if (!Array.isArray(alpn)) throw new TypeError("serve: alpn must be an array of strings");
+  return { cert: o.cert, key: o.key, alpn: alpn.map(String) };
+}
+
 // Streams a Response's ReadableStream body to the host one chunk at a time.
 // Each push awaits the bounded host channel (download backpressure); a guest
 // stream error is forwarded so the in-flight response aborts the connection —
@@ -131,7 +153,7 @@ async function handleRequest(entry, handler) {
 // The handle returned by serve(): `addr` resolves to the bound address,
 // `finished` resolves when the accept loop ends, `stop()` shuts it down.
 class Server {
-  constructor(hostname, port, handler) {
+  constructor(hostname, port, tls, handler) {
     let resolveAddr, rejectAddr, resolveFinished;
     this.addr = new Promise((res, rej) => {
       resolveAddr = res;
@@ -144,7 +166,9 @@ class Server {
     (async () => {
       let info;
       try {
-        info = await ops.http_serve(hostname, port);
+        info = tls
+          ? await ops.http_serve(hostname, port, tls.cert, tls.key, ...tls.alpn)
+          : await ops.http_serve(hostname, port);
       } catch (e) {
         rejectAddr(e);
         resolveFinished();
@@ -196,7 +220,7 @@ function serve(options, handler) {
     throw new TypeError("serve(options, handler): handler must be a function");
   }
   const { hostname, port } = parseAddress(options);
-  return new Server(hostname, port, handler);
+  return new Server(hostname, port, parseTls(options), handler);
 }
 
 export { serve };

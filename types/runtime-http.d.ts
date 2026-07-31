@@ -21,6 +21,17 @@ declare module "runtime:http" {
     host?: string;
     /** `0` (the default) binds an ephemeral port (read it back from `addr`). */
     port?: number;
+    /**
+     * `"on"` terminates TLS on accept — requires {@link cert} and {@link key}.
+     * Defaults to `"off"` (plain HTTP).
+     */
+    secureTransport?: "on" | "off";
+    /** PEM certificate chain, leaf first. Required when `secureTransport` is `"on"`. */
+    cert?: string | Uint8Array;
+    /** PEM private key. Required when `secureTransport` is `"on"`. */
+    key?: string | Uint8Array;
+    /** ALPN protocols to advertise. Defaults to `["http/1.1"]`. */
+    alpn?: string[];
   }
 
   /** A running HTTP server. */
@@ -33,7 +44,14 @@ declare module "runtime:http" {
     stop(): Promise<void>;
   }
 
-  /** Start an HTTP/1.1 server (capability: `NetListen`). Returns immediately. */
+  /**
+   * Start an HTTP/1.1 server (capability: `NetListen`). Returns immediately.
+   *
+   * With `secureTransport: "on"` it serves HTTPS, and `request.url` reports the
+   * `https:` scheme. The cert and key are passed inline rather than as paths —
+   * reading a file is the filesystem's privilege — so serving HTTPS needs no
+   * grant beyond `NetListen`.
+   */
   export function serve(handler: Handler): Server;
   export function serve(options: ServeOptions, handler: Handler): Server;
 

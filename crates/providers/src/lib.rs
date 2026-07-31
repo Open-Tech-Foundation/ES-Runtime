@@ -899,6 +899,36 @@ pub struct HttpServerResponse {
     pub body: HttpServerBody,
 }
 
+/// Where and how an [`HttpServerProvider`] should listen.
+///
+/// A struct rather than positional arguments so binding options can grow without
+/// breaking every implementation each time.
+pub struct HttpServeOptions {
+    /// Address to bind (`"0.0.0.0"`, `"127.0.0.1"`, …).
+    pub host: String,
+    /// Port to bind; `0` picks an ephemeral one, read back from the returned
+    /// [`SocketInfo`].
+    pub port: u16,
+    /// TLS to terminate on accept, or `None` for plain HTTP.
+    pub tls: Option<HttpServerTls>,
+}
+
+/// Server-side TLS material for [`HttpServeOptions`].
+///
+/// The certificate and key travel **inline** rather than as paths, exactly as
+/// `runtime:net` `listen` takes them: reading a file is the filesystem's
+/// privilege, so a guest that wants to serve HTTPS from a cert on disk reads it
+/// with `runtime:fs` under its own gate. Serving needs no grant beyond
+/// `NetListen`.
+pub struct HttpServerTls {
+    /// PEM certificate chain, leaf first.
+    pub cert: Vec<u8>,
+    /// PEM private key.
+    pub key: Vec<u8>,
+    /// ALPN protocols to advertise. An HTTP/1.1 server offers `["http/1.1"]`.
+    pub alpn: Vec<String>,
+}
+
 /// An HTTP/1.1 server backing `runtime:http` (the `serve((req) => res)` shape).
 ///
 /// The implementation owns the listener and every accepted connection, parsing
@@ -912,10 +942,12 @@ pub struct HttpServerResponse {
 /// (like `runtime:net` `listen`) before this is ever called; an embedder that
 /// installs no `HttpServerProvider` has no `runtime:http` access at all.
 pub trait HttpServerProvider: Send + Sync {
-    /// Binds an HTTP server to `host:port` and starts accepting; resolves to
+    /// Binds an HTTP server per `options` and starts accepting; resolves to
     /// (server id, bound-address info). `port` 0 picks an ephemeral port.
-    fn serve(&self, host: String, port: u16)
-    -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
+    fn serve(
+        &self,
+        options: HttpServeOptions,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
 
     /// Waits for inbound requests on server `id`, then drains any others already
     /// queued (up to `max`) so the single-threaded consumer can amortize the

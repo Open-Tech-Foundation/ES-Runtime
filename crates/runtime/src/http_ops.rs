@@ -37,7 +37,8 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ByteStream, HttpServerBody, HttpServerProvider, HttpServerResponse, ProviderError, SocketInfo,
+    ByteStream, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerResponse,
+    HttpServerTls, ProviderError, SocketInfo,
 };
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
@@ -73,12 +74,39 @@ pub(crate) fn install(
 
     let h = http.clone();
     engine.register_op(
+        // Args: [host, port, cert?, key?, alpn0, alpn1, …]. A cert *and* key
+        // (both non-empty) turn on TLS termination; the cert/key travel inline
+        // because reading a file is the filesystem's privilege, so serving HTTPS
+        // needs no grant beyond NetListen.
         OpDecl::r#async("http_serve", move |args| {
             let h = h.clone();
             let host = arg_str(&args, 0);
             let port = arg_u16(&args, 1);
+            let cert = arg_bytes(&args, 2);
+            let key = arg_bytes(&args, 3);
+            let alpn: Vec<String> = args
+                .iter()
+                .skip(4)
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect();
             Box::pin(async move {
-                let (id, info) = require(&h)?.serve(host, port).await.map_err(map_err)?;
+                let tls = match (cert, key) {
+                    (Some(cert), Some(key)) if !cert.is_empty() && !key.is_empty() => {
+                        Some(HttpServerTls {
+                            cert,
+                            key,
+                            // An HTTP/1.1 server that advertises nothing else.
+                            alpn: if alpn.is_empty() {
+                                vec!["http/1.1".to_string()]
+                            } else {
+                                alpn
+                            },
+                        })
+                    }
+                    _ => None,
+                };
+                let options = HttpServeOptions { host, port, tls };
+                let (id, info) = require(&h)?.serve(options).await.map_err(map_err)?;
                 Ok(server_value(id, &info))
             })
         })
@@ -329,6 +357,16 @@ fn arg_str(args: &[Value], i: usize) -> String {
 
 fn arg_u16(args: &[Value], i: usize) -> u16 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u16
+}
+
+/// Bytes at `i`, accepting either a typed array or a string (PEM is text, and
+/// reading a cert file gives either shape depending on how the guest read it).
+fn arg_bytes(args: &[Value], i: usize) -> Option<Vec<u8>> {
+    match args.get(i) {
+        Some(Value::Bytes(b)) => Some(b.clone()),
+        Some(Value::String(s)) => Some(s.as_bytes().to_vec()),
+        _ => None,
+    }
 }
 
 fn arg_u64(args: &[Value], i: usize) -> u64 {

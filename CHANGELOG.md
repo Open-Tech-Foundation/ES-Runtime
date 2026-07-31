@@ -137,6 +137,33 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:http` terminates TLS — `serve({ secureTransport: "on", cert, key })`.**
+  It served plain HTTP only, so putting an ES-Runtime server on a public port
+  meant a reverse proxy in front of it, no matter how small the deployment. The
+  gap was also an odd one: `runtime:net` `listen` has terminated TLS since 0.11
+  and `fetch` speaks TLS as a client, so the one thing that could not was the
+  HTTP server.
+  Options match `runtime:net` `listen` exactly, and the cert and key travel
+  **inline** rather than as paths for the same reason: reading a file is the
+  filesystem's privilege, so a guest serving HTTPS from a cert on disk reads it
+  with `runtime:fs` under its own gate, and serving needs no grant beyond
+  `NetListen`. Both providers now build their rustls config through one shared
+  helper, so there is one thing to keep right rather than two.
+  `request.url` reports the `https:` scheme, taken from the listener — a client
+  cannot talk a plain server into claiming it with a `Host` header. An
+  unparseable cert or key fails the `serve` call rather than each later
+  handshake, and `secureTransport: "on"` without both is a `TypeError`: a bound
+  port that rejects every connection looks like a working server nothing can
+  reach. A failed handshake ends only its own connection — on a public port
+  those are routine, and taking the acceptor down with one would be a
+  single-packet denial of service.
+  Still HTTP/1.1 only; `alpn` (default `["http/1.1"]`) is advertised for the
+  client's benefit, not to switch protocol.
+- **Breaking (embedders implementing `HttpServerProvider`):** `serve` now takes
+  an `HttpServeOptions` struct instead of `(host, port)`, carrying an optional
+  `HttpServerTls`. A struct so binding options can grow without breaking every
+  implementation again.
+
 - **`esrun` shuts down gracefully on `^C` / `SIGTERM`.** A running server was
   killed where it stood: in-flight requests died mid-response, and a client that
   had waited seconds for an answer got an empty reply. That is the default

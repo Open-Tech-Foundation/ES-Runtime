@@ -717,8 +717,7 @@ pulling chunks as they arrive (nothing is buffered unless the handler asks, e.g.
 `await request.text()`), and a `ReadableStream` response body is sent with
 chunked transfer-encoding as it is produced (bounded-channel backpressure) — so
 SSE-style responses and `new Response(request.body)` proxying work unbuffered.
-TLS is not supported yet (terminate it at a proxy, or use `runtime:net`
-`listen({ secureTransport: "on" })`).
+`secureTransport: "on"` terminates **TLS** on accept (see below).
 
 ```js
 import { serve } from "runtime:http";
@@ -741,12 +740,48 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
-| `serve(options, handler)`         | `({ hostname?, port? }, Handler) => Server`   | Start a server bound to `options`. `NetListen`.                    |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
 `Handler` is `(request: Request) => Response | Promise<Response>`.
 
 **`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
 `finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.
+
+#### HTTPS
+
+`secureTransport: "on"` terminates TLS on accept. The certificate and key travel
+**inline**, exactly as `runtime:net` `listen` takes them — reading a file is the
+filesystem's privilege, so a guest serving HTTPS from a cert on disk reads it
+with `runtime:fs` under its own gate, and serving needs no grant beyond
+`NetListen`:
+
+```js
+import { serve } from "runtime:http";
+import { file } from "runtime:fs";
+
+serve(
+  {
+    port: 443,
+    secureTransport: "on",
+    cert: await file("/etc/certs/fullchain.pem").text(), // PEM chain, leaf first
+    key: await file("/etc/certs/privkey.pem").text(),
+  },
+  (request) => new Response(request.url), // https://…
+);
+```
+
+`request.url` reports the `https:` scheme — that comes from the listener, so a
+client cannot talk a plain server into claiming it via a `Host` header. `alpn`
+defaults to `["http/1.1"]`, which is what this server speaks.
+
+An unparseable certificate or key fails the `serve` call itself rather than each
+later handshake, and `secureTransport: "on"` without both a `cert` and a `key`
+is a `TypeError` — binding a port that rejects every connection would look like
+a working server nothing can reach. A failed handshake ends that connection
+only; on a public port those are routine and must not stop the server.
+
+Still HTTP/1.1 only: there is no HTTP/2, so `alpn` is advertised for the
+client's benefit rather than to switch protocol.
 
 #### Shutdown
 

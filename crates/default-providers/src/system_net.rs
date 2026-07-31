@@ -26,10 +26,10 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
-use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
@@ -148,37 +148,6 @@ impl SystemNet {
             .unwrap()
             .insert(alpn.to_vec(), connector.clone());
         Ok(connector)
-    }
-
-    /// A server-side TLS acceptor presenting `cert` (a PEM chain, leaf first) with
-    /// `key` (a PEM private key) and advertising `alpn`. Built once per `listen`
-    /// so the cert/key parse and config assembly are paid at bind time, not per
-    /// accept. `aws_lc_rs` is selected explicitly for the same reason as the
-    /// client connector (an ambiguous process-default provider would panic).
-    fn server_acceptor(
-        cert: &[u8],
-        key: &[u8],
-        alpn: &[String],
-    ) -> Result<TlsAcceptor, ProviderError> {
-        use tokio_rustls::rustls::pki_types::pem::PemObject;
-        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
-
-        let certs = CertificateDer::pem_slice_iter(cert)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(err)?;
-        if certs.is_empty() {
-            return Err(err("no certificates found in the PEM cert"));
-        }
-        let key = PrivateKeyDer::from_pem_slice(key).map_err(err)?;
-        let provider = Arc::new(aws_lc_rs::default_provider());
-        let mut config = ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .map_err(err)?
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(err)?;
-        config.alpn_protocols = alpn.iter().map(|p| p.as_bytes().to_vec()).collect();
-        Ok(TlsAcceptor::from(Arc::new(config)))
     }
 
     /// Splits `stream` and spawns its reader + writer tasks, returning the
@@ -513,7 +482,7 @@ impl NetProvider for SystemNet {
             let acceptor = if opts.cert.is_empty() && opts.key.is_empty() {
                 None
             } else {
-                Some(SystemNet::server_acceptor(
+                Some(crate::tls::server_acceptor(
                     &opts.cert, &opts.key, &opts.alpn,
                 )?)
             };
@@ -698,6 +667,10 @@ impl NetProvider for SystemNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The production paths build their server-side TLS through `crate::tls`;
+    // these tests stand up their own peer, so they need the types directly.
+    use tokio_rustls::TlsAcceptor;
+    use tokio_rustls::rustls::ServerConfig;
     use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
     /// A throwaway self-signed cert for `localhost`: (cert DER, PKCS#8 key DER).

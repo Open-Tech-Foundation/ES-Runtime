@@ -824,3 +824,36 @@ fn import_meta_resolve_resolves_against_the_module() {
     assert!(stdout.contains("BARE!TypeError"), "{stdout}");
     assert!(stdout.contains("NODE!TypeError"), "{stdout}");
 }
+
+#[test]
+fn serve_rejects_incomplete_tls_options() {
+    // Failing at `serve` beats binding a port and then rejecting every
+    // handshake, which looks like a working server nothing can talk to.
+    let out = esrun()
+        .arg("-e")
+        .arg(
+            "import { serve } from 'runtime:http'; \
+             const cases = [ \
+               { secureTransport: 'on' }, \
+               { secureTransport: 'on', cert: 'x' }, \
+               { secureTransport: 'on', key: 'x' }, \
+               { secureTransport: 'yes', cert: 'x', key: 'x' }, \
+             ]; \
+             for (const o of cases) { \
+               try { serve({ port: 0, ...o }, () => new Response('x')); console.log('NO THROW'); } \
+               catch (e) { console.log(`THREW ${e.constructor.name}`); } \
+             } \
+             console.log('TLS_OPTS_OK');",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert_eq!(
+        stdout.matches("THREW TypeError").count(),
+        4,
+        "every incomplete or unknown TLS option must throw: {stdout}"
+    );
+    assert!(!stdout.contains("NO THROW"), "{stdout}");
+    assert!(stdout.contains("TLS_OPTS_OK"), "{stdout}");
+}
