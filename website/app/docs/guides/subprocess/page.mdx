@@ -4,6 +4,11 @@ description: Run programs with runtime:system — web streams in and out, no she
 ---
 
 import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
 
 # Subprocesses
 
@@ -127,22 +132,22 @@ by design.
 Node, Deno, and Bun all spawn processes. The differences are in what is on by
 default.
 
-| | esrun `runtime:system` | Node `child_process` | execa (npm) | Bun `spawn` | Deno `Command` |
+| | esrun<br />`runtime:system` | Node<br />`child_process` | execa<br />(npm) | Bun<br />`spawn` | Deno<br />`Command` |
 | --- | --- | --- | --- | --- | --- |
-| Entry point | `new Command()` | `spawn`/`exec`/`execFile`/`fork` + 3 sync | `execa()`, `` $`…` `` | `Bun.spawn` / `spawnSync` | `new Deno.Command()` |
+| Entry point | `new Command()` | `spawn` / `exec` | `execa()`, `` $`…` `` | `Bun.spawn` / `spawnSync` | `new Deno.Command()` |
 | Async model | Promise | EventEmitter + callbacks | Promise | Promise + `onExit` | Promise |
 | stdout type | web `ReadableStream` | Node `Readable` | Node stream / string | web `ReadableStream` | web `ReadableStream` |
-| stdin takes a body | ✅ | ❌ | 🟡 | ✅ | ❌ |
-| Shell | ❌ none | `exec` = real shell | ❌ by design | `Bun.$` | ❌ none |
-| Env inherited by default | ❌ opt in | ✅ | ✅ | ✅ | ✅ |
+| stdin takes a body | <Yes /> | <No /> | <Partial /> | <Yes /> | <No /> |
+| Shell | <No /> none | `exec` = real shell | <No /> by design | `Bun.$` | <No /> none |
+| Env inherited by default | <No /> opt in | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Authorization | capability + allowlist | ambient | ambient | ambient | `--allow-run` |
-| `output()` bounded by default | ✅ 16 MiB | 🟡 `exec` only, 1 MiB | 🟡 | 🟡 opt-in | ❌ |
-| Children killed at shutdown | ✅ | ❌ | 🟡 via `signal-exit` | 🟡 | 🟡 |
-| Sync variants | ❌ | ✅ | ❌ | ✅ | ✅ |
-| `fork()` / IPC | ❌ | ✅ | ✅ | ✅ | ❌ |
-| PTY | ❌ | via `node-pty` | ❌ | ✅ | ❌ |
+| `output()` bounded by default | <Yes /> 16 MiB | <Partial /> `exec` only, 1 MiB | <Partial /> | <Partial /> opt-in | <No /> |
+| Children killed at shutdown | <Yes /> | <No /> | <Partial /> via `signal-exit` | <Partial /> | <Partial /> |
+| Sync variants | <No /> | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| `fork()` / IPC | <No /> | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| PTY | <No /> | via `node-pty` | <No /> | <Yes /> | <No /> |
 
-**Legend:** ✅ Supported · 🟡 Partial / opt-in · ❌ Not supported
+**Legend:** <Yes /> Supported · <Partial /> Partial / opt-in · <No /> Not supported
 
 <br />
 

@@ -12,7 +12,7 @@
 //   - avoid fill-rule/clip-rule cut-outs (kebab names aren't emitted).
 // Pass `className` to override size/color.
 
-const SIZE = "inline-block h-6 w-6 align-middle ";
+const SIZE = "inline-block h-4 w-4 align-middle shrink-0 ";
 
 export default function StatusIcon({ status, title, className }) {
   return (

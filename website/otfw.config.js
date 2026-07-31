@@ -9,7 +9,7 @@ export default defineDocsConfig({
   docs: {
     title: "ES-Runtime",
     // Bump on each release, to match the workspace Cargo.toml.
-    version: "v0.12.0",
+    version: "v0.13.0",
     github: GITHUB,
     // Enables the per-page "Edit this page" link (with `lastUpdated`).
     repoUrl: GITHUB,

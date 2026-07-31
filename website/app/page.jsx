@@ -1,6 +1,7 @@
 import BenchRoller from "../components/BenchRoller.jsx";
 import CodeTabs from "../components/CodeTabs.jsx";
 import RpsChart from "../components/RpsChart.jsx";
+import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
 import WhyChooseSection from "../components/WhyChooseSection.jsx";
 
@@ -70,7 +71,8 @@ export default function HomePage() {
                 href="/docs"
                 className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-5 py-3 text-sm font-semibold text-zinc-900 shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
               >
-                <span>🚀</span> Get started
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-brand-500"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-3.05 11a22.35 22.35 0 0 1-3.95 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+                Get started
               </a>
             </div>
             <div className="mt-6 max-w-xl">
@@ -137,7 +139,9 @@ export default function HomePage() {
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
             </div>
             <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-100 text-2xl dark:bg-orange-950/50">🦀</div>
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-950/50">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-orange-600 dark:text-orange-400"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+              </div>
               <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">Op Layer</h3>
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Drives the event loop and low-cost boundary calls.</p>
             </div>
@@ -145,7 +149,9 @@ export default function HomePage() {
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
             </div>
             <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 text-2xl dark:bg-blue-950/50">🧩</div>
+              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-950/50">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 dark:text-blue-400"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+              </div>
               <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">Runtime Modules</h3>
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Standard Web APIs like fetch, crypto, and streams.</p>
             </div>
@@ -220,35 +226,35 @@ export default function HomePage() {
       </section>
 
       {/* CTA */}
-      <section className="border-t border-zinc-200 bg-zinc-950 dark:border-zinc-800">
+      <section className="border-t border-zinc-200 dark:border-zinc-800">
         <div className="mx-auto max-w-6xl px-6 py-16 lg:py-20">
-          <h2 className="text-center text-3xl font-bold tracking-tight text-white">
+          <h2 className="text-center text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
             Ship a runtime you can trust.
           </h2>
           <div className="mt-12 grid gap-10 sm:grid-cols-2 text-left">
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-8">
-              <h3 className="text-xl font-bold text-white">Standard Server Runtime</h3>
-              <p className="mt-3 text-zinc-400">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 dark:border-zinc-800 dark:bg-zinc-900">
+              <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Standard Server Runtime</h3>
+              <p className="mt-3 text-zinc-600 dark:text-zinc-400">
                 A standard-based, full-capability, fast and optimal runtime for general workloads.
               </p>
               <div className="mt-6">
                 <a
                   href="/docs"
-                  className="inline-flex items-center rounded-lg bg-white px-5 py-3 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-100"
+                  className="inline-flex items-center rounded-lg bg-zinc-900 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
                 >
                   Read ESRun Docs
                 </a>
               </div>
             </div>
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-8">
-              <h3 className="text-xl font-bold text-white">Embeddable Engine</h3>
-              <p className="mt-3 text-zinc-400">
+            <div className="rounded-2xl border border-zinc-200 bg-white p-8 dark:border-zinc-800 dark:bg-zinc-900">
+              <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Embeddable Engine</h3>
+              <p className="mt-3 text-zinc-600 dark:text-zinc-400">
                 Embedded for ultimate control & untrusted code execution. Inject standard APIs or create your own custom capabilities from Rust.
               </p>
               <div className="mt-6">
                 <a
                   href="/docs/embed"
-                  className="inline-flex items-center rounded-lg border border-zinc-700 bg-transparent px-5 py-3 text-sm font-semibold text-zinc-200 transition-colors hover:bg-zinc-800"
+                  className="inline-flex items-center rounded-lg border border-zinc-300 bg-transparent px-5 py-3 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-800"
                 >
                   Embeddable Guide
                 </a>

@@ -3,6 +3,12 @@ title: esrun vs Node.js · Bun · Deno
 description: The trade-offs between esrun's sandboxed, standards-only core and general-purpose runtimes.
 ---
 
+import StatusIcon from "../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
 # esrun vs Node.js · Bun · Deno
 
 Node.js, Bun, and Deno are general-purpose runtimes with broad toolchains and
@@ -12,26 +18,26 @@ makes the trade-offs explicit.
 
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
-| ES Modules | ✅ | ✅ | ✅ | ✅ |
-| CommonJS (require) | ❌ | ✅ | ✅ | 🟡 |
-| TypeScript (built-in) | ❌ | ✅ | ✅ | ✅ |
-| JSX (built-in) | ❌ | ❌ | ✅ | ✅ |
-| JSON module imports | ✅ | ✅ | ✅ | ✅ |
-| Web APIs (fetch/URL/streams/WebCrypto) | ✅ | ✅ | ✅ | ✅ |
-| Temporal API | ✅ | ✅ | ❌ | ✅ |
-| WebAssembly | ✅ | ✅ | ✅ | ✅ |
-| `.wasm` ES module imports | ✅ | ✅ | ❌ | ✅ |
-| WASI preview 1 | ✅ | ✅ | 🟡 | ✅ |
-| Node.js compatibility (`node:` builtins) | ❌ | ✅ | ✅ | 🟡 |
-| Capability sandbox (deny by default) | ❌ | 🟡 | ❌ | ✅ |
-| Workers / multi-thread | ❌ | ✅ | ✅ | ✅ |
-| FFI (dlopen) | ❌ | ❌ | ✅ | ✅ |
-| Native addons (N-API) | ❌ | ✅ | ✅ | ✅ |
-| Package installer | ❌ | ✅ | ✅ | ✅ |
-| Bundler / test runner | ❌ | 🟡 | ✅ | ✅ |
-| Embeddable as a library | ✅ | ❌ | ❌ | 🟡 |
+| ES Modules | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| CommonJS (require) | <No /> | <Yes /> | <Yes /> | <Partial /> |
+| TypeScript (built-in) | <No /> | <Yes /> | <Yes /> | <Yes /> |
+| JSX (built-in) | <No /> | <No /> | <Yes /> | <Yes /> |
+| JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Temporal API | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
+| Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
+| Capability sandbox (deny by default) | <No /> | <Partial /> | <No /> | <Yes /> |
+| Workers / multi-thread | <No /> | <Yes /> | <Yes /> | <Yes /> |
+| FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
+| Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
+| Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
+| Bundler / test runner | <No /> | <Partial /> | <Yes /> | <Yes /> |
+| Embeddable as a library | <Yes /> | <No /> | <No /> | <Partial /> |
 
-**Legend:** ✅ Supported · 🟡 Partial / flagged / experimental · ❌ Not supported
+**Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental · <No /> Not supported
 
 <br />
 

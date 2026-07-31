@@ -3,6 +3,12 @@ title: WebAssembly & WASI
 description: The WebAssembly JS API, .wasm ES module imports, and WASI preview 1 — what is supported, how it compares, and the caveats.
 ---
 
+import StatusIcon from "../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
 # WebAssembly & WASI
 
 WebAssembly needs **no capability**: a module is exactly as privileged as the
@@ -20,7 +26,7 @@ through capability-gated ops.
 | `Tag` / `Exception` | Exception handling |
 | `Suspending` / `promising` | JSPI |
 | `CompileError` / `LinkError` / `RuntimeError` | |
-| `WebAssembly.Function` | ❌ type reflection — also absent from Node, Bun, and Deno |
+| `WebAssembly.Function` | <No /> type reflection — also absent from Node, Bun, and Deno |
 
 ```js
 const { instance } = await WebAssembly.instantiate(bytes, {
@@ -41,11 +47,11 @@ import { add } from "./add.wasm";   // exports
 
 | Feature | Support |
 | --- | --- |
-| Named + namespace imports | ✅ |
-| Non-identifier export names | ✅ via string alias |
-| wasm imports resolving through the graph | ✅ |
-| One instance across static + dynamic import | ✅ |
-| `import source m from "./m.wasm"` | ❌ `SyntaxError` |
+| Named + namespace imports | <Yes /> |
+| Non-identifier export names | <Yes /> via string alias |
+| wasm imports resolving through the graph | <Yes /> |
+| One instance across static + dynamic import | <Yes /> |
+| `import source m from "./m.wasm"` | <No /> `SyntaxError` |
 
 ## Proposals
 
@@ -54,27 +60,27 @@ The proposal surface is V8's, so it matches Deno's exactly. Verified with
 
 | Proposal | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
-| BigInt integration | ✅ | ✅ | ✅ | ✅ |
-| Bulk memory | ✅ | ✅ | ✅ | ✅ |
-| Exception handling | ✅ | ✅ | ✅ | ✅ |
-| Exception handling (final) | ✅ | ❌ | ✅ | ✅ |
-| Extended const | ✅ | ✅ | ✅ | ✅ |
-| Garbage collection | ✅ | ✅ | ✅ | ✅ |
-| JS string builtins | ✅ | ✅ | ✅ | ✅ |
-| JSPI (promise integration) | ✅ | ❌ | ✅ | ✅ |
-| Memory64 | ✅ | ✅ | ❌ | ✅ |
-| Multi-memory | ✅ | ✅ | ❌ | ✅ |
-| Multi-value | ✅ | ✅ | ✅ | ✅ |
-| Mutable globals | ✅ | ✅ | ✅ | ✅ |
-| Reference types | ✅ | ✅ | ✅ | ✅ |
-| Relaxed SIMD | ✅ | ✅ | ❌ | ✅ |
-| Saturating float→int | ✅ | ✅ | ✅ | ✅ |
-| Sign extension | ✅ | ✅ | ✅ | ✅ |
-| SIMD | ✅ | ✅ | ✅ | ✅ |
-| Tail call | ✅ | ✅ | ✅ | ✅ |
-| Threads (validation) | ✅ | ✅ | ✅ | ✅ |
-| Typed function references | ✅ | ✅ | ✅ | ✅ |
-| Type reflection | ❌ | ❌ | ❌ | ❌ |
+| BigInt integration | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Bulk memory | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Exception handling | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Exception handling (final) | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| Extended const | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Garbage collection | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| JS string builtins | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| JSPI (promise integration) | <Yes /> | <No /> | <Yes /> | <Yes /> |
+| Memory64 | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Multi-memory | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Multi-value | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Mutable globals | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Reference types | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Relaxed SIMD | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Saturating float→int | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Sign extension | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| SIMD | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Tail call | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Threads (validation) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Typed function references | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Type reflection | <No /> | <No /> | <No /> | <No /> |
 
 ## WASI
 
@@ -127,8 +133,8 @@ independent checks — and preopens are isolated from each other, so `../` out o
 
 | Syscalls | Served |
 | --- | --- |
-| `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, `path_create_directory`, `path_unlink_file`, `path_remove_directory`, `path_rename` | ✅ |
-| `fd_pread`, `fd_pwrite`, `path_link`, `path_symlink`, `path_readlink`, the `*_set_times` / `set_size` calls, sockets | ❌ `ENOTCAPABLE` |
+| `path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`, `fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`, `fd_prestat_get`, `fd_prestat_dir_name`, `path_create_directory`, `path_unlink_file`, `path_remove_directory`, `path_rename` | <Yes /> |
+| `fd_pread`, `fd_pwrite`, `path_link`, `path_symlink`, `path_readlink`, the `*_set_times` / `set_size` calls, sockets | <No /> `ENOTCAPABLE` |
 
 Every import is **present** regardless — a missing import is a `LinkError` at
 instantiation, which would break a program that merely links a symbol without
@@ -153,15 +159,15 @@ immediate end-of-file.
 
 | | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
-| WebAssembly JS API | ✅ | ✅ | ✅ | ✅ |
-| `.wasm` ES module imports | ✅ | ✅ | ❌ | ✅ |
-| `import source` | ❌ | ✅ | ❌ | ✅ |
-| WASI preview 1 | ✅ `runtime:wasi` | ✅ `node:wasi` | 🟡 `node:wasi` | ✅ `node:wasi` |
-| `getImportObject()` | ✅ | ✅ | ❌ `wasiImport` only | ✅ |
-| `start()` returns the exit status | ✅ | ✅ | ❌ | ✅ |
-| Enforced WASI sandbox | ✅ | ❌ | ❌ | ❌ |
-| Wasm threads (running) | ❌ | ✅ | ✅ | ✅ |
+| WebAssembly JS API | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| `import source` | <No /> | <Yes /> | <No /> | <Yes /> |
+| WASI preview 1 | <Yes /> `runtime:wasi` | <Yes /> `node:wasi` | <Partial /> `node:wasi` | <Yes /> `node:wasi` |
+| `getImportObject()` | <Yes /> | <Yes /> | <No /> `wasiImport` only | <Yes /> |
+| `start()` returns the exit status | <Yes /> | <Yes /> | <No /> | <Yes /> |
+| Enforced WASI sandbox | <Yes /> | <No /> | <No /> | <No /> |
+| Wasm threads (running) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 
-**Legend:** ✅ Supported · 🟡 Partial / flagged / experimental · ❌ Not supported
+**Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental · <No /> Not supported
 
 See [Benchmarks](/docs/benchmarks) for measured `wasm_*` and `wasi_*` results.

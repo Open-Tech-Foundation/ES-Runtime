@@ -8,6 +8,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **Website updates**:
+  - Updated website config version to `v0.13.0`.
+  - Enforced default dark background on site footer.
+  - Converted CTA section to standard theme-responsive page section.
+  - Added Subprocess (`ffmpeg`) example tab to code samples and removed glob scanning tab.
+  - Replaced text ticks/crosses and emojis with vector SVG status components across landing page and documentation tables.
+  - Upgraded `@opentf/web`, `@opentf/web-docs`, `@opentf/web-cli`, and `wrangler` framework dependencies.
+
 ## [0.13.0] - 2026-07-31
 
 ### Added

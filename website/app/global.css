@@ -145,6 +145,11 @@ button:not(:disabled),
 }
 
 /* Footer org link (logo + name). */
+.otfw-footer {
+  background-color: #09090b;
+  border-top: 1px solid #27272a;
+  color: #a1a1aa;
+}
 .otfw-footer-org {
   display: flex;
   flex-wrap: wrap;
@@ -155,12 +160,12 @@ button:not(:disabled),
   display: inline-flex;
   align-items: center;
   gap: 0.55rem;
-  color: var(--otfw-text-muted);
+  color: #a1a1aa;
   text-decoration: none;
   transition: color 0.2s ease;
 }
 .otfw-footer-org-link:hover {
-  color: var(--otfw-text);
+  color: #f4f4f5;
 }
 .otfw-footer-org-link:focus-visible {
   outline: 2px solid var(--otfw-accent);
@@ -174,7 +179,7 @@ button:not(:disabled),
   flex-shrink: 0;
 }
 .otfw-footer-license {
-  color: var(--otfw-text-muted);
+  color: #71717a;
 }
 
 /* Footer "Built with OTF Web" badge (right side). */
@@ -184,9 +189,9 @@ button:not(:disabled),
   gap: 0.65rem;
   flex-shrink: 0;
   padding: 0.45rem 0.95rem 0.45rem 0.55rem;
-  border: 1px solid var(--otfw-border);
+  border: 1px solid #27272a;
   border-radius: 9999px;
-  background: var(--otfw-bg-elevated);
+  background: #18181b;
   text-decoration: none;
   box-shadow: 0 1px 2px color-mix(in srgb, var(--otfw-text) 4%, transparent);
   transition:
@@ -195,7 +200,7 @@ button:not(:disabled),
     transform 0.2s ease;
 }
 .otfw-footer-badge:hover {
-  border-color: color-mix(in srgb, var(--otfw-accent) 35%, var(--otfw-border));
+  border-color: color-mix(in srgb, var(--otfw-accent) 35%, #27272a);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--otfw-accent) 12%, transparent);
   transform: translateY(-1px);
 }
@@ -218,11 +223,19 @@ button:not(:disabled),
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--otfw-text-muted);
+  color: #a1a1aa;
 }
 .otfw-footer-badge-brand {
   font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--otfw-accent);
+}
+
+.web-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  flex-shrink: 0;
 }

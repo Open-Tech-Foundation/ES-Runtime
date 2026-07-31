@@ -1,3 +1,41 @@
+function TickIcon({ className = "size-4 shrink-0 mt-0.5 text-emerald-500" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="currentColor" stroke="none" />
+      <path
+        d="M7 12.5 L10.5 16 L17 8.5"
+        fill="none"
+        stroke="white"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CrossIcon({ className = "size-4 shrink-0 mt-0.5 text-rose-500" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden="true">
+      <circle cx="12" cy="12" r="11" fill="currentColor" stroke="none" />
+      <path
+        d="M8.5 8.5 L15.5 15.5"
+        fill="none"
+        stroke="white"
+        stroke-width="2.5"
+        stroke-linecap="round"
+      />
+      <path
+        d="M15.5 8.5 L8.5 15.5"
+        fill="none"
+        stroke="white"
+        stroke-width="2.5"
+        stroke-linecap="round"
+      />
+    </svg>
+  );
+}
+
 export default function WhyChooseSection() {
   return (
     <section className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
@@ -34,10 +72,10 @@ export default function WhyChooseSection() {
                 </svg>
               </div>
               <ul className="mt-2 text-[13px] text-zinc-400 space-y-3 relative z-10 leading-relaxed">
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Largest package ecosystem</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Deep native addon support</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Battle-tested stability</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Lower baseline throughput</li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Largest package ecosystem</span></li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Deep native addon support</span></li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Battle-tested stability</span></li>
+                <li className="flex items-start gap-2.5"><CrossIcon /> <span>Lower baseline throughput</span></li>
               </ul>
             </div>
           </div>
@@ -60,10 +98,10 @@ export default function WhyChooseSection() {
                 </svg>
               </div>
               <ul className="mt-2 text-[13px] text-zinc-400 space-y-3 relative z-10 leading-relaxed">
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Secure by default</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Native capability gating</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Unified standard library</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Smaller ecosystem and adoption</li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Secure by default</span></li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Native capability gating</span></li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Unified standard library</span></li>
+                <li className="flex items-start gap-2.5"><CrossIcon /> <span>Smaller ecosystem and adoption</span></li>
               </ul>
             </div>
           </div>
@@ -84,10 +122,10 @@ export default function WhyChooseSection() {
                 </svg>
               </div>
               <ul className="mt-2 text-[13px] text-zinc-400 space-y-3 relative z-10 leading-relaxed">
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Exceptional JIT performance</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> High-throughput HTTP engine</li>
-                <li className="flex items-start gap-2"><span className="text-green-500 font-bold shrink-0">✓</span> Deep Node.js API compatibility</li>
-                <li className="flex items-start gap-2"><span className="text-red-400 font-bold shrink-0">✗</span> Memory quirks</li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Exceptional JIT performance</span></li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>High-throughput HTTP engine</span></li>
+                <li className="flex items-start gap-2.5"><TickIcon /> <span>Deep Node.js API compatibility</span></li>
+                <li className="flex items-start gap-2.5"><CrossIcon /> <span>Memory quirks</span></li>
               </ul>
             </div>
           </div>
@@ -114,20 +152,20 @@ export default function WhyChooseSection() {
                 </svg>
               </div>
               <ul className="mt-2 text-[13px] text-zinc-300 space-y-3 relative z-10 leading-relaxed">
-                <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold shrink-0">✓</span> 
+                <li className="flex items-start gap-2.5">
+                  <TickIcon className="size-4 shrink-0 mt-0.5 text-brand-400" />
                   <span><strong className="text-zinc-100">WinterTC Standard</strong> – Web APIs without custom namespace lock-in.</span>
                 </li>
-                <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold shrink-0">✓</span> 
+                <li className="flex items-start gap-2.5">
+                  <TickIcon className="size-4 shrink-0 mt-0.5 text-brand-400" />
                   <span><strong className="text-zinc-100">Predictable Safety</strong> – Strict memory bounds without native segmentation faults.</span>
                 </li>
-                <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold shrink-0">✓</span> 
+                <li className="flex items-start gap-2.5">
+                  <TickIcon className="size-4 shrink-0 mt-0.5 text-brand-400" />
                   <span><strong className="text-zinc-100">Lightweight Footprint</strong> – Operates with a &lt;20MB baseline.</span>
                 </li>
-                <li className="flex items-start gap-2">
-                  <span className="text-brand-500 font-bold shrink-0">✓</span> 
+                <li className="flex items-start gap-2.5">
+                  <TickIcon className="size-4 shrink-0 mt-0.5 text-brand-400" />
                   <span><strong className="text-zinc-100">Fast Initialization</strong> – Boots up to 5x faster than Node.js.</span>
                 </li>
               </ul>

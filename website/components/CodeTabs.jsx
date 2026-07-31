@@ -30,16 +30,16 @@ const EXAMPLES = [
     )
   },
   {
-    id: "glob",
-    title: "Glob Scanning",
+    id: "subprocess",
+    title: "Subprocess",
     code: (
       <code>
-        <span className="text-brand-400">import</span> {"{ Glob }"} <span className="text-brand-400">from</span> <span className="text-emerald-300">"runtime:fs"</span>;{"\n\n"}
-        <span className="text-brand-400">const</span> glob = <span className="text-brand-400">new</span> <span className="text-blue-300">Glob</span>(<span className="text-emerald-300">"**/*.ts"</span>);{"\n\n"}
-        <span className="text-brand-400">for await</span> (<span className="text-brand-400">const</span> match <span className="text-brand-400">of</span> glob.<span className="text-blue-300">scan</span>()) {"{\n"}
-        {"  "}<span className="text-zinc-500">// prints matched TypeScript file paths</span>{"\n"}
-        {"  "}<span className="text-blue-300">console</span>.log(match);{"\n"}
-        {"}\n"}
+        <span className="text-brand-400">import</span> {"{ Command }"} <span className="text-brand-400">from</span> <span className="text-emerald-300">"runtime:system"</span>;{"\n\n"}
+        <span className="text-brand-400">const</span> child = <span className="text-brand-400">await new</span> <span className="text-blue-300">Command</span>(<span className="text-emerald-300">"ffmpeg"</span>, {"{\n"}
+        {"  "}args: [<span className="text-emerald-300">"-i"</span>, <span className="text-emerald-300">"pipe:0"</span>, <span className="text-emerald-300">"-f"</span>, <span className="text-emerald-300">"mp3"</span>, <span className="text-emerald-300">"pipe:1"</span>],{"\n"}
+        {"  "}stdin: request.body,{"\n"}
+        {"}"}).<span className="text-blue-300">spawn</span>();{"\n\n"}
+        <span className="text-brand-400">return new</span> <span className="text-blue-300">Response</span>(child.stdout);{"\n"}
       </code>
     )
   }
@@ -50,7 +50,7 @@ export default function CodeTabs() {
 
   return (
     <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950">
-      <div className="flex items-center gap-1 border-b border-zinc-800 px-2 pt-2">
+      <div className="flex items-center gap-1 border-b border-zinc-800 px-2 pt-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {EXAMPLES.map((ex) => (
           <button
             type="button"
