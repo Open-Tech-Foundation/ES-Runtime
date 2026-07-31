@@ -81,6 +81,7 @@ Traits the embedder must satisfy (defaults shipped in `default-providers`):
 - ☑ `FileSystem` — capability-scoped (`FileRead`/`FileWrite`), async, optional/deniable; backs `runtime:fs`. *(Phase 11: trait + `SystemFs`, root-jailed per D25.)*
 - ☑ `SyncFileSystem` — the blocking seam WASI's syscalls need, same gates and jail (DECISIONS D36). *(Phase 12.)*
 - ☑ `Process` — env/args/cwd/platform/exit, gated on `Env` (DECISIONS D26). *(Phase 11.)*
+- ☑ `Signals` — OS signal delivery (`SIGINT`/`SIGTERM`/`SIGHUP`/`SIGUSR1`/`SIGUSR2`; `SIGINT`/`SIGBREAK` on Windows), pull-based like `next_requests` since the runtime owns no loop. Gated on the new `Signals` capability, **separate from `Env`**: a watch suppresses the signal's default action, so it is the privilege to decline to die on request rather than a read of process state. Defaults `SystemSignals` (tokio) and `ManualSignals` (deterministic).
 - ☑ `NetProvider` — sockets + listener for `runtime:net`, gated on `Net`/`NetListen` (DECISIONS D28). *(Phase 12.)*
 - ☑ `HttpServerProvider` — the `runtime:http` `serve()` seam, streaming both directions (DECISIONS D31), plus `request_disconnected` backing the handler's `request.signal`. That method has a default returning `false`, so a transport with no way to observe its peer keeps compiling and simply has a signal that never fires. *(Phase 12.)*
 - ☑ `WebSocketProvider` — client and server framing for `WebSocket` / `runtime:websocket` (DECISIONS D29). *(Phase 12.)*

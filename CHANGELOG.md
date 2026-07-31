@@ -137,6 +137,31 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **OS signals — `runtime:process` `onSignal` / `offSignal` / `signals`.** There
+  was no way to observe a signal at all, so a container's `SIGTERM` killed the
+  process outright: in-flight HTTP requests died mid-response, connection pools
+  and open files were never closed, and nothing a program did could change that.
+  Graceful shutdown was simply not expressible.
+  `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1` and `SIGUSR2` are deliverable on Unix
+  and `SIGINT`/`SIGBREAK` on Windows; `signals()` reports the set, and asking for
+  one the platform lacks **throws** rather than registering a handler that could
+  never fire.
+  Gated on a new **`Signals` capability**, deliberately separate from `Env`:
+  watching a signal suppresses its default action, so it is the privilege to
+  decline to die on request, not a read of process state. Granting a program the
+  environment must not also grant it the ability to ignore a shutdown.
+  Delivery is pull-based, like the HTTP server's `next_requests` — the runtime
+  owns no loop, so it asks for the next signal and awaits. That pending op is
+  also what keeps the program alive to receive one (as in Node and Deno);
+  removing the last handler releases it, so a program that stops listening can
+  still exit. Repeated deliveries coalesce: a burst of `SIGHUP`s while the first
+  is still being handled arrives once, because signals are edge notifications and
+  replaying a backlog helps nobody. A handler that throws is reported like any
+  other unhandled failure and does not stop the others.
+  New `Signals` provider trait with `SystemSignals` (tokio) and `ManualSignals`
+  (deterministic, for tests). A program that installs no handler is completely
+  unaffected — `SIGTERM` still terminates it exactly as before.
+
 - **Fuzzing and Miri in CI** — the two pre-1.0 gates SPEC §5 has been asking for.
   Six `cargo-fuzz` targets under `fuzz/` cover the parsers that read untrusted
   bytes: URL parsing and component read-back (where the UTF-16 offset arithmetic

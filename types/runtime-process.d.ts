@@ -52,6 +52,37 @@ declare module "runtime:process" {
    */
   export function exit(code?: number): never;
 
+  /** A signal name this runtime understands. */
+  export type SignalName = "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGUSR1" | "SIGUSR2" | "SIGBREAK";
+
+  /**
+   * The signal names this platform can actually deliver: `SIGINT`, `SIGTERM`,
+   * `SIGHUP`, `SIGUSR1` and `SIGUSR2` on Unix; `SIGINT` and `SIGBREAK` on
+   * Windows. Needs the `Signals` capability, but watches nothing.
+   */
+  export function signals(): SignalName[];
+
+  /**
+   * Run `handler` when `signal` arrives. The first handler for a signal starts
+   * watching it, which **suppresses its default action** — so a `SIGTERM`
+   * handler is what stops the process being killed outright, and is how a
+   * graceful shutdown is written.
+   *
+   * While anything is watched the program stays alive to receive it (as in Node
+   * and Deno); removing the last handler with {@link offSignal} releases it.
+   *
+   * Needs the `Signals` capability. Throws if `signal` is not a name this
+   * runtime knows, or is one this platform cannot deliver — a handler that
+   * could never fire is worse than a clear failure.
+   */
+  export function onSignal(signal: SignalName, handler: (signal: SignalName) => void): void;
+
+  /**
+   * Remove a handler added with {@link onSignal}. Removing the last handler for
+   * a signal stops watching it and restores the default action.
+   */
+  export function offSignal(signal: SignalName, handler: (signal: SignalName) => void): void;
+
   const process: {
     env: typeof env;
     args: typeof args;
@@ -61,6 +92,9 @@ declare module "runtime:process" {
     exit: typeof exit;
     unmask: typeof unmask;
     Secret: typeof Secret;
+    signals: typeof signals;
+    onSignal: typeof onSignal;
+    offSignal: typeof offSignal;
   };
   export default process;
 }

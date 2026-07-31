@@ -45,12 +45,18 @@ pub enum Capability {
     /// backs `runtime:net` `listen`). Distinct from [`Net`](Self::Net) outbound
     /// connections — a server-side privilege, deny-by-default.
     NetListen,
+    /// Observe OS signals — `SIGINT`, `SIGTERM`, … (`Signals` provider; backs
+    /// `runtime:process` `onSignal`). Distinct from [`Env`](Self::Env): reading
+    /// the environment is a read of process *state*, while watching a signal
+    /// intercepts process *control* — a handler suppresses the default
+    /// termination, so it is the privilege to refuse to die on request.
+    Signals,
 }
 
 impl Capability {
     /// All capabilities, in a fixed order. Used to build [`CapabilitySet::all`]
     /// and to keep the bit assignment in [`bit`](Self::bit) exhaustive.
-    const ALL: [Capability; 10] = [
+    const ALL: [Capability; 11] = [
         Capability::Clock,
         Capability::Entropy,
         Capability::Timers,
@@ -61,6 +67,7 @@ impl Capability {
         Capability::FileRead,
         Capability::FileWrite,
         Capability::NetListen,
+        Capability::Signals,
     ];
 
     /// This capability's single-bit mask within a [`CapabilitySet`].
@@ -77,6 +84,7 @@ impl Capability {
             Capability::FileRead => 1 << 7,
             Capability::FileWrite => 1 << 8,
             Capability::NetListen => 1 << 9,
+            Capability::Signals => 1 << 10,
         }
     }
 }

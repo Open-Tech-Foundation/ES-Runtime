@@ -320,6 +320,101 @@ impl From<String> for ModuleSource {
     }
 }
 
+/// An OS signal the runtime can observe.
+///
+/// A closed set rather than a raw number: the runtime never delivers a signal
+/// whose default action it cannot sensibly suppress, and a fixed set is what
+/// lets the same names mean the same thing on every platform the CLI ships for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Signal {
+    /// Interactive interrupt — Ctrl+C (`SIGINT`; Windows Ctrl+C).
+    Int,
+    /// Polite termination request — what an orchestrator sends first
+    /// (`SIGTERM`). Not available on Windows.
+    Term,
+    /// Controlling terminal hung up; conventionally "reload your config"
+    /// (`SIGHUP`). Not available on Windows.
+    Hup,
+    /// User-defined (`SIGUSR1`). Not available on Windows.
+    Usr1,
+    /// User-defined (`SIGUSR2`). Not available on Windows.
+    Usr2,
+    /// Windows Ctrl+Break (`SIGBREAK`). Windows only.
+    Break,
+}
+
+impl Signal {
+    /// The conventional name, as guest code spells it (`"SIGTERM"`).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Signal::Int => "SIGINT",
+            Signal::Term => "SIGTERM",
+            Signal::Hup => "SIGHUP",
+            Signal::Usr1 => "SIGUSR1",
+            Signal::Usr2 => "SIGUSR2",
+            Signal::Break => "SIGBREAK",
+        }
+    }
+
+    /// Parses a conventional name, or `None` if it is not one this runtime
+    /// knows. Whether a known signal is *available* is the provider's answer,
+    /// not this one's — that varies by platform.
+    pub fn from_name(name: &str) -> Option<Signal> {
+        match name {
+            "SIGINT" => Some(Signal::Int),
+            "SIGTERM" => Some(Signal::Term),
+            "SIGHUP" => Some(Signal::Hup),
+            "SIGUSR1" => Some(Signal::Usr1),
+            "SIGUSR2" => Some(Signal::Usr2),
+            "SIGBREAK" => Some(Signal::Break),
+            _ => None,
+        }
+    }
+
+    /// The exit status a process conventionally reports when this signal kills
+    /// it: 128 + the signal number. Used for the CLI's exit code, so `^C` still
+    /// looks like `^C` to a shell or an orchestrator.
+    pub const fn exit_code(self) -> i32 {
+        match self {
+            Signal::Int => 130,   // 128 + 2
+            Signal::Term => 143,  // 128 + 15
+            Signal::Hup => 129,   // 128 + 1
+            Signal::Usr1 => 138,  // 128 + 10
+            Signal::Usr2 => 140,  // 128 + 12
+            Signal::Break => 149, // 128 + 21 (SIGBREAK)
+        }
+    }
+}
+
+/// Delivery of OS signals to the guest, backing `runtime:process` `onSignal`.
+/// Capability-checked (`Capability::Signals`).
+///
+/// Pull-based, like [`HttpServerProvider::next_requests`]: the runtime owns no
+/// loop and no thread, so it *asks* for the next signal and the provider's
+/// future resolves when one arrives. Installing a watch is what suppresses the
+/// signal's default action — which is the whole point, and the reason this needs
+/// a capability of its own.
+pub trait Signals: Send + Sync {
+    /// Which signals this host can deliver. Guest code asking for one outside
+    /// this set gets a clear error naming what is available, rather than a
+    /// handler that silently never fires.
+    fn available(&self) -> Vec<Signal>;
+
+    /// Starts watching `signal`, suppressing its default action. Idempotent.
+    /// Errors if the signal is not in [`available`](Self::available) or the host
+    /// refuses the registration.
+    fn watch(&self, signal: Signal) -> Result<(), ProviderError>;
+
+    /// Stops watching `signal`, restoring the default action where the platform
+    /// allows it. Idempotent; unwatching one never watched is not an error.
+    fn unwatch(&self, signal: Signal);
+
+    /// Resolves with the next delivery of any currently watched signal, or
+    /// `None` once nothing is watched — so a caller that unwatches everything
+    /// is released rather than parked forever.
+    fn next(&self) -> BoxFuture<Option<Signal>>;
+}
+
 /// Host process information — environment, arguments, working directory,
 /// platform — and the exit hook, backing the `runtime:process` module
 /// (DECISIONS D24). Capability-checked (`Capability::Env`) before any op

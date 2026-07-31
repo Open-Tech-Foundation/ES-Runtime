@@ -391,7 +391,7 @@ the required capability has been granted.
 
 | Module            | Status      | Capability | Reference                     |
 | ----------------- | ----------- | ---------- | ----------------------------- |
-| `runtime:process` | Available   | `Env`      | [↓](#runtimeprocess)          |
+| `runtime:process` | Available   | `Env` / `Signals` | [↓](#runtimeprocess)   |
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
 | `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
@@ -416,6 +416,7 @@ different module path.
 | `FileWrite` | Write files within the configured root jail.                        |
 | `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`). |
 | `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen`, `runtime:http` `serve`). |
+| `Signals`   | Watch OS signals — `runtime:process` `onSignal`. Separate from `Env` because a watch **suppresses the signal's default action**: it is the privilege to decline to die on request, not a read of process state. |
 | `HrTime`    | Access high-resolution timing.                                      |
 
 Filesystem access (including module resolution) is confined to a project **root
@@ -431,7 +432,7 @@ Host process information: environment, arguments, working directory, platform,
 and exit. Aligned *in spirit* with the WinterTC CLI-API proposal (DECISIONS
 D26).
 
-- **Capability:** `Env`
+- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`.
 - **Status:** Available
 - **Loading:** on demand — importing it adds nothing to startup if unused.
 - **Snapshotting:** values are captured when the module is evaluated.
@@ -459,7 +460,50 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | `exit(code = 0)`  | `(code?: number) => never`          | Records the exit code and **halts execution immediately** — code after the call does not run. The embedder reads the recorded code and treats it as a clean exit, not an error.            |
 | `unmask(value)`   | `(value: string \| Secret) => string` | Reveal a masked `Secret`'s real value. A plain `string` passes through unchanged, so `unmask(env.ANY)` is always safe.                                                                  |
 | `Secret`          | `class`                             | Opaque holder for a masked env value (see **Secret masking**).                                                                                                                            |
+| `signals()`       | `() => SignalName[]`                | Signal names this platform can deliver. **Capability: `Signals`.**                                                                                                                        |
+| `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Capability: `Signals`.**                                                                          |
+| `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one for a signal restores the default action. **Capability: `Signals`.**                                                     |
 | `default`         | `object`                            | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+
+### Signals
+
+Watching a signal **suppresses its default action** — which is the point, and
+why it needs the `Signals` capability rather than riding on `Env`. A `SIGTERM`
+handler is what stops an orchestrator's shutdown from killing the process
+outright, and is how graceful shutdown is written:
+
+```js
+import { onSignal, offSignal } from "runtime:process";
+import { serve } from "runtime:http";
+
+const server = serve(handler);
+
+const shutdown = async (signal) => {
+  offSignal(signal, shutdown);   // second ^C should kill, not queue
+  await server.stop();           // stop accepting, drain in-flight
+  await pool.close();
+};
+onSignal("SIGINT", shutdown);
+onSignal("SIGTERM", shutdown);
+```
+
+| Platform | Deliverable |
+| --- | --- |
+| Unix | `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` |
+| Windows | `SIGINT`, `SIGBREAK` |
+
+Asking for a signal the platform cannot deliver **throws**, rather than
+registering a handler that would never fire; `signals()` reports the set. An
+unknown name is a `TypeError`.
+
+While anything is watched, the program stays alive to receive it — the same
+behaviour as Node and Deno, and the reason to install a handler at all. Removing
+the last handler releases it, so a program that stops listening can still exit.
+
+Repeated deliveries **coalesce**: a burst of `SIGHUP`s while the first is still
+being handled arrives once. Signals are edge notifications ("a reload was asked
+for"), and replaying a backlog helps nobody. A handler that throws is reported
+like any other unhandled failure and does not stop the others.
 
 ### Secret masking
 

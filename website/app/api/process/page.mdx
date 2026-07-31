@@ -8,11 +8,11 @@ import { Callout } from "@opentf/web-docs";
 # runtime:process
 
 Host process information: environment, arguments, working directory, platform,
-and exit. Aligned in spirit with the WinterTC CLI-API proposal.
+signals, and exit. Aligned in spirit with the WinterTC CLI-API proposal.
 
-<Callout type="info" title="Capability: Env">
-  Environment access is gated on the **Env** capability. Exposed as an ES module
-  under the `runtime:` scheme. Status: **Available**.
+<Callout type="info" title="Capabilities: Env, Signals">
+  Environment access is gated on **Env**; the signal exports on **Signals**.
+  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
 </Callout>
 
 ## Import
@@ -36,6 +36,9 @@ import process from "runtime:process";
 | `exit(code = 0)` | `(code?: number) => never` | Records the exit code and halts execution immediately — code after the call does not run. The embedder treats it as a clean exit, not an error. |
 | `unmask(value)` | `(value: string \| Secret) => string` | Reveal the real value of a masked `Secret`. A plain string is returned unchanged, so `unmask(env.ANY)` is always safe. |
 | `Secret` | `class` | Opaque holder for a masked env value. Renders as `"[redacted]"` in console, string coercion, and JSON. Call `unmask()` to read it. |
+| `signals()` | `() => SignalName[]` | Signal names this platform can deliver. **Signals.** |
+| `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Signals.** |
+| `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one restores the default action. **Signals.** |
 
 ## env — reading and writing
 
@@ -55,6 +58,32 @@ import { args } from "runtime:process";
 
 console.log(args); // ["build", "--watch"]
 ```
+
+## signals — graceful shutdown
+
+Watching a signal suppresses its default action, which is what lets a `SIGTERM`
+drain instead of kill.
+
+```js
+import { onSignal, offSignal } from "runtime:process";
+
+const shutdown = async (signal) => {
+  offSignal(signal, shutdown);   // a second ^C should kill, not queue
+  await server.stop();
+};
+onSignal("SIGINT", shutdown);
+onSignal("SIGTERM", shutdown);
+```
+
+| Platform | Deliverable |
+| --- | --- |
+| Unix | `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` |
+| Windows | `SIGINT`, `SIGBREAK` |
+
+<Callout type="note" title="A watch keeps the program alive">
+  While anything is watched the program stays running to receive it, as in Node
+  and Deno; removing the last handler releases it. Repeated deliveries coalesce.
+</Callout>
 
 ## exit — stopping the run
 
@@ -100,7 +129,9 @@ auto-discovery; the OS environment wins unless `--env-override` is passed).
 | Error | When |
 | --- | --- |
 | `TypeError` | `unmask()` gets something other than a string or a `Secret` from env. |
-| `DOMException` | name `"NotAllowedError"` — the Env capability is not granted (env access). |
+| `DOMException` | name `"NotAllowedError"` — the Env capability is not granted (env access), or Signals (signal access). |
+| `TypeError` | `onSignal()` gets a name this runtime does not know. |
+| `Error` | `onSignal()` gets a signal this platform cannot deliver — better than a handler that never fires. |
 
 <Callout type="note">
   The default export is an object bundling all named exports — useful for a

@@ -35,7 +35,8 @@ use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
     NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemFileSystem, SystemHttpServer,
-    SystemNet, SystemProcess, SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
+    SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem, SystemWebSocket, TokioTimers,
+    path,
 };
 use es_runtime_providers::{Console, ConsoleLevel};
 use url::Url;
@@ -473,6 +474,7 @@ async fn run() -> Result<(), String> {
         Arc::new(OsEntropy),
     )
     .with_process(process.clone())
+    .with_signals(Arc::new(SystemSignals::new()))
     .with_file_system(file_system)
     .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(SystemNet::new()))

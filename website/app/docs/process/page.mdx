@@ -8,9 +8,10 @@ import { Callout } from "@opentf/web-docs";
 # Process & Env
 
 `runtime:process` gives you the environment, CLI arguments, working directory,
-and exit.
+signals, and exit.
 
-It is an ES module, gated on the `Env` capability. Import only what you need.
+It is an ES module, gated on the `Env` capability — except the signal exports,
+which need `Signals`. Import only what you need.
 
 ## Reading process info
 
@@ -88,6 +89,40 @@ const token = unmask(env.API_TOKEN); // real value, explicit
 <Callout type="danger" title="Masking is for accidents, not attackers">
   It stops secrets leaking into logs by mistake. It is not a sandbox — code you
   run can call `unmask` itself.
+</Callout>
+
+## Signals
+
+Watching a signal **suppresses its default action** — that is how a graceful
+shutdown is written, and why it needs its own `Signals` capability.
+
+```js
+import { onSignal, offSignal } from "runtime:process";
+import { serve } from "runtime:http";
+
+const server = serve(handler);
+
+const shutdown = async (signal) => {
+  offSignal(signal, shutdown);   // a second ^C should kill, not queue
+  await server.stop();           // stop accepting, drain in-flight
+  await pool.close();
+};
+onSignal("SIGINT", shutdown);
+onSignal("SIGTERM", shutdown);
+```
+
+| Platform | Deliverable |
+| --- | --- |
+| Unix | `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1`, `SIGUSR2` |
+| Windows | `SIGINT`, `SIGBREAK` |
+
+`signals()` reports the set. Asking for one the platform cannot deliver throws,
+rather than registering a handler that would never fire.
+
+<Callout type="note" title="A watch keeps the program alive">
+  While anything is watched the program stays running to receive it, as in Node
+  and Deno. Removing the last handler releases it. Repeated deliveries coalesce:
+  a burst of `SIGHUP`s arrives once.
 </Callout>
 
 ## Exit

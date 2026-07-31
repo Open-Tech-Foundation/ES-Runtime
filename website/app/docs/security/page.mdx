@@ -30,6 +30,7 @@ with the `NotAllowedError` name.
 | `FileWrite` | Write files within the configured root jail. |
 | `Net` | Open outbound network connections (`runtime:net` connect, fetch, WebSocket). |
 | `NetListen` | Bind a listening socket and accept connections (`runtime:net` listen, `runtime:http` / `runtime:websocket` serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed. |
+| `Signals` | Watch OS signals (`runtime:process` onSignal). Separate from `Env` because a watch **suppresses the signal's default action** — the privilege to decline to die on request, not a read of process state. |
 | `HrTime` | Access high-resolution timing. |
 
 ## The filesystem root jail

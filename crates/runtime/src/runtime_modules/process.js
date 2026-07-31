@@ -81,5 +81,99 @@ function exit(code = 0) {
   ops.process_exit(Number(code) | 0);
 }
 
-export { env, args, platform, arch, cwd, exit, unmask, Secret };
-export default { env, args, platform, arch, cwd, exit, unmask, Secret };
+// ---- signals ---------------------------------------------------------------
+//
+// Gated on Capability::Signals, not Env: watching a signal suppresses its
+// default action, so it is the privilege to decline to die on request rather
+// than a read of process state.
+//
+// The runtime owns no loop, so delivery is pulled: one pump awaits
+// `signal_next` and dispatches, and it runs only while something is watched.
+// That pending op is also what keeps the program alive to receive a signal —
+// the same behaviour as Node and Deno, and the point of installing a handler at
+// all. Remove the last handler and the pump is released, so a program that
+// stops listening can still exit.
+
+const handlers = new Map(); // name -> Set<function>
+let pumping = false;
+
+async function pump() {
+  pumping = true;
+  try {
+    for (;;) {
+      const name = await ops.signal_next();
+      if (name === null) break; // nothing watched any more — release the loop
+      const listeners = handlers.get(name);
+      if (listeners === undefined) continue;
+      // Iterate a copy: a handler may legitimately call offSignal (a one-shot
+      // shutdown hook is the obvious case) while the set is being walked.
+      for (const handler of [...listeners]) {
+        try {
+          handler(name);
+        } catch (e) {
+          // One bad handler must not stop the others or kill the pump; report
+          // it the way any other unhandled failure is reported.
+          reportError(e);
+        }
+      }
+    }
+  } finally {
+    pumping = false;
+  }
+}
+
+function checkName(name) {
+  if (typeof name !== "string") throw new TypeError("signal name must be a string");
+  return name;
+}
+
+// `signals`: the signal names this platform can actually deliver. Reading it
+// needs the capability but watches nothing.
+function signals() {
+  return ops.signal_available();
+}
+
+// `onSignal(name, handler)`: run `handler` when `name` arrives. The first
+// handler for a signal starts watching it, which suppresses its default action.
+function onSignal(name, handler) {
+  checkName(name);
+  if (typeof handler !== "function") throw new TypeError("signal handler must be a function");
+  let listeners = handlers.get(name);
+  if (listeners === undefined) {
+    // Watch before recording the handler, so a signal this platform cannot
+    // deliver throws instead of registering a handler that would never fire.
+    ops.signal_watch(name);
+    listeners = new Set();
+    handlers.set(name, listeners);
+  }
+  listeners.add(handler);
+  if (!pumping) pump();
+}
+
+// `offSignal(name, handler)`: remove a handler. Removing the last one for a
+// signal stops watching it and restores the default action.
+function offSignal(name, handler) {
+  checkName(name);
+  const listeners = handlers.get(name);
+  if (listeners === undefined) return;
+  listeners.delete(handler);
+  if (listeners.size === 0) {
+    handlers.delete(name);
+    ops.signal_unwatch(name);
+  }
+}
+
+export { env, args, platform, arch, cwd, exit, unmask, Secret, onSignal, offSignal, signals };
+export default {
+  env,
+  args,
+  platform,
+  arch,
+  cwd,
+  exit,
+  unmask,
+  Secret,
+  onSignal,
+  offSignal,
+  signals,
+};
