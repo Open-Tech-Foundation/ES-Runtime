@@ -16,7 +16,7 @@ namespace) is unstable and may change between minor releases until the API freez
   - Converted CTA section to standard theme-responsive page section.
   - Added Subprocess (`ffmpeg`) example tab to code samples and removed glob scanning tab.
   - Replaced text ticks/crosses and emojis with vector SVG status components across landing page and documentation tables.
-  - Upgraded `@opentf/web`, `@opentf/web-docs`, `@opentf/web-cli`, and `wrangler` framework dependencies.
+  - Expanded Migration guide with comprehensive side-by-side examples from Node.js, Bun, and Deno, API mapping cheat sheet, and pre-flight checklist.
 
 ## [0.13.0] - 2026-07-31
 
