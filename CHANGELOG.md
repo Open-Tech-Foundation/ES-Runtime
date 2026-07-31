@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-31
+
 ### Added
 
 - **`runtime:system` — child processes** (DECISIONS D37). The last "a server has
