@@ -6,8 +6,8 @@ import StatusIcon from "../components/StatusIcon.jsx";
 
 const features = [
   {
-    title: "Capability-gated",
-    body: "The embeddable library is deny-by-default: the host grants exactly the powers code needs — no ambient filesystem, network, or environment access.",
+    title: "Batteries in the binary",
+    body: "HTTP and WebSocket servers, filesystem, sockets, subprocesses, WASM/WASI, and XML, YAML, TOML, JSONL, MessagePack, and Protobuf parsers. One self-contained binary, nothing to install.",
   },
   {
     title: "Web standards only",
@@ -26,8 +26,8 @@ const features = [
     body: "The engine behind Chrome and Node.js, embedded from Rust. A baked snapshot boots a realm in milliseconds.",
   },
   {
-    title: "Embeddable by design",
-    body: "A driven event loop with no owned thread. Tick it from your host loop and keep full control of scheduling and lifetime.",
+    title: "Embeddable & capability-gated",
+    body: "The library form is deny-by-default — the host grants exactly the powers code needs — and its event loop has no owned thread: tick it from your own.",
   },
 ];
 
