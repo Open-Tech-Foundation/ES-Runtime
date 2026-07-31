@@ -11,6 +11,9 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Changed
 
 - **Website updates**:
+  - Set Open Tech Foundation org logo as the site favicon.
+  - Formatted Migration Guide table code cells to prevent import statement line breaks.
+  - Upgraded site framework packages (`@opentf/web` to `v0.27.0`, `@opentf/web-docs` to `v0.25.0`, and `@opentf/web-cli` to `v1.25.0`).
   - Updated Built With footer badge styling to white background with black "OTF" brand text and orange "Web" accent.
   - Added missing `--color-brand-950` theme color in `global.css` to fix landing page Alpha badge dark mode.
   - Updated website config version to `v0.13.0`.

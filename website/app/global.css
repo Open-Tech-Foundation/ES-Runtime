@@ -88,6 +88,10 @@ pre {
     "Liberation Mono", monospace;
 }
 
+td code {
+  white-space: nowrap;
+}
+
 ::selection {
   background: rgba(255, 122, 0, 0.16);
 }
