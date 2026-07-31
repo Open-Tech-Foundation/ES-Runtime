@@ -948,6 +948,7 @@ mod tests {
                     status,
                     status_text: "OK".into(),
                     url,
+                    redirected: false,
                     headers,
                     body,
                 })
@@ -1007,6 +1008,7 @@ mod tests {
                     status: 200,
                     status_text: "OK".into(),
                     url: request.url,
+                    redirected: false,
                     headers: vec![],
                     body: stream,
                 })
@@ -2555,6 +2557,171 @@ mod tests {
              return s;",
         );
         assert_eq!(out, Value::String("foobarbaz".into()));
+    }
+
+    /// A transport that redirects `/hop/<n>` to `/hop/<n+1>` and answers
+    /// anything else `200 "landed"`, following the chain itself exactly as a
+    /// real transport does — so the redirect *mode* is what the tests below
+    /// vary, not the JS side's interpretation of a canned response.
+    struct RedirectNet {
+        /// How many hops before the chain lands. `usize::MAX` never lands, to
+        /// drive the cap.
+        hops: usize,
+    }
+    impl es_runtime_providers::NetTransport for RedirectNet {
+        fn fetch(
+            &self,
+            request: es_runtime_providers::HttpRequest,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                es_runtime_providers::HttpResponse,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            const CAP: usize = 20;
+            let follow = request.redirect == es_runtime_providers::RedirectMode::Follow;
+            let total = self.hops;
+            let mut url = request.url;
+            Box::pin(async move {
+                // `n` is the hop this URL represents; the start URL is hop 0.
+                let mut n = url
+                    .rsplit_once("/hop/")
+                    .and_then(|(_, n)| n.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let mut redirected = false;
+                let mut followed = 0;
+                while n < total {
+                    if !follow {
+                        // Hand back the redirect itself, unfollowed.
+                        let body: es_runtime_providers::ByteStream =
+                            Box::pin(futures_util::stream::iter(std::iter::empty()));
+                        return Ok(es_runtime_providers::HttpResponse {
+                            status: 302,
+                            status_text: "Found".into(),
+                            url,
+                            redirected: false,
+                            headers: vec![(
+                                "location".into(),
+                                format!("https://x.test/hop/{}", n + 1),
+                            )],
+                            body,
+                        });
+                    }
+                    followed += 1;
+                    if followed > CAP {
+                        return Err(es_runtime_providers::ProviderError::Coded {
+                            code: es_runtime_common::ErrorCode::TooManyRedirects,
+                            message: format!("too many redirects (more than {CAP})"),
+                        });
+                    }
+                    n += 1;
+                    url = format!("https://x.test/hop/{n}");
+                    redirected = true;
+                }
+                let body: es_runtime_providers::ByteStream = Box::pin(futures_util::stream::iter(
+                    std::iter::once(Ok(b"landed".to_vec())),
+                ));
+                Ok(es_runtime_providers::HttpResponse {
+                    status: 200,
+                    status_text: "OK".into(),
+                    url,
+                    redirected,
+                    headers: vec![],
+                    body,
+                })
+            })
+        }
+    }
+
+    fn redirect_runtime(hops: usize) -> Runtime {
+        let mut rt = runtime_with_net(Arc::new(RedirectNet { hops }));
+        rt.set_capabilities(CapabilitySet::none().with(Capability::Net));
+        rt
+    }
+
+    #[test]
+    fn fetch_follows_redirects_by_default_and_reports_the_final_url() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(2);
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/hop/0'); \
+             return r.status + '|' + r.redirected + '|' + r.url + '|' + (await r.text());",
+        );
+        assert_eq!(
+            out,
+            Value::String("200|true|https://x.test/hop/2|landed".into())
+        );
+    }
+
+    #[test]
+    fn fetch_redirect_manual_returns_the_redirect_response_unfollowed() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(2);
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/hop/0', { redirect: 'manual' }); \
+             return r.status + '|' + r.redirected + '|' + r.headers.get('location');",
+        );
+        assert_eq!(out, Value::String("302|false|https://x.test/hop/1".into()));
+    }
+
+    #[test]
+    fn fetch_redirect_error_rejects_with_a_type_error() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(2);
+        let out = eval_async(
+            &mut rt,
+            "try { await fetch('https://x.test/hop/0', { redirect: 'error' }); return 'no throw'; } \
+             catch (e) { return e.constructor.name + '|' + e.message.includes('302'); }",
+        );
+        assert_eq!(out, Value::String("TypeError|true".into()));
+    }
+
+    #[test]
+    fn fetch_reports_not_redirected_when_nothing_redirected() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(0);
+        let out = eval_async(
+            &mut rt,
+            "const r = await fetch('https://x.test/hop/0'); return String(r.redirected);",
+        );
+        assert_eq!(out, Value::String("false".into()));
+    }
+
+    #[test]
+    fn fetch_rejects_a_redirect_chain_past_the_cap_with_a_stable_code() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(usize::MAX);
+        let out = eval_async(
+            &mut rt,
+            "try { await fetch('https://x.test/hop/0'); return 'no throw'; } \
+             catch (e) { return e.code; }",
+        );
+        assert_eq!(out, Value::String("ERR_TOO_MANY_REDIRECTS".into()));
+    }
+
+    #[test]
+    fn request_rejects_an_unknown_redirect_mode() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(0);
+        let out = eval_async(
+            &mut rt,
+            "try { new Request('https://x.test/', { redirect: 'manaul' }); return 'no throw'; } \
+             catch (e) { return e.constructor.name; }",
+        );
+        assert_eq!(out, Value::String("TypeError".into()));
+    }
+
+    #[test]
+    fn a_script_constructed_response_cannot_claim_to_be_redirected() {
+        let _g = v8_guard();
+        let mut rt = redirect_runtime(0);
+        let out = eval_async(
+            &mut rt,
+            "const r = new Response('x', { redirected: true }); return String(r.redirected);",
+        );
+        assert_eq!(out, Value::String("false".into()));
     }
 
     /// A transport whose request future never resolves, and which records how
@@ -4145,7 +4312,7 @@ mod tests {
         );
         // Non-regression floor; bump alongside conformance/RESULTS.md as the
         // suite grows so removed/skipped assertions are caught.
-        const BASELINE: u32 = 307;
+        const BASELINE: u32 = 309;
 
         assert!(
             pass >= BASELINE,

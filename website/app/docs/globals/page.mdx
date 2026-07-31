@@ -58,9 +58,9 @@ console.time("query"); await db.run(); console.timeEnd("query");
 
 | Global | Notes |
 | --- | --- |
-| `fetch` | streaming request + response bodies |
+| `fetch` | streaming request + response bodies; all three [redirect modes](#redirects) |
 | `Request` | |
-| `Response` | |
+| `Response` | `redirected` + final `url` from the transport |
 | `Headers` | incl. `getSetCookie` |
 | `WebSocket` | client; server is `runtime:websocket` |
 | `WebSocketStream` | streams interface over the same connection |
@@ -196,6 +196,25 @@ const body = new ReadableStream({
 await fetch("https://example.com/upload", { method: "POST", body });
 // Anything else (string, Blob, FormData, Uint8Array) is sent buffered.
 ```
+
+## Redirects
+
+| `redirect` | Behaviour |
+| --- | --- |
+| `"follow"` (default) | follows, cap 20; past it `ERR_TOO_MANY_REDIRECTS` |
+| `"manual"` | resolves with the `3xx`, `Location` intact |
+| `"error"` | rejects with `TypeError` |
+
+```js
+const r = await fetch(url, { redirect: "manual" });
+r.status;                      // 302
+r.headers.get("location");     // where it would have gone
+r.redirected;                  // false — nothing was followed
+```
+
+An unknown mode throws `TypeError` from `new Request`. Under `"manual"` the real
+response is returned, not the spec's opaque-redirect filtered one — same as
+Node, Deno and Bun.
 
 ## Not available
 

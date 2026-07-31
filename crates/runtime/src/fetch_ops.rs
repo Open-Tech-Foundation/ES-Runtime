@@ -25,7 +25,9 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{ByteStream, HttpRequest, NetTransport, ProviderError, RequestBody};
+use es_runtime_providers::{
+    ByteStream, HttpRequest, NetTransport, ProviderError, RedirectMode, RequestBody,
+};
 use futures_channel::{mpsc, oneshot};
 use futures_util::future::{Either, select};
 use futures_util::{SinkExt, StreamExt};
@@ -177,6 +179,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                         response.status,
                         &response.status_text,
                         &response.url,
+                        response.redirected,
                         &response.headers,
                         id,
                     ))
@@ -306,11 +309,16 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
 
 /// Parses the `fetch` op arguments and resolves any streaming request body.
 ///
-/// Layout: `[method, url, body?, bodyStreamId?, abortId?, name0, value0, …]` —
-/// `body` is the buffered bytes (or null), `bodyStreamId` is the id from
+/// Layout: `[method, url, body?, bodyStreamId?, abortId?, follow, name0, value0,
+/// …]` — `body` is the buffered bytes (or null), `bodyStreamId` is the id from
 /// `fetch_request_body_new` (or null) whose receiver becomes the request stream,
-/// and `abortId` is the id from `fetch_abort_new` (or null). `abortId` is read
-/// by the caller, not here.
+/// `abortId` is the id from `fetch_abort_new` (or null), and `follow` is whether
+/// the transport should follow redirects. `abortId` is read by the caller, not
+/// here.
+///
+/// Only Fetch's `"follow"` and `"manual"` reach the transport: `"error"` is a
+/// rule about the response, so the prelude asks for `"manual"` and rejects on a
+/// redirect status itself (see `RedirectMode`).
 fn parse_request(
     args: &[Value],
     req_receivers: &Rc<RefCell<HashMap<u64, mpsc::Receiver<ReqBodyItem>>>>,
@@ -338,8 +346,14 @@ fn parse_request(
         RequestBody::Empty
     };
 
+    // Absent (an older caller) means the previous behaviour: follow.
+    let redirect = match args.get(5) {
+        Some(Value::Bool(false)) => RedirectMode::Manual,
+        _ => RedirectMode::Follow,
+    };
+
     let mut headers = Vec::new();
-    let mut i = 5;
+    let mut i = 6;
     while i + 1 < args.len() {
         if let (Some(name), Some(value)) = (args[i].as_str(), args[i + 1].as_str()) {
             headers.push((name.to_string(), value.to_string()));
@@ -351,6 +365,7 @@ fn parse_request(
         url,
         headers,
         body,
+        redirect,
     }
 }
 
@@ -358,6 +373,7 @@ fn response_value(
     status: u16,
     status_text: &str,
     url: &str,
+    redirected: bool,
     headers: &[(String, String)],
     body_id: u64,
 ) -> Value {
@@ -368,6 +384,7 @@ fn response_value(
             Value::String(status_text.to_string()),
         ),
         ("url".to_string(), Value::String(url.to_string())),
+        ("redirected".to_string(), Value::Bool(redirected)),
         ("bodyId".to_string(), Value::Number(body_id as f64)),
         (
             "headers".to_string(),

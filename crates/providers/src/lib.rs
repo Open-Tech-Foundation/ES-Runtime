@@ -187,6 +187,25 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     /// The request body — absent, fully buffered, or streamed incrementally.
     pub body: RequestBody,
+    /// What to do with a redirect response.
+    pub redirect: RedirectMode,
+}
+
+/// What a [`NetTransport`] does when the server answers with a redirect.
+///
+/// These are the two behaviours a *transport* can implement; Fetch's third mode,
+/// `"error"`, is a rule about the resulting response rather than about the wire,
+/// so the runtime asks for [`Manual`](RedirectMode::Manual) and rejects the
+/// `fetch` promise itself. That keeps redirect *policy* in one place instead of
+/// obliging every embedder transport to reimplement it identically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RedirectMode {
+    /// Follow redirects transparently, up to the Fetch specification's cap of
+    /// 20; exceeding it is a [`ProviderError`]. The default.
+    #[default]
+    Follow,
+    /// Return the redirect response itself, unfollowed.
+    Manual,
 }
 
 /// The body of an outbound [`HttpRequest`].
@@ -222,6 +241,9 @@ pub struct HttpResponse {
     pub status_text: String,
     /// The final URL after any redirects.
     pub url: String,
+    /// Whether at least one redirect was followed to arrive here. Always `false`
+    /// under [`RedirectMode::Manual`], which follows nothing.
+    pub redirected: bool,
     /// Response header name/value pairs, in order.
     pub headers: Vec<(String, String)>,
     /// The response body, streamed as byte-chunks.

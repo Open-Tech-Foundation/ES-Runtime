@@ -125,6 +125,16 @@ test("Request init overrides the policy defaults and clone carries them", () => 
   assertEquals(r.clone().redirect, "manual");
 });
 
+test("Request accepts every RequestRedirect value and rejects any other", () => {
+  for (const mode of ["follow", "error", "manual"]) {
+    assertEquals(new Request("https://a.example/", { redirect: mode }).redirect, mode);
+  }
+  // An unrecognized enumeration value is a TypeError, not a silent default —
+  // `redirect` decides whether a 3xx is followed, so a typo must not pass.
+  assertThrows(() => new Request("https://a.example/", { redirect: "manaul" }), "TypeError");
+  assertThrows(() => new Request("https://a.example/", { redirect: "" }), "TypeError");
+});
+
 // ---- Response -------------------------------------------------------------
 
 test("Response reports status, ok and the default type", () => {
@@ -135,6 +145,14 @@ test("Response reports status, ok and the default type", () => {
   assertEquals(r.type, "default");
   assertEquals(r.url, "");
   assertEquals(r.redirected, false);
+});
+
+test("redirected is set by the runtime, never by a constructed Response", () => {
+  // `redirected` reports what the network did. A script must not be able to
+  // forge it, or a caller checking it is checking nothing.
+  assertEquals(new Response("x", { redirected: true }).redirected, false);
+  assertEquals(Response.redirect("https://a.example/").redirected, false);
+  assertEquals(new Response("x").clone().redirected, false);
 });
 
 test("Response infers Content-Type from the body type", () => {

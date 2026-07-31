@@ -6,39 +6,58 @@ use es_runtime_common::ErrorCode;
 use futures_util::StreamExt;
 
 use es_runtime_providers::{
-    BoxFuture, ByteStream, HttpRequest, HttpResponse, NetTransport, ProviderError, RequestBody,
+    BoxFuture, ByteStream, HttpRequest, HttpResponse, NetTransport, ProviderError, RedirectMode,
+    RequestBody,
 };
+
+/// The Fetch specification's redirect cap ("request's redirect count" is
+/// compared against 20 in HTTP-redirect fetch).
+const MAX_REDIRECTS: usize = 20;
 
 /// A [`NetTransport`] backed by `reqwest` with rustls TLS (no OpenSSL). HTTP/1.1
 /// and HTTP/2; response bodies stream.
 ///
-/// The client is built on the **first fetch**, not at construction: client
-/// build-out (TLS config, root-store loading) costs startup milliseconds that
-/// scripts which never fetch shouldn't pay. A build failure surfaces as a
-/// [`ProviderError`] from that first fetch.
+/// The clients are built on the **first fetch** that needs one, not at
+/// construction: client build-out (TLS config, root-store loading) costs startup
+/// milliseconds that scripts which never fetch shouldn't pay. A build failure
+/// surfaces as a [`ProviderError`] from that first fetch.
+///
+/// reqwest's redirect policy is a property of the client rather than of a
+/// request, so the two [`RedirectMode`]s get one client each; a program that
+/// only ever uses the default never pays to build the other.
 pub struct ReqwestTransport {
-    client: OnceLock<Result<reqwest::Client, String>>,
+    following: OnceLock<Result<reqwest::Client, String>>,
+    manual: OnceLock<Result<reqwest::Client, String>>,
 }
 
 impl ReqwestTransport {
-    /// Builds a transport. Infallible today (the client is built lazily); the
+    /// Builds a transport. Infallible today (the clients are built lazily); the
     /// `Result` is kept so a future eager validation can fail here.
     pub fn new() -> Result<Self, ProviderError> {
         Ok(ReqwestTransport {
-            client: OnceLock::new(),
+            following: OnceLock::new(),
+            manual: OnceLock::new(),
         })
     }
 
-    /// The shared client, built on first use (cheap to clone: an `Arc` inside).
-    fn client(&self) -> Result<reqwest::Client, ProviderError> {
-        self.client
-            .get_or_init(|| {
-                reqwest::Client::builder()
-                    .build()
-                    .map_err(|e| format!("http client: {e}"))
-            })
-            .clone()
-            .map_err(ProviderError::Other)
+    /// The shared client for `mode`, built on first use (cheap to clone: an
+    /// `Arc` inside).
+    fn client(&self, mode: RedirectMode) -> Result<reqwest::Client, ProviderError> {
+        let (cell, policy) = match mode {
+            RedirectMode::Follow => (
+                &self.following,
+                reqwest::redirect::Policy::limited(MAX_REDIRECTS),
+            ),
+            RedirectMode::Manual => (&self.manual, reqwest::redirect::Policy::none()),
+        };
+        cell.get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(policy)
+                .build()
+                .map_err(|e| format!("http client: {e}"))
+        })
+        .clone()
+        .map_err(ProviderError::Other)
     }
 }
 
@@ -53,6 +72,13 @@ fn classify_reqwest(e: reqwest::Error) -> ProviderError {
         return ProviderError::Coded {
             code: ErrorCode::TimedOut,
             message,
+        };
+    }
+    // The redirect policy gave up: the chain exceeded MAX_REDIRECTS.
+    if e.is_redirect() {
+        return ProviderError::Coded {
+            code: ErrorCode::TooManyRedirects,
+            message: format!("too many redirects (more than {MAX_REDIRECTS})"),
         };
     }
     // Walk the source chain for the underlying io error / failure text.
@@ -91,7 +117,7 @@ fn classify_reqwest(e: reqwest::Error) -> ProviderError {
 
 impl NetTransport for ReqwestTransport {
     fn fetch(&self, request: HttpRequest) -> BoxFuture<Result<HttpResponse, ProviderError>> {
-        let client = self.client();
+        let client = self.client(request.redirect);
         Box::pin(async move {
             let client = client?;
             let method = reqwest::Method::from_bytes(request.method.as_bytes())
@@ -122,6 +148,12 @@ impl NetTransport for ReqwestTransport {
                 .canonical_reason()
                 .unwrap_or("")
                 .to_string();
+            // reqwest reports the *final* URL, so a redirect shows up as a URL
+            // that differs from the one asked for. Both sides are compared as
+            // parsed `Url`s rather than strings, so reqwest's own normalization
+            // (`http://h` → `http://h/`) is not mistaken for a redirect.
+            let redirected = reqwest::Url::parse(&request.url)
+                .is_ok_and(|requested| &requested != response.url());
             let url = response.url().to_string();
             let headers = response
                 .headers()
@@ -144,6 +176,7 @@ impl NetTransport for ReqwestTransport {
                 status,
                 status_text,
                 url,
+                redirected,
                 headers,
                 body,
             })

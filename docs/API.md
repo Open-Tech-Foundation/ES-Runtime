@@ -57,7 +57,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — pure URL resolution against the current module, with no I/O and no existence check. A **bare specifier throws**: resolving one means reading `node_modules`, which cannot be done synchronously — use `import()`.
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **URL:** `URL` (incl. `canParse`, `parse`, and `createObjectURL`/`revokeObjectURL` for in-process `blob:` URLs), `URLSearchParams`, `URLPattern`
-- **Fetch:** `fetch`, `Request`, `Response` (incl. `Response.json`/`error`/`redirect`), `Headers` (incl. `getSetCookie`) — a `ReadableStream` request body streams as a chunked upload (response bodies stream too)
+- **Fetch:** `fetch`, `Request`, `Response` (incl. `Response.json`/`error`/`redirect`), `Headers` (incl. `getSetCookie`) — a `ReadableStream` request body streams as a chunked upload (response bodies stream too), and all three [redirect modes](#redirects) are honoured
 - **Encoding:** `TextEncoder`, `TextDecoder`, `TextEncoderStream`, `TextDecoderStream`, `atob`, `btoa` — `TextDecoder` accepts every label the WHATWG Encoding Standard defines (`utf-8`, `utf-16le`/`be`, `windows-1252`, `shift_jis`, `gb18030`, …), with `fatal`, `ignoreBOM` and streaming decode
 - **Streams:** `ReadableStream` (default + byte/BYOB, `ReadableStream.from`, async iteration), `WritableStream`, `TransformStream`, `ByteLengthQueuingStrategy`, `CountQueuingStrategy` (+ controllers/readers)
 - **Compression:** `CompressionStream`, `DecompressionStream` — all four spec formats: `"brotli"`, `"gzip"`, `"deflate"` (zlib), `"deflate-raw"`; corrupt/trailing-junk input errors at write, truncated input at close, all as `TypeError`
@@ -68,6 +68,38 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Messaging:** `MessageChannel`, `MessagePort`, `BroadcastChannel` — one agent, so the other end of a channel is always in this isolate and delivery is a queued task rather than a cross-thread hop. Messages are still structured-cloned at `postMessage`, delivered asynchronously and in order, and a port buffers until `start()` (which assigning `onmessage` does implicitly). Transferring a `MessagePort` is a `DataCloneError`: with one agent there is nowhere to transfer it to.
 - **Performance:** `performance` — `now()`, `timeOrigin`, and User Timing (`mark`, `measure`, `getEntries`/`getEntriesByName`/`getEntriesByType`, `clearMarks`, `clearMeasures`), with `PerformanceEntry`, `PerformanceMark`, `PerformanceMeasure`
 - **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
+
+### Redirects
+
+`fetch` honours all three `RequestRedirect` modes; the mode reaches the
+transport, so a redirect the caller refused is never walked.
+
+| `redirect` | Behaviour |
+| --- | --- |
+| `"follow"` (default) | Follow the chain, up to the specification's cap of 20. Past it: `ERR_TOO_MANY_REDIRECTS`. |
+| `"manual"` | Resolve with the `3xx` itself — status, `Location`, headers intact — and follow nothing. |
+| `"error"` | Reject with a `TypeError`. |
+
+An unrecognized value is a `TypeError` from the `Request` constructor rather
+than a silent fallback: `redirect` decides whether a `3xx` is followed, so a
+typo must not quietly become `"follow"`.
+
+```js
+const r = await fetch(url, { redirect: "manual" });
+if (r.status === 302) console.log("would go to", r.headers.get("location"));
+```
+
+`response.redirected` reports whether at least one redirect was followed, and
+`response.url` is where the request actually ended up. Both come from the
+transport — a script cannot construct a `Response` that claims either.
+
+**Deviation:** under `"manual"` the specification returns an *opaque-redirect
+filtered* response (status `0`, no headers, null body). That exists so a browser
+can hand a redirect back to its navigation machinery without leaking
+cross-origin data; here there is no navigation and no origin to protect, and it
+would make the mode useless — the reason to ask for `"manual"` server-side is to
+read `Location`. The real response is returned instead, as Node, Deno and Bun
+all do.
 
 ### `console`
 
@@ -879,6 +911,7 @@ try {
 | `ERR_UNREACHABLE` | The host or network is unreachable. |
 | `ERR_DNS` | Name resolution failed. |
 | `ERR_TLS` | TLS handshake or certificate verification failed. |
+| `ERR_TOO_MANY_REDIRECTS` | A redirect chain exceeded the Fetch specification's cap of 20. |
 | `ERR_CANCELLED` | The operation was cancelled. |
 | `ERR_ENTROPY` | The entropy source failed. |
 | `ERR_IO` | An I/O failure with no finer classification. |

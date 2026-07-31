@@ -13,10 +13,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures_util::{StreamExt, stream};
 
+use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
     BoxFuture, ByteStream, Clock, Console, ConsoleLevel, Entropy, HttpRequest, HttpResponse,
-    NetTransport, ProviderError, RequestBody, TaskSpawner, Timers,
+    NetTransport, ProviderError, RedirectMode, RequestBody, TaskSpawner, Timers,
 };
+
+/// [`MockTransport`]'s redirect cap, matching the Fetch specification's.
+const MOCK_MAX_REDIRECTS: usize = 20;
 
 /// A [`Clock`] whose monotonic time advances only via [`advance`](Self::advance)
 /// / [`set`](Self::set). Cheaply cloneable; clones share the same time.
@@ -190,6 +194,36 @@ impl MockResponse {
         self.chunks = chunks;
         self
     }
+
+    /// A redirect to `location` (default `302`), so tests can drive
+    /// [`RedirectMode`] without a network.
+    pub fn redirect(location: &str) -> Self {
+        MockResponse {
+            status: 302,
+            status_text: "Found".to_string(),
+            headers: vec![("location".to_string(), location.to_string())],
+            chunks: Vec::new(),
+        }
+    }
+
+    /// Replaces the status (and its reason phrase).
+    #[must_use]
+    pub fn status(mut self, status: u16, status_text: &str) -> Self {
+        self.status = status;
+        self.status_text = status_text.to_string();
+        self
+    }
+
+    /// This response's `location` header, if it is a redirect.
+    fn location(&self) -> Option<&str> {
+        if !matches!(self.status, 301 | 302 | 303 | 307 | 308) {
+            return None;
+        }
+        self.headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+            .map(|(_, value)| value.as_str())
+    }
 }
 
 /// A deterministic [`NetTransport`] that answers from a handler closure — no
@@ -218,6 +252,7 @@ impl NetTransport for MockTransport {
         // sees a buffered `RequestBody::Bytes` and tests can assert the uploaded
         // content regardless of how the guest produced it.
         let handler = self.handler.clone();
+        let follow = request.redirect == RedirectMode::Follow;
         Box::pin(async move {
             if let RequestBody::Stream(mut stream) = request.body {
                 let mut buf = Vec::new();
@@ -226,8 +261,33 @@ impl NetTransport for MockTransport {
                 }
                 request.body = RequestBody::Bytes(buf);
             }
-            let url = request.url.clone();
-            let response = (handler)(request);
+            // Follow redirects the same way a real transport does, so tests can
+            // exercise `RedirectMode` end-to-end without a network. `Manual`
+            // hands the redirect straight back, unfollowed.
+            let mut url = request.url.clone();
+            let mut redirected = false;
+            let mut response = (handler)(request);
+            if follow {
+                let mut hops = 0;
+                while let Some(location) = response.location().map(str::to_string) {
+                    hops += 1;
+                    if hops > MOCK_MAX_REDIRECTS {
+                        return Err(ProviderError::Coded {
+                            code: ErrorCode::TooManyRedirects,
+                            message: format!("too many redirects (more than {MOCK_MAX_REDIRECTS})"),
+                        });
+                    }
+                    url = location;
+                    redirected = true;
+                    response = (handler)(HttpRequest {
+                        method: "GET".to_string(),
+                        url: url.clone(),
+                        headers: Vec::new(),
+                        body: RequestBody::Empty,
+                        redirect: RedirectMode::Follow,
+                    });
+                }
+            }
             let chunks: Vec<Result<Vec<u8>, ProviderError>> =
                 response.chunks.into_iter().map(Ok).collect();
             let body: ByteStream = Box::pin(stream::iter(chunks));
@@ -235,6 +295,7 @@ impl NetTransport for MockTransport {
                 status: response.status,
                 status_text: response.status_text,
                 url,
+                redirected,
                 headers: response.headers,
                 body,
             })

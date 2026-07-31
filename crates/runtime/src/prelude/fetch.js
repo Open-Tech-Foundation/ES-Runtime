@@ -29,6 +29,8 @@
   const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
   // Statuses `Response.redirect` accepts (Fetch: "redirect status").
   const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
+  // The `RequestRedirect` WebIDL enumeration.
+  const REDIRECT_MODES = new Set(["follow", "error", "manual"]);
 
   // ---- Headers ------------------------------------------------------------
 
@@ -453,11 +455,20 @@
       ) {
         throw new TypeError(`Request with method ${this.#method} cannot have a body`);
       }
+      // `redirect` is acted on (see `fetch`), so an unrecognized value is a
+      // WebIDL enumeration error rather than something to quietly reinterpret —
+      // a typo'd "manaul" must not silently become a followed redirect.
+      const redirect = options.redirect ?? (input instanceof Request ? input.#redirect : "follow");
+      if (!REDIRECT_MODES.has(redirect)) {
+        throw new TypeError(
+          `Request: '${redirect}' is not a valid redirect mode ("follow", "error" or "manual")`,
+        );
+      }
+      this.#redirect = redirect;
       // Browser-only request policy knobs. A server-side runtime has no origin,
       // cache or referrer to apply them to, so they are recorded and reported
       // faithfully rather than acted on — reading them must not be undefined,
       // since code branches on these values.
-      this.#redirect = options.redirect ?? (input instanceof Request ? input.#redirect : "follow");
       this.#cache = options.cache ?? (input instanceof Request ? input.#cache : "default");
       this.#credentials =
         options.credentials ?? (input instanceof Request ? input.#credentials : "same-origin");
@@ -553,6 +564,7 @@
     #headers;
     #url;
     #type = "default";
+    #redirected = false;
     constructor(body = null, init = {}) {
       const options = init ?? {};
       const internal = options[INTERNAL_RESPONSE] === true;
@@ -569,6 +581,9 @@
       this.#statusText = options.statusText ?? "";
       this.#headers = new Headers(options.headers);
       this.#url = options.url ?? "";
+      // Only the runtime sets this: a script cannot construct a response that
+      // claims to have come through a redirect.
+      if (internal) this.#redirected = options.redirected === true;
       if (options.type) this.#type = String(options.type);
       const extracted =
         body !== null && body !== undefined
@@ -595,7 +610,7 @@
       return this.#url;
     }
     get redirected() {
-      return false;
+      return this.#redirected;
     }
     get type() {
       return this.#type;
@@ -607,6 +622,7 @@
         headers: this.#headers,
         url: this.#url,
         type: this.#type,
+        redirected: this.#redirected,
         [INTERNAL_RESPONSE]: true,
       });
       r[BODY] = { ...this[BODY] };
@@ -758,12 +774,16 @@
       throw signal.reason;
     }
 
+    // Only "follow" travels to the transport as "follow": "error" is a rule
+    // about the response, not about the wire, so it asks for the unfollowed
+    // response and rejects below on a redirect status.
     const args = [
       request.method,
       request.url,
       hasBody ? bodyBytes : null,
       bodyStreamId,
       abortId,
+      request.redirect === "follow",
     ];
     for (const [name, value] of request[REQUEST_HEADERS]()) args.push(name, value);
 
@@ -791,6 +811,17 @@
     if (pumpError) throw pumpError;
 
     const bodyId = meta.bodyId;
+
+    // redirect: "error" — the server answered with a redirect the guest asked
+    // never to see. Drop the body host-side (closing the connection instead of
+    // leaving it to drain) and reject, as Fetch's "network error" requires.
+    if (request.redirect === "error" && REDIRECT_STATUS.has(meta.status)) {
+      ops.fetch_body_cancel(bodyId);
+      throw new TypeError(
+        `Failed to fetch: ${request.url} answered ${meta.status} and redirect mode is "error"`,
+      );
+    }
+
     // An abort after the headers arrived errors the body stream and drops the
     // host-side stream, closing the connection rather than leaving it to drain.
     const stream = new ReadableStream({
@@ -828,6 +859,7 @@
       statusText: meta.statusText,
       headers: meta.headers,
       url: meta.url,
+      redirected: meta.redirected === true,
       [INTERNAL_RESPONSE]: true,
     });
   }

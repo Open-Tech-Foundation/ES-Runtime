@@ -52,6 +52,7 @@ Implement to spec; track conformance against the official Minimum Common Web API
 
 ### 2.9 Fetch family
 - ☑ `Headers`, `Request`, `Response`, `Body` mixin, `fetch` — networking exclusively via the `NetTransport` provider. **Both** directions stream: response bodies via §2.8, and a `ReadableStream` **request** body uploads with chunked transfer-encoding (bounded-channel backpressure) rather than buffering. A non-stream body still travels buffered. *(Phase 6, DECISIONS D20.)*
+- ☑ **Redirects.** All three `RequestRedirect` modes are honoured, and the mode reaches the transport (`HttpRequest.redirect`) so a refused redirect is never walked: `"follow"` up to the spec's cap of 20 (past it, `ERR_TOO_MANY_REDIRECTS`), `"manual"` resolving with the unfollowed `3xx`, `"error"` rejecting with a `TypeError`. `Response.redirected` and the final `Response.url` come from the transport; an unknown mode is a `TypeError` from the `Request` constructor. One deviation, recorded in §7: `"manual"` returns the real response rather than an opaque-redirect filtered one.
 - ☑ `Blob`, `File`, `FormData`. *(Phase 6.)*
 
 ### 2.10 WebCrypto
@@ -153,6 +154,15 @@ Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM
 - **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) — ☑ **implemented in Phase 9**: a host op panic is contained as a JS exception, not an abort (assumes `panic = "unwind"`). (DECISIONS D15.)
 - **`DOMException` engine reconciliation** — ☑ **implemented**: the engine dynamically resolves `globalThis.DOMException` when marshaling a native `DOMException`, surfacing it as a proper instance of the JS class (resolves DECISIONS D3a).
 - **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) — ☑ **implemented in Phase 9** (copy-based, no ArrayBuffer transfer/detach; DECISIONS D19). Default streams + encoding streams shipped in Phase 5.
+- **Fetch redirect modes** → ☑ **implemented** (§2.9). One deliberate deviation:
+  under `redirect: "manual"` the specification returns an **opaque-redirect
+  filtered** response (status `0`, no headers, null body). That filtering exists
+  so a browser can hand a redirect to its navigation machinery without leaking
+  cross-origin data; this runtime has no navigation and no origin to protect,
+  and the filtered response would make the mode useless — the reason to ask for
+  `"manual"` server-side is to read `Location`. The real `3xx` is returned
+  instead, matching Node, Deno and Bun. `Response.type` stays `"default"`;
+  `"opaqueredirect"` is never produced.
 - **Streaming `fetch` request bodies** → ☑ **implemented**: a `ReadableStream`
   request body uploads with chunked transfer-encoding, pumped to the host one
   chunk at a time over a bounded channel (upload backpressure); a stream error

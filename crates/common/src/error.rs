@@ -121,6 +121,8 @@ pub enum ErrorCode {
     Dns,
     /// TLS handshake or certificate verification failed.
     Tls,
+    /// A redirect chain exceeded the Fetch specification's cap of 20.
+    TooManyRedirects,
     /// An I/O failure with no finer stable classification.
     Io,
 }
@@ -147,6 +149,7 @@ impl ErrorCode {
             ErrorCode::Unreachable => "ERR_UNREACHABLE",
             ErrorCode::Dns => "ERR_DNS",
             ErrorCode::Tls => "ERR_TLS",
+            ErrorCode::TooManyRedirects => "ERR_TOO_MANY_REDIRECTS",
             ErrorCode::Io => "ERR_IO",
         }
     }

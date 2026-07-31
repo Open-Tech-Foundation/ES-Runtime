@@ -93,6 +93,31 @@ fn streams_an_http_request_body_through_to_the_response() {
 }
 
 #[test]
+fn honours_every_fetch_redirect_mode_over_the_wire() {
+    // Real 3xx responses from a real runtime:http server through the real
+    // reqwest transport — the stub transport in the runtime's own tests cannot
+    // prove that the redirect policy actually reaches the client.
+    let out = run_file("fetch-redirect.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(
+        stdout.contains("FOLLOW status:200 redirected:true landed:true body:landed"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("MANUAL status:302 redirected:false location:true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("ERROR threw:TypeError"), "{stdout}");
+    assert!(stdout.contains("DIRECT redirected:false"), "{stdout}");
+    assert!(
+        stdout.contains("LOOP code:ERR_TOO_MANY_REDIRECTS"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("REDIRECT_OK"), "{stdout}");
+}
+
+#[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
         .arg("-e")

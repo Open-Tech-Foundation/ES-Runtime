@@ -10,6 +10,38 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`fetch` honours `redirect: "manual"` and `"error"`.** It never had: the mode
+  was parsed, stored and reported on the `Request`, but nothing read it and it
+  never reached the transport, so every redirect was followed no matter what the
+  caller asked for. `redirect: "manual"` is the standard way to inspect a `3xx`
+  without walking it — the guard code reaches for when a URL is attacker-
+  influenced and a redirect could point somewhere internal — so a mode that
+  silently does nothing is worse than one that is absent. All three modes now
+  work, the mode travels to the transport (`HttpRequest.redirect`) rather than
+  being interpreted after the fact, and `"follow"` is capped at the
+  specification's 20 hops with `ERR_TOO_MANY_REDIRECTS` past it instead of
+  reqwest's default 10.
+  One deliberate deviation, recorded in `SPEC.md` §7: `"manual"` returns the real
+  `3xx` rather than the spec's opaque-redirect filtered response (status `0`, no
+  headers). That filtering protects a *browser's* cross-origin navigations; here
+  it would only make the mode useless, since reading `Location` is the entire
+  reason to ask for it. Node, Deno and Bun all return the real response too.
+- **`Response.redirected` was hardcoded `false`**, and so was useless for the one
+  thing it exists for: noticing that a request did not end up where it was sent.
+  It now reports what the transport actually did, alongside a `response.url` that
+  is the final URL. Neither can be forged — a script-constructed `Response`
+  passing `{ redirected: true }` still reads `false`.
+- **An unknown `redirect` value is now a `TypeError`.** `new Request(url, {
+  redirect: "manaul" })` used to be accepted and stored verbatim; now that the
+  value decides whether a `3xx` is followed, a typo silently meaning `"follow"`
+  is a bug that only shows up in production.
+- **Breaking (embedders implementing `NetTransport`):** `HttpRequest` gains a
+  `redirect: RedirectMode` field and `HttpResponse` a `redirected: bool`. A
+  transport must decide between `RedirectMode::Follow` and `Manual` and report
+  whether it followed anything. Fetch's third mode, `"error"`, deliberately does
+  *not* appear at the seam — it is a rule about the resulting response rather
+  than about the wire, so the runtime asks for `Manual` and rejects itself,
+  instead of obliging every transport to reimplement the same check.
 - **A malformed `URLPattern` no longer panics inside the host.** Found by the new
   fuzzing: `new URLPattern("**:]:")` — an unmatched `]` where the hostname would
   be — underflows `urlpattern` 0.6.0's IPv6 bracket-depth counter. The op
