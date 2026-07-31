@@ -18,8 +18,9 @@ namespace) is unstable and may change between minor releases until the API freez
   - Replaced text ticks/crosses and emojis with vector SVG status components across landing page and documentation tables.
   - Expanded Migration guide with comprehensive side-by-side examples from Node.js, Bun, and Deno, API mapping cheat sheet, and pre-flight checklist.
   - Upgraded site framework packages `@opentf/web-docs` to `v0.24.0` and `@opentf/web-cli` to `v1.24.1`.
-  - Replaced the landing page "Why ESRun?" runtime comparison with a "Distinctly
-    ESRun" section covering only what the runtime itself offers.
+  - Removed the landing page "Why ESRun?" runtime comparison grid. The core
+    feature cards are now the "Why ES-Runtime?" section and sit above the
+    architecture diagram.
 
 ## [0.13.0] - 2026-07-31
 

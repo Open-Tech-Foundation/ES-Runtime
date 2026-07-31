@@ -3,7 +3,6 @@ import CodeTabs from "../components/CodeTabs.jsx";
 import RpsChart from "../components/RpsChart.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
-import UniqueFeaturesSection from "../components/UniqueFeaturesSection.jsx";
 
 const features = [
   {
@@ -103,8 +102,32 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Why ES-Runtime? */}
+      <section className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
+          <div className="mb-12 text-center">
+            <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+              Why ES-Runtime?
+            </h2>
+          </div>
+
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {features.map((f) => (
+              <div className="rounded-2xl border border-zinc-200 bg-white p-6 transition-shadow hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
+                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                  {f.title}
+                </h3>
+                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                  {f.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* Architecture Section */}
-      <section className="border-t border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
+      <section>
         <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
           <div className="mb-12 text-center">
             <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
@@ -166,29 +189,6 @@ export default function HomePage() {
               <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Kernel networking, file system, and raw system I/O.</p>
             </div>
           </div>
-        </div>
-      </section>
-
-      {/* Unique Features Section */}
-      <UniqueFeaturesSection />
-
-      {/* Builtin Core Features */}
-      <section className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
-        <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-          Builtin Core Features
-        </h2>
-
-        <div className="mt-12 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {features.map((f) => (
-            <div className="rounded-2xl border border-zinc-200 bg-white p-6 transition-shadow hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-              <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-                {f.title}
-              </h3>
-              <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-                {f.body}
-              </p>
-            </div>
-          ))}
         </div>
       </section>
 
