@@ -6,10 +6,10 @@
       "name": "website",
       "dependencies": {
         "@opentf/web": "^0.26.0",
-        "@opentf/web-docs": "^0.23.0",
+        "@opentf/web-docs": "^0.24.0",
       },
       "devDependencies": {
-        "@opentf/web-cli": "^1.24.0",
+        "@opentf/web-cli": "^1.24.1",
         "wrangler": "^4.118.0",
       },
     },
@@ -160,11 +160,11 @@
 
     "@opentf/web": ["@opentf/web@0.26.0", "", {}, "sha512-hcCqhByjO0360TxCoEa4vnZgnEr03Ht/9AUHgiy2qFXG/snmyFJniOPLqO3vbezLSukrO+e+3+DyjXBxs6asow=="],
 
-    "@opentf/web-cli": ["@opentf/web-cli@1.24.0", "", { "dependencies": { "@opentf/web-compiler": "0.14.0", "@tailwindcss/node": "4.2.2", "@tailwindcss/oxide": "4.2.2", "rolldown": "1.0.0-rc.17", "tailwindcss": "4.2.2" }, "peerDependencies": { "@opentf/web": "*" }, "bin": { "otfw": "src/cli.js" } }, "sha512-MqRINfAf2hnis4OGf6gTzdn7sTJKPFKsLkHHp67WvbibZSu1B5nELQXdRd+tDtpgfZzn/lXU/utO3cT0A+pimA=="],
+    "@opentf/web-cli": ["@opentf/web-cli@1.24.1", "", { "dependencies": { "@opentf/web-compiler": "0.15.0", "@tailwindcss/node": "4.2.2", "@tailwindcss/oxide": "4.2.2", "rolldown": "1.0.0-rc.17", "tailwindcss": "4.2.2" }, "peerDependencies": { "@opentf/web": "*" }, "bin": { "otfw": "src/cli.js" } }, "sha512-D2xKmvRX+7rBnjIgrr4UlPV7ee4ase1uvJj5jlm0RN8iqHXGwMcDO1APuV9lls/xEOCcJ9bzsmBCaBzVHkEQXg=="],
 
-    "@opentf/web-compiler": ["@opentf/web-compiler@0.14.0", "", {}, "sha512-yQkMklGumgfLGxWWJIPy3Yma6sYzkXNr9O3gJhExKEXr08hHWHdRdKaETS+6e0F5l39SEW73UZxq1cnYp673PA=="],
+    "@opentf/web-compiler": ["@opentf/web-compiler@0.15.0", "", {}, "sha512-opR2w/eU5p8pemESIdURv48NzSjov23J98BRDEbhBZ4GyTaN2JyMh5Pk8KAr9oqyaVH2rJjgGYOJ3oqxrUdwjQ=="],
 
-    "@opentf/web-docs": ["@opentf/web-docs@0.23.0", "", { "dependencies": { "pagefind": "^1.5.2" }, "peerDependencies": { "@opentf/web": "*" } }, "sha512-y54ujUrCIh8gxIuDUe9FEwWQNMvz01ah0QS/tqY4CsAwr1aBgmfOAZFMPXazxBqrO8c/rboSKLAxQU2SrnKp6A=="],
+    "@opentf/web-docs": ["@opentf/web-docs@0.24.0", "", { "dependencies": { "pagefind": "^1.5.2" }, "peerDependencies": { "@opentf/web": "*" } }, "sha512-xvzDb6TnTMpAixCP4iiqxSsaLIM4GYxGWjk3IfW7eWCZnxByWR/PXotHzNYZ3ibPgzJfINbj38blFR5x5hEQCA=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.127.0", "", {}, "sha512-aIYXQBo4lCbO4z0R3FHeucQHpF46l2LbMdxRvqvuRuW2OxdnSkcng5B8+K12spgLDj93rtN3+J2Vac/TIO+ciQ=="],
 
