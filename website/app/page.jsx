@@ -6,24 +6,24 @@ import StatusIcon from "../components/StatusIcon.jsx";
 
 const features = [
   {
+    title: "Standard web APIs",
+    body: "fetch, URL, URLPattern, streams, WebCrypto, encoding, timers, and events — the WinterTC Minimum Common Web Platform API. What you learn here is what runs in the browser.",
+  },
+  {
     title: "Batteries in the binary",
-    body: "HTTP and WebSocket servers, filesystem, sockets, subprocesses, WASM/WASI, and XML, YAML, TOML, JSONL, MessagePack, and Protobuf parsers. One self-contained binary, nothing to install.",
+    body: "HTTP and WebSocket servers, filesystem, sockets, subprocesses, WASM/WASI, and XML, YAML, TOML, JSONL, MessagePack, and Protobuf parsers — all behind runtime: imports, nothing to install.",
   },
   {
-    title: "Web standards only",
-    body: "The WinterTC Minimum Common Web Platform API: fetch, URL, streams, WebCrypto, encoding, timers, events. No bespoke globals.",
+    title: "ESM everywhere",
+    body: "Static imports, dynamic import(), top-level await, import.meta, and JSON modules. One module system, no CommonJS interop rules to learn.",
   },
   {
-    title: "ESM, and only ESM",
-    body: "Static imports, dynamic import(), top-level await, import.meta, and JSON modules. No CommonJS, no JSX.",
+    title: "Written in Rust",
+    body: "The runtime around the engine is safe Rust: no data races, no use-after-free, no buffer overruns to reach for under hostile input.",
   },
   {
-    title: "Built on Rust",
-    body: "Memory-safe by construction — no data races, no use-after-free. The host stays crash-resistant even under hostile input.",
-  },
-  {
-    title: "Built on V8",
-    body: "The engine behind Chrome and Node.js, embedded from Rust. A baked snapshot boots a realm in milliseconds.",
+    title: "Powered by V8",
+    body: "The engine behind Chrome and Node.js, embedded from Rust. A baked startup snapshot opens a full realm in about 7 ms.",
   },
   {
     title: "Embeddable & capability-gated",
@@ -113,11 +113,14 @@ export default function HomePage() {
 
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {features.map((f) => (
-              <div className="rounded-2xl border border-zinc-200 bg-white p-6 transition-shadow hover:shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
-                <h3 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+              <div className="group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-brand-900">
+                {/* Faint brand wash, only on hover. */}
+                <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-brand-500/0 blur-2xl transition-colors duration-300 group-hover:bg-brand-500/15" />
+                <span className="block h-[3px] w-8 rounded-full bg-brand-500/70 transition-all duration-200 group-hover:w-12 group-hover:bg-brand-500" />
+                <h3 className="relative mt-4 text-base font-semibold text-zinc-900 dark:text-zinc-100">
                   {f.title}
                 </h3>
-                <p className="mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                <p className="relative mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {f.body}
                 </p>
               </div>
