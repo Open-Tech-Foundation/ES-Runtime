@@ -35,6 +35,23 @@ namespace) is unstable and may change between minor releases until the API freez
   redirect: "manaul" })` used to be accepted and stored verbatim; now that the
   value decides whether a `3xx` is followed, a typo silently meaning `"follow"`
   is a bug that only shows up in production.
+- **A `runtime:http` handler now learns that the client hung up.** The
+  `request.signal` handed to a handler was a fresh `AbortController`'s signal
+  that nothing was ever wired to, so it could not fire: a handler had no way to
+  know its caller had gone, and expensive work ran to completion writing to a
+  socket nobody was listening on. It now aborts with an `AbortError` when the
+  peer disconnects before the response was handed over, and composes with
+  everything else that takes a signal — `fetch(url, { signal: request.signal })`
+  drops the upstream call the moment the caller does.
+  Reading `request.signal` is what starts the watch on the connection, so a
+  handler that never asks costs nothing: the watch holds a pending op for the
+  life of the request, and charging every request for a signal most handlers do
+  not read would have halved the effective concurrency under the
+  `max_pending_ops` bound. Same deal, and the same reasoning, as the deferred
+  `request.headers`.
+  The signal covers the window *before* the response is handed over; a client
+  vanishing partway through a streamed response body is a different event, and
+  was already reported by that stream ending.
 - **`fetch` decodes compressed response bodies.** The default transport was
   built without any content-coding support, so it never sent `Accept-Encoding`
   and, worse, never decoded: a server that compressed anyway — plenty do it
@@ -56,6 +73,11 @@ namespace) is unstable and may change between minor releases until the API freez
   sees the identity the guest reports — unless the request sets its own. Like
   the content-codings above, this is a property of the default
   `ReqwestTransport`; an embedder with its own `NetTransport` decides for itself.
+- **Embedders implementing `HttpServerProvider`:** a new `request_disconnected`
+  method backs the handler's `request.signal`. It has a default returning
+  `false`, so an existing transport keeps compiling and simply has a signal that
+  never fires; implement it to opt in. It **must** settle either way — a future
+  that never resolves would hold a driven loop open for the life of the process.
 - **Breaking (embedders implementing `NetTransport`):** `HttpRequest` gains a
   `redirect: RedirectMode` field and `HttpResponse` a `redirected: bool`. A
   transport must decide between `RedirectMode::Follow` and `Manual` and report

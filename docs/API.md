@@ -686,6 +686,29 @@ await server.stop();
 **`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
 `finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.
 
+#### `request.signal` — the client hung up
+
+`request.signal` aborts (with an `AbortError` `DOMException`) when the client
+disconnects before the handler has produced a response. Expensive work that
+nobody will read can then be abandoned, and it composes with anything else that
+takes a signal:
+
+```js
+serve(async (request) => {
+  // The upstream call is dropped the moment the caller goes away.
+  const upstream = await fetch(slowUrl, { signal: request.signal });
+  return new Response(upstream.body);
+});
+```
+
+Reading `request.signal` is what starts the watch on the connection, so a
+handler that never asks costs nothing — the same deal as `request.headers`. The
+signal covers the window *before* the response is handed over; a client that
+vanishes partway through a streamed response body instead ends that stream.
+
+An embedder's own `HttpServerProvider` opts in by implementing
+`request_disconnected`; one that does not gets a signal that simply never fires.
+
 ---
 
 ## `runtime:websocket`

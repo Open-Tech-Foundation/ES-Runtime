@@ -14,7 +14,7 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **309 / 309** (100%) |
+| Assertions passing | **310 / 310** (100%) |
 | Known deviations (`todo`) | **0** |
 | Files | 23 |
 | Last updated | 2026-07-31 |
@@ -46,7 +46,7 @@ every known deviation an executable, self-retiring entry rather than prose.
 | `timers.js` | setTimeout/setInterval §2.5 | 3 | — |
 | `blob.js` | Blob/File/FormData, object URLs §2.9 | 18 | — |
 | `channel.js` | MessageChannel/MessagePort/BroadcastChannel | 8 | — |
-| `fetch.js` | Headers/Request/Response object surface | 35 | — |
+| `fetch.js` | Headers/Request/Response object surface | 36 | — |
 | `webidl.js` | Interface shape: branding, arity, iterators | 28 | — |
 | `wasm.js` | WebAssembly JS API | 18 | — |
 | `protobuf.js` | `runtime:serialization` Protobuf | 11 | — |

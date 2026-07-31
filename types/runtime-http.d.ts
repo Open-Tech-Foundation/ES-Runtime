@@ -6,6 +6,11 @@ declare module "runtime:http" {
    * as they arrive, and a `ReadableStream` response body is sent with chunked
    * transfer-encoding as it is produced (`new Response(request.body)` proxies
    * without buffering).
+   *
+   * `request.signal` aborts if the client disconnects before the handler has
+   * produced a response, so work nobody will read can be abandoned — pass it
+   * straight to `fetch` or anything else taking a signal. Reading it is what
+   * starts the watch, so a handler that never asks pays nothing.
    */
   export type Handler = (request: Request) => Response | Promise<Response>;
 

@@ -842,6 +842,26 @@ pub trait HttpServerProvider: Send + Sync {
         response: HttpServerResponse,
     ) -> BoxFuture<Result<(), ProviderError>>;
 
+    /// Watches request `request_id` for its client going away *before* a
+    /// response was handed over — what backs the handler's `request.signal`, so
+    /// work nobody will read can be abandoned.
+    ///
+    /// Resolves `true` if the peer disconnected first, and `false` once the
+    /// response was delivered, the id is unknown, or the transport cannot tell.
+    /// It **must** settle either way: a future that never resolves would hold a
+    /// driven loop open for the life of the process.
+    ///
+    /// A disconnect *during* a streamed response body is a different event, and
+    /// is already reported by [`HttpServerBody::Stream`] consumption ending.
+    ///
+    /// The default answers `false` immediately — correct for a transport with no
+    /// way to observe the peer, and it costs such a transport nothing but a
+    /// signal that never fires.
+    fn request_disconnected(&self, request_id: u64) -> BoxFuture<bool> {
+        let _ = request_id;
+        Box::pin(std::future::ready(false))
+    }
+
     /// Closes server `id`: stops accepting and tears the listener down
     /// (idempotent).
     fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;

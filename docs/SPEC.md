@@ -81,7 +81,7 @@ Traits the embedder must satisfy (defaults shipped in `default-providers`):
 - ☑ `SyncFileSystem` — the blocking seam WASI's syscalls need, same gates and jail (DECISIONS D36). *(Phase 12.)*
 - ☑ `Process` — env/args/cwd/platform/exit, gated on `Env` (DECISIONS D26). *(Phase 11.)*
 - ☑ `NetProvider` — sockets + listener for `runtime:net`, gated on `Net`/`NetListen` (DECISIONS D28). *(Phase 12.)*
-- ☑ `HttpServerProvider` — the `runtime:http` `serve()` seam, streaming both directions (DECISIONS D31). *(Phase 12.)*
+- ☑ `HttpServerProvider` — the `runtime:http` `serve()` seam, streaming both directions (DECISIONS D31), plus `request_disconnected` backing the handler's `request.signal`. That method has a default returning `false`, so a transport with no way to observe its peer keeps compiling and simply has a signal that never fires. *(Phase 12.)*
 - ☑ `WebSocketProvider` — client and server framing for `WebSocket` / `runtime:websocket` (DECISIONS D29). *(Phase 12.)*
 
 All calls: async-friendly, cancellable, capability-checked, typed errors. No provider, no capability ⇒ clean JS exception.

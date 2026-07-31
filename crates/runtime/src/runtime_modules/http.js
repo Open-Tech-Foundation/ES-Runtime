@@ -47,6 +47,29 @@ async function pumpResponseBody(stream, id) {
   }
 }
 
+// Backs `request.signal`: an AbortSignal that aborts when the client goes away
+// before the response was handed over, so a handler doing expensive work can
+// stop rather than finish something nobody will read. Called on the handler's
+// first read of `.signal` (see __serverRequest), because the watch it starts
+// holds a pending op for the life of the request and most handlers never ask.
+//
+// The op always settles — `false` once the response is delivered — so this
+// cannot hold the driven loop open past the request it belongs to. The `catch`
+// is for a server torn down mid-request: that is not a failure of the request,
+// and must not surface as an unhandled rejection.
+function watchDisconnect(requestId) {
+  const controller = new AbortController();
+  ops
+    .http_request_disconnected(requestId)
+    .then((gone) => {
+      if (gone) {
+        controller.abort(new DOMException("The client disconnected.", "AbortError"));
+      }
+    })
+    .catch(() => {});
+  return controller.signal;
+}
+
 // Runs one request through the handler and writes the response back. Never
 // throws: a handler error or a non-Response return becomes a 500. `entry` is the
 // structured tuple from http_next_request: [requestId, method, url, hasBody,
@@ -72,7 +95,7 @@ async function handleRequest(entry, handler) {
         },
       });
     }
-    response = await handler(makeServerRequest(url, init));
+    response = await handler(makeServerRequest(url, init, () => watchDisconnect(requestId)));
     if (!(response instanceof Response)) {
       response = new Response(response == null ? "" : String(response));
     }

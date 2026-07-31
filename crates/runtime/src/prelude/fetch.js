@@ -24,6 +24,10 @@
   // terms and are not subject to the constructor's status/body checks, which
   // only constrain what a script may construct.
   const INTERNAL_RESPONSE = Symbol("internalResponse");
+  // Closure-private marker carrying a function that produces the request's
+  // AbortSignal on first read (see Request#signalThunk). Only `__serverRequest`
+  // can pass it, so guest code cannot install a thunk of its own.
+  const LAZY_SIGNAL = Symbol("lazySignal");
 
   // Statuses that must not carry a body (Fetch: "null body status").
   const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
@@ -410,6 +414,12 @@
     // plain hello-world) pays nothing for header normalization.
     #rawHeaders = null;
     #signal;
+    // Deferred signal init, on the same reasoning as #rawHeaders: in the trusted
+    // server path the signal is backed by a host watch on the client connection,
+    // which costs a pending op for the life of the request. A handler that never
+    // reads req.signal — most of them — should not pay for one, so the thunk is
+    // called on first access and the watch starts then (#ensureSignal).
+    #signalThunk = null;
     #redirect;
     #cache;
     #credentials;
@@ -425,8 +435,12 @@
           throw new TypeError("Request signal must be an AbortSignal");
         }
         this.#signal = options.signal;
+      } else if (typeof options[LAZY_SIGNAL] === "function") {
+        this.#signalThunk = options[LAZY_SIGNAL];
       } else if (input instanceof Request) {
-        this.#signal = input.#signal;
+        // Through the getter, so wrapping a server request in `new Request(req)`
+        // carries its live disconnect signal rather than a dead placeholder.
+        this.#signal = input.signal;
       } else {
         // Every request has a signal, even when the caller passed none.
         this.#signal = new AbortController().signal;
@@ -510,6 +524,13 @@
       return this.#headers;
     }
     get signal() {
+      if (this.#signalThunk !== null) {
+        const thunk = this.#signalThunk;
+        // Cleared first: the thunk starts a host watch, and a re-entrant read
+        // must not start a second one.
+        this.#signalThunk = null;
+        this.#signal = thunk();
+      }
       return this.#signal;
     }
     get redirect() {
@@ -874,8 +895,12 @@
   globalThis.fetch = fetch;
   // Internal bridge for runtime:http: build a server-side Request from a
   // host-validated absolute URL without the URL re-parse. Keyed by a private
-  // symbol so only the prelude can grant the trust.
+  // symbol so only the prelude can grant the trust. `signalThunk`, if given,
+  // produces the request's AbortSignal on first read of `.signal` — the
+  // disconnect watch it starts costs a pending op, so a handler that never asks
+  // never pays.
   Object.defineProperty(globalThis, "__serverRequest", {
-    value: (url, init) => new Request(url, { ...init, [TRUSTED_URL]: true }),
+    value: (url, init, signalThunk) =>
+      new Request(url, { ...init, [TRUSTED_URL]: true, [LAZY_SIGNAL]: signalThunk }),
   });
 })();

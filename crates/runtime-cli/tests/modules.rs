@@ -151,6 +151,25 @@ fn decodes_compressed_response_bodies_and_identifies_itself() {
 }
 
 #[test]
+fn a_server_handler_learns_the_client_hung_up() {
+    // Needs a real socket to close, so it cannot be an in-process test. Also
+    // asserts the opposite: a request that completed leaves its signal
+    // unaborted, and the process exits — a disconnect watch that never settled
+    // would hold the driven loop open forever.
+    let out = run_file("http-request-signal.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("PLAIN body:plain done"), "{stdout}");
+    assert!(
+        stdout.contains("ABORT reason:AbortError promptly:true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("QUICK body:quick done"), "{stdout}");
+    assert!(stdout.contains("QUICK aborted:false"), "{stdout}");
+    assert!(stdout.contains("SIGNAL_OK"), "{stdout}");
+}
+
+#[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
         .arg("-e")

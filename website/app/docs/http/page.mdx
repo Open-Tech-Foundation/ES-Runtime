@@ -99,6 +99,22 @@ serve({ port: 8080 }, () => {
 `new Response(request.body)` pipes an upload straight back out without buffering
 either side.
 
+## Client disconnects
+
+`request.signal` aborts when the client hangs up before your handler produced a
+response — drop expensive work nobody will read.
+
+```js
+serve(async (request) => {
+  const upstream = await fetch(slowUrl, { signal: request.signal });
+  return new Response(upstream.body);
+});
+```
+
+Reading `request.signal` starts the watch, so a handler that never asks costs
+nothing. It covers the window before the response is handed over; a client that
+vanishes mid-stream ends the response body stream instead.
+
 ## Errors
 
 If your handler **throws** or returns a value that is not a `Response`, the

@@ -10,7 +10,13 @@
 //! `Incoming` body crosses as an [`HttpServerBody::Stream`] the guest pulls
 //! chunk-by-chunk (hyper keeps feeding it while the connection task awaits the
 //! response oneshot), and a streamed response body is written with chunked
-//! transfer-encoding as the guest produces it. TLS is not supported yet.
+//! transfer-encoding as the guest produces it.
+//!
+//! Each request also carries a "was the response delivered?" half that
+//! [`request_disconnected`](HttpServerProvider::request_disconnected) reads,
+//! which is what backs the guest's `request.signal`: hyper dropping the service
+//! future — what a vanished client does to it — drops that half unsent, and the
+//! watcher reads the drop as the disconnect. TLS is not supported yet.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -41,8 +47,19 @@ use tokio::task::AbortHandle;
 /// is `Send` but not `Sync` — hyper only needs `Send` here.
 type OutBody = UnsyncBoxBody<Bytes, ProviderError>;
 
-/// One inbound request plus the channel that carries its response back to hyper.
-type Pending = (HttpServerRequest, oneshot::Sender<HttpServerResponse>);
+/// One inbound request, the channel that carries its response back to hyper, and
+/// the half that reports whether the peer outlived the wait for that response.
+///
+/// The `delivered` receiver is the disconnect signal, read backwards: the
+/// service future *sends* on it once it has the guest's response in hand, and
+/// dropping it without sending is what a dropped connection looks like. So
+/// `Ok(())` means delivered and `Err(_)` means the client went away — no
+/// polling, and nothing to clean up on either path.
+type Pending = (
+    HttpServerRequest,
+    oneshot::Sender<HttpServerResponse>,
+    oneshot::Receiver<()>,
+);
 
 /// Per-server shutdown handle, kept in a side map that `next_request` never
 /// removes — so `close` can stop a server even while a `next_request` await has
@@ -60,6 +77,11 @@ pub struct SystemHttpServer {
     requests: Arc<Mutex<HashMap<u64, mpsc::Receiver<Pending>>>>,
     controls: Arc<Mutex<HashMap<u64, Control>>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<HttpServerResponse>>>>,
+    /// Per-request "was the response delivered?" halves, read by
+    /// [`request_disconnected`](HttpServerProvider::request_disconnected). An
+    /// entry is taken by the first watcher; a request nobody watches has its
+    /// entry dropped with the server.
+    delivered: Arc<Mutex<HashMap<u64, oneshot::Receiver<()>>>>,
     next_id: Arc<AtomicU64>,
 }
 
@@ -202,16 +224,30 @@ impl HttpServerProvider for SystemHttpServer {
                             async move {
                                 let server_req = to_server_request(req, &authority);
                                 let (rtx, rrx) = oneshot::channel();
-                                if tx.send((server_req, rtx)).await.is_err() {
+                                let (dtx, drx) = oneshot::channel();
+                                if tx.send((server_req, rtx, drx)).await.is_err() {
                                     // Server closed: the request channel is gone.
                                     return Ok::<_, Infallible>(status_only(
                                         StatusCode::SERVICE_UNAVAILABLE,
                                     ));
                                 }
                                 match rrx.await {
-                                    Ok(resp) => Ok(build_response(resp)),
+                                    Ok(resp) => {
+                                        // Say "delivered" before building, so a
+                                        // handler awaiting the disconnect signal
+                                        // learns the request completed. If this
+                                        // future is instead dropped — which is
+                                        // what a vanished client does to it —
+                                        // `dtx` drops unsent and the watcher
+                                        // sees the disconnect.
+                                        let _ = dtx.send(());
+                                        Ok(build_response(resp))
+                                    }
                                     // Guest dropped the request without responding.
-                                    Err(_) => Ok(status_only(StatusCode::INTERNAL_SERVER_ERROR)),
+                                    Err(_) => {
+                                        let _ = dtx.send(());
+                                        Ok(status_only(StatusCode::INTERNAL_SERVER_ERROR))
+                                    }
                                 }
                             }
                         });
@@ -283,9 +319,11 @@ impl HttpServerProvider for SystemHttpServer {
             let mut out = Vec::with_capacity(batch.len());
             if !batch.is_empty() {
                 let mut pending = this.pending.lock().unwrap();
-                for (req, sender) in batch {
+                let mut delivered = this.delivered.lock().unwrap();
+                for (req, sender, disconnect) in batch {
                     let rid = this.id();
                     pending.insert(rid, sender);
+                    delivered.insert(rid, disconnect);
                     out.push((rid, req));
                 }
             }
@@ -307,6 +345,21 @@ impl HttpServerProvider for SystemHttpServer {
         })
     }
 
+    fn request_disconnected(&self, request_id: u64) -> BoxFuture<bool> {
+        // Take the receiver out rather than borrowing it: no lock may be held
+        // across the await, and only one watcher exists per request.
+        let watch = self.delivered.lock().unwrap().remove(&request_id);
+        Box::pin(async move {
+            match watch {
+                // Err means the service future was dropped without ever getting
+                // a response to hand over — the client is gone.
+                Some(rx) => rx.await.is_err(),
+                // Unknown id: already responded to, or never ours.
+                None => false,
+            }
+        })
+    }
+
     fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
@@ -319,5 +372,88 @@ impl HttpServerProvider for SystemHttpServer {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpStream;
+
+    /// Sends a bare `GET /` on a fresh connection and returns it, so a test can
+    /// decide when (and whether) to hang up.
+    async fn request_on_new_conn(port: u16) -> TcpStream {
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        sock
+    }
+
+    async fn bound() -> (SystemHttpServer, u64, u16) {
+        let http = SystemHttpServer::new();
+        let (id, info) = http.serve("127.0.0.1".into(), 0).await.unwrap();
+        (http, id, info.local_port)
+    }
+
+    /// The signal a handler's `request.signal` is built on: a client that goes
+    /// away before its response was handed over must be reported as a
+    /// disconnect, not left waiting forever.
+    #[tokio::test]
+    async fn request_disconnected_reports_a_client_that_hung_up() {
+        let (http, id, port) = bound().await;
+        let sock = request_on_new_conn(port).await;
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let rid = reqs[0].0;
+
+        drop(sock); // hang up without ever reading a response
+        let gone = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            http.request_disconnected(rid),
+        )
+        .await
+        .expect("must settle rather than hang");
+        assert!(gone, "a dropped connection is a disconnect");
+    }
+
+    /// The other half of the contract: a request that was answered resolves
+    /// `false`. If it did not settle here, every served request would leak a
+    /// pending op and hold a driven loop open.
+    #[tokio::test]
+    async fn request_disconnected_resolves_false_once_answered() {
+        let (http, id, port) = bound().await;
+        let _sock = request_on_new_conn(port).await;
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let rid = reqs[0].0;
+
+        let watch = tokio::spawn({
+            let http = http.clone();
+            async move { http.request_disconnected(rid).await }
+        });
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(b"ok".to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let gone = tokio::time::timeout(std::time::Duration::from_secs(5), watch)
+            .await
+            .expect("must settle rather than hang")
+            .unwrap();
+        assert!(!gone, "an answered request is not a disconnect");
+    }
+
+    /// An id that was never handed out (or was already watched) answers `false`
+    /// immediately rather than parking on nothing.
+    #[tokio::test]
+    async fn request_disconnected_is_false_for_an_unknown_id() {
+        let (http, _id, _port) = bound().await;
+        assert!(!http.request_disconnected(9_999).await);
     }
 }

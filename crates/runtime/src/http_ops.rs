@@ -284,6 +284,20 @@ pub(crate) fn install(
         }))?;
     }
 
+    // ---- http_request_disconnected -------------------------------------------
+    // Resolves `true` if request `requestId`'s client went away before its
+    // response was handed over, `false` once the response was delivered. Backs
+    // the handler's `request.signal`. It always settles, so awaiting it cannot
+    // hold the driven loop open past the request it belongs to.
+    {
+        let h = http.clone();
+        engine.register_op(OpDecl::r#async("http_request_disconnected", move |args| {
+            let h = h.clone();
+            let rid = arg_u64(&args, 0);
+            Box::pin(async move { Ok(Value::Bool(require(&h)?.request_disconnected(rid).await)) })
+        }))?;
+    }
+
     engine.register_op(OpDecl::r#async("http_close", move |args| {
         let h = http.clone();
         let id = arg_u64(&args, 0);

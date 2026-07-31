@@ -105,6 +105,25 @@ test("Request exposes the standard mode/credentials/redirect defaults", () => {
   assertEquals(r.keepalive, false);
 });
 
+test("every Request has a signal, and wrapping one carries it", () => {
+  const plain = new Request("https://a.example/");
+  assert(plain.signal instanceof AbortSignal);
+  assertEquals(plain.signal.aborted, false);
+  // Reading it twice must give the same signal, not a fresh one each time —
+  // otherwise a listener added on one read would never fire.
+  assert(plain.signal === plain.signal);
+
+  const ac = new AbortController();
+  const withSignal = new Request("https://a.example/", { signal: ac.signal });
+  assert(withSignal.signal === ac.signal);
+  // Re-wrapping carries the same signal through, so an abort still reaches it.
+  assert(new Request(withSignal).signal === ac.signal);
+  ac.abort();
+  assertEquals(new Request(withSignal).signal.aborted, true);
+
+  assertThrows(() => new Request("https://a.example/", { signal: "nope" }), "TypeError");
+});
+
 test("Request exposes formData()", () => {
   assertEquals(typeof Request.prototype.formData, "function");
 });
