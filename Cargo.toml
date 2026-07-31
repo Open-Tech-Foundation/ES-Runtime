@@ -73,7 +73,14 @@ futures-core = "0.3.32"
 futures-channel = { version = "0.3.32", default-features = false, features = ["alloc"] }
 # Vetted HTTP client for the default NetTransport (DECISIONS.md D20). rustls TLS
 # only (no OpenSSL/native-tls). Confined to `default-providers`.
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset"] }
+#
+# The three content-codings are the same set `CompressionStream` implements
+# (SPEC §2.8), which is what Fetch's "decode" step needs a client to understand;
+# enabling them is what makes reqwest negotiate `Accept-Encoding` and decode the
+# response body. `zstd` is deliberately left out: the runtime does not implement
+# it anywhere else, and advertising a coding we would then have to decode with a
+# codec present for no other reason is dependency for its own sake.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "stream", "http2", "charset", "gzip", "brotli", "deflate"] }
 futures-util = { version = "0.3.32", default-features = false }
 # Vetted HTTP/1.1 server for the default HttpServerProvider (runtime:http). The
 # same hyper 1.x already in the tree via reqwest; hyper-util's tokio executor +

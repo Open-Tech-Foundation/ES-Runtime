@@ -14,8 +14,22 @@ use es_runtime_providers::{
 /// compared against 20 in HTTP-redirect fetch).
 const MAX_REDIRECTS: usize = 20;
 
+/// The default `User-Agent`, matching `navigator.userAgent` so a server sees the
+/// same identity the guest reports. A request that sets its own `user-agent`
+/// header overrides this.
+const USER_AGENT: &str = concat!("ES-Runtime/", env!("CARGO_PKG_VERSION"));
+
 /// A [`NetTransport`] backed by `reqwest` with rustls TLS (no OpenSSL). HTTP/1.1
 /// and HTTP/2; response bodies stream.
+///
+/// Content-codings are negotiated and decoded here (Fetch's "decode" step):
+/// `Accept-Encoding: gzip, br, deflate` goes out, and a response in any of those
+/// codings arrives decoded with `Content-Encoding`/`Content-Length` dropped from
+/// the headers, so they cannot describe bytes the guest never sees. Decoding
+/// keys off the response's `Content-Encoding` rather than off who asked, so a
+/// server that compresses unbidden is still handled. A coding this client does
+/// not implement (`zstd`, say) passes through untouched, headers intact — the
+/// honest answer, since pretending to have decoded it would be a lie.
 ///
 /// The clients are built on the **first fetch** that needs one, not at
 /// construction: client build-out (TLS config, root-store loading) costs startup
@@ -53,6 +67,7 @@ impl ReqwestTransport {
         cell.get_or_init(|| {
             reqwest::Client::builder()
                 .redirect(policy)
+                .user_agent(USER_AGENT)
                 .build()
                 .map_err(|e| format!("http client: {e}"))
         })

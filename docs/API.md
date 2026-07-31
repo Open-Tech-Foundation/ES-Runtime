@@ -101,6 +101,27 @@ would make the mode useless — the reason to ask for `"manual"` server-side is 
 read `Location`. The real response is returned instead, as Node, Deno and Bun
 all do.
 
+### Compressed responses
+
+The default transport negotiates and decodes content-codings, so a compressed
+response arrives as a body you can read:
+
+| | |
+| --- | --- |
+| Sent | `Accept-Encoding: gzip, br, deflate` — the same set `CompressionStream` implements |
+| Decoded | `gzip`, `br`, `deflate`, keyed off the response's `Content-Encoding` rather than off who asked, so a server that compresses unbidden is still handled |
+| Stripped | `Content-Encoding` and `Content-Length`, which described the compressed bytes |
+| Passed through | any other coding (`zstd`, …) — body and headers untouched, since claiming to have decoded it would be a lie |
+
+`zstd` is deliberately not implemented: nothing else in the runtime speaks it,
+and advertising a coding means carrying a codec that exists for no other reason.
+
+Outbound requests carry `User-Agent: ES-Runtime/<version>` — the same string as
+`navigator.userAgent` — unless the request sets its own.
+
+Both are properties of the default `ReqwestTransport`. An embedder that installs
+its own `NetTransport` decides for itself.
+
 ### `console`
 
 The whole Console Standard method set, routed to the injected `Console` provider

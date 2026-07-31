@@ -118,6 +118,39 @@ fn honours_every_fetch_redirect_mode_over_the_wire() {
 }
 
 #[test]
+fn decodes_compressed_response_bodies_and_identifies_itself() {
+    // Real compressed bytes from a real runtime:http server: the guest must see
+    // the decoded body, and the headers describing the compressed form must not
+    // survive to describe bytes it never sees.
+    let out = run_file("fetch-content-encoding.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    for coding in ["gzip", "deflate", "br"] {
+        assert!(
+            stdout.contains(&format!(
+                "DECODE {coding} ok:true content-encoding:null content-length:null"
+            )),
+            "{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("ACCEPT gzip:true br:true deflate:true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("EXPLICIT ok:true"), "{stdout}");
+    assert!(
+        stdout.contains("UNKNOWN body:true content-encoding:zstd"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("UA default:true matches-navigator:true"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("UA override:true"), "{stdout}");
+    assert!(stdout.contains("ENCODING_OK"), "{stdout}");
+}
+
+#[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
         .arg("-e")

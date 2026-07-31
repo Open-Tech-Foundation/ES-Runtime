@@ -35,6 +35,27 @@ namespace) is unstable and may change between minor releases until the API freez
   redirect: "manaul" })` used to be accepted and stored verbatim; now that the
   value decides whether a `3xx` is followed, a typo silently meaning `"follow"`
   is a bug that only shows up in production.
+- **`fetch` decodes compressed response bodies.** The default transport was
+  built without any content-coding support, so it never sent `Accept-Encoding`
+  and, worse, never decoded: a server that compressed anyway — plenty do it
+  unconditionally — handed the guest raw gzip bytes, and `await r.text()`
+  returned binary garbage with no error to say why. `Accept-Encoding: gzip, br,
+  deflate` now goes out (the same set `CompressionStream` implements) and a
+  response in any of those codings arrives decoded, with `Content-Encoding` and
+  `Content-Length` dropped so they cannot describe bytes the guest never sees.
+  Decoding keys off the response's `Content-Encoding` rather than off who asked,
+  so an unbidden compressed response is handled too. A coding the client does
+  not implement passes through untouched, headers intact.
+  `zstd` is deliberately not included: nothing else in the runtime speaks it, and
+  advertising a coding means carrying a codec that exists for no other reason.
+  Only three crates are new — `brotli` and `flate2` were already in the tree for
+  `CompressionStream`.
+- **Outbound requests identify the runtime.** `fetch` sent no `User-Agent` at
+  all, which some CDNs and WAFs treat as a bot. Requests now carry
+  `ES-Runtime/<version>` — the same string as `navigator.userAgent`, so a server
+  sees the identity the guest reports — unless the request sets its own. Like
+  the content-codings above, this is a property of the default
+  `ReqwestTransport`; an embedder with its own `NetTransport` decides for itself.
 - **Breaking (embedders implementing `NetTransport`):** `HttpRequest` gains a
   `redirect: RedirectMode` field and `HttpResponse` a `redirected: bool`. A
   transport must decide between `RedirectMode::Follow` and `Manual` and report

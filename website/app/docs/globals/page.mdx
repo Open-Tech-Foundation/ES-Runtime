@@ -197,6 +197,18 @@ await fetch("https://example.com/upload", { method: "POST", body });
 // Anything else (string, Blob, FormData, Uint8Array) is sent buffered.
 ```
 
+## Compressed responses
+
+| | |
+| --- | --- |
+| Sent | `Accept-Encoding: gzip, br, deflate` |
+| Decoded | `gzip`, `br`, `deflate` — off the response's `Content-Encoding` |
+| Stripped | `Content-Encoding`, `Content-Length` |
+| Passed through | any other coding (`zstd`, …), headers intact |
+
+Requests carry `User-Agent: ES-Runtime/<version>` unless you set your own. Both
+are properties of the default transport.
+
 ## Redirects
 
 | `redirect` | Behaviour |
