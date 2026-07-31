@@ -27,10 +27,10 @@ mod dotenv;
 
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
-use es_runtime::{HostProviders, ModuleEvalState, ModuleLoader, Process, Runtime};
+use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, Process, Runtime};
 use es_runtime_common::CapabilitySet;
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
@@ -38,7 +38,7 @@ use es_runtime_default_providers::{
     SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem, SystemWebSocket, TokioTimers,
     path,
 };
-use es_runtime_providers::{Console, ConsoleLevel};
+use es_runtime_providers::{Console, ConsoleLevel, Signal};
 use url::Url;
 
 const USAGE: &str = "\
@@ -50,6 +50,9 @@ USAGE:
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file <path>  Load env vars from a .env file
     esrun --env-override     Let --env-file values override the OS environment
+    esrun --shutdown-grace <ms>
+                             How long in-flight HTTP requests may finish after
+                             ^C/SIGTERM (default 10000)
     esrun upgrade            Update esrun to the latest release
     esrun types              Print the runtime: TypeScript definitions
     esrun types --install    Install the definitions + wire up tsconfig.json
@@ -260,6 +263,108 @@ impl Console for StdoutConsole {
     }
 }
 
+/// Watches for an interrupt and, if the guest has not taken responsibility for
+/// it, drains the HTTP servers instead of letting the process be killed.
+///
+/// The three-way split is the whole design:
+///
+/// * **The guest is watching this signal** — it installed a handler, so it owns
+///   shutdown. Do nothing; racing its handler would be worse than useless.
+/// * **No server is running** — there is no in-flight request to protect, so
+///   exit at once. A script with a `setInterval` should still die instantly on
+///   `^C`; waiting out a grace period there would be a regression, not a
+///   feature.
+/// * **Servers are running** — stop accepting, let in-flight requests answer,
+///   and exit with the conventional 128+signal once they drain. `grace` is the
+///   backstop for a handler that never finishes.
+///
+/// A second interrupt during the drain exits immediately: someone pressing `^C`
+/// twice means it, and the first press has already been given its chance.
+fn spawn_shutdown_watcher(
+    signals: Arc<SystemSignals>,
+    http: Arc<SystemHttpServer>,
+    interrupt: InterruptHandle,
+    grace: Duration,
+) {
+    let draining = Arc::new(AtomicBool::new(false));
+    for signal in [Signal::Int, Signal::Term] {
+        // Watching here also suppresses the default action, which is the point:
+        // the process must survive long enough to drain. A platform that cannot
+        // deliver this signal simply gets no watcher.
+        let Some(mut stream) = watch_process_signal(signal) else {
+            continue;
+        };
+        let (signals, http, interrupt, draining) = (
+            signals.clone(),
+            http.clone(),
+            interrupt.clone(),
+            draining.clone(),
+        );
+        tokio::spawn(async move {
+            while stream.recv().await.is_some() {
+                // The guest asked for this signal: its handler is the shutdown.
+                if signals.is_watched(signal) {
+                    continue;
+                }
+                if draining.swap(true, Ordering::SeqCst) {
+                    // Second interrupt while draining — stop waiting.
+                    std::process::exit(signal.exit_code());
+                }
+                if http.shutdown_all() == 0 {
+                    // Nothing in flight to protect; behave as the default action
+                    // would have.
+                    std::process::exit(signal.exit_code());
+                }
+                eprintln!(
+                    "esrun: {} received, draining in-flight requests (up to {}ms)",
+                    signal.name(),
+                    grace.as_millis()
+                );
+                // Backstop: a handler that never finishes must not outlive the
+                // grace. Terminating the engine unblocks the drive loop, and the
+                // exit code is the same either way.
+                let handle = interrupt.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(grace).await;
+                    handle.terminate();
+                    std::process::exit(signal.exit_code());
+                });
+                // The drive loop reaches quiescence once the servers have
+                // drained; record the code it should exit with.
+                SHUTDOWN_CODE.store(signal.exit_code(), Ordering::SeqCst);
+            }
+        });
+    }
+}
+
+/// The exit code a completed graceful shutdown should use, or `0` if no
+/// interrupt was handled. Read once the drive loop returns.
+static SHUTDOWN_CODE: AtomicI32 = AtomicI32::new(0);
+
+/// A process-level stream for `signal`, or `None` where the platform has no such
+/// signal to deliver. Separate from the guest's `Signals` provider on purpose:
+/// this one is the *host's* shutdown behaviour, and both can watch the same
+/// signal without competing for deliveries.
+#[cfg(unix)]
+fn watch_process_signal(signal: Signal) -> Option<tokio::signal::unix::Signal> {
+    use tokio::signal::unix::{SignalKind, signal as unix_signal};
+    let kind = match signal {
+        Signal::Int => SignalKind::interrupt(),
+        Signal::Term => SignalKind::terminate(),
+        _ => return None,
+    };
+    unix_signal(kind).ok()
+}
+
+#[cfg(windows)]
+fn watch_process_signal(signal: Signal) -> Option<tokio::signal::windows::CtrlC> {
+    // Windows has no SIGTERM; Ctrl+C is the interrupt that exists.
+    match signal {
+        Signal::Int => tokio::signal::windows::ctrl_c().ok(),
+        _ => None,
+    }
+}
+
 /// What to run, parsed from argv.
 enum Source {
     File(String),
@@ -274,15 +379,25 @@ struct Config {
     env_file: Option<String>,
     /// Whether `--env-file` values override the OS environment (`--env-override`).
     env_override: bool,
+    /// How long in-flight HTTP requests get to finish after an interrupt, via
+    /// `--shutdown-grace` (see [`DEFAULT_SHUTDOWN_GRACE`]).
+    shutdown_grace: Duration,
     /// User arguments after the script/`-e` code, exposed as `runtime:process`
     /// `args` (the runtime binary and the script/code are excluded).
     args: Vec<String>,
 }
 
+/// How long a graceful shutdown waits for in-flight HTTP requests before giving
+/// up and exiting anyway. Long enough for an ordinary request to finish, short
+/// enough that an orchestrator's own kill deadline (commonly 30s) is not the
+/// thing that ends the process.
+const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
+
 fn parse_args() -> Result<Config, String> {
     let mut timeout = None;
     let mut env_file: Option<String> = None;
     let mut env_override = false;
+    let mut shutdown_grace = DEFAULT_SHUTDOWN_GRACE;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -343,6 +458,15 @@ fn parse_args() -> Result<Config, String> {
             "--env-override" => {
                 env_override = true;
             }
+            "--shutdown-grace" => {
+                let ms = args
+                    .next()
+                    .ok_or_else(|| "--shutdown-grace requires a millisecond value".to_string())?;
+                let ms: u64 = ms.parse().map_err(|_| {
+                    format!("invalid --shutdown-grace value: {ms} (expected milliseconds)")
+                })?;
+                shutdown_grace = Duration::from_millis(ms);
+            }
             "-e" | "--eval" => {
                 let code = args
                     .next()
@@ -352,6 +476,7 @@ fn parse_args() -> Result<Config, String> {
                     timeout,
                     env_file,
                     env_override,
+                    shutdown_grace,
                     args: args.collect(),
                 });
             }
@@ -364,6 +489,7 @@ fn parse_args() -> Result<Config, String> {
                     timeout,
                     env_file,
                     env_override,
+                    shutdown_grace,
                     args: args.collect(),
                 });
             }
@@ -467,6 +593,11 @@ async fn run() -> Result<(), String> {
     // The same view, synchronously, for `runtime:wasi` — WASI's syscalls cannot
     // await. Same base and same jail, so both paths agree on what is reachable.
     let sync_file_system = Arc::new(SystemSyncFileSystem::new(&base_dir, &fs_root));
+    // Held here as well as in the providers: the interrupt watcher below needs
+    // to ask the signal registry what the guest is watching, and to tell the
+    // HTTP servers to stop accepting.
+    let signals = Arc::new(SystemSignals::new());
+    let http_server = Arc::new(SystemHttpServer::new());
     let providers = HostProviders::new(
         clock.clone(),
         Arc::new(StdoutConsole),
@@ -474,11 +605,11 @@ async fn run() -> Result<(), String> {
         Arc::new(OsEntropy),
     )
     .with_process(process.clone())
-    .with_signals(Arc::new(SystemSignals::new()))
+    .with_signals(signals.clone())
     .with_file_system(file_system)
     .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(SystemNet::new()))
-    .with_http_server(Arc::new(SystemHttpServer::new()))
+    .with_http_server(http_server.clone())
     .with_web_socket(Arc::new(SystemWebSocket::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
@@ -496,6 +627,15 @@ async fn run() -> Result<(), String> {
     // A trusted local script: grant the full capability set (incl. FileSystem,
     // which module loading requires).
     runtime.set_capabilities(CapabilitySet::all());
+
+    // Graceful shutdown on ^C / SIGTERM. Installed before the module runs, so a
+    // server that binds immediately is covered from its first request.
+    spawn_shutdown_watcher(
+        signals,
+        http_server.clone(),
+        runtime.interrupt_handle(),
+        config.shutdown_grace,
+    );
 
     // Execution-time watchdog (SPEC §4): a separate thread terminates the engine
     // after the deadline. Cross-thread V8 termination means even a synchronous
@@ -560,6 +700,19 @@ async fn run() -> Result<(), String> {
     // interrupt; exit with that code rather than reporting the termination.
     if let Some(code) = process.requested_exit_code() {
         std::process::exit(code);
+    }
+
+    // The drive returned because a graceful shutdown drained the servers. The
+    // guest is done, but its last responses have only been *handed* to the HTTP
+    // transport — exiting now would turn them into empty replies, which is the
+    // very failure the drain exists to prevent. Wait for the connections to
+    // close, then report the interruption in the status an orchestrator reads.
+    let shutdown_code = SHUTDOWN_CODE.load(Ordering::SeqCst);
+    if shutdown_code != 0 {
+        if !http_server.wait_for_idle(config.shutdown_grace).await {
+            eprintln!("esrun: shutdown grace expired with requests still in flight");
+        }
+        std::process::exit(shutdown_code);
     }
 
     // A top-level throw (or a rejected top-level await) fails the module's

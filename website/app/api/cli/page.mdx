@@ -19,6 +19,9 @@ esrun -e <code>          Run an inline module snippet
 esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
 esrun --env-file <path>  Load env vars from a .env file
 esrun --env-override     Let --env-file values override the OS environment
+esrun --shutdown-grace <ms>
+                         How long in-flight HTTP requests may finish after
+                         ^C/SIGTERM (default 10000)
 esrun upgrade            Update esrun to the latest release
 esrun types              Print the runtime: TypeScript definitions
 esrun types --install    Install the definitions + wire up tsconfig.json
@@ -35,6 +38,7 @@ esrun -v, --version      Show the version
 | `-t, --timeout <ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
 | `--env-file <path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
+| `--shutdown-grace <ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
 | `upgrade` | Download the latest release for your platform, verify its checksum, and replace the running binary in place. |
 | `types` | Print the `runtime:` TypeScript definitions to stdout (`esrun types > runtime.d.ts`) — version-matched and offline. |
 | `types --install` | Install the definitions into `node_modules/@opentf/esrun` and wire up `tsconfig.json` (`typeRoots` + `types`) so editors resolve the `runtime:*` modules automatically. |
@@ -58,6 +62,9 @@ esrun -t 500 app.js
 
 # Load env vars from a .env file (OS env wins; --env-override flips it)
 esrun --env-file .env app.js
+
+# Give in-flight requests 30s to finish after SIGTERM
+esrun --shutdown-grace 30000 server.js
 ```
 
 <Callout type="note" title="Arguments">
@@ -65,3 +72,20 @@ esrun --env-file .env app.js
   list, readable as [`args` from runtime:process](/api/process). The runtime
   binary and the script path are excluded.
 </Callout>
+
+## Graceful shutdown
+
+`^C` and `SIGTERM` are handled for you when a `runtime:http` server is running:
+esrun stops accepting, lets in-flight requests answer, and exits `130` / `143`.
+
+| Situation | What happens |
+| --- | --- |
+| A server is running | Stop accepting, drain in flight, exit `128 + signal` |
+| No server is running | Exit immediately — nothing in flight to protect |
+| You installed a handler | esrun stays out of the way; the handler owns shutdown |
+| A second `^C` while draining | Exit immediately |
+| The drain outlasts `--shutdown-grace` | Exit anyway (default `10000`ms) |
+
+Install a handler with [`onSignal`](/api/process) when you have your own cleanup
+— closing a pool, flushing a buffer — and esrun leaves the whole shutdown to
+you.

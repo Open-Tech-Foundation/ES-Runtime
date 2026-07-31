@@ -38,7 +38,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
 /// The response body handed to hyper: buffered (`Full`) or streamed
@@ -68,6 +68,55 @@ type Pending = (
 struct Control {
     acceptor: AbortHandle,
     shutdown: Arc<Notify>,
+    /// Level-triggered "begin a graceful shutdown" flag the live connection
+    /// tasks watch. A `Notify` would not do: it is edge-triggered, so a
+    /// connection accepted a moment before the signal could miss it and then
+    /// hold the process open until its client happened to hang up.
+    draining: watch::Sender<bool>,
+}
+
+/// Live connection accounting, shared by every server in one registry.
+///
+/// A response is *handed to* hyper by `respond`, which is not the same as
+/// written to the socket — hyper needs to be polled again for that. So a caller
+/// draining for shutdown cannot ask "are all responses sent?"; it asks "are all
+/// connections finished?", which is this.
+#[derive(Clone, Default)]
+struct LiveConnections {
+    count: Arc<AtomicU64>,
+    idle: Arc<Notify>,
+}
+
+impl LiveConnections {
+    fn enter(&self) {
+        self.count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn leave(&self) {
+        if self.count.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.idle.notify_waiters();
+        }
+    }
+
+    /// Resolves once no connection is live. Returns `false` if `grace` ran out
+    /// first, so a caller can report that it gave up rather than drained.
+    async fn wait_idle(&self, grace: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + grace;
+        loop {
+            if self.count.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            // Register before re-checking, so a `leave` that lands between the
+            // two is not a missed wakeup.
+            let idle = self.idle.notified();
+            if self.count.load(Ordering::SeqCst) == 0 {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, idle).await.is_err() {
+                return self.count.load(Ordering::SeqCst) == 0;
+            }
+        }
+    }
 }
 
 /// An [`HttpServerProvider`] over a hyper HTTP/1.1 server. The `Arc`s are cloned
@@ -82,6 +131,7 @@ pub struct SystemHttpServer {
     /// entry is taken by the first watcher; a request nobody watches has its
     /// entry dropped with the server.
     delivered: Arc<Mutex<HashMap<u64, oneshot::Receiver<()>>>>,
+    live: LiveConnections,
     next_id: Arc<AtomicU64>,
 }
 
@@ -93,6 +143,52 @@ impl SystemHttpServer {
 
     fn id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Stops every live server from accepting, and returns how many there were.
+    ///
+    /// This is the first half of a graceful shutdown: new connections stop, but
+    /// requests already handed to the guest are untouched — their response
+    /// channels stay open, so a handler still in flight can finish and reply.
+    /// The caller keeps driving until that work drains.
+    ///
+    /// The count is what tells a caller whether a drain is worth waiting for at
+    /// all: zero means there was never a server, so there is nothing in flight
+    /// to protect and no reason to delay exiting.
+    pub fn shutdown_all(&self) -> usize {
+        let controls: Vec<_> = self
+            .controls
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .collect();
+        for (id, control) in &controls {
+            // Dropping the request receiver ends idle keep-alive connections;
+            // aborting the acceptor stops new ones; the notify wakes a parked
+            // `next_requests` so the guest's accept loop finishes; and the
+            // drain flag puts every live connection into hyper's graceful
+            // shutdown, which answers what is in flight and then closes.
+            self.requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
+            control.acceptor.abort();
+            control.shutdown.notify_waiters();
+            let _ = control.draining.send(true);
+        }
+        controls.len()
+    }
+
+    /// Resolves once every connection has finished, or after `grace`; `true` if
+    /// they drained, `false` if the deadline ran out first.
+    ///
+    /// Pairs with [`shutdown_all`](Self::shutdown_all). Waiting for the guest's
+    /// work to finish is not enough on its own: the guest hands a response to
+    /// [`respond`](HttpServerProvider::respond) and moves on, and hyper has to be
+    /// polled again to put the bytes on the socket. Exiting between those two
+    /// points is exactly how an in-flight request turns into an empty reply.
+    pub async fn wait_for_idle(&self, grace: std::time::Duration) -> bool {
+        self.live.wait_idle(grace).await
     }
 }
 
@@ -210,6 +306,8 @@ impl HttpServerProvider for SystemHttpServer {
             // consumer to drain in one batch (see `next_requests`), rather than
             // stalling on backpressure between crossings.
             let (tx, rx) = mpsc::channel::<Pending>(1024);
+            let (draining, drain_rx) = watch::channel(false);
+            let live = this.live.clone();
 
             let acceptor = tokio::spawn(async move {
                 while let Ok((stream, _peer)) = listener.accept().await {
@@ -217,6 +315,9 @@ impl HttpServerProvider for SystemHttpServer {
                     let io = TokioIo::new(stream);
                     let tx = tx.clone();
                     let authority = authority.clone();
+                    let live = live.clone();
+                    let mut drain_rx = drain_rx.clone();
+                    live.enter();
                     tokio::spawn(async move {
                         let service = service_fn(move |req: Request<Incoming>| {
                             let tx = tx.clone();
@@ -251,7 +352,28 @@ impl HttpServerProvider for SystemHttpServer {
                                 }
                             }
                         });
-                        let _ = http1::Builder::new().serve_connection(io, service).await;
+                        let conn = http1::Builder::new().serve_connection(io, service);
+                        tokio::pin!(conn);
+                        // Race the connection against the drain signal. On
+                        // shutdown, `graceful_shutdown` stops reading new
+                        // requests but still finishes the one in flight and
+                        // writes its response — the difference between draining
+                        // and dropping. Awaiting the connection afterwards is
+                        // what makes the response actually reach the socket.
+                        tokio::select! {
+                            _ = conn.as_mut() => {}
+                            // Wrapped so the borrow `wait_for` hands back — a
+                            // read guard — is dropped at the end of the
+                            // statement, rather than living across the await
+                            // below and making this task non-`Send`.
+                            _ = async {
+                                let _ = drain_rx.wait_for(|draining| *draining).await;
+                            } => {
+                                conn.as_mut().graceful_shutdown();
+                                let _ = conn.await;
+                            }
+                        }
+                        live.leave();
                     });
                 }
             })
@@ -264,6 +386,7 @@ impl HttpServerProvider for SystemHttpServer {
                 Control {
                     acceptor,
                     shutdown: Arc::new(Notify::new()),
+                    draining,
                 },
             );
             Ok((id, info_of(local)))

@@ -17,7 +17,7 @@ es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
 es-runtime.workspace = true
 es-runtime-default-providers.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "time"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "signal"] }
 # Canonicalizing the entry path / inline-snippet base into a file: module
 # specifier (the referrer the entry's imports resolve against).
 url.workspace = true

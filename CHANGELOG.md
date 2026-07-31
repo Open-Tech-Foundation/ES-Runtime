@@ -137,6 +137,30 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`esrun` shuts down gracefully on `^C` / `SIGTERM`.** A running server was
+  killed where it stood: in-flight requests died mid-response, and a client that
+  had waited seconds for an answer got an empty reply. That is the default
+  behaviour a container gets on every deploy.
+  `esrun` now stops accepting, lets in-flight requests answer, and exits with the
+  conventional `128 + signal` (`130` / `143`), which is what an orchestrator
+  reads. `--shutdown-grace <ms>` bounds the wait (default `10000`).
+  Three cases, deliberately distinguished:
+  - **The guest installed a signal handler** — it owns shutdown, and `esrun`
+    stays out of the way entirely rather than racing it.
+  - **No server is running** — exit immediately. There is nothing in flight to
+    protect, and making `^C` on a plain script wait out a grace period would be a
+    regression, not a feature.
+  - **Servers are running** — drain. A second interrupt during the drain exits
+    at once: someone pressing `^C` twice means it.
+
+  Draining waits for the **connections** to close, not merely for the handler to
+  return. A response is *handed to* the HTTP transport and the guest moves on;
+  the bytes reach the socket only when hyper is polled again, so exiting between
+  those two points is precisely how an in-flight request becomes an empty reply —
+  which is what the first draft of this did. Live connections are now put into
+  hyper's own graceful shutdown, which finishes what is in flight and then
+  closes, and the process waits for that.
+
 - **OS signals — `runtime:process` `onSignal` / `offSignal` / `signals`.** There
   was no way to observe a signal at all, so a container's `SIGTERM` killed the
   process outright: in-flight HTTP requests died mid-response, connection pools

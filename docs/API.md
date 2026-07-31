@@ -748,6 +748,30 @@ await server.stop();
 **`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
 `finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.
 
+#### Shutdown
+
+`server.stop()` stops accepting and resolves once the accept loop has ended;
+in-flight requests still complete.
+
+`esrun` wires this to `^C` and `SIGTERM` for you, so a server does not need to
+handle signals to shut down cleanly:
+
+| Situation | What happens |
+| --- | --- |
+| A server is running | Stop accepting, drain in-flight requests, exit `128 + signal` (`130`/`143`) |
+| No server is running | Exit immediately — there is nothing in flight to protect, and a plain script should still die instantly on `^C` |
+| The guest installed a signal handler | `esrun` stays out of the way entirely; the handler owns shutdown |
+| A second interrupt during the drain | Exit immediately |
+| The drain outlasts `--shutdown-grace` | Exit anyway (default `10000`ms) |
+
+Draining waits for the *connections* to close, not just for the handler to
+return: a response is handed to the transport before it reaches the socket, and
+exiting between those two points is what turns an in-flight request into an
+empty reply.
+
+To run your own cleanup instead, install a handler with
+[`onSignal`](#signals) — that alone tells `esrun` to leave shutdown to you.
+
 #### `request.signal` — the client hung up
 
 `request.signal` aborts (with an `AbortError` `DOMException`) when the client

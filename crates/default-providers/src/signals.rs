@@ -53,6 +53,18 @@ impl SystemSignals {
         }
     }
 
+    /// Whether the guest is watching `signal`.
+    ///
+    /// An embedder that also watches a signal for its own shutdown handling asks
+    /// this to decide whether to act: a guest that installed a handler has taken
+    /// responsibility, and a host default that fired anyway would race it.
+    pub fn is_watched(&self, signal: Signal) -> bool {
+        self.watched
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&signal)
+    }
+
     fn unsupported(signal: Signal) -> ProviderError {
         ProviderError::Coded {
             code: ErrorCode::ProviderUnavailable,

@@ -162,6 +162,34 @@ await server.finished;
 console.log("server stopped");
 ```
 
+## Shutdown on ^C / SIGTERM
+
+esrun handles this for you: it stops accepting, lets in-flight requests answer,
+and exits `130` / `143`.
+
+| Situation | What happens |
+| --- | --- |
+| A server is running | Drain in flight, then exit `128 + signal` |
+| No server is running | Exit immediately |
+| You installed a handler | esrun stays out of the way |
+| Second `^C` while draining | Exit immediately |
+| Drain outlasts `--shutdown-grace` | Exit anyway (default `10000`ms) |
+
+For your own cleanup, take it over with
+[`onSignal`](/docs/process#signals):
+
+```js
+import { onSignal, offSignal } from "runtime:process";
+
+const shutdown = async (signal) => {
+  offSignal(signal, shutdown);
+  await server.stop();
+  await pool.close();
+};
+onSignal("SIGINT", shutdown);
+onSignal("SIGTERM", shutdown);
+```
+
 ## TLS and production deployment
 
 `runtime:http` does not terminate TLS. Typical production setups:
