@@ -3,7 +3,7 @@ import CodeTabs from "../components/CodeTabs.jsx";
 import RpsChart from "../components/RpsChart.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
-import WhyChooseSection from "../components/WhyChooseSection.jsx";
+import UniqueFeaturesSection from "../components/UniqueFeaturesSection.jsx";
 
 const features = [
   {
@@ -169,8 +169,8 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Why Choose Section */}
-      <WhyChooseSection />
+      {/* Unique Features Section */}
+      <UniqueFeaturesSection />
 
       {/* Builtin Core Features */}
       <section className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
