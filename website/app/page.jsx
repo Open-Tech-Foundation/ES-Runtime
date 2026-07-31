@@ -116,11 +116,11 @@ export default function HomePage() {
               <div className="group relative overflow-hidden rounded-2xl border border-zinc-200 bg-white p-6 transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-brand-900">
                 {/* Faint brand wash, only on hover. */}
                 <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-brand-500/0 blur-2xl transition-colors duration-300 group-hover:bg-brand-500/15" />
-                <span className="block h-[3px] w-8 rounded-full bg-brand-500/70 transition-all duration-200 group-hover:w-12 group-hover:bg-brand-500" />
-                <h3 className="relative mt-4 text-base font-semibold text-zinc-900 dark:text-zinc-100">
+                <h3 className="relative text-base font-semibold text-zinc-900 dark:text-zinc-100">
                   {f.title}
                 </h3>
-                <p className="relative mt-2 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
+                <span className="mt-3 block h-[3px] w-8 rounded-full bg-brand-500/70 transition-all duration-200 group-hover:w-12 group-hover:bg-brand-500" />
+                <p className="relative mt-3 text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
                   {f.body}
                 </p>
               </div>
