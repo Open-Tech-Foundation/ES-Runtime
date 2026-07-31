@@ -22,6 +22,7 @@
   --color-brand-700: #c25600;
   --color-brand-800: #9a4400;
   --color-brand-900: #7c3a00;
+  --color-brand-950: #431c00;
 }
 
 :root {
@@ -189,19 +190,19 @@ button:not(:disabled),
   gap: 0.65rem;
   flex-shrink: 0;
   padding: 0.45rem 0.95rem 0.45rem 0.55rem;
-  border: 1px solid #27272a;
+  border: 1px solid #e4e4e7;
   border-radius: 9999px;
-  background: #18181b;
+  background: #ffffff;
   text-decoration: none;
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--otfw-text) 4%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   transition:
     border-color 0.2s ease,
     box-shadow 0.2s ease,
     transform 0.2s ease;
 }
 .otfw-footer-badge:hover {
-  border-color: color-mix(in srgb, var(--otfw-accent) 35%, #27272a);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--otfw-accent) 12%, transparent);
+  border-color: #d4d4d8;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   transform: translateY(-1px);
 }
 .otfw-footer-badge:focus-visible {
@@ -223,13 +224,16 @@ button:not(:disabled),
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #a1a1aa;
+  color: #52525b;
 }
 .otfw-footer-badge-brand {
   font-size: 0.9375rem;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--otfw-accent);
+  color: #000000;
+}
+.otfw-footer-badge-accent {
+  color: var(--otfw-accent, #ff7a00);
 }
 
 .web-status-icon {

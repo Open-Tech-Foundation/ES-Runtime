@@ -49,7 +49,9 @@ export default function BuiltWithBadge() {
       <DocsMark />
       <span className="otfw-footer-badge-copy">
         <span className="otfw-footer-badge-muted">Built with</span>
-        <span className="otfw-footer-badge-brand">OTF Web</span>
+        <span className="otfw-footer-badge-brand">
+          OTF <span className="otfw-footer-badge-accent">Web</span>
+        </span>
       </span>
     </a>
   );

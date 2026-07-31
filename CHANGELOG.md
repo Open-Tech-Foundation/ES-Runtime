@@ -11,6 +11,8 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Changed
 
 - **Website updates**:
+  - Updated Built With footer badge styling to white background with black "OTF" brand text and orange "Web" accent.
+  - Added missing `--color-brand-950` theme color in `global.css` to fix landing page Alpha badge dark mode.
   - Updated website config version to `v0.13.0`.
   - Enforced default dark background on site footer.
   - Converted CTA section to standard theme-responsive page section.

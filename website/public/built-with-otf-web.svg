@@ -5,13 +5,15 @@
       .mark-bg { fill: rgba(255, 122, 0, 0.12); }
       .mark-stroke { stroke: #ff7a00; fill: none; }
       .muted { fill: #64748b; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 9px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
-      .brand { fill: #ff7a00; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 15px; font-weight: 700; letter-spacing: -0.02em; }
+      .brand { fill: #000000; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 15px; font-weight: 700; letter-spacing: -0.02em; }
+      .accent { fill: #ff7a00; }
       @media (prefers-color-scheme: dark) {
-        .shell { fill: #0f172a; stroke: #1e293b; }
-        .mark-bg { fill: rgba(255, 148, 61, 0.16); }
-        .mark-stroke { stroke: #ff943d; }
-        .muted { fill: #94a3b8; }
-        .brand { fill: #ff943d; }
+        .shell { fill: #ffffff; stroke: #e2e8f0; }
+        .mark-bg { fill: rgba(255, 122, 0, 0.12); }
+        .mark-stroke { stroke: #ff7a00; }
+        .muted { fill: #64748b; }
+        .brand { fill: #000000; }
+        .accent { fill: #ff7a00; }
       }
     </style>
   </defs>
@@ -22,5 +24,5 @@
     <path class="mark-stroke" d="M10.25 6.5v9M6.5 9.25h3.75M11.75 9.25H15.5M6.5 12h3.75M11.75 12H15.5" stroke-width="1.1" stroke-linecap="round" opacity="0.55"/>
   </g>
   <text class="muted" x="44" y="18.5">Built with</text>
-  <text class="brand" x="44" y="33">OTF Web</text>
+  <text class="brand" x="44" y="33">OTF <tspan class="accent">Web</tspan></text>
 </svg>
