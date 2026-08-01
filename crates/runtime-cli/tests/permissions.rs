@@ -473,6 +473,197 @@ fn deny_env_leaves_exit_and_permissions_working() {
     assert!(s.contains("env denied: NotAllowedError"), "{s}");
 }
 
+// ---- scoped grants: --allow-<name>=<list> ------------------------------------
+
+#[test]
+fn allow_env_narrows_the_environment_to_the_named_variables() {
+    // The point of scoping `env` on a server: the process holds credentials the
+    // guest has no business reading, and the guest needs two variables.
+    let out = esrun()
+        .env("ESRUN_SCOPE_PORT", "8080")
+        .env("ESRUN_SCOPE_SECRET", "hunter2")
+        .args(["--deny-all", "--allow-env=ESRUN_SCOPE_PORT"])
+        .arg(
+            "-e=import { env } from 'runtime:process'; \
+             console.log('port', env.ESRUN_SCOPE_PORT); \
+             console.log('secret', env.ESRUN_SCOPE_SECRET); \
+             console.log('names', Object.keys(env).join(','));",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("port 8080"), "{s}");
+    // Absent, not merely unreadable — the value and the *name* are both denied.
+    assert!(s.contains("secret undefined"), "{s}");
+    assert!(s.contains("names ESRUN_SCOPE_PORT\n"), "{s}");
+}
+
+#[test]
+fn a_scoped_grant_still_reports_the_capability_as_granted() {
+    // `has("env")` answers "is the door open", which it is — the narrowing is
+    // the provider's, not the capability bit's. Reporting it as denied would be
+    // the lie that matters: code would take the no-env path and never read the
+    // variable it was explicitly given.
+    let out = run(
+        &["--deny-all", "--allow-env=HOME"],
+        "import { permissions } from 'runtime:process'; \
+         console.log(permissions.has('env'), permissions.denied.includes('env'));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true false");
+}
+
+#[test]
+#[cfg(unix)]
+fn allow_run_spawns_the_named_program_and_refuses_the_rest() {
+    let out = run(
+        &["--deny-all", "--allow-run=echo"],
+        "import { Command } from 'runtime:system'; \
+         const ok = await new Command('echo', { args: ['allowed'] }).output(); \
+         console.log(new TextDecoder().decode(ok.stdout).trim()); \
+         try { await new Command('sh', { args: ['-c', 'echo pwned'] }).output(); \
+               console.log('NO THROW'); } \
+         catch (e) { console.log('refused', e.name, e.code); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("allowed"), "{s}");
+    // A *scoped* denial, distinct from the capability denial that
+    // `--deny-run` produces (ERR_CAPABILITY_DENIED): the guest has `run`, just
+    // not this program.
+    assert!(s.contains("refused"), "{s}");
+    assert!(s.contains("ERR_PERMISSION_DENIED"), "{s}");
+}
+
+#[test]
+#[cfg(unix)]
+fn an_absolute_path_to_an_allowed_program_is_still_that_program() {
+    // Matching is on the name as written *and* the resolved file name, so the
+    // allowlist is not defeated by spelling the path out.
+    let out = run(
+        &["--deny-all", "--allow-run=echo"],
+        "import { Command } from 'runtime:system'; \
+         const out = await new Command('/bin/echo', { args: ['ok'] }).output(); \
+         console.log(new TextDecoder().decode(out.stdout).trim());",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ok");
+}
+
+// ---- the value grammar (D38) -------------------------------------------------
+
+#[test]
+fn scope_entries_are_comma_separated_and_trimmed() {
+    // `--allow-env="A, B"` and `--allow-env=A,B` are the same thing: quoting is
+    // a shell convenience, not a second syntax.
+    let out = esrun()
+        .env("ESRUN_SCOPE_A", "1")
+        .env("ESRUN_SCOPE_B", "2")
+        .args(["--deny-all", "--allow-env= ESRUN_SCOPE_A , ESRUN_SCOPE_B "])
+        .arg(
+            "-e=import { env } from 'runtime:process'; \
+             console.log(Object.keys(env).join(','));",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ESRUN_SCOPE_A,ESRUN_SCOPE_B");
+}
+
+#[test]
+fn repeating_a_scoped_flag_unions_its_entries() {
+    // Two flags that both add read in any order — no flag overrides another.
+    let out = esrun()
+        .env("ESRUN_SCOPE_A", "1")
+        .env("ESRUN_SCOPE_B", "2")
+        .args([
+            "--deny-all",
+            "--allow-env=ESRUN_SCOPE_A",
+            "--allow-env=ESRUN_SCOPE_B",
+        ])
+        .arg(
+            "-e=import { env } from 'runtime:process'; \
+             console.log(Object.keys(env).join(','));",
+        )
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ESRUN_SCOPE_A,ESRUN_SCOPE_B");
+}
+
+#[test]
+fn an_empty_entry_in_a_scope_list_is_an_error() {
+    // A stray comma is a typo, and a typo must not quietly change what the run
+    // may reach.
+    for value in ["--allow-env=A,,B", "--allow-env=A,", "--allow-env=,A"] {
+        let out = run(&["--deny-all", value], "console.log(1)");
+        assert!(!out.status.success(), "{value} should be rejected");
+        assert!(stderr(&out).contains("has an empty entry"), "{value}");
+    }
+}
+
+#[test]
+fn an_empty_scope_list_is_an_error_not_an_empty_grant() {
+    let out = run(&["--deny-all", "--allow-env="], "console.log(1)");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("has an empty value"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_denial_takes_no_scope_list() {
+    // Scoping narrows a grant; "everything except these hosts" is the other
+    // direction, and a mode has exactly one (D38 rule 3).
+    let out = run(&["--deny-run=git"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("--deny-run takes no value"), "{s}");
+    assert!(s.contains("--allow-run=<list>"), "{s}");
+}
+
+#[test]
+fn scoping_an_unimplemented_capability_is_rejected_and_says_what_works() {
+    let out = run(&["--deny-all", "--allow-read=/etc"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("Scoping read is not implemented yet"), "{s}");
+    assert!(s.contains("--allow-env=<list>"), "{s}");
+    assert!(s.contains("--allow-run=<list>"), "{s}");
+}
+
+#[test]
+fn granting_a_capability_whole_and_narrowed_at_once_is_an_error() {
+    // Neither reading wins: the wider flag would widen a run the user asked to
+    // narrow, the narrower one would ignore a flag they typed.
+    for flags in [
+        ["--allow-env", "--allow-env=HOME"],
+        ["--allow-env=HOME", "--allow-env"],
+    ] {
+        let out = run(&["--deny-all", flags[0], flags[1]], "console.log(1)");
+        assert!(!out.status.success(), "{flags:?} should be rejected");
+        let s = stderr(&out);
+        assert!(s.contains("disagree"), "{s}");
+        assert!(s.contains("--allow-env=HOME"), "{s}");
+    }
+}
+
+#[test]
+fn a_scoped_allow_still_requires_deny_all() {
+    // Rule 2 is unchanged by scoping: against "everything granted" there is
+    // nothing for an allow to add.
+    let out = run(&["--allow-env=HOME"], "console.log(1)");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--allow-env=HOME requires --deny-all"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
 // ---- the permissions API itself ----------------------------------------------
 
 #[test]

@@ -30,6 +30,7 @@
 
 mod dotenv;
 
+use std::collections::HashMap;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -60,6 +61,9 @@ USAGE:
     esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
                                 <name> is one of: read, write, imports, net,
                                 listen, env, run, signals
+    esrun --allow-run=<list>    Grant it narrowed to a comma-separated list:
+    esrun --allow-env=<list>    program names for run, variable names for env
+                                (the other six are all-or-nothing for now)
     esrun -t=<ms>, --timeout=<ms>
                                 Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file=<path>     Load env vars from a .env file
@@ -86,6 +90,7 @@ never both — each has a single direction, so no flag ever overrides another:
 
     esrun --deny-net --deny-run app.js     # everything, minus these
     esrun --deny-all --allow-net app.js    # nothing, plus these
+    esrun --deny-all --allow-env=PORT,HOME app.js   # ...and only these vars
 
 --allow-<name> requires --deny-all (with everything already granted, there is
 nothing for it to add). A denied operation throws NotAllowedError; importing a
@@ -94,9 +99,17 @@ compute, but cannot read, write, import another file, reach the network, read
 the environment, or spawn anything. Ask from JS with `permissions.has(name)`
 from runtime:process.
 
-Permission flags take no value — scoping to paths/hosts is not implemented, and
-`--allow-net=host` is rejected rather than ignored. They must also come before
-the script; after it they would be the script's own arguments.
+A scope list narrows a grant: --allow-env=HOME,PATH hides every other variable,
+--allow-run=git,ls refuses to spawn anything else. Entries are comma-separated
+and trimmed (`--allow-env=\"A, B\"` ≡ `--allow-env=A,B`); an empty entry is an
+error. Scoping the other six (read, write, imports, net, listen, signals) is not
+implemented, and `--allow-net=host` is rejected rather than ignored — a run must
+never be narrower on the command line than it is in reality. Denials take no
+value at all: a scope narrows a grant, so it is written --deny-all
+--allow-<name>=<list>.
+
+Permission flags must come before the script; after it they would be the
+script's own arguments.
 
 Everything after <file> (or the -e code) belongs to the script, readable as
 `args` from runtime:process.";
@@ -422,6 +435,29 @@ struct Config {
     /// What the script may reach, from `--deny-all` / `--deny-<name>` (D38).
     /// [`CapabilitySet::all`] unless denials were asked for.
     capabilities: CapabilitySet,
+    /// The scope lists from `--allow-<name>=a,b`, keyed by capability (D38).
+    /// A capability that is granted but absent here is granted **unnarrowed**;
+    /// the narrowing itself is enforced provider-side, not by the capability
+    /// bit — the bit only says whether the door exists.
+    scopes: Scopes,
+}
+
+/// Scope lists by capability, in the order the user wrote them.
+type Scopes = HashMap<Capability, Vec<String>>;
+
+/// What a scoped `--allow-<name>=<list>` means for `cap`, or `None` if scoping
+/// that capability is not implemented yet.
+///
+/// This is the list that grows as enforcement lands, and it is deliberately a
+/// list of what *works*: a capability missing from it rejects a value rather
+/// than accepting one it would not enforce (D38 — a run must never be narrower
+/// on the command line than it is in reality).
+fn scope_hint(cap: Capability) -> Option<&'static str> {
+    match cap {
+        Capability::Run => Some("program names, e.g. --allow-run=git,ls"),
+        Capability::Env => Some("variable names, e.g. --allow-env=HOME,PATH"),
+        _ => None,
+    }
 }
 
 /// The permission flags accumulated while parsing, resolved into a
@@ -446,17 +482,37 @@ struct Permissions {
     /// the user actually typed.
     denied: Vec<(String, Capability)>,
     /// `--allow-<name>` flags, likewise.
-    allowed: Vec<(String, Capability)>,
+    allowed: Vec<Allow>,
+}
+
+/// One `--allow-<name>` flag as written.
+struct Allow {
+    /// The whole argument as the user typed it, scope list included, so an
+    /// error can quote it back — `--allow-env` and `--allow-env=HOME` are
+    /// different flags to a reader, and the message that tells them apart is
+    /// the one complaining that they conflict.
+    flag: String,
+    cap: Capability,
+    /// The entries of `--allow-<name>=a,b`, or `None` for the bare flag —
+    /// "granted, unnarrowed".
+    values: Option<Vec<String>>,
 }
 
 impl Permissions {
-    /// Records a `--deny-<name>` / `--allow-<name>` flag.
+    /// Records a `--deny-<name>` / `--allow-<name>` flag, with the value it
+    /// carried (if any).
     ///
     /// `name` has already been split off the `--deny-`/`--allow-` prefix and is
     /// rejected here if it is not one of the eight — never ignored, since an
     /// unrecognised permission flag would otherwise read as a sandbox that is
     /// not actually on.
-    fn record(&mut self, flag: &str, name: &str, allow: bool) -> Result<(), String> {
+    fn record(
+        &mut self,
+        flag: &str,
+        name: &str,
+        allow: bool,
+        value: Option<&str>,
+    ) -> Result<(), String> {
         let prefix = if allow { "--allow-" } else { "--deny-" };
         let cap = Capability::from_flag_name(name).ok_or_else(|| {
             let known = Capability::HOST_FACING
@@ -467,12 +523,93 @@ impl Permissions {
                 .join(", ");
             format!("unknown option: {flag}\n\nexpected one of: {known}")
         })?;
-        if allow {
-            self.allowed.push((flag.to_string(), cap));
-        } else {
+        if !allow {
+            if let Some(value) = value {
+                // Scoping has one direction, like everything else in D38: it
+                // narrows a grant. A `--deny-net=host` would be the other one —
+                // "everything except" — and rule 3 says a mode has exactly one.
+                return Err(format!(
+                    "{flag} takes no value (got {flag}={value}).\n\n\
+                     A denial is all-or-nothing: scoping narrows a grant, so it is written \
+                     as --deny-all --allow-{name}=<list>, never as a denial of specific \
+                     values."
+                ));
+            }
             self.denied.push((flag.to_string(), cap));
+            return Ok(());
         }
+        let values = match value {
+            None => None,
+            Some(value) => {
+                if scope_hint(cap).is_none() {
+                    // Rejected, never ignored: a value that parsed but was not
+                    // enforced would tell the user the run is scoped while the
+                    // capability is wide open.
+                    return Err(format!(
+                        "{flag} takes no value (got {flag}={value}).\n\n\
+                         Scoping {name} is not implemented yet — {flag} is all-or-nothing. \
+                         It is rejected rather than ignored so a run is never narrower on the \
+                         command line than it is in reality.\n\n\
+                         Scoping works today for: {}.",
+                        scopable_flags()
+                    ));
+                }
+                Some(parse_scope_list(flag, value)?)
+            }
+        };
+        self.allowed.push(Allow {
+            flag: match value {
+                Some(value) => format!("{flag}={value}"),
+                None => flag.to_string(),
+            },
+            cap,
+            values,
+        });
         Ok(())
+    }
+
+    /// The scope lists these flags describe, or an error if a capability was
+    /// both granted whole and narrowed.
+    ///
+    /// Repeating a scoped flag **unions** its entries (`--allow-run=git
+    /// --allow-run=ls` ≡ `--allow-run=git,ls`), which keeps D38's rule that no
+    /// flag ever overrides another: two flags that both add can be read in any
+    /// order and the list is still the answer.
+    fn scopes(&self) -> Result<Scopes, String> {
+        let mut scopes: Scopes = HashMap::new();
+        // The bare `--allow-<name>` that granted each capability whole, if any.
+        let mut whole: HashMap<Capability, &str> = HashMap::new();
+        for allow in &self.allowed {
+            match &allow.values {
+                None => {
+                    if let Some(scoped) = scopes.keys().find(|cap| **cap == allow.cap) {
+                        let scoped = self.first_scoped_flag(*scoped);
+                        return Err(mixed_scope_error(scoped, &allow.flag));
+                    }
+                    whole.insert(allow.cap, &allow.flag);
+                }
+                Some(values) => {
+                    if let Some(whole) = whole.get(&allow.cap) {
+                        return Err(mixed_scope_error(&allow.flag, whole));
+                    }
+                    let entries = scopes.entry(allow.cap).or_default();
+                    for value in values {
+                        if !entries.contains(value) {
+                            entries.push(value.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(scopes)
+    }
+
+    /// The first scoped flag written for `cap`, for an error message.
+    fn first_scoped_flag(&self, cap: Capability) -> &str {
+        self.allowed
+            .iter()
+            .find(|allow| allow.cap == cap && allow.values.is_some())
+            .map_or("", |allow| allow.flag.as_str())
     }
 
     /// The capability set these flags describe, or an error naming the rule that
@@ -484,7 +621,7 @@ impl Permissions {
                  everything {flag} would. Use one or the other."
             ));
         }
-        if let (false, Some((flag, _))) = (self.all, self.allowed.first()) {
+        if let (false, Some(Allow { flag, .. })) = (self.all, self.allowed.first()) {
             return Err(format!(
                 "{flag} requires --deny-all: everything is granted by default, so there is \
                  nothing for {flag} to add. Use --deny-all {flag} to start from nothing, or \
@@ -493,8 +630,13 @@ impl Permissions {
         }
         if self.all {
             let mut caps = CapabilitySet::all().without_host_access();
-            for (_, cap) in &self.allowed {
-                caps.grant(*cap);
+            for allow in &self.allowed {
+                // A scoped allow grants the same bit: the capability is what
+                // opens the door, the scope list is what the provider then
+                // refuses to hand over. `--allow-env=HOME` therefore reports
+                // `has("env") === true`, which is the truth — the guest can
+                // read *an* environment variable.
+                caps.grant(allow.cap);
             }
             Ok(caps)
         } else {
@@ -505,6 +647,67 @@ impl Permissions {
             Ok(caps)
         }
     }
+}
+
+/// The `--allow-<name>=<list>` flags that accept a scope list today, for the
+/// error that names them.
+fn scopable_flags() -> String {
+    Capability::HOST_FACING
+        .into_iter()
+        .filter(|cap| scope_hint(*cap).is_some())
+        .filter_map(Capability::flag_name)
+        .map(|name| format!("--allow-{name}=<list>"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The error for a capability that was both granted whole and narrowed.
+///
+/// There is no precedence rule to apply here and deliberately so (D38 rule 3):
+/// taking the wider flag widens a run the user asked to narrow, and taking the
+/// narrower one silently ignores a flag they typed. Both are the failure this
+/// design exists to avoid, so the command line is rejected instead.
+fn mixed_scope_error(scoped: &str, whole: &str) -> String {
+    format!(
+        "{scoped} and {whole} disagree: one narrows the grant to a list, the other grants it \
+         whole.\n\n\
+         No flag overrides another, so there is nothing to resolve this with. Pass only \
+         {scoped} to narrow, or only {whole} to grant it all."
+    )
+}
+
+/// Splits a scoped permission value into its entries — D38's value grammar,
+/// one grammar for every capability that takes a list:
+///
+/// - entries are separated by commas, so `--allow-run=git,ls` is two programs;
+/// - surrounding whitespace on each entry is trimmed, so `--allow-run="git, ls"`
+///   is the same thing and quoting is a shell convenience, not a syntax;
+/// - an **empty entry** (`a,,b`, a trailing comma) is an error, because a typo
+///   must never silently change what the run may reach;
+/// - a repeated entry is kept once, in first-written order.
+fn parse_scope_list(flag: &str, value: &str) -> Result<Vec<String>, String> {
+    if value.is_empty() {
+        return Err(format!(
+            "{flag}= has an empty value — write `{flag}=<list>` to narrow the grant, or the \
+             bare `{flag}` to grant it whole."
+        ));
+    }
+    let mut entries: Vec<String> = Vec::new();
+    for entry in value.split(',') {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            return Err(format!(
+                "{flag}={value} has an empty entry.\n\n\
+                 A stray or trailing comma is a typo, and a typo must not quietly change what \
+                 the run may reach. Write the list as `{flag}=a,b`; spaces around an entry are \
+                 trimmed."
+            ));
+        }
+        if !entries.iter().any(|seen| seen == entry) {
+            entries.push(entry.to_string());
+        }
+    }
+    Ok(entries)
 }
 
 /// Splits `--flag=value` into its parts. A flag with no `=` yields `None`, which
@@ -544,20 +747,10 @@ fn reject_value(flag: &str, value: Option<&str>) -> Result<(), String> {
     let Some(value) = value else {
         return Ok(());
     };
-    // Permission flags are the ones a reader might reasonably expect to be
-    // scopable, so they explain themselves; everything else is a plain mistake.
-    if flag.starts_with("--deny-") || flag.starts_with("--allow-") {
-        if flag == "--deny-all" {
-            // A mode switch, not a capability — scoping could never apply.
-            return Err(format!("{flag} takes no value (got {flag}={value})"));
-        }
-        return Err(format!(
-            "{flag} takes no value (got {flag}={value}).\n\n\
-             Scoping permissions to specific paths, hosts, or names is not implemented \
-             yet — {flag} is all-or-nothing. It is rejected rather than ignored so a run \
-             is never narrower on the command line than it is in reality."
-        ));
-    }
+    // Permission flags never reach here: `Permissions::record` owns their
+    // values, since for them a value is sometimes a scope list and otherwise an
+    // error that has to explain itself. `--deny-all` does — it is a mode switch
+    // rather than a capability, so scoping could never apply to it.
     Err(format!("{flag} takes no value (got {flag}={value})"))
 }
 
@@ -677,14 +870,14 @@ fn parse_args() -> Result<Config, String> {
                     shutdown_grace,
                     args: rest,
                     capabilities: permissions.resolve()?,
+                    scopes: permissions.scopes()?,
                 });
             }
             flag if flag.starts_with("--deny-") || flag.starts_with("--allow-") => {
-                reject_value(flag, value)?;
                 let allow = flag.starts_with("--allow-");
                 let prefix = if allow { "--allow-" } else { "--deny-" };
                 let name = flag[prefix.len()..].to_string();
-                permissions.record(flag, &name, allow)?;
+                permissions.record(flag, &name, allow, value)?;
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
@@ -715,6 +908,7 @@ fn parse_args() -> Result<Config, String> {
                     shutdown_grace,
                     args: rest,
                     capabilities: permissions.resolve()?,
+                    scopes: permissions.scopes()?,
                 });
             }
         }
@@ -863,8 +1057,16 @@ async fn run() -> Result<(), String> {
         Some(file) => dotenv::load(std::path::Path::new(file))?,
         None => Vec::new(),
     };
-    let process =
-        Arc::new(SystemProcess::new(config.args).with_env(env_overlay, config.env_override));
+    // `--allow-env=<names>` narrows the environment snapshot to those names
+    // (D38): the capability bit opens the door, the provider decides what is
+    // behind it. Unlisted variables are absent rather than unreadable, so the
+    // guest cannot even enumerate the names of the host's secrets.
+    let mut system_process =
+        SystemProcess::new(config.args).with_env(env_overlay, config.env_override);
+    if let Some(names) = config.scopes.get(&Capability::Env) {
+        system_process = system_process.with_env_allowlist(names.clone());
+    }
+    let process = Arc::new(system_process);
     // Filesystem view for runtime:fs: relative paths resolve under the entry's
     // directory, jailed to the same detected project root the loader uses (D25).
     let fs_root = path::detect_root(&base_dir);
@@ -877,6 +1079,10 @@ async fn run() -> Result<(), String> {
     // HTTP servers to stop accepting.
     let signals = Arc::new(SystemSignals::new());
     let http_server = Arc::new(SystemHttpServer::new());
+    let commands = match config.scopes.get(&Capability::Run) {
+        Some(programs) => SystemCommands::new().with_allowlist(programs.clone()),
+        None => SystemCommands::new(),
+    };
     let providers = HostProviders::new(
         clock.clone(),
         Arc::new(StdoutConsole),
@@ -890,10 +1096,10 @@ async fn run() -> Result<(), String> {
     .with_net_provider(Arc::new(SystemNet::new()))
     .with_http_server(http_server.clone())
     .with_web_socket(Arc::new(SystemWebSocket::new()))
-    // Child processes for runtime:system. Unrestricted here (the CLI grants
-    // every capability to a local script); an embedder can hand this provider
-    // an allowlist instead.
-    .with_commands(Arc::new(SystemCommands::new()));
+    // Child processes for runtime:system. Unrestricted unless
+    // `--allow-run=<programs>` named the ones that may be spawned (D38) — the
+    // same provider seam an embedder uses to grant Run without granting a shell.
+    .with_commands(Arc::new(commands));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project
