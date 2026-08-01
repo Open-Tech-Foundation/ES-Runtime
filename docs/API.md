@@ -460,6 +460,47 @@ another**: read the list top to bottom and that is the answer.
 
 Each name takes both prefixes: `--deny-net` and `--allow-net`.
 
+#### Scoped grants
+
+Two of the eight can be granted **narrowed to a list** rather than whole:
+
+```sh
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+      --allow-run=git server.js
+```
+
+| Flag | Grants | Everything else |
+| ---- | ------ | --------------- |
+| `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
+| `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
+
+`--allow-run` matches the program as written and its resolved file name, so
+`--allow-run=git` admits `git`, `/usr/bin/git`, and `git.exe` alike.
+
+A scoped denial is a different fact from a capability denial, and reports as
+one: an unlisted program throws `ERR_PERMISSION_DENIED` ("you have `run`, but
+not this program"), where `--deny-run` throws `ERR_CAPABILITY_DENIED` ("you
+never had `run`"). For the same reason a scoped grant still reports
+`permissions.has("env") === true` — the capability opens the door; the list is
+what the provider declines to hand over.
+
+The value grammar, one rule set for every capability that takes a list:
+
+- entries are comma-separated — `--allow-run=git,ls`;
+- each entry is trimmed, so `--allow-env="A, B"` ≡ `--allow-env=A,B` and quoting
+  is a shell convenience, not a syntax;
+- an empty entry (`a,,b`, a trailing comma) is an **error** — a typo must not
+  quietly change what the run may reach;
+- repeating a flag unions its entries (`--allow-run=git --allow-run=ls`);
+- granting a capability both whole and narrowed (`--allow-env --allow-env=HOME`)
+  is an error, not a precedence rule.
+
+Scoping the other six (`read`, `write`, `imports`, `net`, `listen`, `signals`)
+is **not implemented**, and a value on them is rejected rather than ignored —
+`--allow-net=example.com` that parsed but was not enforced would say "one host"
+while the network was wide open. Denials never take a value: a scope narrows a
+grant, so it is written `--deny-all --allow-<name>=<list>`.
+
 `--deny-all` is the union of all eight. It still runs the entry file — that file
 is read before the runtime exists — but since it includes `--deny-imports`, a
 fully denied run is a **single-file** run; add `--allow-imports` for an app with
@@ -488,7 +529,9 @@ the script opts a script's own argument out of rule 2.
 | `--timeout 500` | Rule 1 — `500` would be mistaken for the script |
 | `--allow-net example.com` | Rule 1 |
 | `esrun app.js --deny-net` | Rule 2 — restricts nothing where it stands |
-| `--allow-net=example.com` | Scoping is not implemented; the value would be ignored |
+| `--allow-net=example.com` | Scoping `net` is not implemented; the value would be ignored (`run` and `env` do take a list) |
+| `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
+| `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the eight |
 

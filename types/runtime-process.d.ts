@@ -126,6 +126,13 @@ declare module "runtime:process" {
      * Whether `name` is available. Throws a `TypeError` for a name outside
      * {@link PermissionName}, rather than answering `false` — a typo'd check
      * would otherwise read as a denial and take the degraded path forever.
+     *
+     * A **scoped** grant (`--allow-env=PORT`, `--allow-run=git`) answers
+     * `true`: the capability is granted, and the list of variables or programs
+     * it was narrowed to is enforced by the host when you use it. So `true`
+     * means "you may read *an* environment variable", not "you may read this
+     * one" — an operation outside the list still throws, with
+     * `ERR_PERMISSION_DENIED` rather than `ERR_CAPABILITY_DENIED`.
      */
     has(name: PermissionName): boolean;
   };

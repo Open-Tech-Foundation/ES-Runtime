@@ -130,6 +130,42 @@ A denied operation throws `NotAllowedError` (`ERR_CAPABILITY_DENIED`) before the
 effect happens. Importing a `runtime:` module always works — the gate is the
 operation, not the import.
 
+### Scoped grants
+
+`run` and `env` can be granted narrowed to a comma-separated list instead of
+whole:
+
+```sh
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+      --allow-run=git server.js
+```
+
+| Flag | Grants | Everything else |
+| --- | --- | --- |
+| `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
+| `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
+
+`--allow-run=git` matches the name as written and the resolved file, so `git`,
+`/usr/bin/git`, and `git.exe` are all the same program.
+
+The value grammar is the same for every capability that takes a list: entries
+are comma-separated and trimmed (`--allow-env="A, B"` ≡ `--allow-env=A,B`), an
+empty entry (`a,,b`) is an error, and repeating a flag unions its entries.
+Granting one capability both whole and narrowed (`--allow-env --allow-env=HOME`)
+is an error rather than a precedence rule — no flag overrides another here
+either.
+
+<Callout type="note" title="A scoped grant is still a grant">
+  `--allow-env=HOME` reports `permissions.has("env") === true`. The capability
+  is what opens the door; the list is what the provider then declines to hand
+  over. An unlisted program throws `ERR_PERMISSION_DENIED` ("you have `run`, but
+  not this one"), where `--deny-run` throws `ERR_CAPABILITY_DENIED` ("you never
+  had `run`").
+</Callout>
+
+Scoping the other six is not implemented, and a value on them is rejected rather
+than ignored.
+
 ### Strict by design
 
 Each of these is an error. For the permission flags the reason is sharper than
@@ -137,7 +173,9 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 
 | Written | Why it fails |
 | --- | --- |
-| `--allow-net=example.com` | Scoping is not implemented; the value would be ignored |
+| `--allow-net=example.com` | Scoping `net` is not implemented; the value would be ignored |
+| `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
+| `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |
 | `esrun app.js --deny-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |

@@ -58,9 +58,9 @@ The eight names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
 denial message use. A denied operation throws `NotAllowedError`
 (`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
 
-The parser is strict on purpose: a value on a permission flag
-(`--allow-net=example.com`), a space-separated value, a permission flag placed
-after the script, or an unknown name is an **error**. Each of those, ignored,
+The parser is strict on purpose: a value on a permission flag that cannot yet
+enforce it (`--allow-net=example.com`), a space-separated value, a permission
+flag placed after the script, or an unknown name is an **error**. Each of those, ignored,
 would leave a run wider than the command line claims.
 
 Two things `--deny-all` does *not* do, both deliberate:
@@ -82,13 +82,27 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Permissions are coarse.** Every flag is all-or-nothing; scoping to paths,
-hosts, or names (`--allow-net=db.internal:5432`) is **not implemented**, and a
-value passed to one of these flags is rejected rather than ignored. Until it
-lands, a run that needs the network can reach *any* host — which is the gap that
-matters most for a server, where a compromised dependency exfiltrates over the
-app's own legitimate network access. The filesystem **root jail** (D25) is always
-on regardless, for both paths.
+**Two of the eight can be scoped to a list; the rest are all-or-nothing.**
+
+```sh
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+      --allow-run=git server.js
+```
+
+`--allow-env=<names>` narrows the environment to those variables — every other
+one is *absent*, so a guest can neither read it nor learn its name — and
+`--allow-run=<programs>` refuses to spawn anything else, with
+`ERR_PERMISSION_DENIED` (a scoped denial; `--deny-run` is
+`ERR_CAPABILITY_DENIED`). A scoped grant still reports
+`permissions.has("env") === true`: the capability opens the door, the list is
+what the provider withholds.
+
+Scoping the other six (`read`, `write`, `imports`, `net`, `listen`, `signals`)
+is **not implemented**, and a value passed to one of them is rejected rather
+than ignored. Until it lands, a run that needs the network can reach *any* host
+— the gap that matters most for a server, where a compromised dependency
+exfiltrates over the app's own legitimate network access. The filesystem **root
+jail** (D25) is always on regardless, for both paths.
 
 ## Child processes (`Capability::Run`)
 

@@ -145,6 +145,11 @@ Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals` —
 the same words the `--deny-<name>` and `--allow-<name>` flags take. Any other
 name throws a `TypeError`.
 
+A [scoped grant](/api/cli#scoped-grants) answers `true`: under
+`--allow-env=PORT` you may read *an* environment variable, and the ones outside
+the list are simply absent. `has()` reports whether the capability is granted,
+not whether a particular value is in its list.
+
 ## Exit
 
 `exit(code)` records the status and halts immediately — nothing after it runs.

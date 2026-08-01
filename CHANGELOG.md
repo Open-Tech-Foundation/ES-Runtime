@@ -32,9 +32,32 @@ namespace) is unstable and may change between minor releases until the API freez
   `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive it — no op
   gates them, so a denied script still computes.
 
-  **Permissions are coarse:** scoping to paths/hosts/names is not implemented,
-  and a value (`--allow-net=example.com`) is **rejected rather than ignored** —
-  a run must never be narrower on the command line than it is in reality.
+- **Scoped grants for `run` and `env`** — `--allow-run=<programs>` and
+  `--allow-env=<names>` narrow a grant to a list instead of handing over the
+  whole capability (DECISIONS D38).
+
+  ```sh
+  esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+        --allow-run=git server.js
+  ```
+
+  Unlisted environment variables are **absent** from `env`, so the guest cannot
+  read them or even enumerate their names; an unlisted program fails to spawn
+  with `ERR_PERMISSION_DENIED` — a *scoped* denial, distinct from the
+  `ERR_CAPABILITY_DENIED` that `--deny-run` produces.
+
+  Entries are comma-separated and trimmed (`--allow-env="A, B"` ≡
+  `--allow-env=A,B`); an empty entry (`a,,b`) is an error. Repeating a flag
+  unions its entries; granting one capability both whole and narrowed
+  (`--allow-env --allow-env=HOME`) is an error rather than a precedence rule.
+  A scoped grant still reports `permissions.has("env") === true` — the
+  capability is granted, the provider is what narrows it.
+
+  **The other six are still coarse:** scoping `read`, `write`, `imports`, `net`,
+  `listen`, and `signals` is not implemented, and a value on them
+  (`--allow-net=example.com`) is **rejected rather than ignored** — a run must
+  never be narrower on the command line than it is in reality. A denial takes no
+  value at all: a scope narrows a grant.
 
 - **`permissions` on `runtime:process`** — what this process is allowed to
   reach. The policy is fixed at launch, so it is introspection only: a
