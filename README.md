@@ -66,9 +66,9 @@ esrun --deny-all --allow-net=api.example.com app.mjs    # ...narrowed to a list
 ```
 
 Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`.
-`--allow-<name>` requires `--deny-all`; all but `imports` and `signals` also
-take a comma-separated list that narrows the grant (paths, addresses, program
-names, variable names). A denied operation throws
+`--allow-<name>` requires `--deny-all`, and every one of them also takes a
+comma-separated list that narrows the grant — paths, addresses, packages,
+program names, variable names, signal names. A denied operation throws
 `NotAllowedError`; importing a `runtime:` module always works. See
 [SECURITY.md](SECURITY.md).
 

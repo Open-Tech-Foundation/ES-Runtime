@@ -63,7 +63,8 @@ USAGE:
                                 listen, env, run, signals
     esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list:
                                 read/write (paths), net/listen (addresses),
-                                run (programs), env (variable names)
+                                imports (packages + paths), run (programs),
+                                env (variable names), signals (signal names)
     esrun -t=<ms>, --timeout=<ms>
                                 Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file=<path>     Load env vars from a .env file
@@ -103,7 +104,8 @@ A scope list narrows a grant. --allow-env=HOME,PATH hides every other variable;
 --allow-run=git,ls refuses to spawn anything else; --allow-net=api.example.com
 refuses every other host, on every redirect hop as well as the first request;
 --allow-listen=127.0.0.1:8080 refuses every other bind; --allow-read=./data
-refuses every other path.
+refuses every other path; --allow-imports=./src,lodash refuses every other
+module; --allow-signals=SIGTERM refuses to watch anything else.
 
 An address is a host, a host:port, or a bare port (any interface); [::1]:8080
 for IPv6. A path is absolute or relative to the working directory and covers its
@@ -112,12 +114,13 @@ does not admit ./app-secrets, and there are no wildcards. Paths are checked
 after canonicalization, so a symlink cannot walk out of a list, and a path list
 narrows the root jail without ever widening it.
 
+An import entry is a package name (lodash, @scope/pkg) or a path — the same
+split the loader makes between a bare and a relative specifier. Allowing a
+package does not allow what it imports; each is named in its own right.
+
 Entries are comma-separated and trimmed (`--allow-env=\"A, B\"` ≡
-`--allow-env=A,B`); an empty entry is an error. Scoping imports and signals is
-not implemented, and a value on those is rejected rather than ignored — a run
-must never be narrower on the command line than it is in reality. Denials take
-no value at all: a scope narrows a grant, so it is written --deny-all
---allow-<name>=<list>.
+`--allow-env=A,B`); an empty entry is an error. Denials take no value at all: a
+scope narrows a grant, so it is written --deny-all --allow-<name>=<list>.
 
 Permission flags must come before the script; after it they would be the
 script's own arguments.
@@ -456,13 +459,13 @@ struct Config {
 /// Scope lists by capability, in the order the user wrote them.
 type Scopes = HashMap<Capability, Vec<String>>;
 
-/// What a scoped `--allow-<name>=<list>` means for `cap`, or `None` if scoping
-/// that capability is not implemented yet.
+/// What a scoped `--allow-<name>=<list>` means for `cap`, or `None` if that
+/// capability cannot enforce a list.
 ///
-/// This is the list that grows as enforcement lands, and it is deliberately a
-/// list of what *works*: a capability missing from it rejects a value rather
-/// than accepting one it would not enforce (D38 — a run must never be narrower
-/// on the command line than it is in reality).
+/// All eight are scopable today. The `None` arm stays because it is the rule,
+/// not a placeholder: a capability added later rejects a value until its
+/// enforcement exists, rather than accepting one nothing acts on (D38 — a run
+/// must never be narrower on the command line than it is in reality).
 fn scope_hint(cap: Capability) -> Option<&'static str> {
     match cap {
         Capability::Run => Some("program names, e.g. --allow-run=git,ls"),

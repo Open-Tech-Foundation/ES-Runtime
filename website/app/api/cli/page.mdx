@@ -19,7 +19,7 @@ esrun -e=<code>             Run an inline module snippet
 esrun --deny-all            Run with no host access at all
 esrun --deny-<name>         Deny one capability; repeatable
 esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
-esrun --allow-<name>=<list> Grant it narrowed to a list (all but imports/signals)
+esrun --allow-<name>=<list> Grant it narrowed to a list (every name takes one)
 esrun -t=<ms>, --timeout=<ms>
                             Stop execution after <ms> ms (watchdog)
 esrun --env-file=<path>     Load env vars from a .env file
@@ -62,7 +62,7 @@ script that genuinely wants a flag esrun also knows.
 | `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
 | `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
 | `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
-| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list. Scopable today: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names). See [Scoped grants](#scoped-grants). |
+| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `imports` (packages and paths), `run` (programs), `env` (variable names), `signals` (signal names). See [Scoped grants](#scoped-grants). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -103,9 +103,10 @@ esrun --deny-net --deny-run app.js
 esrun --deny-all --allow-imports --allow-listen --allow-net server.js
 
 # ...and narrow those grants to what it actually touches
-esrun --deny-all --allow-imports --allow-listen=8080 \
+esrun --deny-all --allow-imports=./src,express --allow-listen=8080 \
       --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL \
-      --allow-read=./public --allow-write=./var/log server.js
+      --allow-read=./public --allow-write=./var/log \
+      --allow-signals=SIGTERM server.js
 ```
 
 ## Permissions
@@ -139,13 +140,14 @@ operation, not the import.
 
 ### Scoped grants
 
-Six of the eight take a comma-separated list that narrows the grant instead of
-handing over the whole capability:
+**Every** `--allow-<name>` takes a comma-separated list that narrows the grant
+instead of handing over the whole capability:
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
-      --allow-read=./data --allow-write=./out --allow-run=git server.js
+      --allow-read=./data --allow-write=./out --allow-run=git \
+      --allow-signals=SIGTERM server.js
 ```
 
 | Flag | Grants | Everything else |
@@ -156,6 +158,8 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 | `--allow-listen=<addresses>` | binding those addresses (`listen`, `serve`) | refused before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails to spawn |
+| `--allow-imports=<packages\|paths>` | importing those packages and paths | fails to resolve |
+| `--allow-signals=<names>` | watching those signals | refused, and hidden from `signals()` |
 
 An **address** is a host (any port), a `host:port`, or a bare port (any
 interface). Bracket IPv6 that carries a port: `[::1]:8080`. Matching is exact —
@@ -202,8 +206,17 @@ either.
   `env`").
 </Callout>
 
-Scoping `imports` and `signals` is not implemented, and a value on them is
-rejected rather than ignored.
+An **import entry** is a package name (`lodash`, `@scope/pkg`) or a path — the
+same split the loader makes between a bare and a relative specifier. A package
+entry covers that package's own files and says nothing about the packages *it*
+imports, so a dependency cannot quietly bring another along. The entry file is
+exempt: it is read before a loader exists, and you named it.
+
+A **signal entry** is a signal name, and unlisted signals are hidden from
+`signals()` — a program should enumerate what it may use.
+
+A value on a flag that could not enforce it would still be rejected rather than
+ignored; that rule holds for any capability added later.
 
 ### Strict by design
 
@@ -212,7 +225,6 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 
 | Written | Why it fails |
 | --- | --- |
-| `--allow-imports=./lib` | Scoping `imports` is not implemented; the value would be ignored |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |

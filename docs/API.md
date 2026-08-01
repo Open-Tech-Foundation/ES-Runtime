@@ -462,12 +462,13 @@ Each name takes both prefixes: `--deny-net` and `--allow-net`.
 
 #### Scoped grants
 
-Six of the eight can be granted **narrowed to a list** rather than whole:
+**Every one of the eight** can be granted narrowed to a list rather than whole:
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
-      --allow-read=./data --allow-write=./out --allow-run=git server.js
+      --allow-read=./data --allow-write=./out --allow-run=git \
+      --allow-signals=SIGTERM server.js
 ```
 
 | Flag | Grants | Everything else |
@@ -478,6 +479,8 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 | `--allow-listen=<addresses>` | binding those addresses (`runtime:net` `listen`, `runtime:http` `serve`) | fails before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
+| `--allow-imports=<packages\|paths>` | importing those packages and paths | fails to resolve |
+| `--allow-signals=<names>` | watching those signals | refused, and absent from `signals()` |
 
 `--allow-run` matches the program as written and its resolved file name, so
 `--allow-run=git` admits `git`, `/usr/bin/git`, and `git.exe` alike.
@@ -534,9 +537,21 @@ it — an entry outside the project root is not a way out of it, and that refusa
 stays `ERR_JAIL_ESCAPE` rather than a scoped denial. `read` and `write` are
 separate lists; the same lists govern `runtime:fs` and `runtime:wasi`.
 
-Scoping `imports` and `signals` is **not implemented**, and a value on them is
-rejected rather than ignored — a flag that parsed but was not enforced would say
-"one path" while the loader was wide open. Denials never take a value: a scope narrows a
+**An import entry** is a package name (`lodash`, `@scope/pkg`) or a path — the
+same split the loader makes between a bare and a relative specifier. A package
+entry covers that package's own files, and says nothing about the packages *it*
+imports: each is named in its own right, including a nested `node_modules` copy.
+The check runs on the resolved module, so a symlink cannot name its way in and a
+pnpm store path is still recognisably its package. The **entry file is exempt** —
+it is read before a loader exists, and you named it.
+
+**A signal entry** is a signal name. Unlisted signals are also absent from
+`signals()`: a program should enumerate what it may use, not what the platform
+happens to deliver.
+
+A value on a flag that could not enforce it would still be **rejected rather
+than ignored** — that rule outlives the capabilities it was written for, and
+applies to any capability added later. Denials never take a value: a scope narrows a
 grant, so it is written `--deny-all --allow-<name>=<list>`.
 
 `--deny-all` is the union of all eight. It still runs the entry file — that file
@@ -567,7 +582,6 @@ the script opts a script's own argument out of rule 2.
 | `--timeout 500` | Rule 1 — `500` would be mistaken for the script |
 | `--allow-net example.com` | Rule 1 |
 | `esrun app.js --deny-net` | Rule 2 — restricts nothing where it stands |
-| `--allow-imports=./lib` | Scoping `imports` is not implemented; the value would be ignored (the other six do take a list) |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |

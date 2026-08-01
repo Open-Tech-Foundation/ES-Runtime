@@ -71,12 +71,13 @@ is nothing for it to add.
 It includes `--deny-imports`, so add `--allow-imports` for an app with
 dependencies.
 
-Six of the eight can be granted **narrowed to a list**:
+**Every one of the eight** can be granted narrowed to a list:
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
-      --allow-read=./data --allow-write=./out --allow-run=git server.js
+      --allow-read=./data --allow-write=./out --allow-run=git \
+      --allow-signals=SIGTERM server.js
 ```
 
 `--allow-net` is the one that stops an exfiltration — a compromised dependency
@@ -86,7 +87,9 @@ URL the program wrote. Unlisted environment variables are *absent*, so a guest
 can neither read them nor learn their names; unlisted programs fail to spawn;
 unlisted binds are refused before the port is claimed; unlisted paths are
 refused after canonicalization, so a symlink inside an allowed directory cannot
-name a file outside it.
+name a file outside it; unlisted modules fail to resolve, and allowing a package
+does not allow the packages it imports; unlisted signals cannot be watched and
+are hidden from `signals()`.
 
 Matching is exact: `example.com` does not admit `api.example.com`, there are no
 wildcards, and hosts are judged as written rather than resolved. A refusal is
@@ -99,16 +102,15 @@ A path list narrows the root jail below and never widens it: a path outside the
 project root stays unreachable, and says so as a jail escape rather than a
 scoped denial.
 
-Scoping `imports` and `signals` is not implemented, and a value on them
-(`--allow-imports=./lib`) is rejected rather than ignored — a run must never be
-narrower on the command line than it is in reality.
+A value on a flag that could not enforce it would still be rejected rather than
+ignored — a run must never be narrower on the command line than it is in
+reality, and that holds for any capability added later.
 
 The [argument grammar](/api/cli#argument-grammar) is enforced for the same
 reason. Each of these is an error, not a warning:
 
 | Written | Why it fails |
 | --- | --- |
-| `--allow-imports=./lib` | Scoping `imports` is unimplemented; the value would be ignored |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word |
