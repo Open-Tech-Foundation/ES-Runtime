@@ -40,7 +40,9 @@ mod url_ops;
 mod urlpattern_ops;
 mod ws_ops;
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::timer::TimerQueue;
@@ -321,6 +323,13 @@ pub struct Runtime {
     /// The loader used for static graph loading and dynamic `import()`. Stored
     /// (not passed per-call) so dynamic imports raised mid-execution can reach it.
     module_loader: Option<Arc<dyn ModuleLoader>>,
+    /// A read-only mirror of the engine's capability set, shared with the ops
+    /// that report on it (`runtime:process` `permissions`, D38).
+    ///
+    /// The engine's own set stays the security boundary — this is never consulted
+    /// to *authorize* anything, only to answer "what am I allowed to do?".
+    /// [`set_capabilities`](Self::set_capabilities) writes both.
+    capabilities: Rc<Cell<CapabilitySet>>,
 }
 
 impl Runtime {
@@ -342,10 +351,12 @@ impl Runtime {
             module_eval_pending: false,
             module_map: HashMap::new(),
             module_loader: None,
+            capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
         // Register the world-touching ops, then evaluate the prelude that builds
         // the pure-JS APIs on top of them (DECISIONS.md D8).
-        builtins::install(runtime.engine.as_mut(), &providers)?;
+        let capabilities = runtime.capabilities.clone();
+        builtins::install(runtime.engine.as_mut(), &providers, capabilities)?;
         runtime.engine.eval(&prelude::source())?;
         runtime.engine.eval(prelude::post_snapshot_source())?;
         Ok(runtime)
@@ -368,7 +379,11 @@ impl Runtime {
                 // `builtins::install` yields the runtime `Error`; it only ever
                 // produces the engine variant here, so re-surface that and treat
                 // any other (impossible) variant as an internal error.
-                builtins::install(engine, providers).map_err(|e| match e {
+                // Handler closures are not serialized, so the capability view
+                // captured here never outlives the build — only the op table's
+                // names and order end up in the blob.
+                let capabilities = Rc::new(Cell::new(CapabilitySet::none()));
+                builtins::install(engine, providers, capabilities).map_err(|e| match e {
                     Error::Engine(e) => e,
                     other => es_runtime_engine::Error::Internal(other.to_string()),
                 })?;
@@ -394,10 +409,12 @@ impl Runtime {
             module_eval_pending: false,
             module_map: HashMap::new(),
             module_loader: None,
+            capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
-        builtins::install(runtime.engine.as_mut(), &providers)?;
+        let capabilities = runtime.capabilities.clone();
+        builtins::install(runtime.engine.as_mut(), &providers, capabilities)?;
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
         runtime.engine.eval(prelude::post_snapshot_source())?;
@@ -412,8 +429,12 @@ impl Runtime {
 
     /// Replaces the capability set checked before capability-gated ops dispatch
     /// (DECISIONS.md D7). Deny-by-default until granted.
+    ///
+    /// Also refreshes the view `runtime:process` `permissions` reports (D38), so
+    /// the guest's answer to "what am I allowed to do?" is never stale.
     pub fn set_capabilities(&mut self, capabilities: CapabilitySet) {
         self.engine.set_capabilities(capabilities);
+        self.capabilities.set(capabilities);
     }
 
     /// Returns a thread-safe handle for interrupting this runtime's execution —
@@ -4892,6 +4913,65 @@ mod tests {
             }
         });
         rt.module_eval_state()
+    }
+
+    /// Every `runtime:` built-in must **import** with nothing granted — the gate
+    /// is the op, never the import (D26, restated by D38's `--deny-all`). This
+    /// caught `runtime:process` calling `Env`-gated ops at module-evaluation
+    /// time, which made it unimportable under `--deny-env`.
+    #[test]
+    fn every_builtin_module_imports_with_no_capabilities() {
+        let _g = v8_guard();
+        for name in runtime_modules::NAMES {
+            let engine = V8Engine::new(Limits::default()).expect("engine");
+            // Providers are the *embedder's* wiring; capabilities are the
+            // *guest's* authority. Only the latter is under test, so the process
+            // provider is present (`runtime:process` reads the platform strings
+            // through it at evaluation) and everything is denied.
+            let providers = HostProviders::new(
+                Arc::new(FixedClock {
+                    monotonic: 0,
+                    wall: 0,
+                }),
+                Arc::new(TestConsole::default()),
+                Arc::new(MockNet::stub()),
+                Arc::new(TestEntropy::new()),
+            )
+            .with_process(Arc::new(StubProcess));
+            let mut rt = Runtime::new(Box::new(engine), providers).expect("runtime");
+            rt.set_capabilities(CapabilitySet::none());
+            let source = format!("import '{name}'; globalThis.ok = true;");
+            let state = block_on(async {
+                rt.load_module_source(ENTRY, &source, MapLoader::new(&[]))
+                    .await
+                    .unwrap_or_else(|e| {
+                        panic!("{name} failed to import with no capabilities: {e}")
+                    });
+                for _ in 0..500 {
+                    rt.tick(0);
+                    if !rt.has_pending_work() {
+                        break;
+                    }
+                }
+                rt.module_eval_state()
+            });
+            assert!(
+                matches!(state, ModuleEvalState::Completed),
+                "{name} failed to evaluate with no capabilities: {state:?}"
+            );
+        }
+    }
+
+    /// The registry and the name list must not drift apart, or a module could be
+    /// added and silently skipped by the guard above.
+    #[test]
+    fn builtin_names_match_the_source_registry() {
+        for name in runtime_modules::NAMES {
+            assert!(
+                runtime_modules::source(name).is_some(),
+                "{name} is listed but has no baked source"
+            );
+        }
     }
 
     #[test]

@@ -39,6 +39,7 @@ import process from "runtime:process";
 | `signals()` | `() => SignalName[]` | Signal names this platform can deliver. **Signals.** |
 | `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Signals.** |
 | `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one restores the default action. **Signals.** |
+| `permissions` | `object` | What this run may reach (see below). **No capability.** |
 
 ## env — reading and writing
 
@@ -93,6 +94,30 @@ import { exit } from "runtime:process";
 if (failed) exit(1); // records the code and halts immediately
 exit();              // defaults to 0
 ```
+
+## permissions — what this run may reach
+
+Fixed at launch by [esrun's denial flags](/api/cli#denying-capabilities), so
+`has()` is a synchronous boolean: there is nothing to request and no prompt to
+await.
+
+```js
+import { permissions } from "runtime:process";
+
+permissions.denied; // ["read", "write"] — [] when nothing is denied
+permissions.has("net"); // true
+
+if (permissions.has("write")) await fs.write("cache.json", data);
+```
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `permissions.denied` | `readonly PermissionName[]` | Names this run may not use, in capability order. |
+| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for any other name. |
+
+`PermissionName` is `"read"`, `"write"`, `"imports"`, `"net"`, `"listen"`,
+`"env"`, `"run"`, `"signals"` — the same words the `--deny-<name>` flags use.
+Needs no capability, so it answers under `--deny-all` too.
 
 ## Secrets — masked by default
 

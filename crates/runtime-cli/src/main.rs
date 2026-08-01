@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
 use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, Process, Runtime};
-use es_runtime_common::CapabilitySet;
+use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
     NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
@@ -47,6 +47,9 @@ esrun — run JavaScript (ES modules) on the ES-Runtime
 USAGE:
     esrun <file>             Run a JavaScript module file
     esrun -e <code>          Run an inline module snippet
+    esrun --deny-all         Run with no host access at all (secure mode)
+    esrun --deny-<name>      Deny one capability; repeatable. <name> is one of:
+                             read, write, imports, net, listen, env, run, signals
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file <path>  Load env vars from a .env file
     esrun --env-override     Let --env-file values override the OS environment
@@ -67,7 +70,13 @@ import() both work; import attributes (`with { type: \"json\" }`) are supported.
 Remote (`https://`) modules are explicitly unsupported to enforce a local-only security model.
 The full WinterTC surface is available (console, URL, fetch, crypto, streams,
 encoding, timers, events).
-All host capabilities are granted.";
+
+Every host capability is granted by default. Restrict a run with either
+--deny-all or one or more --deny-<name> flags — not both. A denied operation
+throws NotAllowedError; importing a runtime: module always works. Under
+--deny-all only the entry file runs: it can compute, but it cannot read, write,
+import another file, reach the network, read the environment, or spawn anything.
+Ask from JS with `permissions.has(name)` from runtime:process.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.
 static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
@@ -387,6 +396,67 @@ struct Config {
     /// User arguments after the script/`-e` code, exposed as `runtime:process`
     /// `args` (the runtime binary and the script/code are excluded).
     args: Vec<String>,
+    /// What the script may reach, from `--deny-all` / `--deny-<name>` (D38).
+    /// [`CapabilitySet::all`] unless denials were asked for.
+    capabilities: CapabilitySet,
+}
+
+/// The denial flags accumulated while parsing, resolved into a [`CapabilitySet`]
+/// once the whole command line has been seen.
+///
+/// `--deny-all` and the granular flags are **mutually exclusive**: `--deny-all`
+/// is precisely the union of the eight, so combining them can only ever be
+/// redundant, and a reader should not have to work out whether one narrows the
+/// other (D38).
+#[derive(Default)]
+struct Denials {
+    all: bool,
+    /// The granular flags seen, in the order given — so the error message can
+    /// quote the one the user actually typed.
+    named: Vec<(String, Capability)>,
+}
+
+impl Denials {
+    /// Records `--deny-<name>`, rejecting a name outside the vocabulary.
+    fn deny(&mut self, flag: &str, name: &str) -> Result<(), String> {
+        let cap = Capability::from_flag_name(name).ok_or_else(|| {
+            let names: Vec<&str> = Capability::HOST_FACING
+                .into_iter()
+                .filter_map(Capability::flag_name)
+                .collect();
+            format!(
+                "unknown option: {flag}\n\nexpected --deny-all or one of: {}",
+                {
+                    names
+                        .iter()
+                        .map(|n| format!("--deny-{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            )
+        })?;
+        self.named.push((flag.to_string(), cap));
+        Ok(())
+    }
+
+    /// The capability set these denials describe, or an error if `--deny-all`
+    /// was combined with a granular flag.
+    fn resolve(&self) -> Result<CapabilitySet, String> {
+        match (self.all, self.named.first()) {
+            (true, Some((flag, _))) => Err(format!(
+                "--deny-all cannot be combined with {flag}: --deny-all already denies \
+                 everything {flag} would. Use one or the other."
+            )),
+            (true, None) => Ok(CapabilitySet::all().without_host_access()),
+            (false, _) => {
+                let mut caps = CapabilitySet::all();
+                for (_, cap) in &self.named {
+                    caps.revoke(*cap);
+                }
+                Ok(caps)
+            }
+        }
+    }
 }
 
 /// How long a graceful shutdown waits for in-flight HTTP requests before giving
@@ -400,6 +470,7 @@ fn parse_args() -> Result<Config, String> {
     let mut env_file: Option<String> = None;
     let mut env_override = false;
     let mut shutdown_grace = DEFAULT_SHUTDOWN_GRACE;
+    let mut denials = Denials::default();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -469,6 +540,9 @@ fn parse_args() -> Result<Config, String> {
                 })?;
                 shutdown_grace = Duration::from_millis(ms);
             }
+            "--deny-all" => {
+                denials.all = true;
+            }
             "-e" | "--eval" => {
                 let code = args
                     .next()
@@ -480,7 +554,12 @@ fn parse_args() -> Result<Config, String> {
                     env_override,
                     shutdown_grace,
                     args: args.collect(),
+                    capabilities: denials.resolve()?,
                 });
+            }
+            flag if flag.starts_with("--deny-") => {
+                let name = flag.trim_start_matches("--deny-").to_string();
+                denials.deny(flag, &name)?;
             }
             flag if flag.starts_with('-') => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
@@ -493,6 +572,7 @@ fn parse_args() -> Result<Config, String> {
                     env_override,
                     shutdown_grace,
                     args: args.collect(),
+                    capabilities: denials.resolve()?,
                 });
             }
         }
@@ -630,9 +710,11 @@ async fn run() -> Result<(), String> {
     // instead of compiling + evaluating it — the bulk of construction cost.
     let mut runtime =
         Runtime::with_snapshot(SNAPSHOT.to_vec(), providers).map_err(|e| e.to_string())?;
-    // A trusted local script: grant the full capability set (incl. FileSystem,
-    // which module loading requires).
-    runtime.set_capabilities(CapabilitySet::all());
+    // A local script is trusted by default: the full capability set (incl.
+    // FileSystem, which module loading requires). `--deny-all` / `--deny-<name>`
+    // narrow it (D38); the entry file has already been read by this point, so a
+    // fully denied run still executes what the user named.
+    runtime.set_capabilities(config.capabilities);
 
     // Graceful shutdown on ^C / SIGTERM. Installed before the module runs, so a
     // server that binds immediately is covered from its first request.

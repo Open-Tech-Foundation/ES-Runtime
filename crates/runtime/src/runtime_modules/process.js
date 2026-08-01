@@ -62,16 +62,55 @@ function unmask(value) {
   throw new TypeError("unmask expects a string or a Secret from runtime:process env");
 }
 
+// Importing a `runtime:` module must never need a capability — the gate is the
+// op, not the import (DECISIONS D26/D38). `env` and `args` are the only bindings
+// here whose values come from an `Env`-gated op, so both seed themselves on
+// *first access* rather than at module evaluation. Under `--deny-env` this
+// module still imports (and `exit`, `onSignal`, `permissions` still work);
+// touching `env`/`args` is what throws.
+function seeded(target, fill) {
+  let done = false;
+  const seed = () => {
+    if (done) return;
+    // Set last: a denial throws out of `fill`, leaving `done` false so the next
+    // access retries and throws again rather than exposing a half-filled value.
+    fill(target);
+    done = true;
+  };
+  // Every trap that can observe or mutate the target seeds first, so the value
+  // is indistinguishable from one built eagerly.
+  return new Proxy(target, {
+    get: (t, k, r) => (seed(), Reflect.get(t, k, r)),
+    set: (t, k, v, r) => (seed(), Reflect.set(t, k, v, r)),
+    has: (t, k) => (seed(), Reflect.has(t, k)),
+    deleteProperty: (t, k) => (seed(), Reflect.deleteProperty(t, k)),
+    ownKeys: (t) => (seed(), Reflect.ownKeys(t)),
+    getOwnPropertyDescriptor: (t, k) => (
+      seed(), Reflect.getOwnPropertyDescriptor(t, k)
+    ),
+    defineProperty: (t, k, d) => (seed(), Reflect.defineProperty(t, k, d)),
+    // Without this, an `Object.freeze(env)` before any read would lock an empty
+    // target and the later seeding would silently fail.
+    preventExtensions: (t) => (seed(), Reflect.preventExtensions(t)),
+  });
+}
+
 // `env`: a mutable in-process object seeded from the host snapshot. Reads,
 // writes, and deletes work in-process; they do not (yet) propagate to the host
 // process or future child processes. Secret-keyed values are wrapped (above).
-const env = {};
-for (const [key, value] of ops.process_env()) {
-  env[key] = SECRET_KEY.test(key) ? new Secret(value) : value;
-}
+const env = seeded({}, (target) => {
+  for (const [key, value] of ops.process_env()) {
+    target[key] = SECRET_KEY.test(key) ? new Secret(value) : value;
+  }
+});
 
 // `args`: the program arguments after the runtime binary and the script/-e code.
-const args = Object.freeze(ops.process_args());
+// Frozen once seeded, so it is read-only exactly as an eager `Object.freeze`
+// would have made it.
+const args = seeded([], (target) => {
+  target.push(...ops.process_args());
+  Object.freeze(target);
+});
 
 // `platform`: the host OS — std::env::consts::OS values ("linux"/"macos"/...).
 const platform = ops.process_platform();
@@ -172,7 +211,65 @@ function offSignal(name, handler) {
   }
 }
 
-export { env, args, platform, arch, cwd, exit, unmask, Secret, onSignal, offSignal, signals };
+// ---- permissions -----------------------------------------------------------
+//
+// What this process is allowed to reach (DECISIONS D38). The policy is fixed at
+// launch by esrun's --deny-all / --deny-* flags (or by the embedder's capability
+// set), so this is introspection only: there is nothing to request, and no
+// prompt to await. Hence a synchronous boolean rather than the promise-returning
+// shape runtimes with interactive prompts use.
+//
+// The backing op is ungated, so this answers even under --deny-all — which is
+// the policy under which a program most needs to ask.
+
+// The denial vocabulary, identical to the --deny-<name> flag suffixes. The
+// authoritative list is Rust-side (Capability::HOST_FACING); this copy exists
+// only to reject typos in has() rather than answering them.
+const PERMISSIONS = Object.freeze([
+  "read",
+  "write",
+  "imports",
+  "net",
+  "listen",
+  "env",
+  "run",
+  "signals",
+]);
+
+const permissions = Object.freeze({
+  /** The names this process may not use — `[]` when nothing is denied. */
+  get denied() {
+    return Object.freeze(ops.process_permissions_denied());
+  },
+  /**
+   * Whether `name` is available. An unknown name throws rather than answering
+   * `false`: a typo'd check would otherwise read as a denial and silently take
+   * the degraded path forever.
+   */
+  has(name) {
+    if (!PERMISSIONS.includes(name)) {
+      throw new TypeError(
+        `'${name}' is not a permission name (expected one of: ${PERMISSIONS.join(", ")})`,
+      );
+    }
+    return !ops.process_permissions_denied().includes(name);
+  },
+});
+
+export {
+  env,
+  args,
+  platform,
+  arch,
+  cwd,
+  exit,
+  unmask,
+  Secret,
+  onSignal,
+  offSignal,
+  signals,
+  permissions,
+};
 export default {
   env,
   args,
@@ -185,4 +282,5 @@ export default {
   onSignal,
   offSignal,
   signals,
+  permissions,
 };

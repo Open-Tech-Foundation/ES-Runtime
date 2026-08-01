@@ -13,8 +13,9 @@ default:
 - **Embeddable library — deny-by-default.** A runtime the host creates can
   compute, but cannot reach the host environment, filesystem, or network until
   the host grants a capability for it.
-- **The `esrun` CLI — unrestricted.** The standalone binary grants all
-  capabilities so scripts run without setup. It is not deny-by-default.
+- **The `esrun` CLI — unrestricted by default.** The standalone binary grants
+  all capabilities so scripts run without setup. It is not deny-by-default;
+  restrict a run with [denial flags](#denying-capabilities-in-esrun).
 
 ## Capabilities
 
@@ -33,6 +34,42 @@ with the `NotAllowedError` name.
 | `Signals` | Watch OS signals (`runtime:process` onSignal). Separate from `Env` because a watch **suppresses the signal's default action** — the privilege to decline to die on request, not a read of process state. |
 | `Run` | Spawn a child process (`runtime:system`). Never implied by another capability — see below. |
 | `HrTime` | Access high-resolution timing. |
+
+Importing a `runtime:` module never needs a capability. The gate is the op, so a
+built-in imports under any policy and only its operations throw.
+
+## Denying capabilities in esrun
+
+Either `--deny-all` or one or more `--deny-<name>`. Not both — `--deny-all` is
+the union of the eight, and combining them is an error.
+
+```sh
+esrun --deny-all app.js                # no host access at all
+esrun --deny-net --deny-run app.js     # everything except those two
+```
+
+| Flag | Denies |
+| --- | --- |
+| `--deny-read` | `runtime:fs` / `runtime:wasi` reads |
+| `--deny-write` | `runtime:fs` / `runtime:wasi` mutations |
+| `--deny-imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `--deny-net` | `fetch`, `WebSocket`, `runtime:net` connect |
+| `--deny-listen` | `runtime:net` listen, `runtime:http` serve |
+| `--deny-env` | `runtime:process` env / args / cwd |
+| `--deny-run` | `runtime:system` child processes |
+| `--deny-signals` | `runtime:process` onSignal |
+
+`--deny-all` still runs the entry file — it is read before the runtime exists.
+It includes `--deny-imports`, so a fully denied run is a single-file run.
+
+Ask from JS:
+
+```js
+import { permissions } from "runtime:process";
+
+permissions.denied; // ["read", "write"]
+permissions.has("net"); // false
+```
 
 ## Child processes
 

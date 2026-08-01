@@ -8,7 +8,57 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`esrun` permission flags** (DECISIONS D38). `esrun` still grants everything
+  by default; restriction is opt-in and expressed as denials.
+
+  ```sh
+  esrun --deny-all app.js               # no host access at all
+  esrun --deny-net --deny-run app.js    # everything except those two
+  ```
+
+  `--deny-all` and the granular `--deny-<name>` flags are **mutually
+  exclusive** — `--deny-all` is exactly the union of the eight, so combining
+  them is rejected rather than merged. The names map 1:1 onto capabilities:
+  `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. A denied
+  operation throws `NotAllowedError` / `ERR_CAPABILITY_DENIED` before the effect.
+
+  `--deny-all` still runs the entry file (read before the runtime exists), and
+  since it includes `--deny-imports`, a fully denied run is a single-file run.
+  `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive it — no op
+  gates them, so a denied script still computes.
+
+- **`permissions` on `runtime:process`** — what this process is allowed to
+  reach. The policy is fixed at launch, so it is introspection only: a
+  synchronous `has()`, no `request()`, no prompt.
+
+  ```js
+  import { permissions } from "runtime:process";
+  permissions.denied;      // ["read", "write"]
+  permissions.has("net");  // false
+  ```
+
+  Needs no capability, so it answers even under `--deny-all`.
+
+### Fixed
+
+- **`runtime:process` no longer needs a capability to import** (DECISIONS
+  D26/D38). It called `Env`-gated ops at module-evaluation time, so denying
+  `Env` made the module unimportable — taking `exit()` and `onSignal()`, which
+  have nothing to do with the environment, down with it. `env` and `args` now
+  seed on first access; a test asserts every `runtime:` module imports and
+  evaluates with no capabilities granted.
+
 ### Changed
+
+- **`process_exit`, `process_platform`, and `process_arch` are no longer gated
+  on `Env`.** Stopping is the guest's own control flow (neither Node nor Deno
+  gates it), and the platform strings are properties of the binary already
+  running, not host state.
+- A capability denial now names the permission alongside the capability —
+  `capability denied: FileSystem (permission "imports")` — so the message points
+  at the flag that produced it.
 
 - **Website updates**:
   - Set Open Tech Foundation org logo as the site favicon.

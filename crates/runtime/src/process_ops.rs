@@ -1,31 +1,43 @@
 //! Host ops backing `runtime:process` (DECISIONS D24): environment, arguments,
-//! working directory, platform, and exit. All are gated on
-//! [`Capability::Env`](es_runtime_common::Capability::Env) — the security
-//! boundary is the op, not the JS module (D7) — and dispatch to the injected
-//! [`Process`] provider. `process_exit` records the code and halts execution via
-//! the engine's interrupt handle; the embedder reads the recorded code to learn
-//! that exit (not an error) stopped the run.
+//! working directory, platform, exit, and permission introspection. The ones
+//! reading process *state* — env, args, cwd — are gated on
+//! [`Capability::Env`](es_runtime_common::Capability::Env); the security
+//! boundary is the op, not the JS module (D7, D38) — and dispatch to the
+//! injected [`Process`] provider. `process_exit` records the code and halts
+//! execution via the engine's interrupt handle; the embedder reads the recorded
+//! code to learn that exit (not an error) stopped the run.
 //!
 //! The signal ops alongside them are gated on
 //! [`Capability::Signals`](es_runtime_common::Capability::Signals) instead: a
 //! watch suppresses the signal's default action, so it is the privilege to
 //! decline to die on request rather than a read of process state.
+//!
+//! **Ungated here** (D38): `process_platform`/`process_arch` return
+//! `std::env::consts` values — compile-time constants of the binary the guest is
+//! already running, not host state — and `process_permissions_denied` reports
+//! only what the guest could discover anyway by calling ops and catching the
+//! denials. Gating those would make `runtime:process` unimportable under
+//! `--deny-env`, which D26 forbids.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
+use es_runtime_common::{Capability, CapabilitySet, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, InterruptHandle, OpDecl, OpError, Value};
 use es_runtime_providers::{Process, Signal, Signals};
 
 use crate::Result;
 
 /// Registers the `runtime:process` ops, capturing the (optional) [`Process`]
-/// provider and the engine's interrupt handle (for `exit`).
+/// provider, the engine's interrupt handle (for `exit`), and the runtime's live
+/// view of its own capability set (for `permissions`).
 pub(crate) fn install(
     engine: &mut dyn Engine,
     process: Option<Arc<dyn Process>>,
     signals: Option<Arc<dyn Signals>>,
     interrupt: InterruptHandle,
+    capabilities: Rc<Cell<CapabilitySet>>,
 ) -> Result<()> {
     let p = process.clone();
     engine.register_op(
@@ -63,37 +75,52 @@ pub(crate) fn install(
         .requires(Capability::Env),
     )?;
 
+    // Ungated (D38): the host OS and CPU architecture are properties of the
+    // binary the guest is already executing, not of the host's state. They are
+    // also read at module-evaluation time by `runtime:process`, so gating them
+    // would make the module unimportable under `--deny-env` (D26).
     let p = process.clone();
-    engine.register_op(
-        OpDecl::sync("process_platform", move |_args| {
-            let proc = require(&p)?;
-            Ok(Value::String(proc.platform()))
-        })
-        .requires(Capability::Env),
-    )?;
+    engine.register_op(OpDecl::sync("process_platform", move |_args| {
+        let proc = require(&p)?;
+        Ok(Value::String(proc.platform()))
+    }))?;
 
     let p = process.clone();
-    engine.register_op(
-        OpDecl::sync("process_arch", move |_args| {
-            let proc = require(&p)?;
-            Ok(Value::String(proc.arch()))
-        })
-        .requires(Capability::Env),
-    )?;
+    engine.register_op(OpDecl::sync("process_arch", move |_args| {
+        let proc = require(&p)?;
+        Ok(Value::String(proc.arch()))
+    }))?;
 
-    engine.register_op(
-        OpDecl::sync("process_exit", move |args| {
-            let proc = require(&process)?;
-            let code = args.first().and_then(Value::as_number).unwrap_or(0.0) as i32;
-            proc.exit(code);
-            // Halt execution immediately (like Node's process.exit). The embedder
-            // reads the recorded code and treats the resulting termination as a
-            // clean exit rather than an error.
-            interrupt.terminate();
-            Ok(Value::Undefined)
-        })
-        .requires(Capability::Env),
-    )?;
+    // Permission introspection (D38). Ungated, and deliberately so: it reveals
+    // only what the guest could learn by calling each op and catching the
+    // denial, and code that must ask "may I?" before trying is exactly the code
+    // running under the tightest policy.
+    engine.register_op(OpDecl::sync("process_permissions_denied", move |_args| {
+        Ok(Value::Array(
+            capabilities
+                .get()
+                .denied_names()
+                .into_iter()
+                .map(|name| Value::String(name.to_string()))
+                .collect(),
+        ))
+    }))?;
+
+    // Ungated (D38): stopping is the guest's own control flow, not authority over
+    // the host — code that can run can always stop running, and the exit code is
+    // the one thing it may already say on the way out. Node and Deno gate it no
+    // further either. Gating it on `Env` (as this once did) meant `--deny-env`
+    // denied the unrelated ability to exit cleanly.
+    engine.register_op(OpDecl::sync("process_exit", move |args| {
+        let proc = require(&process)?;
+        let code = args.first().and_then(Value::as_number).unwrap_or(0.0) as i32;
+        proc.exit(code);
+        // Halt execution immediately (like Node's process.exit). The embedder
+        // reads the recorded code and treats the resulting termination as a
+        // clean exit rather than an error.
+        interrupt.terminate();
+        Ok(Value::Undefined)
+    }))?;
 
     install_signals(engine, signals)?;
     Ok(())

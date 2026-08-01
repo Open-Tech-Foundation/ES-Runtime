@@ -80,6 +80,58 @@ impl Capability {
         Capability::Run,
     ];
 
+    /// The **host-facing** capabilities: everything that reaches past the
+    /// isolate. These are exactly the grants `esrun`'s `--deny-*` flags revoke
+    /// and the names `runtime:process` `permissions` reports (D38).
+    ///
+    /// The four omitted ([`Clock`](Self::Clock), [`Entropy`](Self::Entropy),
+    /// [`Timers`](Self::Timers), [`TaskSpawn`](Self::TaskSpawn)) back
+    /// `Date.now()`, `crypto`, and `setTimeout` — no op gates them, and a flag
+    /// that revoked them would deny nothing while implying otherwise.
+    pub const HOST_FACING: [Capability; 8] = [
+        Capability::FileRead,
+        Capability::FileWrite,
+        Capability::FileSystem,
+        Capability::Net,
+        Capability::NetListen,
+        Capability::Env,
+        Capability::Run,
+        Capability::Signals,
+    ];
+
+    /// This capability's name in the denial vocabulary — the suffix of `esrun`'s
+    /// `--deny-<name>` flag and the string `permissions.has(<name>)` takes — or
+    /// `None` for a capability with no flag (see [`HOST_FACING`](Self::HOST_FACING)).
+    ///
+    /// One vocabulary across the CLI, the JS API, and the docs: `--deny-net` ⇔
+    /// `has("net")`. Never spell these anywhere else.
+    pub const fn flag_name(self) -> Option<&'static str> {
+        match self {
+            Capability::FileRead => Some("read"),
+            Capability::FileWrite => Some("write"),
+            // "imports", not "modules": what it gates is the *loader* — a file or
+            // `node_modules` import. `runtime:` built-ins never consult it (D26).
+            Capability::FileSystem => Some("imports"),
+            Capability::Net => Some("net"),
+            Capability::NetListen => Some("listen"),
+            Capability::Env => Some("env"),
+            Capability::Run => Some("run"),
+            Capability::Signals => Some("signals"),
+            Capability::Clock
+            | Capability::Entropy
+            | Capability::Timers
+            | Capability::TaskSpawn => None,
+        }
+    }
+
+    /// The capability a denial name refers to, or `None` if the name is not one
+    /// of the eight. The inverse of [`flag_name`](Self::flag_name).
+    pub fn from_flag_name(name: &str) -> Option<Capability> {
+        Capability::HOST_FACING
+            .into_iter()
+            .find(|cap| cap.flag_name() == Some(name))
+    }
+
     /// This capability's single-bit mask within a [`CapabilitySet`].
     const fn bit(self) -> u32 {
         // Explicit, stable assignments — never reorder; only append.
@@ -96,6 +148,19 @@ impl Capability {
             Capability::NetListen => 1 << 9,
             Capability::Signals => 1 << 10,
             Capability::Run => 1 << 11,
+        }
+    }
+}
+
+impl std::fmt::Display for Capability {
+    /// The variant name, plus the denial vocabulary word when it has one — so a
+    /// denial message tells a CLI user which `--deny-<name>` produced it without
+    /// making them consult a translation table (D38).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")?;
+        match self.flag_name() {
+            Some(name) => write!(f, " (permission \"{name}\")"),
+            None => Ok(()),
         }
     }
 }
@@ -147,6 +212,30 @@ impl CapabilitySet {
     /// Whether `cap` is granted.
     pub const fn contains(self, cap: Capability) -> bool {
         self.bits & cap.bit() != 0
+    }
+
+    /// Returns `self` with every [`HOST_FACING`](Capability::HOST_FACING)
+    /// capability revoked — `esrun`'s `--deny-all` (D38).
+    ///
+    /// What survives is the isolate's own hygiene (clock, entropy, timers,
+    /// task spawn): the guest still computes, but reaches nothing outside.
+    #[must_use]
+    pub fn without_host_access(mut self) -> Self {
+        for cap in Capability::HOST_FACING {
+            self.revoke(cap);
+        }
+        self
+    }
+
+    /// The [`flag_name`](Capability::flag_name)s of the host-facing capabilities
+    /// this set does **not** hold, in [`HOST_FACING`](Capability::HOST_FACING)
+    /// order. Backs `runtime:process` `permissions.denied`.
+    pub fn denied_names(self) -> Vec<&'static str> {
+        Capability::HOST_FACING
+            .into_iter()
+            .filter(|cap| !self.contains(*cap))
+            .filter_map(Capability::flag_name)
+            .collect()
     }
 
     /// Returns `Ok(())` if `cap` is granted, else
@@ -209,6 +298,80 @@ mod tests {
             Error::CapabilityDenied(Capability::Entropy) => {}
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn flag_names_round_trip() {
+        for cap in Capability::HOST_FACING {
+            let name = cap
+                .flag_name()
+                .expect("host-facing capability needs a name");
+            assert_eq!(Capability::from_flag_name(name), Some(cap));
+        }
+    }
+
+    #[test]
+    fn flag_names_are_unique() {
+        // A collision would make two `--deny-*` flags revoke the same bit while
+        // silently leaving the other granted.
+        let mut names: Vec<&str> = Capability::HOST_FACING
+            .into_iter()
+            .filter_map(Capability::flag_name)
+            .collect();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count);
+    }
+
+    #[test]
+    fn only_host_facing_capabilities_have_flag_names() {
+        for cap in Capability::ALL {
+            assert_eq!(
+                cap.flag_name().is_some(),
+                Capability::HOST_FACING.contains(&cap),
+                "{cap:?} disagrees with HOST_FACING about having a flag"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_flag_name_is_rejected() {
+        // Never a silent `None`-as-granted: the CLI and `has()` both report it.
+        assert_eq!(Capability::from_flag_name("ffi"), None);
+        assert_eq!(Capability::from_flag_name(""), None);
+        assert_eq!(Capability::from_flag_name("Net"), None);
+    }
+
+    #[test]
+    fn deny_all_keeps_only_the_ungated_capabilities() {
+        let set = CapabilitySet::all().without_host_access();
+        for cap in Capability::HOST_FACING {
+            assert!(!set.contains(cap), "{cap:?} should be denied by --deny-all");
+        }
+        // The isolate's own hygiene survives: a denied script still computes.
+        for cap in [
+            Capability::Clock,
+            Capability::Entropy,
+            Capability::Timers,
+            Capability::TaskSpawn,
+        ] {
+            assert!(set.contains(cap), "{cap:?} should survive --deny-all");
+        }
+    }
+
+    #[test]
+    fn denied_names_reports_exactly_what_is_missing() {
+        assert!(CapabilitySet::all().denied_names().is_empty());
+        assert_eq!(
+            CapabilitySet::all().without_host_access().denied_names(),
+            [
+                "read", "write", "imports", "net", "listen", "env", "run", "signals"
+            ]
+        );
+        let mut set = CapabilitySet::all();
+        set.revoke(Capability::Net);
+        assert_eq!(set.denied_names(), ["net"]);
     }
 
     #[test]

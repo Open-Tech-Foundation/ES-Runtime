@@ -101,7 +101,8 @@ Every provider call is async-friendly, cancellable, capability-checked, and retu
 
 ## 7. Security architecture
 
-- **Capabilities:** deny-by-default tokens threaded from the embedder; no global escape hatches.
+- **Capabilities:** deny-by-default tokens threaded from the embedder; no global escape hatches. Eight of the twelve are **host-facing** (`Capability::HOST_FACING`) and carry a name in the denial vocabulary — `read, write, imports, net, listen, env, run, signals` — shared by `esrun`'s `--deny-<name>` flags, the `runtime:process` `permissions` API, and the text of a denial (D38). The `esrun` CLI grants everything unless asked not to; the embeddable library grants nothing unless asked to.
+- **The gate is the op, not the module:** importing a `runtime:` built-in never requires a capability, so a denied program still imports the standard library and fails only where it reaches the host (D26/D38).
 - **Resource limits enforced by the runtime:** per-isolate heap limit (near-heap-limit callback → graceful termination, never host OOM); execution-time/CPU watchdog (interrupt + `TerminateExecution`); stack-depth guard; bounded pending-op concurrency.
 - **No panic across FFI:** boundaries wrapped in `catch_unwind`; all Rust errors converted to proper JS exception classes. A Rust panic must never unwind into V8.
 - **Intrinsic integrity:** the security boundary is in Rust, not JS — the op table and capability set live in the engine's `OpState`, so guest tampering (prototype pollution, global reassignment, forging `__ops`) cannot escalate privilege. JS-surface defense-in-depth (`harden.js`) locks the `__ops` binding and freezes namespace objects; SES-style primordial freezing is left to the embedder. See `SECURITY.md` / `docs/SECURITY-REVIEW.md`.

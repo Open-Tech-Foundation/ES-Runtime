@@ -36,6 +36,8 @@ esrun -v, --version      Show the version
 | `<file>` | Path to a JavaScript ES module to run. Resolved as a local file (relative/absolute path or `file:` URL). |
 | `-e, --eval <code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
 | `-t, --timeout <ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
+| `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Denying capabilities](#denying-capabilities). |
+| `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
 | `--env-file <path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace <ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -65,7 +67,41 @@ esrun --env-file .env app.js
 
 # Give in-flight requests 30s to finish after SIGTERM
 esrun --shutdown-grace 30000 server.js
+
+# Run with no host access at all
+esrun --deny-all app.js
+
+# Run with everything except the network and subprocesses
+esrun --deny-net --deny-run app.js
 ```
+
+## Denying capabilities
+
+esrun grants every capability by default. Restrict a run with **either**
+`--deny-all` **or** one or more `--deny-<name>` — passing both is an error, since
+`--deny-all` is exactly the union of the eight.
+
+| Flag | Denies |
+| --- | --- |
+| `--deny-read` | `runtime:fs` / `runtime:wasi` reads |
+| `--deny-write` | `runtime:fs` / `runtime:wasi` mutations |
+| `--deny-imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `--deny-net` | `fetch`, `WebSocket`, `runtime:net` connect |
+| `--deny-listen` | `runtime:net` listen, `runtime:http` serve |
+| `--deny-env` | `runtime:process` env / args / cwd |
+| `--deny-run` | `runtime:system` child processes |
+| `--deny-signals` | `runtime:process` onSignal |
+
+A denied operation throws `NotAllowedError` (`ERR_CAPABILITY_DENIED`) before the
+effect happens. Importing a `runtime:` module always works — the gate is the
+operation, not the import.
+
+<Callout type="note" title="--deny-all runs a single file">
+  The entry file is read before the runtime exists, so `--deny-all` still runs
+  what you named. It includes `--deny-imports`, though, so a fully denied run
+  cannot load a second file. Query the policy from JS with
+  [`permissions`](/api/process).
+</Callout>
 
 <Callout type="note" title="Arguments">
   Anything after the file (or after the `-e` code) is the script's own argument

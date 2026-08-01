@@ -5,15 +5,27 @@
 //! host concerns. Pure-computation ops (encoding, URL — later increments) need
 //! no provider; the ops here are the provider-backed ones for Phase 4.
 
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
+use es_runtime_common::CapabilitySet;
 use es_runtime_engine::{Engine, OpDecl, Value};
 use es_runtime_providers::{Clock, Console, ConsoleLevel};
 
 use crate::{HostProviders, Result};
 
 /// Registers every built-in host op on `engine`.
-pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Result<()> {
+///
+/// `capabilities` is the runtime's live view of its own grants, shared with the
+/// ops that report on it (`runtime:process` `permissions`, D38) so that a later
+/// [`Runtime::set_capabilities`](crate::Runtime::set_capabilities) is reflected
+/// without re-registering anything.
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    providers: &HostProviders,
+    capabilities: Rc<Cell<CapabilitySet>>,
+) -> Result<()> {
     install_console(engine, providers.console())?;
     install_performance(engine, providers.clock())?;
     // Pure-computation ops (no provider): URL parsing, UTF-8 transcoding,
@@ -36,9 +48,16 @@ pub(crate) fn install(engine: &mut dyn Engine, providers: &HostProviders) -> Res
     crate::curve25519_ops::install(engine)?;
     // RSA WebCrypto (PKCS1-v1_5 / PSS / OAEP), Entropy-backed for key gen/salt.
     crate::rsa_ops::install(engine, providers.entropy())?;
-    // runtime:process ops, gated on Env; `exit` halts via the interrupt handle.
+    // runtime:process ops: state reads gated on Env, signals on Signals, and
+    // `permissions` ungated (D38). `exit` halts via the interrupt handle.
     let interrupt = engine.interrupt_handle();
-    crate::process_ops::install(engine, providers.process(), providers.signals(), interrupt)?;
+    crate::process_ops::install(
+        engine,
+        providers.process(),
+        providers.signals(),
+        interrupt,
+        capabilities,
+    )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
     crate::fs_ops::install(engine, providers.file_system())?;
     // Synchronous filesystem ops for `runtime:wasi` (WASI's syscalls cannot

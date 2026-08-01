@@ -206,7 +206,11 @@ pub trait IntoException: std::fmt::Display {
 #[non_exhaustive]
 pub enum Error {
     /// A capability required for an operation was not granted (DECISIONS.md D7).
-    #[error("capability denied: {0:?}")]
+    ///
+    /// Host-facing capabilities also name themselves in the denial vocabulary
+    /// (D38), so a CLI user reading the message can see which `--deny-<name>`
+    /// produced it without a translation table.
+    #[error("capability denied: {0}")]
     CapabilityDenied(crate::capability::Capability),
 
     /// A configuration value was invalid or inconsistent.

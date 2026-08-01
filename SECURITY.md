@@ -30,8 +30,46 @@ The resource-limit / FFI-safety spine (SPEC.md §4) is in place as of Phase 9:
 marshaler), sanitizer CI (Miri/ASAN), a WPT/min-common conformance run, a
 systematic intrinsic-integrity (prototype-pollution) audit, and an external
 security review. **Until those land, do not run hostile/untrusted code** with
-`esrun` (which also grants all capabilities); the embeddable library lets an
-embedder restrict capabilities and inject its own providers.
+`esrun`, `--deny-all` or not; the embeddable library lets an embedder restrict
+capabilities and inject its own providers.
+
+## Restricting an `esrun` run (`--deny-all` / `--deny-<name>`)
+
+`esrun` grants every capability by default — it runs a local script the user
+named. Restriction is opt-in (DECISIONS D38), and there are exactly two ways to
+ask for it, which **cannot be combined**:
+
+| | |
+|---|---|
+| `--deny-all` | No host access at all |
+| `--deny-<name>` | Deny one capability; repeatable |
+
+The eight names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
+`signals` — the same words the `runtime:process` `permissions` API and the
+denial message use. A denied operation throws `NotAllowedError`
+(`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
+
+Two things `--deny-all` does *not* do, both deliberate:
+
+- **It still runs the entry file.** That file is read by the CLI before a
+  runtime exists, so it is outside the capability system — the user named it,
+  and the flags govern what it may then do. Since `--deny-all` includes
+  `--deny-imports`, a fully denied run is a **single-file** run.
+- **It does not revoke `Clock`/`Entropy`/`Timers`/`TaskSpawn`.** No op gates
+  them; a denied script still computes, it just reaches nothing.
+
+Importing a `runtime:` module always works, under any policy — the gate is the
+op, not the import. A program can ask what it is allowed to do:
+
+```js
+import { permissions } from "runtime:process";
+permissions.denied;          // ["read", "write", ...]
+permissions.has("net");      // false
+```
+
+**Denials are coarse.** `--deny-net` is all-or-nothing, not per-host; scoped
+values (`--deny-net=<hosts>`, `--deny-read=<paths>`) are not implemented. The
+filesystem **root jail** (D25) is always on regardless, for both paths.
 
 ## Child processes (`Capability::Run`)
 

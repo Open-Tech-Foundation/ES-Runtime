@@ -11,7 +11,8 @@ import { Callout } from "@opentf/web-docs";
 signals, and exit.
 
 It is an ES module, gated on the `Env` capability — except the signal exports,
-which need `Signals`. Import only what you need.
+which need `Signals`, and `platform`, `arch`, `exit`, and `permissions`, which
+need none. Import only what you need.
 
 ## Reading process info
 
@@ -124,6 +125,24 @@ rather than registering a handler that would never fire.
   and Deno. Removing the last handler releases it. Repeated deliveries coalesce:
   a burst of `SIGHUP`s arrives once.
 </Callout>
+
+## Permissions
+
+`permissions` reports what this run may reach. The policy is fixed at launch by
+[esrun's denial flags](/docs/security#denying-capabilities-in-esrun), so `has()`
+is a synchronous boolean — there is nothing to request.
+
+```js
+import { permissions } from "runtime:process";
+
+permissions.denied; // ["read", "write"]
+permissions.has("net"); // true
+
+if (permissions.has("write")) await fs.write("cache.json", data);
+```
+
+Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Any
+other name throws a `TypeError`.
 
 ## Exit
 

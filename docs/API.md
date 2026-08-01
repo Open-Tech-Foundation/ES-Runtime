@@ -406,9 +406,11 @@ the required capability has been granted.
 
 ES-Runtime is deny-by-default: a fresh runtime can compute but cannot reach the
 host environment, filesystem, or network until the embedder grants the relevant
-capability. The standalone `esrun` CLI grants the capabilities its features
-need. The check lives on the native op, so it cannot be bypassed by reaching a
-different module path.
+capability. The standalone `esrun` CLI is the other way round — it grants
+everything unless you pass [`--deny-all` or `--deny-<name>`](#denying-capabilities-in-esrun).
+The check lives on the native op, so it cannot be bypassed by reaching a
+different module path, and **importing** a `runtime:` module never needs a
+capability — only its operations do.
 
 | Capability  | Grants                                                              |
 | ----------- | ------------------------------------------------------------------- |
@@ -426,6 +428,33 @@ jail**, on by default and not currently optional (DECISIONS D25). Paths are
 canonicalized to their real location before the check, so a symlink cannot
 escape the jail.
 
+### Denying capabilities in `esrun`
+
+`esrun` grants everything by default. Restrict a run with **either** `--deny-all`
+**or** one or more `--deny-<name>` — passing both is an error (DECISIONS D38).
+
+```sh
+esrun --deny-all app.js                      # no host access at all
+esrun --deny-net --deny-run app.js           # everything except those two
+```
+
+| Flag | Capability | Denies |
+| ---- | ---------- | ------ |
+| `--deny-read` | `FileRead` | `runtime:fs` / `runtime:wasi` reads |
+| `--deny-write` | `FileWrite` | `runtime:fs` / `runtime:wasi` mutations |
+| `--deny-imports` | `FileSystem` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `--deny-net` | `Net` | `fetch`, `WebSocket`, `runtime:net` `connect` |
+| `--deny-listen` | `NetListen` | `runtime:net` `listen`, `runtime:http` `serve` |
+| `--deny-env` | `Env` | `runtime:process` `env` / `args` / `cwd()` |
+| `--deny-run` | `Run` | `runtime:system` child processes |
+| `--deny-signals` | `Signals` | `runtime:process` `onSignal` |
+
+`--deny-all` is the union of all eight. It still runs the entry file — that file
+is read before the runtime exists — but since it includes `--deny-imports`, a
+fully denied run is a **single-file** run. `Clock`/`Entropy`/`Timers`/`TaskSpawn`
+have no flag and survive `--deny-all`: no op gates them, so a denied script still
+computes. Ask from JS with [`permissions`](#runtimeprocess).
+
 ---
 
 ## `runtime:process`
@@ -434,10 +463,12 @@ Host process information: environment, arguments, working directory, platform,
 and exit. Aligned *in spirit* with the WinterTC CLI-API proposal (DECISIONS
 D26).
 
-- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`.
+- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`, and `platform` / `arch` / `exit` / `permissions`, which need none.
 - **Status:** Available
 - **Loading:** on demand — importing it adds nothing to startup if unused.
-- **Snapshotting:** values are captured when the module is evaluated.
+- **Snapshotting:** `env` and `args` are captured on **first access**, not at
+  module evaluation, so importing this module needs no capability even under
+  `--deny-env` (DECISIONS D26/D38).
 
 ```js
 import { env, args, platform, arch, cwd, exit, unmask } from "runtime:process";
@@ -465,7 +496,35 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | `signals()`       | `() => SignalName[]`                | Signal names this platform can deliver. **Capability: `Signals`.**                                                                                                                        |
 | `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Capability: `Signals`.**                                                                          |
 | `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one for a signal restores the default action. **Capability: `Signals`.**                                                     |
+| `permissions`     | `object`                            | What this process is allowed to reach — see **Permissions** below. **Needs no capability.**                                                                                               |
 | `default`         | `object`                            | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+
+### Permissions
+
+The policy is fixed at launch — by `esrun`'s [denial flags](#denying-capabilities-in-esrun)
+or by the embedder's capability set — so this is introspection only. There is
+nothing to request and no prompt to await, which is why `has()` is a synchronous
+boolean rather than a promise.
+
+```js
+import { permissions } from "runtime:process";
+
+permissions.denied;        // ["read", "write"] — [] when nothing is denied
+permissions.has("net");    // true
+if (permissions.has("write")) await fs.write("cache.json", data);
+```
+
+| Export | Type | Description |
+| ------ | ---- | ----------- |
+| `permissions.denied` | `readonly PermissionName[]` | The names this process may not use, in capability order. |
+| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for a name outside the eight — a typo'd check would otherwise read as a denial and take the degraded path forever. |
+
+`PermissionName` is `"read" | "write" | "imports" | "net" | "listen" | "env" |
+"run" | "signals"` — the same words the `--deny-<name>` flags use.
+
+Needs no capability, deliberately: it reveals only what a program could learn by
+calling each op and catching the denial, and code that must ask "may I?" is
+exactly the code running under the tightest policy.
 
 ### Signals
 

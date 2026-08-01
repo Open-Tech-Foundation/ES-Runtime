@@ -83,6 +83,53 @@ declare module "runtime:process" {
    */
   export function offSignal(signal: SignalName, handler: (signal: SignalName) => void): void;
 
+  /**
+   * A capability this process may be denied. These are exactly the suffixes of
+   * `esrun`'s `--deny-<name>` flags:
+   *
+   * - `read` / `write` — the `runtime:fs` and `runtime:wasi` surfaces
+   * - `imports` — the module loader (`import "./x.js"`, `import "pkg"`)
+   * - `net` / `listen` — outbound (`fetch`, `WebSocket`, `runtime:net`) and
+   *   inbound (`runtime:net` listen, `runtime:http` serve)
+   * - `env` — this module's `env`, `args`, and `cwd()`
+   * - `run` — `runtime:system` child processes
+   * - `signals` — `onSignal`
+   */
+  export type PermissionName =
+    | "read"
+    | "write"
+    | "imports"
+    | "net"
+    | "listen"
+    | "env"
+    | "run"
+    | "signals";
+
+  /**
+   * What this process is allowed to reach. The policy is fixed at launch — by
+   * `esrun`'s `--deny-all` / `--deny-<name>` flags, or by the embedder's
+   * capability set — so this is introspection only: there is nothing to request
+   * and no prompt to await, which is why it is synchronous.
+   *
+   * Needs no capability: it answers even under `--deny-all`, which is the policy
+   * under which a program most needs to ask.
+   *
+   * ```js
+   * import { permissions } from "runtime:process";
+   * if (permissions.has("write")) await fs.write("cache.json", data);
+   * ```
+   */
+  export const permissions: {
+    /** The names this process may not use — empty when nothing is denied. */
+    readonly denied: readonly PermissionName[];
+    /**
+     * Whether `name` is available. Throws a `TypeError` for a name outside
+     * {@link PermissionName}, rather than answering `false` — a typo'd check
+     * would otherwise read as a denial and take the degraded path forever.
+     */
+    has(name: PermissionName): boolean;
+  };
+
   const process: {
     env: typeof env;
     args: typeof args;
@@ -95,6 +142,7 @@ declare module "runtime:process" {
     signals: typeof signals;
     onSignal: typeof onSignal;
     offSignal: typeof offSignal;
+    permissions: typeof permissions;
   };
   export default process;
 }

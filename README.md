@@ -51,8 +51,16 @@ esrun examples/hello.js
 esrun examples/modules/main.mjs   # ES module: import/export + top-level await
 esrun -e "console.log(6 * 7)"
 esrun --env-file .env app.mjs     # load env vars from a .env file
+esrun --deny-all app.mjs          # run with no host access at all
+esrun --deny-net app.mjs          # or deny one capability at a time
 esrun --help
 ```
+
+`esrun` grants every capability by default. Restrict a run with **either**
+`--deny-all` **or** one or more `--deny-<name>` from `read`, `write`, `imports`,
+`net`, `listen`, `env`, `run`, `signals` — not both. A denied operation throws
+`NotAllowedError`; importing a `runtime:` module always works. See
+[SECURITY.md](SECURITY.md).
 
 ## TypeScript
 
