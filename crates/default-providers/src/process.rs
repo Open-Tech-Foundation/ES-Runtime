@@ -10,8 +10,12 @@
 //! over the host environment. By default the host environment wins (the overlay
 //! only fills keys the OS doesn't set); with the override flag the overlay wins
 //! instead. The overlay never mutates the real process environment.
+//!
+//! An optional **allowlist** narrows the snapshot to named variables — the
+//! provider-side half of `esrun --allow-env=<names>` (D38). It is applied last,
+//! after the overlay is merged, so a `--env-file` value is no way around it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
@@ -29,6 +33,11 @@ pub struct SystemProcess {
     /// When `true`, overlay entries override OS environment variables of the
     /// same name; when `false` (default), the OS value wins.
     env_override: bool,
+    /// Variables [`Process::env`] may report. `None` ⇒ all of them. Set by
+    /// [`with_env_allowlist`], which backs `esrun --allow-env=<names>`.
+    ///
+    /// [`with_env_allowlist`]: SystemProcess::with_env_allowlist
+    env_allow: Option<BTreeSet<String>>,
     exit: Arc<ExitCell>,
 }
 
@@ -46,6 +55,7 @@ impl SystemProcess {
             args,
             env_overlay: Vec::new(),
             env_override: false,
+            env_allow: None,
             exit: Arc::new(ExitCell::default()),
         }
     }
@@ -58,6 +68,31 @@ impl SystemProcess {
     pub fn with_env(mut self, overlay: Vec<(String, String)>, override_os: bool) -> Self {
         self.env_overlay = overlay;
         self.env_override = override_os;
+        self
+    }
+
+    /// Restricts [`Process::env`] to `names` — the policy seam behind
+    /// `esrun --allow-env=<names>` (D38), and the shape an embedder wants when
+    /// a guest needs two variables rather than the host's whole environment.
+    ///
+    /// Unlisted variables are **absent** from the snapshot rather than present
+    /// and unreadable: `env` hands out a map, so the honest way to say "you may
+    /// not have this" is not to include it. Enumeration of names the guest may
+    /// not read is denied along with the values, which is the point — the
+    /// variable names alone (`AWS_SECRET_ACCESS_KEY`, `DATABASE_URL`) tell an
+    /// attacker where the host keeps its secrets.
+    ///
+    /// Matching is exact and case-sensitive, as environment lookups are on unix.
+    /// This narrows `env` only: `args`, `cwd`, and the rest of the provider are
+    /// not environment variables and stay whole under
+    /// [`Capability::Env`](es_runtime_common::Capability::Env).
+    #[must_use]
+    pub fn with_env_allowlist<I, S>(mut self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.env_allow = Some(names.into_iter().map(Into::into).collect());
         self
     }
 }
@@ -78,6 +113,11 @@ impl Process for SystemProcess {
             } else {
                 map.entry(k.to_string()).or_insert_with(|| v.to_string());
             }
+        }
+        // Last, so neither the OS environment nor an --env-file overlay can
+        // reintroduce a name the allowlist leaves out.
+        if let Some(allow) = &self.env_allow {
+            map.retain(|name, _| allow.contains(name));
         }
         map.into_iter().collect()
     }
@@ -154,5 +194,53 @@ mod tests {
             false,
         );
         assert_eq!(get(&p.env(), key), Some("second"));
+    }
+
+    #[test]
+    fn allowlist_keeps_only_the_named_variables() {
+        let kept = "ESRUN_TEST_ALLOWED_KEY";
+        let dropped = "ESRUN_TEST_DENIED_KEY";
+        let p = SystemProcess::new(vec![])
+            .with_env(
+                vec![(kept.into(), "yes".into()), (dropped.into(), "no".into())],
+                false,
+            )
+            .with_env_allowlist([kept]);
+        let env = p.env();
+        assert_eq!(get(&env, kept), Some("yes"));
+        assert_eq!(get(&env, dropped), None);
+        // The host's own environment is narrowed to the same list, so the guest
+        // cannot enumerate what it may not read.
+        assert_eq!(env.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_allowlist_hides_the_whole_environment() {
+        // `--allow-env=` never reaches here (the CLI rejects an empty list), but
+        // an embedder may legitimately grant the capability and name nothing.
+        let p = SystemProcess::new(vec![])
+            .with_env(vec![("ESRUN_TEST_EMPTY_LIST".into(), "v".into())], false)
+            .with_env_allowlist(Vec::<String>::new());
+        assert!(p.env().is_empty());
+    }
+
+    #[test]
+    fn allowlist_matching_is_exact() {
+        let key = "ESRUN_TEST_EXACT_KEY";
+        let p = SystemProcess::new(vec![])
+            .with_env(vec![(key.into(), "v".into())], false)
+            .with_env_allowlist(["esrun_test_exact_key", "ESRUN_TEST_EXACT"]);
+        assert_eq!(get(&p.env(), key), None);
+    }
+
+    #[test]
+    fn allowlist_outranks_an_env_file_overlay() {
+        // The overlay is merged first; the allowlist is applied after, so
+        // --env-file is not a way around --allow-env.
+        let key = "ESRUN_TEST_OVERLAY_VS_ALLOWLIST";
+        let p = SystemProcess::new(vec![])
+            .with_env(vec![(key.into(), "v".into())], true)
+            .with_env_allowlist(["SOMETHING_ELSE"]);
+        assert_eq!(get(&p.env(), key), None);
     }
 }
