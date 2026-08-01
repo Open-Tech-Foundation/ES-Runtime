@@ -792,24 +792,25 @@ fn a_path_list_narrows_the_root_jail_and_never_widens_it() {
     );
 }
 
-#[test]
-fn allow_imports_admits_named_packages_and_paths_and_refuses_the_rest() {
-    let root = temp("scoped_imports");
+/// A project with two local modules and two packages, plus an `app.mjs` that
+/// imports one of each and probes the other two. Returns the canonical root.
+fn import_project(name: &str) -> PathBuf {
+    let root = temp(name);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::create_dir_all(root.join("vendor")).unwrap();
     std::fs::write(root.join("package.json"), r#"{"name":"t","type":"module"}"#).unwrap();
     std::fs::write(root.join("src/lib.mjs"), "export const v = 1;").unwrap();
     std::fs::write(root.join("vendor/x.mjs"), "export const v = 2;").unwrap();
-    for name in ["good", "evil"] {
-        let pkg = root.join("node_modules").join(name);
-        std::fs::create_dir_all(&pkg).unwrap();
+    for pkg in ["good", "evil"] {
+        let dir = root.join("node_modules").join(pkg);
+        std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
-            pkg.join("package.json"),
-            format!(r#"{{"name":"{name}","type":"module","main":"index.js"}}"#),
+            dir.join("package.json"),
+            format!(r#"{{"name":"{pkg}","type":"module","main":"index.js"}}"#),
         )
         .unwrap();
-        std::fs::write(pkg.join("index.js"), format!("export const n = '{name}';")).unwrap();
+        std::fs::write(dir.join("index.js"), format!("export const n = '{pkg}';")).unwrap();
     }
     let root = std::fs::canonicalize(&root).unwrap();
     std::fs::write(
@@ -823,13 +824,25 @@ fn allow_imports_admits_named_packages_and_paths_and_refuses_the_rest() {
          catch (e) { console.log('package refused'); }",
     )
     .unwrap();
+    root
+}
 
-    let out = esrun()
-        .current_dir(&root)
-        .args(["--deny-all", "--allow-imports=./src,good"])
+/// Runs `app.mjs` in `root` under an import policy written to `policy.json`.
+fn run_with_policy(root: &PathBuf, policy: &str, flags: &[&str]) -> Output {
+    std::fs::write(root.join("policy.json"), policy).unwrap();
+    esrun()
+        .current_dir(root)
+        .args(flags)
+        .arg("--import-policy=policy.json")
         .arg("app.mjs")
         .output()
-        .expect("spawn esrun");
+        .expect("spawn esrun")
+}
+
+#[test]
+fn an_import_policy_allow_list_admits_named_packages_and_paths() {
+    let root = import_project("policy_allow");
+    let out = run_with_policy(&root, r#"{ "allow": ["./src", "good"] }"#, &[]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     // The entry file is exempt — it is read before a loader exists, and the
@@ -837,6 +850,87 @@ fn allow_imports_admits_named_packages_and_paths_and_refuses_the_rest() {
     assert!(s.contains("loaded 1 good"), "{s}");
     assert!(s.contains("path refused"), "{s}");
     assert!(s.contains("package refused"), "{s}");
+}
+
+#[test]
+fn an_import_policy_without_an_allow_list_only_denies() {
+    // The shape for excluding a handful of packages without enumerating the
+    // whole graph.
+    let root = import_project("policy_deny_only");
+    let out = run_with_policy(&root, r#"{ "deny": ["evil"] }"#, &[]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("loaded 1 good"), "{s}");
+    assert!(s.contains("NO THROW"), "{s}"); // ./vendor is not denied
+    assert!(s.contains("package refused"), "{s}");
+}
+
+#[test]
+fn an_import_policy_is_not_a_way_around_the_imports_capability() {
+    // Two layers: the capability decides whether the loader runs at all, the
+    // policy decides what it may resolve. A policy cannot re-open a loader that
+    // --deny-all closed.
+    let root = import_project("policy_vs_capability");
+    let out = run_with_policy(&root, r#"{ "allow": ["./src", "good"] }"#, &["--deny-all"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("imports"), "stderr: {}", stderr(&out));
+}
+
+#[test]
+fn an_import_policy_composes_with_the_imports_capability() {
+    let root = import_project("policy_with_capability");
+    let out = run_with_policy(
+        &root,
+        r#"{ "allow": ["./src", "good"] }"#,
+        &["--deny-all", "--allow-imports"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("loaded 1 good"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_broken_import_policy_is_reported_before_anything_runs() {
+    let root = import_project("policy_broken");
+    for (policy, expected) in [
+        (r#"{ "allowed": ["good"] }"#, "unknown key"),
+        (r#"{ "allow": "good" }"#, "must be an array"),
+        ("{", "invalid JSON"),
+        (r#"{ "allow": [] }"#, "nothing may be imported"),
+    ] {
+        let out = run_with_policy(&root, policy, &[]);
+        assert!(!out.status.success(), "{policy} should be rejected");
+        let s = stderr(&out);
+        assert!(s.contains(expected), "{policy} → {s}");
+        assert!(s.contains("policy.json"), "{policy} → {s}");
+    }
+}
+
+#[test]
+fn a_missing_import_policy_file_is_an_error() {
+    let root = import_project("policy_missing");
+    let out = esrun()
+        .current_dir(&root)
+        .arg("--import-policy=nope.json")
+        .arg("app.mjs")
+        .output()
+        .expect("spawn esrun");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("cannot read import policy"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn allow_imports_takes_no_value_and_points_at_the_policy() {
+    // What may be loaded is not a capability scope; the error says where it
+    // lives instead of pretending the flag will grow a list.
+    let out = run(&["--deny-all", "--allow-imports=./src"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("--allow-imports takes no value"), "{s}");
+    assert!(s.contains("--import-policy=<file>"), "{s}");
 }
 
 #[test]
@@ -938,18 +1032,15 @@ fn a_denial_takes_no_scope_list() {
 }
 
 #[test]
-fn every_permission_name_now_takes_a_scope_list() {
-    // The rejection path is kept (see `record`), but nothing exercises it any
-    // more: all eight names are scopable. If a ninth capability lands without
-    // enforcement, its value must be rejected — this test is here to be the
-    // thing that fails when someone adds one and wires the flag anyway.
-    for name in [
-        "read", "write", "imports", "net", "listen", "env", "run", "signals",
-    ] {
+fn every_capability_name_but_imports_takes_a_scope_list() {
+    // Seven of the eight. `imports` is deliberately not scoped by a flag —
+    // what may be loaded is an import policy (D39), not a capability scope —
+    // and this fails if a capability is added without enforcement behind it.
+    for name in ["read", "write", "net", "listen", "env", "run", "signals"] {
         let value = match name {
             "net" | "listen" => "127.0.0.1:9",
             "signals" => "SIGTERM",
-            "read" | "write" | "imports" => ".",
+            "read" | "write" => ".",
             _ => "X",
         };
         let out = run(

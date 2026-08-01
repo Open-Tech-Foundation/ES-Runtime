@@ -40,7 +40,7 @@ use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, 
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    HostAllowlist, ImportAllowlist, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport,
+    HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport,
     SystemClock, SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess,
     SystemSignals, SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
 };
@@ -63,8 +63,11 @@ USAGE:
                                 listen, env, run, signals
     esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list:
                                 read/write (paths), net/listen (addresses),
-                                imports (packages + paths), run (programs),
-                                env (variable names), signals (signal names)
+                                run (programs), env (variable names),
+                                signals (signal names)
+    esrun --import-policy=<file>
+                                JSON policy for what may be loaded (allow/deny
+                                lists of packages and paths)
     esrun -t=<ms>, --timeout=<ms>
                                 Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file=<path>     Load env vars from a .env file
@@ -104,8 +107,8 @@ A scope list narrows a grant. --allow-env=HOME,PATH hides every other variable;
 --allow-run=git,ls refuses to spawn anything else; --allow-net=api.example.com
 refuses every other host, on every redirect hop as well as the first request;
 --allow-listen=127.0.0.1:8080 refuses every other bind; --allow-read=./data
-refuses every other path; --allow-imports=./src,lodash refuses every other
-module; --allow-signals=SIGTERM refuses to watch anything else.
+refuses every other path; --allow-signals=SIGTERM refuses to watch anything
+else.
 
 An address is a host, a host:port, or a bare port (any interface); [::1]:8080
 for IPv6. A path is absolute or relative to the working directory and covers its
@@ -114,13 +117,16 @@ does not admit ./app-secrets, and there are no wildcards. Paths are checked
 after canonicalization, so a symlink cannot walk out of a list, and a path list
 narrows the root jail without ever widening it.
 
-An import entry is a package name (lodash, @scope/pkg) or a path — the same
-split the loader makes between a bare and a relative specifier. Allowing a
-package does not allow what it imports; each is named in its own right.
-
 Entries are comma-separated and trimmed (`--allow-env=\"A, B\"` ≡
 `--allow-env=A,B`); an empty entry is an error. Denials take no value at all: a
 scope narrows a grant, so it is written --deny-all --allow-<name>=<list>.
+
+What may be *loaded* is a separate question from what running code may reach, so
+it is a separate mechanism: --import-policy=<file> takes JSON with \"allow\"
+and/or \"deny\" lists of package names and paths. Deny wins; omitting \"allow\"
+permits everything not denied; paths resolve relative to the policy file. The
+imports capability decides whether the loader runs at all, the policy decides
+what it may resolve — so a policy is not a way around --deny-imports.
 
 Permission flags must come before the script; after it they would be the
 script's own arguments.
@@ -438,6 +444,9 @@ struct Config {
     timeout: Option<Duration>,
     /// `.env` file to load, via `--env-file` (last one wins if repeated).
     env_file: Option<String>,
+    /// Import policy file, via `--import-policy` (D39). Never auto-discovered:
+    /// like `--env-file`, nothing on disk is read unless it is named.
+    import_policy: Option<String>,
     /// Whether `--env-file` values override the OS environment (`--env-override`).
     env_override: bool,
     /// How long in-flight HTTP requests get to finish after an interrupt, via
@@ -462,10 +471,13 @@ type Scopes = HashMap<Capability, Vec<String>>;
 /// What a scoped `--allow-<name>=<list>` means for `cap`, or `None` if that
 /// capability cannot enforce a list.
 ///
-/// All eight are scopable today. The `None` arm stays because it is the rule,
-/// not a placeholder: a capability added later rejects a value until its
-/// enforcement exists, rather than accepting one nothing acts on (D38 — a run
-/// must never be narrower on the command line than it is in reality).
+/// Seven of the eight take a list. `imports` deliberately does **not**: what
+/// may be loaded is an [import policy](es_runtime_default_providers::ImportPolicy)
+/// (`--import-policy=<file>`, D39), not a capability scope — the capability
+/// decides whether the loader runs, the policy decides what it may resolve. The
+/// `None` arm is the rule, not a placeholder: a capability rejects a value until
+/// something enforces it (D38 — a run must never be narrower on the command line
+/// than it is in reality).
 fn scope_hint(cap: Capability) -> Option<&'static str> {
     match cap {
         Capability::Run => Some("program names, e.g. --allow-run=git,ls"),
@@ -475,7 +487,6 @@ fn scope_hint(cap: Capability) -> Option<&'static str> {
         Capability::FileRead | Capability::FileWrite => {
             Some("paths, e.g. --allow-read=./data,/etc/ssl/certs")
         }
-        Capability::FileSystem => Some("packages and paths, e.g. --allow-imports=./src,lodash"),
         Capability::Signals => Some("signal names, e.g. --allow-signals=SIGTERM,SIGINT"),
         _ => None,
     }
@@ -599,12 +610,22 @@ impl Permissions {
                     // Rejected, never ignored: a value that parsed but was not
                     // enforced would tell the user the run is scoped while the
                     // capability is wide open.
+                    if cap == Capability::FileSystem {
+                        return Err(format!(
+                            "{flag} takes no value (got {flag}={value}).\n\n\
+                             What may be *loaded* is an import policy, not a capability \
+                             scope: the capability decides whether the loader runs, the \
+                             policy decides what it may resolve. Use \
+                             --import-policy=<file> — a JSON file with \"allow\" and/or \
+                             \"deny\" lists of packages and paths."
+                        ));
+                    }
                     return Err(format!(
                         "{flag} takes no value (got {flag}={value}).\n\n\
-                         Scoping {name} is not implemented yet — {flag} is all-or-nothing. \
+                         Scoping {name} is not implemented — {flag} is all-or-nothing. \
                          It is rejected rather than ignored so a run is never narrower on the \
                          command line than it is in reality.\n\n\
-                         Scoping works today for: {}.",
+                         A list works for: {}.",
                         scopable_flags()
                     ));
                 }
@@ -846,6 +867,7 @@ const DEFAULT_SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 fn parse_args() -> Result<Config, String> {
     let mut timeout = None;
     let mut env_file: Option<String> = None;
+    let mut import_policy: Option<String> = None;
     let mut env_override = false;
     let mut shutdown_grace = DEFAULT_SHUTDOWN_GRACE;
     let mut permissions = Permissions::default();
@@ -915,6 +937,9 @@ fn parse_args() -> Result<Config, String> {
             "--env-file" => {
                 env_file = Some(require_value(flag, value)?.to_string());
             }
+            "--import-policy" => {
+                import_policy = Some(require_value(flag, value)?.to_string());
+            }
             "--env-override" => {
                 reject_value(flag, value)?;
                 env_override = true;
@@ -949,6 +974,7 @@ fn parse_args() -> Result<Config, String> {
                     source: Source::Inline(code),
                     timeout,
                     env_file,
+                    import_policy,
                     env_override,
                     shutdown_grace,
                     args: rest,
@@ -987,6 +1013,7 @@ fn parse_args() -> Result<Config, String> {
                     source: Source::File(path.to_string()),
                     timeout,
                     env_file,
+                    import_policy,
                     env_override,
                     shutdown_grace,
                     args: rest,
@@ -1010,6 +1037,7 @@ fn is_esrun_flag(flag: &str) -> bool {
             | "-t"
             | "--timeout"
             | "--env-file"
+            | "--import-policy"
             | "--env-override"
             | "--shutdown-grace"
             | "-e"
@@ -1239,15 +1267,14 @@ async fn run() -> Result<(), String> {
     // entry's directory, from which it detects the sandbox root (the project
     // root containing node_modules/package.json) — resolution is jailed under it
     // by default (D25). Held behind an Arc so dynamic import() can reach it.
-    // `--allow-imports=<list>` narrows what the loader will resolve to named
-    // packages and paths (D38). The entry file is unaffected — it is read
-    // before a loader exists, and the user named it on the command line.
+    // `--import-policy=<file>` governs what the loader may resolve (D39) — a
+    // layer above the `imports` capability, which governs whether it runs at
+    // all. The entry file is unaffected: it is read before a loader exists, and
+    // the user named it on the command line.
     let mut loader_impl =
         NodeModuleLoader::with_base_dir(&base_dir).map_err(|e| format!("module loader: {e}"))?;
-    if let Some(entries) = config.scopes.get(&Capability::FileSystem) {
-        let allow = ImportAllowlist::parse(entries, &flag_dir)
-            .map_err(|e| format!("--allow-imports: {e}"))?;
-        loader_impl = loader_impl.with_allowlist(allow);
+    if let Some(file) = &config.import_policy {
+        loader_impl = loader_impl.with_policy(ImportPolicy::from_file(std::path::Path::new(file))?);
     }
     let loader: Arc<dyn ModuleLoader> = Arc::new(loader_impl);
 
