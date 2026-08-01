@@ -919,6 +919,26 @@ fn a_scoped_allow_still_requires_deny_all() {
 // ---- the permissions API itself ----------------------------------------------
 
 #[test]
+fn has_rejects_a_per_value_check_rather_than_ignoring_the_value() {
+    // `has("read", "/etc/passwd")` used to answer about the capability and drop
+    // the path — true under `--allow-read=./data`, which is the same lie the
+    // parser refuses to tell when it rejects a flag it cannot enforce. Whether
+    // one path is reachable is the deployment's business, answered by making
+    // the call.
+    let out = run(
+        &[],
+        "import { permissions } from 'runtime:process'; \
+         try { permissions.has('read', '/etc/passwd'); console.log('NO THROW'); } \
+         catch (e) { console.log(e.constructor.name, e.message); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("TypeError"), "{s}");
+    assert!(s.contains("takes one argument"), "{s}");
+    assert!(s.contains("ERR_PERMISSION_DENIED"), "{s}");
+}
+
+#[test]
 fn has_rejects_a_name_outside_the_vocabulary() {
     // A typo must not read as a denial and silently take the degraded path.
     let out = run(

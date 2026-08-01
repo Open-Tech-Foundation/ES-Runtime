@@ -506,6 +506,13 @@ never had `run`"). For the same reason a scoped grant still reports
 `permissions.has("env") === true` — the capability opens the door; the list is
 what the provider declines to hand over.
 
+`permissions.has()` takes **one** argument, deliberately: `has("read", "/etc/passwd")`
+throws a `TypeError` rather than answering about the capability and ignoring the
+path. Which values are allowed is set by the deployment, and the exact answer
+for one value is to perform the operation and catch `ERR_PERMISSION_DENIED` —
+the runtime resolves a path before judging it, so any advance answer could be
+stale by the time the call happens.
+
 The value grammar, one rule set for every capability that takes a list:
 
 - entries are comma-separated — `--allow-run=git,ls`;

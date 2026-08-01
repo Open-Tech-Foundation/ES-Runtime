@@ -113,7 +113,7 @@ if (permissions.has("write")) await fs.write("cache.json", data);
 | Export | Type | Description |
 | --- | --- | --- |
 | `permissions.denied` | `readonly PermissionName[]` | Names this run may not use, in capability order. |
-| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for any other name. |
+| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for any other name, and for a second argument. |
 
 `PermissionName` is `"read"`, `"write"`, `"imports"`, `"net"`, `"listen"`,
 `"env"`, `"run"`, `"signals"` — the same words the `--deny-<name>` flags use.
@@ -123,6 +123,12 @@ A [scoped grant](/api/cli#scoped-grants) reports `true`: `--allow-env=PORT`
 grants the `env` capability and narrows what it yields, so `has("env")` means
 "you may read *an* environment variable", not "you may read this one". The same
 holds for `--allow-net=<hosts>` and the rest.
+
+There is no per-value form — `has("read", "/etc/passwd")` throws. Which paths
+and hosts are allowed is set by the deployment, not asked about by the
+application, and the exact answer for one value is to make the call and catch
+`ERR_PERMISSION_DENIED`. A path is judged after the runtime resolves it, so an
+answer given in advance could be stale by the time the call happens.
 
 ## Secrets — masked by default
 

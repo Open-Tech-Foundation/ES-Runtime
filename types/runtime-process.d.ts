@@ -131,9 +131,15 @@ declare module "runtime:process" {
      * `--allow-net=api.example.com`, …) answers `true`: the capability is
      * granted, and the list of paths, addresses, programs or variables it was
      * narrowed to is enforced by the host when you use it. So `true` means
-     * "you may read *an* environment variable", not "you may read this one" —
-     * an operation outside the list still throws, with `ERR_PERMISSION_DENIED`
-     * rather than `ERR_CAPABILITY_DENIED`.
+     * "you may read *an* environment variable", not "you may read this one".
+     *
+     * There is deliberately **no per-value form**: `has("read", "/etc/passwd")`
+     * throws a `TypeError`. Which paths, hosts or programs are allowed is set
+     * by the deployment (`--allow-<name>=<list>`), not asked about by the
+     * application — and the honest answer for one value is to perform the
+     * operation and catch the denial (`ERR_PERMISSION_DENIED`), since the
+     * runtime resolves a path before judging it and any advance answer could be
+     * stale by the time the call happens.
      */
     has(name: PermissionName): boolean;
   };

@@ -245,8 +245,25 @@ const permissions = Object.freeze({
    * Whether `name` is available. An unknown name throws rather than answering
    * `false`: a typo'd check would otherwise read as a denial and silently take
    * the degraded path forever.
+   *
+   * Takes **one** argument. A per-value query (`has("read", "/etc/passwd")`)
+   * throws rather than answering about the capability and ignoring the value,
+   * which would be the same lie the CLI refuses to tell when it rejects a flag
+   * it cannot enforce. Whether a *particular* path or host is reachable is
+   * decided by the deployment's `--allow-<name>=<list>`, and answered by making
+   * the call: the runtime checks a path only after resolving it, so any answer
+   * given in advance could be stale by the time the call happens.
    */
-  has(name) {
+  has(name, ...rest) {
+    if (rest.length > 0) {
+      throw new TypeError(
+        "permissions.has() takes one argument: a per-value check " +
+          `(has(${JSON.stringify(name)}, …)) is not supported. Scoping is set by the ` +
+          "deployment (--allow-<name>=<list>); to learn whether one path, host or " +
+          "program is allowed, perform the operation and catch the denial " +
+          "(code ERR_PERMISSION_DENIED).",
+      );
+    }
     if (!PERMISSIONS.includes(name)) {
       throw new TypeError(
         `'${name}' is not a permission name (expected one of: ${PERMISSIONS.join(", ")})`,

@@ -148,7 +148,10 @@ name throws a `TypeError`.
 A [scoped grant](/api/cli#scoped-grants) answers `true`: under
 `--allow-env=PORT` you may read *an* environment variable, and the ones outside
 the list are simply absent. `has()` reports whether the capability is granted,
-not whether a particular value is in its list.
+not whether a particular value is in its list — and there is no second argument
+for asking about one (`has("read", "/etc/passwd")` throws). Scoping is the
+deployment's business; to find out about one value, do the thing and catch
+`ERR_PERMISSION_DENIED`.
 
 ## Exit
 

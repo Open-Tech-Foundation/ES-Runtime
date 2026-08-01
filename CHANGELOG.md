@@ -87,7 +87,11 @@ namespace) is unstable and may change between minor releases until the API freez
   permissions.has("net");  // false
   ```
 
-  Needs no capability, so it answers even under `--deny-all`.
+  Needs no capability, so it answers even under `--deny-all`. It takes **one**
+  argument: `has("read", "/etc/passwd")` throws rather than answering about the
+  capability and ignoring the path. Scoping is set by the deployment; the exact
+  answer for one value is to perform the operation and catch
+  `ERR_PERMISSION_DENIED`.
 
 ### Changed — **breaking**: one argument grammar for the whole CLI
 
