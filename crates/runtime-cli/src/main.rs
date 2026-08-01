@@ -40,9 +40,9 @@ use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, 
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
-    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, TokioTimers, path,
+    HostAllowlist, NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemCommands,
+    SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
+    SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, Signal};
 use url::Url;
@@ -61,9 +61,9 @@ USAGE:
     esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
                                 <name> is one of: read, write, imports, net,
                                 listen, env, run, signals
-    esrun --allow-run=<list>    Grant it narrowed to a comma-separated list:
-    esrun --allow-env=<list>    program names for run, variable names for env
-                                (the other six are all-or-nothing for now)
+    esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list.
+                                Scopable: net + listen (addresses), run
+                                (programs), env (variable names)
     esrun -t=<ms>, --timeout=<ms>
                                 Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file=<path>     Load env vars from a .env file
@@ -90,7 +90,7 @@ never both — each has a single direction, so no flag ever overrides another:
 
     esrun --deny-net --deny-run app.js     # everything, minus these
     esrun --deny-all --allow-net app.js    # nothing, plus these
-    esrun --deny-all --allow-env=PORT,HOME app.js   # ...and only these vars
+    esrun --deny-all --allow-net=api.example.com app.js   # ...and only there
 
 --allow-<name> requires --deny-all (with everything already granted, there is
 nothing for it to add). A denied operation throws NotAllowedError; importing a
@@ -99,14 +99,19 @@ compute, but cannot read, write, import another file, reach the network, read
 the environment, or spawn anything. Ask from JS with `permissions.has(name)`
 from runtime:process.
 
-A scope list narrows a grant: --allow-env=HOME,PATH hides every other variable,
---allow-run=git,ls refuses to spawn anything else. Entries are comma-separated
-and trimmed (`--allow-env=\"A, B\"` ≡ `--allow-env=A,B`); an empty entry is an
-error. Scoping the other six (read, write, imports, net, listen, signals) is not
-implemented, and `--allow-net=host` is rejected rather than ignored — a run must
-never be narrower on the command line than it is in reality. Denials take no
-value at all: a scope narrows a grant, so it is written --deny-all
---allow-<name>=<list>.
+A scope list narrows a grant. --allow-env=HOME,PATH hides every other variable;
+--allow-run=git,ls refuses to spawn anything else; --allow-net=api.example.com
+refuses every other host, on every redirect hop as well as the first request;
+--allow-listen=127.0.0.1:8080 refuses every other bind. An address is a host, a
+host:port, or a bare port (any interface); [::1]:8080 for IPv6. Matching is
+exact — example.com does not admit api.example.com, and there are no wildcards.
+
+Entries are comma-separated and trimmed (`--allow-env=\"A, B\"` ≡
+`--allow-env=A,B`); an empty entry is an error. Scoping read, write, imports,
+and signals is not implemented, and a value on those is rejected rather than
+ignored — a run must never be narrower on the command line than it is in
+reality. Denials take no value at all: a scope narrows a grant, so it is written
+--deny-all --allow-<name>=<list>.
 
 Permission flags must come before the script; after it they would be the
 script's own arguments.
@@ -456,8 +461,24 @@ fn scope_hint(cap: Capability) -> Option<&'static str> {
     match cap {
         Capability::Run => Some("program names, e.g. --allow-run=git,ls"),
         Capability::Env => Some("variable names, e.g. --allow-env=HOME,PATH"),
+        Capability::Net => Some("hosts, e.g. --allow-net=api.example.com,db.internal:5432"),
+        Capability::NetListen => Some("bind addresses, e.g. --allow-listen=127.0.0.1:8080,8443"),
         _ => None,
     }
+}
+
+/// The address list for `cap`, parsed and validated, or `None` if that
+/// capability was granted whole.
+///
+/// Parsed twice by design — once here at wiring time, once in
+/// [`Permissions::record`] so a malformed entry is an *argument* error reported
+/// before anything runs rather than a provider error three steps later. The
+/// list is a handful of strings; the duplication buys the better message.
+fn address_scope(scopes: &Scopes, cap: Capability) -> Result<Option<HostAllowlist>, String> {
+    scopes
+        .get(&cap)
+        .map(HostAllowlist::parse)
+        .transpose()
 }
 
 /// The permission flags accumulated while parsing, resolved into a
@@ -554,7 +575,22 @@ impl Permissions {
                         scopable_flags()
                     ));
                 }
-                Some(parse_scope_list(flag, value)?)
+                let entries = parse_scope_list(flag, value)?;
+                // Validate the entry syntax now, while the flag is still the
+                // thing being talked about: a bad address should be an argument
+                // error naming the flag, not a provider failure at the first
+                // connect.
+                if matches!(cap, Capability::Net | Capability::NetListen) {
+                    HostAllowlist::parse(&entries).map_err(|e| {
+                        format!(
+                            "{flag}: {e}\n\n\
+                             An entry is a host (`example.com`), a host and port \
+                             (`db.internal:5432`), or a bare port (`8080`, any interface). \
+                             Bracket an IPv6 address that carries a port: `[::1]:8080`."
+                        )
+                    })?;
+                }
+                Some(entries)
             }
         };
         self.allowed.push(Allow {
@@ -1047,7 +1083,18 @@ async fn run() -> Result<(), String> {
     // Default providers — the standalone embedding's host surface.
     let clock = Arc::new(SystemClock::new());
     let timers = Arc::new(TokioTimers);
-    let net = Arc::new(ReqwestTransport::new().map_err(|e| format!("http transport: {e}"))?);
+    // `--allow-net=<hosts>` / `--allow-listen=<addresses>` narrow the addresses
+    // the guest may reach and bind (D38). Every provider that opens a socket
+    // consults the same list for its half of the pair — `net` and `listen` are
+    // one capability each, and which API the guest used to get there is not
+    // something the policy should care about.
+    let allow_net = address_scope(&config.scopes, Capability::Net)?;
+    let allow_listen = address_scope(&config.scopes, Capability::NetListen)?;
+    let transport = ReqwestTransport::new().map_err(|e| format!("http transport: {e}"))?;
+    let net = Arc::new(match allow_net.clone() {
+        Some(allow) => transport.with_allowlist(allow),
+        None => transport,
+    });
     // Host process view for runtime:process (env/cwd/platform from the OS; args
     // are the user's, after the script/-e). A concrete handle is kept to read
     // the exit code a guest `process.exit()` may request. The `.env` file is
@@ -1078,7 +1125,21 @@ async fn run() -> Result<(), String> {
     // to ask the signal registry what the guest is watching, and to tell the
     // HTTP servers to stop accepting.
     let signals = Arc::new(SystemSignals::new());
-    let http_server = Arc::new(SystemHttpServer::new());
+    let http_server = Arc::new(match allow_listen.clone() {
+        Some(allow) => SystemHttpServer::new().with_listen_allowlist(allow),
+        None => SystemHttpServer::new(),
+    });
+    let mut system_net = SystemNet::new();
+    if let Some(allow) = allow_net.clone() {
+        system_net = system_net.with_allowlist(allow);
+    }
+    if let Some(allow) = allow_listen {
+        system_net = system_net.with_listen_allowlist(allow);
+    }
+    let web_socket = match allow_net {
+        Some(allow) => SystemWebSocket::new().with_allowlist(allow),
+        None => SystemWebSocket::new(),
+    };
     let commands = match config.scopes.get(&Capability::Run) {
         Some(programs) => SystemCommands::new().with_allowlist(programs.clone()),
         None => SystemCommands::new(),
@@ -1093,9 +1154,9 @@ async fn run() -> Result<(), String> {
     .with_signals(signals.clone())
     .with_file_system(file_system)
     .with_sync_file_system(sync_file_system)
-    .with_net_provider(Arc::new(SystemNet::new()))
+    .with_net_provider(Arc::new(system_net))
     .with_http_server(http_server.clone())
-    .with_web_socket(Arc::new(SystemWebSocket::new()))
+    .with_web_socket(Arc::new(web_socket))
     // Child processes for runtime:system. Unrestricted unless
     // `--allow-run=<programs>` named the ones that may be spawned (D38) — the
     // same provider seam an embedder uses to grant Run without granting a shell.

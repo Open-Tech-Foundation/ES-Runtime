@@ -273,22 +273,23 @@ fn allowing_everything_back_is_the_same_as_no_flags() {
 // ---- parser strictness -------------------------------------------------------
 
 #[test]
-fn a_value_on_a_permission_flag_is_rejected_not_ignored() {
-    // The dangerous case: accepting and ignoring `=host` would leave the user
-    // believing the run is scoped when it is wide open.
-    let out = run(&["--deny-all", "--allow-net=example.com"], "console.log(1)");
+fn a_value_on_a_permission_flag_that_cannot_enforce_it_is_rejected_not_ignored() {
+    // The dangerous case, and the rule that outlives each capability that gains
+    // scoping: accepting and ignoring `=/etc` would leave the user believing the
+    // run is scoped to one directory when the filesystem is wide open.
+    let out = run(&["--deny-all", "--allow-read=/etc"], "console.log(1)");
     assert!(!out.status.success());
     let s = stderr(&out);
-    assert!(s.contains("--allow-net takes no value"), "{s}");
+    assert!(s.contains("--allow-read takes no value"), "{s}");
     assert!(s.contains("not implemented yet"), "{s}");
 }
 
 #[test]
 fn an_empty_value_on_a_no_value_flag_is_rejected() {
-    let out = run(&["--deny-all", "--allow-net="], "console.log(1)");
+    let out = run(&["--deny-all", "--allow-read="], "console.log(1)");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("--allow-net takes no value"),
+        stderr(&out).contains("--allow-read takes no value"),
         "stderr: {}",
         stderr(&out)
     );
@@ -549,6 +550,146 @@ fn an_absolute_path_to_an_allowed_program_is_still_that_program() {
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "ok");
+}
+
+/// A one-shot HTTP server on an ephemeral port, for the address tests. Returns
+/// the port and the thread, so a test can join it.
+fn one_shot_http(response: &'static str) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        if let Ok((mut sock, _)) = listener.accept() {
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf);
+            let _ = sock.write_all(response.as_bytes());
+            let _ = sock.flush();
+        }
+    });
+    (port, handle)
+}
+
+/// A port the OS has just confirmed is free.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .expect("bind")
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+#[test]
+fn allow_net_reaches_the_named_host_and_refuses_the_rest() {
+    let (port, server) = one_shot_http("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi");
+    let out = run(
+        &["--deny-all", &format!("--allow-net=127.0.0.1:{port}")],
+        &format!(
+            "const ok = await fetch('http://127.0.0.1:{port}/'); \
+             console.log('allowed', ok.status, await ok.text()); \
+             try {{ await fetch('http://127.0.0.1:1/'); console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.cause?.code ?? e.code); }}"
+        ),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("allowed 200 hi"), "{s}");
+    assert!(s.contains("refused"), "{s}");
+    assert!(s.contains("ERR_PERMISSION_DENIED"), "{s}");
+    server.join().unwrap();
+}
+
+#[test]
+fn allow_net_is_enforced_on_every_redirect_hop() {
+    // The reason this capability was the hard one: the redirect is followed by
+    // the HTTP client on a policy set once per client, so an allowlist checked
+    // only at the front door would hand the guest a denied host's response.
+    let (port, server) = one_shot_http(
+        "HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/latest/meta-data/\r\nContent-Length: 0\r\n\r\n",
+    );
+    let out = run(
+        &["--deny-all", &format!("--allow-net=127.0.0.1:{port}")],
+        &format!(
+            "try {{ await fetch('http://127.0.0.1:{port}/'); console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.cause?.message ?? e.message); }}"
+        ),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("refused"), "{s}");
+    assert!(s.contains("169.254.169.254"), "{s}");
+    server.join().unwrap();
+}
+
+#[test]
+fn allow_listen_binds_the_named_address_and_refuses_the_rest() {
+    let port = free_port();
+    let out = run(
+        &["--deny-all", &format!("--allow-listen=127.0.0.1:{port}")],
+        &format!(
+            "import net from 'runtime:net'; \
+             const l = net.listen({{ port: {port}, hostname: '127.0.0.1' }}); \
+             console.log('bound'); \
+             await l.close(); \
+             try {{ await net.listen({{ port: {port}, hostname: '0.0.0.0' }}).addr; \
+                    console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.code); }}"
+        ),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("bound"), "{s}");
+    assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
+}
+
+#[test]
+fn a_bare_port_in_a_listen_list_allows_any_interface() {
+    let port = free_port();
+    let out = run(
+        &["--deny-all", &format!("--allow-listen={port}")],
+        &format!(
+            "import net from 'runtime:net'; \
+             const l = net.listen({{ port: {port}, hostname: '0.0.0.0' }}); \
+             console.log('bound'); await l.close();"
+        ),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "bound");
+}
+
+#[test]
+fn net_and_listen_are_separate_lists() {
+    // Reaching out and being reachable are separate capabilities, so an
+    // address allowed for one says nothing about the other.
+    let port = free_port();
+    let out = run(
+        &[
+            "--deny-all",
+            &format!("--allow-listen=127.0.0.1:{port}"),
+            "--allow-net=example.com",
+        ],
+        &format!(
+            "try {{ await fetch('http://127.0.0.1:{port}/'); console.log('NO THROW'); }} \
+             catch (e) {{ console.log('refused', e.cause?.code ?? e.code); }}"
+        ),
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("ERR_PERMISSION_DENIED"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn a_malformed_address_is_an_argument_error() {
+    // Reported against the flag, before anything runs — not as a provider
+    // failure at the first connect.
+    for value in ["--allow-net=example.com:99999", "--allow-listen=[::1"] {
+        let out = run(&["--deny-all", value], "console.log(1)");
+        assert!(!out.status.success(), "{value} should be rejected");
+        let s = stderr(&out);
+        assert!(s.contains("An entry is a host"), "{value}: {s}");
+    }
 }
 
 // ---- the value grammar (D38) -------------------------------------------------
