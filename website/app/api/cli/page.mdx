@@ -19,7 +19,7 @@ esrun -e=<code>             Run an inline module snippet
 esrun --deny-all            Run with no host access at all
 esrun --deny-<name>         Deny one capability; repeatable
 esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
-esrun --allow-<name>=<list> Grant it narrowed to a list (net, listen, run, env)
+esrun --allow-<name>=<list> Grant it narrowed to a list (all but imports/signals)
 esrun -t=<ms>, --timeout=<ms>
                             Stop execution after <ms> ms (watchdog)
 esrun --env-file=<path>     Load env vars from a .env file
@@ -62,7 +62,7 @@ script that genuinely wants a flag esrun also knows.
 | `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
 | `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
 | `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
-| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list. Scopable today: `net` and `listen` (addresses), `run` (programs), `env` (variable names). See [Scoped grants](#scoped-grants). |
+| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list. Scopable today: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names). See [Scoped grants](#scoped-grants). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -102,9 +102,10 @@ esrun --deny-net --deny-run app.js
 # Start from nothing and grant back exactly what a server needs
 esrun --deny-all --allow-imports --allow-listen --allow-net server.js
 
-# ...and narrow those grants to the addresses it actually uses
+# ...and narrow those grants to what it actually touches
 esrun --deny-all --allow-imports --allow-listen=8080 \
-      --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL server.js
+      --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL \
+      --allow-read=./public --allow-write=./var/log server.js
 ```
 
 ## Permissions
@@ -138,17 +139,19 @@ operation, not the import.
 
 ### Scoped grants
 
-Four of the eight take a comma-separated list that narrows the grant instead of
+Six of the eight take a comma-separated list that narrows the grant instead of
 handing over the whole capability:
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
-      --allow-run=git server.js
+      --allow-read=./data --allow-write=./out --allow-run=git server.js
 ```
 
 | Flag | Grants | Everything else |
 | --- | --- | --- |
+| `--allow-read=<paths>` | reading those paths and their subtrees | refused |
+| `--allow-write=<paths>` | writing those paths and their subtrees | refused before anything is created |
 | `--allow-net=<hosts>` | reaching those addresses (`fetch`, `connect`, `WebSocket`) | refused before any packet |
 | `--allow-listen=<addresses>` | binding those addresses (`listen`, `serve`) | refused before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
@@ -160,8 +163,22 @@ interface). Bracket IPv6 that carries a port: `[::1]:8080`. Matching is exact �
 hosts are judged as written, before resolution. `net` and `listen` keep separate
 lists: reaching out and being reachable are separate capabilities.
 
+A **path** is absolute or relative to the working directory — `./data` means
+what it means in the shell you typed it in, not what it means to the script — and
+covers its subtree, matched by component, so `./app` never admits
+`./app-secrets`. `read` and `write` are separate lists, and both govern
+`runtime:fs` and `runtime:wasi` alike.
+
 `--allow-run=git` matches the name as written and the resolved file, so `git`,
 `/usr/bin/git`, and `git.exe` are all the same program.
+
+<Callout type="note" title="A path list is checked after canonicalization">
+  `--allow-read=./data` refuses `./data/link-to-etc/passwd`: the check runs on
+  the real path, so a symlink inside an allowed directory cannot name a file
+  outside it. The list also narrows the [root jail](/docs/security) and never
+  widens it — a path outside the project root stays unreachable, and says so
+  with `ERR_JAIL_ESCAPE` rather than a scoped denial.
+</Callout>
 
 <Callout type="note" title="--allow-net covers every redirect hop">
   A `302` from an allowed host to a denied one fails the request with
@@ -185,8 +202,8 @@ either.
   `env`").
 </Callout>
 
-Scoping `read`, `write`, `imports`, and `signals` is not implemented, and a
-value on them is rejected rather than ignored.
+Scoping `imports` and `signals` is not implemented, and a value on them is
+rejected rather than ignored.
 
 ### Strict by design
 
@@ -195,7 +212,7 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 
 | Written | Why it fails |
 | --- | --- |
-| `--allow-read=/etc` | Scoping `read` is not implemented; the value would be ignored |
+| `--allow-imports=./lib` | Scoping `imports` is not implemented; the value would be ignored |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |

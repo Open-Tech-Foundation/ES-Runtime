@@ -61,9 +61,9 @@ USAGE:
     esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
                                 <name> is one of: read, write, imports, net,
                                 listen, env, run, signals
-    esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list.
-                                Scopable: net + listen (addresses), run
-                                (programs), env (variable names)
+    esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list:
+                                read/write (paths), net/listen (addresses),
+                                run (programs), env (variable names)
     esrun -t=<ms>, --timeout=<ms>
                                 Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file=<path>     Load env vars from a .env file
@@ -102,16 +102,22 @@ from runtime:process.
 A scope list narrows a grant. --allow-env=HOME,PATH hides every other variable;
 --allow-run=git,ls refuses to spawn anything else; --allow-net=api.example.com
 refuses every other host, on every redirect hop as well as the first request;
---allow-listen=127.0.0.1:8080 refuses every other bind. An address is a host, a
-host:port, or a bare port (any interface); [::1]:8080 for IPv6. Matching is
-exact — example.com does not admit api.example.com, and there are no wildcards.
+--allow-listen=127.0.0.1:8080 refuses every other bind; --allow-read=./data
+refuses every other path.
+
+An address is a host, a host:port, or a bare port (any interface); [::1]:8080
+for IPv6. A path is absolute or relative to the working directory and covers its
+subtree. Matching is exact — example.com does not admit api.example.com, ./app
+does not admit ./app-secrets, and there are no wildcards. Paths are checked
+after canonicalization, so a symlink cannot walk out of a list, and a path list
+narrows the root jail without ever widening it.
 
 Entries are comma-separated and trimmed (`--allow-env=\"A, B\"` ≡
-`--allow-env=A,B`); an empty entry is an error. Scoping read, write, imports,
-and signals is not implemented, and a value on those is rejected rather than
-ignored — a run must never be narrower on the command line than it is in
-reality. Denials take no value at all: a scope narrows a grant, so it is written
---deny-all --allow-<name>=<list>.
+`--allow-env=A,B`); an empty entry is an error. Scoping imports and signals is
+not implemented, and a value on those is rejected rather than ignored — a run
+must never be narrower on the command line than it is in reality. Denials take
+no value at all: a scope narrows a grant, so it is written --deny-all
+--allow-<name>=<list>.
 
 Permission flags must come before the script; after it they would be the
 script's own arguments.

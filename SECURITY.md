@@ -59,7 +59,7 @@ denial message use. A denied operation throws `NotAllowedError`
 (`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
 
 The parser is strict on purpose: a value on a permission flag that cannot yet
-enforce it (`--allow-read=/etc`), a space-separated value, a permission
+enforce it (`--allow-imports=./lib`), a space-separated value, a permission
 flag placed after the script, or an unknown name is an **error**. Each of those, ignored,
 would leave a run wider than the command line claims.
 
@@ -82,12 +82,13 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Four of the eight can be scoped to a list; the rest are all-or-nothing.**
+**Six of the eight can be scoped to a list; `imports` and `signals` are
+all-or-nothing.**
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
-      --allow-run=git server.js
+      --allow-read=./data --allow-write=./out --allow-run=git server.js
 ```
 
 - `--allow-net=<hosts>` refuses every other address, **on every redirect hop**
@@ -101,17 +102,21 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 - `--allow-env=<names>` narrows the environment to those variables — every other
   one is *absent*, so a guest can neither read it nor learn its name.
 - `--allow-run=<programs>` refuses to spawn anything else.
+- `--allow-read=<paths>` / `--allow-write=<paths>` refuse every other path.
+  Entries are resolved against the working directory and cover their subtree,
+  and the check runs **after canonicalization**, so a symlink inside an allowed
+  directory cannot name a file outside it. The two are separate lists, and both
+  govern `runtime:fs` and `runtime:wasi` alike.
 
 A refusal is `ERR_PERMISSION_DENIED` — a scoped denial, distinct from the
 `ERR_CAPABILITY_DENIED` a missing capability raises. A scoped grant still
 reports `permissions.has("net") === true`: the capability opens the door, the
 list is what the provider withholds.
 
-Scoping the other four (`read`, `write`, `imports`, `signals`) is **not
-implemented**, and a value passed to one of them is rejected rather than
-ignored. Until it lands, a run that needs the filesystem can reach every file
-under the root. The filesystem **root jail** (D25) is always on regardless, for
-both paths.
+Scoping `imports` (the module loader) and `signals` is **not implemented**, and
+a value passed to those is rejected rather than ignored. The filesystem **root
+jail** (D25) is always on regardless, for both paths: a path list narrows it and
+never widens it, so an entry outside the project root is not a way out of it.
 
 ## Child processes (`Capability::Run`)
 

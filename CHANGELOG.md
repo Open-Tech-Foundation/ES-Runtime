@@ -32,15 +32,20 @@ namespace) is unstable and may change between minor releases until the API freez
   `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive it — no op
   gates them, so a denied script still computes.
 
-- **Scoped grants** — `--allow-net`, `--allow-listen`, `--allow-run`, and
-  `--allow-env` take a comma-separated list that narrows the grant instead of
-  handing over the whole capability (DECISIONS D38).
+- **Scoped grants** — `--allow-read`, `--allow-write`, `--allow-net`,
+  `--allow-listen`, `--allow-run`, and `--allow-env` take a comma-separated list
+  that narrows the grant instead of handing over the whole capability
+  (DECISIONS D38).
 
   ```sh
   esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
         --allow-net=db.internal:5432 --allow-listen=8080 \
-        --allow-run=git server.js
+        --allow-read=./data --allow-write=./out --allow-run=git server.js
   ```
+
+  Paths are resolved against the working directory, cover their subtree, and are
+  checked **after canonicalization**, so a symlink cannot walk out of a list. A
+  path list narrows the root jail and never widens it.
 
   `--allow-net` is what stops an exfiltration: a compromised dependency reaching
   out over the app's own legitimate network access now has to reach an address
@@ -66,9 +71,9 @@ namespace) is unstable and may change between minor releases until the API freez
   A scoped grant still reports `permissions.has("env") === true` — the
   capability is granted, the provider is what narrows it.
 
-  **The other four are still coarse:** scoping `read`, `write`, `imports`, and
-  `signals` is not implemented, and a value on them (`--allow-read=/etc`) is
-  **rejected rather than ignored** — a run must never be narrower on the command
+  **`imports` and `signals` are still coarse:** scoping them is not implemented,
+  and a value on them (`--allow-imports=./lib`) is **rejected rather than
+  ignored** — a run must never be narrower on the command
   line than it is in reality. A denial takes no value at all: a scope narrows a
   grant.
 

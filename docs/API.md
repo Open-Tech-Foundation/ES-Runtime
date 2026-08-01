@@ -462,15 +462,18 @@ Each name takes both prefixes: `--deny-net` and `--allow-net`.
 
 #### Scoped grants
 
-Four of the eight can be granted **narrowed to a list** rather than whole:
+Six of the eight can be granted **narrowed to a list** rather than whole:
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
-      --allow-net=db.internal:5432 --allow-listen=8080 --allow-run=git server.js
+      --allow-net=db.internal:5432 --allow-listen=8080 \
+      --allow-read=./data --allow-write=./out --allow-run=git server.js
 ```
 
 | Flag | Grants | Everything else |
 | ---- | ------ | --------------- |
+| `--allow-read=<paths>` | reading those paths and their subtrees | fails with `ERR_PERMISSION_DENIED` |
+| `--allow-write=<paths>` | writing those paths and their subtrees | fails before anything is created |
 | `--allow-net=<hosts>` | reaching those addresses (`fetch`, `runtime:net` `connect`, `WebSocket`) | fails with `ERR_PERMISSION_DENIED`, before any packet |
 | `--allow-listen=<addresses>` | binding those addresses (`runtime:net` `listen`, `runtime:http` `serve`) | fails before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
@@ -514,10 +517,19 @@ The value grammar, one rule set for every capability that takes a list:
 - granting a capability both whole and narrowed (`--allow-env --allow-env=HOME`)
   is an error, not a precedence rule.
 
-Scoping the other four (`read`, `write`, `imports`, `signals`) is **not
-implemented**, and a value on them is rejected rather than ignored — a flag that
-parsed but was not enforced would say "one path" while the filesystem was wide
-open. Denials never take a value: a scope narrows a
+**A path** is absolute or relative to the **working directory** — `./data` on a
+command line means what it means in the shell you typed it in, not what it means
+to the script. An entry covers its subtree, matched by path component, so
+`--allow-read=./app` never admits `./app-secrets`. The check runs **after
+canonicalization**: `./data/link-to-etc/passwd` is refused however the link is
+arranged. A path list narrows the [root jail](#the-root-jail) and never widens
+it — an entry outside the project root is not a way out of it, and that refusal
+stays `ERR_JAIL_ESCAPE` rather than a scoped denial. `read` and `write` are
+separate lists; the same lists govern `runtime:fs` and `runtime:wasi`.
+
+Scoping `imports` and `signals` is **not implemented**, and a value on them is
+rejected rather than ignored — a flag that parsed but was not enforced would say
+"one path" while the loader was wide open. Denials never take a value: a scope narrows a
 grant, so it is written `--deny-all --allow-<name>=<list>`.
 
 `--deny-all` is the union of all eight. It still runs the entry file — that file
@@ -548,7 +560,7 @@ the script opts a script's own argument out of rule 2.
 | `--timeout 500` | Rule 1 — `500` would be mistaken for the script |
 | `--allow-net example.com` | Rule 1 |
 | `esrun app.js --deny-net` | Rule 2 — restricts nothing where it stands |
-| `--allow-read=/etc` | Scoping `read` is not implemented; the value would be ignored (net, listen, run, env do take a list) |
+| `--allow-imports=./lib` | Scoping `imports` is not implemented; the value would be ignored (the other six do take a list) |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |

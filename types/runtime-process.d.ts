@@ -127,12 +127,13 @@ declare module "runtime:process" {
      * {@link PermissionName}, rather than answering `false` — a typo'd check
      * would otherwise read as a denial and take the degraded path forever.
      *
-     * A **scoped** grant (`--allow-env=PORT`, `--allow-run=git`) answers
-     * `true`: the capability is granted, and the list of variables or programs
-     * it was narrowed to is enforced by the host when you use it. So `true`
-     * means "you may read *an* environment variable", not "you may read this
-     * one" — an operation outside the list still throws, with
-     * `ERR_PERMISSION_DENIED` rather than `ERR_CAPABILITY_DENIED`.
+     * A **scoped** grant (`--allow-env=PORT`, `--allow-read=./data`,
+     * `--allow-net=api.example.com`, …) answers `true`: the capability is
+     * granted, and the list of paths, addresses, programs or variables it was
+     * narrowed to is enforced by the host when you use it. So `true` means
+     * "you may read *an* environment variable", not "you may read this one" —
+     * an operation outside the list still throws, with `ERR_PERMISSION_DENIED`
+     * rather than `ERR_CAPABILITY_DENIED`.
      */
     has(name: PermissionName): boolean;
   };
