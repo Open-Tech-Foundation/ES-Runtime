@@ -141,8 +141,9 @@ permissions.has("net"); // true
 if (permissions.has("write")) await fs.write("cache.json", data);
 ```
 
-Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Any
-other name throws a `TypeError`.
+Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals` —
+the same words the `--deny-<name>` and `--allow-<name>` flags take. Any other
+name throws a `TypeError`.
 
 ## Exit
 

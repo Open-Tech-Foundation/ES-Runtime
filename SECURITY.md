@@ -36,25 +36,40 @@ capabilities and inject its own providers.
 ## Restricting an `esrun` run (`--deny-all` / `--deny-<name>`)
 
 `esrun` grants every capability by default — it runs a local script the user
-named. Restriction is opt-in (DECISIONS D38), and there are exactly two ways to
-ask for it, which **cannot be combined**:
+named. Restriction is opt-in (DECISIONS D38), and there are exactly two modes,
+which **cannot be combined**:
 
-| | |
-|---|---|
-| `--deny-all` | No host access at all |
-| `--deny-<name>` | Deny one capability; repeatable |
+```sh
+esrun --deny-net --deny-run app.js                     # everything, minus these
+esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
+```
+
+| Mode | Baseline | Direction |
+|---|---|---|
+| `--deny-<name>` | everything granted | subtractive only |
+| `--deny-all --allow-<name>` | nothing granted | additive only |
+
+`--allow-<name>` requires `--deny-all`: with everything already granted there is
+nothing for it to add. Because neither mode mixes directions, **no flag ever
+overrides another** — a reader goes top to bottom and the list is the answer.
 
 The eight names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
 `signals` — the same words the `runtime:process` `permissions` API and the
 denial message use. A denied operation throws `NotAllowedError`
 (`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
 
+The parser is strict on purpose: a value on a permission flag
+(`--allow-net=example.com`), a space-separated value, a permission flag placed
+after the script, or an unknown name is an **error**. Each of those, ignored,
+would leave a run wider than the command line claims.
+
 Two things `--deny-all` does *not* do, both deliberate:
 
 - **It still runs the entry file.** That file is read by the CLI before a
   runtime exists, so it is outside the capability system — the user named it,
   and the flags govern what it may then do. Since `--deny-all` includes
-  `--deny-imports`, a fully denied run is a **single-file** run.
+  `--deny-imports`, a fully denied run is a **single-file** run; add
+  `--allow-imports` for an application with dependencies.
 - **It does not revoke `Clock`/`Entropy`/`Timers`/`TaskSpawn`.** No op gates
   them; a denied script still computes, it just reaches nothing.
 
@@ -67,9 +82,13 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Denials are coarse.** `--deny-net` is all-or-nothing, not per-host; scoped
-values (`--deny-net=<hosts>`, `--deny-read=<paths>`) are not implemented. The
-filesystem **root jail** (D25) is always on regardless, for both paths.
+**Permissions are coarse.** Every flag is all-or-nothing; scoping to paths,
+hosts, or names (`--allow-net=db.internal:5432`) is **not implemented**, and a
+value passed to one of these flags is rejected rather than ignored. Until it
+lands, a run that needs the network can reach *any* host — which is the gap that
+matters most for a server, where a compromised dependency exfiltrates over the
+app's own legitimate network access. The filesystem **root jail** (D25) is always
+on regardless, for both paths.
 
 ## Child processes (`Capability::Run`)
 

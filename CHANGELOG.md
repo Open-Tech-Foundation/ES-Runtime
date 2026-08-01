@@ -14,20 +14,30 @@ namespace) is unstable and may change between minor releases until the API freez
   by default; restriction is opt-in and expressed as denials.
 
   ```sh
-  esrun --deny-all app.js               # no host access at all
-  esrun --deny-net --deny-run app.js    # everything except those two
+  esrun --deny-net --deny-run app.js                     # everything, minus these
+  esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
   ```
 
-  `--deny-all` and the granular `--deny-<name>` flags are **mutually
-  exclusive** — `--deny-all` is exactly the union of the eight, so combining
-  them is rejected rather than merged. The names map 1:1 onto capabilities:
-  `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. A denied
+  Two modes, each with a single direction, and they cannot be combined:
+  `--deny-<name>` subtracts from everything; `--deny-all --allow-<name>` adds to
+  nothing. `--allow-<name>` requires `--deny-all` (with everything granted there
+  is nothing for it to add), so **no flag ever overrides another** and there is
+  no precedence to reason about. The names map 1:1 onto capabilities: `read`,
+  `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. A denied
   operation throws `NotAllowedError` / `ERR_CAPABILITY_DENIED` before the effect.
 
   `--deny-all` still runs the entry file (read before the runtime exists), and
-  since it includes `--deny-imports`, a fully denied run is a single-file run.
+  since it includes `--deny-imports`, it alone is a single-file run — add
+  `--allow-imports` for an app with dependencies.
   `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive it — no op
   gates them, so a denied script still computes.
+
+  **Permissions are coarse:** scoping to paths/hosts/names is not implemented,
+  and a value (`--allow-net=example.com`) is **rejected rather than ignored** —
+  a run must never be narrower on the command line than it is in reality. The
+  parser is strict for the same reason: a space-separated value, a permission
+  flag placed after the script (where it would be the script's own argument),
+  an unknown name, or `--timeout=500` all fail loudly.
 
 - **`permissions` on `runtime:process`** — what this process is allowed to
   reach. The policy is fixed at launch, so it is introspection only: a

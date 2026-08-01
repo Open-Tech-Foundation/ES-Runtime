@@ -36,8 +36,9 @@ esrun -v, --version      Show the version
 | `<file>` | Path to a JavaScript ES module to run. Resolved as a local file (relative/absolute path or `file:` URL). |
 | `-e, --eval <code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
 | `-t, --timeout <ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
-| `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Denying capabilities](#denying-capabilities). |
+| `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
 | `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
+| `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
 | `--env-file <path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace <ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -73,33 +74,57 @@ esrun --deny-all app.js
 
 # Run with everything except the network and subprocesses
 esrun --deny-net --deny-run app.js
+
+# Start from nothing and grant back exactly what a server needs
+esrun --deny-all --allow-imports --allow-listen --allow-net server.js
 ```
 
-## Denying capabilities
+## Permissions
 
-esrun grants every capability by default. Restrict a run with **either**
-`--deny-all` **or** one or more `--deny-<name>` — passing both is an error, since
-`--deny-all` is exactly the union of the eight.
+esrun grants every capability by default. Two modes restrict a run, and they
+cannot be combined:
 
-| Flag | Denies |
+| Mode | Baseline | Direction |
+| --- | --- | --- |
+| `--deny-<name>` | everything granted | subtractive only |
+| `--deny-all --allow-<name>` | nothing granted | additive only |
+
+`--allow-<name>` requires `--deny-all` — with everything already granted, there
+is nothing for it to add. Neither mode mixes directions, so no flag ever
+overrides another.
+
+| Name | Covers |
 | --- | --- |
-| `--deny-read` | `runtime:fs` / `runtime:wasi` reads |
-| `--deny-write` | `runtime:fs` / `runtime:wasi` mutations |
-| `--deny-imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `--deny-net` | `fetch`, `WebSocket`, `runtime:net` connect |
-| `--deny-listen` | `runtime:net` listen, `runtime:http` serve |
-| `--deny-env` | `runtime:process` env / args / cwd |
-| `--deny-run` | `runtime:system` child processes |
-| `--deny-signals` | `runtime:process` onSignal |
+| `read` | `runtime:fs` / `runtime:wasi` reads |
+| `write` | `runtime:fs` / `runtime:wasi` mutations |
+| `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `net` | `fetch`, `WebSocket`, `runtime:net` connect |
+| `listen` | `runtime:net` listen, `runtime:http` serve |
+| `env` | `runtime:process` env / args / cwd |
+| `run` | `runtime:system` child processes |
+| `signals` | `runtime:process` onSignal |
 
 A denied operation throws `NotAllowedError` (`ERR_CAPABILITY_DENIED`) before the
 effect happens. Importing a `runtime:` module always works — the gate is the
 operation, not the import.
 
-<Callout type="note" title="--deny-all runs a single file">
+### Strict by design
+
+Each of these is an error, because ignoring it would leave a run wider than the
+command line claims:
+
+| Written | Why it fails |
+| --- | --- |
+| `--allow-net=example.com` | Scoping is not implemented; the value would be ignored |
+| `--allow-net example.com` | A value never attaches as a separate word |
+| `esrun app.js --deny-net` | After the script it is the script's argument (`--` opts out) |
+| `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
+| `--allow-ffi` | Not one of the eight |
+
+<Callout type="note" title="--deny-all alone runs a single file">
   The entry file is read before the runtime exists, so `--deny-all` still runs
-  what you named. It includes `--deny-imports`, though, so a fully denied run
-  cannot load a second file. Query the policy from JS with
+  what you named. It includes `--deny-imports`, though, so add `--allow-imports`
+  for an app with dependencies. Query the policy from JS with
   [`permissions`](/api/process).
 </Callout>
 

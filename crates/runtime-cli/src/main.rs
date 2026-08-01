@@ -48,8 +48,10 @@ USAGE:
     esrun <file>             Run a JavaScript module file
     esrun -e <code>          Run an inline module snippet
     esrun --deny-all         Run with no host access at all (secure mode)
-    esrun --deny-<name>      Deny one capability; repeatable. <name> is one of:
-                             read, write, imports, net, listen, env, run, signals
+    esrun --deny-<name>      Deny one capability; repeatable
+    esrun --allow-<name>     Grant one back; requires --deny-all; repeatable
+                             <name> is one of: read, write, imports, net,
+                             listen, env, run, signals
     esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
     esrun --env-file <path>  Load env vars from a .env file
     esrun --env-override     Let --env-file values override the OS environment
@@ -71,12 +73,22 @@ Remote (`https://`) modules are explicitly unsupported to enforce a local-only s
 The full WinterTC surface is available (console, URL, fetch, crypto, streams,
 encoding, timers, events).
 
-Every host capability is granted by default. Restrict a run with either
---deny-all or one or more --deny-<name> flags — not both. A denied operation
-throws NotAllowedError; importing a runtime: module always works. Under
---deny-all only the entry file runs: it can compute, but it cannot read, write,
-import another file, reach the network, read the environment, or spawn anything.
-Ask from JS with `permissions.has(name)` from runtime:process.";
+Every host capability is granted by default. Restrict a run in one of two ways,
+never both — each has a single direction, so no flag ever overrides another:
+
+    esrun --deny-net --deny-run app.js     # everything, minus these
+    esrun --deny-all --allow-net app.js    # nothing, plus these
+
+--allow-<name> requires --deny-all (with everything already granted, there is
+nothing for it to add). A denied operation throws NotAllowedError; importing a
+runtime: module always works. --deny-all alone runs only the entry file: it can
+compute, but cannot read, write, import another file, reach the network, read
+the environment, or spawn anything. Ask from JS with `permissions.has(name)`
+from runtime:process.
+
+Permission flags take no value — scoping to paths/hosts is not implemented, and
+`--allow-net=host` is rejected rather than ignored. They must also come before
+the script; after it they would be the script's own arguments.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.
 static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
@@ -401,62 +413,120 @@ struct Config {
     capabilities: CapabilitySet,
 }
 
-/// The denial flags accumulated while parsing, resolved into a [`CapabilitySet`]
-/// once the whole command line has been seen.
+/// The permission flags accumulated while parsing, resolved into a
+/// [`CapabilitySet`] once the whole command line has been seen (D38).
 ///
-/// `--deny-all` and the granular flags are **mutually exclusive**: `--deny-all`
-/// is precisely the union of the eight, so combining them can only ever be
-/// redundant, and a reader should not have to work out whether one narrows the
-/// other (D38).
+/// Three rules, and they exist so that **no flag ever overrides another** — a
+/// reader goes top to bottom and the list is the answer:
+///
+/// 1. `--deny-all` and `--deny-<name>` are mutually exclusive. `--deny-all` is
+///    precisely the union of the eight, so a combination could only be
+///    redundant.
+/// 2. `--allow-<name>` requires `--deny-all`. Against the default baseline
+///    (everything granted) an allow is either a no-op or a contradiction of its
+///    own `--deny-<name>` sibling.
+/// 3. Each mode therefore has exactly one direction: `--deny-<name>` subtracts
+///    from everything, `--deny-all --allow-<name>` adds to nothing.
 #[derive(Default)]
-struct Denials {
+struct Permissions {
+    /// The `--deny-all` flag, if given.
     all: bool,
-    /// The granular flags seen, in the order given — so the error message can
-    /// quote the one the user actually typed.
-    named: Vec<(String, Capability)>,
+    /// `--deny-<name>` flags, in the order given — so an error can quote the one
+    /// the user actually typed.
+    denied: Vec<(String, Capability)>,
+    /// `--allow-<name>` flags, likewise.
+    allowed: Vec<(String, Capability)>,
 }
 
-impl Denials {
-    /// Records `--deny-<name>`, rejecting a name outside the vocabulary.
-    fn deny(&mut self, flag: &str, name: &str) -> Result<(), String> {
+impl Permissions {
+    /// Records a `--deny-<name>` / `--allow-<name>` flag.
+    ///
+    /// `name` has already been split off the `--deny-`/`--allow-` prefix and is
+    /// rejected here if it is not one of the eight — never ignored, since an
+    /// unrecognised permission flag would otherwise read as a sandbox that is
+    /// not actually on.
+    fn record(&mut self, flag: &str, name: &str, allow: bool) -> Result<(), String> {
+        let prefix = if allow { "--allow-" } else { "--deny-" };
         let cap = Capability::from_flag_name(name).ok_or_else(|| {
-            let names: Vec<&str> = Capability::HOST_FACING
+            let known = Capability::HOST_FACING
                 .into_iter()
                 .filter_map(Capability::flag_name)
-                .collect();
-            format!(
-                "unknown option: {flag}\n\nexpected --deny-all or one of: {}",
-                {
-                    names
-                        .iter()
-                        .map(|n| format!("--deny-{n}"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                }
-            )
+                .map(|n| format!("{prefix}{n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("unknown option: {flag}\n\nexpected one of: {known}")
         })?;
-        self.named.push((flag.to_string(), cap));
+        if allow {
+            self.allowed.push((flag.to_string(), cap));
+        } else {
+            self.denied.push((flag.to_string(), cap));
+        }
         Ok(())
     }
 
-    /// The capability set these denials describe, or an error if `--deny-all`
-    /// was combined with a granular flag.
+    /// The capability set these flags describe, or an error naming the rule that
+    /// was broken.
     fn resolve(&self) -> Result<CapabilitySet, String> {
-        match (self.all, self.named.first()) {
-            (true, Some((flag, _))) => Err(format!(
+        if let (true, Some((flag, _))) = (self.all, self.denied.first()) {
+            return Err(format!(
                 "--deny-all cannot be combined with {flag}: --deny-all already denies \
                  everything {flag} would. Use one or the other."
-            )),
-            (true, None) => Ok(CapabilitySet::all().without_host_access()),
-            (false, _) => {
-                let mut caps = CapabilitySet::all();
-                for (_, cap) in &self.named {
-                    caps.revoke(*cap);
-                }
-                Ok(caps)
+            ));
+        }
+        if let (false, Some((flag, _))) = (self.all, self.allowed.first()) {
+            return Err(format!(
+                "{flag} requires --deny-all: everything is granted by default, so there is \
+                 nothing for {flag} to add. Use --deny-all {flag} to start from nothing, or \
+                 --deny-<name> to take single capabilities away."
+            ));
+        }
+        if self.all {
+            let mut caps = CapabilitySet::all().without_host_access();
+            for (_, cap) in &self.allowed {
+                caps.grant(*cap);
             }
+            Ok(caps)
+        } else {
+            let mut caps = CapabilitySet::all();
+            for (_, cap) in &self.denied {
+                caps.revoke(*cap);
+            }
+            Ok(caps)
         }
     }
+}
+
+/// Splits `--flag=value` into its parts, rejecting the forms that would
+/// otherwise be silently misread.
+///
+/// Permission flags take **no value yet** — scoping (`--allow-net=host:port`) is
+/// not implemented. Accepting and ignoring one would be the worst possible
+/// outcome: the user believes the run is scoped when it is wide open. So a
+/// value is a hard error rather than a shrug.
+fn split_flag_value(arg: &str) -> (&str, Option<&str>) {
+    match arg.split_once('=') {
+        Some((flag, value)) => (flag, Some(value)),
+        None => (arg, None),
+    }
+}
+
+/// Rejects a value attached to a permission flag, explaining what the flag does
+/// grant so the user is not left guessing.
+fn reject_flag_value(flag: &str, value: &str) -> String {
+    if value.is_empty() {
+        return format!("{flag}= has an empty value; this flag takes no value");
+    }
+    // `--deny-all` is a mode switch, not a capability — scoping could never
+    // apply to it, so it gets the plain message rather than the roadmap one.
+    if flag == "--deny-all" {
+        return format!("{flag} takes no value (got {flag}={value})");
+    }
+    format!(
+        "{flag} takes no value (got {flag}={value}).\n\n\
+         Scoping permissions to specific paths, hosts, or names is not implemented \
+         yet — {flag} is all-or-nothing. It is rejected rather than ignored so a run \
+         is never narrower on the command line than it is in reality."
+    )
 }
 
 /// How long a graceful shutdown waits for in-flight HTTP requests before giving
@@ -470,9 +540,32 @@ fn parse_args() -> Result<Config, String> {
     let mut env_file: Option<String> = None;
     let mut env_override = false;
     let mut shutdown_grace = DEFAULT_SHUTDOWN_GRACE;
-    let mut denials = Denials::default();
+    let mut permissions = Permissions::default();
+    // Set when the previous argument was a permission flag, so a following bare
+    // token can be recognised as an attempted value (`--allow-net example.com`)
+    // rather than silently becoming the script path.
+    let mut after_permission_flag: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
+        let previous_permission_flag = after_permission_flag.take();
+        // Reject a value on any flag that does not take one, before the match
+        // arms — `--deny-all=1` and `--timeout=500` must not fall through to the
+        // "unknown option" arm, which would hide what is actually wrong.
+        if let (flag, Some(value)) = split_flag_value(&arg)
+            && (flag.starts_with("--deny-") || flag.starts_with("--allow-"))
+        {
+            return Err(reject_flag_value(flag, value));
+        }
+        if let (flag, Some(_)) = split_flag_value(&arg)
+            && matches!(
+                flag,
+                "-t" | "--timeout" | "--env-file" | "--shutdown-grace" | "-e" | "--eval"
+            )
+        {
+            return Err(format!(
+                "{flag} takes its value as the next argument, not with '=' — use `{flag} <value>`"
+            ));
+        }
         match arg.as_str() {
             "-h" | "--help" => {
                 println!("{USAGE}");
@@ -541,43 +634,107 @@ fn parse_args() -> Result<Config, String> {
                 shutdown_grace = Duration::from_millis(ms);
             }
             "--deny-all" => {
-                denials.all = true;
+                permissions.all = true;
+            }
+            // A Deno habit, and it is the default here — say so rather than
+            // rejecting it as an unknown option.
+            "--allow-all" | "-A" => {
+                return Err(
+                    "there is no --allow-all: esrun grants every capability by default, so \
+                     there is nothing to allow.\n\n\
+                     Drop --deny-all to run unrestricted, or name what you need with \
+                     --allow-<name>."
+                        .to_string(),
+                );
             }
             "-e" | "--eval" => {
                 let code = args
                     .next()
                     .ok_or_else(|| "-e/--eval requires a code argument".to_string())?;
+                let rest: Vec<String> = args.collect();
+                reject_permission_flags_after_source(&rest, "the -e code")?;
                 return Ok(Config {
                     source: Source::Inline(code),
                     timeout,
                     env_file,
                     env_override,
                     shutdown_grace,
-                    args: args.collect(),
-                    capabilities: denials.resolve()?,
+                    args: rest,
+                    capabilities: permissions.resolve()?,
                 });
             }
-            flag if flag.starts_with("--deny-") => {
-                let name = flag.trim_start_matches("--deny-").to_string();
-                denials.deny(flag, &name)?;
+            flag if flag.starts_with("--deny-") || flag.starts_with("--allow-") => {
+                let allow = flag.starts_with("--allow-");
+                let prefix = if allow { "--allow-" } else { "--deny-" };
+                let name = flag[prefix.len()..].to_string();
+                permissions.record(flag, &name, allow)?;
+                after_permission_flag = Some(flag.to_string());
             }
             flag if flag.starts_with('-') => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
             }
             path => {
+                // `--allow-net example.com app.js` would otherwise take
+                // `example.com` as the script and hand `app.js` to it as an
+                // argument — a confusing "cannot read" three steps from the
+                // cause. If the previous token was a permission flag and this
+                // one is not a file, say what actually happened.
+                if let Some(flag) = previous_permission_flag
+                    && !std::path::Path::new(path).exists()
+                {
+                    return Err(format!(
+                        "cannot read {path}, and it follows {flag} — {flag} takes no value.\n\n\
+                         If {path} was meant as a value: scoping is not implemented yet, and \
+                         values would attach with '=' ({flag}=...), never as a separate word."
+                    ));
+                }
+                let rest: Vec<String> = args.collect();
+                reject_permission_flags_after_source(&rest, path)?;
                 return Ok(Config {
                     source: Source::File(path.to_string()),
                     timeout,
                     env_file,
                     env_override,
                     shutdown_grace,
-                    args: args.collect(),
-                    capabilities: denials.resolve()?,
+                    args: rest,
+                    capabilities: permissions.resolve()?,
                 });
             }
         }
     }
     Err(format!("missing script argument\n\n{USAGE}"))
+}
+
+/// Rejects a permission flag that appears *after* the script, where it would be
+/// passed to the script as an ordinary argument and quietly do nothing.
+///
+/// Ignoring it is a security failure, not a style one: the user believes the run
+/// is sandboxed and it is not. `--` suppresses the check for a script that
+/// genuinely wants such an argument of its own.
+fn reject_permission_flags_after_source(args: &[String], source: &str) -> Result<(), String> {
+    for arg in args {
+        // Everything past `--` is the script's, verbatim and unexamined.
+        if arg == "--" {
+            return Ok(());
+        }
+        let (flag, _) = split_flag_value(arg);
+        let is_permission_flag = flag == "--deny-all"
+            || ((flag.starts_with("--deny-") || flag.starts_with("--allow-"))
+                && Capability::from_flag_name(
+                    flag.trim_start_matches("--deny-")
+                        .trim_start_matches("--allow-"),
+                )
+                .is_some());
+        if is_permission_flag {
+            return Err(format!(
+                "{arg} appears after {source}, where it is passed to the script and \
+                 restricts nothing.\n\n\
+                 Permission flags must come before the script: `esrun {arg} {source} ...`. \
+                 If the script really wants this argument, separate it with `--`."
+            ));
+        }
+    }
+    Ok(())
 }
 use std::io::IsTerminal;
 

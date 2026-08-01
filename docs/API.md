@@ -430,13 +430,22 @@ escape the jail.
 
 ### Denying capabilities in `esrun`
 
-`esrun` grants everything by default. Restrict a run with **either** `--deny-all`
-**or** one or more `--deny-<name>` — passing both is an error (DECISIONS D38).
+`esrun` grants everything by default. Two modes restrict a run, and they cannot
+be combined (DECISIONS D38):
 
 ```sh
-esrun --deny-all app.js                      # no host access at all
-esrun --deny-net --deny-run app.js           # everything except those two
+esrun --deny-net --deny-run app.js                     # everything, minus these
+esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
 ```
+
+| Mode | Baseline | Direction |
+| ---- | -------- | --------- |
+| `--deny-<name>` | everything granted | subtractive only |
+| `--deny-all --allow-<name>` | nothing granted | additive only |
+
+`--allow-<name>` requires `--deny-all` — with everything already granted there is
+nothing for it to add. Neither mode mixes directions, so **no flag overrides
+another**: read the list top to bottom and that is the answer.
 
 | Flag | Capability | Denies |
 | ---- | ---------- | ------ |
@@ -449,11 +458,26 @@ esrun --deny-net --deny-run app.js           # everything except those two
 | `--deny-run` | `Run` | `runtime:system` child processes |
 | `--deny-signals` | `Signals` | `runtime:process` `onSignal` |
 
+Each name takes both prefixes: `--deny-net` and `--allow-net`.
+
 `--deny-all` is the union of all eight. It still runs the entry file — that file
 is read before the runtime exists — but since it includes `--deny-imports`, a
-fully denied run is a **single-file** run. `Clock`/`Entropy`/`Timers`/`TaskSpawn`
-have no flag and survive `--deny-all`: no op gates them, so a denied script still
-computes. Ask from JS with [`permissions`](#runtimeprocess).
+fully denied run is a **single-file** run; add `--allow-imports` for an app with
+dependencies. `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive
+`--deny-all`: no op gates them, so a denied script still computes. Ask from JS
+with [`permissions`](#runtimeprocess).
+
+**The parser is strict.** These are errors, not warnings, because the silent
+version of each leaves a run wider than the command line claims:
+
+| Written | Why it fails |
+| ------- | ------------ |
+| `--allow-net=example.com` | Scoping is not implemented; the value would be ignored |
+| `--allow-net example.com` | A value never attaches as a separate word |
+| `esrun app.js --deny-net` | After the script it is the script's argument, and restricts nothing (`--` opts out) |
+| `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
+| `--allow-ffi` | Not one of the eight |
+| `--timeout=500` | This flag takes its value as the next argument |
 
 ---
 

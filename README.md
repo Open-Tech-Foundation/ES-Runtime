@@ -56,9 +56,16 @@ esrun --deny-net app.mjs          # or deny one capability at a time
 esrun --help
 ```
 
-`esrun` grants every capability by default. Restrict a run with **either**
-`--deny-all` **or** one or more `--deny-<name>` from `read`, `write`, `imports`,
-`net`, `listen`, `env`, `run`, `signals` — not both. A denied operation throws
+`esrun` grants every capability by default. Two modes restrict a run, and they
+cannot be combined:
+
+```sh
+esrun --deny-net --deny-run app.mjs                     # everything, minus these
+esrun --deny-all --allow-imports --allow-net app.mjs    # nothing, plus these
+```
+
+Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`.
+`--allow-<name>` requires `--deny-all`. A denied operation throws
 `NotAllowedError`; importing a `runtime:` module always works. See
 [SECURITY.md](SECURITY.md).
 

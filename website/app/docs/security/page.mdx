@@ -40,27 +40,40 @@ built-in imports under any policy and only its operations throw.
 
 ## Denying capabilities in esrun
 
-Either `--deny-all` or one or more `--deny-<name>`. Not both — `--deny-all` is
-the union of the eight, and combining them is an error.
+Two modes, each with a single direction. They cannot be combined, so no flag
+ever overrides another.
 
 ```sh
-esrun --deny-all app.js                # no host access at all
-esrun --deny-net --deny-run app.js     # everything except those two
+esrun --deny-net --deny-run app.js                     # everything, minus these
+esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
 ```
 
-| Flag | Denies |
+| Mode | Baseline | Direction |
+| --- | --- | --- |
+| `--deny-<name>` | everything granted | subtractive only |
+| `--deny-all --allow-<name>` | nothing granted | additive only |
+
+`--allow-<name>` requires `--deny-all` — with everything already granted, there
+is nothing for it to add.
+
+| Name | Covers |
 | --- | --- |
-| `--deny-read` | `runtime:fs` / `runtime:wasi` reads |
-| `--deny-write` | `runtime:fs` / `runtime:wasi` mutations |
-| `--deny-imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `--deny-net` | `fetch`, `WebSocket`, `runtime:net` connect |
-| `--deny-listen` | `runtime:net` listen, `runtime:http` serve |
-| `--deny-env` | `runtime:process` env / args / cwd |
-| `--deny-run` | `runtime:system` child processes |
-| `--deny-signals` | `runtime:process` onSignal |
+| `read` | `runtime:fs` / `runtime:wasi` reads |
+| `write` | `runtime:fs` / `runtime:wasi` mutations |
+| `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `net` | `fetch`, `WebSocket`, `runtime:net` connect |
+| `listen` | `runtime:net` listen, `runtime:http` serve |
+| `env` | `runtime:process` env / args / cwd |
+| `run` | `runtime:system` child processes |
+| `signals` | `runtime:process` onSignal |
 
 `--deny-all` still runs the entry file — it is read before the runtime exists.
-It includes `--deny-imports`, so a fully denied run is a single-file run.
+It includes `--deny-imports`, so add `--allow-imports` for an app with
+dependencies.
+
+Permissions are **coarse**: scoping to paths or hosts is not implemented, and a
+value (`--allow-net=example.com`) is rejected rather than ignored — a run must
+never be narrower on the command line than it is in reality.
 
 Ask from JS:
 

@@ -187,6 +187,203 @@ fn an_unknown_denial_name_is_rejected_with_the_vocabulary() {
     assert!(s.contains("--deny-signals"), "{s}");
 }
 
+// ---- --allow-<name> ----------------------------------------------------------
+
+#[test]
+fn allow_grants_a_capability_back_under_deny_all() {
+    let out = run(
+        &["--deny-all", "--allow-net", "--allow-env"],
+        "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "read,write,imports,listen,run,signals");
+}
+
+#[test]
+fn allow_imports_makes_deny_all_usable_for_a_multi_file_app() {
+    // Without this, `--deny-all` is single-file only — which is why the allow
+    // layer exists at all.
+    write("allow_imports_helper.mjs", "export const v = 11;");
+    let app = write(
+        "allow_imports_app.mjs",
+        "import { v } from './allow_imports_helper.mjs'; \
+         import fs from 'runtime:fs'; \
+         console.log('imported', v); \
+         try { await fs.readDir('.'); console.log('NOT DENIED'); } \
+         catch (e) { console.log('read still denied'); }",
+    );
+    let out = esrun()
+        .arg("--deny-all")
+        .arg("--allow-imports")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("imported 11"), "{s}");
+    assert!(s.contains("read still denied"), "{s}");
+}
+
+#[test]
+fn allow_requires_deny_all() {
+    // Rule 2: against the default baseline an allow is a no-op or a
+    // contradiction, so it is rejected rather than silently doing nothing.
+    let out = run(&["--allow-net"], "console.log('ran')");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--allow-net requires --deny-all"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn allow_cannot_be_mixed_with_granular_denials() {
+    // `--deny-read --allow-net` has no --deny-all, so rule 2 catches it: the two
+    // directions never appear on one command line.
+    let out = run(&["--deny-read", "--allow-net"], "console.log('ran')");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("requires --deny-all"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn allowing_everything_back_is_the_same_as_no_flags() {
+    let flags = [
+        "--deny-all",
+        "--allow-read",
+        "--allow-write",
+        "--allow-imports",
+        "--allow-net",
+        "--allow-listen",
+        "--allow-env",
+        "--allow-run",
+        "--allow-signals",
+    ];
+    let out = run(
+        &flags,
+        "import { permissions } from 'runtime:process'; console.log(JSON.stringify(permissions.denied));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "[]");
+}
+
+// ---- parser strictness -------------------------------------------------------
+
+#[test]
+fn a_value_on_a_permission_flag_is_rejected_not_ignored() {
+    // The dangerous case: accepting and ignoring `=host` would leave the user
+    // believing the run is scoped when it is wide open.
+    let out = run(&["--deny-all", "--allow-net=example.com"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("--allow-net takes no value"), "{s}");
+    assert!(s.contains("not implemented yet"), "{s}");
+}
+
+#[test]
+fn an_empty_value_is_rejected() {
+    let out = run(&["--deny-all", "--allow-net="], "console.log(1)");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("empty value"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn deny_all_takes_no_value() {
+    let out = run(&["--deny-all=1"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("--deny-all takes no value"), "{s}");
+    // Not the scoping message — scoping could never apply to a mode switch.
+    assert!(!s.contains("not implemented yet"), "{s}");
+}
+
+#[test]
+fn a_space_separated_value_names_the_real_problem() {
+    // `--allow-net example.com app.js` would otherwise take example.com as the
+    // script and hand app.js to it — a "cannot read" three steps from the cause.
+    let app = write("space_value.mjs", "console.log('ran');");
+    let out = esrun()
+        .arg("--deny-all")
+        .arg("--allow-net")
+        .arg("example.com")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("it follows --allow-net"), "{s}");
+    assert!(s.contains("never as a separate word"), "{s}");
+}
+
+#[test]
+fn a_permission_flag_after_the_script_is_rejected() {
+    // Silently passing it to the script would leave the user believing the run
+    // is sandboxed when it is not.
+    let app = write("after_script.mjs", "console.log('ran');");
+    let out = esrun().arg(&app).arg("--deny-net").output().unwrap();
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("appears after"), "{s}");
+    assert!(s.contains("restricts nothing"), "{s}");
+}
+
+#[test]
+fn a_double_dash_lets_a_script_take_the_argument_itself() {
+    let app = write(
+        "after_script_escaped.mjs",
+        "import { args } from 'runtime:process'; console.log(args.join(' '));",
+    );
+    let out = esrun()
+        .arg(&app)
+        .arg("--")
+        .arg("--deny-net")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("--deny-net"), "{}", stdout(&out));
+}
+
+#[test]
+fn allow_all_points_at_the_default() {
+    let out = run(&["--allow-all"], "console.log(1)");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("there is no --allow-all"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn an_equals_value_on_a_space_valued_flag_says_so() {
+    // `--timeout=500` would otherwise fall through to "unknown option", which
+    // hides what is actually wrong.
+    let out = run(&["--timeout=500"], "console.log(1)");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("takes its value as the next argument"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn an_unknown_allow_name_is_rejected_with_the_vocabulary() {
+    let out = run(&["--deny-all", "--allow-ffi"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("unknown option: --allow-ffi"), "{s}");
+    assert!(s.contains("--allow-read"), "{s}");
+}
+
 // ---- the D26 invariant: importing a runtime: module always works -------------
 
 #[test]

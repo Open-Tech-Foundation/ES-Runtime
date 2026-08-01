@@ -51,11 +51,11 @@ makes the trade-offs explicit.
 | --- | --- | --- | --- | --- |
 | Restricted by default | <No /> | <No /> | <No /> | <Yes /> |
 | Turned on by | `--deny-all` | `--permission` | — | always on (`-A` off) |
-| Direction | deny-list | allow-list | — | allow-list + `--deny-*` |
+| Direction | deny-list, or `--deny-all` + allow-list | allow-list | — | allow-list + `--deny-*` |
 | Scoped to paths / hosts | <No /> | <Yes /> | — | <Yes /> |
 | Interactive prompt | <No /> | <No /> | — | <Yes /> |
 | Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
-| Local imports readable | <No /> | <No /> | — | <Yes /> |
+| Local imports readable | `--allow-imports` | <No /> | — | <Yes /> |
 | Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
 | Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
 | Filesystem root jail | always on | <No /> | <No /> | <No /> |
