@@ -40,8 +40,8 @@ use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, 
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    HostAllowlist, NodeModuleLoader, OsEntropy, ReqwestTransport, SystemClock, SystemCommands,
-    SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
+    HostAllowlist, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport, SystemClock,
+    SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
     SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, Signal};
@@ -463,8 +463,25 @@ fn scope_hint(cap: Capability) -> Option<&'static str> {
         Capability::Env => Some("variable names, e.g. --allow-env=HOME,PATH"),
         Capability::Net => Some("hosts, e.g. --allow-net=api.example.com,db.internal:5432"),
         Capability::NetListen => Some("bind addresses, e.g. --allow-listen=127.0.0.1:8080,8443"),
+        Capability::FileRead | Capability::FileWrite => {
+            Some("paths, e.g. --allow-read=./data,/etc/ssl/certs")
+        }
         _ => None,
     }
+}
+
+/// The path list for `cap`, resolved against `base` — the working directory the
+/// user typed the flags in, which is what a relative `./data` means to them.
+/// `None` if that capability was granted whole.
+fn path_scope(
+    scopes: &Scopes,
+    cap: Capability,
+    base: &std::path::Path,
+) -> Result<Option<PathAllowlist>, String> {
+    scopes
+        .get(&cap)
+        .map(|entries| PathAllowlist::parse(entries, base))
+        .transpose()
 }
 
 /// The address list for `cap`, parsed and validated, or `None` if that
@@ -475,10 +492,7 @@ fn scope_hint(cap: Capability) -> Option<&'static str> {
 /// before anything runs rather than a provider error three steps later. The
 /// list is a handful of strings; the duplication buys the better message.
 fn address_scope(scopes: &Scopes, cap: Capability) -> Result<Option<HostAllowlist>, String> {
-    scopes
-        .get(&cap)
-        .map(HostAllowlist::parse)
-        .transpose()
+    scopes.get(&cap).map(HostAllowlist::parse).transpose()
 }
 
 /// The permission flags accumulated while parsing, resolved into a
@@ -1117,10 +1131,30 @@ async fn run() -> Result<(), String> {
     // Filesystem view for runtime:fs: relative paths resolve under the entry's
     // directory, jailed to the same detected project root the loader uses (D25).
     let fs_root = path::detect_root(&base_dir);
-    let file_system = Arc::new(SystemFileSystem::new(&base_dir, &fs_root));
+    // `--allow-read=<paths>` / `--allow-write=<paths>` narrow the jail (D38).
+    // Entries are resolved against the *working directory*, because that is
+    // where the user typed them; the jail's own base is the entry file's
+    // directory, which is not what `./data` means on a command line.
+    let flag_dir = std::env::current_dir().unwrap_or_else(|_| base_dir.clone());
+    let allow_read = path_scope(&config.scopes, Capability::FileRead, &flag_dir)?;
+    let allow_write = path_scope(&config.scopes, Capability::FileWrite, &flag_dir)?;
+    // Both filesystem views take the same lists: `runtime:fs` and `runtime:wasi`
+    // are two doors onto one filesystem, and a policy that differed between
+    // them would be a bug wearing a feature's clothes.
+    let mut file_system = SystemFileSystem::new(&base_dir, &fs_root);
+    let mut sync_file_system = SystemSyncFileSystem::new(&base_dir, &fs_root);
+    if let Some(allow) = &allow_read {
+        file_system = file_system.with_read_allowlist(allow.clone());
+        sync_file_system = sync_file_system.with_read_allowlist(allow.clone());
+    }
+    if let Some(allow) = &allow_write {
+        file_system = file_system.with_write_allowlist(allow.clone());
+        sync_file_system = sync_file_system.with_write_allowlist(allow.clone());
+    }
+    let file_system = Arc::new(file_system);
     // The same view, synchronously, for `runtime:wasi` — WASI's syscalls cannot
     // await. Same base and same jail, so both paths agree on what is reachable.
-    let sync_file_system = Arc::new(SystemSyncFileSystem::new(&base_dir, &fs_root));
+    let sync_file_system = Arc::new(sync_file_system);
     // Held here as well as in the providers: the interrupt watcher below needs
     // to ask the signal registry what the guest is watching, and to tell the
     // HTTP servers to stop accepting.

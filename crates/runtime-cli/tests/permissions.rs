@@ -275,21 +275,21 @@ fn allowing_everything_back_is_the_same_as_no_flags() {
 #[test]
 fn a_value_on_a_permission_flag_that_cannot_enforce_it_is_rejected_not_ignored() {
     // The dangerous case, and the rule that outlives each capability that gains
-    // scoping: accepting and ignoring `=/etc` would leave the user believing the
-    // run is scoped to one directory when the filesystem is wide open.
-    let out = run(&["--deny-all", "--allow-read=/etc"], "console.log(1)");
+    // scoping: accepting and ignoring the value would leave the user believing
+    // the run is scoped when that capability is wide open.
+    let out = run(&["--deny-all", "--allow-imports=./lib"], "console.log(1)");
     assert!(!out.status.success());
     let s = stderr(&out);
-    assert!(s.contains("--allow-read takes no value"), "{s}");
+    assert!(s.contains("--allow-imports takes no value"), "{s}");
     assert!(s.contains("not implemented yet"), "{s}");
 }
 
 #[test]
 fn an_empty_value_on_a_no_value_flag_is_rejected() {
-    let out = run(&["--deny-all", "--allow-read="], "console.log(1)");
+    let out = run(&["--deny-all", "--allow-imports="], "console.log(1)");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("--allow-read takes no value"),
+        stderr(&out).contains("--allow-imports takes no value"),
         "stderr: {}",
         stderr(&out)
     );
@@ -692,6 +692,117 @@ fn a_malformed_address_is_an_argument_error() {
     }
 }
 
+/// A directory tree for the path tests: `data/ok.txt` and a `secrets.env`
+/// beside it, with an empty `out/`. Returns the (canonicalized) root.
+fn scoped_tree(name: &str) -> PathBuf {
+    let root = temp(name);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("data")).expect("mkdir");
+    std::fs::create_dir_all(root.join("out")).expect("mkdir");
+    std::fs::write(root.join("data/ok.txt"), "fine").expect("write");
+    std::fs::write(root.join("secrets.env"), "TOKEN=1").expect("write");
+    std::fs::canonicalize(&root).expect("canonicalize")
+}
+
+/// Runs `code` with `dir` as the working directory — the directory a relative
+/// `--allow-read=data` is resolved against.
+fn run_in(dir: &PathBuf, flags: &[&str], code: &str) -> Output {
+    esrun()
+        .current_dir(dir)
+        .args(flags)
+        .arg(format!("-e={}", code))
+        .output()
+        .expect("spawn esrun")
+}
+
+#[test]
+fn allow_read_reaches_the_listed_paths_and_refuses_the_rest() {
+    let root = scoped_tree("scoped_read");
+    let out = run_in(
+        &root,
+        &["--deny-all", "--allow-read=data"],
+        "import fs from 'runtime:fs'; \
+         console.log('read', await fs.file('data/ok.txt').text()); \
+         try { await fs.file('secrets.env').text(); console.log('NO THROW'); } \
+         catch (e) { console.log('refused', e.code); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("read fine"), "{s}");
+    // A scoped denial, not a jail escape: the file is inside the project root,
+    // it is simply not one this run may read.
+    assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
+}
+
+#[test]
+fn allow_write_is_a_separate_list_from_allow_read() {
+    let root = scoped_tree("scoped_write");
+    let out = run_in(
+        &root,
+        &["--deny-all", "--allow-read=data", "--allow-write=out"],
+        "import fs from 'runtime:fs'; \
+         await fs.write('out/report.json', '{}'); console.log('wrote'); \
+         try { await fs.write('data/ok.txt', 'x'); console.log('NO THROW'); } \
+         catch (e) { console.log('refused', e.code); } \
+         try { await fs.file('out/report.json').text(); console.log('NO THROW'); } \
+         catch (e) { console.log('unreadable', e.code); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("wrote"), "{s}");
+    // Writable where it may not read, readable where it may not write: two
+    // grants, two lists, no implication either way.
+    assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
+    assert!(s.contains("unreadable ERR_PERMISSION_DENIED"), "{s}");
+    assert!(root.join("out/report.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("data/ok.txt")).unwrap(),
+        "fine"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn a_symlink_cannot_walk_out_of_a_path_list() {
+    // Why the check runs after canonicalization: `data/escape/secrets.env` is a
+    // name inside the list for a file outside it.
+    let root = scoped_tree("scoped_symlink");
+    std::os::unix::fs::symlink(&root, root.join("data/escape")).expect("symlink");
+    let out = run_in(
+        &root,
+        &["--deny-all", "--allow-read=data"],
+        "import fs from 'runtime:fs'; \
+         try { await fs.file('data/escape/secrets.env').text(); console.log('NO THROW'); } \
+         catch (e) { console.log('refused', e.code); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("refused ERR_PERMISSION_DENIED"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn a_path_list_narrows_the_root_jail_and_never_widens_it() {
+    // The jail (D25) is checked first and its refusal is the one reported: a
+    // scope list is not a way to reach outside the project root.
+    let root = scoped_tree("scoped_jail");
+    let out = run_in(
+        &root,
+        &["--deny-all", "--allow-read=/etc"],
+        "import fs from 'runtime:fs'; \
+         try { await fs.file('/etc/hostname').text(); console.log('NO THROW'); } \
+         catch (e) { console.log('refused', e.code); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("refused ERR_JAIL_ESCAPE"),
+        "{}",
+        stdout(&out)
+    );
+}
+
 // ---- the value grammar (D38) -------------------------------------------------
 
 #[test]
@@ -768,12 +879,12 @@ fn a_denial_takes_no_scope_list() {
 
 #[test]
 fn scoping_an_unimplemented_capability_is_rejected_and_says_what_works() {
-    let out = run(&["--deny-all", "--allow-read=/etc"], "console.log(1)");
+    let out = run(&["--deny-all", "--allow-signals=SIGINT"], "console.log(1)");
     assert!(!out.status.success());
     let s = stderr(&out);
-    assert!(s.contains("Scoping read is not implemented yet"), "{s}");
-    assert!(s.contains("--allow-env=<list>"), "{s}");
-    assert!(s.contains("--allow-run=<list>"), "{s}");
+    assert!(s.contains("Scoping signals is not implemented yet"), "{s}");
+    assert!(s.contains("--allow-read=<list>"), "{s}");
+    assert!(s.contains("--allow-net=<list>"), "{s}");
 }
 
 #[test]
