@@ -79,6 +79,11 @@ impl PathAllowlist {
         Ok(PathAllowlist { entries: parsed })
     }
 
+    /// Whether this list names nothing.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Whether `real` — an already-resolved path from the jail — is inside one
     /// of the entries. An entry covers itself and everything under it.
     pub(crate) fn permits(&self, real: &Path) -> bool {
