@@ -31,6 +31,9 @@ pub struct SystemSignals {
     /// that unwatched everything would leave its pump awaiting a delivery that
     /// can no longer come — holding the driven loop open for good.
     released: Arc<Notify>,
+    /// Signals the guest may watch (`--allow-signals=<names>`). `None` ⇒ all the
+    /// platform delivers.
+    allow: Option<Arc<Vec<Signal>>>,
 }
 
 impl Default for SystemSignals {
@@ -50,7 +53,35 @@ impl SystemSignals {
             tx,
             rx: Arc::new(Mutex::new(Some(rx))),
             released: Arc::new(Notify::new()),
+            allow: None,
         }
+    }
+
+    /// Restricts watching to `signals` — `esrun --allow-signals=<names>` (D38).
+    ///
+    /// A watch **suppresses the signal's default action**, so this is the
+    /// privilege to decline to die on request, one signal at a time: a service
+    /// that drains on `SIGTERM` has no business also intercepting `SIGINT` or
+    /// `SIGHUP`, and an operator who reaches for `kill` should not find a
+    /// dependency has quietly taken the signal.
+    ///
+    /// Unlisted signals are also absent from
+    /// [`available`](Signals::available) — a guest should enumerate what it may
+    /// use, not what the platform happens to deliver.
+    #[must_use]
+    pub fn with_allowlist<I>(mut self, signals: I) -> Self
+    where
+        I: IntoIterator<Item = Signal>,
+    {
+        self.allow = Some(Arc::new(signals.into_iter().collect()));
+        self
+    }
+
+    /// Whether `signal` is within the scope list (or nothing is scoped).
+    fn permits(&self, signal: Signal) -> bool {
+        self.allow
+            .as_ref()
+            .is_none_or(|allow| allow.contains(&signal))
     }
 
     /// Whether the guest is watching `signal`.
@@ -171,12 +202,24 @@ fn spawn_forwarder(
 
 impl Signals for SystemSignals {
     fn available(&self) -> Vec<Signal> {
-        AVAILABLE.to_vec()
+        AVAILABLE
+            .iter()
+            .copied()
+            .filter(|signal| self.permits(*signal))
+            .collect()
     }
 
     fn watch(&self, signal: Signal) -> Result<(), ProviderError> {
         if !AVAILABLE.contains(&signal) {
             return Err(SystemSignals::unsupported(signal));
+        }
+        if !self.permits(signal) {
+            // A scoped denial: the capability is granted, this signal is not in
+            // the list it was narrowed to.
+            return Err(ProviderError::Coded {
+                code: ErrorCode::PermissionDenied,
+                message: format!("{} is not an allowed signal", signal.name()),
+            });
         }
         let mut watched = self.watched.lock().unwrap_or_else(|e| e.into_inner());
         if watched.contains_key(&signal) {
@@ -337,6 +380,26 @@ impl Signals for ManualSignals {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_signal_allowlist_narrows_watch_and_available() {
+        let signals = SystemSignals::new().with_allowlist([Signal::Term]);
+        // A guest should enumerate what it may use, not what the platform
+        // happens to deliver.
+        assert_eq!(signals.available(), vec![Signal::Term]);
+        assert!(signals.watch(Signal::Term).is_ok());
+        let err = signals
+            .watch(Signal::Int)
+            .expect_err("an unlisted signal must be refused");
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+        assert!(err.to_string().contains("SIGINT"), "{err}");
+        signals.unwatch(Signal::Term);
+    }
+
+    #[test]
+    fn an_unscoped_registry_offers_every_available_signal() {
+        assert_eq!(SystemSignals::new().available(), AVAILABLE.to_vec());
+    }
 
     #[tokio::test]
     async fn next_returns_none_when_nothing_is_watched() {

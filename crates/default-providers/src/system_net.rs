@@ -1048,16 +1048,11 @@ mod tests {
     async fn listen_refuses_a_bind_outside_the_allowlist() {
         // The port must not be claimed by a refused bind: the check comes before
         // the acceptor and before `TcpListener::bind`.
-        // A port the OS just told us is free, so the *allowed* half of this
-        // test binds something real without colliding with the host's services.
-        let port = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let net = SystemNet::new()
-            .with_listen_allowlist(HostAllowlist::parse([format!("127.0.0.1:{port}")]).unwrap());
+        // The list names the interface, not a port, so the allowed half binds
+        // port 0 and never races another test for a number.
+        let net =
+            SystemNet::new().with_listen_allowlist(HostAllowlist::parse(["127.0.0.1"]).unwrap());
+        let port = 0;
         let err = net
             .listen("0.0.0.0".to_string(), port, ListenOptions::default())
             .await

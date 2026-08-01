@@ -647,35 +647,27 @@ mod tests {
     #[tokio::test]
     async fn serve_refuses_a_bind_outside_the_allowlist() {
         // The check precedes the TLS acceptor and the bind, so a refused
-        // `serve` claims no port and leaves nothing behind.
-        let port = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let http = SystemHttpServer::new().with_listen_allowlist(
-            crate::HostAllowlist::parse([format!("127.0.0.1:{port}")]).unwrap(),
-        );
+        // `serve` claims no port and leaves nothing behind. The list names the
+        // interface rather than a port, so the allowed half can bind port 0 and
+        // never race another test for a number.
+        let http = SystemHttpServer::new()
+            .with_listen_allowlist(crate::HostAllowlist::parse(["127.0.0.1"]).unwrap());
         let err = http
             .serve(HttpServeOptions {
                 host: "0.0.0.0".to_string(),
-                port,
+                port: 0,
                 tls: None,
             })
             .await
             .err()
             .expect("a bind outside the list must be refused");
-        assert!(
-            err.to_string().contains(&format!("0.0.0.0:{port}")),
-            "{err}"
-        );
+        assert!(err.to_string().contains("0.0.0.0:0"), "{err}");
         // ...and the allowed address still binds: `listen` is one capability,
         // whichever API claims the port.
         let (id, _) = http
             .serve(HttpServeOptions {
                 host: "127.0.0.1".to_string(),
-                port,
+                port: 0,
                 tls: None,
             })
             .await
