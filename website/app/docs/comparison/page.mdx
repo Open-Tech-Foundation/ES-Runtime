@@ -41,9 +41,33 @@ makes the trade-offs explicit.
 
 <br />
 
-> **Note on the esrun sandbox column.** The esrun **CLI** grants all capabilities,
-> so the "deny by default" and always-on jail apply to the **embeddable library** —
-> deny-by-default there, unrestricted in the CLI.
+> **Note on the esrun sandbox column.** Deny-by-default applies to the
+> **embeddable library**. The esrun **CLI** grants everything by default and
+> restricts on request — see below.
+
+## Permission models
+
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Restricted by default | <No /> | <No /> | <No /> | <Yes /> |
+| Turned on by | `--deny-all` | `--permission` | — | always on (`-A` off) |
+| Direction | deny-list | allow-list | — | allow-list + `--deny-*` |
+| Scoped to paths / hosts | <No /> | <Yes /> | — | <Yes /> |
+| Interactive prompt | <No /> | <No /> | — | <Yes /> |
+| Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
+| Local imports readable | <No /> | <No /> | — | <Yes /> |
+| Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
+| Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
+| Filesystem root jail | always on | <No /> | <No /> | <No /> |
+| Status | alpha | stable (v22.13+) | [proposed](https://github.com/oven-sh/bun/issues/26637) | stable |
+
+Rows 6–7 are about the module graph: under esrun's `--deny-all` and Node's
+`--permission`, the entry file still runs but a second file needs a grant. Deno
+reads statically analysable imports without one.
+
+esrun's eight denial names — `read`, `write`, `imports`, `net`, `listen`, `env`,
+`run`, `signals` — are also what `permissions.has()` takes. See
+[Security model](/docs/security#denying-capabilities-in-esrun).
 
 ## Where the API surface differs
 
@@ -55,9 +79,8 @@ makes the trade-offs explicit.
   either.
 - **Always-on filesystem jail.** File access — including module resolution — is
   confined to a project root that can't be escaped, even via symlink, in both the
-  library and the CLI. Deno gates host access with CLI permission flags and
-  Node.js has an experimental permission model; the esrun CLI grants all
-  capabilities, while the embeddable library is deny-by-default.
+  library and the CLI, with no flag to turn it off. No other runtime here has an
+  equivalent; their permission flags are the only confinement.
 - **It embeds.** esrun is a Rust library with a driven event loop and no owned
   thread, designed to run inside a host application — a use case the others do not
   target.
