@@ -32,14 +32,27 @@ namespace) is unstable and may change between minor releases until the API freez
   `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive it — no op
   gates them, so a denied script still computes.
 
-- **Scoped grants for `run` and `env`** — `--allow-run=<programs>` and
-  `--allow-env=<names>` narrow a grant to a list instead of handing over the
-  whole capability (DECISIONS D38).
+- **Scoped grants** — `--allow-net`, `--allow-listen`, `--allow-run`, and
+  `--allow-env` take a comma-separated list that narrows the grant instead of
+  handing over the whole capability (DECISIONS D38).
 
   ```sh
   esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+        --allow-net=db.internal:5432 --allow-listen=8080 \
         --allow-run=git server.js
   ```
+
+  `--allow-net` is what stops an exfiltration: a compromised dependency reaching
+  out over the app's own legitimate network access now has to reach an address
+  you named. It is enforced **on every redirect hop**, not just the URL the
+  program wrote — a `302` from an allowed host to a denied one fails rather than
+  being followed. `net` and `listen` keep separate lists: reaching out and being
+  reachable are separate capabilities.
+
+  An address is a host (any port), a `host:port`, or a bare port (any
+  interface); `[::1]:8080` for IPv6. Matching is exact — `example.com` does not
+  admit `api.example.com`, and there are no wildcards — and hosts are judged as
+  written, before resolution.
 
   Unlisted environment variables are **absent** from `env`, so the guest cannot
   read them or even enumerate their names; an unlisted program fails to spawn
@@ -53,11 +66,11 @@ namespace) is unstable and may change between minor releases until the API freez
   A scoped grant still reports `permissions.has("env") === true` — the
   capability is granted, the provider is what narrows it.
 
-  **The other six are still coarse:** scoping `read`, `write`, `imports`, `net`,
-  `listen`, and `signals` is not implemented, and a value on them
-  (`--allow-net=example.com`) is **rejected rather than ignored** — a run must
-  never be narrower on the command line than it is in reality. A denial takes no
-  value at all: a scope narrows a grant.
+  **The other four are still coarse:** scoping `read`, `write`, `imports`, and
+  `signals` is not implemented, and a value on them (`--allow-read=/etc`) is
+  **rejected rather than ignored** — a run must never be narrower on the command
+  line than it is in reality. A denial takes no value at all: a scope narrows a
+  grant.
 
 - **`permissions` on `runtime:process`** — what this process is allowed to
   reach. The policy is fixed at launch, so it is introspection only: a

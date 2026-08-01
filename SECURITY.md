@@ -59,7 +59,7 @@ denial message use. A denied operation throws `NotAllowedError`
 (`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
 
 The parser is strict on purpose: a value on a permission flag that cannot yet
-enforce it (`--allow-net=example.com`), a space-separated value, a permission
+enforce it (`--allow-read=/etc`), a space-separated value, a permission
 flag placed after the script, or an unknown name is an **error**. Each of those, ignored,
 would leave a run wider than the command line claims.
 
@@ -82,27 +82,36 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Two of the eight can be scoped to a list; the rest are all-or-nothing.**
+**Four of the eight can be scoped to a list; the rest are all-or-nothing.**
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+      --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-run=git server.js
 ```
 
-`--allow-env=<names>` narrows the environment to those variables — every other
-one is *absent*, so a guest can neither read it nor learn its name — and
-`--allow-run=<programs>` refuses to spawn anything else, with
-`ERR_PERMISSION_DENIED` (a scoped denial; `--deny-run` is
-`ERR_CAPABILITY_DENIED`). A scoped grant still reports
-`permissions.has("env") === true`: the capability opens the door, the list is
-what the provider withholds.
+- `--allow-net=<hosts>` refuses every other address, **on every redirect hop**
+  as well as on the request the program wrote — the check that stops a
+  compromised dependency exfiltrating over the app's own legitimate network
+  access. Hosts are matched as written, before resolution, and exactly:
+  `example.com` does not admit `api.example.com`, and there are no wildcards.
+- `--allow-listen=<addresses>` refuses every other bind, before the port is
+  claimed. A separate list from `net`: reaching out and being reachable are
+  separate capabilities.
+- `--allow-env=<names>` narrows the environment to those variables — every other
+  one is *absent*, so a guest can neither read it nor learn its name.
+- `--allow-run=<programs>` refuses to spawn anything else.
 
-Scoping the other six (`read`, `write`, `imports`, `net`, `listen`, `signals`)
-is **not implemented**, and a value passed to one of them is rejected rather
-than ignored. Until it lands, a run that needs the network can reach *any* host
-— the gap that matters most for a server, where a compromised dependency
-exfiltrates over the app's own legitimate network access. The filesystem **root
-jail** (D25) is always on regardless, for both paths.
+A refusal is `ERR_PERMISSION_DENIED` — a scoped denial, distinct from the
+`ERR_CAPABILITY_DENIED` a missing capability raises. A scoped grant still
+reports `permissions.has("net") === true`: the capability opens the door, the
+list is what the provider withholds.
+
+Scoping the other four (`read`, `write`, `imports`, `signals`) is **not
+implemented**, and a value passed to one of them is rejected rather than
+ignored. Until it lands, a run that needs the filesystem can reach every file
+under the root. The filesystem **root jail** (D25) is always on regardless, for
+both paths.
 
 ## Child processes (`Capability::Run`)
 

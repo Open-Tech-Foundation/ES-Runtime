@@ -462,20 +462,39 @@ Each name takes both prefixes: `--deny-net` and `--allow-net`.
 
 #### Scoped grants
 
-Two of the eight can be granted **narrowed to a list** rather than whole:
+Four of the eight can be granted **narrowed to a list** rather than whole:
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
-      --allow-run=git server.js
+      --allow-net=db.internal:5432 --allow-listen=8080 --allow-run=git server.js
 ```
 
 | Flag | Grants | Everything else |
 | ---- | ------ | --------------- |
+| `--allow-net=<hosts>` | reaching those addresses (`fetch`, `runtime:net` `connect`, `WebSocket`) | fails with `ERR_PERMISSION_DENIED`, before any packet |
+| `--allow-listen=<addresses>` | binding those addresses (`runtime:net` `listen`, `runtime:http` `serve`) | fails before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
 
 `--allow-run` matches the program as written and its resolved file name, so
 `--allow-run=git` admits `git`, `/usr/bin/git`, and `git.exe` alike.
+
+**An address** is a host (any port), a `host:port`, or a bare port (any
+interface — usually what a `--allow-listen` wants). Bracket an IPv6 literal that
+carries a port: `[::1]:8080`. Matching is exact and never widens:
+`--allow-net=example.com` does not admit `api.example.com`, and there are no
+wildcards. Hosts are judged **as written, before resolution** — an IP entry
+never silently admits a name that resolves to it, and DNS is not part of the
+policy.
+
+`net` and `listen` keep separate lists: reaching out and being reachable are
+separate capabilities, and an address allowed for one says nothing about the
+other.
+
+**`--allow-net` is enforced on every redirect hop**, not just the URL the
+program wrote. A `302` from an allowed host to a denied one fails the request
+with `ERR_PERMISSION_DENIED`; an allowlist checked only at the front door would
+follow it transparently and hand back the denied host's body.
 
 A scoped denial is a different fact from a capability denial, and reports as
 one: an unlisted program throws `ERR_PERMISSION_DENIED` ("you have `run`, but
@@ -495,10 +514,10 @@ The value grammar, one rule set for every capability that takes a list:
 - granting a capability both whole and narrowed (`--allow-env --allow-env=HOME`)
   is an error, not a precedence rule.
 
-Scoping the other six (`read`, `write`, `imports`, `net`, `listen`, `signals`)
-is **not implemented**, and a value on them is rejected rather than ignored —
-`--allow-net=example.com` that parsed but was not enforced would say "one host"
-while the network was wide open. Denials never take a value: a scope narrows a
+Scoping the other four (`read`, `write`, `imports`, `signals`) is **not
+implemented**, and a value on them is rejected rather than ignored — a flag that
+parsed but was not enforced would say "one path" while the filesystem was wide
+open. Denials never take a value: a scope narrows a
 grant, so it is written `--deny-all --allow-<name>=<list>`.
 
 `--deny-all` is the union of all eight. It still runs the entry file — that file
@@ -529,7 +548,7 @@ the script opts a script's own argument out of rule 2.
 | `--timeout 500` | Rule 1 — `500` would be mistaken for the script |
 | `--allow-net example.com` | Rule 1 |
 | `esrun app.js --deny-net` | Rule 2 — restricts nothing where it stands |
-| `--allow-net=example.com` | Scoping `net` is not implemented; the value would be ignored (`run` and `env` do take a list) |
+| `--allow-read=/etc` | Scoping `read` is not implemented; the value would be ignored (net, listen, run, env do take a list) |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |

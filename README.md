@@ -62,12 +62,12 @@ cannot be combined:
 ```sh
 esrun --deny-net --deny-run app.mjs                     # everything, minus these
 esrun --deny-all --allow-imports --allow-net app.mjs    # nothing, plus these
-esrun --deny-all --allow-env=PORT --allow-run=git app.mjs   # ...narrowed to a list
+esrun --deny-all --allow-net=api.example.com app.mjs    # ...narrowed to a list
 ```
 
 Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`.
-`--allow-<name>` requires `--deny-all`; `run` and `env` also take a
-comma-separated list that narrows the grant. A denied operation throws
+`--allow-<name>` requires `--deny-all`; `net`, `listen`, `run`, and `env` also
+take a comma-separated list that narrows the grant. A denied operation throws
 `NotAllowedError`; importing a `runtime:` module always works. See
 [SECURITY.md](SECURITY.md).
 

@@ -121,7 +121,8 @@ Needs no capability, so it answers under `--deny-all` too.
 
 A [scoped grant](/api/cli#scoped-grants) reports `true`: `--allow-env=PORT`
 grants the `env` capability and narrows what it yields, so `has("env")` means
-"you may read *an* environment variable", not "you may read this one".
+"you may read *an* environment variable", not "you may read this one". The same
+holds for `--allow-net=<hosts>` and the rest.
 
 ## Secrets — masked by default
 

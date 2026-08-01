@@ -71,31 +71,39 @@ is nothing for it to add.
 It includes `--deny-imports`, so add `--allow-imports` for an app with
 dependencies.
 
-Two of the eight can be granted **narrowed to a list**:
+Four of the eight can be granted **narrowed to a list**:
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+      --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-run=git server.js
 ```
 
-Every other environment variable is *absent* — a guest can neither read it nor
-learn its name — and any other program fails to spawn with
+`--allow-net` is the one that stops an exfiltration — a compromised dependency
+reaching out over the app's own legitimate network access has to reach an
+address you named — and it is enforced on **every redirect hop**, not just the
+URL the program wrote. Unlisted environment variables are *absent*, so a guest
+can neither read them nor learn their names; unlisted programs fail to spawn;
+unlisted binds are refused before the port is claimed.
+
+Matching is exact: `example.com` does not admit `api.example.com`, there are no
+wildcards, and hosts are judged as written rather than resolved. A refusal is
 `ERR_PERMISSION_DENIED`, a scoped denial distinct from the
-`ERR_CAPABILITY_DENIED` that `--deny-run` gives. A scoped grant still reports
-`permissions.has("env") === true`: the capability opens the door, the list is
+`ERR_CAPABILITY_DENIED` a missing capability gives. A scoped grant still reports
+`permissions.has("net") === true`: the capability opens the door, the list is
 what the provider withholds.
 
-Scoping the other six (`read`, `write`, `imports`, `net`, `listen`, `signals`)
-is not implemented, and a value on them (`--allow-net=example.com`) is rejected
-rather than ignored — a run must never be narrower on the command line than it
-is in reality.
+Scoping the other four (`read`, `write`, `imports`, `signals`) is not
+implemented, and a value on them (`--allow-read=/etc`) is rejected rather than
+ignored — a run must never be narrower on the command line than it is in
+reality.
 
 The [argument grammar](/api/cli#argument-grammar) is enforced for the same
 reason. Each of these is an error, not a warning:
 
 | Written | Why it fails |
 | --- | --- |
-| `--allow-net=example.com` | Scoping `net` is unimplemented; the value would be ignored |
+| `--allow-read=/etc` | Scoping `read` is unimplemented; the value would be ignored |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word |
