@@ -86,12 +86,38 @@ pub struct SystemNet {
     /// connect with the same ALPN set; a `TlsConnector` is an `Arc` inside, so a
     /// cache hit is a refcount bump.
     tls_connectors: Arc<Mutex<HashMap<Vec<String>, TlsConnector>>>,
+    /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
+    allow_connect: Option<Arc<crate::HostAllowlist>>,
+    /// Addresses `listen` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
+    /// Separate from [`allow_connect`](Self::allow_connect) because reaching out
+    /// and being reachable are separate capabilities (`Net` / `NetListen`), and
+    /// the addresses that make sense for each have nothing to do with the other.
+    allow_listen: Option<Arc<crate::HostAllowlist>>,
 }
 
 impl SystemNet {
     /// Builds an empty socket registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Restricts `connect` to `allow` — `esrun --allow-net=<hosts>` (D38). The
+    /// host is judged **as written**, before resolution: a name is a name, so a
+    /// denied name cannot be smuggled through by an attacker-controlled DNS
+    /// answer, and an IP entry never silently admits a name that resolves to it.
+    #[must_use]
+    pub fn with_allowlist(mut self, allow: crate::HostAllowlist) -> Self {
+        self.allow_connect = Some(Arc::new(allow));
+        self
+    }
+
+    /// Restricts `listen` to `allow` — `esrun --allow-listen=<addresses>` (D38).
+    /// The bind address must match an entry exactly; write a bare port to allow
+    /// any interface.
+    #[must_use]
+    pub fn with_listen_allowlist(mut self, allow: crate::HostAllowlist) -> Self {
+        self.allow_listen = Some(Arc::new(allow));
+        self
     }
 
     /// Like [`new`](Self::new), but trusting `roots` for TLS instead of the
@@ -374,6 +400,9 @@ impl NetProvider for SystemNet {
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
+            if let Some(allow) = &this.allow_connect {
+                allow.check(&host, port, "connect")?;
+            }
             let tcp = TcpStream::connect((host.as_str(), port))
                 .await
                 .map_err(|e| io_err(format!("connect {host}:{port}"), e))?;
@@ -477,6 +506,11 @@ impl NetProvider for SystemNet {
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
+            // Before the acceptor is built and before the port is claimed: a
+            // denied bind must leave nothing behind.
+            if let Some(allow) = &this.allow_listen {
+                allow.check(&host, port, "listen")?;
+            }
             // Build the TLS acceptor (cert/key parse, config assembly) once, at
             // bind time, before any connection arrives.
             let acceptor = if opts.cert.is_empty() && opts.key.is_empty() {
@@ -667,6 +701,7 @@ impl NetProvider for SystemNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HostAllowlist;
     // The production paths build their server-side TLS through `crate::tls`;
     // these tests stand up their own peer, so they need the types directly.
     use tokio_rustls::TlsAcceptor;
@@ -970,5 +1005,74 @@ mod tests {
         assert_eq!(net.read(id).await.unwrap().unwrap(), b"hi");
         net.close(id).await.unwrap();
         server.await.unwrap();
+    }
+
+    // ---- the address allowlist (D38) ----------------------------------------
+
+    #[tokio::test]
+    async fn connect_refuses_an_address_outside_the_allowlist() {
+        // Nothing is listening on the refused address and nothing needs to be:
+        // the check runs before the socket, so a denial costs no DNS lookup and
+        // sends no packet.
+        let net =
+            SystemNet::new().with_allowlist(HostAllowlist::parse(["db.internal:5432"]).unwrap());
+        let err = net
+            .connect("evil.test".to_string(), 5432, ConnectOptions::default())
+            .await
+            .err()
+            .expect("an address outside the list must be refused");
+        assert_eq!(
+            err.code(),
+            Some(es_runtime_common::ErrorCode::PermissionDenied)
+        );
+        assert!(err.to_string().contains("evil.test:5432"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn connect_permits_an_address_on_the_allowlist() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+        let net = SystemNet::new()
+            .with_allowlist(HostAllowlist::parse([format!("127.0.0.1:{port}")]).unwrap());
+        let connected = net
+            .connect("127.0.0.1".to_string(), port, ConnectOptions::default())
+            .await;
+        assert!(connected.is_ok(), "{:?}", connected.err());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn listen_refuses_a_bind_outside_the_allowlist() {
+        // The port must not be claimed by a refused bind: the check comes before
+        // the acceptor and before `TcpListener::bind`.
+        // A port the OS just told us is free, so the *allowed* half of this
+        // test binds something real without colliding with the host's services.
+        let port = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let net = SystemNet::new()
+            .with_listen_allowlist(HostAllowlist::parse([format!("127.0.0.1:{port}")]).unwrap());
+        let err = net
+            .listen("0.0.0.0".to_string(), port, ListenOptions::default())
+            .await
+            .err()
+            .expect("a bind outside the list must be refused");
+        assert!(
+            err.to_string().contains(&format!("0.0.0.0:{port}")),
+            "{err}"
+        );
+        // Binding is not the same grant as reaching out: an allowlist for one
+        // says nothing about the other.
+        let (id, _) = net
+            .listen("127.0.0.1".to_string(), port, ListenOptions::default())
+            .await
+            .expect("the allowed address binds");
+        net.close_listener(id).await.unwrap();
     }
 }

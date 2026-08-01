@@ -133,12 +133,23 @@ pub struct SystemHttpServer {
     delivered: Arc<Mutex<HashMap<u64, oneshot::Receiver<()>>>>,
     live: LiveConnections,
     next_id: Arc<AtomicU64>,
+    /// Addresses `serve` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
+    allow_listen: Option<Arc<crate::HostAllowlist>>,
 }
 
 impl SystemHttpServer {
     /// Builds an empty server registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Restricts `serve` to `allow` — `esrun --allow-listen=<addresses>` (D38).
+    /// The same list `runtime:net` `listen` consults: `listen` is one
+    /// capability whichever API claims the port.
+    #[must_use]
+    pub fn with_listen_allowlist(mut self, allow: crate::HostAllowlist) -> Self {
+        self.allow_listen = Some(Arc::new(allow));
+        self
     }
 
     fn id(&self) -> u64 {
@@ -365,6 +376,11 @@ impl HttpServerProvider for SystemHttpServer {
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
+            // Before the acceptor and before the port is claimed: a denied bind
+            // must leave nothing behind.
+            if let Some(allow) = &this.allow_listen {
+                allow.check(&options.host, options.port, "serve")?;
+            }
             // Build the TLS acceptor before binding: a bad cert should fail the
             // `serve` call, not each connection after the port is already open.
             let tls = match &options.tls {
@@ -627,6 +643,44 @@ mod tests {
     async fn request_disconnected_is_false_for_an_unknown_id() {
         let (http, _id, _port) = bound().await;
         assert!(!http.request_disconnected(9_999).await);
+    }
+    #[tokio::test]
+    async fn serve_refuses_a_bind_outside_the_allowlist() {
+        // The check precedes the TLS acceptor and the bind, so a refused
+        // `serve` claims no port and leaves nothing behind.
+        let port = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let http = SystemHttpServer::new().with_listen_allowlist(
+            crate::HostAllowlist::parse([format!("127.0.0.1:{port}")]).unwrap(),
+        );
+        let err = http
+            .serve(HttpServeOptions {
+                host: "0.0.0.0".to_string(),
+                port,
+                tls: None,
+            })
+            .await
+            .err()
+            .expect("a bind outside the list must be refused");
+        assert!(
+            err.to_string().contains(&format!("0.0.0.0:{port}")),
+            "{err}"
+        );
+        // ...and the allowed address still binds: `listen` is one capability,
+        // whichever API claims the port.
+        let (id, _) = http
+            .serve(HttpServeOptions {
+                host: "127.0.0.1".to_string(),
+                port,
+                tls: None,
+            })
+            .await
+            .expect("the allowed address binds");
+        http.close(id).await.unwrap();
     }
 }
 

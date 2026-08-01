@@ -68,12 +68,24 @@ pub struct SystemWebSocket {
     /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
     /// tests inject a custom store via [`SystemWebSocket::with_tls_roots`].
     tls_roots: Option<Arc<RootCertStore>>,
+    /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
+    allow: Option<Arc<crate::HostAllowlist>>,
 }
 
 impl SystemWebSocket {
     /// Builds an empty connection registry.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Restricts `connect` to `allow` — `esrun --allow-net=<hosts>` (D38). The
+    /// same list `fetch` and `runtime:net` consult: `net` is one capability, and
+    /// which provider serves which API is not something a policy should care
+    /// about.
+    #[must_use]
+    pub fn with_allowlist(mut self, allow: crate::HostAllowlist) -> Self {
+        self.allow = Some(Arc::new(allow));
+        self
     }
 
     /// Like [`new`](Self::new), but trusting `roots` for `wss:` TLS instead of
@@ -258,6 +270,10 @@ impl WebSocketProvider for SystemWebSocket {
             let port = parsed
                 .port_or_known_default()
                 .ok_or_else(|| err("WebSocket URL has no port"))?;
+            // Before the upgrade request is built and before anything is sent.
+            if let Some(allow) = &this.allow {
+                allow.check(&host, port, "WebSocket connect")?;
+            }
 
             // Build the upgrade request, carrying any offered subprotocols.
             let mut request = url.as_str().into_client_request().map_err(err)?;
@@ -684,5 +700,43 @@ mod tests {
             .unwrap();
         server.await.unwrap();
         assert!(client.recv(id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_refuses_a_url_outside_the_allowlist() {
+        // Same list `fetch` and `runtime:net` consult — one capability, one
+        // policy, whichever API the guest reached for. Nothing is listening on
+        // the refused address: the check precedes the socket.
+        let client = SystemWebSocket::new()
+            .with_allowlist(crate::HostAllowlist::parse(["chat.example.com:443"]).unwrap());
+        let err = client
+            .connect("ws://evil.test:8080/".to_string(), vec![])
+            .await
+            .err()
+            .expect("a URL outside the list must be refused");
+        assert_eq!(
+            err.code(),
+            Some(es_runtime_common::ErrorCode::PermissionDenied)
+        );
+        assert!(err.to_string().contains("evil.test:8080"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn connect_permits_a_url_on_the_allowlist() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            echo(ws).await;
+        });
+        let client = SystemWebSocket::new()
+            .with_allowlist(crate::HostAllowlist::parse([format!("127.0.0.1:{port}")]).unwrap());
+        let (id, _) = client
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .expect("the allowed address connects");
+        client.close(id, None, String::new()).await.unwrap();
+        server.await.unwrap();
     }
 }
