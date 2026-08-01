@@ -75,6 +75,20 @@ Permissions are **coarse**: scoping to paths or hosts is not implemented, and a
 value (`--allow-net=example.com`) is rejected rather than ignored — a run must
 never be narrower on the command line than it is in reality.
 
+The [argument grammar](/api/cli#argument-grammar) is enforced for the same
+reason. Each of these is an error, not a warning:
+
+| Written | Why it fails |
+| --- | --- |
+| `--allow-net=example.com` | Scoping is unimplemented; the value would be ignored |
+| `--allow-net example.com` | A value never attaches as a separate word |
+| `esrun app.js --deny-net` | After the script it restricts nothing (`--` opts out) |
+| `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
+| `--allow-ffi` | Not one of the eight |
+
+A sandbox that silently isn't one is worse than no sandbox, so the parser never
+guesses what a malformed flag meant.
+
 Ask from JS:
 
 ```js

@@ -72,3 +72,14 @@ esrun -e='console.log(await Promise.resolve(42))'
 # Pass arguments through to the script
 esrun app.js --name Ada
 ```
+
+Two rules cover every flag:
+
+| | |
+| --- | --- |
+| `--flag` or `--flag=value` | A value is never a separate word — `--timeout=500`, not `--timeout 500` |
+| esrun's flags come first | Everything after the script belongs to the script |
+
+Both are enforced, not conventions: a value arriving as a separate word would be
+indistinguishable from the script path, and a flag written after the script would
+silently do nothing. Details: [esrun CLI](/api/cli#argument-grammar).
