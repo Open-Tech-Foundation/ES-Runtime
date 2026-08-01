@@ -273,26 +273,15 @@ fn allowing_everything_back_is_the_same_as_no_flags() {
 // ---- parser strictness -------------------------------------------------------
 
 #[test]
-fn a_value_on_a_permission_flag_that_cannot_enforce_it_is_rejected_not_ignored() {
-    // The dangerous case, and the rule that outlives each capability that gains
-    // scoping: accepting and ignoring the value would leave the user believing
-    // the run is scoped when that capability is wide open.
-    let out = run(&["--deny-all", "--allow-imports=./lib"], "console.log(1)");
+fn a_value_on_a_flag_that_takes_none_is_named_not_swallowed() {
+    // Every permission name is scopable now, so the flag that still has to
+    // reject a value is one that could never carry one. The rejection path for
+    // an unenforceable *permission* value stays in the parser for the next
+    // capability that lands (see `Permissions::record`).
+    let out = run(&["--env-override=yes"], "console.log(1)");
     assert!(!out.status.success());
     let s = stderr(&out);
-    assert!(s.contains("--allow-imports takes no value"), "{s}");
-    assert!(s.contains("not implemented yet"), "{s}");
-}
-
-#[test]
-fn an_empty_value_on_a_no_value_flag_is_rejected() {
-    let out = run(&["--deny-all", "--allow-imports="], "console.log(1)");
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("--allow-imports takes no value"),
-        "stderr: {}",
-        stderr(&out)
-    );
+    assert!(s.contains("--env-override takes no value"), "{s}");
 }
 
 #[test]
@@ -803,6 +792,77 @@ fn a_path_list_narrows_the_root_jail_and_never_widens_it() {
     );
 }
 
+#[test]
+fn allow_imports_admits_named_packages_and_paths_and_refuses_the_rest() {
+    let root = temp("scoped_imports");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("vendor")).unwrap();
+    std::fs::write(root.join("package.json"), r#"{"name":"t","type":"module"}"#).unwrap();
+    std::fs::write(root.join("src/lib.mjs"), "export const v = 1;").unwrap();
+    std::fs::write(root.join("vendor/x.mjs"), "export const v = 2;").unwrap();
+    for name in ["good", "evil"] {
+        let pkg = root.join("node_modules").join(name);
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            format!(r#"{{"name":"{name}","type":"module","main":"index.js"}}"#),
+        )
+        .unwrap();
+        std::fs::write(pkg.join("index.js"), format!("export const n = '{name}';")).unwrap();
+    }
+    let root = std::fs::canonicalize(&root).unwrap();
+    std::fs::write(
+        root.join("app.mjs"),
+        "import { v } from './src/lib.mjs'; \
+         import { n } from 'good'; \
+         console.log('loaded', v, n); \
+         try { await import('./vendor/x.mjs'); console.log('NO THROW'); } \
+         catch (e) { console.log('path refused'); } \
+         try { await import('evil'); console.log('NO THROW'); } \
+         catch (e) { console.log('package refused'); }",
+    )
+    .unwrap();
+
+    let out = esrun()
+        .current_dir(&root)
+        .args(["--deny-all", "--allow-imports=./src,good"])
+        .arg("app.mjs")
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    // The entry file is exempt — it is read before a loader exists, and the
+    // user named it.
+    assert!(s.contains("loaded 1 good"), "{s}");
+    assert!(s.contains("path refused"), "{s}");
+    assert!(s.contains("package refused"), "{s}");
+}
+
+#[test]
+fn allow_signals_narrows_what_may_be_watched_and_what_is_reported() {
+    // A watch suppresses the signal's default action, so the list decides which
+    // deaths the program may decline. `signals()` reports only what it may use.
+    let out = run(
+        &["--deny-all", "--allow-signals=SIGTERM"],
+        "import { signals, onSignal, offSignal } from 'runtime:process';          console.log('available', signals().join(','));          const noop = () => {};          onSignal('SIGTERM', noop); console.log('watched SIGTERM');          try { onSignal('SIGINT', noop); console.log('NO THROW'); }          catch (e) { console.log('refused', e.code); }          offSignal('SIGTERM', noop);",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    assert!(s.contains("available SIGTERM"), "{s}");
+    assert!(s.contains("watched SIGTERM"), "{s}");
+    assert!(s.contains("refused ERR_PERMISSION_DENIED"), "{s}");
+}
+
+#[test]
+fn an_unknown_signal_name_in_a_scope_list_is_an_argument_error() {
+    let out = run(&["--deny-all", "--allow-signals=SIGFOO"], "console.log(1)");
+    assert!(!out.status.success());
+    let s = stderr(&out);
+    assert!(s.contains("SIGFOO is not a signal name"), "{s}");
+    assert!(s.contains("SIGTERM"), "{s}");
+}
+
 // ---- the value grammar (D38) -------------------------------------------------
 
 #[test]
@@ -878,13 +938,30 @@ fn a_denial_takes_no_scope_list() {
 }
 
 #[test]
-fn scoping_an_unimplemented_capability_is_rejected_and_says_what_works() {
-    let out = run(&["--deny-all", "--allow-signals=SIGINT"], "console.log(1)");
-    assert!(!out.status.success());
-    let s = stderr(&out);
-    assert!(s.contains("Scoping signals is not implemented yet"), "{s}");
-    assert!(s.contains("--allow-read=<list>"), "{s}");
-    assert!(s.contains("--allow-net=<list>"), "{s}");
+fn every_permission_name_now_takes_a_scope_list() {
+    // The rejection path is kept (see `record`), but nothing exercises it any
+    // more: all eight names are scopable. If a ninth capability lands without
+    // enforcement, its value must be rejected — this test is here to be the
+    // thing that fails when someone adds one and wires the flag anyway.
+    for name in [
+        "read", "write", "imports", "net", "listen", "env", "run", "signals",
+    ] {
+        let value = match name {
+            "net" | "listen" => "127.0.0.1:9",
+            "signals" => "SIGTERM",
+            "read" | "write" | "imports" => ".",
+            _ => "X",
+        };
+        let out = run(
+            &["--deny-all", &format!("--allow-{name}={value}")],
+            "console.log('ran')",
+        );
+        assert!(
+            out.status.success(),
+            "--allow-{name}={value} should be accepted: {}",
+            stderr(&out)
+        );
+    }
 }
 
 #[test]

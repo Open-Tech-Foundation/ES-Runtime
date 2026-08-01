@@ -40,9 +40,9 @@ use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, 
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    HostAllowlist, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport, SystemClock,
-    SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
-    SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
+    HostAllowlist, ImportAllowlist, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport,
+    SystemClock, SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess,
+    SystemSignals, SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, Signal};
 use url::Url;
@@ -472,8 +472,18 @@ fn scope_hint(cap: Capability) -> Option<&'static str> {
         Capability::FileRead | Capability::FileWrite => {
             Some("paths, e.g. --allow-read=./data,/etc/ssl/certs")
         }
+        Capability::FileSystem => Some("packages and paths, e.g. --allow-imports=./src,lodash"),
+        Capability::Signals => Some("signal names, e.g. --allow-signals=SIGTERM,SIGINT"),
         _ => None,
     }
+}
+
+/// The signal list for `--allow-signals`, or `None` if `signals` was granted
+/// whole. Names were validated when the flag was parsed.
+fn signal_scope(scopes: &Scopes) -> Option<Vec<Signal>> {
+    scopes
+        .get(&Capability::Signals)
+        .map(|names| names.iter().filter_map(|n| Signal::from_name(n)).collect())
 }
 
 /// The path list for `cap`, resolved against `base` — the working directory the
@@ -609,6 +619,20 @@ impl Permissions {
                              Bracket an IPv6 address that carries a port: `[::1]:8080`."
                         )
                     })?;
+                }
+                if cap == Capability::Signals {
+                    // A name this runtime does not know would watch nothing, and
+                    // read as protection that is not there.
+                    for entry in &entries {
+                        if Signal::from_name(entry).is_none() {
+                            return Err(format!(
+                                "{flag}: {entry} is not a signal name.\n\n\
+                                 Expected one of: SIGINT, SIGTERM, SIGHUP, SIGUSR1, SIGUSR2, \
+                                 SIGBREAK (what this platform can deliver is reported by \
+                                 `signals()` from runtime:process)."
+                            ));
+                        }
+                    }
                 }
                 Some(entries)
             }
@@ -1164,7 +1188,13 @@ async fn run() -> Result<(), String> {
     // Held here as well as in the providers: the interrupt watcher below needs
     // to ask the signal registry what the guest is watching, and to tell the
     // HTTP servers to stop accepting.
-    let signals = Arc::new(SystemSignals::new());
+    // `--allow-signals=<names>` narrows which signals may be watched. A watch
+    // suppresses the default action, so this is the privilege to decline to die
+    // on request, granted one signal at a time.
+    let signals = Arc::new(match signal_scope(&config.scopes) {
+        Some(names) => SystemSignals::new().with_allowlist(names),
+        None => SystemSignals::new(),
+    });
     let http_server = Arc::new(match allow_listen.clone() {
         Some(allow) => SystemHttpServer::new().with_listen_allowlist(allow),
         None => SystemHttpServer::new(),
@@ -1206,9 +1236,17 @@ async fn run() -> Result<(), String> {
     // entry's directory, from which it detects the sandbox root (the project
     // root containing node_modules/package.json) — resolution is jailed under it
     // by default (D25). Held behind an Arc so dynamic import() can reach it.
-    let loader: Arc<dyn ModuleLoader> = Arc::new(
-        NodeModuleLoader::with_base_dir(&base_dir).map_err(|e| format!("module loader: {e}"))?,
-    );
+    // `--allow-imports=<list>` narrows what the loader will resolve to named
+    // packages and paths (D38). The entry file is unaffected — it is read
+    // before a loader exists, and the user named it on the command line.
+    let mut loader_impl =
+        NodeModuleLoader::with_base_dir(&base_dir).map_err(|e| format!("module loader: {e}"))?;
+    if let Some(entries) = config.scopes.get(&Capability::FileSystem) {
+        let allow = ImportAllowlist::parse(entries, &flag_dir)
+            .map_err(|e| format!("--allow-imports: {e}"))?;
+        loader_impl = loader_impl.with_allowlist(allow);
+    }
+    let loader: Arc<dyn ModuleLoader> = Arc::new(loader_impl);
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.
