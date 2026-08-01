@@ -11,13 +11,14 @@
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use es_runtime_providers::{
     DirEntry, FileStat, ProviderError, SyncFd, SyncFileSystem, SyncOpenOptions, SyncWhence,
 };
 
 use crate::path;
+use crate::path_allowlist::{Access, PathAllowlist};
 use crate::system_fs::{confine, file_stat};
 
 /// What a handle refers to. A directory is kept as a path rather than an OS
@@ -37,6 +38,13 @@ pub struct SystemSyncFileSystem {
     /// practice (the runtime drives one thread).
     open: Mutex<HashMap<SyncFd, Handle>>,
     next_fd: Mutex<SyncFd>,
+    /// Paths reads / writes may touch (`--allow-read` / `--allow-write`, D38).
+    /// `None` ⇒ anywhere inside the root jail. The same lists the async
+    /// filesystem holds: `runtime:fs` and `runtime:wasi` are two doors onto one
+    /// filesystem, and a policy that differed between them would be a bug
+    /// wearing a feature's clothes.
+    allow_read: Option<Arc<PathAllowlist>>,
+    allow_write: Option<Arc<PathAllowlist>>,
 }
 
 impl SystemSyncFileSystem {
@@ -50,20 +58,49 @@ impl SystemSyncFileSystem {
             root,
             open: Mutex::new(HashMap::new()),
             next_fd: Mutex::new(1),
+            allow_read: None,
+            allow_write: None,
+        }
+    }
+
+    /// Restricts reads to `allow` — `esrun --allow-read=<paths>` (D38).
+    #[must_use]
+    pub fn with_read_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.allow_read = Some(Arc::new(allow));
+        self
+    }
+
+    /// Restricts writes to `allow` — `esrun --allow-write=<paths>` (D38).
+    #[must_use]
+    pub fn with_write_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.allow_write = Some(Arc::new(allow));
+        self
+    }
+
+    /// Applies the scope list to an already-resolved path — after
+    /// canonicalization, never before, or a symlink walks out of the list.
+    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, ProviderError> {
+        let list = match access {
+            Access::Read => self.allow_read.as_deref(),
+            Access::Write => self.allow_write.as_deref(),
+        };
+        match list {
+            Some(allow) => allow.check(&real, access).map(|()| real),
+            None => Ok(real),
         }
     }
 
     /// Resolves `p` against `base` and confines it to `root`. Re-canonicalizes on
     /// every call, exactly as the async jail does: caching a validated path would
     /// let a later symlink swap escape it.
-    fn jailed(&self, p: &str) -> Result<PathBuf, ProviderError> {
+    fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
         let raw = Path::new(p);
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        confine(&abs, &self.root)
+        self.scoped(confine(&abs, &self.root)?, access)
     }
 
     /// Runs `f` against the handle for `fd`, holding the table lock for the call.
@@ -101,7 +138,18 @@ fn io(p: &str, e: std::io::Error) -> ProviderError {
 
 impl SyncFileSystem for SystemSyncFileSystem {
     fn open(&self, path: &str, options: SyncOpenOptions) -> Result<SyncFd, ProviderError> {
-        let resolved = self.jailed(path)?;
+        // The access an open needs is the access it asks for, and a handle
+        // opened for both needs both — the later `read`/`write` calls have only
+        // an fd to go on, so this is the one place the path is still known.
+        let writes = options.write
+            || options.append
+            || options.truncate
+            || options.create
+            || options.create_new;
+        let resolved = self.jailed(path, if writes { Access::Write } else { Access::Read })?;
+        if writes && options.read {
+            self.scoped(resolved.clone(), Access::Read)?;
+        }
         let display = resolved.display().to_string();
 
         let handle = if options.directory {
@@ -179,14 +227,14 @@ impl SyncFileSystem for SystemSyncFileSystem {
     }
 
     fn stat(&self, path: &str) -> Result<FileStat, ProviderError> {
-        let resolved = self.jailed(path)?;
+        let resolved = self.jailed(path, Access::Read)?;
         let meta =
             std::fs::metadata(&resolved).map_err(|e| io(&resolved.display().to_string(), e))?;
         Ok(file_stat(&meta))
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<DirEntry>, ProviderError> {
-        let resolved = self.jailed(path)?;
+        let resolved = self.jailed(path, Access::Read)?;
         let display = resolved.display().to_string();
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&resolved).map_err(|e| io(&display, e))? {
@@ -203,23 +251,23 @@ impl SyncFileSystem for SystemSyncFileSystem {
     }
 
     fn mkdir(&self, path: &str) -> Result<(), ProviderError> {
-        let resolved = self.jailed(path)?;
+        let resolved = self.jailed(path, Access::Write)?;
         std::fs::create_dir(&resolved).map_err(|e| io(&resolved.display().to_string(), e))
     }
 
     fn remove_file(&self, path: &str) -> Result<(), ProviderError> {
-        let resolved = self.jailed(path)?;
+        let resolved = self.jailed(path, Access::Write)?;
         std::fs::remove_file(&resolved).map_err(|e| io(&resolved.display().to_string(), e))
     }
 
     fn remove_dir(&self, path: &str) -> Result<(), ProviderError> {
-        let resolved = self.jailed(path)?;
+        let resolved = self.jailed(path, Access::Write)?;
         std::fs::remove_dir(&resolved).map_err(|e| io(&resolved.display().to_string(), e))
     }
 
     fn rename(&self, from: &str, to: &str) -> Result<(), ProviderError> {
-        let from = self.jailed(from)?;
-        let to = self.jailed(to)?;
+        let from = self.jailed(from, Access::Write)?;
+        let to = self.jailed(to, Access::Write)?;
         std::fs::rename(&from, &to).map_err(|e| io(&from.display().to_string(), e))
     }
 }
@@ -234,6 +282,40 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let fs = SystemSyncFileSystem::new(&dir, &dir);
         (fs, dir)
+    }
+
+    #[test]
+    fn the_scope_lists_hold_for_wasi_too() {
+        // `runtime:fs` and `runtime:wasi` are two doors onto one filesystem, so
+        // the same lists apply — a WASI program is not a way around --allow-read.
+        let (_, dir) = fs_in("scoped");
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        std::fs::write(dir.join("data/ok.txt"), b"fine").unwrap();
+        std::fs::write(dir.join("secrets.env"), b"TOKEN=1").unwrap();
+        let fs = SystemSyncFileSystem::new(&dir, &dir)
+            .with_read_allowlist(PathAllowlist::parse(["data"], &dir).unwrap())
+            .with_write_allowlist(PathAllowlist::parse(["out"], &dir).unwrap());
+
+        let opts = SyncOpenOptions {
+            read: true,
+            ..Default::default()
+        };
+        assert!(fs.open("data/ok.txt", opts).is_ok());
+        let err = fs.open("secrets.env", opts).unwrap_err();
+        assert_eq!(
+            err.code(),
+            Some(es_runtime_common::ErrorCode::PermissionDenied)
+        );
+
+        // An open that creates is a write, wherever it points.
+        let creating = SyncOpenOptions {
+            write: true,
+            create: true,
+            ..Default::default()
+        };
+        assert!(fs.open("data/new.txt", creating).is_err());
+        assert!(fs.stat("secrets.env").is_err());
+        assert!(fs.mkdir("data/sub").is_err());
     }
 
     #[test]

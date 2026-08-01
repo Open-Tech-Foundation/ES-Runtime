@@ -7,6 +7,7 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use es_runtime_common::ErrorCode;
@@ -18,6 +19,7 @@ use tokio::io::AsyncWriteExt;
 use walkdir::WalkDir;
 
 use crate::path;
+use crate::path_allowlist::{Access, PathAllowlist};
 
 /// Compiles a glob pattern into a matcher plus a "negated" flag, covering the
 /// full conventional set: `?`, `*` (not crossing `/`), `**` (crossing), `[ab]`,
@@ -44,6 +46,12 @@ fn parse_glob(pattern: &str) -> Result<(globset::GlobMatcher, bool), ProviderErr
 pub struct SystemFileSystem {
     base: PathBuf,
     root: PathBuf,
+    /// Paths reads may touch (`--allow-read=<paths>`). `None` ⇒ anywhere inside
+    /// the root jail, which is the grant's own outer bound.
+    allow_read: Option<Arc<PathAllowlist>>,
+    /// Paths writes may touch (`--allow-write=<paths>`). `None` ⇒ anywhere
+    /// inside the root jail.
+    allow_write: Option<Arc<PathAllowlist>>,
 }
 
 impl SystemFileSystem {
@@ -55,6 +63,45 @@ impl SystemFileSystem {
         SystemFileSystem {
             base: base.as_ref().to_path_buf(),
             root,
+            allow_read: None,
+            allow_write: None,
+        }
+    }
+
+    /// Restricts reads to `allow` — `esrun --allow-read=<paths>` (D38). Narrows
+    /// the root jail; it never widens it, so a path outside the root stays
+    /// unreachable whatever the list says.
+    #[must_use]
+    pub fn with_read_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.allow_read = Some(Arc::new(allow));
+        self
+    }
+
+    /// Restricts writes to `allow` — `esrun --allow-write=<paths>` (D38).
+    #[must_use]
+    pub fn with_write_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.allow_write = Some(Arc::new(allow));
+        self
+    }
+
+    /// The list for `access`, if one was set.
+    fn allowlist(&self, access: Access) -> Option<&PathAllowlist> {
+        match access {
+            Access::Read => self.allow_read.as_deref(),
+            Access::Write => self.allow_write.as_deref(),
+        }
+    }
+
+    /// Applies the scope list to an **already-resolved** path.
+    ///
+    /// After canonicalization and never before: a symlink is a name for a file
+    /// elsewhere, so judging the name the guest wrote would let
+    /// `--allow-read=./data` admit `./data/link-to-etc/passwd` — the hole the
+    /// root jail exists to close, reopened one level in.
+    fn scoped(&self, real: PathBuf, access: Access) -> Result<PathBuf, ProviderError> {
+        match self.allowlist(access) {
+            Some(allow) => allow.check(&real, access).map(|()| real),
+            None => Ok(real),
         }
     }
 
@@ -71,11 +118,11 @@ impl SystemFileSystem {
     /// when empty. Deliberately *not* the OS temp directory — that lives outside
     /// the root jail, so writing there would be the one filesystem call that
     /// escapes it.
-    fn temp_base(&self, dir: &str) -> Result<PathBuf, ProviderError> {
+    fn temp_base(&self, dir: &str, access: Access) -> Result<PathBuf, ProviderError> {
         if dir.is_empty() {
-            confine(&self.base.clone(), &self.root)
+            self.scoped(confine(&self.base.clone(), &self.root)?, access)
         } else {
-            self.jailed(dir)
+            self.jailed(dir, access)
         }
     }
 
@@ -87,7 +134,7 @@ impl SystemFileSystem {
     /// is being asked about, so it would read the target's target — or, for a
     /// link to a regular file, fail with `EINVAL`. The parent is still fully
     /// resolved and jailed, so the link being read is provably inside the root.
-    fn jailed_nofollow(&self, p: &str) -> Result<PathBuf, ProviderError> {
+    fn jailed_nofollow(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
         let raw = Path::new(p);
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
@@ -97,19 +144,19 @@ impl SystemFileSystem {
         let (parent, name) = match (abs.parent(), abs.file_name()) {
             (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
             // No final component to hold back (a bare root); fall through.
-            _ => return confine(&abs, &self.root),
+            _ => return self.scoped(confine(&abs, &self.root)?, access),
         };
-        Ok(confine(&parent, &self.root)?.join(name))
+        self.scoped(confine(&parent, &self.root)?.join(name), access)
     }
 
-    fn jailed(&self, p: &str) -> Result<PathBuf, ProviderError> {
+    fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
         let raw = Path::new(p);
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        confine(&abs, &self.root)
+        self.scoped(confine(&abs, &self.root)?, access)
     }
 }
 
@@ -187,7 +234,7 @@ fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
 
 impl FileSystem for SystemFileSystem {
     fn read(&self, path: String) -> BoxFuture<Result<Vec<u8>, ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Read);
         if let Ok(p) = &resolved
             && let Ok(md) = std::fs::metadata(p)
             && md.len() < 64 * 1024
@@ -208,7 +255,7 @@ impl FileSystem for SystemFileSystem {
         data: Vec<u8>,
         append: bool,
     ) -> BoxFuture<Result<u64, ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Write);
         let len = data.len() as u64;
 
         if let Ok(p) = &resolved
@@ -247,7 +294,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn stat(&self, path: String) -> BoxFuture<Result<FileStat, ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Read);
         if let Ok(p) = &resolved
             && let Ok(md) = std::fs::metadata(p)
         {
@@ -280,7 +327,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn exists(&self, path: String) -> BoxFuture<Result<bool, ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Read);
         if let Ok(p) = &resolved {
             return Box::pin(std::future::ready(
                 p.try_exists().map_err(|e| other(&path, e)),
@@ -290,7 +337,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn read_dir(&self, path: String) -> BoxFuture<Result<Vec<DirEntry>, ProviderError>> {
-        let p = match self.jailed(&path) {
+        let p = match self.jailed(&path, Access::Read) {
             Ok(p) => p,
             // Propagate the jail-escape error, like read/write/stat.
             Err(e) => return Box::pin(std::future::ready(Err(e))),
@@ -313,7 +360,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Write);
         Box::pin(async move {
             let p = resolved?;
             if recursive {
@@ -326,7 +373,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn remove(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Write);
         Box::pin(async move {
             let p = resolved?;
             let md = tokio::fs::symlink_metadata(&p)
@@ -346,8 +393,8 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn rename(&self, from: String, to: String) -> BoxFuture<Result<(), ProviderError>> {
-        let from_r = self.jailed(&from);
-        let to_r = self.jailed(&to);
+        let from_r = self.jailed(&from, Access::Write);
+        let to_r = self.jailed(&to, Access::Write);
         Box::pin(async move {
             let (a, b) = (from_r?, to_r?);
             tokio::fs::rename(&a, &b).await.map_err(|e| other(&from, e))
@@ -355,8 +402,8 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn copy(&self, from: String, to: String) -> BoxFuture<Result<u64, ProviderError>> {
-        let from_r = self.jailed(&from);
-        let to_r = self.jailed(&to);
+        let from_r = self.jailed(&from, Access::Read);
+        let to_r = self.jailed(&to, Access::Write);
         Box::pin(async move {
             let (a, b) = (from_r?, to_r?);
             tokio::fs::copy(&a, &b).await.map_err(|e| other(&from, e))
@@ -364,7 +411,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn real_path(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Read);
         let root = self.root.clone();
         Box::pin(async move {
             let p = resolved?;
@@ -382,7 +429,7 @@ impl FileSystem for SystemFileSystem {
 
     fn read_link(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
         // Not `jailed`: that would resolve the link being asked about.
-        let resolved = self.jailed_nofollow(&path);
+        let resolved = self.jailed_nofollow(&path, Access::Read);
         Box::pin(async move {
             let p = resolved?;
             // The stored target, verbatim — it may be relative, and may not
@@ -397,7 +444,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn truncate(&self, path: String, len: u64) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Write);
         Box::pin(async move {
             let p = resolved?;
             let file = tokio::fs::OpenOptions::new()
@@ -410,7 +457,7 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn chmod(&self, path: String, mode: u32) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path);
+        let resolved = self.jailed(&path, Access::Write);
         Box::pin(async move {
             let p = resolved?;
             #[cfg(unix)]
@@ -442,7 +489,7 @@ impl FileSystem for SystemFileSystem {
         dir: String,
         prefix: String,
     ) -> BoxFuture<Result<String, ProviderError>> {
-        let resolved = self.temp_base(&dir);
+        let resolved = self.temp_base(&dir, Access::Write);
         Box::pin(async move {
             let base = resolved?;
             // Built by tempfile, so the name is unpredictable: a guessable temp
@@ -463,7 +510,7 @@ impl FileSystem for SystemFileSystem {
         dir: String,
         prefix: String,
     ) -> BoxFuture<Result<String, ProviderError>> {
-        let resolved = self.temp_base(&dir);
+        let resolved = self.temp_base(&dir, Access::Write);
         Box::pin(async move {
             let base = resolved?;
             let made = tempfile::Builder::new()
@@ -486,8 +533,9 @@ impl FileSystem for SystemFileSystem {
         pattern: String,
         opts: GlobScanOptions,
     ) -> BoxFuture<Result<Vec<String>, ProviderError>> {
-        let resolved = self.jailed(&base);
+        let resolved = self.jailed(&base, Access::Read);
         let root = self.root.clone();
+        let allow_read = self.allow_read.clone();
         Box::pin(async move {
             let base_real = resolved?;
             let (matcher, negated) = parse_glob(&pattern)?;
@@ -503,10 +551,16 @@ impl FileSystem for SystemFileSystem {
                 }
                 if opts.follow_symlinks
                     && path::canonicalize(path)
-                        .map(|real| !path::within_root(&real, &root))
+                        .map(|real| {
+                            // A followed link may leave the jail, or stay inside
+                            // it but leave the scope list — listing a name is a
+                            // read either way.
+                            !path::within_root(&real, &root)
+                                || allow_read.as_ref().is_some_and(|a| !a.permits(&real))
+                        })
                         .unwrap_or(false)
                 {
-                    continue; // a followed link left the jail
+                    continue; // a followed link left what this run may read
                 }
                 let rel = path.strip_prefix(&base_real).unwrap_or(path);
                 let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -532,6 +586,87 @@ impl FileSystem for SystemFileSystem {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// A jail whose reads are scoped to `data/` and writes to `out/`.
+    fn scoped_jail(name: &str) -> (std::path::PathBuf, SystemFileSystem) {
+        let (root, _) = jail(name);
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        let fs = SystemFileSystem::new(&root, &root)
+            .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap())
+            .with_write_allowlist(PathAllowlist::parse(["out"], &root).unwrap());
+        (root, fs)
+    }
+
+    #[tokio::test]
+    async fn a_read_outside_the_read_list_is_refused() {
+        let (root, fs) = scoped_jail("scoped-read");
+        std::fs::write(root.join("data/ok.txt"), b"fine").unwrap();
+        std::fs::write(root.join("secrets.env"), b"TOKEN=1").unwrap();
+        assert_eq!(fs.read("data/ok.txt".into()).await.unwrap(), b"fine");
+        let err = fs.read("secrets.env".into()).await.unwrap_err();
+        // A scoped denial, not a jail escape: the path is inside the root, it
+        // is simply not one this run may read.
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_write_outside_the_write_list_is_refused() {
+        let (root, fs) = scoped_jail("scoped-write");
+        fs.write("out/report.json".into(), b"{}".to_vec(), false)
+            .await
+            .unwrap();
+        let err = fs
+            .write("data/ok.txt".into(), b"x".to_vec(), false)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+        // Nothing was created on the refused path: the check precedes the open.
+        assert!(!root.join("data/ok.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn read_and_write_are_separate_lists() {
+        // Being allowed to write somewhere is not being allowed to read it.
+        let (root, fs) = scoped_jail("scoped-separate");
+        std::fs::write(root.join("out/written.txt"), b"x").unwrap();
+        assert!(fs.read("out/written.txt".into()).await.is_err());
+        assert!(
+            fs.write("data/x.txt".into(), b"x".to_vec(), false)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_symlink_cannot_walk_out_of_the_read_list() {
+        // The whole reason the check runs after canonicalization: the name
+        // `data/escape/secrets.env` is inside the list, the file is not.
+        let (root, fs) = scoped_jail("scoped-symlink");
+        std::fs::write(root.join("secrets.env"), b"TOKEN=1").unwrap();
+        std::os::unix::fs::symlink(&root, root.join("data/escape")).unwrap();
+        let err = fs.read("data/escape/secrets.env".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_scope_list_narrows_the_jail_and_never_widens_it() {
+        // An entry outside the root is not a way out of it: the jail check runs
+        // first, and its refusal is the one reported.
+        let (root, _) = jail("scoped-outside");
+        let outside = root.parent().unwrap().to_path_buf();
+        let fs = SystemFileSystem::new(&root, &root)
+            .with_read_allowlist(PathAllowlist::parse([outside.to_string_lossy()], &root).unwrap());
+        let err = fs.read("../anything.txt".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_unscoped_filesystem_reaches_the_whole_jail() {
+        let (root, fs) = jail("unscoped");
+        std::fs::write(root.join("anywhere.txt"), b"ok").unwrap();
+        assert_eq!(fs.read("anywhere.txt".into()).await.unwrap(), b"ok");
+    }
 
     /// A fresh empty jail rooted at its own temp directory, plus a `SystemFileSystem`
     /// based there. Named per test so cases cannot collide.
@@ -674,7 +809,7 @@ mod tests {
         let fs = SystemFileSystem::new(&root, &root);
 
         // "link" does not exist yet -> resolves under the (existing) root.
-        let first = fs.jailed("link");
+        let first = fs.jailed("link", Access::Read);
         assert!(first.is_ok(), "should resolve before the symlink exists");
 
         // Now "link" becomes a symlink pointing outside the jail.
@@ -682,7 +817,7 @@ mod tests {
 
         // A second resolution must re-canonicalize and reject the escape,
         // carrying the stable jail-escape code (SPEC §6 Phase 13).
-        let second = fs.jailed("link");
+        let second = fs.jailed("link", Access::Read);
         assert!(
             matches!(
                 second,
