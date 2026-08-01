@@ -67,7 +67,7 @@ Prefer to build from source? See the
 esrun app.js
 
 # Evaluate an inline snippet (top-level await is supported)
-esrun -e "console.log(await Promise.resolve(42))"
+esrun -e='console.log(await Promise.resolve(42))'
 
 # Pass arguments through to the script
 esrun app.js --name Ada

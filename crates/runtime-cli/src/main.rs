@@ -14,9 +14,14 @@
 //! (ES module packages only — CommonJS packages and `node:` builtins are
 //! rejected; nothing is installed).
 //!
+//! Argument grammar: every flag is `--flag` or `--flag=value` — a value is never
+//! a separate argument — and esrun's flags come **before** the script, since
+//! everything after it belongs to the script.
+//!
 //! ```text
-//! esrun script.mjs           # run a module file
-//! esrun -e "console.log(1)"  # run an inline module snippet
+//! esrun script.mjs            # run a module file
+//! esrun -e='console.log(1)'   # run an inline module snippet
+//! esrun --timeout=500 app.js  # values attach with '='
 //! esrun --version | --help
 //! ```
 
@@ -44,25 +49,28 @@ use url::Url;
 const USAGE: &str = "\
 esrun — run JavaScript (ES modules) on the ES-Runtime
 
+Every flag is either `--flag` or `--flag=value`. A value is never a separate
+argument: `--timeout=500`, not `--timeout 500`.
+
 USAGE:
-    esrun <file>             Run a JavaScript module file
-    esrun -e <code>          Run an inline module snippet
-    esrun --deny-all         Run with no host access at all (secure mode)
-    esrun --deny-<name>      Deny one capability; repeatable
-    esrun --allow-<name>     Grant one back; requires --deny-all; repeatable
-                             <name> is one of: read, write, imports, net,
-                             listen, env, run, signals
-    esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog, SPEC §4)
-    esrun --env-file <path>  Load env vars from a .env file
-    esrun --env-override     Let --env-file values override the OS environment
-    esrun --shutdown-grace <ms>
-                             How long in-flight HTTP requests may finish after
-                             ^C/SIGTERM (default 10000)
-    esrun upgrade            Update esrun to the latest release
-    esrun types              Print the runtime: TypeScript definitions
-    esrun types --install    Install the definitions + wire up tsconfig.json
-    esrun -h, --help         Show this help
-    esrun -v, --version      Show the version
+    esrun <file>                Run a JavaScript module file
+    esrun -e=<code>             Run an inline module snippet
+    esrun --deny-all            Run with no host access at all (secure mode)
+    esrun --deny-<name>         Deny one capability; repeatable
+    esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
+                                <name> is one of: read, write, imports, net,
+                                listen, env, run, signals
+    esrun -t=<ms>, --timeout=<ms>
+                                Stop execution after <ms> ms (watchdog, SPEC §4)
+    esrun --env-file=<path>     Load env vars from a .env file
+    esrun --env-override        Let --env-file values override the OS environment
+    esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
+                                ^C/SIGTERM (default 10000)
+    esrun upgrade               Update esrun to the latest release
+    esrun types                 Print the runtime: TypeScript definitions
+    esrun types --install       Install the definitions + wire up tsconfig.json
+    esrun -h, --help            Show this help
+    esrun -v, --version         Show the version
 
 Inputs run as ES modules: import/export and top-level await work. Imports
 resolve as local files (relative/absolute paths or file: URLs) and as bare
@@ -88,7 +96,10 @@ from runtime:process.
 
 Permission flags take no value — scoping to paths/hosts is not implemented, and
 `--allow-net=host` is rejected rather than ignored. They must also come before
-the script; after it they would be the script's own arguments.";
+the script; after it they would be the script's own arguments.
+
+Everything after <file> (or the -e code) belongs to the script, readable as
+`args` from runtime:process.";
 
 /// The V8 startup snapshot with the prelude baked in, built by build.rs.
 static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
@@ -496,13 +507,9 @@ impl Permissions {
     }
 }
 
-/// Splits `--flag=value` into its parts, rejecting the forms that would
-/// otherwise be silently misread.
-///
-/// Permission flags take **no value yet** — scoping (`--allow-net=host:port`) is
-/// not implemented. Accepting and ignoring one would be the worst possible
-/// outcome: the user believes the run is scoped when it is wide open. So a
-/// value is a hard error rather than a shrug.
+/// Splits `--flag=value` into its parts. A flag with no `=` yields `None`, which
+/// is distinct from `--flag=` (an empty value) — the latter is a mistake worth
+/// naming rather than treating as absent.
 fn split_flag_value(arg: &str) -> (&str, Option<&str>) {
     match arg.split_once('=') {
         Some((flag, value)) => (flag, Some(value)),
@@ -510,23 +517,48 @@ fn split_flag_value(arg: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Rejects a value attached to a permission flag, explaining what the flag does
-/// grant so the user is not left guessing.
-fn reject_flag_value(flag: &str, value: &str) -> String {
-    if value.is_empty() {
-        return format!("{flag}= has an empty value; this flag takes no value");
+/// The value of a flag that requires one.
+///
+/// **The single grammar rule of this parser: a value attaches with `=`, never as
+/// the next argument.** `--timeout 500` is rejected, not read.
+///
+/// One rule for every flag is the whole point. Two — a space form here, an `=`
+/// form there — is how `--allow-net example.com app.js` silently runs
+/// `example.com` as the script and hands `app.js` to it as an argument. With one
+/// rule the parser never has to guess whether the next word belongs to the flag
+/// or is the script, so there is nothing to guess wrong.
+fn require_value<'a>(flag: &str, value: Option<&'a str>) -> Result<&'a str, String> {
+    match value {
+        Some(value) if !value.is_empty() => Ok(value),
+        Some(_) => Err(format!("{flag}= has an empty value — use `{flag}=<value>`")),
+        None => Err(format!(
+            "{flag} requires a value, attached with '=': use `{flag}=<value>`.\n\n\
+             A value is never a separate word: `{flag} <value>` would leave <value> \
+             to be mistaken for the script to run."
+        )),
     }
-    // `--deny-all` is a mode switch, not a capability — scoping could never
-    // apply to it, so it gets the plain message rather than the roadmap one.
-    if flag == "--deny-all" {
-        return format!("{flag} takes no value (got {flag}={value})");
+}
+
+/// Rejects a value on a flag that takes none.
+fn reject_value(flag: &str, value: Option<&str>) -> Result<(), String> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    // Permission flags are the ones a reader might reasonably expect to be
+    // scopable, so they explain themselves; everything else is a plain mistake.
+    if flag.starts_with("--deny-") || flag.starts_with("--allow-") {
+        if flag == "--deny-all" {
+            // A mode switch, not a capability — scoping could never apply.
+            return Err(format!("{flag} takes no value (got {flag}={value})"));
+        }
+        return Err(format!(
+            "{flag} takes no value (got {flag}={value}).\n\n\
+             Scoping permissions to specific paths, hosts, or names is not implemented \
+             yet — {flag} is all-or-nothing. It is rejected rather than ignored so a run \
+             is never narrower on the command line than it is in reality."
+        ));
     }
-    format!(
-        "{flag} takes no value (got {flag}={value}).\n\n\
-         Scoping permissions to specific paths, hosts, or names is not implemented \
-         yet — {flag} is all-or-nothing. It is rejected rather than ignored so a run \
-         is never narrower on the command line than it is in reality."
-    )
+    Err(format!("{flag} takes no value (got {flag}={value})"))
 }
 
 /// How long a graceful shutdown waits for in-flight HTTP requests before giving
@@ -541,37 +573,26 @@ fn parse_args() -> Result<Config, String> {
     let mut env_override = false;
     let mut shutdown_grace = DEFAULT_SHUTDOWN_GRACE;
     let mut permissions = Permissions::default();
-    // Set when the previous argument was a permission flag, so a following bare
-    // token can be recognised as an attempted value (`--allow-net example.com`)
-    // rather than silently becoming the script path.
-    let mut after_permission_flag: Option<String> = None;
+    // The flag the previous argument was, so a bare word following it can be
+    // diagnosed as an attempted value rather than silently becoming the script.
+    let mut previous_flag: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        let previous_permission_flag = after_permission_flag.take();
-        // Reject a value on any flag that does not take one, before the match
-        // arms — `--deny-all=1` and `--timeout=500` must not fall through to the
-        // "unknown option" arm, which would hide what is actually wrong.
-        if let (flag, Some(value)) = split_flag_value(&arg)
-            && (flag.starts_with("--deny-") || flag.starts_with("--allow-"))
-        {
-            return Err(reject_flag_value(flag, value));
+        let preceding_flag = previous_flag.take();
+        // One grammar for every flag: `--flag` or `--flag=value`. Splitting here,
+        // once, is what makes that true — no arm reaches for the next argument.
+        let (flag, value) = split_flag_value(&arg);
+        if flag.starts_with('-') && flag.len() > 1 {
+            previous_flag = Some(flag.to_string());
         }
-        if let (flag, Some(_)) = split_flag_value(&arg)
-            && matches!(
-                flag,
-                "-t" | "--timeout" | "--env-file" | "--shutdown-grace" | "-e" | "--eval"
-            )
-        {
-            return Err(format!(
-                "{flag} takes its value as the next argument, not with '=' — use `{flag} <value>`"
-            ));
-        }
-        match arg.as_str() {
+        match flag {
             "-h" | "--help" => {
+                reject_value(flag, value)?;
                 println!("{USAGE}");
                 std::process::exit(0);
             }
             "types" => {
+                reject_value(flag, value)?;
                 if args.next().as_deref() == Some("--install") {
                     match install_types() {
                         Ok(msg) => print!("{msg}"),
@@ -586,6 +607,7 @@ fn parse_args() -> Result<Config, String> {
                 std::process::exit(0);
             }
             "upgrade" => {
+                reject_value(flag, value)?;
                 // `self_update` drives its own blocking HTTP runtime; running it
                 // inside this `#[tokio::main]` context would drop that runtime
                 // from within an async context and panic. Run it on a dedicated
@@ -603,37 +625,33 @@ fn parse_args() -> Result<Config, String> {
                 std::process::exit(0);
             }
             "-v" | "-V" | "--version" => {
+                reject_value(flag, value)?;
                 println!("esrun {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
             "-t" | "--timeout" => {
-                let ms = args
-                    .next()
-                    .ok_or_else(|| "-t/--timeout requires a millisecond value".to_string())?;
-                let ms: u64 = ms.parse().map_err(|_| {
-                    format!("invalid --timeout value: {ms} (expected milliseconds)")
-                })?;
+                let ms = require_value(flag, value)?;
+                let ms: u64 = ms
+                    .parse()
+                    .map_err(|_| format!("invalid {flag} value: {ms} (expected milliseconds)"))?;
                 timeout = Some(Duration::from_millis(ms));
             }
             "--env-file" => {
-                let path = args
-                    .next()
-                    .ok_or_else(|| "--env-file requires a path".to_string())?;
-                env_file = Some(path);
+                env_file = Some(require_value(flag, value)?.to_string());
             }
             "--env-override" => {
+                reject_value(flag, value)?;
                 env_override = true;
             }
             "--shutdown-grace" => {
-                let ms = args
-                    .next()
-                    .ok_or_else(|| "--shutdown-grace requires a millisecond value".to_string())?;
-                let ms: u64 = ms.parse().map_err(|_| {
-                    format!("invalid --shutdown-grace value: {ms} (expected milliseconds)")
-                })?;
+                let ms = require_value(flag, value)?;
+                let ms: u64 = ms
+                    .parse()
+                    .map_err(|_| format!("invalid {flag} value: {ms} (expected milliseconds)"))?;
                 shutdown_grace = Duration::from_millis(ms);
             }
             "--deny-all" => {
+                reject_value(flag, value)?;
                 permissions.all = true;
             }
             // A Deno habit, and it is the default here — say so rather than
@@ -648,11 +666,9 @@ fn parse_args() -> Result<Config, String> {
                 );
             }
             "-e" | "--eval" => {
-                let code = args
-                    .next()
-                    .ok_or_else(|| "-e/--eval requires a code argument".to_string())?;
+                let code = require_value(flag, value)?.to_string();
                 let rest: Vec<String> = args.collect();
-                reject_permission_flags_after_source(&rest, "the -e code")?;
+                reject_esrun_flags_after_source(&rest, "the -e code")?;
                 return Ok(Config {
                     source: Source::Inline(code),
                     timeout,
@@ -664,32 +680,33 @@ fn parse_args() -> Result<Config, String> {
                 });
             }
             flag if flag.starts_with("--deny-") || flag.starts_with("--allow-") => {
+                reject_value(flag, value)?;
                 let allow = flag.starts_with("--allow-");
                 let prefix = if allow { "--allow-" } else { "--deny-" };
                 let name = flag[prefix.len()..].to_string();
                 permissions.record(flag, &name, allow)?;
-                after_permission_flag = Some(flag.to_string());
             }
-            flag if flag.starts_with('-') => {
+            flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
             }
             path => {
-                // `--allow-net example.com app.js` would otherwise take
-                // `example.com` as the script and hand `app.js` to it as an
-                // argument — a confusing "cannot read" three steps from the
-                // cause. If the previous token was a permission flag and this
-                // one is not a file, say what actually happened.
-                if let Some(flag) = previous_permission_flag
+                // With one grammar there is nothing to guess: a bare word is the
+                // script. But `--deny-net example.com app.js` still *reads* like
+                // a value to whoever typed it, and would otherwise run
+                // `example.com` as the script with `app.js` as its argument — a
+                // "cannot read" three steps from the cause. Say what happened.
+                if let Some(flag) = preceding_flag
                     && !std::path::Path::new(path).exists()
                 {
                     return Err(format!(
-                        "cannot read {path}, and it follows {flag} — {flag} takes no value.\n\n\
-                         If {path} was meant as a value: scoping is not implemented yet, and \
-                         values would attach with '=' ({flag}=...), never as a separate word."
+                        "cannot read {path}, and it follows {flag}.\n\n\
+                         If {path} was meant as {flag}'s value, attach it with '=' \
+                         ({flag}={path}) — this parser never reads a value from the next \
+                         argument. Every flag is either `--flag` or `--flag=value`."
                     ));
                 }
                 let rest: Vec<String> = args.collect();
-                reject_permission_flags_after_source(&rest, path)?;
+                reject_esrun_flags_after_source(&rest, path)?;
                 return Ok(Config {
                     source: Source::File(path.to_string()),
                     timeout,
@@ -705,31 +722,54 @@ fn parse_args() -> Result<Config, String> {
     Err(format!("missing script argument\n\n{USAGE}"))
 }
 
-/// Rejects a permission flag that appears *after* the script, where it would be
-/// passed to the script as an ordinary argument and quietly do nothing.
+/// Whether `flag` is one esrun itself understands.
+fn is_esrun_flag(flag: &str) -> bool {
+    if matches!(
+        flag,
+        "-h" | "--help"
+            | "-v"
+            | "-V"
+            | "--version"
+            | "-t"
+            | "--timeout"
+            | "--env-file"
+            | "--env-override"
+            | "--shutdown-grace"
+            | "-e"
+            | "--eval"
+            | "--deny-all"
+            | "--allow-all"
+            | "-A"
+    ) {
+        return true;
+    }
+    ["--deny-", "--allow-"].iter().any(|prefix| {
+        flag.strip_prefix(prefix)
+            .is_some_and(|name| Capability::from_flag_name(name).is_some())
+    })
+}
+
+/// Rejects an esrun flag that appears *after* the script, where it is the
+/// script's own argument and does nothing to the run.
 ///
-/// Ignoring it is a security failure, not a style one: the user believes the run
-/// is sandboxed and it is not. `--` suppresses the check for a script that
-/// genuinely wants such an argument of its own.
-fn reject_permission_flags_after_source(args: &[String], source: &str) -> Result<(), String> {
+/// **Order is part of the grammar:** esrun's flags come before the script, and
+/// everything after it belongs to the script. That split is what lets a script
+/// have flags of its own without colliding with the runtime's — but it means a
+/// misplaced flag silently does nothing, which for `--deny-net` is a security
+/// failure and for the rest is a confusing no-op. `--` suppresses the check for
+/// a script that genuinely wants such an argument.
+fn reject_esrun_flags_after_source(args: &[String], source: &str) -> Result<(), String> {
     for arg in args {
         // Everything past `--` is the script's, verbatim and unexamined.
         if arg == "--" {
             return Ok(());
         }
         let (flag, _) = split_flag_value(arg);
-        let is_permission_flag = flag == "--deny-all"
-            || ((flag.starts_with("--deny-") || flag.starts_with("--allow-"))
-                && Capability::from_flag_name(
-                    flag.trim_start_matches("--deny-")
-                        .trim_start_matches("--allow-"),
-                )
-                .is_some());
-        if is_permission_flag {
+        if is_esrun_flag(flag) {
             return Err(format!(
-                "{arg} appears after {source}, where it is passed to the script and \
-                 restricts nothing.\n\n\
-                 Permission flags must come before the script: `esrun {arg} {source} ...`. \
+                "{arg} appears after {source}, where it is the script's own argument and \
+                 does nothing to the run.\n\n\
+                 esrun's flags come before the script: `esrun {arg} {source} ...`. \
                  If the script really wants this argument, separate it with `--`."
             ));
         }

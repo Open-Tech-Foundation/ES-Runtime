@@ -33,8 +33,7 @@ fn stderr(out: &Output) -> String {
 fn run(flags: &[&str], code: &str) -> Output {
     esrun()
         .args(flags)
-        .arg("-e")
-        .arg(code)
+        .arg(format!("-e={}", code))
         .output()
         .expect("spawn esrun")
 }
@@ -285,11 +284,22 @@ fn a_value_on_a_permission_flag_is_rejected_not_ignored() {
 }
 
 #[test]
-fn an_empty_value_is_rejected() {
+fn an_empty_value_on_a_no_value_flag_is_rejected() {
     let out = run(&["--deny-all", "--allow-net="], "console.log(1)");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("empty value"),
+        stderr(&out).contains("--allow-net takes no value"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn an_empty_value_on_a_value_flag_is_rejected() {
+    let out = run(&["--timeout="], "console.log(1)");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("has an empty value"),
         "stderr: {}",
         stderr(&out)
     );
@@ -320,7 +330,7 @@ fn a_space_separated_value_names_the_real_problem() {
     assert!(!out.status.success());
     let s = stderr(&out);
     assert!(s.contains("it follows --allow-net"), "{s}");
-    assert!(s.contains("never as a separate word"), "{s}");
+    assert!(s.contains("--flag=value"), "{s}");
 }
 
 #[test]
@@ -332,7 +342,38 @@ fn a_permission_flag_after_the_script_is_rejected() {
     assert!(!out.status.success());
     let s = stderr(&out);
     assert!(s.contains("appears after"), "{s}");
-    assert!(s.contains("restricts nothing"), "{s}");
+    assert!(s.contains("does nothing to the run"), "{s}");
+}
+
+#[test]
+fn any_esrun_flag_after_the_script_is_rejected() {
+    // Not just the permission flags: order is part of the grammar, and a
+    // misplaced --timeout is a silent no-op too.
+    let app = write("after_script_timeout.mjs", "console.log('ran');");
+    let out = esrun().arg(&app).arg("--timeout=500").output().unwrap();
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("appears after"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn a_scripts_own_unrelated_flags_still_pass_through() {
+    // Only flags esrun itself knows are rejected; the script keeps its own.
+    let app = write(
+        "after_script_own.mjs",
+        "import { args } from 'runtime:process'; console.log(args.join(' '));",
+    );
+    let out = esrun()
+        .arg(&app)
+        .arg("--verbose")
+        .arg("--out=dist")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "--verbose --out=dist");
 }
 
 #[test]
@@ -363,16 +404,29 @@ fn allow_all_points_at_the_default() {
 }
 
 #[test]
-fn an_equals_value_on_a_space_valued_flag_says_so() {
-    // `--timeout=500` would otherwise fall through to "unknown option", which
-    // hides what is actually wrong.
-    let out = run(&["--timeout=500"], "console.log(1)");
+fn one_grammar_applies_to_every_flag_not_just_permissions() {
+    // The rule is the parser's, not the permission model's: `--timeout 500`
+    // would leave `500` to be mistaken for the script to run.
+    let out = run(&["--timeout", "500"], "console.log(1)");
     assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("takes its value as the next argument"),
-        "stderr: {}",
-        stderr(&out)
-    );
+    let s = stderr(&out);
+    assert!(s.contains("--timeout requires a value"), "{s}");
+    assert!(s.contains("attached with '='"), "{s}");
+}
+
+#[test]
+fn the_equals_form_works_for_every_value_flag() {
+    let app = write("equals_form.mjs", "console.log('ran');");
+    let envf = write("equals_form.env", "A=1\n");
+    let out = esrun()
+        .arg("--timeout=5000")
+        .arg(format!("--env-file={}", envf.display()))
+        .arg("--shutdown-grace=1000")
+        .arg(&app)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ran");
 }
 
 #[test]

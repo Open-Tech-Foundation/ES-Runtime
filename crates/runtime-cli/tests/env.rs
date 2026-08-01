@@ -41,8 +41,7 @@ fn loads_values_from_env_file() {
     let envf = write("load.env", "A=one\nB=two\n");
     let app = write("load.mjs", PRINT_APP);
     let out = esrun()
-        .arg("--env-file")
-        .arg(&envf)
+        .arg(format!("--env-file={}", envf.display()))
         .arg(&app)
         .output()
         .unwrap();
@@ -57,8 +56,7 @@ fn os_env_wins_by_default() {
     let envf = write("prec_default.env", "A=from_file\n");
     let app = write("prec_default.mjs", PRINT_APP);
     let out = esrun()
-        .arg("--env-file")
-        .arg(&envf)
+        .arg(format!("--env-file={}", envf.display()))
         .arg(&app)
         .env("A", "from_os")
         .output()
@@ -72,8 +70,7 @@ fn env_override_lets_file_win() {
     let envf = write("prec_override.env", "A=from_file\n");
     let app = write("prec_override.mjs", PRINT_APP);
     let out = esrun()
-        .arg("--env-file")
-        .arg(&envf)
+        .arg(format!("--env-file={}", envf.display()))
         .arg("--env-override")
         .arg(&app)
         .env("A", "from_os")
@@ -87,8 +84,10 @@ fn env_override_lets_file_win() {
 fn missing_env_file_is_an_error() {
     let app = write("missing.mjs", "console.log('ran')");
     let out = esrun()
-        .arg("--env-file")
-        .arg(temp("does-not-exist.env"))
+        .arg(format!(
+            "--env-file={}",
+            temp("does-not-exist.env").display()
+        ))
         .arg(&app)
         .output()
         .unwrap();
@@ -118,8 +117,7 @@ fn secret_keyed_values_are_redacted_everywhere_but_unmaskable() {
         "#,
     );
     let out = esrun()
-        .arg("--env-file")
-        .arg(&envf)
+        .arg(format!("--env-file={}", envf.display()))
         .arg(&app)
         .output()
         .unwrap();
@@ -170,8 +168,7 @@ fn secret_key_convention_covers_the_full_pattern_set() {
         "#,
     );
     let out = esrun()
-        .arg("--env-file")
-        .arg(&envf)
+        .arg(format!("--env-file={}", envf.display()))
         .arg(&app)
         .output()
         .unwrap();

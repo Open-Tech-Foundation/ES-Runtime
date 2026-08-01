@@ -34,10 +34,7 @@ namespace) is unstable and may change between minor releases until the API freez
 
   **Permissions are coarse:** scoping to paths/hosts/names is not implemented,
   and a value (`--allow-net=example.com`) is **rejected rather than ignored** —
-  a run must never be narrower on the command line than it is in reality. The
-  parser is strict for the same reason: a space-separated value, a permission
-  flag placed after the script (where it would be the script's own argument),
-  an unknown name, or `--timeout=500` all fail loudly.
+  a run must never be narrower on the command line than it is in reality.
 
 - **`permissions` on `runtime:process`** — what this process is allowed to
   reach. The policy is fixed at launch, so it is introspection only: a
@@ -50,6 +47,29 @@ namespace) is unstable and may change between minor releases until the API freez
   ```
 
   Needs no capability, so it answers even under `--deny-all`.
+
+### Changed — **breaking**: one argument grammar for the whole CLI
+
+Every `esrun` flag is now `--flag` or `--flag=value`. **A value is never a
+separate argument**, and esrun's flags must come **before** the script.
+
+```sh
+esrun --timeout=500 app.js          # was: esrun --timeout 500 app.js
+esrun --env-file=.env app.js        # was: esrun --env-file .env app.js
+esrun -e='console.log(1)'           # was: esrun -e "console.log(1)"
+esrun --shutdown-grace=30000 app.js # was: esrun --shutdown-grace 30000 app.js
+```
+
+The space form now fails with a message naming the fix. One rule replaces two:
+previously the permission flags required `=` while the older flags took a
+following word, and that inconsistency is what lets `--allow-net example.com
+app.js` quietly run `example.com` as the script. With a single rule the parser
+never has to decide whether the next word is a value or the script, so it cannot
+decide wrong.
+
+Rule 2 is enforced too: a flag esrun knows, written **after** the script, is an
+error rather than a silent no-op — for `--deny-net` that silence would be a
+security failure. `--` after the script opts a script's own argument out.
 
 ### Fixed
 

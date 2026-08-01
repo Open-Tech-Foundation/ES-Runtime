@@ -14,34 +14,56 @@ snippet) end to end. Inputs run as modules — `import`/`export` and top-level
 ## Usage
 
 ```text
-esrun <file>             Run a JavaScript module file
-esrun -e <code>          Run an inline module snippet
-esrun -t, --timeout <ms> Stop execution after <ms> ms (watchdog)
-esrun --env-file <path>  Load env vars from a .env file
-esrun --env-override     Let --env-file values override the OS environment
-esrun --shutdown-grace <ms>
-                         How long in-flight HTTP requests may finish after
-                         ^C/SIGTERM (default 10000)
-esrun upgrade            Update esrun to the latest release
-esrun types              Print the runtime: TypeScript definitions
-esrun types --install    Install the definitions + wire up tsconfig.json
-esrun -h, --help         Show this help
-esrun -v, --version      Show the version
+esrun <file>                Run a JavaScript module file
+esrun -e=<code>             Run an inline module snippet
+esrun --deny-all            Run with no host access at all
+esrun --deny-<name>         Deny one capability; repeatable
+esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
+esrun -t=<ms>, --timeout=<ms>
+                            Stop execution after <ms> ms (watchdog)
+esrun --env-file=<path>     Load env vars from a .env file
+esrun --env-override        Let --env-file values override the OS environment
+esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
+                            ^C/SIGTERM (default 10000)
+esrun upgrade               Update esrun to the latest release
+esrun types                 Print the runtime: TypeScript definitions
+esrun types --install       Install the definitions + wire up tsconfig.json
+esrun -h, --help            Show this help
+esrun -v, --version         Show the version
 ```
+
+## Argument grammar
+
+Two rules, applied to every flag:
+
+1. A flag is **`--flag`** or **`--flag=value`**. A value is never a separate
+   argument — `--timeout=500`, not `--timeout 500`.
+2. esrun's flags come **before** the script. Everything after it belongs to the
+   script, readable as [`args`](/api/process).
+
+```sh
+esrun --timeout=500 app.js build --watch
+#     └─ esrun's ──┘ └file┘ └─ the script's ─┘
+```
+
+Both are enforced, not conventions: a value that arrives as a separate word
+would be indistinguishable from the script path, and a flag written after the
+script would silently do nothing. `--` after the script suppresses rule 2 for a
+script that genuinely wants a flag esrun also knows.
 
 ## Options
 
 | Option | Description |
 | --- | --- |
 | `<file>` | Path to a JavaScript ES module to run. Resolved as a local file (relative/absolute path or `file:` URL). |
-| `-e, --eval <code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
-| `-t, --timeout <ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
+| `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
+| `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
 | `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
 | `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
 | `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
-| `--env-file <path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
+| `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
-| `--shutdown-grace <ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
+| `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
 | `upgrade` | Download the latest release for your platform, verify its checksum, and replace the running binary in place. |
 | `types` | Print the `runtime:` TypeScript definitions to stdout (`esrun types > runtime.d.ts`) — version-matched and offline. |
 | `types --install` | Install the definitions into `node_modules/@opentf/esrun` and wire up `tsconfig.json` (`typeRoots` + `types`) so editors resolve the `runtime:*` modules automatically. |
@@ -55,19 +77,19 @@ esrun -v, --version      Show the version
 esrun app.js
 
 # Inline snippet (top-level await works)
-esrun -e "console.log(await Promise.resolve(42))"
+esrun -e='console.log(await Promise.resolve(42))'
 
 # Pass arguments through to the script (read via runtime:process)
 esrun app.js build --watch
 
 # Stop a runaway script after 500ms
-esrun -t 500 app.js
+esrun -t=500 app.js
 
 # Load env vars from a .env file (OS env wins; --env-override flips it)
-esrun --env-file .env app.js
+esrun --env-file=.env app.js
 
 # Give in-flight requests 30s to finish after SIGTERM
-esrun --shutdown-grace 30000 server.js
+esrun --shutdown-grace=30000 server.js
 
 # Run with no host access at all
 esrun --deny-all app.js
@@ -110,16 +132,17 @@ operation, not the import.
 
 ### Strict by design
 
-Each of these is an error, because ignoring it would leave a run wider than the
-command line claims:
+Each of these is an error. For the permission flags the reason is sharper than
+tidiness: ignoring one leaves a run wider than the command line claims.
 
 | Written | Why it fails |
 | --- | --- |
 | `--allow-net=example.com` | Scoping is not implemented; the value would be ignored |
-| `--allow-net example.com` | A value never attaches as a separate word |
-| `esrun app.js --deny-net` | After the script it is the script's argument (`--` opts out) |
+| `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |
+| `esrun app.js --deny-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the eight |
+| `--timeout 500` | Same rule 1 — this is the parser's grammar, not a permission rule |
 
 <Callout type="note" title="--deny-all alone runs a single file">
   The entry file is read before the runtime exists, so `--deny-all` still runs

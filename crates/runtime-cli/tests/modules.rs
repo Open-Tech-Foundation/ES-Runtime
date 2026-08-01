@@ -187,8 +187,7 @@ fn a_deadline_ends_a_request_the_server_never_answers() {
 #[test]
 fn runs_an_inline_module_snippet() {
     let out = esrun()
-        .arg("-e")
-        .arg("console.log('inline', 6 * 7)")
+        .arg("-e=console.log('inline', 6 * 7)")
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -198,8 +197,7 @@ fn runs_an_inline_module_snippet() {
 #[test]
 fn inline_snippet_supports_top_level_await() {
     let out = esrun()
-        .arg("-e")
-        .arg("const x = await Promise.resolve(5); console.log('awaited', x)")
+        .arg("-e=const x = await Promise.resolve(5); console.log('awaited', x)")
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -298,11 +296,11 @@ fn node_modules_export_patterns_work() {
 fn runtime_process_exposes_env_args_platform_cwd() {
     let out = esrun()
         .env("ESRUN_TEST_VAR", "hello")
-        .arg("-e")
-        .arg(
+        .arg(format!(
+            "-e={}",
             "import { env, args, platform, arch, cwd } from 'runtime:process'; \
              console.log(env.ESRUN_TEST_VAR, platform, arch, args.join(','), typeof cwd());",
-        )
+        ))
         .arg("alpha")
         .arg("beta")
         .output()
@@ -327,8 +325,7 @@ fn runtime_process_exposes_env_args_platform_cwd() {
 #[test]
 fn runtime_process_exit_sets_exit_code() {
     let out = esrun()
-        .arg("-e")
-        .arg("import { exit } from 'runtime:process'; console.log('before'); exit(5); console.log('after');")
+        .arg("-e=import { exit } from 'runtime:process'; console.log('before'); exit(5); console.log('after');")
         .output()
         .expect("spawn esrun");
     assert_eq!(out.status.code(), Some(5), "stderr: {}", stderr(&out));
@@ -346,8 +343,8 @@ fn runtime_process_exit_sets_exit_code() {
 #[test]
 fn runtime_path_exposes_modern_surface() {
     let out = esrun()
-        .arg("-e")
-        .arg(
+        .arg(format!(
+            "-e={}",
             "import * as p from 'runtime:path'; const o=(k,v)=>console.log(k+'='+v);\
              o('sep',p.sep); o('delimiter',p.delimiter);\
              o('join',p.join('a','b','..','c/d/'));\
@@ -361,7 +358,7 @@ fn runtime_path_exposes_modern_surface() {
              o('resolveAbs',p.resolve('/x','y','z'));\
              o('fromFileURL',p.fromFileURL('file:///a/b%20c.txt'));\
              o('toFileURL',p.toFileURL('/a/b c.txt').href);",
-        )
+        ))
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -405,8 +402,7 @@ fn runtime_fs_read_write_stat_and_jail() {
         catch { console.log('JAIL=blocked'); }";
     let out = esrun()
         .current_dir(&tmp)
-        .arg("-e")
-        .arg(script)
+        .arg(format!("-e={}", script))
         .output()
         .expect("spawn esrun");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -441,7 +437,10 @@ fn runtime_fs_glob_covers_all_patterns() {
         out.push('not=' + m('!index.ts','a.ts') + ',' + m('!index.ts','index.ts'));\
         out.push('escape=' + m('\\\\!x.ts','!x.ts') + ',' + m('\\\\!x.ts','x.ts'));\
         console.log(out.join('\\n'));";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     for expected in [
@@ -483,7 +482,10 @@ fn runtime_net_tcp_echo_roundtrip() {
         let out = ''; const dec = new TextDecoder();\
         for await (const chunk of sock.readable) out += dec.decode(chunk);\
         console.log('NET:' + out);";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(stdout(&out).contains("NET:ping"), "{}", stdout(&out));
 }
@@ -513,7 +515,10 @@ fn runtime_net_starttls_surface_and_guards() {
         try { const c = connect('127.0.0.1:1'); await c.opened; } catch (e) { g3 = tag(e); }\
         console.log('STARTTLS:' + g1 + ':' + g2 + ':' + g3 + ':' + (b.upgraded === false));\
         await a.close('done'); await b.close(); await server.close();";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains("STARTTLS:TypeError+SE:TypeError+SE:TypeError+SE:true"),
@@ -535,7 +540,10 @@ fn runtime_net_listener_close_ends_accept_loop() {
         await server.close();\
         await loop;\
         console.log('CLOSED:' + ended);";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(stdout(&out).contains("CLOSED:true"), "{}", stdout(&out));
 }
@@ -568,7 +576,10 @@ fn runtime_net_half_open_and_combined_address() {
         await w.write(enc.encode('after'));\
         await w.close();\
         console.log('HALF:' + out + ':' + info.remoteAddress.includes(':'));";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     assert!(s.contains("HALF:hi:true"), "{s}");
@@ -614,7 +625,10 @@ VXKwlHaaiSsPtueuWJ1GwC4Pm9kbriVs1/9YTXpKdjsPga00am7iwK7c
         r += ':BOUND:' + (port > 0);
         await server.close();
         console.log(r);"#;
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains("NOCERT:TypeError+SE:MODE:TypeError+SE:BOUND:true"),
@@ -639,7 +653,10 @@ fn runtime_http_serve_and_fetch_roundtrip() {
         const res = await fetch(`http://127.0.0.1:${port}/`, { method: 'POST', body: 'bun' });\
         console.log('HTTP:' + res.status + ':' + res.headers.get('x-greeting') + ':' + (await res.text()));\
         await server.stop();";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains("HTTP:201:hi:hello bun"),
@@ -651,8 +668,7 @@ fn runtime_http_serve_and_fetch_roundtrip() {
 #[test]
 fn unknown_runtime_builtin_module_errors() {
     let out = esrun()
-        .arg("-e")
-        .arg("import 'runtime:nope';")
+        .arg("-e=import 'runtime:nope';")
         .output()
         .expect("spawn esrun");
     assert!(!out.status.success(), "should exit non-zero");
@@ -736,8 +752,7 @@ fn version_flag_succeeds() {
 #[test]
 fn unhandled_rejection_reports_stack_trace() {
     let out = esrun()
-        .arg("-e")
-        .arg("setTimeout(() => { Promise.reject(new TypeError('async boom')); }, 0);")
+        .arg("-e=setTimeout(() => { Promise.reject(new TypeError('async boom')); }, 0);")
         .output()
         .expect("spawn esrun");
     assert!(!out.status.success(), "should exit non-zero");
@@ -782,7 +797,10 @@ fn runtime_urlpattern_works_globally() {
         );
         console.log('MATCH6=' + p5.test('https://api.example.com/api/123'));
     ";
-    let out = esrun().arg("-e").arg(script).output().expect("spawn esrun");
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     assert!(s.contains("MATCH1=true"), "{}", s);
@@ -830,8 +848,8 @@ fn serve_rejects_incomplete_tls_options() {
     // Failing at `serve` beats binding a port and then rejecting every
     // handshake, which looks like a working server nothing can talk to.
     let out = esrun()
-        .arg("-e")
-        .arg(
+        .arg(format!(
+            "-e={}",
             "import { serve } from 'runtime:http'; \
              const cases = [ \
                { secureTransport: 'on' }, \
@@ -844,7 +862,7 @@ fn serve_rejects_incomplete_tls_options() {
                catch (e) { console.log(`THREW ${e.constructor.name}`); } \
              } \
              console.log('TLS_OPTS_OK');",
-        )
+        ))
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));

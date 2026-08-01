@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 
 fn esrun(code: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .args(["-e", code])
+        .arg(format!("-e={code}"))
         .output()
         .expect("failed to spawn esrun")
 }

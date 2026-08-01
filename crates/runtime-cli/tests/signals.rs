@@ -80,8 +80,7 @@ fn a_guest_handler_intercepts_a_real_sigterm() {
 #[test]
 fn an_unwatched_signal_still_terminates() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .arg("-e")
-        .arg("console.log('READY'); await new Promise(() => {});")
+        .arg("-e=console.log('READY'); await new Promise(() => {});")
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn esrun");
@@ -172,9 +171,8 @@ fn sigterm_drains_an_in_flight_request_before_exiting() {
 fn an_interrupt_with_no_server_exits_at_once() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
         // A long grace, so a wrongly-applied drain would be unmistakable.
-        .args(["--shutdown-grace", "30000"])
-        .arg("-e")
-        .arg("console.log('READY'); setInterval(() => {}, 1000);")
+        .arg("--shutdown-grace=30000")
+        .arg("-e=console.log('READY'); setInterval(() => {}, 1000);")
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn esrun");
@@ -200,13 +198,13 @@ fn an_interrupt_with_no_server_exits_at_once() {
 #[test]
 fn the_shutdown_grace_bounds_the_drain() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
-        .args(["--shutdown-grace", "300"])
-        .arg("-e")
-        .arg(
+        .arg("--shutdown-grace=300")
+        .arg(format!(
+            "-e={}",
             "import { serve } from 'runtime:http'; \
              const s = serve({ port: 0 }, () => new Promise(() => {})); \
              const { port } = await s.addr; console.log(`PORT ${port}`); await s.finished;",
-        )
+        ))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

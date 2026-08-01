@@ -43,10 +43,10 @@ API_TOKEN=tok_live_123
 ```
 
 ```sh
-esrun --env-file .env app.js
+esrun --env-file=.env app.js
 
 # Let the file beat the OS environment (default: OS wins):
-esrun --env-file .env --env-override app.js
+esrun --env-file=.env --env-override app.js
 ```
 
 <Callout type="warning" title="No auto-loading">

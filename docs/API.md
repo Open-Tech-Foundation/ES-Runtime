@@ -467,17 +467,30 @@ dependencies. `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive
 `--deny-all`: no op gates them, so a denied script still computes. Ask from JS
 with [`permissions`](#runtimeprocess).
 
-**The parser is strict.** These are errors, not warnings, because the silent
-version of each leaves a run wider than the command line claims:
+**The parser is strict, and its grammar is two rules for every flag** — not just
+the permission ones:
+
+1. A flag is `--flag` or `--flag=value`. A value is never a separate argument.
+2. esrun's flags come before the script; everything after it is the script's.
+
+```sh
+esrun --timeout=500 app.js build --watch
+#     └─ esrun's ──┘ └file┘ └─ the script's ─┘
+```
+
+Both are enforced rather than conventional: a value arriving as a separate word
+is indistinguishable from the script path, and a flag written after the script
+silently does nothing — which for `--deny-net` is a security failure. `--` after
+the script opts a script's own argument out of rule 2.
 
 | Written | Why it fails |
 | ------- | ------------ |
+| `--timeout 500` | Rule 1 — `500` would be mistaken for the script |
+| `--allow-net example.com` | Rule 1 |
+| `esrun app.js --deny-net` | Rule 2 — restricts nothing where it stands |
 | `--allow-net=example.com` | Scoping is not implemented; the value would be ignored |
-| `--allow-net example.com` | A value never attaches as a separate word |
-| `esrun app.js --deny-net` | After the script it is the script's argument, and restricts nothing (`--` opts out) |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the eight |
-| `--timeout=500` | This flag takes its value as the next argument |
 
 ---
 
