@@ -102,6 +102,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **An HTTPS `serve()` now advertises `h2` in ALPN by default** — `["h2",
+  "http/1.1"]`, where it was `["http/1.1"]`. The visible effect on an existing
+  deployment: an h2-capable client that was served HTTP/1.1 yesterday gets
+  HTTP/2 today, from the same handler and the same code. Nothing in guest code
+  can observe the version, so this is a wire change rather than an API one, but
+  it is a change to what your clients negotiate — pin it back with
+  `alpn: ["http/1.1"]` if a client mishandles h2. Cleartext listeners are
+  affected too, by the HTTP/2 preface rather than by ALPN. See **HTTP/2 in
+  `runtime:http`** above.
+
 - `import.meta.resolve` names the kind of specifier it cannot resolve. A
   `#private` specifier was reported as a *bare* specifier needing `node_modules`;
   it needs the referring package's `imports` map instead, and now says so. Both
