@@ -52,7 +52,9 @@ declare module "runtime:http" {
   }
 
   /**
-   * Start an HTTP/1.1 server (capability: `NetListen`). Returns immediately.
+   * Start an HTTP/1.1 + HTTP/2 server (capability: `NetListen`). Returns
+   * immediately. The version is negotiated per connection — ALPN over TLS, the
+   * HTTP/2 preface (h2c) on a cleartext port — and never reaches the handler.
    *
    * With `secureTransport: "on"` it serves HTTPS, and `request.url` reports the
    * `https:` scheme. The cert and key are passed inline rather than as paths —

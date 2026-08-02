@@ -1139,11 +1139,20 @@ pub struct HttpServerTls {
     pub cert: Vec<u8>,
     /// PEM private key.
     pub key: Vec<u8>,
-    /// ALPN protocols to advertise. An HTTP/1.1 server offers `["http/1.1"]`.
+    /// ALPN protocols to advertise. A server speaking both versions offers
+    /// `["h2", "http/1.1"]` — ALPN order is the server's preference — which is
+    /// what `runtime:http` `serve` sends when the guest names no `alpn`.
     pub alpn: Vec<String>,
 }
 
-/// An HTTP/1.1 server backing `runtime:http` (the `serve((req) => res)` shape).
+/// An HTTP server backing `runtime:http` (the `serve((req) => res)` shape).
+///
+/// The HTTP version is the implementation's business, not this trait's: nothing
+/// in the handoff below names one, so a provider is free to serve HTTP/1.1,
+/// HTTP/2, or both on one listener (the default provider does the last, choosing
+/// per connection). Responses are matched to requests by id rather than by
+/// arrival order, which is what lets an HTTP/2 provider answer multiplexed
+/// streams out of order without the runtime knowing.
 ///
 /// The implementation owns the listener and every accepted connection, parsing
 /// requests and writing responses; the runtime only supplies the response for
