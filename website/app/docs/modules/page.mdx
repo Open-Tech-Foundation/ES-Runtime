@@ -57,9 +57,10 @@ import.meta.resolve("runtime:process");   // "runtime:process"
 check that the target exists — resolving a path and importing it are separate
 questions.
 
-A **bare specifier throws**. Resolving one means reading `package.json` files and
-probing the filesystem, and `resolve` is synchronous, so it refuses rather than
-return a URL it never resolved. Use `import()`.
+A **bare or `#private` specifier throws** — the first needs `node_modules`, the
+second needs the referring package's `imports` map. Both mean reading
+`package.json` files and probing the filesystem, and `resolve` is synchronous, so
+it refuses rather than return a URL it never resolved. Use `import()`.
 
 ## Resolving packages
 

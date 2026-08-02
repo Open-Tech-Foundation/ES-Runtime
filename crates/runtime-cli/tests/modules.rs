@@ -858,7 +858,12 @@ fn import_meta_resolve_resolves_against_the_module() {
     // A bare specifier would need node_modules read synchronously; rather than
     // answer with a URL it never resolved, it refuses.
     assert!(stdout.contains("BARE!TypeError"), "{stdout}");
+    assert!(stdout.contains("PRIV!TypeError"), "{stdout}");
     assert!(stdout.contains("NODE!TypeError"), "{stdout}");
+    // Each refusal names the kind of specifier it got: a #private one resolves
+    // through the package's "imports" map, not through node_modules.
+    assert!(stdout.contains("PRIVATE:true"), "{stdout}");
+    assert!(stdout.contains("BAREMSG:true"), "{stdout}");
 }
 
 #[test]

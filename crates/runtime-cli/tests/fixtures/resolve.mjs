@@ -20,4 +20,17 @@ show("BUILTIN", "runtime:process");
 show("MISSING", "./definitely-not-here.mjs");
 // A bare specifier needs node_modules — host I/O — and resolve is synchronous.
 show("BARE", "some-package");
+// A #private specifier needs the referring package's "imports" map, and says so
+// rather than calling itself bare.
+const message = (specifier) => {
+  try {
+    import.meta.resolve(specifier);
+    return "(resolved)";
+  } catch (e) {
+    return e.message;
+  }
+};
+console.log(`PRIVATE:${message("#config").includes("private specifier")}`);
+console.log(`BAREMSG:${message("some-package").includes("bare specifier")}`);
+show("PRIV", "#config");
 show("NODE", "node:fs");

@@ -103,13 +103,17 @@
     ) {
       return new URL(target, base).href;
     }
-    // A bare specifier means walking node_modules — reading package.json files
-    // and probing the filesystem — which is host I/O, and `resolve` is
-    // synchronous. Rather than answer with a URL that was never resolved, say so.
+    // What is left needs the module loader: a bare specifier walks node_modules,
+    // and a #private one reads the referring package's "imports" map. Both mean
+    // reading package.json files and probing the filesystem — host I/O — while
+    // `resolve` is synchronous. Rather than answer with a URL that was never
+    // resolved, say which kind of specifier it is and what does resolve it.
+    const kind = target.startsWith("#")
+      ? `private specifier ${JSON.stringify(target)}: resolving one requires reading the "imports" map of the nearest package.json`
+      : `bare specifier ${JSON.stringify(target)}: resolving one requires reading node_modules`;
     throw new TypeError(
-      `import.meta.resolve cannot resolve the bare specifier ${JSON.stringify(target)}: ` +
-        "resolving one requires reading node_modules, which cannot be done synchronously. " +
-        "Use import() instead.",
+      `import.meta.resolve cannot resolve the ${kind}, ` +
+        "which cannot be done synchronously. Use import() instead.",
     );
   };
 

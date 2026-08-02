@@ -40,6 +40,14 @@ namespace) is unstable and may change between minor releases until the API freez
   keys with condition keys) is now an error naming the `package.json`, not a
   silent "not found".
 
+### Changed
+
+- `import.meta.resolve` names the kind of specifier it cannot resolve. A
+  `#private` specifier was reported as a *bare* specifier needing `node_modules`;
+  it needs the referring package's `imports` map instead, and now says so. Both
+  still throw a `TypeError` — `resolve` is synchronous and either answer is host
+  I/O.
+
 ## [0.14.0] - 2026-08-02
 
 ### Added

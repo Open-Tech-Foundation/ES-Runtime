@@ -56,7 +56,7 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 [`runtime:` modules](#the-runtime-scheme).
 
 - **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` only — `"ES-Runtime/<version>"`)
-- **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — pure URL resolution against the current module, with no I/O and no existence check. A **bare specifier throws**: resolving one means reading `node_modules`, which cannot be done synchronously — use `import()`.
+- **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — pure URL resolution against the current module, with no I/O and no existence check. A **bare or `#private` specifier throws**: resolving either means reading `package.json` files — `node_modules` for the first, the referring package's `imports` map for the second — which cannot be done synchronously. Use `import()`.
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **URL:** `URL` (incl. `canParse`, `parse`, and `createObjectURL`/`revokeObjectURL` for in-process `blob:` URLs), `URLSearchParams`, `URLPattern`
 - **Fetch:** `fetch`, `Request`, `Response` (incl. `Response.json`/`error`/`redirect`), `Headers` (incl. `getSetCookie`) — a `ReadableStream` request body streams as a chunked upload (response bodies stream too), and all three [redirect modes](#redirects) are honoured
