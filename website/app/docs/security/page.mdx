@@ -166,6 +166,10 @@ package's own files and **not** the packages it imports, so a dependency that
 quietly pulls in another cannot load it. The entry file is exempt — it is read
 before a loader exists.
 
+The policy also binds `import.meta.resolve`: a package it refuses cannot be
+located, not just not imported — otherwise the refusal would still hand out the
+path.
+
 <Callout type="note" title="A policy is not a way around --deny-imports">
   Two layers, not two alternatives: the `imports` capability decides whether the
   loader runs at all, the policy decides what it may resolve. Under

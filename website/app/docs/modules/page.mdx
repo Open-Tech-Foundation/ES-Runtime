@@ -67,10 +67,10 @@ const schema = import.meta.resolve("my-orm/migrations/001.sql");
 const sql = await file(new URL(schema)).text();
 ```
 
-That reads `package.json` files, so it needs the same permission an import does
-(`--allow-imports`) and obeys the same root jail and import policy — a run that
-may not import a package may not locate it either. A URL it returns is always one
-`import()` accepts.
+That reads `package.json` files (see [Resolving packages](#resolving-packages)),
+so it needs the same permission an import does (`--allow-imports`) and obeys the
+same root jail and import policy — a run that may not import a package may not
+locate it either. A URL it returns is always one `import()` accepts.
 
 ## Resolving packages
 
