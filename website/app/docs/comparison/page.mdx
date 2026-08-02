@@ -26,7 +26,7 @@ makes the trade-offs explicit.
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
-| HTTP/3 server (QUIC) | <No /> | <No /> | <No /> | <No /> |
+| HTTP/3 server (QUIC) | <No /> | <No /> | <Yes /> | <No /> |
 | Temporal API | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
@@ -51,15 +51,22 @@ because it implements `node:http2` — which does serve h2c — while its own
 same server. Measured throughput for all four:
 [Benchmarks](/docs/benchmarks#http2).
 
-**On the HTTP/3 row.** No runtime here serves HTTP/3, which is why the row is
-worth stating rather than leaving to inference — it is a gap in the field, not a
-gap in one of them. HTTP/3 is HTTP over QUIC, a UDP transport with its own TLS
-integration, so it is a new dependency and a new listener rather than another
-version negotiated on the connection you already have — which is what made
-HTTP/2 cheap to add here. Deno ships unstable QUIC *primitives*
-(`Deno.connectQuic`, behind `--unstable-net`); that is a transport, not an HTTP/3
-server, and nothing above it speaks HTTP. Node has no `node:quic` in the current
-release line, and Bun's server is HTTP/1.1 plus `node:http2`.
+**On the HTTP/3 row.** Bun leads here and esrun does not have it. `Bun.serve({
+http3: true })` serves real HTTP/3 over TLS — verified against `curl
+--http3-only`, which reports version 3 — on an embedded lsquic stack; it also has
+an HTTP/3 `fetch` client behind `--experimental-http3-fetch`, which is the half
+still marked experimental. Node has no `node:quic` in the current release line.
+Deno ships unstable QUIC *primitives* (`Deno.connectQuic` behind
+`--unstable-net`, with no matching listener), which is a transport with nothing
+speaking HTTP above it.
+
+HTTP/3 is not the cheap follow-on that HTTP/2 was, which is why the two rows
+differ: HTTP/2 was another version negotiated on a connection `serve()` already
+accepts, whereas QUIC is a UDP transport with its own TLS integration and
+congestion control — a new listener and a new dependency, not a flag on the
+existing one. Bun's answer to that was to embed a C QUIC library; that is a real
+option and the row is here to say so plainly rather than to imply the field has
+no answer.
 
 **On the permission row.** It is about the *CLI*, and is a different question
 from the sandbox row above it, which is about the **default**: esrun grants
