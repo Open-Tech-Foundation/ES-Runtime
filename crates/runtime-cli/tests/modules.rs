@@ -93,6 +93,21 @@ fn streams_an_http_request_body_through_to_the_response() {
 }
 
 #[test]
+fn serves_http2_to_a_cleartext_client_that_opens_with_the_preface() {
+    // A real `serve()` under the real binary, answering hand-written HTTP/2
+    // frames over `runtime:net` — `fetch` would talk HTTP/1.1 to a cleartext
+    // origin, so only raw frames can show the version detection actually fires
+    // on the guest-facing path rather than only in the provider's own tests.
+    let out = run_file("http2-h2c.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("H2C_HEADERS_FRAME"), "{stdout}");
+    // The DATA payload is the handler's response, and the path proves the
+    // request URL was rebuilt from `:authority` rather than a missing `Host`.
+    assert!(stdout.contains("h2c-body:body-for:/h2c"), "{stdout}");
+}
+
+#[test]
 fn honours_every_fetch_redirect_mode_over_the_wire() {
     // Real 3xx responses from a real runtime:http server through the real
     // reqwest transport — the stub transport in the runtime's own tests cannot
