@@ -138,6 +138,12 @@ A denied operation throws `NotAllowedError` (`ERR_CAPABILITY_DENIED`) before the
 effect happens. Importing a `runtime:` module always works — the gate is the
 operation, not the import.
 
+<Callout type="tip" title="Building the command for a real deployment">
+  [Securing a run](/docs/guides/hardening) walks a working script from
+  `--deny-all` to a narrowed command, and explains how to read each denial back
+  to the flag that fixes it.
+</Callout>
+
 ### Scoped grants
 
 **Seven of the eight** `--allow-<name>` flags take a comma-separated list that
