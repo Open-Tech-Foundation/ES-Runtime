@@ -293,6 +293,24 @@ fn node_modules_export_patterns_work() {
 }
 
 #[test]
+fn node_modules_export_conditions_work() {
+    // Condition matching in author order, unasserted conditions skipped, array
+    // fallbacks, nested conditions, and a `null`-withdrawn subpath.
+    let out = run_file("esm/consumer-conditions.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("COND-SUITE-OK"), "{}", stdout(&out));
+}
+
+#[test]
+fn private_imports_and_self_reference_work() {
+    // `#specifier` through the package's own "imports" map (path, pattern, and
+    // another package), plus importing this package by its own name.
+    let out = run_file("esm/consumer-private.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("PRIVATE-SUITE-OK"), "{}", stdout(&out));
+}
+
+#[test]
 fn runtime_process_exposes_env_args_platform_cwd() {
     let out = esrun()
         .env("ESRUN_TEST_VAR", "hello")

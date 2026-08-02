@@ -1,0 +1,13 @@
+{
+  "name": "esrun-fixtures",
+  "version": "1.0.0",
+  "private": true,
+  "exports": {
+    "./exporter": "./esm/exporter.mjs"
+  },
+  "imports": {
+    "#local": "./esm/exporter.mjs",
+    "#feat/*": "./esm/feat/*.mjs",
+    "#greeter": "greeter"
+  }
+}

@@ -21,6 +21,7 @@ mod clock;
 mod console;
 mod driver;
 mod entropy;
+mod esm_resolve;
 mod host_allowlist;
 mod import_policy;
 mod modules;

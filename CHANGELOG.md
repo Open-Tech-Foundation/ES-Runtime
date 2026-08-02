@@ -12,6 +12,36 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Complete ESM package resolution: conditions, `imports`, and self-reference**
+  (DECISIONS D40, lifting D22's deferral). Bare-specifier resolution now
+  implements the whole `exports`/`imports` algorithm rather than its common
+  subset:
+
+  - **Conditions are matched in the order the package author wrote them**, and
+    nested condition objects are walked, falling through to the next key when a
+    matched branch resolves to nothing. The conditions asserted are
+    **standards-only** — `import` and `default`. No runtime-branded key (`node`,
+    `deno`, `bun`, or one of our own) is asserted, so a manifest's ESM answer is
+    reached through `default` rather than through a private name.
+  - **`imports` / `#private` specifiers.** `import config from "#config"`
+    resolves against the nearest `package.json`'s `imports` map, which may point
+    at a path in that package (including subpath patterns) or at another package.
+  - **Self-reference.** A package that declares `exports` can import itself by
+    its own `name`, so an intra-package import resolves to exactly what a
+    consumer would get.
+  - **Array fallbacks** (`["./a.mjs", "./b.mjs"]`) and **`null` targets**, which
+    withdraw a subpath. A withdrawn subpath now reports that the author withdrew
+    it instead of a generic "not found".
+  - **Target validation.** A target (after any `*` substitution) may not contain
+    a `..`, `.` or `node_modules` segment, may not be a bare specifier in
+    `exports`, and may not be a trailing-slash directory mapping — so a pattern
+    capture cannot walk out of the package it belongs to. The D25 project-root
+    jail is unchanged and still applies underneath.
+
+  A malformed manifest (an invalid target, or an `exports` object mixing subpath
+  keys with condition keys) is now an error naming the `package.json`, not a
+  silent "not found".
+
 - **`esrun` permission flags** (DECISIONS D38). `esrun` still grants everything
   by default; restriction is opt-in and expressed as denials.
 

@@ -27,6 +27,7 @@ tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 webpki-roots.workspace = true
 bytes.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros", "signal", "process"] }
 tracing.workspace = true
