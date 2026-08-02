@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-02
+
 ### Added
 
 - **`esrun` permission flags** (DECISIONS D38). `esrun` still grants everything
