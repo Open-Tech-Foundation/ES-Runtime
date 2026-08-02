@@ -1149,8 +1149,22 @@ What HTTP/2 buys, given the handler is unchanged: requests **multiplex** over on
 connection (many in flight at once, answered in any order — the runtime already
 hands responses back per request, not per connection), one TLS handshake serves a
 whole session, and headers are HPACK-compressed. Concurrency per connection is
-capped so one peer cannot open unbounded streams against a single-threaded
-isolate.
+capped at **256 streams**, advertised in the server's `SETTINGS`, so one peer
+cannot open unbounded streams against a single-threaded isolate.
+
+Whether that is a win depends entirely on how the client connects, and it is
+worth being concrete rather than assuming h2 is faster (`bench/http2.sh`, same
+server, only the version changed):
+
+| client shape | HTTP/1.1 | HTTP/2 |
+| --- | --- | --- |
+| 50 connections × 1 stream | 67,118 req/s | 50,048 req/s (**0.75×**) |
+| 1 connection × 50 streams | 19,333 req/s | 70,961 req/s (**3.67×**) |
+
+With 50 sockets already open there is nothing to multiplex and HTTP/2 is pure
+framing overhead — it *loses*. On one connection, where HTTP/1.1 is strictly
+serial, it wins by 3.67×. That second shape is the one a reverse proxy, an API
+gateway, or a gRPC client is in.
 
 `request.url` is rebuilt from `:authority` on HTTP/2, which is the version's
 replacement for the `Host` header — one URL shape either way. Framing stays the

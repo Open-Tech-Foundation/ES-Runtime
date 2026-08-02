@@ -246,7 +246,31 @@ What changes on the wire, with the handler untouched:
 | Handshakes | one TLS handshake per session, not per connection |
 | Headers | HPACK-compressed instead of resent in full each request |
 | `request.url` | rebuilt from `:authority` (HTTP/2 has no `Host` header) |
-| Streams per connection | capped, so one peer cannot flood a single-threaded isolate |
+| Streams per connection | capped at 256 (advertised in `SETTINGS`), so one peer cannot flood a single-threaded isolate |
+
+### Is it faster?
+
+Only in the shape it is designed for — and it is worth measuring rather than
+assuming. Same server, same request count, only the version changed
+(`bench/http2.sh`):
+
+| client shape | HTTP/1.1 | HTTP/2 | |
+| --- | --- | --- | --- |
+| 50 connections × 1 stream | 67,118 req/s | 50,048 req/s | **0.75×** |
+| 1 connection × 50 streams | 19,333 req/s | 70,961 req/s | **3.67×** |
+
+With 50 sockets already open there is nothing to multiplex, so HTTP/2 is pure
+framing overhead and *loses*. On a single connection — where HTTP/1.1 can only
+send the next request after reading the previous response — it wins by 3.67×.
+The second row is the shape a reverse proxy, an API gateway, or a gRPC client is
+in, which is why it is the interesting one.
+
+<Callout type="info" title="Same numbers, other runtimes">
+  In the same run Node gains 1.72× and Deno 1.28× on the single-connection shape;
+  `Bun.serve` has no cleartext HTTP/2 server at all. See
+  [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md)
+  for the full table and method.
+</Callout>
 
 ## Usage with Hono
 

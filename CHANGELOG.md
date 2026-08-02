@@ -33,6 +33,19 @@ namespace) is unstable and may change between minor releases until the API freez
   `h2` implementation was already in the tree behind the HTTP/2-capable `fetch`
   client.
 
+  Measured rather than assumed, with `bench/http2.sh` (new): on **one**
+  connection carrying 50 concurrent streams — the shape a reverse proxy or gRPC
+  client is in — throughput goes from 19,333 to 70,961 req/s (**3.67×**, against
+  1.72× for Node and 1.28× for Deno on the same box; `Bun.serve` has no cleartext
+  h2 server). Across **50** connections, where there is nothing to multiplex,
+  HTTP/2 is overhead and *loses* (0.75×) — as it does for every runtime measured.
+
+- **`bench/http2.sh`**: HTTP/1.1 vs HTTP/2 throughput per runtime, in two client
+  shapes (wide: many connections; narrow: one connection, many streams), driven
+  by an external load generator against each runtime's own server. A cell reads
+  n/a when a runtime has no cleartext h2 server or the run was not ≥99%
+  successful.
+
 - **Complete ESM package resolution: conditions, `imports`, and self-reference**
   (DECISIONS D40, lifting D22's deferral). Bare-specifier resolution now
   implements the whole `exports`/`imports` algorithm rather than its common
