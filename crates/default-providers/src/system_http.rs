@@ -1007,6 +1007,416 @@ mod http2_tests {
         assert_eq!(body, "secure-h2");
     }
 
+    /// One port, both versions, in one test: an HTTP/1.1 client written by hand
+    /// and an HTTP/2 client on the same listener. Version detection is per
+    /// connection, so this is the shape that would break if it were per
+    /// listener — and it is the shape every existing deployment is in the moment
+    /// h2 is advertised.
+    #[tokio::test]
+    async fn one_listener_serves_an_http1_and_an_http2_client() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (http, id, port) = super::tests::bound_with(None).await;
+
+        let h1 = tokio::spawn(async move {
+            let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            sock.write_all(b"GET /one HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut got = String::new();
+            sock.read_to_string(&mut got).await.unwrap();
+            got
+        });
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let h2 = tokio::spawn(async move {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/two"))
+                .send()
+                .await
+                .unwrap();
+            (resp.version(), resp.text().await.unwrap())
+        });
+
+        let mut pending = Vec::new();
+        while pending.len() < 2 {
+            pending.extend(http.next_requests(id, 8).await.unwrap());
+        }
+        for (rid, req) in pending {
+            let body = if req.url.ends_with("/one") {
+                "v1"
+            } else {
+                "v2"
+            };
+            ok(&http, rid, body).await;
+        }
+
+        let one = h1.await.unwrap();
+        assert!(one.contains("HTTP/1.1 200"), "{one}");
+        assert!(one.contains("v1"), "{one}");
+        let (version, two) = h2.await.unwrap();
+        assert_eq!(version, reqwest::Version::HTTP_2);
+        assert_eq!(two, "v2");
+    }
+
+    /// A streamed response body over HTTP/2. There is no chunked transfer-
+    /// encoding here — the version frames the body itself, and
+    /// `Transfer-Encoding` is forbidden on it — so this is the path that would
+    /// silently produce a malformed response if the HTTP/1.1 framing leaked
+    /// through.
+    #[tokio::test]
+    async fn streams_a_response_body_over_h2() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/stream"))
+                .send()
+                .await
+                .unwrap();
+            let te = resp.headers().get("transfer-encoding").is_some();
+            let len = resp.headers().get("content-length").is_some();
+            (resp.text().await.unwrap(), te, len)
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        let chunks = futures_util::stream::iter(
+            (0..8).map(|i| Ok::<_, ProviderError>(format!("chunk-{i};").into_bytes())),
+        );
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Stream(Box::pin(chunks)),
+            },
+        )
+        .await
+        .unwrap();
+
+        let (body, transfer_encoding, content_length) = request.await.unwrap();
+        assert_eq!(
+            body,
+            "chunk-0;chunk-1;chunk-2;chunk-3;chunk-4;chunk-5;chunk-6;chunk-7;"
+        );
+        assert!(!transfer_encoding, "HTTP/2 forbids Transfer-Encoding");
+        // Length is unknown up front for a streamed body on either version.
+        assert!(!content_length, "a streamed body has no Content-Length");
+    }
+
+    /// The inbound half: a request body arrives as a stream the consumer pulls,
+    /// and on HTTP/2 that is DATA frames under per-stream flow control rather
+    /// than a chunked HTTP/1.1 body. The handoff is the same either way, which
+    /// is what this pins.
+    #[tokio::test]
+    async fn reads_a_streamed_request_body_over_h2() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        // Big enough to span many DATA frames and exhaust the initial stream
+        // window, so the client only finishes if WINDOW_UPDATEs flow back.
+        let upload = "u".repeat(256 * 1024);
+        let expected = upload.len();
+        let request = tokio::spawn(async move {
+            client
+                .post(format!("http://127.0.0.1:{port}/upload"))
+                .body(upload)
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, req) = reqs.into_iter().next().expect("one request");
+        assert_eq!(req.method, "POST");
+        let mut seen = 0usize;
+        match req.body {
+            HttpServerBody::Stream(mut chunks) => {
+                while let Some(chunk) = chunks.next().await {
+                    seen += chunk.expect("a chunk, not an error").len();
+                }
+            }
+            _ => panic!("a request with a body must cross as a stream"),
+        }
+        assert_eq!(seen, expected, "every uploaded byte reached the consumer");
+        ok(&http, rid, "read-it-all").await;
+
+        assert_eq!(request.await.unwrap(), "read-it-all");
+    }
+
+    /// Method, status, and ordinary headers survive the HPACK round trip — the
+    /// header representation is entirely different on HTTP/2, so "it worked on
+    /// HTTP/1.1" proves nothing about it.
+    #[tokio::test]
+    async fn carries_method_status_and_headers_over_h2() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let resp = client
+                .patch(format!("http://127.0.0.1:{port}/thing?q=1"))
+                .header("x-request-note", "from-client")
+                .send()
+                .await
+                .unwrap();
+            let note = resp
+                .headers()
+                .get("x-response-note")
+                .map(|v| v.to_str().unwrap().to_string());
+            (resp.status().as_u16(), note)
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, req) = reqs.into_iter().next().expect("one request");
+        assert_eq!(req.method, "PATCH");
+        assert!(req.url.ends_with("/thing?q=1"), "{}", req.url);
+        assert!(
+            req.headers
+                .iter()
+                .any(|(k, v)| k == "x-request-note" && v == "from-client"),
+            "{:?}",
+            req.headers
+        );
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 201,
+                headers: vec![("x-response-note".into(), "from-server".into())],
+                body: HttpServerBody::Bytes(b"created".to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let (status, note) = request.await.unwrap();
+        assert_eq!(status, 201);
+        assert_eq!(note.as_deref(), Some("from-server"));
+    }
+
+    /// HTTP/2 forbids connection-specific header fields, and a handler written
+    /// against HTTP/1.1 habits will set them. The response must still be valid
+    /// rather than a stream the client resets — so this pins the behaviour we
+    /// rely on, whichever layer provides it.
+    #[tokio::test]
+    async fn connection_specific_headers_do_not_break_an_h2_response() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/legacy"))
+                .send()
+                .await
+                .expect("the response must be valid HTTP/2");
+            let leaked: Vec<String> = ["connection", "keep-alive", "transfer-encoding", "upgrade"]
+                .iter()
+                .filter(|h| resp.headers().contains_key(**h))
+                .map(|h| (*h).to_string())
+                .collect();
+            (resp.status().as_u16(), leaked, resp.text().await.unwrap())
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![
+                    ("connection".into(), "keep-alive".into()),
+                    ("keep-alive".into(), "timeout=5".into()),
+                    ("transfer-encoding".into(), "chunked".into()),
+                    ("content-length".into(), "999".into()),
+                    ("x-kept".into(), "yes".into()),
+                ],
+                body: HttpServerBody::Bytes(b"legacy-ok".to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+
+        let (status, leaked, body) = request.await.unwrap();
+        assert_eq!(status, 200);
+        assert!(
+            leaked.is_empty(),
+            "these must not reach an h2 client: {leaked:?}"
+        );
+        assert_eq!(body, "legacy-ok");
+    }
+
+    /// A response larger than HTTP/2's initial 64 KiB stream window only
+    /// completes if flow control is honoured in both directions. A server that
+    /// wrote the body and stopped would hang here rather than fail loudly.
+    #[tokio::test]
+    async fn a_response_larger_than_the_flow_control_window_completes() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            client
+                .get(format!("http://127.0.0.1:{port}/big"))
+                .send()
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .len()
+        });
+
+        const SIZE: usize = 1024 * 1024; // 16× the default stream window
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(vec![b'z'; SIZE]),
+            },
+        )
+        .await
+        .unwrap();
+
+        let got = tokio::time::timeout(std::time::Duration::from_secs(30), request)
+            .await
+            .expect("a windowed body must drain, not stall")
+            .unwrap();
+        assert_eq!(got, SIZE);
+    }
+
+    /// The disconnect signal on HTTP/2: a client that resets its stream (here,
+    /// by being dropped mid-flight) must be reported, or a handler awaiting
+    /// `request.signal` waits for a peer that is already gone. The stream reset
+    /// is a different event from the HTTP/1.1 connection close this mirrors.
+    #[tokio::test]
+    async fn a_client_that_abandons_an_h2_stream_is_reported_as_a_disconnect() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let _ = client
+                .get(format!("http://127.0.0.1:{port}/gone"))
+                .send()
+                .await;
+        });
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+
+        request.abort(); // drops the client, and with it the connection
+        let gone = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            http.request_disconnected(rid),
+        )
+        .await
+        .expect("must settle rather than hang");
+        assert!(gone, "an abandoned h2 stream is a disconnect");
+    }
+
+    /// A request whose response can no longer arrive — here because the whole
+    /// server registry went away while it was in flight — ends as a 500 on
+    /// HTTP/2 as it does on HTTP/1.1. The alternative is a client left holding
+    /// an open stream forever, which is the failure that looks like a hang
+    /// rather than an error.
+    ///
+    /// (Dropping the returned `HttpServerRequest` alone would *not* do this: the
+    /// response sender is stashed in the provider's pending map when the request
+    /// is handed out, not carried by the request itself.)
+    #[tokio::test]
+    async fn a_request_that_can_no_longer_be_answered_becomes_a_500() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            client
+                .get(format!("http://127.0.0.1:{port}/dropped"))
+                .send()
+                .await
+                .unwrap()
+                .status()
+                .as_u16()
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (_rid, _req) = reqs.into_iter().next().expect("one request");
+        // The last handle to the registry, and with it the stashed response
+        // sender: the connection task sees the send half drop.
+        drop(http);
+
+        let status = tokio::time::timeout(std::time::Duration::from_secs(10), request)
+            .await
+            .expect("the client must be answered, not left hanging")
+            .unwrap();
+        assert_eq!(status, 500);
+    }
+
+    /// Graceful shutdown over HTTP/2: an in-flight request still gets its
+    /// response written after the drain starts. hyper's graceful shutdown is
+    /// version-specific machinery (GOAWAY here, not a closed keep-alive), so it
+    /// needs its own coverage.
+    #[tokio::test]
+    async fn a_drain_finishes_an_inflight_h2_request() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            client
+                .get(format!("http://127.0.0.1:{port}/slow"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap()
+        });
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+
+        // Drain *first*, then answer: the response has to survive the shutdown.
+        assert_eq!(http.shutdown_all(), 1);
+        ok(&http, rid, "answered-while-draining").await;
+
+        assert_eq!(request.await.unwrap(), "answered-while-draining");
+        assert!(
+            http.wait_for_idle(std::time::Duration::from_secs(10)).await,
+            "the connection must finish and the server go idle"
+        );
+        http.close(id).await.unwrap();
+    }
+
     /// A guest that narrows `alpn` to HTTP/1.1 gets HTTP/1.1, even from a client
     /// that would have preferred h2 — the option is the escape hatch, so it has
     /// to actually decide the outcome.

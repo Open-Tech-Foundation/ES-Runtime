@@ -105,6 +105,18 @@ fn serves_http2_to_a_cleartext_client_that_opens_with_the_preface() {
     // The DATA payload is the handler's response, and the path proves the
     // request URL was rebuilt from `:authority` rather than a missing `Host`.
     assert!(stdout.contains("h2c-body:body-for:/h2c"), "{stdout}");
+    // A second stream opened before the first was answered — multiplexing, on
+    // the guest-facing path rather than only in the provider's tests.
+    assert!(stdout.contains("h2c-second:body-for:/second"), "{stdout}");
+    // A request body carried as DATA frames reached the handler's `text()`.
+    assert!(stdout.contains("h2c-post:echo:uploaded-bytes"), "{stdout}");
+    // The stream cap is advertised in the server's SETTINGS, so a client knows
+    // it before opening anything. This is the documented number, read off the
+    // wire rather than from the constant that set it.
+    assert!(stdout.contains("h2c-max-streams:256"), "{stdout}");
+    // …and the same port still answers an HTTP/1.1 `fetch`, which is the
+    // mixed-version state every existing deployment is in.
+    assert!(stdout.contains("h1-body:body-for:/http1"), "{stdout}");
 }
 
 #[test]

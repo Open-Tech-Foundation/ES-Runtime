@@ -6122,4 +6122,143 @@ mod tests {
             vec!["a; rm -rf /".to_string(), "$(id)".to_string()]
         );
     }
+
+    /// An [`HttpServerProvider`] that records what `serve` was asked for and
+    /// binds nothing. The ALPN list a guest's `serve()` produces is a documented
+    /// default and part of what a client negotiates against, so it is pinned
+    /// here — at the layer that decides it — rather than inferred from a
+    /// handshake.
+    #[derive(Default)]
+    struct RecordingHttpServer {
+        options: Arc<Mutex<Vec<es_runtime_providers::HttpServeOptions>>>,
+    }
+
+    impl es_runtime_providers::HttpServerProvider for RecordingHttpServer {
+        fn serve(
+            &self,
+            options: es_runtime_providers::HttpServeOptions,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                (u64, es_runtime_providers::SocketInfo),
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            let info = es_runtime_providers::SocketInfo {
+                remote_address: String::new(),
+                remote_port: 0,
+                local_address: options.host.clone(),
+                local_port: 8443,
+                alpn: None,
+            };
+            self.options.lock().unwrap().push(options);
+            Box::pin(std::future::ready(Ok((1, info))))
+        }
+
+        fn next_requests(
+            &self,
+            _id: u64,
+            _max: usize,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<
+                Vec<(u64, es_runtime_providers::HttpServerRequest)>,
+                es_runtime_providers::ProviderError,
+            >,
+        > {
+            // Empty ⇒ "the server is closed", which ends the accept loop rather
+            // than holding the module open on a server nothing will call.
+            Box::pin(std::future::ready(Ok(Vec::new())))
+        }
+
+        fn respond(
+            &self,
+            _request_id: u64,
+            _response: es_runtime_providers::HttpServerResponse,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(std::future::ready(Ok(())))
+        }
+
+        fn close(
+            &self,
+            _id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    fn http_runtime(http: Arc<RecordingHttpServer>) -> Runtime {
+        let engine = V8Engine::new(Limits::default()).expect("engine");
+        let providers = HostProviders::new(
+            Arc::new(FixedClock {
+                monotonic: 0,
+                wall: 0,
+            }),
+            Arc::new(TestConsole::default()),
+            Arc::new(MockNet::stub()),
+            Arc::new(TestEntropy::new()),
+        )
+        .with_http_server(http);
+        Runtime::new(Box::new(engine), providers).expect("runtime")
+    }
+
+    /// The TLS ALPN list a `serve()` with no `alpn` advertises. Both versions,
+    /// h2 first — ALPN order is the server's preference, so this is what decides
+    /// that an h2-capable client gets HTTP/2.
+    #[test]
+    fn serve_advertises_h2_then_http11_by_default() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ hostname: '127.0.0.1', port: 8443, secureTransport: 'on', \
+                               cert: 'PEM-CERT', key: 'PEM-KEY' }, () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        let tls = options[0].tls.as_ref().expect("secureTransport: on");
+        assert_eq!(tls.alpn, vec!["h2".to_string(), "http/1.1".to_string()]);
+    }
+
+    /// …and naming `alpn` replaces that list rather than adding to it, which is
+    /// what pins a listener to one version for a client that mishandles h2.
+    #[test]
+    fn an_explicit_alpn_replaces_the_default() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8443, secureTransport: 'on', cert: 'C', key: 'K', \
+                               alpn: ['http/1.1'] }, () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        let tls = options[0].tls.as_ref().expect("secureTransport: on");
+        assert_eq!(tls.alpn, vec!["http/1.1".to_string()]);
+    }
+
+    /// A cleartext `serve()` carries no TLS at all — h2c is decided by the
+    /// connection preface on the wire, so there is nothing for ALPN to say here.
+    #[test]
+    fn a_cleartext_serve_sends_no_tls_options() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080 }, () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        assert!(http.options.lock().unwrap()[0].tls.is_none());
+    }
 }
