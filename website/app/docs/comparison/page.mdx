@@ -31,7 +31,7 @@ makes the trade-offs explicit.
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
-| Capability sandbox (deny by default) | <No /> | <Partial /> | <No /> | <Yes /> |
+| Capability sandbox (deny by default) | <Partial /> | <Partial /> | <No /> | <Yes /> |
 | Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Workers / multi-thread | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
@@ -61,9 +61,15 @@ a policy for what the module loader may resolve).
 
 <br />
 
-> **Note on the esrun sandbox column.** Deny-by-default applies to the
-> **embeddable library**. The esrun **CLI** grants everything by default and
-> restricts on request — see below.
+> **Note on the esrun sandbox column.** The answer differs by entry point, which
+> is why it is <Partial /> rather than a single icon. The **embeddable library**
+> is deny-by-default in the strongest sense available here: a `Runtime` starts
+> with an empty capability set and a host grants each one explicitly, so an
+> embedder cannot forget to sandbox — there is nothing to forget. The **CLI**
+> inverts that: it grants everything and restricts on request, because a runner
+> you have to configure before it runs anything is not a runner. `--deny-all`
+> takes it back to the library's posture; see [Permission
+> models](#permission-models).
 
 ## Permission models
 
