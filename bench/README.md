@@ -18,6 +18,8 @@ workloads it supports; `http`/`streams`/`fs`/`glob`/`fetch_upload` and the
 ```sh
 cargo build --release -p es-runtime-cli   # build esrun first
 bench/run.sh                              # auto-detects node / bun / deno / llrt / esrun
+bench/rps.sh                              # server throughput, external load generator
+bench/http2.sh                            # the same server over HTTP/1.1 vs HTTP/2
 ```
 
 Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 25),
@@ -339,6 +341,65 @@ The framework narrows the gap (esrun is within ~25% of Bun here), because
 cost on top of their fast servers. Express, by contrast, cannot run on esrun at
 all (it is CommonJS and needs `node:http`'s `(req, res)` API; esrun is ESM-only
 and rejects `node:` builtins).
+
+### HTTP/1.1 vs HTTP/2
+
+`bench/http2.sh` measures the same hello-world server twice — once over HTTP/1.1,
+once over cleartext HTTP/2 (h2c by prior knowledge) — so the only variable is the
+protocol version. It runs two shapes, because an HTTP/2 number in isolation says
+nothing: it is dominated by how many connections the client opened and how many
+streams it put on each.
+
+| shape | client | what it answers |
+| --- | --- | --- |
+| **wide** | 50 connections × 1 stream | throughput at ordinary load-generator concurrency. HTTP/1.1's best case — it already has 50 sockets, so h2 adds framing cost and buys nothing. |
+| **narrow** | 1 connection × 50 streams | multiplexing. HTTP/1.1 on one connection is strictly serial (the next request is written only after the previous response is read); HTTP/2 carries all 50 at once on the same socket. |
+
+```sh
+cargo build --release -p es-runtime-cli
+cargo install oha                        # bombardier cannot drive cleartext h2
+bench/http2.sh
+CONN=250 PARALLEL=100 bench/http2.sh     # heavier load
+```
+
+Same box as above (Linux x86-64, 12 cores), `-n 100000` per cell:
+
+```
+        | wide: 50 conns × 1 stream | narrow: 1 conn × 50 streams
+runtime |  HTTP/1.1    HTTP/2  gain |  HTTP/1.1    HTTP/2  gain
+--------+---------------------------+---------------------------
+node    |     34,143    17,903 0.52x |    22,824    39,344 1.72x
+bun     |    113,238       n/a   n/a |    29,507       n/a   n/a
+deno    |    112,825    26,280 0.23x |    31,024    39,789 1.28x
+esrun   |     67,118    50,048 0.75x |    19,333    70,961 3.67x
+```
+
+Read it in two halves, because they say opposite things and both are expected:
+
+- **Wide is HTTP/2's worst case and every runtime loses there** (0.23–0.75×).
+  With 50 sockets already open there is nothing to multiplex, so h2 is pure
+  overhead: framing, HPACK state, flow-control accounting. esrun gives up the
+  least of the three, which mostly reflects how little sits above the socket in
+  its request path — the version-detecting connection is the same code either
+  way. A runtime that showed a *large* h2 win in this column would be telling you
+  about its HTTP/1.1 handling, not its h2.
+- **Narrow is what HTTP/2 is for, and it is where esrun gains most** (3.67×,
+  against 1.72× for Node and 1.28× for Deno). One connection, 50 requests in
+  flight: HTTP/1.1 serialises them, HTTP/2 does not. The size of esrun's gain
+  comes from the request handoff being per *request* rather than per connection
+  — responses were already matched by request id and could always complete out of
+  order, so multiplexing needed no new machinery to exploit. It is also the
+  column that matters behind a proxy or an API gateway, which is exactly the
+  deployment that holds one long-lived connection to the origin.
+
+**bun is n/a** because `Bun.serve` has no cleartext HTTP/2 server (confirmed
+outside the harness with `curl --http2-prior-knowledge`); its HTTP/1.1 numbers
+are there for scale. **node** is the one runtime whose two columns come from two
+*servers*: `node:http` is HTTP/1.1-only and h2c lives behind a separate
+`node:http2` API, where esrun and Deno detect the version per connection on one
+server. A cell reads n/a when the runtime cannot serve that version, or when the
+run did not come back ≥99% successful — a half-failing run is not a throughput
+measurement.
 
 [oha]: https://github.com/hatoo/oha
 [bombardier]: https://github.com/codesenberg/bombardier
