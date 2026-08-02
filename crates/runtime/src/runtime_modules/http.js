@@ -1,4 +1,7 @@
-// runtime:http — an HTTP/1.1 server: `serve((request) => response)`. The handler
+// runtime:http — an HTTP/1.1 + HTTP/2 server: `serve((request) => response)`.
+// The version is the client's to choose and the handler never sees it: over TLS
+// it is ALPN (`h2` and `http/1.1` are both offered unless `alpn` narrows it),
+// and on a cleartext port an HTTP/2 client is served h2c by prior knowledge. The handler
 // is called with a web `Request` and returns (or resolves to) a web `Response`
 // — the same Fetch API objects `fetch` uses. Backed by async ops over a vetted
 // HTTP backend, gated on NetListen (binding the listening socket). Bodies
@@ -36,6 +39,8 @@ function parseTls(options) {
   if (!o.cert || !o.key) {
     throw new TypeError('serve: secureTransport "on" requires both cert and key (PEM)');
   }
+  // Left empty, the host advertises ["h2", "http/1.1"] — the server speaks both.
+  // Naming `alpn` narrows that, e.g. ["http/1.1"] for a client that mishandles h2.
   const alpn = o.alpn ?? [];
   if (!Array.isArray(alpn)) throw new TypeError("serve: alpn must be an array of strings");
   return { cert: o.cert, key: o.key, alpn: alpn.map(String) };

@@ -95,9 +95,12 @@ pub(crate) fn install(
                         Some(HttpServerTls {
                             cert,
                             key,
-                            // An HTTP/1.1 server that advertises nothing else.
+                            // The server speaks both versions, so it offers
+                            // both, h2 first — ALPN order is the server's
+                            // preference. A guest that wants one of them only
+                            // says so with an explicit `alpn`.
                             alpn: if alpn.is_empty() {
-                                vec!["http/1.1".to_string()]
+                                vec!["h2".to_string(), "http/1.1".to_string()]
                             } else {
                                 alpn
                             },

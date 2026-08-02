@@ -1,4 +1,5 @@
-//! OS-backed [`HttpServerProvider`] — a hyper HTTP/1.1 server for `runtime:http`.
+//! OS-backed [`HttpServerProvider`] — a hyper HTTP/1.1 + HTTP/2 server for
+//! `runtime:http`.
 //!
 //! Each accepted connection is served on its own spawned task. hyper parses the
 //! request and, for each one, hands `(request, oneshot)` to a per-server channel
@@ -16,7 +17,16 @@
 //! [`request_disconnected`](HttpServerProvider::request_disconnected) reads,
 //! which is what backs the guest's `request.signal`: hyper dropping the service
 //! future — what a vanished client does to it — drops that half unsent, and the
-//! watcher reads the drop as the disconnect. TLS is not supported yet.
+//! watcher reads the drop as the disconnect.
+//!
+//! The protocol version is the client's choice, not the listener's: every
+//! connection is served through hyper-util's version-detecting builder, so an
+//! HTTP/1.1 client and an HTTP/2 client are both answered on the same port by
+//! the same handler. Over TLS the choice is ALPN (`serve` advertises `h2` and
+//! `http/1.1` unless the guest narrows it); on a cleartext port it is the HTTP/2
+//! connection preface, which is prior-knowledge h2c. Nothing above the socket
+//! changes with the version — the handoff already answers requests out of order,
+//! which is what HTTP/2 multiplexing needs.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -33,10 +43,10 @@ use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body as _, Frame, Incoming};
-use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
@@ -119,7 +129,7 @@ impl LiveConnections {
     }
 }
 
-/// An [`HttpServerProvider`] over a hyper HTTP/1.1 server. The `Arc`s are cloned
+/// An [`HttpServerProvider`] over a hyper HTTP/1.1 + HTTP/2 server. The `Arc`s are cloned
 /// into each returned future so the futures stay `'static`.
 #[derive(Clone, Default)]
 pub struct SystemHttpServer {
@@ -220,19 +230,24 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
 /// Turns a parsed hyper request into the [`HttpServerRequest`] handoff shape
 /// without touching the body: the `Incoming` body crosses as a chunk stream the
 /// guest pulls (hyper feeds it while the connection task awaits the response).
-/// The absolute URL is reconstructed from the listener's scheme plus the `Host`
-/// header (falling back to the bound address).
+/// The absolute URL is reconstructed from the listener's scheme plus the request
+/// authority — the `Host` header, or on HTTP/2 the `:authority` pseudo-header
+/// hyper puts in the URI — falling back to the bound address.
 fn to_server_request(req: Request<Incoming>, origin: &str) -> HttpServerRequest {
     let method = req.method().to_string();
     // `origin` is "<scheme>://<bound address>", the fallback when a request
-    // carries no Host. A Host header replaces only the authority — the scheme
+    // names no authority. The authority replaces only the host part — the scheme
     // is the listener's, and a client cannot talk this into claiming https:.
     let (scheme, authority) = origin.split_once("://").unwrap_or(("http", origin));
+    // HTTP/2 has no `Host` header: the client sends `:authority`, which hyper
+    // parses into the URI. Reading only the header would leave every h2 request
+    // reporting the bound address as its host.
     let host = req
         .headers()
         .get(hyper::header::HOST)
         .and_then(|v| v.to_str().ok())
         .filter(|h| !h.is_empty())
+        .or_else(|| req.uri().authority().map(|a| a.as_str()))
         .unwrap_or(authority);
     let path = req
         .uri()
@@ -348,7 +363,18 @@ async fn serve_connection<S>(
         }
     });
 
-    let conn = http1::Builder::new().serve_connection(TokioIo::new(io), service);
+    // One builder for both versions: it reads the start of the stream and picks
+    // HTTP/2 when the connection preface is there, HTTP/1.1 otherwise. That is
+    // the whole of h2c support on a cleartext port, and over TLS it agrees with
+    // whatever ALPN already negotiated (an `h2` client sends the preface first).
+    let mut builder = auto::Builder::new(TokioExecutor::new());
+    // Explicit rather than inherited: an HTTP/2 peer can open streams far faster
+    // than a single-threaded isolate answers them, and every open stream holds a
+    // queued `Pending` plus its body channel. Capping concurrency bounds what one
+    // connection can make the server hold, and leaves the request channel's
+    // buffer for spreading across connections rather than one client filling it.
+    builder.http2().max_concurrent_streams(256);
+    let conn = builder.serve_connection(TokioIo::new(io), service);
     tokio::pin!(conn);
     // Race the connection against the drain signal. On shutdown,
     // `graceful_shutdown` stops reading new requests but still finishes the one
@@ -835,5 +861,188 @@ mod tls_tests {
         .await
         .unwrap();
         assert!(request.await.unwrap().contains("still here"));
+    }
+}
+
+#[cfg(test)]
+mod http2_tests {
+    use super::*;
+    use es_runtime_providers::HttpServerTls;
+
+    /// Answers `rid` with a 200 carrying `body`.
+    async fn ok(http: &SystemHttpServer, rid: u64, body: &str) {
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(body.as_bytes().to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    /// A cleartext port serves an HTTP/2 client that opens with the connection
+    /// preface (prior knowledge, h2c) — the version detection is the accepted
+    /// stream's own bytes, with no ALPN to consult and no upgrade dance.
+    #[tokio::test]
+    async fn serves_h2c_on_a_cleartext_port_by_prior_knowledge() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/h2c"))
+                .send()
+                .await
+                .expect("an h2c client is answered");
+            (resp.version(), resp.text().await.unwrap())
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, req) = reqs.into_iter().next().expect("one request");
+        // HTTP/2 sends `:authority`, not a `Host` header. Reading only the
+        // header would leave every h2 request claiming the bound address.
+        assert_eq!(req.url, format!("http://127.0.0.1:{port}/h2c"));
+        ok(&http, rid, "over-h2c").await;
+
+        let (version, body) = request.await.unwrap();
+        assert_eq!(version, reqwest::Version::HTTP_2);
+        assert_eq!(body, "over-h2c");
+    }
+
+    /// The point of multiplexing: two requests in flight on **one** connection,
+    /// answered out of order. On HTTP/1.1 the second response could not be
+    /// written before the first; here it is, and each stream gets its own body.
+    #[tokio::test]
+    async fn multiplexes_concurrent_streams_on_one_connection() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        // One client, so both requests share a pooled connection.
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        let get = |path: &'static str| {
+            let client = client.clone();
+            tokio::spawn(async move {
+                client
+                    .get(format!("http://127.0.0.1:{port}/{path}"))
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap()
+            })
+        };
+        let first = get("first");
+        let second = get("second");
+
+        // Collect both before answering either: on HTTP/1.1 this deadlocks
+        // unless the client opens a second connection, because the second
+        // request is not written until the first response is read.
+        let mut pending = Vec::new();
+        while pending.len() < 2 {
+            pending.extend(http.next_requests(id, 8).await.unwrap());
+        }
+        // Answer in reverse arrival order — the stream, not the connection,
+        // decides which response belongs to which request.
+        for (rid, req) in pending.into_iter().rev() {
+            let body = if req.url.ends_with("/first") {
+                "one"
+            } else {
+                "two"
+            };
+            ok(&http, rid, body).await;
+        }
+
+        assert_eq!(first.await.unwrap(), "one");
+        assert_eq!(second.await.unwrap(), "two");
+    }
+
+    /// Over TLS the version is ALPN's answer. The listener offers `h2` first, so
+    /// an h2-capable client gets HTTP/2 without the guest asking for anything.
+    #[tokio::test]
+    async fn negotiates_h2_over_tls_alpn() {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_pem = ck.cert.pem().into_bytes();
+        let key_pem = ck.signing_key.serialize_pem().into_bytes();
+        let (http, id, port) = super::tests::bound_with(Some(HttpServerTls {
+            cert: cert_pem.clone(),
+            key: key_pem,
+            // What `runtime:http` `serve` sends when the guest names no `alpn`.
+            alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+        }))
+        .await;
+
+        // Trusts this cert and nothing else, so the test never reads the host's
+        // certificate store.
+        let client = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(&cert_pem).unwrap())
+            .resolve("localhost", ([127, 0, 0, 1], port).into())
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let resp = client
+                .get(format!("https://localhost:{port}/tls"))
+                .send()
+                .await
+                .expect("the handshake negotiates a protocol both sides speak");
+            (resp.version(), resp.text().await.unwrap())
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, req) = reqs.into_iter().next().expect("one request");
+        assert_eq!(req.url, format!("https://localhost:{port}/tls"));
+        ok(&http, rid, "secure-h2").await;
+
+        let (version, body) = request.await.unwrap();
+        assert_eq!(version, reqwest::Version::HTTP_2);
+        assert_eq!(body, "secure-h2");
+    }
+
+    /// A guest that narrows `alpn` to HTTP/1.1 gets HTTP/1.1, even from a client
+    /// that would have preferred h2 — the option is the escape hatch, so it has
+    /// to actually decide the outcome.
+    #[tokio::test]
+    async fn an_alpn_of_http1_only_keeps_a_capable_client_on_http1() {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert_pem = ck.cert.pem().into_bytes();
+        let key_pem = ck.signing_key.serialize_pem().into_bytes();
+        let (http, id, port) = super::tests::bound_with(Some(HttpServerTls {
+            cert: cert_pem.clone(),
+            key: key_pem,
+            alpn: vec!["http/1.1".to_string()],
+        }))
+        .await;
+
+        let client = reqwest::Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_pem(&cert_pem).unwrap())
+            .resolve("localhost", ([127, 0, 0, 1], port).into())
+            .build()
+            .unwrap();
+
+        let request = tokio::spawn(async move {
+            let resp = client
+                .get(format!("https://localhost:{port}/one-one"))
+                .send()
+                .await
+                .expect("a narrowed ALPN still serves");
+            (resp.version(), resp.text().await.unwrap())
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        ok(&http, rid, "plain").await;
+
+        let (version, body) = request.await.unwrap();
+        assert_eq!(version, reqwest::Version::HTTP_11);
+        assert_eq!(body, "plain");
     }
 }
