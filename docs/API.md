@@ -1154,17 +1154,20 @@ cannot open unbounded streams against a single-threaded isolate.
 
 Whether that is a win depends entirely on how the client connects, and it is
 worth being concrete rather than assuming h2 is faster (`bench/http2.sh`, same
-server, only the version changed):
+server, best of 3 interleaved repetitions, only the version changed):
 
 | client shape | HTTP/1.1 | HTTP/2 |
 | --- | --- | --- |
-| 50 connections × 1 stream | 59,322 req/s | 44,326 req/s (**0.75×**) |
-| 1 connection × 50 streams | 18,372 req/s | 65,563 req/s (**3.57×**) |
+| 50 connections × 1 stream | 60,544 req/s | 46,769 req/s (**0.77×**) |
+| 1 connection × 50 streams | 18,192 req/s | 65,687 req/s (**3.61×**) |
 
 With 50 sockets already open there is nothing to multiplex and HTTP/2 is pure
 framing overhead — it *loses*. On one connection, where HTTP/1.1 is strictly
-serial, it wins by 3.57×. That second shape is the one a reverse proxy, an API
-gateway, or a gRPC client is in.
+serial, 65,687 req/s is both a 3.61× gain and the fastest of the four runtimes
+measured on that shape (Bun 47,283, Node 36,052, Deno 35,069 — see
+`bench/README.md`, which also explains which comparisons in that table are
+apples-to-apples and which are not). That second shape is the one a reverse
+proxy, an API gateway, or a gRPC client is in.
 
 `request.url` is rebuilt from `:authority` on HTTP/2, which is the version's
 replacement for the `Host` header — one URL shape either way. Framing stays the

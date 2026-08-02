@@ -344,64 +344,79 @@ and rejects `node:` builtins).
 
 ### HTTP/1.1 vs HTTP/2
 
-`bench/http2.sh` measures the same hello-world server twice — once over HTTP/1.1,
-once over cleartext HTTP/2 (h2c by prior knowledge) — so the only variable is the
-protocol version. It runs two shapes, because an HTTP/2 number in isolation says
-nothing: it is dominated by how many connections the client opened and how many
-streams it put on each.
+`bench/http2.sh` measures the same hello-world server over HTTP/1.1 and over
+cleartext HTTP/2 (h2c by prior knowledge). It runs two client shapes, because an
+HTTP/2 number in isolation says nothing — it is dominated by how many connections
+the client opened and how many streams it put on each.
 
 | shape | client | what it answers |
 | --- | --- | --- |
 | **wide** | 50 connections × 1 stream | throughput at ordinary load-generator concurrency. HTTP/1.1's best case — it already has 50 sockets, so h2 adds framing cost and buys nothing. |
 | **narrow** | 1 connection × 50 streams | multiplexing. HTTP/1.1 on one connection is strictly serial (the next request is written only after the previous response is read); HTTP/2 carries all 50 at once on the same socket. |
 
+Sampling follows the same methodology as `run.sh` rather than inventing a second
+one: **interleaved and shuffled** (each repetition samples every runtime back to
+back in random order, so contention hits them all in the same window), a
+**discarded warmup repetition**, and **best of N** — interference only ever
+subtracts throughput, so the maximum is the contention-free ceiling, by the same
+argument that makes `run.sh` take the minimum of a duration.
+
 ```sh
 cargo build --release -p es-runtime-cli
 cargo install oha                        # bombardier cannot drive cleartext h2
 bench/http2.sh
-CONN=250 PARALLEL=100 bench/http2.sh     # heavier load
+CONN=250 PARALLEL=100 REPS=5 bench/http2.sh
 ```
 
-Same box as above (Linux x86-64, 12 cores), `-n 100000` per cell:
+Same box as above (Linux x86-64, 12 cores), `-n 100000`, best of 3:
 
 ```
-        | wide: 50 conns × 1 stream | narrow: 1 conn × 50 streams
-runtime |  HTTP/1.1    HTTP/2  gain |  HTTP/1.1    HTTP/2  gain
---------+---------------------------+---------------------------
-node    |     32,471    16,253 0.50x |    21,043    35,864 1.70x
-bun     |    100,753    38,267 0.38x |    28,280    44,470 1.57x
-deno    |    103,514    22,798 0.22x |    28,391    35,480 1.25x
-esrun   |     59,322    44,326 0.75x |    18,372    65,563 3.57x
+        | wide: 50 conns × 1 stream  | narrow: 1 conn × 50 streams
+runtime |  HTTP/1.1    HTTP/2   gain |  HTTP/1.1    HTTP/2   gain
+--------+----------------------------+----------------------------
+node    |     34,658    16,834 0.49x†|    21,216    36,052 1.70x†
+bun     |    107,981    39,945 0.37x†|    29,319    47,283 1.61x†
+deno    |    114,446    26,527  0.23x|    29,002    35,069  1.21x
+esrun   |     60,544    46,769  0.77x|    18,192    65,687  3.61x
 ```
 
-Read it in two halves, because they say opposite things and both are expected:
+#### What this table does and does not license you to compare
 
-- **Wide is HTTP/2's worst case and every runtime loses there** (0.22–0.75×).
+- **Down a column: fair.** One client shape, one load generator, each runtime on
+  its best available server. On the narrow shape esrun serves **65,687 req/s over
+  HTTP/2 — the fastest of the four outright**, 1.39× the next best (Bun, 47,283),
+  and it does that while being *slowest* of the four on the same shape over
+  HTTP/1.1. That is the claim worth making, and it does not depend on any ratio.
+- **The gain column, unmarked rows (esrun, Deno): fair.** Both numbers come from
+  one server with one code path, so the ratio isolates the protocol.
+- **The gain column, † rows (Node, Bun): not comparable with the others.** For
+  both, cleartext h2 lives behind `node:http2` while their default server
+  (`node:http`, `Bun.serve`) is HTTP/1.1-only — checked directly with
+  `curl --http2-prior-knowledge`. So their ratio carries the gap between two
+  *implementations* on top of the protocol change. Bun's 0.37× in particular is
+  mostly `node:http2` against a very fast native `Bun.serve`, not a statement
+  about HTTP/2.
+- **Ratios across runtimes: don't.** esrun's 3.61× is the largest partly because
+  its single-connection HTTP/1.1 baseline is the *weakest* of the four (18,192),
+  and a small denominator inflates a multiple. The absolute number above is the
+  honest version of the same result.
+
+Both halves of the table are expected, and they say opposite things:
+
+- **Wide is HTTP/2's worst case and every runtime loses there** (0.23–0.77×).
   With 50 sockets already open there is nothing to multiplex, so h2 is pure
-  overhead: framing, HPACK state, flow-control accounting. esrun gives up the
-  least of the four, which mostly reflects how little sits above the socket in
-  its request path — the version-detecting connection is the same code either
-  way. A runtime that showed a *large* h2 win in this column would be telling you
-  about its HTTP/1.1 handling, not its h2.
-- **Narrow is what HTTP/2 is for, and it is where esrun gains most** (3.57×,
-  against 1.70× Node, 1.57× Bun, 1.25× Deno). One connection, 50 requests in
-  flight: HTTP/1.1 serialises them, HTTP/2 does not. The size of esrun's gain
-  comes from the request handoff being per *request* rather than per connection
-  — responses were already matched by request id and could always complete out of
-  order, so multiplexing needed no new machinery to exploit. It is also the
-  column that matters behind a proxy or an API gateway, which is exactly the
-  deployment that holds one long-lived connection to the origin.
+  overhead: framing, HPACK state, flow-control accounting.
+- **Narrow is what HTTP/2 is for.** One connection, 50 requests in flight:
+  HTTP/1.1 serialises them, HTTP/2 does not. esrun exploits it well because the
+  request handoff is per *request* rather than per connection — responses were
+  already matched by request id and could always complete out of order, so
+  multiplexing needed no new machinery. It is also the column that matters behind
+  a proxy or an API gateway, which is exactly the deployment that holds one
+  long-lived connection to the origin.
 
-**Node and Bun are the runtimes whose two columns come from two *servers*.** For
-both, cleartext h2 lives behind `node:http2`, not their default server:
-`node:http`'s server and `Bun.serve` are HTTP/1.1-only (checked directly with
-`curl --http2-prior-knowledge`). Each runtime is therefore measured on its best
-available cleartext h2 server, which is the fair comparison but is worth knowing
-when reading the wide column — Bun's 0.38× is `node:http2` against `Bun.serve`,
-two different implementations, where esrun's 0.75× and Deno's 0.22× are one
-server answering both versions. A cell reads n/a when a runtime cannot serve that
-version at all, or when the run did not come back ≥99% successful — a
-half-failing run is not a throughput measurement.
+A cell reads n/a when a runtime cannot serve that version at all, or when no
+repetition came back ≥99% successful — a half-failing run is not a throughput
+measurement.
 
 [oha]: https://github.com/hatoo/oha
 [bombardier]: https://github.com/codesenberg/bombardier

@@ -252,26 +252,28 @@ What changes on the wire, with the handler untouched:
 
 Only in the shape it is designed for — and it is worth measuring rather than
 assuming. Same server, same request count, only the version changed
-(`bench/http2.sh`):
+(`bench/http2.sh`, best of 3 interleaved repetitions):
 
 | client shape | HTTP/1.1 | HTTP/2 | |
 | --- | --- | --- | --- |
-| 50 connections × 1 stream | 59,322 req/s | 44,326 req/s | **0.75×** |
-| 1 connection × 50 streams | 18,372 req/s | 65,563 req/s | **3.57×** |
+| 50 connections × 1 stream | 60,544 req/s | 46,769 req/s | **0.77×** |
+| 1 connection × 50 streams | 18,192 req/s | 65,687 req/s | **3.61×** |
 
 With 50 sockets already open there is nothing to multiplex, so HTTP/2 is pure
 framing overhead and *loses*. On a single connection — where HTTP/1.1 can only
-send the next request after reading the previous response — it wins by 3.57×.
+send the next request after reading the previous response — it wins by 3.61×.
 The second row is the shape a reverse proxy, an API gateway, or a gRPC client is
 in, which is why it is the interesting one.
 
-<Callout type="info" title="Same numbers, other runtimes">
-  In the same run Node gains 1.70×, Bun 1.57× and Deno 1.25× on the
-  single-connection shape. Node and Bun serve cleartext h2 through `node:http2`
-  rather than their default server (`node:http` and `Bun.serve` are HTTP/1.1
-  only), where esrun and Deno answer both versions on one server. See
-  [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md)
-  for the full table and method.
+<Callout type="info" title="Against other runtimes">
+  On that single-connection shape esrun serves **65,687 req/s over HTTP/2, the
+  fastest of the four measured** — ahead of Bun (47,283), Node (36,052) and Deno
+  (35,069) — while being the *slowest* of them over HTTP/1.1 on the same shape.
+  Node and Bun serve cleartext h2 through `node:http2` rather than their default
+  server (`node:http` and `Bun.serve` are HTTP/1.1-only), so their own
+  h2-vs-h1 ratios mix in an implementation change; compare the absolute numbers
+  instead. Full table and method:
+  [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md).
 </Callout>
 
 ## Usage with Hono

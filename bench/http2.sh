@@ -35,7 +35,7 @@
 #
 # Usage:  bench/http2.sh                    (auto-detects installed runtimes)
 #         CONN=250 PARALLEL=100 bench/http2.sh
-#         REQUESTS=200000 bench/http2.sh
+#         REQUESTS=200000 REPS=5 bench/http2.sh
 #         BENCH_JSON=1 bench/http2.sh       (machine-readable, for diffing runs)
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -45,6 +45,7 @@ SERVER="${SERVER:-scripts/helloserver.js}"
 CONN="${CONN:-50}"          # connections in the "wide" shape
 PARALLEL="${PARALLEL:-50}"  # streams on the single connection in the "narrow" shape
 REQUESTS="${REQUESTS:-100000}"
+REPS="${REPS:-3}"        # timed repetitions per cell; one warmup rep runs first
 
 pick_free_port() {
   python3 -c 'import socket
@@ -113,8 +114,9 @@ print(f\"{s['requestsPerSec']:.0f}\")" 2>/dev/null || echo "ERR"
 }
 
 # measure <runtime> <version> <conns> <streams> → "<req/s>" or ERR.
-# The server is restarted per measurement: Node needs a different one per
-# version, and restarting the others too keeps every number equally warm.
+# The server is started fresh per measurement: Node and Bun need a different one
+# per version (their h2c is `node:http2`, not their default server), and starting
+# one for everybody keeps every cell equally cold at the same point in its run.
 measure() {
   local r="$1" version="$2" conns="$3" streams="$4"
   local h2=""; [ "$version" = "h2" ] && h2="1"
@@ -133,49 +135,105 @@ measure() {
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
 }
 
-# "1.84x" from two rates, or "n/a" when either side could not be measured.
+# Sampling, following run.sh's methodology rather than inventing a second one:
+#
+#   * **Interleaved + shuffled.** Each repetition samples every runtime once,
+#     back to back, in a random order — so contention hits all of them inside the
+#     same window instead of one runtime being measured minutes after another.
+#     Without this, a close call is decided by *when* a runtime happened to run.
+#   * **A discarded warmup repetition**, so page cache, JIT and the load
+#     generator's own state are not charged to the first runtime in the list.
+#   * **Best of N, not mean.** Interference only ever *subtracts* throughput, so
+#     the maximum over repetitions is the contention-free ceiling — the same
+#     argument by which run.sh takes the minimum of a duration.
+CELLS=(wide_h1 wide_h2 narrow_h1 narrow_h2)
+declare -A BEST
+
+# The client shape each cell is measured with: version, connections, streams.
+cell_args() {
+  case "$1" in
+    wide_h1)   echo "h1 $CONN 1" ;;
+    wide_h2)   echo "h2 $CONN 1" ;;
+    narrow_h1) echo "h1 1 1" ;;
+    narrow_h2) echo "h2 1 $PARALLEL" ;;
+  esac
+}
+
+sample_all() {
+  local order=("${ORDER[@]}")
+  if command -v shuf >/dev/null 2>&1; then
+    mapfile -t order < <(printf '%s\n' "${ORDER[@]}" | shuf)
+  fi
+  local rep="$1" r c args v prev
+  for r in "${order[@]}"; do
+    for c in "${CELLS[@]}"; do
+      read -r args <<<"$(cell_args "$c")"
+      # shellcheck disable=SC2086
+      v="$(measure "$r" $args)"
+      [ "$rep" = "warmup" ] && continue
+      case "$v" in ERR|'') continue ;; esac
+      prev="${BEST[$r|$c]:-}"
+      if [ -z "$prev" ] || [ "$v" -gt "$prev" ]; then BEST[$r|$c]="$v"; fi
+    done
+  done
+}
+
+sample_all warmup
+for rep in $(seq "$REPS"); do sample_all "$rep"; done
+
+# "1.84x" from two rates, or "n/a" when either side could not be measured. A
+# runtime whose two versions come from two different servers gets a dagger: the
+# ratio there is not "what HTTP/2 costs", it also carries the gap between two
+# implementations, so it does not mean the same thing as the rows above it.
 ratio() {
-  case "$1$2" in *ERR*) echo "n/a"; return ;; esac
-  python3 -c "print(f'{$2 / $1:.2f}x')" 2>/dev/null || echo "n/a"
+  local lo="$1" hi="$2" mark="$3"
+  case "$lo$hi" in *ERR*|'') echo "n/a"; return ;; esac
+  [ -z "$lo" ] || [ -z "$hi" ] && { echo "n/a"; return; }
+  python3 -c "print(f'{$hi / $lo:.2f}x$mark')" 2>/dev/null || echo "n/a"
 }
 
 cell() { case "$1" in ERR|'') echo "n/a" ;; *) echo "$1" ;; esac; }
+
+# Runtimes whose HTTP/1.1 and HTTP/2 numbers come from two different servers.
+declare -A SPLIT_SERVER=([node]=1 [bun]=1)
 
 if [ -n "${BENCH_JSON:-}" ]; then
   printf '{\n  "results_http2": {'
   first=1
   for r in "${ORDER[@]}"; do
-    wide_h1="$(measure "$r" h1 "$CONN" 1)"
-    wide_h2="$(measure "$r" h2 "$CONN" 1)"
-    narrow_h1="$(measure "$r" h1 1 1)"
-    narrow_h2="$(measure "$r" h2 1 "$PARALLEL")"
     [ -z "$first" ] && printf ','
     first=
-    for v in wide_h1 wide_h2 narrow_h1 narrow_h2; do
-      case "${!v}" in ERR|'') eval "$v=null" ;; esac
+    for c in "${CELLS[@]}"; do
+      eval "$c=\${BEST[\$r|\$c]:-null}"
     done
-    printf '\n    "%s": { "wide_h1": %s, "wide_h2": %s, "narrow_h1": %s, "narrow_h2": %s }' \
-      "$r" "$wide_h1" "$wide_h2" "$narrow_h1" "$narrow_h2"
+    printf '\n    "%s": { "wide_h1": %s, "wide_h2": %s, "narrow_h1": %s, "narrow_h2": %s, "split_server": %s }' \
+      "$r" "$wide_h1" "$wide_h2" "$narrow_h1" "$narrow_h2" \
+      "$([ -n "${SPLIT_SERVER[$r]:-}" ] && echo true || echo false)"
   done
   printf '\n  }\n}\n'
 else
   echo "HTTP/1.1 vs HTTP/2 (h2c, cleartext) — hello-world plaintext"
-  echo "server: $SERVER   load: oha -n $REQUESTS   requests are identical; only the version differs"
+  echo "server: $SERVER   load: oha -n $REQUESTS   best of $REPS interleaved reps (+1 discarded warmup)"
   echo
-  printf "%-7s | %-25s | %-25s\n" "" "wide: $CONN conns × 1 stream" "narrow: 1 conn × $PARALLEL streams"
-  printf "%-7s | %9s %9s %5s | %9s %9s %5s\n" \
+  printf "%-7s | %-27s | %-27s\n" "" "wide: $CONN conns × 1 stream" "narrow: 1 conn × $PARALLEL streams"
+  printf "%-7s | %9s %9s %6s | %9s %9s %6s\n" \
     "runtime" "HTTP/1.1" "HTTP/2" "gain" "HTTP/1.1" "HTTP/2" "gain"
-  printf -- "--------+---------------------------+---------------------------\n"
+  printf -- "--------+----------------------------+----------------------------\n"
   for r in "${ORDER[@]}"; do
-    wide_h1="$(measure "$r" h1 "$CONN" 1)"
-    wide_h2="$(measure "$r" h2 "$CONN" 1)"
-    narrow_h1="$(measure "$r" h1 1 1)"
-    narrow_h2="$(measure "$r" h2 1 "$PARALLEL")"
-    printf "%-7s | %9s %9s %5s | %9s %9s %5s\n" \
-      "$r" "$(cell "$wide_h1")" "$(cell "$wide_h2")" "$(ratio "$wide_h1" "$wide_h2")" \
-      "$(cell "$narrow_h1")" "$(cell "$narrow_h2")" "$(ratio "$narrow_h1" "$narrow_h2")"
+    mark=""; [ -n "${SPLIT_SERVER[$r]:-}" ] && mark="†"
+    wide_h1="${BEST[$r|wide_h1]:-}"
+    wide_h2="${BEST[$r|wide_h2]:-}"
+    narrow_h1="${BEST[$r|narrow_h1]:-}"
+    narrow_h2="${BEST[$r|narrow_h2]:-}"
+    printf "%-7s | %9s %9s %6s | %9s %9s %6s\n" \
+      "$r" "$(cell "$wide_h1")" "$(cell "$wide_h2")" "$(ratio "$wide_h1" "$wide_h2" "$mark")" \
+      "$(cell "$narrow_h1")" "$(cell "$narrow_h2")" "$(ratio "$narrow_h1" "$narrow_h2" "$mark")"
   done
   echo
-  echo "req/sec; ratio is HTTP/2 ÷ HTTP/1.1. n/a = that runtime has no cleartext"
-  echo "h2 server, or the run did not come back ≥99% successful."
+  echo "req/sec. Compare *down* a column freely — that is one client shape against"
+  echo "each runtime's best available server. The gain column is HTTP/2 ÷ HTTP/1.1;"
+  echo "† marks a runtime whose two versions come from two different servers"
+  echo "(node:http2 vs node:http / Bun.serve), so its ratio also carries the gap"
+  echo "between two implementations and is not comparable with an unmarked row."
+  echo "n/a = no cleartext h2 server, or no rep came back ≥99% successful."
 fi

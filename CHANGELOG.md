@@ -35,15 +35,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
   Measured rather than assumed, with `bench/http2.sh` (new): on **one**
   connection carrying 50 concurrent streams — the shape a reverse proxy or gRPC
-  client is in — throughput goes from 18,372 to 65,563 req/s (**3.57×**, against
-  1.70× Node, 1.57× Bun and 1.25× Deno on the same box). Across **50**
-  connections, where there is nothing to multiplex, HTTP/2 is overhead and
-  *loses* (0.75×) — as it does for every runtime measured.
+  client is in — throughput goes from 18,192 to 65,687 req/s (**3.61×**), which
+  is also the fastest of the four runtimes measured on that shape (Bun 47,283,
+  Node 36,052, Deno 35,069). Across **50** connections, where there is nothing to
+  multiplex, HTTP/2 is overhead and *loses* (0.77×) — as it does for every
+  runtime measured.
 
 - **`bench/http2.sh`**: HTTP/1.1 vs HTTP/2 throughput per runtime, in two client
   shapes (wide: many connections; narrow: one connection, many streams), driven
-  by an external load generator against each runtime's own server. A cell reads
-  n/a when a runtime has no cleartext h2 server or the run was not ≥99%
+  by an external load generator against each runtime's own server. Sampling
+  follows `run.sh`'s methodology — interleaved and shuffled repetitions, a
+  discarded warmup, best of N. Rows whose two versions come from two different
+  servers (Node and Bun, whose cleartext h2 is `node:http2` rather than their
+  default server) are marked, because their h2-vs-h1 ratio also carries an
+  implementation change and is not comparable with the unmarked rows. A cell
+  reads n/a when a runtime has no cleartext h2 server or no repetition was ≥99%
   successful.
 
 - **Complete ESM package resolution: conditions, `imports`, and self-reference**
