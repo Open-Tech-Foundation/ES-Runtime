@@ -12,6 +12,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 
 - [Scope & non-goals](#scope--non-goals)
 - [Web-standard globals](#web-standard-globals)
+- [Module resolution](#module-resolution)
 - [`WebAssembly`](#webassembly)
 - [The `runtime:` scheme](#the-runtime-scheme)
 - [Capabilities](#capabilities)
@@ -217,6 +218,88 @@ that was unhandled when it mattered is a bug worth surfacing.
 `userAgent`: the rest of the browser `Navigator` is document, device and
 permission surface, and answering those with plausible constants would make a
 feature check pass and then lie.
+
+---
+
+## Module resolution
+
+Specifiers resolve as ES modules only. Relative, absolute-path and `file:`
+specifiers are resolved strictly — the extension is part of the name, and nothing
+is guessed. Bare specifiers resolve through `node_modules`, honouring the
+package's `exports` map; symlinks resolve to their real path (pnpm's store works
+as-is), and every resolved module is confined to the project root.
+
+### Conditions
+
+The conditions asserted are **`import` and `default`** — the standard ones, and
+only those. No `node`, no `browser`, and no ES-Runtime-specific key: a package
+that needs to know which runtime it is on is not a package this runtime is trying
+to run, and `default` is the path everything else reaches it by.
+
+Condition keys are matched **in the order the package author wrote them**, not in
+a fixed order of our own, and nested condition objects are walked the same way —
+a matched branch that resolves to nothing falls through to the next key.
+
+```json
+{
+  "exports": {
+    ".": {
+      "node": "./node.js",
+      "import": "./esm.mjs",
+      "default": "./fallback.mjs"
+    }
+  }
+}
+```
+
+`"."` resolves to `./esm.mjs`: `node` is not asserted, `import` is. A package
+offering only `require` is CommonJS and is rejected saying so.
+
+Also supported: subpath patterns (`"./fn/*": "./fns/*.mjs"`, longest prefix
+wins), array fallbacks (`["./a.mjs", "./b.mjs"]` — the first *valid* target is
+used), and `null` targets, which withdraw a subpath. Importing a withdrawn
+subpath reports that the author withdrew it, rather than a bare "not found".
+
+### `imports` and self-reference
+
+A `#specifier` resolves through the nearest `package.json`'s `imports` map, whose
+targets may be a path in that package, a subpath pattern, or another package. A
+package that declares `exports` may also import **itself** by its own `name`, so
+an intra-package import resolves to what a consumer would get.
+
+```json
+{
+  "name": "my-app",
+  "type": "module",
+  "exports": { "./util": "./src/util.js" },
+  "imports": {
+    "#config": "./src/config.js",
+    "#feat/*": "./src/feat/*.js",
+    "#dep": "lodash-es"
+  }
+}
+```
+
+```js
+import config from "#config";
+import { one } from "#feat/one";
+import { chunk } from "#dep";
+import { util } from "my-app/util";
+```
+
+### What a target may not do
+
+A target (after any `*` substitution) may not contain a `..`, `.` or
+`node_modules` path segment, may not be a bare specifier in `exports`, and may
+not be a trailing-slash directory mapping. A subpath pattern therefore cannot be
+used to walk out of the package that declares it. This is a package-boundary
+check; the [project-root jail](#capabilities) applies underneath it either way. A
+malformed manifest — an invalid target, or an `exports` object mixing subpath
+keys with condition keys — is an error naming the `package.json`, not a silent
+resolution failure.
+
+**Not supported:** CommonJS packages, `node:` builtins, remote (`http:`) modules,
+and installing anything.
 
 ---
 

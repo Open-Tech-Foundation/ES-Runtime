@@ -63,10 +63,61 @@ return a URL it never resolved. Use `import()`.
 
 ## Resolving packages
 
-Bare specifiers resolve from `node_modules`, honoring the package `exports` map —
-including conditional `import`/`default` conditions and subpath patterns such as
-`"./*"`. Symlinks are resolved to their real path, so pnpm's nested store works
-as-is. A CommonJS-only package is rejected with a clear error.
+Bare specifiers resolve from `node_modules`, honoring the package `exports` map:
+conditions, subpath patterns such as `"./*"`, array fallbacks, and `null` targets
+that withdraw a subpath. Symlinks are resolved to their real path, so pnpm's
+nested store works as-is. A CommonJS-only package is rejected with a clear error.
+
+### Conditions
+
+The conditions esrun asserts are **`import` and `default`** — the standard ones,
+and only those. There is no `node`, no `browser`, and no esrun-specific key, so a
+package reaches this runtime through `default` rather than through a private
+name. Keys are matched **in the order the package author wrote them**, nesting as
+deep as the manifest goes:
+
+```json
+{
+  "exports": {
+    ".": {
+      "node": "./node.js",      // skipped — not asserted
+      "import": "./esm.mjs",    // ← matched
+      "default": "./fallback.mjs"
+    }
+  }
+}
+```
+
+A `require`-only package is CommonJS, and says so rather than reporting a missing
+subpath.
+
+### Private imports and self-reference
+
+A `#specifier` resolves through the nearest `package.json`'s `imports` map, and a
+package that declares `exports` can import itself by its own `name`:
+
+```json
+{
+  "name": "my-app",
+  "exports": { "./util": "./src/util.js" },
+  "imports": {
+    "#config": "./src/config.js",
+    "#feat/*": "./src/feat/*.js",
+    "#dep": "lodash-es"
+  }
+}
+```
+
+```js
+import config from "#config";            // a path inside this package
+import { one } from "#feat/one";         // a subpath pattern
+import { chunk } from "#dep";            // another package, by private name
+import { util } from "my-app/util";      // self-reference through exports
+```
+
+A target may not step outside the package it belongs to: `..`, `.` and
+`node_modules` path segments are refused, after any `*` substitution, so a
+pattern capture cannot be used to walk out.
 
 <Callout type="warning" title="Filesystem root jail">
   Module resolution is confined to a project root. A specifier that escapes the

@@ -8,8 +8,6 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
-## [0.14.0] - 2026-08-02
-
 ### Added
 
 - **Complete ESM package resolution: conditions, `imports`, and self-reference**
@@ -41,6 +39,10 @@ namespace) is unstable and may change between minor releases until the API freez
   A malformed manifest (an invalid target, or an `exports` object mixing subpath
   keys with condition keys) is now an error naming the `package.json`, not a
   silent "not found".
+
+## [0.14.0] - 2026-08-02
+
+### Added
 
 - **`esrun` permission flags** (DECISIONS D38). `esrun` still grants everything
   by default; restriction is opt-in and expressed as denials.
