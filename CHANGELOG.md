@@ -35,10 +35,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
   Measured rather than assumed, with `bench/http2.sh` (new): on **one**
   connection carrying 50 concurrent streams — the shape a reverse proxy or gRPC
-  client is in — throughput goes from 18,192 to 65,687 req/s (**3.61×**), which
-  is also the fastest of the four runtimes measured on that shape (Bun 47,283,
-  Node 36,052, Deno 35,069). Across **50** connections, where there is nothing to
-  multiplex, HTTP/2 is overhead and *loses* (0.77×) — as it does for every
+  client is in — throughput goes from 20,157 to 73,541 req/s (**3.65×**), which
+  is also the fastest of the four runtimes measured on that shape (Bun 49,142,
+  Node 39,700, Deno 39,209). Across **50** connections, where there is nothing to
+  multiplex, HTTP/2 is overhead and *loses* (0.79×) — as it does for every
   runtime measured.
 
 - **`bench/http2.sh`**: HTTP/1.1 vs HTTP/2 throughput per runtime, in two client

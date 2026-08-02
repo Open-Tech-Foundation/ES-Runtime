@@ -15,8 +15,9 @@ OUT="../website/src/benchmarks.js"
 TMP1="$(mktemp)"
 TMP2="$(mktemp)"
 TMP3="$(mktemp)"
+TMP4="$(mktemp)"
 TMP_COMBINED="$(mktemp)"
-trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP_COMBINED"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP_COMBINED"' EXIT
 
 if [ $# -gt 0 ]; then
   # Partial update mode
@@ -54,15 +55,20 @@ else
   BENCH_JSON=1 bash websocket-chat/run-chat.sh > "$TMP3"
   bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP3"
 
+  # HTTP/1.1 vs HTTP/2, two client shapes per runtime (req/s)
+  BENCH_JSON=1 bash http2.sh > "$TMP4"
+  bun -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$TMP4"
+
   # Merge the JSON objects
   bun -e '
     const fs = require("fs");
     const t1 = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const t2 = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
     const t3 = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
-    const merged = Object.assign({}, t1, t2, t3);
-    fs.writeFileSync(process.argv[4], JSON.stringify(merged, null, 2));
-  ' "$TMP1" "$TMP2" "$TMP3" "$TMP_COMBINED"
+    const t4 = JSON.parse(fs.readFileSync(process.argv[4], "utf8"));
+    const merged = Object.assign({}, t1, t2, t3, t4);
+    fs.writeFileSync(process.argv[5], JSON.stringify(merged, null, 2));
+  ' "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP_COMBINED"
 fi
 
 {

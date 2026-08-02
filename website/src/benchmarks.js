@@ -674,5 +674,35 @@ export default {
         "node": 223664
       }
     }
+  },
+  "results_http2": {
+    "node": {
+      "wide_h1": 36597,
+      "wide_h2": 18413,
+      "narrow_h1": 23221,
+      "narrow_h2": 39700,
+      "split_server": true
+    },
+    "bun": {
+      "wide_h1": 119785,
+      "wide_h2": 43086,
+      "narrow_h1": 31109,
+      "narrow_h2": 49142,
+      "split_server": true
+    },
+    "deno": {
+      "wide_h1": 115141,
+      "wide_h2": 27409,
+      "narrow_h1": 32303,
+      "narrow_h2": 39209,
+      "split_server": false
+    },
+    "esrun": {
+      "wide_h1": 66939,
+      "wide_h2": 53080,
+      "narrow_h1": 20157,
+      "narrow_h2": 73541,
+      "split_server": false
+    }
   }
 }

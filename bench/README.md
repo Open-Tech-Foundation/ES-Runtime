@@ -374,17 +374,17 @@ Same box as above (Linux x86-64, 12 cores), `-n 100000`, best of 3:
         | wide: 50 conns × 1 stream  | narrow: 1 conn × 50 streams
 runtime |  HTTP/1.1    HTTP/2   gain |  HTTP/1.1    HTTP/2   gain
 --------+----------------------------+----------------------------
-node    |     34,658    16,834 0.49x†|    21,216    36,052 1.70x†
-bun     |    107,981    39,945 0.37x†|    29,319    47,283 1.61x†
-deno    |    114,446    26,527  0.23x|    29,002    35,069  1.21x
-esrun   |     60,544    46,769  0.77x|    18,192    65,687  3.61x
+node    |     36,597    18,413 0.50x†|    23,221    39,700 1.71x†
+bun     |    119,785    43,086 0.36x†|    31,109    49,142 1.58x†
+deno    |    115,141    27,409  0.24x|    32,303    39,209  1.21x
+esrun   |     66,939    53,080  0.79x|    20,157    73,541  3.65x
 ```
 
 #### What this table does and does not license you to compare
 
 - **Down a column: fair.** One client shape, one load generator, each runtime on
-  its best available server. On the narrow shape esrun serves **65,687 req/s over
-  HTTP/2 — the fastest of the four outright**, 1.39× the next best (Bun, 47,283),
+  its best available server. On the narrow shape esrun serves **73,541 req/s over
+  HTTP/2 — the fastest of the four outright**, 1.50× the next best (Bun, 49,142),
   and it does that while being *slowest* of the four on the same shape over
   HTTP/1.1. That is the claim worth making, and it does not depend on any ratio.
 - **The gain column, unmarked rows (esrun, Deno): fair.** Both numbers come from
@@ -393,17 +393,17 @@ esrun   |     60,544    46,769  0.77x|    18,192    65,687  3.61x
   both, cleartext h2 lives behind `node:http2` while their default server
   (`node:http`, `Bun.serve`) is HTTP/1.1-only — checked directly with
   `curl --http2-prior-knowledge`. So their ratio carries the gap between two
-  *implementations* on top of the protocol change. Bun's 0.37× in particular is
+  *implementations* on top of the protocol change. Bun's 0.36× in particular is
   mostly `node:http2` against a very fast native `Bun.serve`, not a statement
   about HTTP/2.
-- **Ratios across runtimes: don't.** esrun's 3.61× is the largest partly because
-  its single-connection HTTP/1.1 baseline is the *weakest* of the four (18,192),
+- **Ratios across runtimes: don't.** esrun's 3.65× is the largest partly because
+  its single-connection HTTP/1.1 baseline is the *weakest* of the four (20,157),
   and a small denominator inflates a multiple. The absolute number above is the
   honest version of the same result.
 
 Both halves of the table are expected, and they say opposite things:
 
-- **Wide is HTTP/2's worst case and every runtime loses there** (0.23–0.77×).
+- **Wide is HTTP/2's worst case and every runtime loses there** (0.24–0.79×).
   With 50 sockets already open there is nothing to multiplex, so h2 is pure
   overhead: framing, HPACK state, flow-control accounting.
 - **Narrow is what HTTP/2 is for.** One connection, 50 requests in flight:

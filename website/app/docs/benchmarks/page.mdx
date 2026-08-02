@@ -8,6 +8,7 @@ import BenchChart from "../../../components/BenchChart.jsx";
 import BenchStandings from "../../../components/BenchStandings.jsx";
 import RuntimeVersions from "../../../components/RuntimeVersions.jsx";
 import WsSweepTable from "../../../components/WsSweepTable.jsx";
+import Http2Table from "../../../components/Http2Table.jsx";
 import bench from "../../../src/benchmarks.js";
 
 export const startup = [
@@ -147,6 +148,49 @@ Fixed Bun server; each runtime's WebSocket _client_ under the same broadcast loa
 
 See the [WebSocket guide](/docs/guides/websocket).
 
+<span id="http2"></span>
+
+## HTTP/1.1 vs HTTP/2
+
+The same hello-world server driven twice — once over HTTP/1.1, once over
+cleartext HTTP/2 (h2c) — so the only variable is the protocol version. Cells are
+**req/sec**, best of 3 interleaved repetitions. Higher is better.
+
+Unlike the charts above, this table is driven by an **external** load generator
+against each runtime's own server, and it is regenerated on its own
+(`bench/http2.sh`) rather than as part of the full sweep — so treat it as a
+separate run, not as another row of the same experiment.
+
+<Http2Table data={bench.results_http2} />
+
+Two shapes, because an HTTP/2 number on its own says nothing — it is dominated by
+how the client connected:
+
+- **Wide** (50 connections, 1 stream each) is HTTP/1.1's best case: it already
+  has 50 sockets, so there is nothing to multiplex and h2 is pure framing
+  overhead. **Every runtime loses here**, esrun least of them.
+- **Narrow** (1 connection, 50 streams) is what HTTP/2 is for. HTTP/1.1 on one
+  connection is strictly serial — the next request goes out only after the
+  previous response comes back — while HTTP/2 carries all 50 at once. This is the
+  shape a reverse proxy, an API gateway, or a gRPC client is in.
+
+esrun leads the narrow HTTP/2 column outright, from the *slowest* HTTP/1.1
+baseline on that shape: `runtime:http` hands responses back per **request** rather
+than per connection, so multiplexed streams could always complete out of order
+and the feature needed no new machinery to exploit.
+
+<Callout type="warning" title="Which comparisons this table licenses">
+  Compare **down a column** freely — one client shape against each runtime's best
+  available server. The **gain** column only isolates the protocol for rows
+  without a †: Node and Bun serve cleartext h2 from `node:http2` while their
+  HTTP/1.1 number comes from `node:http`/`Bun.serve`, so their ratio also carries
+  a change of implementation. And don't compare gains *across* runtimes — a
+  weaker HTTP/1.1 baseline inflates a multiple, which is part of why esrun's is
+  the largest.
+</Callout>
+
+See the [HTTP/2 section of the HTTP guide](/docs/http#http2).
+
 ## Reproduce
 
 The harness lives in `bench/`. It auto-detects installed runtimes and can emit
@@ -158,6 +202,9 @@ bench/run.sh
 
 # regenerate the data module this page renders
 bench/gen-bench-data.sh
+
+# just the HTTP/1.1 vs HTTP/2 table
+bench/http2.sh
 ```
 
 For CLI/script benchmarking, tools like `hyperfine` are also a good fit. Numbers

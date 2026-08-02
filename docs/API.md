@@ -1158,13 +1158,13 @@ server, best of 3 interleaved repetitions, only the version changed):
 
 | client shape | HTTP/1.1 | HTTP/2 |
 | --- | --- | --- |
-| 50 connections × 1 stream | 60,544 req/s | 46,769 req/s (**0.77×**) |
-| 1 connection × 50 streams | 18,192 req/s | 65,687 req/s (**3.61×**) |
+| 50 connections × 1 stream | 66,939 req/s | 53,080 req/s (**0.79×**) |
+| 1 connection × 50 streams | 20,157 req/s | 73,541 req/s (**3.65×**) |
 
 With 50 sockets already open there is nothing to multiplex and HTTP/2 is pure
 framing overhead — it *loses*. On one connection, where HTTP/1.1 is strictly
-serial, 65,687 req/s is both a 3.61× gain and the fastest of the four runtimes
-measured on that shape (Bun 47,283, Node 36,052, Deno 35,069 — see
+serial, 73,541 req/s is both a 3.65× gain and the fastest of the four runtimes
+measured on that shape (Bun 49,142, Node 39,700, Deno 39,209 — see
 `bench/README.md`, which also explains which comparisons in that table are
 apples-to-apples and which are not). That second shape is the one a reverse
 proxy, an API gateway, or a gRPC client is in.

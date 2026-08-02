@@ -256,19 +256,19 @@ assuming. Same server, same request count, only the version changed
 
 | client shape | HTTP/1.1 | HTTP/2 | |
 | --- | --- | --- | --- |
-| 50 connections × 1 stream | 60,544 req/s | 46,769 req/s | **0.77×** |
-| 1 connection × 50 streams | 18,192 req/s | 65,687 req/s | **3.61×** |
+| 50 connections × 1 stream | 66,939 req/s | 53,080 req/s | **0.79×** |
+| 1 connection × 50 streams | 20,157 req/s | 73,541 req/s | **3.65×** |
 
 With 50 sockets already open there is nothing to multiplex, so HTTP/2 is pure
 framing overhead and *loses*. On a single connection — where HTTP/1.1 can only
-send the next request after reading the previous response — it wins by 3.61×.
+send the next request after reading the previous response — it wins by 3.65×.
 The second row is the shape a reverse proxy, an API gateway, or a gRPC client is
 in, which is why it is the interesting one.
 
 <Callout type="info" title="Against other runtimes">
-  On that single-connection shape esrun serves **65,687 req/s over HTTP/2, the
-  fastest of the four measured** — ahead of Bun (47,283), Node (36,052) and Deno
-  (35,069) — while being the *slowest* of them over HTTP/1.1 on the same shape.
+  On that single-connection shape esrun serves **73,541 req/s over HTTP/2, the
+  fastest of the four measured** — ahead of Bun (49,142), Node (39,700) and Deno
+  (39,209) — while being the *slowest* of them over HTTP/1.1 on the same shape.
   Node and Bun serve cleartext h2 through `node:http2` rather than their default
   server (`node:http` and `Bun.serve` are HTTP/1.1-only), so their own
   h2-vs-h1 ratios mix in an implementation change; compare the absolute numbers
