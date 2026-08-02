@@ -19,7 +19,9 @@ esrun -e=<code>             Run an inline module snippet
 esrun --deny-all            Run with no host access at all
 esrun --deny-<name>         Deny one capability; repeatable
 esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
-esrun --allow-<name>=<list> Grant it narrowed to a list (every name takes one)
+esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the eight)
+esrun --import-policy=<file>
+                            JSON policy for what may be loaded
 esrun -t=<ms>, --timeout=<ms>
                             Stop execution after <ms> ms (watchdog)
 esrun --env-file=<path>     Load env vars from a .env file
@@ -62,7 +64,8 @@ script that genuinely wants a flag esrun also knows.
 | `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
 | `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
 | `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
-| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `imports` (packages and paths), `run` (programs), `env` (variable names), `signals` (signal names). See [Scoped grants](#scoped-grants). |
+| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — see `--import-policy`. See [Scoped grants](#scoped-grants). |
+| `--import-policy=<file>` | A JSON file of `"allow"` and/or `"deny"` lists of package names and paths, bounding what the module loader may resolve. Never auto-discovered. A second layer, not a substitute for the `imports` capability. See [Import policy](#import-policy). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -107,6 +110,9 @@ esrun --deny-all --allow-imports --allow-listen=8080 \
       --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL \
       --allow-read=./public --allow-write=./var/log \
       --allow-signals=SIGTERM server.js
+
+# Bound what the module loader may resolve, too
+esrun --deny-all --allow-imports --import-policy=./import-policy.json server.js
 ```
 
 ## Permissions
@@ -139,7 +145,7 @@ effect happens. Importing a `runtime:` module always works — the gate is the
 operation, not the import.
 
 <Callout type="tip" title="Building the command for a real deployment">
-  [Securing a run](/docs/guides/hardening) walks a working script from
+  [Securing Runtime](/docs/guides/securing-runtime) walks a working script from
   `--deny-all` to a narrowed command, and explains how to read each denial back
   to the flag that fixes it.
 </Callout>

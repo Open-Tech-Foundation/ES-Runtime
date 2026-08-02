@@ -1,0 +1,306 @@
+---
+title: Securing Runtime
+description: Take a working service from "grants everything" to a deployment command that states exactly what it may touch — and read every denial back to the flag that fixes it.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Securing Runtime
+
+`esrun app.js` grants every capability. That is the right default for a script
+you just wrote and are about to run yourself. It is the wrong default for
+anything with dependencies, a network, or a production deployment.
+
+This guide is the practical path from one to the other. It is a **method**, not
+a command to copy: start from nothing, run it, and grant back exactly what
+breaks. The [security model](/docs/security) explains *why* the pieces are
+shaped this way; the [CLI reference](/api/cli#permissions) is the complete flag
+list and grammar.
+
+<Callout type="note" title="What this guide assumes">
+  The `esrun` CLI, running a service you control. An **embedded** runtime — one
+  a Rust host creates through the library — is deny-by-default already and is
+  configured in code rather than on a command line; see
+  [Embedding](/docs/embed).
+</Callout>
+
+## The method
+
+<Callout type="tip" title="Grant back, never take away">
+  Do not start from a working command and remove flags. You will stop the moment
+  the service runs, which is *before* you have found what it doesn't need. Start
+  from `--deny-all`, where nothing works, and add until it does. What you end up
+  with is the honest minimum, and you will have read a denial for every grant in
+  it.
+</Callout>
+
+### 1. Start from nothing
+
+```sh
+esrun --deny-all server.js
+```
+
+Under `--deny-all` a run can compute and nothing else. It still executes the
+entry file — that file is read by the CLI before a runtime exists, and you named
+it — but it cannot read a second file, import a package, reach the network, or
+see the environment.
+
+The first thing that breaks tells you what to grant. A capability denial names
+the flag word in parentheses:
+
+```
+NotAllowedError: capability denied: FileSystem (permission "imports")
+```
+
+`permission "imports"` → add `--allow-imports`. Re-run. Repeat.
+
+<Callout type="note" title="Do this against a real exercise of the service">
+  A denial only surfaces when the code path runs. A run that reaches only the
+  health check will not reveal the host your payment client calls or the
+  directory your crash reporter writes to. Drive the service through its actual
+  workload — including its failure paths — or you will discover the missing
+  grant in production instead.
+</Callout>
+
+### 2. Grant capabilities back
+
+Repeat until the service starts and serves. For a typical HTTP service:
+
+```sh
+esrun --deny-all --allow-imports --allow-listen --allow-net --allow-env \
+      --allow-read server.js
+```
+
+This already excludes a great deal — there is no `--allow-write`, no
+`--allow-run`, no `--allow-signals` — but every grant it *does* carry is still
+whole. At this stage `--allow-net` means "any host, anywhere".
+
+### 3. Narrow each grant to a list
+
+Seven of the eight names take a comma-separated list. Go back through the
+command and replace each whole grant with what the service actually touches:
+
+```sh
+esrun --deny-all --allow-imports \
+      --allow-listen=8080 \
+      --allow-net=db.internal:5432,api.stripe.com \
+      --allow-env=PORT,DATABASE_URL,STRIPE_KEY \
+      --allow-read=./public,./config \
+      --allow-write=./var/log \
+      --allow-signals=SIGTERM \
+      server.js
+```
+
+That command is now a readable, enforced statement of everything the service may
+touch. Commit it next to the code: a diff that widens it is a diff worth
+reviewing.
+
+<Callout type="note" title="--allow-net is the one that stops an exfiltration">
+  A compromised dependency does not need a new capability to steal your data. It
+  already has the network access your application legitimately needs. Narrowing
+  `net` to the hosts you actually call is what turns that into a refusal — and
+  the check runs on **every redirect hop**, so a `302` from an allowed host
+  toward a denied one fails rather than being followed transparently.
+</Callout>
+
+Matching is exact throughout, and never widens. `--allow-net=example.com` does
+not admit `api.example.com`; `--allow-read=./app` does not admit `./app-secrets`;
+there are no wildcards. Hosts are judged **as written, before resolution**, so an
+IP entry never silently admits a name that resolves to it, and DNS is not part of
+your policy.
+
+## Reading a denial
+
+Three different refusals mean three different fixes. The error code tells you
+which, and they are worth distinguishing in your alerting:
+
+| Code | Means | Fix |
+| --- | --- | --- |
+| `ERR_CAPABILITY_DENIED` | The capability was never granted | Add `--allow-<name>` |
+| `ERR_PERMISSION_DENIED` | Granted, but not for *this* value | Add the value to that flag's list |
+| `ERR_JAIL_ESCAPE` | Outside the project root entirely | Not a flag — see below |
+
+What each looks like in practice:
+
+```
+NotAllowedError | ERR_CAPABILITY_DENIED | capability denied: Net (permission "net")
+Error           | ERR_PERMISSION_DENIED | example.com:443 is not an allowed address (fetch)
+Error           | ERR_PERMISSION_DENIED | /srv/app/secret.txt is not an allowed path (read)
+Error           | ERR_JAIL_ESCAPE       | path /etc/passwd escapes the filesystem root jail /srv/app
+```
+
+A denial is thrown **before** the effect, never partway through one: no packet
+leaves, no file is created, no process is spawned. An uncaught one ends the run
+with a non-zero exit status, like any other uncaught exception.
+
+<Callout type="note" title="A scoped grant is still a grant">
+  `--allow-net=api.stripe.com` reports `permissions.has("net") === true`. The
+  capability opens the door; the list is what the provider then declines to hand
+  over. That is why the two codes are distinct — "you never had `net`" and "you
+  have `net`, but not for that host" are different mistakes in a deployment
+  command, and only the second is a one-word fix.
+</Callout>
+
+<Callout type="warning" title="A path list narrows the root jail — it cannot widen it">
+  Filesystem access is confined to the project root regardless of any flag. An
+  `--allow-read` entry pointing outside that root is **not rejected**; it is
+  simply inert, and access still fails with `ERR_JAIL_ESCAPE`. So if you granted
+  a path and the run still cannot reach it, check whether it is inside the root
+  before adding more flags — no permission flag is the fix for a jail escape.
+</Callout>
+
+## Bound what may load
+
+Capabilities bound what running code may *reach*. Which modules may **become**
+running code is a separate question, and has a separate mechanism — a JSON file,
+named explicitly and never auto-discovered:
+
+```sh
+esrun --deny-all --allow-imports --import-policy=./import-policy.json server.js
+```
+
+```json
+{
+  "allow": ["./src", "express", "@acme/ui"],
+  "deny": ["aws-sdk"]
+}
+```
+
+A refused import fails to load, by name:
+
+```
+module loading failed: package aws-sdk is denied by the import policy
+```
+
+Entries beginning with `.` or `/` are paths covering their subtree; anything
+else is a package name. **Deny wins over allow.** Omitting `"allow"` permits
+everything not denied — the shape to reach for first, because a deny-only policy
+can be adopted on an existing project today without enumerating a dependency
+graph. An empty `"allow": []` and any unknown key are errors, rather than a
+policy that quietly permits or forbids everything. See the
+[full rules](/api/cli#import-policy).
+
+<Callout type="note" title="The policy is not a way around --deny-imports">
+  Two layers, not two alternatives. The `imports` **capability** decides whether
+  the module loader runs at all; the **policy** decides what it may then
+  resolve. Under `--deny-all`, an `"allow"` entry still loads nothing.
+</Callout>
+
+<Callout type="warning" title="A policy names packages, not content">
+  `"express"` says the loader may resolve that package. It says nothing about
+  which version, or whether the bytes are the ones you audited. Keep your
+  lockfile — it is the install-time half of this, and the policy does not
+  replace it.
+</Callout>
+
+## The command is part of the deployment
+
+A permission flag that is ignored would leave a run wider than the command line
+claims, so the parser never guesses. Each of these **fails the run** rather than
+starting one:
+
+```
+$ esrun app.js --deny-all
+error: --deny-all appears after app.js, where it is the script's own argument
+and does nothing to the run.
+
+$ esrun --deny-al app.js
+error: unknown option: --deny-al
+
+$ esrun --allow-net app.js
+error: --allow-net requires --deny-all: everything is granted by default, so
+there is nothing for --allow-net to add.
+
+$ esrun --deny-all --allow-env --allow-env=HOME app.js
+error: --allow-env=HOME and --allow-env disagree: one narrows the grant to a
+list, the other grants it whole.
+```
+
+The consequences for a deployment are worth stating plainly:
+
+- **Order matters.** esrun's flags come before the script; anything after it is
+  the script's own argument. A restriction appended to the end of a command is
+  the classic way to ship an unrestricted service, so this is an error rather
+  than a silent pass-through.
+- **A typo cannot degrade you quietly.** An unknown flag stops the run and lists
+  the valid names.
+- **No flag overrides another.** There is no precedence to reason about. The two
+  modes — `--deny-<name>` subtracting, `--deny-all --allow-<name>` adding —
+  cannot be combined, and granting one capability both whole and narrowed is an
+  error rather than a rule someone has to remember.
+
+Because a malformed command fails loudly, a smoke test that the service *starts*
+is also a test that its permission flags parsed.
+
+## Two things worth refusing outright
+
+<Callout type="danger" title="Do not grant Run">
+  A child process runs **outside** every confinement described here — no
+  capability check, no root jail, and no execution deadline reaches it.
+  `--allow-run=git` bounds *which* program starts, not what that program may then
+  do, so granting `Run` to code you do not fully trust grants everything the host
+  user can do. If a service genuinely needs it, name the exact program, and treat
+  that grant as the sandbox boundary it is.
+</Callout>
+
+<Callout type="danger" title="Do not grant env wholesale">
+  Bare `--allow-env` hands over every variable in the process — including your CI
+  runner's, your cloud metadata, and anything else exported on that box.
+  `--allow-env=PORT,DATABASE_URL` makes every other variable **absent** from the
+  snapshot, so guest code can neither read one nor enumerate its name.
+</Callout>
+
+## Secrets
+
+A `.env` file is never discovered on its own. It loads only when `--env-file`
+names it, and loaded values fill unset keys rather than overriding the real
+environment, so a checked-in file cannot clobber production configuration.
+
+```sh
+esrun --env-file=.env.production --deny-all --allow-env=PORT,DATABASE_URL app.js
+```
+
+Keys ending in `_KEY` / `_TOKEN` / `_SECRET` / `_PASS(WORD)`, or containing
+`CREDENTIAL` / `AUTH`, become [`Secret`](/api/process) values that print as
+`[redacted]` in logs and JSON.
+
+<Callout type="danger" title="Masking is for accidents, not attackers">
+  Guest code can call `unmask()` itself. Masking keeps a token out of a log line,
+  a stack trace, and a serialized error payload; it is not a confinement. The
+  confinement is `--allow-env=<names>` — a variable that never entered the
+  snapshot cannot be unmasked.
+</Callout>
+
+## A pre-deploy checklist
+
+- The command starts from `--deny-all`, not from `--deny-<name>`.
+- Every `--allow-` flag that can carry a list carries one.
+- `--allow-run` is absent, or names exactly one program you can defend.
+- `--allow-env` names variables; it is not bare.
+- `--allow-write` names the narrowest directory that works — a log and a temp
+  directory, not the project root.
+- `--allow-net` names hosts, and has been checked against what the service calls
+  on its *error* paths too: retries, telemetry, crash reporters.
+- `--allow-read` and `--allow-write` entries are all inside the project root, so
+  none of them is inert.
+- An `--import-policy` exists, even if it only denies.
+- The permission flags precede the script path.
+- The deployment command is committed and code-reviewed like source, and widening
+  it takes the same review as changing the code.
+
+## What this does not cover
+
+Worth knowing before you rely on it:
+
+- **Integrity.** Nothing here verifies that a package is the code you audited —
+  only which packages and paths may load at all. Lockfiles remain your
+  install-time control, and content pinning is future work.
+- **Resource limits.** Capabilities bound reach, not consumption; a fully denied
+  script still computes. Use `--timeout=<ms>` for a wall-clock bound, and your
+  supervisor — container limits, cgroups — for CPU and memory.
+- **Runtime revocation.** The policy is fixed at launch. There is no `.drop()`: a
+  program cannot narrow its own grants partway through, and equally cannot widen
+  them. `permissions` is introspection only.
+- **The host user.** Everything here confines the JavaScript. Run the process as
+  an unprivileged user, in a container, regardless. This is one layer, not a
+  replacement for the ones beneath it.
