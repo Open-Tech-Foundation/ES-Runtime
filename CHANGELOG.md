@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-02
+
 ### Added
 
 - **HTTP/2 in `runtime:http`** (DECISIONS D42). `serve()` now answers HTTP/2 as well as
