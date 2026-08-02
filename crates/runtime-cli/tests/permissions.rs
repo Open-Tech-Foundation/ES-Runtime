@@ -106,6 +106,28 @@ fn a_denied_operation_throws_not_allowed() {
     assert_eq!(stdout(&out).trim(), "NotAllowedError ERR_CAPABILITY_DENIED");
 }
 
+#[test]
+fn import_meta_resolve_is_denied_with_the_loader() {
+    // `resolve` reads package.json files to answer, so a run denied the loader
+    // must not get it as a filesystem-probing oracle: it fails like an import
+    // rather than reporting what is or is not installed (D41).
+    let out = run(
+        &["--deny-all"],
+        "try { console.log(import.meta.resolve('greeter')); } \
+         catch (e) { console.log(e.name, e.code ?? ''); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let printed = stdout(&out);
+    assert!(
+        printed.contains("NotAllowedError") || printed.contains("TypeError"),
+        "a denied run must refuse to resolve: {printed}"
+    );
+    assert!(
+        !printed.contains("file://"),
+        "a denied run must not learn where a package lives: {printed}"
+    );
+}
+
 // ---- granular flags ----------------------------------------------------------
 
 #[test]

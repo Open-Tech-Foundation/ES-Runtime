@@ -40,6 +40,24 @@ namespace) is unstable and may change between minor releases until the API freez
   keys with condition keys) is now an error naming the `package.json`, not a
   silent "not found".
 
+- **`import.meta.resolve` resolves bare and `#private` specifiers** (DECISIONS
+  D41). It previously threw for anything the module loader had to answer, which
+  left no way to locate a non-JS file shipped inside a dependency — a migration,
+  a `.proto`, a template, a CA bundle — since the install layout (pnpm's store,
+  hoisting) is exactly what resolution knows and a hardcoded path does not.
+
+  ```js
+  const schema = import.meta.resolve("my-orm/migrations/001.sql");
+  ```
+
+  Resolution is now a single synchronous core that the asynchronous
+  `ModuleLoader::resolve` also calls, so `import.meta.resolve` and `import()`
+  cannot disagree, and both pass the same root jail and import policy. It is
+  gated on the `imports` permission like the loader itself: a denied run gets a
+  refusal, not the location of a package. `ModuleLoader` gains an optional
+  `resolve_sync` (defaulting to `None`) — a loader whose modules come from the
+  network keeps the previous `TypeError`.
+
 ### Changed
 
 - `import.meta.resolve` names the kind of specifier it cannot resolve. A

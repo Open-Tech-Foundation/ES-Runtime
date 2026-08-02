@@ -57,10 +57,20 @@ import.meta.resolve("runtime:process");   // "runtime:process"
 check that the target exists — resolving a path and importing it are separate
 questions.
 
-A **bare or `#private` specifier throws** — the first needs `node_modules`, the
-second needs the referring package's `imports` map. Both mean reading
-`package.json` files and probing the filesystem, and `resolve` is synchronous, so
-it refuses rather than return a URL it never resolved. Use `import()`.
+Bare and `#private` specifiers resolve as well, through the module loader:
+
+```js
+import { file } from "runtime:fs";
+
+// Locate a file shipped inside a dependency, wherever it was installed.
+const schema = import.meta.resolve("my-orm/migrations/001.sql");
+const sql = await file(new URL(schema)).text();
+```
+
+That reads `package.json` files, so it needs the same permission an import does
+(`--allow-imports`) and obeys the same root jail and import policy — a run that
+may not import a package may not locate it either. A URL it returns is always one
+`import()` accepts.
 
 ## Resolving packages
 

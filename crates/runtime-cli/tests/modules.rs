@@ -307,7 +307,11 @@ fn private_imports_and_self_reference_work() {
     // another package), plus importing this package by its own name.
     let out = run_file("esm/consumer-private.mjs");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert!(stdout(&out).contains("PRIVATE-SUITE-OK"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("PRIVATE-SUITE-OK"),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]
@@ -857,13 +861,21 @@ fn import_meta_resolve_resolves_against_the_module() {
     assert!(stdout.contains("/definitely-not-here.mjs"), "{stdout}");
     // A bare specifier would need node_modules read synchronously; rather than
     // answer with a URL it never resolved, it refuses.
-    assert!(stdout.contains("BARE!TypeError"), "{stdout}");
-    assert!(stdout.contains("PRIV!TypeError"), "{stdout}");
+    // A bare specifier resolves through the loader (D41), and the URL it gives
+    // back is one import() accepts — the same module instance, not a lookalike.
+    assert!(stdout.contains("PKG:file://"), "{stdout}");
+    assert!(
+        stdout.contains("/node_modules/greeter/index.mjs"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("PARITY:true"), "{stdout}");
+    // A #private specifier resolves through the package's own "imports" map.
+    assert!(stdout.contains("PRIV:file://"), "{stdout}");
+    assert!(stdout.contains("/esm/exporter.mjs"), "{stdout}");
+    // What cannot be resolved throws, naming what it looked for.
+    assert!(stdout.contains("MISSINGPKG!TypeError"), "{stdout}");
+    assert!(stdout.contains("PRIVMSG:true"), "{stdout}");
     assert!(stdout.contains("NODE!TypeError"), "{stdout}");
-    // Each refusal names the kind of specifier it got: a #private one resolves
-    // through the package's "imports" map, not through node_modules.
-    assert!(stdout.contains("PRIVATE:true"), "{stdout}");
-    assert!(stdout.contains("BAREMSG:true"), "{stdout}");
 }
 
 #[test]

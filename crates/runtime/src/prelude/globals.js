@@ -104,16 +104,22 @@
       return new URL(target, base).href;
     }
     // What is left needs the module loader: a bare specifier walks node_modules,
-    // and a #private one reads the referring package's "imports" map. Both mean
-    // reading package.json files and probing the filesystem — host I/O — while
-    // `resolve` is synchronous. Rather than answer with a URL that was never
-    // resolved, say which kind of specifier it is and what does resolve it.
+    // and a #private one reads the referring package's "imports" map. Both are
+    // host I/O, done synchronously through the loader's own resolution — so the
+    // answer is always a URL `import()` would have produced (D41). A failure to
+    // resolve throws from the op, naming the package.
+    const resolved = globalThis.__ops.module_resolve_sync(target, base);
+    if (resolved !== null) return resolved;
+
+    // The loader has no synchronous path (modules over a network, say). Say
+    // which kind of specifier this is and what would resolve it, rather than
+    // answer with a URL that was never resolved.
     const kind = target.startsWith("#")
       ? `private specifier ${JSON.stringify(target)}: resolving one requires reading the "imports" map of the nearest package.json`
       : `bare specifier ${JSON.stringify(target)}: resolving one requires reading node_modules`;
     throw new TypeError(
       `import.meta.resolve cannot resolve the ${kind}, ` +
-        "which cannot be done synchronously. Use import() instead.",
+        "which this module loader cannot do synchronously. Use import() instead.",
     );
   };
 

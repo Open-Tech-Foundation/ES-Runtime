@@ -25,12 +25,15 @@ pub(crate) fn install(
     engine: &mut dyn Engine,
     providers: &HostProviders,
     capabilities: Rc<Cell<CapabilitySet>>,
+    module_loader: crate::module_ops::LoaderSlot,
 ) -> Result<()> {
     install_console(engine, providers.console())?;
     install_performance(engine, providers.clock())?;
     // Pure-computation ops (no provider): URL parsing, UTF-8 transcoding,
     // base64.
     crate::url_ops::install(engine)?;
+    // import.meta.resolve for specifiers that need the loader (D41).
+    crate::module_ops::install(engine, module_loader)?;
     crate::urlpattern_ops::install(engine)?;
     crate::encoding_ops::install(engine)?;
     crate::base64_ops::install(engine)?;

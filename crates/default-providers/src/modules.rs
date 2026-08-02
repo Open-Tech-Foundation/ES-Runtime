@@ -47,45 +47,55 @@ impl FsModuleLoader {
     }
 }
 
+/// Strict path/URL resolution — no I/O, so it is the same work either way the
+/// loader is asked (D41).
+fn resolve_core(specifier: &str, referrer: &str, base: &Url) -> Result<String, ProviderError> {
+    // ESM requires a relative path, absolute path, or URL. Reject bare
+    // names up front — they would otherwise resolve as relative paths,
+    // masking the "no bare-specifier resolution" non-goal with surprising
+    // behaviour.
+    let relative = specifier.starts_with("./") || specifier.starts_with("../");
+    let absolute_path = specifier.starts_with('/');
+    let url_like = !relative && !absolute_path && Url::parse(specifier).is_ok();
+    if !(relative || absolute_path || url_like) {
+        return Err(ProviderError::Other(format!(
+            "bare module specifier not supported: {specifier:?} \
+             (use a relative path, an absolute path, or a file: URL)"
+        )));
+    }
+
+    let base = if referrer.is_empty() {
+        base.clone()
+    } else {
+        Url::parse(referrer)
+            .map_err(|e| ProviderError::Other(format!("invalid referrer {referrer:?}: {e}")))?
+    };
+    let resolved = base
+        .join(specifier)
+        .map_err(|e| ProviderError::Other(format!("cannot resolve {specifier:?}: {e}")))?;
+
+    if resolved.scheme() != "file" {
+        return Err(ProviderError::Other(format!(
+            "unsupported module scheme {:?}: only file: modules are supported",
+            resolved.scheme()
+        )));
+    }
+    Ok(resolved.into())
+}
+
 impl ModuleLoader for FsModuleLoader {
     fn resolve(&self, specifier: &str, referrer: &str) -> BoxFuture<Result<String, ProviderError>> {
-        let base = self.base.clone();
-        let specifier = specifier.to_string();
-        let referrer = referrer.to_string();
-        Box::pin(async move {
-            // ESM requires a relative path, absolute path, or URL. Reject bare
-            // names up front — they would otherwise resolve as relative paths,
-            // masking the "no bare-specifier resolution" non-goal with
-            // surprising behaviour.
-            let relative = specifier.starts_with("./") || specifier.starts_with("../");
-            let absolute_path = specifier.starts_with('/');
-            let url_like = !relative && !absolute_path && Url::parse(&specifier).is_ok();
-            if !(relative || absolute_path || url_like) {
-                return Err(ProviderError::Other(format!(
-                    "bare module specifier not supported: {specifier:?} \
-                     (use a relative path, an absolute path, or a file: URL)"
-                )));
-            }
+        Box::pin(std::future::ready(resolve_core(
+            specifier, referrer, &self.base,
+        )))
+    }
 
-            let base = if referrer.is_empty() {
-                base
-            } else {
-                Url::parse(&referrer).map_err(|e| {
-                    ProviderError::Other(format!("invalid referrer {referrer:?}: {e}"))
-                })?
-            };
-            let resolved = base
-                .join(&specifier)
-                .map_err(|e| ProviderError::Other(format!("cannot resolve {specifier:?}: {e}")))?;
-
-            if resolved.scheme() != "file" {
-                return Err(ProviderError::Other(format!(
-                    "unsupported module scheme {:?}: only file: modules are supported",
-                    resolved.scheme()
-                )));
-            }
-            Ok(resolved.into())
-        })
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        Some(resolve_core(specifier, referrer, &self.base))
     }
 
     fn load(&self, specifier: &str) -> BoxFuture<Result<ModuleSource, ProviderError>> {

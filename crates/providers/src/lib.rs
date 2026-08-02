@@ -284,6 +284,29 @@ pub trait ModuleLoader: Send + Sync {
     /// loader's base, e.g. the working dir).
     fn resolve(&self, specifier: &str, referrer: &str) -> BoxFuture<Result<String, ProviderError>>;
 
+    /// Resolves **synchronously**, or reports that this loader cannot.
+    ///
+    /// This exists for `import.meta.resolve`, which the language defines as
+    /// returning a string rather than a promise, so there is nowhere to await.
+    /// A loader whose resolution is blocking-capable (a filesystem walk) answers
+    /// `Some`; one whose modules come from the network or a database — where
+    /// synchronous resolution is impossible, not merely slow — keeps the default
+    /// `None`, and the guest gets a `TypeError` naming the specifier instead of
+    /// a URL that was never resolved.
+    ///
+    /// An implementation **must** agree with [`resolve`](Self::resolve): the same
+    /// specifier and referrer must yield the same id, through the same
+    /// confinement checks. Returning an id here that `resolve` would refuse hands
+    /// the guest a URL that imports differently, which is worse than refusing.
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        let _ = (specifier, referrer);
+        None
+    }
+
     /// Loads the module at a canonical id (as returned by
     /// [`resolve`](Self::resolve)) as either source text or WebAssembly bytes.
     fn load(&self, specifier: &str) -> BoxFuture<Result<ModuleSource, ProviderError>>;

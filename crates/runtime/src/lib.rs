@@ -27,6 +27,7 @@ mod fs_ops;
 #[doc(hidden)]
 pub mod fuzz;
 mod http_ops;
+mod module_ops;
 mod net_ops;
 mod prelude;
 mod process_ops;
@@ -40,7 +41,7 @@ mod url_ops;
 mod urlpattern_ops;
 mod ws_ops;
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -321,8 +322,10 @@ pub struct Runtime {
     /// imported both statically and dynamically is the **same instance**.
     module_map: HashMap<String, ModuleId>,
     /// The loader used for static graph loading and dynamic `import()`. Stored
-    /// (not passed per-call) so dynamic imports raised mid-execution can reach it.
-    module_loader: Option<Arc<dyn ModuleLoader>>,
+    /// (not passed per-call) so dynamic imports raised mid-execution can reach
+    /// it — and shared with the `module_resolve_sync` op, which serves
+    /// `import.meta.resolve` and is registered long before a loader exists (D41).
+    module_loader: Rc<RefCell<Option<Arc<dyn ModuleLoader>>>>,
     /// A read-only mirror of the engine's capability set, shared with the ops
     /// that report on it (`runtime:process` `permissions`, D38).
     ///
@@ -350,13 +353,19 @@ impl Runtime {
             now_ms: 0,
             module_eval_pending: false,
             module_map: HashMap::new(),
-            module_loader: None,
+            module_loader: Rc::new(RefCell::new(None)),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
         // Register the world-touching ops, then evaluate the prelude that builds
         // the pure-JS APIs on top of them (DECISIONS.md D8).
         let capabilities = runtime.capabilities.clone();
-        builtins::install(runtime.engine.as_mut(), &providers, capabilities)?;
+        let loader_slot = runtime.module_loader.clone();
+        builtins::install(
+            runtime.engine.as_mut(),
+            &providers,
+            capabilities,
+            loader_slot,
+        )?;
         runtime.engine.eval(&prelude::source())?;
         runtime.engine.eval(prelude::post_snapshot_source())?;
         Ok(runtime)
@@ -383,10 +392,13 @@ impl Runtime {
                 // captured here never outlives the build — only the op table's
                 // names and order end up in the blob.
                 let capabilities = Rc::new(Cell::new(CapabilitySet::none()));
-                builtins::install(engine, providers, capabilities).map_err(|e| match e {
-                    Error::Engine(e) => e,
-                    other => es_runtime_engine::Error::Internal(other.to_string()),
-                })?;
+                let loader_slot = Rc::new(RefCell::new(None));
+                builtins::install(engine, providers, capabilities, loader_slot).map_err(
+                    |e| match e {
+                        Error::Engine(e) => e,
+                        other => es_runtime_engine::Error::Internal(other.to_string()),
+                    },
+                )?;
                 engine.eval(&prelude::source())?;
                 Ok(())
             },
@@ -408,13 +420,19 @@ impl Runtime {
             now_ms: 0,
             module_eval_pending: false,
             module_map: HashMap::new(),
-            module_loader: None,
+            module_loader: Rc::new(RefCell::new(None)),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
         let capabilities = runtime.capabilities.clone();
-        builtins::install(runtime.engine.as_mut(), &providers, capabilities)?;
+        let loader_slot = runtime.module_loader.clone();
+        builtins::install(
+            runtime.engine.as_mut(),
+            &providers,
+            capabilities,
+            loader_slot,
+        )?;
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
         runtime.engine.eval(prelude::post_snapshot_source())?;
@@ -484,7 +502,7 @@ impl Runtime {
         entry_source: &str,
         loader: Arc<dyn ModuleLoader>,
     ) -> Result<()> {
-        self.module_loader = Some(loader);
+        *self.module_loader.borrow_mut() = Some(loader);
 
         let entry_id = self.engine.compile_module(entry_specifier, entry_source)?;
         self.module_map
@@ -737,7 +755,7 @@ impl Runtime {
     /// The configured module loader, or an error if none was set (no loader =
     /// imports denied, like a denied capability).
     fn loader(&self) -> Result<Arc<dyn ModuleLoader>> {
-        self.module_loader.clone().ok_or_else(|| {
+        self.module_loader.borrow().clone().ok_or_else(|| {
             Error::ModuleLoad("no module loader configured (imports are not permitted)".into())
         })
     }

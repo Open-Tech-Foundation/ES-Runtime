@@ -18,10 +18,16 @@ show("URL", "file:///q.mjs");
 show("BUILTIN", "runtime:process");
 // No existence check: resolving a path and importing it are separate questions.
 show("MISSING", "./definitely-not-here.mjs");
-// A bare specifier needs node_modules — host I/O — and resolve is synchronous.
-show("BARE", "some-package");
-// A #private specifier needs the referring package's "imports" map, and says so
-// rather than calling itself bare.
+// A bare specifier resolves synchronously through the module loader (D41).
+show("PKG", "greeter");
+// And the URL it returns is one import() accepts — same module, same instance.
+const viaSpecifier = await import("greeter");
+const viaResolved = await import(import.meta.resolve("greeter"));
+console.log(`PARITY:${viaSpecifier === viaResolved}`);
+// A package that is not installed fails, rather than inventing a URL.
+show("MISSINGPKG", "no-such-package");
+// #private specifiers resolve through this package's own "imports" map.
+show("PRIV", "#local");
 const message = (specifier) => {
   try {
     import.meta.resolve(specifier);
@@ -30,7 +36,5 @@ const message = (specifier) => {
     return e.message;
   }
 };
-console.log(`PRIVATE:${message("#config").includes("private specifier")}`);
-console.log(`BAREMSG:${message("some-package").includes("bare specifier")}`);
-show("PRIV", "#config");
+console.log(`PRIVMSG:${message("#nope").includes("does not define")}`);
 show("NODE", "node:fs");
