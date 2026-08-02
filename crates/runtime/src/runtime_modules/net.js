@@ -66,6 +66,16 @@ class Socket {
       localPort: c.localPort,
       alpn: c.alpn ?? null,
     }));
+    // One connect failure rejects several surfaces — `opened`, the streams,
+    // close(), a later startTls() — because all of them derive from `_conn`.
+    // `opened` is built eagerly here, so a program that handled the failure on
+    // one of the others (reading `readable` is the common shape) still had this
+    // one left over, and an unhandled rejection took the whole process down: a
+    // single unreachable host could stop a server that had already dealt with
+    // it. Marking it handled drops the *duplicate* report, not the error — a
+    // later `await socket.opened` still rejects, since this catch settles its
+    // own derived promise and leaves `opened` untouched.
+    this.opened.catch(() => {});
     // Set when the socket was opened with secureTransport: "starttls": the
     // { name, alpn } a later startTls() upgrade uses. null ⇒ not upgradable.
     this._upgrade = upgrade;
@@ -168,6 +178,12 @@ class Listener {
   constructor(ready) {
     this._ready = ready; // Promise<{ id, localAddress, localPort }>
     this.addr = ready.then((s) => ({ hostname: s.localAddress, port: s.localPort }));
+    // Same shape as Socket.opened above: `addr` is built eagerly, so a bind
+    // that fails (a denied address, a port already in use) rejects it whether
+    // or not anyone asked for the address. A caller that handles the failure on
+    // accept() has already reported it; this stops the leftover from ending the
+    // process. `await listener.addr` still rejects.
+    this.addr.catch(() => {});
   }
 
   async accept() {

@@ -961,6 +961,15 @@ socket, else `null`.
 **Errors** — socket failures (bad options, connect/TLS/I/O errors) surface as a
 `TypeError` whose message is prefixed `"SocketError: "` (WinterTC `SocketError`).
 
+One failure reaches **every** surface of the socket it belongs to: a refused
+connect rejects `opened`, the streams, `close()` and a later `startTls()` alike,
+because all of them derive from the same pending connection. Handling it on any
+one of them is enough — the others do **not** additionally report as unhandled
+rejections, so a single unreachable host cannot end a process that already dealt
+with it. The corollary: a socket whose failure is *never* observed — nothing
+awaits `opened`, nothing touches the streams — fails silently rather than
+failing the run. `Listener.addr` behaves the same way with respect to a bind.
+
 ## `runtime:http`
 
 An HTTP/1.1 server: `serve((request) => response)`. The handler receives a web

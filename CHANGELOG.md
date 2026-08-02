@@ -149,6 +149,24 @@ security failure. `--` after the script opts a script's own argument out.
 
 ### Fixed
 
+- **A handled socket failure no longer also fails the run.** One connect (or
+  bind) failure rejects several promises — `opened`, the streams, `close()`, a
+  later `startTls()`, and `Listener.addr` — because all of them derive from the
+  same pending operation. A program can only handle one of those, so the
+  leftovers reached the global scope as unhandled rejections and ended the
+  process with a non-zero exit *even though the error had been caught*. For a
+  server that meant one unreachable host could take down a process that had
+  already dealt with it.
+
+  `opened` and `addr` are now built as handled, which drops the duplicate report
+  and not the error: `await sock.opened` still rejects, and the streams still
+  deliver the failure to their reader. The tradeoff is deliberate — a socket
+  nobody ever consumes now fails silently instead of ending the run.
+
+  Not specific to the permission flags: an ordinary DNS failure behaved the same
+  way. Four regression tests in `tests/errors.rs`, three of which fail without
+  the fix and one of which guards against over-fixing it into a swallowed error.
+
 - **`runtime:process` no longer needs a capability to import** (DECISIONS
   D26/D38). It called `Env`-gated ops at module-evaluation time, so denying
   `Env` made the module unimportable — taking `exit()` and `onSignal()`, which
