@@ -1,13 +1,13 @@
 ---
 title: HTTP server
-description: A built-in HTTP/1.1 server using standard web Request and Response objects.
+description: A built-in HTTP/1.1 and HTTP/2 server using standard web Request and Response objects.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # HTTP server
 
-[`runtime:http`](/api/http) provides an HTTP/1.1 server built on the same
+[`runtime:http`](/api/http) provides an HTTP/1.1 and HTTP/2 server built on the same
 `Request` and `Response` objects that `fetch` uses. Handlers are plain functions
 — sync or async — that take a `Request` and return a `Response`.
 
@@ -18,8 +18,9 @@ import { Callout } from "@opentf/web-docs";
 </Callout>
 
 <Callout type="warning" title="Current limits">
-  **HTTP/1.1 only** — no HTTP/2 or HTTP/3. TLS terminates in-process; see
-  [HTTPS](#https).
+  **HTTP/1.1 and HTTP/2** — no HTTP/3 (QUIC). The version is negotiated per
+  connection and never reaches your handler; see [HTTP/2](#http2). TLS
+  terminates in-process; see [HTTPS](#https).
 </Callout>
 
 ## Basic server
@@ -213,13 +214,39 @@ serve(
 | | |
 | --- | --- |
 | `request.url` scheme | `https:` — from the listener, not a `Host` header |
-| `alpn` | defaults to `["http/1.1"]` |
+| `alpn` | defaults to `["h2", "http/1.1"]` — narrow it to pin a version |
 | Bad cert or key | fails `serve()`, not each handshake |
 | `"on"` without cert/key | `TypeError` |
 | Failed handshake | ends that connection only |
 
 `wss:` WebSocket servers are still a follow-up — see
 [WebSockets](/docs/guides/websocket).
+
+## HTTP/2
+
+Nothing to turn on: the client picks the version, and the handler is the same
+function either way — one `Request` in, one `Response` out.
+
+Over TLS the choice is ALPN, where `serve()` offers `["h2", "http/1.1"]` and the
+client takes the first it speaks. On a cleartext port, a client that opens with
+the HTTP/2 connection preface is served **h2c** by prior knowledge — which is
+what a reverse proxy or a gRPC client that terminates TLS in front of the
+runtime sends. Everything else is served HTTP/1.1, exactly as before.
+
+```js
+// Same server, both versions. Pin to HTTP/1.1 only if a client needs it:
+serve({ port: 443, secureTransport: "on", cert, key, alpn: ["http/1.1"] }, handler);
+```
+
+What changes on the wire, with the handler untouched:
+
+| | |
+| --- | --- |
+| Multiplexing | many requests in flight on one connection, answered in any order |
+| Handshakes | one TLS handshake per session, not per connection |
+| Headers | HPACK-compressed instead of resent in full each request |
+| `request.url` | rebuilt from `:authority` (HTTP/2 has no `Host` header) |
+| Streams per connection | capped, so one peer cannot flood a single-threaded isolate |
 
 ## Usage with Hono
 

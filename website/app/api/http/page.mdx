@@ -1,13 +1,13 @@
 ---
 title: runtime:http
-description: An HTTP/1.1 server — serve((request) => response) with web Request/Response objects.
+description: An HTTP/1.1 and HTTP/2 server — serve((request) => response) with web Request/Response objects.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # runtime:http
 
-An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
+An HTTP/1.1 and HTTP/2 server: `serve((request) => response)`. The handler takes a web
 `Request` and returns a web `Response` — the same Fetch API objects `fetch` uses.
 
 <Callout type="info" title="Capability: NetListen">
@@ -17,8 +17,9 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
 <Callout type="warning" title="All I/O is async">
   A handler error or a non-`Response` return becomes a `500`. Request and
   response bodies stream with backpressure; string/byte bodies use the buffered
-  fast path (`Content-Length`). HTTP/1.1 only; TLS terminates in-process with
-  `secureTransport: "on"`. See the [HTTP server guide](/docs/http) for patterns
+  fast path (`Content-Length`). HTTP/1.1 and HTTP/2 are both served on one port —
+  ALPN over TLS, h2c by prior knowledge on cleartext — and the version never
+  reaches the handler. TLS terminates in-process with `secureTransport: "on"`. See the [HTTP server guide](/docs/http) for patterns
   and examples.
 </Callout>
 
@@ -27,7 +28,7 @@ An HTTP/1.1 server: `serve((request) => response)`. The handler takes a web
 | Function | Type | Description | Example |
 | --- | --- | --- | --- |
 | `serve(handler)` | `(Handler) => Server` | Start a server on an ephemeral port (read it from `server.addr`). `handler` is `(request) => response`. | `serve((req) => new Response("hi"))` |
-| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["http/1.1"]`). | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
+| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
 
 ## Serve
 

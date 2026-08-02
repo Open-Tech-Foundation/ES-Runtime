@@ -1055,7 +1055,7 @@ failing the run. `Listener.addr` behaves the same way with respect to a bind.
 
 ## `runtime:http`
 
-An HTTP/1.1 server: `serve((request) => response)`. The handler receives a web
+An HTTP/1.1 **and HTTP/2** server: `serve((request) => response)`. The handler receives a web
 `Request` and returns (or resolves to) a web `Response` — the same Fetch API
 objects `fetch` uses. A thrown error or a non-`Response` return becomes a `500`.
 `serve` requires `NetListen` (it binds a listening socket). All I/O is async.
@@ -1064,7 +1064,9 @@ pulling chunks as they arrive (nothing is buffered unless the handler asks, e.g.
 `await request.text()`), and a `ReadableStream` response body is sent with
 chunked transfer-encoding as it is produced (bounded-channel backpressure) — so
 SSE-style responses and `new Response(request.body)` proxying work unbuffered.
-`secureTransport: "on"` terminates **TLS** on accept (see below).
+`secureTransport: "on"` terminates **TLS** on accept (see below). The protocol
+version is the client's choice and never reaches the handler (see
+[HTTP/2](#http2)).
 
 ```js
 import { serve } from "runtime:http";
@@ -1119,7 +1121,8 @@ serve(
 
 `request.url` reports the `https:` scheme — that comes from the listener, so a
 client cannot talk a plain server into claiming it via a `Host` header. `alpn`
-defaults to `["http/1.1"]`, which is what this server speaks.
+defaults to `["h2", "http/1.1"]` — both versions this server speaks, h2 first
+because ALPN order is the server's preference.
 
 An unparseable certificate or key fails the `serve` call itself rather than each
 later handshake, and `secureTransport: "on"` without both a `cert` and a `key`
@@ -1127,8 +1130,33 @@ is a `TypeError` — binding a port that rejects every connection would look lik
 a working server nothing can reach. A failed handshake ends that connection
 only; on a public port those are routine and must not stop the server.
 
-Still HTTP/1.1 only: there is no HTTP/2, so `alpn` is advertised for the
-client's benefit rather than to switch protocol.
+#### HTTP/2
+
+The version is negotiated per connection and the handler never sees it: the same
+`Request` in, the same `Response` out, whichever version carried it.
+
+- **Over TLS** it is ALPN. `serve` offers `["h2", "http/1.1"]` by default, so an
+  h2 client gets HTTP/2 and everything else gets HTTP/1.1. Naming `alpn`
+  explicitly narrows that — `alpn: ["http/1.1"]` pins a listener to HTTP/1.1 for
+  a client that mishandles h2.
+- **On a cleartext port** an HTTP/2 client is served **h2c by prior knowledge**:
+  a connection opening with the HTTP/2 preface is read as HTTP/2, anything else
+  as HTTP/1.1. There is no `Upgrade:`-header dance — that mechanism is
+  deprecated, and no client relies on it. This is what a reverse proxy or a gRPC
+  client terminating TLS in front of the runtime speaks.
+
+What HTTP/2 buys, given the handler is unchanged: requests **multiplex** over one
+connection (many in flight at once, answered in any order — the runtime already
+hands responses back per request, not per connection), one TLS handshake serves a
+whole session, and headers are HPACK-compressed. Concurrency per connection is
+capped so one peer cannot open unbounded streams against a single-threaded
+isolate.
+
+`request.url` is rebuilt from `:authority` on HTTP/2, which is the version's
+replacement for the `Host` header — one URL shape either way. Framing stays the
+server's job on both versions: a handler's own `Content-Length` /
+`Transfer-Encoding` are dropped, and HTTP/2 — which frames bodies itself and
+forbids `Transfer-Encoding` outright — never sees a chunked encoding.
 
 #### Shutdown
 

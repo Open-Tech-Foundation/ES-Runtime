@@ -11,6 +11,9 @@ declare module "runtime:http" {
    * produced a response, so work nobody will read can be abandoned — pass it
    * straight to `fetch` or anything else taking a signal. Reading it is what
    * starts the watch, so a handler that never asks pays nothing.
+   *
+   * The HTTP version is negotiated per connection (HTTP/1.1 or HTTP/2) and is
+   * not visible here: the same `Request` arrives either way.
    */
   export type Handler = (request: Request) => Response | Promise<Response>;
 
@@ -30,7 +33,11 @@ declare module "runtime:http" {
     cert?: string | Uint8Array;
     /** PEM private key. Required when `secureTransport` is `"on"`. */
     key?: string | Uint8Array;
-    /** ALPN protocols to advertise. Defaults to `["http/1.1"]`. */
+    /**
+     * ALPN protocols to advertise. Defaults to `["h2", "http/1.1"]` — the
+     * server speaks both, and the client picks. Narrow it to pin a version,
+     * e.g. `["http/1.1"]`.
+     */
     alpn?: string[];
   }
 

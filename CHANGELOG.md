@@ -10,6 +10,29 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **HTTP/2 in `runtime:http`** (DECISIONS D42). `serve()` now answers HTTP/2 as well as
+  HTTP/1.1, on the same port, with the handler unchanged — one `Request` in, one
+  `Response` out, whichever version carried it. The version is negotiated per
+  connection: over TLS by **ALPN** (`serve` advertises `["h2", "http/1.1"]` by
+  default, h2 first), and on a **cleartext** port by the HTTP/2 connection
+  preface, which is **h2c by prior knowledge** — what a reverse proxy or a gRPC
+  client terminating TLS in front of the runtime speaks. The deprecated
+  `Upgrade:`-header dance is deliberately not implemented.
+
+  Requests **multiplex**: many can be in flight on one connection and are
+  answered in any order, which the request handoff already supported (responses
+  are matched per request, not per connection). One TLS handshake serves a whole
+  session, and headers travel HPACK-compressed. Concurrent streams per connection
+  are capped, so one peer cannot open unbounded streams against the
+  single-threaded isolate. `request.url` is rebuilt from HTTP/2's `:authority`
+  where HTTP/1.1 uses `Host`, so the URL a handler sees is the same shape on
+  both.
+
+  Guests that need one version only still say so with `alpn`
+  (`alpn: ["http/1.1"]` pins a TLS listener to HTTP/1.1). No new dependency: the
+  `h2` implementation was already in the tree behind the HTTP/2-capable `fetch`
+  client.
+
 - **Complete ESM package resolution: conditions, `imports`, and self-reference**
   (DECISIONS D40, lifting D22's deferral). Bare-specifier resolution now
   implements the whole `exports`/`imports` algorithm rather than its common
