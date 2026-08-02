@@ -24,12 +24,15 @@ makes the trade-offs explicit.
 | JSX (built-in) | <No /> | <No /> | <Yes /> | <Yes /> |
 | JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | Temporal API | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
 | Capability sandbox (deny by default) | <No /> | <Partial /> | <No /> | <Yes /> |
+| Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Workers / multi-thread | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
@@ -38,6 +41,23 @@ makes the trade-offs explicit.
 | Embeddable as a library | <Yes /> | <No /> | <No /> | <Partial /> |
 
 **Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental · <No /> Not supported
+
+**On the HTTP/2 row.** esrun and Deno detect the version per connection on the
+server they already have, so one `serve()` answers both. Node's h2c is a separate
+API (`node:http2`); `node:http`'s server is HTTP/1.1-only. Bun is <Partial />
+because it implements `node:http2` — which does serve h2c — while its own
+`Bun.serve` is HTTP/1.1-only, so the flagship API and the HTTP/2 one are not the
+same server. Measured throughput for all four:
+[Benchmarks](/docs/benchmarks#http2).
+
+**On the permission row.** It is about the *CLI*, and is a different question
+from the sandbox row above it, which is about the **default**: esrun grants
+everything by default and restricts on request, where Deno denies by default and
+grants on request. Both have flags that allow or deny a capability, scopes that
+narrow one to particular paths or hosts, and a way to ask from JS — the
+[Permission models](#permission-models) table below breaks down how differently
+they get there, and where esrun goes further (an always-on filesystem jail, and
+a policy for what the module loader may resolve).
 
 <br />
 
