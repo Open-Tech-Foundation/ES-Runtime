@@ -7,11 +7,13 @@
 // The port comes from BENCH_PORT — rps.sh picks a free one per run, so a dev
 // server on the old fixed :3000 can no longer be load-tested in our place.
 //
-// BENCH_H2=1 (set by http2.sh) asks for a cleartext HTTP/2 server. Only Node
-// needs to be told: its `node:http` server is HTTP/1.1-only and h2c lives
-// behind a separate `node:http2` API, where every other runtime here detects
-// the version per connection on one server. That asymmetry is the point of the
-// flag, not a wart in it.
+// BENCH_H2=1 (set by http2.sh) asks for a cleartext HTTP/2 server. Node and Bun
+// need to be told, because for both of them h2c lives behind the separate
+// `node:http2` API — `node:http`'s server and `Bun.serve` are HTTP/1.1-only —
+// while esrun and Deno detect the version per connection on the one server they
+// already have. That asymmetry is the point of the flag, not a wart in it: the
+// h2 column measures each runtime's *best available* cleartext h2 server, which
+// for two of the four is a different server than the h1 column used.
 const BODY = "Hello, World!";
 const PORT = Number(await benchEnv("BENCH_PORT")) || 3000;
 const H2 = (await benchEnv("BENCH_H2")) === "1";
@@ -27,17 +29,31 @@ async function benchEnv(name) {
   return env[name];
 }
 
+const NODE_LIKE =
+  typeof Bun !== "undefined" ||
+  (typeof process !== "undefined" && process.versions && process.versions.node);
+
 if (typeof Deno !== "undefined") {
   Deno.serve(
     { hostname: "127.0.0.1", port: PORT, onListen() {} },
     () => new Response(BODY),
   );
+} else if (H2 && NODE_LIKE) {
+  // `http2.createServer` is h2c-only — it does not also answer HTTP/1.1 — so
+  // Node and Bun measure the two versions from two servers where the others use
+  // one. Bun implements this API too, so its h2 number is a real measurement
+  // rather than the n/a that `Bun.serve` alone would produce.
+  const http2 = await import("node:http2");
+  http2
+    .createServer((_req, res) => {
+      res.setHeader("content-type", "text/plain");
+      res.end(BODY);
+    })
+    .listen(PORT, "127.0.0.1");
 } else if (typeof Bun !== "undefined") {
   Bun.serve({ hostname: "127.0.0.1", port: PORT, fetch: () => new Response(BODY) });
-} else if (typeof process !== "undefined" && process.versions && process.versions.node) {
-  // `http2.createServer` is h2c-only — it does not also answer HTTP/1.1 — so
-  // Node measures the two versions from two servers where the others use one.
-  const http = await import(H2 ? "node:http2" : "node:http");
+} else if (NODE_LIKE) {
+  const http = await import("node:http");
   http
     .createServer((_req, res) => {
       res.setHeader("content-type", "text/plain");

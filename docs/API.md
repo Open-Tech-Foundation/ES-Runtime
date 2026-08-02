@@ -1158,12 +1158,12 @@ server, only the version changed):
 
 | client shape | HTTP/1.1 | HTTP/2 |
 | --- | --- | --- |
-| 50 connections × 1 stream | 67,118 req/s | 50,048 req/s (**0.75×**) |
-| 1 connection × 50 streams | 19,333 req/s | 70,961 req/s (**3.67×**) |
+| 50 connections × 1 stream | 59,322 req/s | 44,326 req/s (**0.75×**) |
+| 1 connection × 50 streams | 18,372 req/s | 65,563 req/s (**3.57×**) |
 
 With 50 sockets already open there is nothing to multiplex and HTTP/2 is pure
 framing overhead — it *loses*. On one connection, where HTTP/1.1 is strictly
-serial, it wins by 3.67×. That second shape is the one a reverse proxy, an API
+serial, it wins by 3.57×. That second shape is the one a reverse proxy, an API
 gateway, or a gRPC client is in.
 
 `request.url` is rebuilt from `:authority` on HTTP/2, which is the version's

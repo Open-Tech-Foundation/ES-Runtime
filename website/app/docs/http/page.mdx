@@ -256,18 +256,20 @@ assuming. Same server, same request count, only the version changed
 
 | client shape | HTTP/1.1 | HTTP/2 | |
 | --- | --- | --- | --- |
-| 50 connections × 1 stream | 67,118 req/s | 50,048 req/s | **0.75×** |
-| 1 connection × 50 streams | 19,333 req/s | 70,961 req/s | **3.67×** |
+| 50 connections × 1 stream | 59,322 req/s | 44,326 req/s | **0.75×** |
+| 1 connection × 50 streams | 18,372 req/s | 65,563 req/s | **3.57×** |
 
 With 50 sockets already open there is nothing to multiplex, so HTTP/2 is pure
 framing overhead and *loses*. On a single connection — where HTTP/1.1 can only
-send the next request after reading the previous response — it wins by 3.67×.
+send the next request after reading the previous response — it wins by 3.57×.
 The second row is the shape a reverse proxy, an API gateway, or a gRPC client is
 in, which is why it is the interesting one.
 
 <Callout type="info" title="Same numbers, other runtimes">
-  In the same run Node gains 1.72× and Deno 1.28× on the single-connection shape;
-  `Bun.serve` has no cleartext HTTP/2 server at all. See
+  In the same run Node gains 1.70×, Bun 1.57× and Deno 1.25× on the
+  single-connection shape. Node and Bun serve cleartext h2 through `node:http2`
+  rather than their default server (`node:http` and `Bun.serve` are HTTP/1.1
+  only), where esrun and Deno answer both versions on one server. See
   [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md)
   for the full table and method.
 </Callout>

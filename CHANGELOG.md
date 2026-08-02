@@ -35,10 +35,10 @@ namespace) is unstable and may change between minor releases until the API freez
 
   Measured rather than assumed, with `bench/http2.sh` (new): on **one**
   connection carrying 50 concurrent streams — the shape a reverse proxy or gRPC
-  client is in — throughput goes from 19,333 to 70,961 req/s (**3.67×**, against
-  1.72× for Node and 1.28× for Deno on the same box; `Bun.serve` has no cleartext
-  h2 server). Across **50** connections, where there is nothing to multiplex,
-  HTTP/2 is overhead and *loses* (0.75×) — as it does for every runtime measured.
+  client is in — throughput goes from 18,372 to 65,563 req/s (**3.57×**, against
+  1.70× Node, 1.57× Bun and 1.25× Deno on the same box). Across **50**
+  connections, where there is nothing to multiplex, HTTP/2 is overhead and
+  *loses* (0.75×) — as it does for every runtime measured.
 
 - **`bench/http2.sh`**: HTTP/1.1 vs HTTP/2 throughput per runtime, in two client
   shapes (wide: many connections; narrow: one connection, many streams), driven

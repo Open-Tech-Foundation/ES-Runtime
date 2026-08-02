@@ -368,23 +368,23 @@ Same box as above (Linux x86-64, 12 cores), `-n 100000` per cell:
         | wide: 50 conns × 1 stream | narrow: 1 conn × 50 streams
 runtime |  HTTP/1.1    HTTP/2  gain |  HTTP/1.1    HTTP/2  gain
 --------+---------------------------+---------------------------
-node    |     34,143    17,903 0.52x |    22,824    39,344 1.72x
-bun     |    113,238       n/a   n/a |    29,507       n/a   n/a
-deno    |    112,825    26,280 0.23x |    31,024    39,789 1.28x
-esrun   |     67,118    50,048 0.75x |    19,333    70,961 3.67x
+node    |     32,471    16,253 0.50x |    21,043    35,864 1.70x
+bun     |    100,753    38,267 0.38x |    28,280    44,470 1.57x
+deno    |    103,514    22,798 0.22x |    28,391    35,480 1.25x
+esrun   |     59,322    44,326 0.75x |    18,372    65,563 3.57x
 ```
 
 Read it in two halves, because they say opposite things and both are expected:
 
-- **Wide is HTTP/2's worst case and every runtime loses there** (0.23–0.75×).
+- **Wide is HTTP/2's worst case and every runtime loses there** (0.22–0.75×).
   With 50 sockets already open there is nothing to multiplex, so h2 is pure
   overhead: framing, HPACK state, flow-control accounting. esrun gives up the
-  least of the three, which mostly reflects how little sits above the socket in
+  least of the four, which mostly reflects how little sits above the socket in
   its request path — the version-detecting connection is the same code either
   way. A runtime that showed a *large* h2 win in this column would be telling you
   about its HTTP/1.1 handling, not its h2.
-- **Narrow is what HTTP/2 is for, and it is where esrun gains most** (3.67×,
-  against 1.72× for Node and 1.28× for Deno). One connection, 50 requests in
+- **Narrow is what HTTP/2 is for, and it is where esrun gains most** (3.57×,
+  against 1.70× Node, 1.57× Bun, 1.25× Deno). One connection, 50 requests in
   flight: HTTP/1.1 serialises them, HTTP/2 does not. The size of esrun's gain
   comes from the request handoff being per *request* rather than per connection
   — responses were already matched by request id and could always complete out of
@@ -392,14 +392,16 @@ Read it in two halves, because they say opposite things and both are expected:
   column that matters behind a proxy or an API gateway, which is exactly the
   deployment that holds one long-lived connection to the origin.
 
-**bun is n/a** because `Bun.serve` has no cleartext HTTP/2 server (confirmed
-outside the harness with `curl --http2-prior-knowledge`); its HTTP/1.1 numbers
-are there for scale. **node** is the one runtime whose two columns come from two
-*servers*: `node:http` is HTTP/1.1-only and h2c lives behind a separate
-`node:http2` API, where esrun and Deno detect the version per connection on one
-server. A cell reads n/a when the runtime cannot serve that version, or when the
-run did not come back ≥99% successful — a half-failing run is not a throughput
-measurement.
+**Node and Bun are the runtimes whose two columns come from two *servers*.** For
+both, cleartext h2 lives behind `node:http2`, not their default server:
+`node:http`'s server and `Bun.serve` are HTTP/1.1-only (checked directly with
+`curl --http2-prior-knowledge`). Each runtime is therefore measured on its best
+available cleartext h2 server, which is the fair comparison but is worth knowing
+when reading the wide column — Bun's 0.38× is `node:http2` against `Bun.serve`,
+two different implementations, where esrun's 0.75× and Deno's 0.22× are one
+server answering both versions. A cell reads n/a when a runtime cannot serve that
+version at all, or when the run did not come back ≥99% successful — a
+half-failing run is not a throughput measurement.
 
 [oha]: https://github.com/hatoo/oha
 [bombardier]: https://github.com/codesenberg/bombardier

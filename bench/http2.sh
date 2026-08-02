@@ -24,10 +24,11 @@
 # is usually measuring its own HTTP/1.1 connection handling, not h2.
 #
 # Cleartext throughout (h2c by prior knowledge), so the numbers are the protocol
-# and the server, with no TLS handshake mixed in. Coverage differs by runtime:
-# esrun and Deno detect the version per connection on one server; Node's h2c
-# lives behind a separate `node:http2` API, so its two rows come from two
-# servers; a runtime with no cleartext h2 server reads n/a.
+# and the server, with no TLS handshake mixed in. Each runtime is measured on its
+# *best available* cleartext h2 server, which is not always the same server as
+# its h1 column: esrun and Deno detect the version per connection on one server,
+# while for Node and Bun h2c lives behind the separate `node:http2` API. A
+# runtime with no cleartext h2 server at all reads n/a.
 #
 # Load generator: `oha` (the only one of the two rps.sh accepts that speaks
 # HTTP/2 to a cleartext origin). Install: `cargo install oha`.
