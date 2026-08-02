@@ -81,10 +81,11 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Every one of the eight can be scoped to a list.**
+**Seven of the eight can be scoped to a list.** (`imports` is the exception —
+what may be *loaded* has its own mechanism, below.)
 
 ```sh
-esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -106,11 +107,6 @@ esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
   and the check runs **after canonicalization**, so a symlink inside an allowed
   directory cannot name a file outside it. The two are separate lists, and both
   govern `runtime:fs` and `runtime:wasi` alike.
-- `--allow-imports=<packages|paths>` refuses every other module. A package entry
-  covers that package's own files and **not** the packages it imports — each is
-  named in its own right, so a dependency that quietly pulls in another cannot
-  load it. Checked on the resolved module, so a symlink cannot name its way in.
-  The entry file is exempt: it is read before a loader exists.
 - `--allow-signals=<names>` refuses to watch anything else, and hides the rest
   from `signals()`. A watch suppresses the default action, so this is the
   privilege to decline to die on request, granted one signal at a time.
@@ -125,6 +121,48 @@ ignored — the rule outlives the capabilities it was written for. The filesyste
 **root jail** (D25) is always on regardless, for both paths: a path list narrows
 it and never widens it, so an entry outside the project root is not a way out of
 it.
+
+## Import policy (what may be loaded)
+
+Capabilities bound what running code may *reach*. What may **become** running
+code is a separate question, and has a separate mechanism (DECISIONS D39) — a
+JSON file, named explicitly and never auto-discovered:
+
+```sh
+esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+      --import-policy=./import-policy.json server.js
+```
+
+```json
+{ "allow": ["./src", "express", "@acme/ui"], "deny": ["aws-sdk"] }
+```
+
+An entry beginning with `.` or `/` is a path covering its subtree; anything else
+is a package name — the split the loader already makes between a relative and a
+bare specifier. **Deny wins over allow.** Omitting `"allow"` permits everything
+not denied; an empty `"allow": []` is an error, not a run that can load nothing.
+Unknown keys are an error, for the same reason an unknown flag is: a misspelled
+`"allowed"` would read as protection that is not there. Paths resolve relative
+to the **policy file**, so a committed policy means the same thing wherever the
+run is invoked from.
+
+Matching runs on the **resolved, canonicalized** module, after the root jail, so
+a symlink cannot name its way in and a pnpm store path is still recognisably its
+package. A package entry covers that package's own files and **not** the
+packages it imports — each is named in its own right, so a dependency that
+quietly pulls in another cannot load it. The entry file is exempt: it is read
+before a loader exists.
+
+The two layers do not substitute for each other. The `imports` capability
+decides whether the loader runs at all; the policy decides what it may resolve.
+A policy is **not a way around `--deny-imports`** — under `--deny-all`, an allow
+entry still loads nothing.
+
+**Known gap: no integrity.** A policy names packages and paths, not content.
+`"express"` says the loader may resolve that package; it says nothing about
+which version, or whether the bytes are the ones you audited. Lockfiles remain
+the install-time counterpart; content pinning is future work. Treat the policy
+as a bound on *which* dependencies can run, not as proof of *what* they are.
 
 ## Child processes (`Capability::Run`)
 

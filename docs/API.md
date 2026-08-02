@@ -462,10 +462,12 @@ Each name takes both prefixes: `--deny-net` and `--allow-net`.
 
 #### Scoped grants
 
-**Every one of the eight** can be granted narrowed to a list rather than whole:
+**Seven of the eight** can be granted narrowed to a list rather than whole
+(`imports` is the exception — what may be *loaded* is [its own
+mechanism](#import-policy--what-may-be-loaded)):
 
 ```sh
-esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -479,7 +481,6 @@ esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
 | `--allow-listen=<addresses>` | binding those addresses (`runtime:net` `listen`, `runtime:http` `serve`) | fails before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
-| `--allow-imports=<packages\|paths>` | importing those packages and paths | fails to resolve |
 | `--allow-signals=<names>` | watching those signals | refused, and absent from `signals()` |
 
 `--allow-run` matches the program as written and its resolved file name, so
@@ -537,14 +538,6 @@ it — an entry outside the project root is not a way out of it, and that refusa
 stays `ERR_JAIL_ESCAPE` rather than a scoped denial. `read` and `write` are
 separate lists; the same lists govern `runtime:fs` and `runtime:wasi`.
 
-**An import entry** is a package name (`lodash`, `@scope/pkg`) or a path — the
-same split the loader makes between a bare and a relative specifier. A package
-entry covers that package's own files, and says nothing about the packages *it*
-imports: each is named in its own right, including a nested `node_modules` copy.
-The check runs on the resolved module, so a symlink cannot name its way in and a
-pnpm store path is still recognisably its package. The **entry file is exempt** —
-it is read before a loader exists, and you named it.
-
 **A signal entry** is a signal name. Unlisted signals are also absent from
 `signals()`: a program should enumerate what it may use, not what the platform
 happens to deliver.
@@ -560,6 +553,57 @@ fully denied run is a **single-file** run; add `--allow-imports` for an app with
 dependencies. `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive
 `--deny-all`: no op gates them, so a denied script still computes. Ask from JS
 with [`permissions`](#runtimeprocess).
+
+### Import policy — what may be *loaded*
+
+Capabilities answer *what may executing code reach*. Which modules may **become**
+executing code is a different question, and it has its own mechanism (DECISIONS
+D39): a JSON file named by `--import-policy=<file>`.
+
+```sh
+esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+      --import-policy=./import-policy.json server.js
+```
+
+```json
+{
+  "allow": ["./src", "express", "@acme/ui"],
+  "deny": ["aws-sdk"]
+}
+```
+
+- **Entries read the way specifiers do.** An entry beginning with `.` or `/` is
+  a path covering its subtree; anything else is a package name (`lodash`,
+  `@scope/pkg`). No second grammar — it is the split the loader already makes
+  between a bare and a relative specifier.
+- **Deny wins over allow.** A module named by both is refused.
+- **Omitting `"allow"`** permits everything not denied — the shape for a policy
+  that only wants to exclude a few packages. An empty `"allow": []` is an error
+  rather than a run that can load nothing; `"deny": []` is fine.
+- **Unknown keys are an error.** A misspelled `"allowed"` would otherwise parse
+  as protection that is not there.
+- **Paths resolve relative to the policy file**, not the working directory: a
+  policy is committed next to the project it governs and means the same thing
+  wherever it is invoked from.
+- **Matching runs on the resolved, canonicalized module**, after the root jail —
+  so a symlink cannot name its way in, and a pnpm store path is still
+  recognisably its package. A package entry covers that package's own files and
+  says nothing about the packages *it* imports; each is named in its own right,
+  including a nested `node_modules` copy.
+- **The entry file is exempt** — it is read before a loader exists, and you
+  named it.
+- **Never auto-discovered.** The file is read only when `--import-policy` names
+  it, exactly as `--env-file` works (D30).
+
+The two layers do not substitute for each other: the `imports` capability
+decides whether the loader runs at all, the policy decides what it may resolve.
+A policy is therefore **not a way around `--deny-imports`** — under
+`--deny-all`, an allow entry still loads nothing.
+
+> **Known gap: no integrity.** A policy names packages and paths, not content.
+> `"express"` says the loader may resolve that package; it says nothing about
+> *which* version, or whether the bytes are the ones you audited. Lockfiles
+> remain the install-time counterpart, and content pinning is future work.
 
 **The parser is strict, and its grammar is two rules for every flag** — not just
 the permission ones:

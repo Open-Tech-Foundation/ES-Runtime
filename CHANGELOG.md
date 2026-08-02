@@ -32,21 +32,19 @@ namespace) is unstable and may change between minor releases until the API freez
   `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive it — no op
   gates them, so a denied script still computes.
 
-- **Scoped grants** — **every** `--allow-<name>` takes a comma-separated list
-  that narrows the grant instead of handing over the whole capability
-  (DECISIONS D38).
+- **Scoped grants** — seven of the eight `--allow-<name>` flags take a
+  comma-separated list that narrows the grant instead of handing over the whole
+  capability (DECISIONS D38). `imports` is the exception: what may be *loaded*
+  is a separate mechanism (see `--import-policy` below).
 
   ```sh
-  esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
+  esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
         --allow-net=db.internal:5432 --allow-listen=8080 \
         --allow-read=./data --allow-write=./out --allow-run=git \
         --allow-signals=SIGTERM server.js
   ```
 
-  `--allow-imports` takes package names and paths — the same split the loader
-  makes between a bare and a relative specifier — and a package entry does not
-  cover the packages *it* imports. `--allow-signals` also hides unlisted signals
-  from `signals()`.
+  `--allow-signals` also hides unlisted signals from `signals()`.
 
   Paths are resolved against the working directory, cover their subtree, and are
   checked **after canonicalization**, so a symlink cannot walk out of a list. A
@@ -76,11 +74,39 @@ namespace) is unstable and may change between minor releases until the API freez
   A scoped grant still reports `permissions.has("env") === true` — the
   capability is granted, the provider is what narrows it.
 
-  **`imports` and `signals` are still coarse:** scoping them is not implemented,
-  and a value on them (`--allow-imports=./lib`) is **rejected rather than
-  ignored** — a run must never be narrower on the command
-  line than it is in reality. A denial takes no value at all: a scope narrows a
-  grant.
+  **`--allow-imports` takes no value** (`--allow-imports=./lib` is **rejected
+  rather than ignored** — a run must never look narrower on the command line
+  than it is in reality); use `--import-policy` instead. A denial takes no value
+  at all either: a scope narrows a grant.
+
+- **`--import-policy=<file>`** — what a run may *load*, as a JSON file rather
+  than a capability scope (DECISIONS D39). Capabilities bound what running code
+  may reach; which modules may *become* running code is a different question,
+  with different needs (aliases, warn-only rollout, integrity), none of which
+  belong on a permission flag.
+
+  ```sh
+  esrun --deny-all --allow-imports --import-policy=./import-policy.json server.js
+  ```
+
+  ```json
+  { "allow": ["./src", "express", "@acme/ui"], "deny": ["aws-sdk"] }
+  ```
+
+  An entry beginning with `.` or `/` is a path covering its subtree; anything
+  else is a package name — the split the loader already makes between a relative
+  and a bare specifier. **Deny wins over allow.** Omitting `"allow"` permits
+  everything not denied; an empty `"allow": []` and any unknown key are errors.
+  Paths resolve relative to the **policy file**. Matching runs on the resolved,
+  canonicalized module (after the root jail), so a symlink cannot name its way
+  in and a pnpm store path is still recognisably its package; a package entry
+  covers that package's own files and not the packages *it* imports. The entry
+  file is exempt, and the file is never auto-discovered.
+
+  The policy is a second layer, not an alternative: the `imports` capability
+  decides whether the loader runs at all, so a policy is **not** a way around
+  `--deny-imports`. It names packages, not content — integrity pinning is future
+  work.
 
 - **`permissions` on `runtime:process`** — what this process is allowed to
   reach. The policy is fixed at launch, so it is introspection only: a

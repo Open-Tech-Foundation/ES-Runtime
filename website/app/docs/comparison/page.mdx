@@ -56,6 +56,7 @@ makes the trade-offs explicit.
 | Interactive prompt | <No /> | <No /> | — | <Yes /> |
 | Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
 | Local imports readable | `--allow-imports` | <No /> | — | <Yes /> |
+| Allow/deny which modules load | `--import-policy` file | <No /> | — | <No /> |
 | Query from JS | `permissions.has()` | `process.permission.has()` | — | `Deno.permissions.query()` |
 | Drop privileges at runtime | <No /> | `.drop()` | — | `.revoke()` |
 | Filesystem root jail | always on | <No /> | <No /> | <No /> |
@@ -64,6 +65,14 @@ makes the trade-offs explicit.
 Rows 6–7 are about the module graph: under esrun's `--deny-all` and Node's
 `--permission`, the entry file still runs but a second file needs a grant. Deno
 reads statically analysable imports without one.
+
+Row 8 is a different question again — not *may the loader run* but *what may it
+resolve*. esrun answers it outside the permission model, with a JSON
+`--import-policy` file of allow/deny package names and paths. Deno's
+similarly-named `--allow-import` is not this: it names which **remote hosts**
+code may be fetched from, which esrun has no equivalent of because it refuses
+remote modules outright. Node's module policy mechanism was deprecated and
+removed.
 
 esrun's eight denial names — `read`, `write`, `imports`, `net`, `listen`, `env`,
 `run`, `signals` — are also what `permissions.has()` takes. See

@@ -103,7 +103,7 @@ esrun --deny-net --deny-run app.js
 esrun --deny-all --allow-imports --allow-listen --allow-net server.js
 
 # ...and narrow those grants to what it actually touches
-esrun --deny-all --allow-imports=./src,express --allow-listen=8080 \
+esrun --deny-all --allow-imports --allow-listen=8080 \
       --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL \
       --allow-read=./public --allow-write=./var/log \
       --allow-signals=SIGTERM server.js
@@ -140,11 +140,12 @@ operation, not the import.
 
 ### Scoped grants
 
-**Every** `--allow-<name>` takes a comma-separated list that narrows the grant
-instead of handing over the whole capability:
+**Seven of the eight** `--allow-<name>` flags take a comma-separated list that
+narrows the grant instead of handing over the whole capability. `imports` is the
+exception — what may be *loaded* has [its own mechanism](#import-policy).
 
 ```sh
-esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -158,7 +159,6 @@ esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
 | `--allow-listen=<addresses>` | binding those addresses (`listen`, `serve`) | refused before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails to spawn |
-| `--allow-imports=<packages\|paths>` | importing those packages and paths | fails to resolve |
 | `--allow-signals=<names>` | watching those signals | refused, and hidden from `signals()` |
 
 An **address** is a host (any port), a `host:port`, or a bare port (any
@@ -206,17 +206,57 @@ either.
   `env`").
 </Callout>
 
-An **import entry** is a package name (`lodash`, `@scope/pkg`) or a path — the
-same split the loader makes between a bare and a relative specifier. A package
-entry covers that package's own files and says nothing about the packages *it*
-imports, so a dependency cannot quietly bring another along. The entry file is
-exempt: it is read before a loader exists, and you named it.
-
 A **signal entry** is a signal name, and unlisted signals are hidden from
 `signals()` — a program should enumerate what it may use.
 
 A value on a flag that could not enforce it would still be rejected rather than
 ignored; that rule holds for any capability added later.
+
+### Import policy
+
+Capabilities answer *what may executing code reach*. Which modules may **become**
+executing code is a different question, and it has its own mechanism —
+`--import-policy=<file>`, a JSON file named explicitly and never auto-discovered.
+
+```sh
+esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+      --import-policy=./import-policy.json server.js
+```
+
+```json
+{
+  "allow": ["./src", "express", "@acme/ui"],
+  "deny": ["aws-sdk"]
+}
+```
+
+An entry beginning with `.` or `/` is a path covering its subtree; anything else
+is a package name (`lodash`, `@scope/pkg`) — the split the loader already makes
+between a relative and a bare specifier, so there is no second grammar. **Deny
+wins over allow.** Omitting `"allow"` permits everything not denied, which is the
+shape for a policy that only excludes a few packages; an empty `"allow": []` is
+an error rather than a run that can load nothing, and so is an unknown key.
+
+Paths resolve relative to the **policy file**, not the working directory — a
+policy is committed next to the project it governs and means the same thing
+wherever the run is invoked from. Matching runs on the resolved, canonicalized
+module (after the root jail), so a symlink cannot name its way in and a pnpm
+store path is still recognisably its package. A package entry covers that
+package's own files and says nothing about the packages *it* imports, so a
+dependency cannot quietly bring another along. The entry file is exempt: it is
+read before a loader exists, and you named it.
+
+<Callout type="note" title="A policy is not a way around --deny-imports">
+  Two layers, not two alternatives: the `imports` capability decides whether the
+  loader runs at all, the policy decides what it may resolve. Under
+  `--deny-all`, an allow entry still loads nothing.
+</Callout>
+
+<Callout type="warning" title="A policy names packages, not content">
+  `"express"` says the loader may resolve that package. It says nothing about
+  which version, or whether the bytes are the ones you audited. Lockfiles remain
+  the install-time counterpart; content pinning is future work.
+</Callout>
 
 ### Strict by design
 

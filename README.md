@@ -66,10 +66,14 @@ esrun --deny-all --allow-net=api.example.com app.mjs    # ...narrowed to a list
 ```
 
 Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`.
-`--allow-<name>` requires `--deny-all`, and every one of them also takes a
-comma-separated list that narrows the grant — paths, addresses, packages,
-program names, variable names, signal names. A denied operation throws
-`NotAllowedError`; importing a `runtime:` module always works. See
+`--allow-<name>` requires `--deny-all`, and seven of them also take a
+comma-separated list that narrows the grant — paths, addresses, program names,
+variable names, signal names. A denied operation throws `NotAllowedError`;
+importing a `runtime:` module always works.
+
+What a run may *load* is a separate question from what running code may reach,
+so it has a separate mechanism — `--import-policy=./import-policy.json` takes
+JSON with `"allow"` and/or `"deny"` lists of package names and paths. See
 [SECURITY.md](SECURITY.md).
 
 ## TypeScript

@@ -71,10 +71,11 @@ is nothing for it to add.
 It includes `--deny-imports`, so add `--allow-imports` for an app with
 dependencies.
 
-**Every one of the eight** can be granted narrowed to a list:
+**Seven of the eight** can be granted narrowed to a list (`imports` is the
+exception — what may be *loaded* is [its own mechanism](#import-policy)):
 
 ```sh
-esrun --deny-all --allow-imports=./src,express --allow-env=PORT,DATABASE_URL \
+esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -87,9 +88,8 @@ URL the program wrote. Unlisted environment variables are *absent*, so a guest
 can neither read them nor learn their names; unlisted programs fail to spawn;
 unlisted binds are refused before the port is claimed; unlisted paths are
 refused after canonicalization, so a symlink inside an allowed directory cannot
-name a file outside it; unlisted modules fail to resolve, and allowing a package
-does not allow the packages it imports; unlisted signals cannot be watched and
-are hidden from `signals()`.
+name a file outside it; unlisted signals cannot be watched and are hidden from
+`signals()`.
 
 Matching is exact: `example.com` does not admit `api.example.com`, there are no
 wildcards, and hosts are judged as written rather than resolved. A refusal is
@@ -129,6 +129,50 @@ import { permissions } from "runtime:process";
 permissions.denied; // ["read", "write"]
 permissions.has("net"); // false
 ```
+
+## Import policy
+
+Capabilities bound what running code may *reach*. What may **become** running
+code is a separate question, with a separate mechanism: a JSON file, named by
+`--import-policy` and never auto-discovered.
+
+```sh
+esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+      --import-policy=./import-policy.json server.js
+```
+
+```json
+{ "allow": ["./src", "express", "@acme/ui"], "deny": ["aws-sdk"] }
+```
+
+An entry beginning with `.` or `/` is a path covering its subtree; anything else
+is a package name — the split the loader already makes between a relative and a
+bare specifier. **Deny wins over allow.** Omitting `"allow"` permits everything
+not denied; an empty `"allow": []` is an error rather than a run that can load
+nothing, and so is an unknown key — a misspelled `"allowed"` would otherwise read
+as protection that is not there.
+
+Paths resolve relative to the **policy file**, so a committed policy means the
+same thing wherever the run is invoked from. Matching runs on the resolved,
+canonicalized module, after the root jail: a symlink cannot name its way in, and
+a pnpm store path is still recognisably its package. A package entry covers that
+package's own files and **not** the packages it imports, so a dependency that
+quietly pulls in another cannot load it. The entry file is exempt — it is read
+before a loader exists.
+
+<Callout type="note" title="A policy is not a way around --deny-imports">
+  Two layers, not two alternatives: the `imports` capability decides whether the
+  loader runs at all, the policy decides what it may resolve. Under
+  `--deny-all`, an allow entry still loads nothing.
+</Callout>
+
+<Callout type="warning" title="Known gap: no integrity">
+  A policy names packages and paths, not content. `"express"` says the loader
+  may resolve that package; it says nothing about which version, or whether the
+  bytes are the ones you audited. Lockfiles remain the install-time counterpart,
+  and content pinning is future work — treat the policy as a bound on *which*
+  dependencies can run, not as proof of *what* they are.
+</Callout>
 
 ## Child processes
 
