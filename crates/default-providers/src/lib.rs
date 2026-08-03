@@ -17,6 +17,7 @@
 // `unsafe` is confined to `engine`; the default providers use none.
 #![forbid(unsafe_code)]
 
+mod accept_backoff;
 mod clock;
 mod console;
 mod driver;

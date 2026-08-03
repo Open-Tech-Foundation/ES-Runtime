@@ -26,10 +26,13 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+
+use crate::accept_backoff::AcceptBackoff;
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
@@ -532,10 +535,33 @@ impl NetProvider for SystemNet {
             // next accept nor keeps the channel alive past a close.
             let task = tokio::spawn(async move {
                 let mut handshakes = FuturesUnordered::new();
+                // Errors from `accept` are retried, never fatal — see
+                // [`AcceptBackoff`](crate::accept_backoff). The wait is a
+                // branch of the select rather than an inline sleep so that
+                // handshakes already in flight keep advancing through it: a
+                // `FuturesUnordered` only makes progress while it is polled.
+                let mut backoff = AcceptBackoff::new();
+                let mut retry_at: Option<Instant> = None;
                 loop {
                     tokio::select! {
-                        accepted = listener.accept() => {
-                            let Ok((tcp, remote)) = accepted else { break };
+                        accepted = listener.accept(), if retry_at.is_none() => {
+                            let (tcp, remote) = match accepted {
+                                Ok(accepted) => {
+                                    backoff.reset();
+                                    accepted
+                                }
+                                Err(e) => {
+                                    let delay = backoff.next_delay();
+                                    tracing::warn!(
+                                        target: "runtime::net",
+                                        error = %e,
+                                        backoff_ms = delay.as_millis() as u64,
+                                        "accept failed; retrying",
+                                    );
+                                    retry_at = Some(Instant::now() + delay);
+                                    continue;
+                                }
+                            };
                             let _ = tcp.set_nodelay(true);
                             match &acceptor {
                                 None => {
@@ -550,6 +576,17 @@ impl NetProvider for SystemNet {
                                     });
                                 }
                             }
+                        }
+                        // `pending` when there is nothing to wait for: every
+                        // branch expression is evaluated up front, so this one
+                        // has to be safe to build with no retry outstanding.
+                        () = async move {
+                            match retry_at {
+                                Some(at) => tokio::time::sleep_until(at).await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            retry_at = None;
                         }
                         Some(done) = handshakes.next(), if !handshakes.is_empty() => {
                             // A failed handshake yields `None` — drop it silently.
@@ -873,6 +910,46 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    // The `runtime:net` half of the invariant the HTTP acceptor has: the accept
+    // loop keeps looping, rather than ending on the first error and leaving the
+    // port bound but dead. The errno is not provokable in-process (the retry
+    // policy is unit-tested in `accept_backoff`), so what is asserted is that a
+    // burst of connections abandoned on arrival leaves the listener able to
+    // hand over the next one.
+    #[tokio::test]
+    async fn the_accept_loop_keeps_working_after_a_burst_of_abandoned_connections() {
+        let net = SystemNet::new();
+        let (lid, addr) = net
+            .listen("127.0.0.1".to_string(), 0, ListenOptions::default())
+            .await
+            .unwrap();
+        let port = addr.local_port;
+
+        for _ in 0..64 {
+            drop(
+                tokio::net::TcpStream::connect(("127.0.0.1", port))
+                    .await
+                    .unwrap(),
+            );
+        }
+
+        let client = net.clone();
+        let connect = tokio::spawn(async move {
+            client
+                .connect("127.0.0.1".to_string(), port, ConnectOptions::default())
+                .await
+        });
+        let accepted = tokio::time::timeout(std::time::Duration::from_secs(10), net.accept(lid))
+            .await
+            .expect("the accept loop is still accepting")
+            .unwrap();
+        assert!(accepted.is_some(), "the connection after the burst arrives");
+
+        let (cid, _) = connect.await.unwrap().unwrap();
+        net.close(cid).await.unwrap();
+        net.close_listener(lid).await.unwrap();
     }
 
     // close_listener must unblock an already-parked accept (resolve it to None),

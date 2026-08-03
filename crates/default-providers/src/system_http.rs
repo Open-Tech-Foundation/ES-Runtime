@@ -51,6 +51,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
+use crate::accept_backoff::AcceptBackoff;
+
 /// The response body handed to hyper: buffered (`Full`) or streamed
 /// (`StreamBody`), erased behind one type so both share the service signature.
 /// Unsync because the guest's [`ByteStream`](es_runtime_providers::ByteStream)
@@ -431,7 +433,28 @@ impl HttpServerProvider for SystemHttpServer {
             let live = this.live.clone();
 
             let acceptor = tokio::spawn(async move {
-                while let Ok((stream, _peer)) = listener.accept().await {
+                // Errors from `accept` are retried, never fatal — see
+                // [`AcceptBackoff`](crate::accept_backoff) for why, and for
+                // what the wait between attempts is protecting.
+                let mut backoff = AcceptBackoff::new();
+                loop {
+                    let stream = match listener.accept().await {
+                        Ok((stream, _peer)) => {
+                            backoff.reset();
+                            stream
+                        }
+                        Err(e) => {
+                            let delay = backoff.next_delay();
+                            tracing::warn!(
+                                target: "runtime::http",
+                                error = %e,
+                                backoff_ms = delay.as_millis() as u64,
+                                "accept failed; retrying",
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                    };
                     let _ = stream.set_nodelay(true);
                     let tx = tx.clone();
                     let origin = origin.clone();
@@ -609,6 +632,33 @@ mod tests {
             .await
             .unwrap();
         (http, id, info.local_port)
+    }
+
+    /// The accept loop must keep looping. It used to leave on the first error
+    /// from `accept` — which killed the server while the port stayed bound, and
+    /// said nothing. The errno that motivates the fix (`ECONNABORTED`,
+    /// `EMFILE`) cannot be provoked on demand from in-process test code, so the
+    /// retry policy itself is covered by the unit tests in
+    /// [`accept_backoff`](crate::accept_backoff); what this holds down is that
+    /// a stream of connections opened and abandoned on arrival leaves the
+    /// listener still serving afterwards.
+    #[tokio::test]
+    async fn the_acceptor_keeps_serving_after_a_burst_of_abandoned_connections() {
+        let (http, id, port) = bound().await;
+
+        for _ in 0..64 {
+            drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+
+        let _sock = request_on_new_conn(port).await;
+        let reqs = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            http.next_requests(id, 8),
+        )
+        .await
+        .expect("the acceptor is still accepting")
+        .unwrap();
+        assert_eq!(reqs.len(), 1, "the request after the burst still arrives");
     }
 
     /// The signal a handler's `request.signal` is built on: a client that goes

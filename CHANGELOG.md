@@ -8,7 +8,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
-## [0.15.0] - 2026-08-02
+### Fixed
+
+- **A failed `accept()` no longer kills a server.** The accept loops behind
+  `runtime:http`'s `serve()` and `runtime:net`'s `listen()` left their loop on
+  the first error from `accept`, which ended the server permanently while the
+  port stayed bound — nothing served, and nothing else able to take the address.
+  The errors that trigger it are ordinary on a busy public port and say nothing
+  about the listening socket: `ECONNABORTED` from a client that hangs up between
+  the SYN and the accept, `EMFILE`/`ENFILE` from a momentarily full descriptor
+  table, `EINTR` from a signal. Both loops now retry every error and end only
+  when the server is closed.
+
+  The retry waits, doubling from 5ms to a ceiling of 1s and resetting on the
+  next accepted connection, so a persistent failure (a descriptor limit that
+  stays hit) costs one wakeup a second instead of spinning a core. Each retry is
+  logged at `warn` with the error and the wait (`runtime::http` / `runtime::net`
+  targets), because a fix that turned a silent death into a silent stall would
+  barely be a fix.
 
 ### Added
 
