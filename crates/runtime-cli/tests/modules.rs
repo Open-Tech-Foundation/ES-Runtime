@@ -204,6 +204,27 @@ fn sends_response_trailers_from_a_handler() {
 }
 
 #[test]
+fn reads_response_trailers_with_fetch() {
+    // The round trip on one runtime: a handler attaches trailers and `fetch`
+    // reads them back — the gRPC shape, status after the body.
+    let out = run_file("http-trailers-client.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("body:payload"), "{stdout}");
+    assert!(stdout.contains("status:0 message:fine"), "{stdout}");
+    // Promised trailers arrive the same way from the client's side.
+    assert!(stdout.contains("failed-status:13"), "{stdout}");
+    // No trailers is empty Headers, not a rejection — on a response that had
+    // none, on one the guest built itself, and on a body that was cancelled
+    // rather than read (which must settle rather than hang).
+    assert!(stdout.contains("none:0"), "{stdout}");
+    assert!(stdout.contains("local:0"), "{stdout}");
+    assert!(stdout.contains("cancelled:0"), "{stdout}");
+    assert!(stdout.contains("bad-arg:TypeError"), "{stdout}");
+    assert!(stdout.contains("CLIENT_TRAILERS_OK"), "{stdout}");
+}
+
+#[test]
 fn honours_every_fetch_redirect_mode_over_the_wire() {
     // Real 3xx responses from a real runtime:http server through the real
     // reqwest transport — the stub transport in the runtime's own tests cannot

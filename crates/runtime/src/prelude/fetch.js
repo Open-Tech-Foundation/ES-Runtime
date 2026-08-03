@@ -24,6 +24,8 @@
   // terms and are not subject to the constructor's status/body checks, which
   // only constrain what a script may construct.
   const INTERNAL_RESPONSE = Symbol("internalResponse");
+  // fetch response → host body id, for `trailersOf` (see __responseTrailers).
+  const responseBodyIds = new WeakMap();
   // Closure-private marker carrying a function that produces the request's
   // AbortSignal on first read (see Request#signalThunk). Only `__serverRequest`
   // can pass it, so guest code cannot install a thunk of its own.
@@ -875,7 +877,7 @@
       },
     });
 
-    return new Response(stream, {
+    const response = new Response(stream, {
       status: meta.status,
       statusText: meta.statusText,
       headers: meta.headers,
@@ -883,7 +885,26 @@
       redirected: meta.redirected === true,
       [INTERNAL_RESPONSE]: true,
     });
+    // Remember which host-side response this is, so trailers can be asked for
+    // later. A WeakMap rather than a property: trailers are not part of the
+    // Fetch API in any runtime, and a non-standard property on a standard
+    // object is how code stops being portable without anyone noticing.
+    responseBodyIds.set(response, bodyId);
+    return response;
   }
+
+  // Internal bridge for runtime:http's `trailersOf`: the header fields that
+  // arrived after a fetch response's body. Resolves once the body has been read
+  // to its end — trailers are not on the wire before that — and to an empty
+  // Headers for a response that has none or was not produced by fetch.
+  globalThis.__responseTrailers = async (response) => {
+    const bodyId = responseBodyIds.get(response);
+    if (bodyId === undefined) return new Headers();
+    const flat = await ops.fetch_trailers(bodyId);
+    const headers = new Headers();
+    for (let i = 0; i + 1 < flat.length; i += 2) headers.append(flat[i], flat[i + 1]);
+    return headers;
+  };
 
   for (const Interface of [Headers, Request, Response]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {

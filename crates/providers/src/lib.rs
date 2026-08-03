@@ -249,6 +249,14 @@ pub struct HttpResponse {
     pub headers: Vec<(String, String)>,
     /// The response body, streamed as byte-chunks.
     pub body: ByteStream,
+    /// Header fields that arrived **after** the body, or `None` if the
+    /// transport does not surface them.
+    ///
+    /// Trailers are on the wire only once the body is over, so this resolves
+    /// when [`body`](Self::body) has been read to its end — or when it is
+    /// dropped, which yields none rather than waiting for a body nobody is
+    /// reading. A response with no trailers resolves to an empty list.
+    pub trailers: Option<BoxFuture<Vec<(String, String)>>>,
 }
 
 /// Outbound HTTP for `fetch` (ARCHITECTURE.md §6, SPEC §2.9).

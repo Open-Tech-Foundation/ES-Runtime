@@ -141,6 +141,25 @@ function withTrailers(response, trailers) {
   return response;
 }
 
+// The header fields that arrived after a response's body — the other half of
+// withTrailers(), for a client reading what a server sent.
+//
+// Resolves once the body has been read to its end, because that is when
+// trailers are on the wire; a response whose body is never read settles this
+// when the body is dropped rather than waiting forever. Anything that is not a
+// fetch response, or that carried no trailers, gives an empty Headers.
+//
+// Not a property on Response for the same reason withTrailers is not an option
+// on it: no runtime exposes trailers on the Fetch API, so a standard-looking
+// accessor would be a portability trap.
+async function trailersOf(response) {
+  if (!(response instanceof Response)) {
+    throw new TypeError("trailersOf(response): response must be a Response");
+  }
+  const read = globalThis.__responseTrailers;
+  return typeof read === "function" ? read(response) : new Headers();
+}
+
 // Streams a Response's ReadableStream body to the host one chunk at a time.
 // Each push awaits the bounded host channel (download backpressure); a guest
 // stream error is forwarded so the in-flight response aborts the connection —
@@ -402,5 +421,5 @@ function serve(options, handler) {
   );
 }
 
-export { serve, withTrailers };
-export default { serve, withTrailers };
+export { serve, withTrailers, trailersOf };
+export default { serve, withTrailers, trailersOf };

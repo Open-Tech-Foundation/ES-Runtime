@@ -4,6 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use es_runtime_common::ErrorCode;
 use futures_util::StreamExt;
+use hyper::body::Body as _;
 
 use es_runtime_providers::{
     BoxFuture, ByteStream, HttpRequest, HttpResponse, NetTransport, ProviderError, RedirectMode,
@@ -249,6 +250,14 @@ impl NetTransport for ReqwestTransport {
             for (name, value) in &request.headers {
                 builder = builder.header(name, value);
             }
+            // Say that trailers are welcome. A conformant HTTP/1.1 server sends
+            // a trailer section only to a client that asked for one (RFC 9110
+            // §10.1.4), so without this the trailers this transport goes out of
+            // its way to surface would never arrive over HTTP/1.1 — from our own
+            // server included. `trailers` is the only value the header is
+            // allowed to carry over HTTP/2 (RFC 9113 §8.2.2), so one spelling
+            // serves both versions.
+            builder = builder.header(hyper::header::TE, "trailers");
             match request.body {
                 RequestBody::Empty => {}
                 RequestBody::Bytes(body) => {
@@ -289,10 +298,48 @@ impl NetTransport for ReqwestTransport {
                 })
                 .collect();
 
-            let body: ByteStream = Box::pin(response.bytes_stream().map(|chunk| {
-                chunk
-                    .map(|bytes| bytes.to_vec())
-                    .map_err(|e| ProviderError::Other(format!("body: {e}")))
+            // Frames rather than `bytes_stream()`: that convenience yields data
+            // only and drops the trailing header block, which is exactly what a
+            // gRPC status arrives in. reqwest's `Response` converts into an
+            // `http::Response` whose body is an `http_body::Body`, so the frames
+            // are reachable without patching the client.
+            let (trailer_tx, trailer_rx) = tokio::sync::oneshot::channel();
+            let http_response: hyper::Response<reqwest::Body> = response.into();
+            let mut body_frames = http_response.into_body();
+            let mut trailer_tx = Some(trailer_tx);
+            let body: ByteStream = Box::pin(futures_util::stream::poll_fn(move |cx| {
+                loop {
+                    return match std::pin::Pin::new(&mut body_frames).poll_frame(cx) {
+                        std::task::Poll::Pending => std::task::Poll::Pending,
+                        std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
+                        std::task::Poll::Ready(Some(Err(e))) => std::task::Poll::Ready(Some(Err(
+                            ProviderError::Other(format!("body: {e}")),
+                        ))),
+                        std::task::Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
+                            Ok(bytes) => std::task::Poll::Ready(Some(Ok(bytes.to_vec()))),
+                            // A trailer block: hand it over and keep polling —
+                            // the stream's items are body bytes, and trailers
+                            // are not body bytes.
+                            Err(frame) => {
+                                if let Ok(map) = frame.into_trailers()
+                                    && let Some(tx) = trailer_tx.take()
+                                {
+                                    let pairs = map
+                                        .iter()
+                                        .map(|(n, v)| {
+                                            (
+                                                n.as_str().to_string(),
+                                                v.to_str().unwrap_or("").to_string(),
+                                            )
+                                        })
+                                        .collect();
+                                    let _ = tx.send(pairs);
+                                }
+                                continue;
+                            }
+                        },
+                    };
+                }
             }));
 
             Ok(HttpResponse {
@@ -302,6 +349,12 @@ impl NetTransport for ReqwestTransport {
                 redirected,
                 headers,
                 body,
+                // Resolves when the body ends: either with what the peer sent,
+                // or empty once the sender is dropped with the stream — so a
+                // body nobody reads settles this rather than hanging on it.
+                trailers: Some(Box::pin(
+                    async move { trailer_rx.await.unwrap_or_default() },
+                )),
             })
         })
     }

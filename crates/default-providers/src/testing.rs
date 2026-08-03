@@ -298,6 +298,7 @@ impl NetTransport for MockTransport {
                 redirected,
                 headers: response.headers,
                 body,
+                trailers: None,
             })
         })
     }

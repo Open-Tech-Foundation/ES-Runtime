@@ -1027,6 +1027,7 @@ mod tests {
                     redirected: false,
                     headers,
                     body,
+                    trailers: None,
                 })
             })
         }
@@ -1087,6 +1088,7 @@ mod tests {
                     redirected: false,
                     headers: vec![],
                     body: stream,
+                    trailers: None,
                 })
             })
         }
@@ -3107,6 +3109,7 @@ mod tests {
                                 format!("https://x.test/hop/{}", n + 1),
                             )],
                             body,
+                            trailers: None,
                         });
                     }
                     followed += 1;
@@ -3130,6 +3133,7 @@ mod tests {
                     redirected,
                     headers: vec![],
                     body,
+                    trailers: None,
                 })
             })
         }

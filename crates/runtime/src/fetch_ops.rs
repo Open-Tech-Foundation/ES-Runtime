@@ -34,6 +34,9 @@ use futures_util::{SinkExt, StreamExt};
 
 use crate::Result;
 
+/// Trailers still to arrive for one response, settling when its body ends.
+type PendingTrailers = es_runtime_providers::BoxFuture<Vec<(String, String)>>;
+
 /// Bounded request-body channel capacity. The guest pump awaits each push, so at
 /// most this many chunks (plus the one in flight) are buffered between the guest
 /// `ReadableStream` and the transport — the backpressure that keeps a large
@@ -47,6 +50,11 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     // Active response-body streams, keyed by id: `fetch` inserts, `fetch_body_read`
     // drains.
     let bodies: Rc<RefCell<HashMap<u64, ByteStream>>> = Rc::new(RefCell::new(HashMap::new()));
+    // Trailers per response id. They exist on the wire only after the body, so
+    // the future settles when the body ends — or when it is dropped, which
+    // yields none rather than waiting on a body nobody is reading.
+    let trailers: Rc<RefCell<HashMap<u64, PendingTrailers>>> =
+        Rc::new(RefCell::new(HashMap::new()));
     let resp_id_gen = Rc::new(Cell::new(1u64));
 
     // Streaming request bodies, keyed by id. `fetch_request_body_new` creates the
@@ -129,6 +137,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
     {
         let net = net;
         let bodies = bodies.clone();
+        let trailers_outer = trailers.clone();
         let req_receivers = req_receivers.clone();
         let abort_txs = abort_txs.clone();
         let abort_rxs = abort_rxs.clone();
@@ -136,6 +145,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
             OpDecl::r#async("fetch", move |args| {
                 let net = net.clone();
                 let bodies = bodies.clone();
+                let trailers_for_fetch = trailers_outer.clone();
                 let resp_id_gen = resp_id_gen.clone();
                 let abort_txs = abort_txs.clone();
                 // Resolve a streaming request body (if any) synchronously, before
@@ -175,6 +185,9 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                     let id = resp_id_gen.get();
                     resp_id_gen.set(id + 1);
                     bodies.borrow_mut().insert(id, response.body);
+                    if let Some(t) = response.trailers {
+                        trailers_for_fetch.borrow_mut().insert(id, t);
+                    }
                     Ok(response_value(
                         response.status,
                         &response.status_text,
@@ -228,6 +241,30 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Arc<dyn NetTransport>) -> Re
                         .with_code_opt(e.code())),
                     None => Ok(Value::Null), // end of stream; not reinserted
                 }
+            })
+        }))?;
+    }
+
+    // ---- fetch_trailers ------------------------------------------------------
+    // Header fields that arrived after response `id`'s body, as a flat
+    // `[name, value, …]` array. Resolves once the body has been read to its end
+    // — trailers are not on the wire before that — or empty if the body was
+    // dropped, so this always settles rather than holding the loop open.
+    {
+        let trailers = trailers.clone();
+        engine.register_op(OpDecl::r#async("fetch_trailers", move |args| {
+            let trailers = trailers.clone();
+            let id = args.first().and_then(Value::as_number).unwrap_or(0.0) as u64;
+            Box::pin(async move {
+                let Some(pending) = trailers.borrow_mut().remove(&id) else {
+                    return Ok(Value::Array(Vec::new())); // unknown id, or asked twice
+                };
+                let mut flat = Vec::new();
+                for (name, value) in pending.await {
+                    flat.push(Value::String(name));
+                    flat.push(Value::String(value));
+                }
+                Ok(Value::Array(flat))
             })
         }))?;
     }
