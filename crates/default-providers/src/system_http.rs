@@ -53,6 +53,7 @@ use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
 use crate::accept_backoff::AcceptBackoff;
+use crate::checkout::Checkout;
 use crate::first_byte::FirstByteTimeout;
 
 /// The most header fields one HTTP/1.1 request head may carry.
@@ -628,11 +629,19 @@ impl HttpServerProvider for SystemHttpServer {
     ) -> BoxFuture<Result<Vec<(u64, HttpServerRequest)>, ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            // Take the receiver out so no lock is held across the await, then
-            // reinsert to keep serving (mirrors SystemNet::accept). The shutdown
-            // signal lives in a side map `close` can still reach meanwhile.
+            // Take the receiver out so no lock is held across the await, and
+            // guard it so it goes back however this call ends — including a
+            // caller who abandons the future, which would otherwise take the
+            // server's whole request queue with it (see `checkout`). The
+            // shutdown signal lives in a side map `close` can still reach
+            // meanwhile.
             let mut rx = match this.requests.lock().unwrap().remove(&id) {
-                Some(rx) => rx,
+                Some(rx) => {
+                    let back = this.requests.clone();
+                    Checkout::new(rx, move |rx| {
+                        back.lock().unwrap().insert(id, rx);
+                    })
+                }
                 None => return Ok(Vec::new()), // closed
             };
             let shutdown = this
@@ -646,9 +655,9 @@ impl HttpServerProvider for SystemHttpServer {
                 Some(notify) => tokio::select! {
                     biased;
                     () = notify.notified() => None, // close() asked us to stop
-                    r = rx.recv() => r,
+                    r = rx.get_mut().recv() => r,
                 },
-                None => rx.recv().await,
+                None => rx.get_mut().recv().await,
             };
             let mut batch = Vec::new();
             if let Some(pending) = first {
@@ -657,13 +666,13 @@ impl HttpServerProvider for SystemHttpServer {
                 // up to `max` — this is the amortization: one await, many
                 // requests handed to the single-threaded consumer per crossing.
                 while batch.len() < max {
-                    match rx.try_recv() {
+                    match rx.get_mut().try_recv() {
                         Ok(pending) => batch.push(pending),
                         Err(_) => break, // empty (or disconnected) — stop draining
                     }
                 }
             }
-            this.requests.lock().unwrap().insert(id, rx);
+            drop(rx); // returns the receiver to the registry
 
             // Assign a request id to each and stash its response sender. (Empty
             // batch ⇒ closed/shutting down.)
@@ -743,7 +752,7 @@ mod tests {
         sock
     }
 
-    async fn bound() -> (SystemHttpServer, u64, u16) {
+    pub(super) async fn bound() -> (SystemHttpServer, u64, u16) {
         bound_with(None).await
     }
 
@@ -2060,5 +2069,37 @@ mod connection_cap_tests {
             assert_eq!(batch.len(), 1);
             drop(conn);
         }
+    }
+}
+
+/// Abandoning a call must not take the resource with it.
+///
+/// The provider traits are a public integration seam, so an embedder is free to
+/// wrap one of these in `tokio::time::timeout` or race it in a `select!`. Before
+/// the checkout guard, doing so silently and permanently closed the server's
+/// request queue: every later call returned "closed" while the port stayed bound
+/// and connections kept arriving.
+#[cfg(test)]
+mod cancel_safety_tests {
+    use super::tests::{bound, request_on_new_conn};
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn an_abandoned_next_requests_leaves_the_server_serving() {
+        let (http, id, port) = bound().await;
+
+        // Nothing is connected yet, so this parks — then give up on it.
+        let abandoned =
+            tokio::time::timeout(Duration::from_millis(100), http.next_requests(id, 8)).await;
+        assert!(abandoned.is_err(), "the call parked, as this test needs");
+
+        // The server must still be serving.
+        let _sock = request_on_new_conn(port).await;
+        let reqs = tokio::time::timeout(Duration::from_secs(10), http.next_requests(id, 8))
+            .await
+            .expect("the request queue survived the abandoned call")
+            .unwrap();
+        assert_eq!(reqs.len(), 1);
     }
 }

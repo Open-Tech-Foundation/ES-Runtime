@@ -33,6 +33,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 use crate::accept_backoff::AcceptBackoff;
+use crate::checkout::Checkout;
 
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
@@ -443,24 +444,35 @@ impl NetProvider for SystemNet {
     fn read(&self, id: u64) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>> {
         let sockets = self.sockets.clone();
         Box::pin(async move {
+            // Guarded so the channel goes back however this call ends: an
+            // abandoned read would otherwise take it, and every later read on a
+            // live socket would report EOF (see `checkout`).
             let mut rx = match sockets
                 .lock()
                 .unwrap()
                 .get_mut(&id)
                 .and_then(|s| s.read_rx.take())
             {
-                Some(rx) => rx,
+                Some(rx) => {
+                    let back = sockets.clone();
+                    Checkout::new(rx, move |rx| {
+                        if let Some(slot) = back.lock().unwrap().get_mut(&id) {
+                            slot.read_rx = Some(rx);
+                        }
+                    })
+                }
                 None => return Ok(None), // closed or already at EOF
             };
-            match rx.recv().await {
-                Some(Ok(buf)) => {
-                    if let Some(slot) = sockets.lock().unwrap().get_mut(&id) {
-                        slot.read_rx = Some(rx);
-                    }
-                    Ok(Some(buf))
+            match rx.get_mut().recv().await {
+                Some(Ok(buf)) => Ok(Some(buf)),
+                Some(Err(e)) => {
+                    rx.keep_out(); // the socket errored; nothing to read again
+                    Err(err(e))
                 }
-                Some(Err(e)) => Err(err(e)),
-                None => Ok(None), // reader task ended (EOF) — leave it taken
+                None => {
+                    rx.keep_out(); // reader task ended (EOF)
+                    Ok(None)
+                }
             }
         })
     }
@@ -609,14 +621,21 @@ impl NetProvider for SystemNet {
     fn accept(&self, id: u64) -> BoxFuture<Result<Option<(u64, SocketInfo)>, ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
+            // Guarded: an abandoned accept would take the listener's channel
+            // with it and every later accept would report the listener closed.
             let mut rx = match this.listeners.lock().unwrap().remove(&id) {
-                Some(rx) => rx,
+                Some(rx) => {
+                    let back = this.listeners.clone();
+                    Checkout::new(rx, move |rx| {
+                        back.lock().unwrap().insert(id, rx);
+                    })
+                }
                 None => return Ok(None), // listener closed
             };
-            let conn = rx.recv().await;
+            let conn = rx.get_mut().recv().await;
             match conn {
                 Some((accepted, remote)) => {
-                    this.listeners.lock().unwrap().insert(id, rx); // keep accepting
+                    drop(rx); // back to the registry — keep accepting
                     let sid = this.id();
                     // The stream is already TLS-terminated (if this is a TLS
                     // listener); just build the slot and surface the negotiated
@@ -641,6 +660,7 @@ impl NetProvider for SystemNet {
                 // Listener closed (sender dropped, e.g. close_listener aborted the
                 // task): don't re-insert the dead rx; drop its task handle.
                 None => {
+                    rx.keep_out();
                     this.listener_tasks.lock().unwrap().remove(&id);
                     Ok(None)
                 }
@@ -1146,5 +1166,72 @@ mod tests {
             .await
             .expect("the allowed address binds");
         net.close_listener(id).await.unwrap();
+    }
+}
+
+/// Abandoning a call must not take the resource with it — see the same module
+/// in `system_http` for why an embedder can do this at all.
+#[cfg(test)]
+mod cancel_safety_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn an_abandoned_read_leaves_the_socket_readable() {
+        let net = SystemNet::new();
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            // Say nothing at first, so the guest's read parks and is abandoned.
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            tcp.write_all(b"late").await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+
+        let (cid, _) = net
+            .connect("127.0.0.1".to_string(), port, ConnectOptions::default())
+            .await
+            .unwrap();
+
+        let abandoned = tokio::time::timeout(Duration::from_millis(50), net.read(cid)).await;
+        assert!(abandoned.is_err(), "the read parked, as this test needs");
+
+        // The bytes that arrive later must still be readable — before the guard
+        // this reported EOF on a perfectly live socket.
+        let got = tokio::time::timeout(Duration::from_secs(10), net.read(cid))
+            .await
+            .expect("the read channel survived the abandoned read")
+            .unwrap();
+        assert_eq!(got.as_deref(), Some(&b"late"[..]));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_accept_leaves_the_listener_accepting() {
+        let net = SystemNet::new();
+        let (lid, addr) = net
+            .listen("127.0.0.1".to_string(), 0, ListenOptions::default())
+            .await
+            .unwrap();
+
+        let abandoned = tokio::time::timeout(Duration::from_millis(100), net.accept(lid)).await;
+        assert!(abandoned.is_err(), "the accept parked, as this test needs");
+
+        let client = net.clone();
+        let port = addr.local_port;
+        let connect = tokio::spawn(async move {
+            client
+                .connect("127.0.0.1".to_string(), port, ConnectOptions::default())
+                .await
+        });
+        let accepted = tokio::time::timeout(Duration::from_secs(10), net.accept(lid))
+            .await
+            .expect("the accept channel survived the abandoned accept")
+            .unwrap();
+        assert!(accepted.is_some());
+        let (cid, _) = connect.await.unwrap().unwrap();
+        net.close(cid).await.unwrap();
+        net.close_listener(lid).await.unwrap();
     }
 }

@@ -42,13 +42,14 @@ open socket costs.
 
 ### The consequences worth knowing
 
-**A read checks the receiver out.** It takes the receiver out of the registry
-and puts it back only once a chunk arrives. Nothing is lost at the *socket*
-level if that wait is abandoned — no bytes have been consumed — but the receiver
-goes with the abandoned call, and the socket reads as EOF from then on. Guest
-code has no way to abandon a read today, so this is a hazard in the shape of the
-code rather than a bug you can reach — but it is the reason a read is not
-something to wrap in a cancelling wrapper.
+**A read checks the receiver out, and gets it back either way.** It takes the
+receiver out of the registry for the duration of the wait, because the
+registry's lock cannot be held across an await. The put-back is a destructor
+rather than a code path, so it happens whether the read completes, is abandoned
+by the caller, or panics — an embedder can wrap a read in
+`tokio::time::timeout` or race it in a `select!` without silently killing the
+socket. The same guard covers `accept`, and the equivalents in the HTTP and
+WebSocket providers.
 
 **EOF is the reader task ending.** It drops its sender, `recv()` yields `None`,
 and the read resolves to `null`. There is no separate end-of-stream flag to keep

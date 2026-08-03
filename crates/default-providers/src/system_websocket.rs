@@ -39,6 +39,7 @@ use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::accept_backoff::AcceptBackoff;
+use crate::checkout::Checkout;
 
 /// A close with no peer status code maps to 1005 ("no status received").
 const NO_STATUS_RCVD: u16 = 1005;
@@ -352,25 +353,31 @@ impl WebSocketProvider for SystemWebSocket {
     fn recv(&self, id: u64) -> BoxFuture<Result<Option<WsIncoming>, ProviderError>> {
         let conns = self.conns.clone();
         Box::pin(async move {
+            // Guarded so an abandoned receive cannot take the inbound channel
+            // with it and leave every later receive reporting end-of-stream on a
+            // live connection (see `checkout`).
             let mut rx = match conns
                 .lock()
                 .unwrap()
                 .get_mut(&id)
                 .and_then(|s| s.inbound_rx.take())
             {
-                Some(rx) => rx,
+                Some(rx) => {
+                    let back = conns.clone();
+                    Checkout::new(rx, move |rx| {
+                        if let Some(slot) = back.lock().unwrap().get_mut(&id) {
+                            slot.inbound_rx = Some(rx);
+                        }
+                    })
+                }
                 None => return Ok(None), // closed or already ended
             };
-            match rx.recv().await {
-                Some(item) => {
-                    if let Some(slot) = conns.lock().unwrap().get_mut(&id) {
-                        slot.inbound_rx = Some(rx);
-                    }
-                    Ok(Some(item))
-                }
+            match rx.get_mut().recv().await {
+                Some(item) => Ok(Some(item)),
                 // The actor ended (clean close already delivered, or abnormal):
                 // drop the registry entry and signal end-of-stream.
                 None => {
+                    rx.keep_out();
                     conns.lock().unwrap().remove(&id);
                     Ok(None)
                 }
@@ -471,12 +478,19 @@ impl WebSocketProvider for SystemWebSocket {
     fn accept(&self, id: u64) -> BoxFuture<Result<Option<(u64, WebSocketInfo)>, ProviderError>> {
         let servers = self.servers.clone();
         Box::pin(async move {
+            // Guarded: an abandoned accept would take the server's channel with
+            // it and every later accept would report the server closed.
             let mut rx = match servers.lock().unwrap().remove(&id) {
-                Some(rx) => rx,
+                Some(rx) => {
+                    let back = servers.clone();
+                    Checkout::new(rx, move |rx| {
+                        back.lock().unwrap().insert(id, rx);
+                    })
+                }
                 None => return Ok(None), // server closed
             };
-            let conn = rx.recv().await;
-            servers.lock().unwrap().insert(id, rx); // keep accepting
+            let conn = rx.get_mut().recv().await;
+            drop(rx); // back to the registry — keep accepting
             Ok(conn)
         })
     }
@@ -607,6 +621,40 @@ mod tests {
         client.close(id, Some(1000), String::new()).await.unwrap();
         let _ = client.recv(id).await;
         server.await.unwrap();
+    }
+
+    // Abandoning a receive must not take the connection's inbound channel with
+    // it — see `system_http`'s cancel_safety_tests for why an embedder can do
+    // this at all. Before the checkout guard, every later receive on a live
+    // connection reported end-of-stream.
+    #[tokio::test]
+    async fn an_abandoned_recv_leaves_the_connection_receiving() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let port = info.local_port;
+        let (cid, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let (conn_id, _) = sys.accept(server_id).await.unwrap().expect("a connection");
+
+        // Nothing has been sent yet, so this parks — then give up on it.
+        let abandoned =
+            tokio::time::timeout(std::time::Duration::from_millis(100), sys.recv(conn_id)).await;
+        assert!(abandoned.is_err(), "the receive parked, as this test needs");
+
+        sys.send(cid, WsMessage::Text("after".to_string()))
+            .await
+            .unwrap();
+        let got = tokio::time::timeout(std::time::Duration::from_secs(10), sys.recv(conn_id))
+            .await
+            .expect("the inbound channel survived the abandoned receive")
+            .unwrap();
+        match got {
+            Some(WsIncoming::Text(t)) => assert_eq!(t, "after"),
+            _ => panic!("expected the text message sent after the abandoned receive"),
+        }
+        sys.close(cid, Some(1000), String::new()).await.unwrap();
     }
 
     // The third accept loop with the same invariant as the HTTP server's and

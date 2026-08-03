@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 mod accept_backoff;
+mod checkout;
 mod clock;
 mod console;
 mod driver;

@@ -119,6 +119,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An abandoned provider call no longer kills the resource it was waiting on.**
+  Five calls — `runtime:http`'s `next_requests`, `runtime:net`'s `read` and
+  `accept`, and the WebSocket provider's `recv` and `accept` — take a channel
+  receiver out of a shared registry for the duration of their await, because the
+  registry's lock cannot be held across one. The put-back only happened on the
+  paths that reached it, so a caller who abandoned the future took the receiver
+  with it: the resource stayed in the registry looking alive while reporting
+  "closed" or "end of stream" to every later call. Silent and permanent.
+
+  Guest JavaScript could not trigger this — the engine polls every pending op
+  future to completion — but the provider traits are a public integration seam,
+  so an embedder wrapping one of these in `tokio::time::timeout`, or racing it in
+  a `select!`, could. The put-back is now a destructor rather than a code path,
+  so it happens on completion, on cancellation, and on a panic in between.
+
 - **A failed `accept()` no longer kills a server.** The accept loops behind
   `runtime:http`'s `serve()`, `runtime:net`'s `listen()` and the WebSocket
   server left their loop on
