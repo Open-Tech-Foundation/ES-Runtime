@@ -22,13 +22,18 @@ bench/rps.sh                              # server throughput, external load gen
 bench/http2.sh                            # the same server over HTTP/1.1 vs HTTP/2
 ```
 
-Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 25),
-`WORKLOAD_RUNS` (default 9), `NOISE_THRESHOLD` (CoV % above which a cell is
-flagged noisy, default 5), `WORKLOAD_TIMEOUT` (per-workload cap, default 60s, so
-an unsupported workload yields n/a instead of hanging), `WORKLOADS="url encoding"`
-(run a subset), `QUIET=1` (pin to one CPU + disable ASLR for lower variance; see
-Methodology), `BENCH_CPU` (the core to pin under `QUIET`, default 0),
-`BENCH_JSON=1` (machine-readable output for diffing runs over time). A runtime
+Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 15),
+`WORKLOAD_RUNS` (default 5 — a *ceiling*, see the adaptive stop below),
+`MIN_REPS` (repetitions before a row may stop early, default 3),
+`NOISE_THRESHOLD` (CoV % above which a cell is flagged noisy, and below which a
+row counts as settled, default 5), `RSS_ROWS` (rows to sample peak memory for,
+default `startup bigscript`), `MIN_MS` (below this a cell is reported as being
+under the measurement floor, default 5), `WORKLOAD_TIMEOUT` (per-workload cap,
+default 60s, so an unsupported workload yields n/a instead of hanging),
+`WORKLOADS="url encoding"` (run a subset), `QUIET=1` (pin to one CPU + disable
+ASLR for lower variance; see Methodology), `BENCH_CPU` (the core to pin under
+`QUIET`, default 0), `BENCH_JSON=1` (machine-readable output for diffing runs
+over time). A runtime
 that isn't installed is skipped; Deno is also looked for at `~/.deno/bin/deno`
 and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, or
 `/tmp/llrt/llrt` if not on `PATH`. Install LLRT by unzipping the
@@ -91,7 +96,28 @@ run to run (see Sources for the rationale):
   and report `RESULT_MS`, isolating engine cost from process launch.
 - **Noise is disclosed, not hidden.** The coefficient of variation (CoV) per
   cell is computed; cells above `NOISE_THRESHOLD%` are marked `~` and listed, so
-  a wobbly number is never read as precise.
+  a wobbly number is never read as precise. `BENCH_JSON` publishes each cell's
+  CoV and sample count next to its value, so the site can show how firm a number
+  is instead of implying they are all equally firm.
+- **Adaptive stop.** `WORKLOAD_RUNS` is a ceiling, not a quota: once every live
+  cell in a row is within `NOISE_THRESHOLD%`, further repetitions cannot move a
+  minimum that has already settled, so the row stops (never before `MIN_REPS`).
+  Stability is judged per row rather than per cell, so all runtimes keep an
+  identical sample count and the interleaving stays balanced. Startup rows are
+  exempt — their launches are cheap and their wall-clock measurement is the
+  noisiest, so they always take the full `STARTUP_RUNS`.
+- **A failure is retried before it is believed.** A cell that fails on the
+  warmup repetition is sampled once more before being written off, and a
+  timeout is recorded separately from an unsupported API. Both reach the site as
+  `null`, but only one of them means "this runtime cannot do this", and a
+  transient (a busy port, a cold cache, a timeout tripped under load) used to be
+  published as the other.
+- **A measurement floor.** A workload whose fastest runtime finishes in under
+  `MIN_MS` is measuring timer resolution, not the runtime, and is reported so
+  its `N` can be raised rather than its ranking published. This is why
+  `fsstat_large`/`fsexists_large` no longer run 20 operations: they inherited
+  that count from the read/write `_large` workloads, where 20 ops move 40 MB,
+  but a metadata call moves no bytes — so they were landing at 0.2–1.2 ms.
 - **Optional hardening (`QUIET=1`).** Pins every runtime to the same CPU
   (`taskset`), disables ASLR (`setarch -R`), and raises priority as root, so all
   candidates face identical conditions. For the lowest variance also set the
@@ -256,9 +282,23 @@ WinterTC surface**, not "fastest at everything."
 `run.sh`'s `http` workload runs the client *and* the server in one process, so on
 esrun a single thread does both jobs — useful for the warm request/response path,
 but not a server-throughput number. For that, `bench/rps.sh` runs a hello-world
-server per runtime (`scripts/helloserver.js`, plaintext `"Hello, World!"` on
-:3000) and points an **external** load generator at it — the classic plaintext
-req/s shape.
+server per runtime (`scripts/helloserver.js`, plaintext `"Hello, World!"` on a
+free port picked per run) and points an **external** load generator at it — the
+classic plaintext req/s shape.
+
+The client and the server share one machine, so **the cores are split between
+them**: the server gets the lower half, the load generator the upper half
+(`taskset`). Unpinned, `oha` starts a worker per core and competes with the very
+server it is measuring, and past some rate the number describes whichever won —
+the failure mode where every runtime lands within a few percent of every other.
+`PIN=0` disables the split; `SERVER_CPUS=0-3 LOAD_CPUS=4-11` chooses it. The
+split in force is recorded in the `BENCH_JSON` output next to the numbers.
+
+Results are published under a key derived from `$SERVER`, so a run of the
+default `helloserver.js` cannot land in the site's Hono row. Each cell also
+reports the **spread** (worst-to-best across the repetitions): a best-of-N with a
+wide spread is a lucky draw rather than a ceiling, and the winning number alone
+cannot tell you which you have.
 
 The generator is [oha] (or [bombardier]) — **not** autocannon: Bun's own
 `bench/express` README notes autocannon's node:http client can't push a fast
@@ -421,6 +461,41 @@ measurement.
 [oha]: https://github.com/hatoo/oha
 [bombardier]: https://github.com/codesenberg/bombardier
 [Hono]: https://hono.dev
+
+## Publishing to the site
+
+`website/src/benchmarks.js` is generated, never edited. `bench/gen-bench-data.sh`
+runs the four scripts in machine mode, merges their JSON, and writes the module:
+
+```sh
+bench/gen-bench-data.sh                  # full suite
+bench/gen-bench-data.sh url encoding     # re-measure a subset, merge into the rest
+```
+
+The point of a generated module is that no number on the site is ever typed by
+hand — which only holds if a run that went wrong is **rejected** rather than
+written out. A half-failed suite would otherwise produce a module full of nulls,
+every chart would render "n/a", and the repair would be a human editing the
+generated file. So `bench/validate-bench-data.mjs` gates the write:
+
+- Every row the benchmarks page charts must exist and have at least one measured
+  runtime. The page's `{ key: "..." }` literals are read back out of the MDX, so
+  adding a row there starts requiring the run to produce it.
+- Every value must be a finite non-negative number or `null`.
+- The sections owned by the other three scripts (`results_rps`, `websocket`,
+  `results_http2`) must be present and populated.
+- Noisy cells (CoV > 10%), timeouts, and cells under the measurement floor are
+  reported as warnings, so whoever publishes sees them and not just whoever
+  happened to be watching stderr.
+
+On rejection the previous, known-good module is left in place and the generator
+exits non-zero. The fix is to re-run the benchmark, never to edit the module.
+
+Charts read the generated data directly and render nothing where it is missing.
+They must not carry inline fallback numbers: the homepage req/s chart used to
+have a `||` fallback that had gone stale by ~43% for esrun, and it would have
+appeared the moment a run failed to produce the key — silently replacing a
+measurement with a flattering guess.
 
 ## Caveats
 
