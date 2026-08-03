@@ -38,6 +38,8 @@ use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
+use crate::accept_backoff::AcceptBackoff;
+
 /// A close with no peer status code maps to 1005 ("no status received").
 const NO_STATUS_RCVD: u16 = 1005;
 
@@ -411,10 +413,28 @@ impl WebSocketProvider for SystemWebSocket {
             // connection registers in the shared `conns` map and is queued for
             // `accept`.
             tokio::spawn(async move {
+                // Errors from `accept` are retried, never fatal — see
+                // [`AcceptBackoff`](crate::accept_backoff). Breaking here would
+                // end the server while the port stayed bound, on an error that
+                // says nothing about the listening socket.
+                let mut backoff = AcceptBackoff::new();
                 loop {
                     let (tcp, _) = match listener.accept().await {
-                        Ok(c) => c,
-                        Err(_) => break,
+                        Ok(accepted) => {
+                            backoff.reset();
+                            accepted
+                        }
+                        Err(e) => {
+                            let delay = backoff.next_delay();
+                            tracing::warn!(
+                                target: "runtime::websocket",
+                                error = %e,
+                                backoff_ms = delay.as_millis() as u64,
+                                "accept failed; retrying",
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
                     };
                     if tx.is_closed() {
                         break; // server closed (accept rx dropped)
@@ -587,6 +607,36 @@ mod tests {
         client.close(id, Some(1000), String::new()).await.unwrap();
         let _ = client.recv(id).await;
         server.await.unwrap();
+    }
+
+    // The third accept loop with the same invariant as the HTTP server's and
+    // `runtime:net`'s: it keeps looping. It used to leave on the first error,
+    // which ended the server while the port stayed bound. The errno is not
+    // provokable in-process (the retry policy is unit-tested in
+    // `accept_backoff`), so what is asserted is that connections abandoned on
+    // arrival leave the server able to accept the next real one.
+    #[tokio::test]
+    async fn the_accept_loop_survives_connections_abandoned_on_arrival() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let port = info.local_port;
+
+        // TCP connections that never attempt the WebSocket handshake.
+        for _ in 0..32 {
+            drop(TcpStream::connect(("127.0.0.1", port)).await.unwrap());
+        }
+
+        let (cid, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .expect("a real client still connects after the burst");
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_secs(10), sys.accept(server_id))
+                .await
+                .expect("the accept loop is still accepting")
+                .unwrap();
+        assert!(accepted.is_some(), "the connection after the burst arrives");
+        sys.close(cid, Some(1000), String::new()).await.unwrap();
     }
 
     // The server side: serve → accept → the accepted connection echoes back
