@@ -15,12 +15,21 @@
 # fixed request count. Install: `cargo install oha`, or
 # `go install github.com/codesenberg/bombardier@latest`.
 #
+# The client and the server share one machine, so the cores are split between
+# them (see the pinning block below) — otherwise the load generator competes with
+# the server it is measuring and the result describes whichever won.
+#
+# Results are published under a key derived from $SERVER, so a hello-world run
+# cannot land in the site's Hono row.
+#
 # Usage:  bench/rps.sh                         (auto-detects installed runtimes)
 #         CONN=250 bench/rps.sh                (higher concurrency)
 #         REQUESTS=1000000 bench/rps.sh        (more requests per runtime)
 #         REPS=5 bench/rps.sh                  (more samples per runtime; best wins)
 #         SERVER=scripts/hono.js bench/rps.sh  (serve through the Hono framework;
 #                                               run `bun install` in bench/ first)
+#         PIN=0 bench/rps.sh                   (no CPU pinning)
+#         SERVER_CPUS=0-3 LOAD_CPUS=4-11 bench/rps.sh   (choose the split)
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -39,6 +48,33 @@ PORT="${PORT:-$(pick_free_port)}"
 CONN="${CONN:-100}"
 REQUESTS="${REQUESTS:-500000}"
 REPS="${REPS:-3}"
+
+# The key this run publishes under. Derived from $SERVER, never assumed: this
+# was hardcoded to "hono", so running the default helloserver.js wrote
+# hello-world numbers into the site's Hono row with nothing to show they were
+# not Hono's.
+SERVER_KEY="${SERVER_KEY:-$(basename "$SERVER" .js)}"
+
+# CPU isolation. The load generator and the server it is measuring run on the
+# same machine; unpinned, oha spawns a worker per core and competes with the
+# server for all of them, so past some rate the number describes the client
+# rather than the server — the failure mode where every runtime lands within a
+# few percent of every other. Splitting the cores gives the server a fixed,
+# uncontended budget and keeps the client out of it.
+#
+# SERVER_CPUS/LOAD_CPUS override the split; PIN=0 disables pinning entirely.
+NCPU="$(nproc 2>/dev/null || echo 0)"
+SERVER_PIN=""
+LOAD_PIN=""
+PIN_DESC="none (unpinned — client and server share all cores)"
+if [ "${PIN:-1}" != 0 ] && command -v taskset >/dev/null 2>&1 && [ "$NCPU" -ge 4 ]; then
+  half=$((NCPU / 2))
+  SERVER_CPUS="${SERVER_CPUS:-0-$((half - 1))}"
+  LOAD_CPUS="${LOAD_CPUS:-$half-$((NCPU - 1))}"
+  SERVER_PIN="taskset -c $SERVER_CPUS"
+  LOAD_PIN="taskset -c $LOAD_CPUS"
+  PIN_DESC="server on CPUs $SERVER_CPUS, load generator on CPUs $LOAD_CPUS"
+fi
 
 # Resolve the load generator: prefer oha, then bombardier (also check the usual
 # cargo/go install dirs even if they aren't on PATH). Sets TOOL + LOADER array.
@@ -102,13 +138,13 @@ fi
 # $OUT, then prints "<req/s> <avg-latency-ms>" parsed from it.
 load() {
   if [ "$TOOL" = "oha" ]; then
-    "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+    $LOAD_PIN "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
     python3 -c "
 import json
 d=json.load(open('$OUT'))['summary']
 print(f\"{d['requestsPerSec']:.0f} {d['average']*1000:.2f}\")" 2>/dev/null || echo "ERR ERR"
   else
-    "$BOMB" -c "$CONN" -n "$REQUESTS" -H "$HDR" -o json -p result "$URL" >"$OUT" 2>/dev/null
+    $LOAD_PIN "$BOMB" -c "$CONN" -n "$REQUESTS" -H "$HDR" -o json -p result "$URL" >"$OUT" 2>/dev/null
     python3 -c "
 import json
 d=json.load(open('$OUT'))['result']
@@ -126,21 +162,26 @@ print(f\"{d['rps']['mean']:.0f} {d['latency']['mean']/1000:.2f}\")" 2>/dev/null 
 # It also gives the runtime a warmup. A single sample was measuring whichever
 # JIT tier the run happened to land in, which is why this number moved by tens
 # of percent between runs while run.sh's (min of N, after a warmup) did not.
+# Also reports the spread (worst-to-best, %) rather than discarding it. A best-of
+# with a wide spread is not a ceiling, it is a lucky draw, and the caller cannot
+# tell which from the winning number alone. Prints "<best-rps> <avg-lat> <spread%>".
 load_best() {
-  local best_rps=0 best_avg=0 rps avg
+  local best_rps=0 best_avg=0 worst_rps=0 rps avg spread
   for _ in $(seq "$REPS"); do
     read -r rps avg <<<"$(load)"
-    case "$rps" in ''|ERR) continue ;; esac
+    case "$rps" in '' | ERR) continue ;; esac
     if awk "BEGIN{exit !($rps > $best_rps)}"; then best_rps="$rps"; best_avg="$avg"; fi
+    if [ "$worst_rps" = 0 ] || awk "BEGIN{exit !($rps < $worst_rps)}"; then worst_rps="$rps"; fi
   done
-  [ "$best_rps" = 0 ] && { echo "ERR ERR"; return; }
-  echo "$best_rps $best_avg"
+  [ "$best_rps" = 0 ] && { echo "ERR ERR ERR"; return; }
+  spread=$(awk "BEGIN{printf \"%.1f\", 100*($best_rps-$worst_rps)/$best_rps}")
+  echo "$best_rps $best_avg $spread"
 }
 
 # Boots one runtime's server, waits for the port, loads it, tears it down.
 measure() {
   local cmd="$1"
-  BENCH_PORT="$PORT" $cmd "$SERVER" >/dev/null 2>&1 &
+  BENCH_PORT="$PORT" $SERVER_PIN $cmd "$SERVER" >/dev/null 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 50); do
     (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break
@@ -151,7 +192,7 @@ measure() {
   # else is listening. Check the process we started is still alive.
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     SERVER_PID=""
-    echo "ERR ERR"
+    echo "ERR ERR ERR"
     return
   fi
   load_best
@@ -159,28 +200,56 @@ measure() {
 }
 
 if [ -n "${BENCH_JSON:-}" ]; then
-  printf '{\n  "results_rps": {\n    "hono": {'
+  declare -A RPS SPREAD
+  for r in "${ORDER[@]}"; do
+    read -r rps avg spread <<<"$(measure "${CMD[$r]}")"
+    case "$rps" in '' | ERR) rps=null; spread=null ;; esac
+    RPS[$r]="$rps"
+    SPREAD[$r]="$spread"
+  done
+  printf '{\n  "results_rps": {\n    "%s": {' "$SERVER_KEY"
   first=1
   for r in "${ORDER[@]}"; do
-    read -r rps avg <<<"$(measure "${CMD[$r]}")"
     [ -z "$first" ] && printf ','
     first=
     # A runtime that could not be measured emits null, not a bare ERR token —
     # the latter is invalid JSON and would fail the consumer's parse.
-    case "$rps" in ''|ERR) rps=null ;; esac
-    printf '\n      "%s": %s' "$r" "$rps"
+    printf '\n      "%s": %s' "$r" "${RPS[$r]}"
   done
-  printf '\n    }\n  }\n}\n'
+  printf '\n    }\n  },'
+  # How this was measured, and how far the reps spread — published so the site
+  # can show the conditions instead of a human retyping them.
+  printf '\n  "rps_method": {'
+  printf '\n    "%s": {' "$SERVER_KEY"
+  printf '\n      "server": "%s",' "$SERVER"
+  printf '\n      "tool": "%s",' "$TOOL"
+  printf '\n      "connections": %s,' "$CONN"
+  printf '\n      "requests": %s,' "$REQUESTS"
+  printf '\n      "reps": %s,' "$REPS"
+  printf '\n      "aggregate": "max",'
+  printf '\n      "cpu_pinning": "%s",' "$PIN_DESC"
+  printf '\n      "spread_pct": {'
+  first=1
+  for r in "${ORDER[@]}"; do
+    [ -z "$first" ] && printf ','
+    first=
+    printf '\n        "%s": %s' "$r" "${SPREAD[$r]}"
+  done
+  printf '\n      }'
+  printf '\n    }'
+  printf '\n  }\n}\n'
 else
   echo "HTTP requests/sec — hello-world plaintext (\"Hello, World!\")"
-  echo "server: $SERVER"
+  echo "server: $SERVER   (published under the key \"$SERVER_KEY\")"
   echo "load: $TOOL -c $CONN -n $REQUESTS -H \"$HDR\" $URL"
+  echo "cpu: $PIN_DESC"
   echo "best of $REPS runs per runtime (the first doubles as a warmup)"
+  echo "spread = worst-to-best across the reps; a wide one means the best is a lucky draw"
   echo
-  printf "%-7s | %12s | %11s\n" "runtime" "req/sec" "avg lat"
-  printf -- "--------+--------------+------------\n"
+  printf "%-7s | %12s | %11s | %8s\n" "runtime" "req/sec" "avg lat" "spread"
+  printf -- "--------+--------------+-------------+---------\n"
   for r in "${ORDER[@]}"; do
-    read -r rps avg <<<"$(measure "${CMD[$r]}")"
-    printf "%-7s | %12s | %9s ms\n" "$r" "$rps" "$avg"
+    read -r rps avg spread <<<"$(measure "${CMD[$r]}")"
+    printf "%-7s | %12s | %9s ms | %6s%%\n" "$r" "$rps" "$avg" "$spread"
   done
 fi

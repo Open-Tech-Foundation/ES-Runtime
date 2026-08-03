@@ -53,6 +53,25 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.clos
 }
 PORT="${PORT:-$(pick_free_port)}"
 
+# Split the cores between the server and the load generator, for the reason
+# spelled out in rps.sh: both run on this machine, and an unpinned oha spawns a
+# worker per core and contends with the very server it is measuring. It matters
+# more here than there — the narrow shape multiplexes onto one connection, so a
+# client short of CPU throttles the server without ever looking saturated.
+# PIN=0 disables it; SERVER_CPUS/LOAD_CPUS choose the split.
+NCPU="$(nproc 2>/dev/null || echo 0)"
+SERVER_PIN=""
+LOAD_PIN=""
+PIN_DESC="none (unpinned — client and server share all cores)"
+if [ "${PIN:-1}" != 0 ] && command -v taskset >/dev/null 2>&1 && [ "$NCPU" -ge 4 ]; then
+  half=$((NCPU / 2))
+  SERVER_CPUS="${SERVER_CPUS:-0-$((half - 1))}"
+  LOAD_CPUS="${LOAD_CPUS:-$half-$((NCPU - 1))}"
+  SERVER_PIN="taskset -c $SERVER_CPUS"
+  LOAD_PIN="taskset -c $LOAD_CPUS"
+  PIN_DESC="server on CPUs $SERVER_CPUS, load generator on CPUs $LOAD_CPUS"
+fi
+
 OHA="$(command -v oha 2>/dev/null || true)"
 [ -z "$OHA" ] && [ -x "$HOME/.cargo/bin/oha" ] && OHA="$HOME/.cargo/bin/oha"
 if [ -z "$OHA" ]; then
@@ -102,7 +121,7 @@ load() {
   local version="$1" conns="$2" streams="$3"
   local args=(-n "$REQUESTS" -c "$conns" --no-tui --output-format json -H "$HDR")
   [ "$version" = "h2" ] && args+=(--http2 -p "$streams")
-  "$OHA" "${args[@]}" "$URL" >"$OUT" 2>/dev/null
+  $LOAD_PIN "$OHA" "${args[@]}" "$URL" >"$OUT" 2>/dev/null
   python3 -c "
 import json, sys
 d = json.load(open('$OUT'))
@@ -120,7 +139,7 @@ print(f\"{s['requestsPerSec']:.0f}\")" 2>/dev/null || echo "ERR"
 measure() {
   local r="$1" version="$2" conns="$3" streams="$4"
   local h2=""; [ "$version" = "h2" ] && h2="1"
-  BENCH_PORT="$PORT" BENCH_H2="$h2" ${CMD[$r]} "$SERVER" >/dev/null 2>&1 &
+  BENCH_PORT="$PORT" BENCH_H2="$h2" $SERVER_PIN ${CMD[$r]} "$SERVER" >/dev/null 2>&1 &
   SERVER_PID=$!
   for _ in $(seq 50); do
     (echo > "/dev/tcp/127.0.0.1/$PORT") 2>/dev/null && break
