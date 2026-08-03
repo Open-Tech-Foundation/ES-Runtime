@@ -3737,12 +3737,17 @@ mod tests {
     struct MockWs {
         inbound: std::sync::Mutex<std::collections::VecDeque<es_runtime_providers::WsIncoming>>,
         protocol: String,
+        /// Every `serve()` this provider was asked for, in order. What the
+        /// prelude sent is the thing under test for the server options — the
+        /// bind itself is the provider's business.
+        served: std::sync::Mutex<Vec<es_runtime_providers::WsServeOptions>>,
     }
     impl MockWs {
         fn new(frames: Vec<es_runtime_providers::WsIncoming>, protocol: &str) -> Self {
             MockWs {
                 inbound: std::sync::Mutex::new(frames.into()),
                 protocol: protocol.to_string(),
+                served: std::sync::Mutex::new(Vec::new()),
             }
         }
     }
@@ -3810,17 +3815,23 @@ mod tests {
         }
         fn serve(
             &self,
-            _host: String,
-            _port: u16,
+            options: es_runtime_providers::WsServeOptions,
         ) -> es_runtime_providers::BoxFuture<
             std::result::Result<
                 (u64, es_runtime_providers::SocketInfo),
                 es_runtime_providers::ProviderError,
             >,
         > {
-            Box::pin(async {
-                Err(es_runtime_providers::ProviderError::Other(
-                    "no server".into(),
+            let port = options.port;
+            self.served.lock().unwrap().push(options);
+            Box::pin(async move {
+                Ok((
+                    1u64,
+                    es_runtime_providers::SocketInfo {
+                        local_address: "127.0.0.1".to_string(),
+                        local_port: port,
+                        ..Default::default()
+                    },
                 ))
             })
         }
@@ -4069,6 +4080,86 @@ mod tests {
         assert_eq!(
             out,
             Value::String("opened:WebSocketError|closed:WebSocketError".into())
+        );
+    }
+
+    /// A guest that says nothing about a WebSocket server's posture gets the
+    /// provider's defaults. The prelude must send "unset" rather than a copy of
+    /// the number, so this asserts what arrives equals `WsTimeouts::default()`
+    /// rather than any literal written here — one copy of the value, on the
+    /// Rust side, is what keeps the two from drifting.
+    #[test]
+    fn ws_serve_without_options_uses_the_provider_defaults() {
+        let _g = v8_guard();
+        let ws = Arc::new(MockWs::new(vec![], ""));
+        let mut rt = runtime_with_ws(ws.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:websocket'; \
+             const s = serve({ port: 4001 }); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let served = ws.served.lock().unwrap();
+        assert_eq!(
+            served[0].timeouts,
+            es_runtime_providers::WsTimeouts::default()
+        );
+        assert_eq!(served[0].max_connections, None);
+    }
+
+    /// The two knobs cross as they are written: milliseconds for the timeout,
+    /// and an explicit `null` meaning "off" rather than "use the default".
+    #[test]
+    fn ws_serve_options_cross_as_written() {
+        let _g = v8_guard();
+        let ws = Arc::new(MockWs::new(vec![], ""));
+        let mut rt = runtime_with_ws(ws.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:websocket'; \
+             const a = serve({ port: 4001, timeouts: { handshake: 1500 }, maxConnections: 64 }); \
+             const b = serve({ port: 4002, timeouts: { handshake: null } }); \
+             globalThis.result = (await a.addr).port + (await b.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let served = ws.served.lock().unwrap();
+        assert_eq!(
+            served[0].timeouts.handshake,
+            Some(std::time::Duration::from_millis(1500))
+        );
+        assert_eq!(served[0].max_connections, Some(64));
+        assert_eq!(
+            served[1].timeouts.handshake, None,
+            "an explicit null must disable the timeout, not fall back to the default",
+        );
+    }
+
+    /// Rejected at the call rather than after the bind: a server that is
+    /// listening with a policy the guest did not ask for is worse than an error.
+    #[test]
+    fn ws_serve_rejects_unusable_options_before_the_port_is_bound() {
+        let _g = v8_guard();
+        let ws = Arc::new(MockWs::new(vec![], ""));
+        let mut rt = runtime_with_ws(ws.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:websocket'; \
+             const names = []; \
+             for (const bad of ['lots', 0, -1, 1.5]) { \
+               try { serve({ port: 4001, maxConnections: bad }); } \
+               catch (e) { names.push(e.constructor.name); } \
+             } \
+             for (const bad of ['soon', -1, Infinity]) { \
+               try { serve({ port: 4001, timeouts: { handshake: bad } }); } \
+               catch (e) { names.push(e.constructor.name); } \
+             } \
+             globalThis.result = names.join(',');",
+            MapLoader::new(&[]),
+        );
+        assert!(
+            ws.served.lock().unwrap().is_empty(),
+            "no bind may be attempted for an option that was rejected",
         );
     }
 

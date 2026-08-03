@@ -20,10 +20,11 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use es_runtime_providers::{
     BoxFuture, ProviderError, SocketInfo, WebSocketInfo, WebSocketProvider, WsIncoming, WsMessage,
+    WsServeOptions,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -139,7 +140,15 @@ impl SystemWebSocket {
     /// Spawns the actor task owning `ws` and returns its channel ends. Generic
     /// over the stream so a plain `TcpStream` or a TLS stream drives the same
     /// machinery.
-    fn spawn<S>(ws: WebSocketStream<S>) -> WsSlot
+    ///
+    /// `permit` is a server's connection slot, moved into the task so it is
+    /// released when the connection actually ends rather than when the handshake
+    /// finishes. Holding it only until the connection is *established* would
+    /// make the cap bound the handshake rate and nothing else, which is the
+    /// opposite of what a WebSocket server needs — the connections it holds are
+    /// the long-lived ones. `None` for a client `connect`, which no server's
+    /// budget applies to.
+    fn spawn<S>(ws: WebSocketStream<S>, permit: Option<OwnedSemaphorePermit>) -> WsSlot
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
@@ -148,6 +157,9 @@ impl SystemWebSocket {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Cmd>(16);
 
         tokio::spawn(async move {
+            // Released when this task ends, whichever way it ends — the peer's
+            // close, a broken stream, the guest dropping the socket, or a panic.
+            let _permit = permit;
             loop {
                 tokio::select! {
                     msg = stream.next() => match msg {
@@ -301,10 +313,10 @@ impl WebSocketProvider for SystemWebSocket {
                     .await
                     .map_err(err)?;
                 let (stream, response) = client_async(request, tls).await.map_err(err)?;
-                (info_of(&response), SystemWebSocket::spawn(stream))
+                (info_of(&response), SystemWebSocket::spawn(stream, None))
             } else {
                 let (stream, response) = client_async(request, tcp).await.map_err(err)?;
-                (info_of(&response), SystemWebSocket::spawn(stream))
+                (info_of(&response), SystemWebSocket::spawn(stream, None))
             };
             this.conns.lock().unwrap().insert(id, slot);
             Ok((id, info))
@@ -404,18 +416,27 @@ impl WebSocketProvider for SystemWebSocket {
 
     fn serve(
         &self,
-        host: String,
-        port: u16,
+        options: WsServeOptions,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            let listener = TcpListener::bind((host.as_str(), port))
+            let listener = TcpListener::bind((options.host.as_str(), options.port))
                 .await
                 .map_err(err)?;
             let local = listener.local_addr().ok();
             let (tx, rx) = mpsc::channel::<(u64, WebSocketInfo)>(64);
             let conns = this.conns.clone();
             let next_id = this.next_id.clone();
+            let handshake_timeout = options.timeouts.handshake;
+            // One permit per connection this server may hold, taken *before*
+            // `accept` and released when the connection ends. At the cap the
+            // acceptor simply stops accepting: excess connections wait in the
+            // kernel's backlog and are refused by the OS once that fills, so
+            // nothing is spent on a connection this server will not serve. Same
+            // mechanism as the HTTP server (D45).
+            let slots = options
+                .max_connections
+                .map(|max| Arc::new(Semaphore::new(max)));
             // Accept loop: each TCP connection's WS handshake runs in its own task
             // so a slow handshake never blocks the next accept; on success the
             // connection registers in the shared `conns` map and is queued for
@@ -427,6 +448,18 @@ impl WebSocketProvider for SystemWebSocket {
                 // says nothing about the listening socket.
                 let mut backoff = AcceptBackoff::new();
                 loop {
+                    // Held across the accept, then handed to the connection it
+                    // admits. `acquire_owned` only fails on a closed semaphore
+                    // and nothing closes this one, so a failure would mean the
+                    // cap had silently stopped applying — end the loop rather
+                    // than serve unbounded.
+                    let permit = match &slots {
+                        None => None,
+                        Some(slots) => match slots.clone().acquire_owned().await {
+                            Ok(permit) => Some(permit),
+                            Err(_) => break,
+                        },
+                    };
                     // The peer is kept, not discarded: it is the only thing that
                     // makes a failed handshake attributable to a client.
                     let (tcp, peer) = match listener.accept().await {
@@ -464,14 +497,44 @@ impl WebSocketProvider for SystemWebSocket {
                     );
                     tokio::spawn(
                         async move {
-                            let ws = match tokio_tungstenite::accept_async(tcp).await {
-                                Ok(ws) => ws,
+                            // Moved in so the slot is released whichever way
+                            // this connection ends, including a failed
+                            // handshake — and, on success, handed to the actor
+                            // task so it lives as long as the connection does.
+                            let permit = permit;
+                            // A peer that opens a connection and never sends its
+                            // upgrade request is the cheapest hold there is: one
+                            // syscall to the peer, a task and a descriptor to us,
+                            // and tungstenite waits for that request forever.
+                            let handshake = match handshake_timeout {
+                                None => Some(tokio_tungstenite::accept_async(tcp).await),
+                                Some(limit) => {
+                                    match tokio::time::timeout(
+                                        limit,
+                                        tokio_tungstenite::accept_async(tcp),
+                                    )
+                                    .await
+                                    {
+                                        Ok(done) => Some(done),
+                                        Err(_) => {
+                                            tracing::debug!(
+                                                target: "runtime::websocket",
+                                                timeout_ms = limit.as_millis() as u64,
+                                                "handshake timed out; closing the connection",
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                            };
+                            let ws = match handshake {
+                                Some(Ok(ws)) => ws,
                                 // A plain HTTP request to a WebSocket port, a
                                 // missing `Sec-WebSocket-Key`, a peer that
                                 // opened a connection and said nothing. Debug,
                                 // not warn: it is peer-driven, so warning would
                                 // let any client set this server's log volume.
-                                Err(e) => {
+                                Some(Err(e)) => {
                                     tracing::debug!(
                                         target: "runtime::websocket",
                                         error = %e,
@@ -479,9 +542,11 @@ impl WebSocketProvider for SystemWebSocket {
                                     );
                                     return;
                                 }
+                                // Already logged, above.
+                                None => return,
                             };
                             let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
-                            let slot = SystemWebSocket::spawn(ws);
+                            let slot = SystemWebSocket::spawn(ws, permit);
                             conns.lock().unwrap().insert(id, slot);
                             if tx.send((id, WebSocketInfo::default())).await.is_err() {
                                 conns.lock().unwrap().remove(&id); // server gone before accept
@@ -534,8 +599,30 @@ impl WebSocketProvider for SystemWebSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use es_runtime_providers::WsTimeouts;
     use futures_util::{SinkExt, StreamExt};
     use tokio::net::TcpListener;
+
+    /// `serve()` on an ephemeral loopback port with the default posture.
+    pub(super) async fn bound(sys: &SystemWebSocket) -> (u64, SocketInfo) {
+        bound_with(sys, WsTimeouts::default(), None).await
+    }
+
+    /// `serve()` on an ephemeral loopback port with a chosen posture.
+    pub(super) async fn bound_with(
+        sys: &SystemWebSocket,
+        timeouts: WsTimeouts,
+        max_connections: Option<usize>,
+    ) -> (u64, SocketInfo) {
+        sys.serve(WsServeOptions {
+            host: "127.0.0.1".to_string(),
+            port: 0,
+            timeouts,
+            max_connections,
+        })
+        .await
+        .unwrap()
+    }
 
     /// A minimal echo server: accept the WebSocket, bounce every data frame, and
     /// let tungstenite drive the closing handshake when the peer closes.
@@ -657,7 +744,7 @@ mod tests {
     #[tokio::test]
     async fn an_abandoned_recv_leaves_the_connection_receiving() {
         let sys = SystemWebSocket::new();
-        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let (server_id, info) = bound(&sys).await;
         let port = info.local_port;
         let (cid, _) = sys
             .connect(format!("ws://127.0.0.1:{port}/"), vec![])
@@ -693,7 +780,7 @@ mod tests {
     #[tokio::test]
     async fn the_accept_loop_survives_connections_abandoned_on_arrival() {
         let sys = SystemWebSocket::new();
-        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let (server_id, info) = bound(&sys).await;
         let port = info.local_port;
 
         // TCP connections that never attempt the WebSocket handshake.
@@ -719,7 +806,7 @@ mod tests {
     #[tokio::test]
     async fn ws_server_accepts_and_echoes() {
         let sys = SystemWebSocket::new();
-        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let (server_id, info) = bound(&sys).await;
         let port = info.local_port;
 
         // A client connects to our own server.
@@ -779,7 +866,7 @@ mod tests {
     #[tokio::test]
     async fn ws_server_broadcast_reaches_all() {
         let sys = SystemWebSocket::new();
-        let (server_id, info) = sys.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let (server_id, info) = bound(&sys).await;
         let port = info.local_port;
 
         let (c1, _) = sys
@@ -879,7 +966,7 @@ mod tracing_tests {
     async fn a_failed_handshake_is_logged_with_its_peer() {
         trace_capture::install();
         let ws = SystemWebSocket::default();
-        let (sid, addr) = ws.serve("127.0.0.1".to_string(), 0).await.unwrap();
+        let (sid, addr) = super::tests::bound(&ws).await;
 
         // A plain HTTP request at a WebSocket port: no `Upgrade`, no
         // `Sec-WebSocket-Key` — tungstenite refuses it.
@@ -911,5 +998,198 @@ mod tracing_tests {
             "the reason is the whole point of the event: {line}",
         );
         ws.close_server(sid).await.unwrap();
+    }
+}
+
+/// The two bounds a WebSocket server holds on connections that are not yet, or
+/// no longer, doing anything useful. Both are the same mechanisms the HTTP
+/// server uses (D43, D45), against real sockets on loopback.
+#[cfg(test)]
+mod bounds_tests {
+    use super::tests::bound_with;
+    use super::*;
+    use es_runtime_providers::WsTimeouts;
+    use std::time::Duration;
+
+    /// Waits until `sock` is closed by the peer, up to `grace`; `false` if it
+    /// was still open when time ran out.
+    async fn closed_within(sock: &mut TcpStream, grace: Duration) -> bool {
+        let mut buf = [0u8; 1];
+        match tokio::time::timeout(grace, tokio::io::AsyncReadExt::read(sock, &mut buf)).await {
+            Ok(Ok(0)) => true,  // clean EOF — the server hung up
+            Ok(Err(_)) => true, // reset
+            _ => false,         // still open, or it sent us something
+        }
+    }
+
+    /// A peer that opens a connection and never sends its upgrade request is the
+    /// cheapest hold there is — one syscall to it, a task and a descriptor to
+    /// us — and tungstenite waits for that request indefinitely.
+    #[tokio::test]
+    async fn a_connection_that_never_sends_a_handshake_is_closed() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound_with(
+            &sys,
+            WsTimeouts {
+                handshake: Some(Duration::from_millis(300)),
+            },
+            None,
+        )
+        .await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", info.local_port))
+            .await
+            .unwrap();
+        assert!(
+            closed_within(&mut sock, Duration::from_secs(5)).await,
+            "a connection that never starts its handshake must be closed",
+        );
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// And the timeout must not reach an *established* connection. A WebSocket
+    /// that has said nothing since its handshake is idle, not stalled — closing
+    /// it is the application's decision, not the transport's.
+    #[tokio::test]
+    async fn an_established_connection_outlives_the_handshake_timeout() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound_with(
+            &sys,
+            WsTimeouts {
+                handshake: Some(Duration::from_millis(200)),
+            },
+            None,
+        )
+        .await;
+        let port = info.local_port;
+
+        let (cid, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("accepted")
+            .unwrap()
+            .expect("a connection");
+
+        // Well past the handshake deadline, saying nothing the whole time.
+        tokio::time::sleep(Duration::from_millis(800)).await;
+
+        sys.send(cid, WsMessage::Text("still here".into()))
+            .await
+            .unwrap();
+        let got = tokio::time::timeout(Duration::from_secs(5), sys.recv(accepted.0))
+            .await
+            .expect("the idle connection is still open")
+            .unwrap();
+        assert!(
+            matches!(got, Some(WsIncoming::Text(t)) if t == "still here"),
+            "an established connection must not be reaped by the handshake timeout",
+        );
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// Disabling it must actually disable it, not fall back to the default.
+    #[tokio::test]
+    async fn a_disabled_handshake_timeout_never_fires() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound_with(&sys, WsTimeouts { handshake: None }, None).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", info.local_port))
+            .await
+            .unwrap();
+        assert!(
+            !closed_within(&mut sock, Duration::from_millis(700)).await,
+            "with the timeout off, a silent connection must be left alone",
+        );
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// The cap holds a connection back rather than refusing it: over the limit
+    /// nothing is accepted, and the moment a slot frees the waiting connection
+    /// is served. That is the difference between a queue and a rejection.
+    #[tokio::test]
+    async fn a_connection_over_the_cap_waits_for_a_slot_rather_than_being_refused() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound_with(&sys, WsTimeouts::default(), Some(1)).await;
+        let port = info.local_port;
+
+        // Fills the single slot, and holds it: a WebSocket connection is not
+        // done until it closes.
+        let (first, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let first_accepted = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the first connection is accepted")
+            .unwrap()
+            .expect("a connection");
+
+        // The second completes its TCP connect — the kernel's backlog takes it —
+        // but must not become an accepted WebSocket while the slot is held.
+        let waiting = tokio::spawn({
+            let sys = sys.clone();
+            async move { sys.connect(format!("ws://127.0.0.1:{port}/"), vec![]).await }
+        });
+        let too_early =
+            tokio::time::timeout(Duration::from_millis(700), sys.accept(server_id)).await;
+        assert!(
+            too_early.is_err(),
+            "a connection over the cap must not be served while the cap is full",
+        );
+
+        // Free the slot. The waiting connection was held, not refused, so it is
+        // served now rather than having been dropped.
+        sys.close(first, Some(1000), String::new()).await.unwrap();
+        drop(first_accepted);
+        let second = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the held connection is served once a slot frees")
+            .unwrap();
+        assert!(
+            second.is_some(),
+            "the held connection arrives, not an error"
+        );
+        let _ = waiting.await;
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// A failed handshake must give its slot back. If it did not, the cap would
+    /// count attempts rather than connections — and a peer that opens and
+    /// abandons connections could exhaust it without ever holding one.
+    #[tokio::test]
+    async fn a_failed_handshake_returns_its_slot() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound_with(&sys, WsTimeouts::default(), Some(1)).await;
+        let port = info.local_port;
+
+        // Plain HTTP at a WebSocket port, several times over: each takes the
+        // single slot and must hand it straight back.
+        for _ in 0..4 {
+            let mut tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let _ = tokio::io::AsyncWriteExt::write_all(
+                &mut tcp,
+                b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n",
+            )
+            .await;
+            let _ = closed_within(&mut tcp, Duration::from_secs(5)).await;
+        }
+
+        let (cid, _) = tokio::time::timeout(
+            Duration::from_secs(10),
+            sys.connect(format!("ws://127.0.0.1:{port}/"), vec![]),
+        )
+        .await
+        .expect("the slot was returned by the failed handshakes")
+        .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("a real connection is accepted afterwards")
+            .unwrap();
+        assert!(accepted.is_some());
+        sys.close(cid, Some(1000), String::new()).await.unwrap();
+        sys.close_server(server_id).await.unwrap();
     }
 }

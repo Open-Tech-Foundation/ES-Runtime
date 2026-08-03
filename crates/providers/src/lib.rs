@@ -978,6 +978,69 @@ pub struct WebSocketInfo {
     pub extensions: String,
 }
 
+/// How a [`WebSocketProvider`] should bind a server, from
+/// [`serve`](WebSocketProvider::serve).
+///
+/// Deliberately the same shape as [`HttpServeOptions`], down to the field names:
+/// a WebSocket server is an HTTP server that stops after one request, its
+/// opening handshake *is* an HTTP request head, and the two live in the same
+/// process under the same descriptor budget. A second vocabulary for the same
+/// two questions would be a thing to learn twice for no gain.
+pub struct WsServeOptions {
+    /// Address to bind (`"0.0.0.0"`, `"127.0.0.1"`, …).
+    pub host: String,
+    /// Port to bind; `0` picks an ephemeral one, read back from the returned
+    /// [`SocketInfo`].
+    pub port: u16,
+    /// When to give up on a connection that is not making progress.
+    pub timeouts: WsTimeouts,
+    /// The most connections to hold at once, or `None` for no limit.
+    ///
+    /// `None` is the default for the same reason as
+    /// [`HttpServeOptions::max_connections`]: the right number follows from a
+    /// deployment's file-descriptor budget, which this crate cannot read.
+    ///
+    /// It matters more here than it does there, though, and for the opposite
+    /// reason: HTTP connections churn, while a WebSocket connection is
+    /// long-lived *by design*. A count that a busy HTTP server keeps flat is one
+    /// a WebSocket server accumulates, so this is the option that decides
+    /// whether it has an upper bound at all.
+    ///
+    /// An implementation that honours this should hold connections *back*
+    /// rather than accept and discard them — a limit that still costs a
+    /// descriptor and a task per refused connection does not bound anything
+    /// under the flood it exists for.
+    pub max_connections: Option<usize>,
+}
+
+/// When a [`WebSocketProvider`] server should give up on a connection.
+///
+/// [`Default`] is the recommended posture rather than "off", so a provider gets
+/// the protection without asking and a guest opts *out* deliberately — the same
+/// choice as [`HttpTimeouts`], for the same reason (D43): a timeout nobody
+/// configures protects nobody.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WsTimeouts {
+    /// From accept until the opening handshake completes.
+    ///
+    /// RFC 6455's handshake is an HTTP request head and a `101` answer, so this
+    /// is the WebSocket spelling of [`HttpTimeouts::header_read`] — the same
+    /// slowloris bound, on the same bytes. It does **not** bound an established
+    /// connection: a WebSocket that has said nothing for a week is idle, not
+    /// stalled, and closing it is the application's decision.
+    ///
+    /// Default: 10s.
+    pub handshake: Option<Duration>,
+}
+
+impl Default for WsTimeouts {
+    fn default() -> Self {
+        Self {
+            handshake: Some(Duration::from_secs(10)),
+        }
+    }
+}
+
 /// A message to send on a WebSocket, from [`WebSocketProvider::send`].
 pub enum WsMessage {
     /// A UTF-8 text frame.
@@ -1046,10 +1109,10 @@ pub trait WebSocketProvider: Send + Sync {
 
     /// Binds a listening WebSocket server (`ws:` only — a `wss:` server is a
     /// follow-up) and starts accepting; resolves to (server id, bound-address
-    /// info). `port` 0 picks an ephemeral port. Capability-checked on
+    /// info). Port 0 picks an ephemeral port. Capability-checked on
     /// `Capability::NetListen` (like `runtime:net` `listen`) before this is ever
     /// called; backs the `runtime:websocket` `serve()` (DECISIONS D29).
-    fn serve(&self, host: String, port: u16)
+    fn serve(&self, options: WsServeOptions)
     -> BoxFuture<Result<(u64, SocketInfo), ProviderError>>;
 
     /// Accepts the next inbound connection on server `id`, once its opening

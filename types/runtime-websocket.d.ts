@@ -31,12 +31,51 @@ declare module "runtime:websocket" {
     ): void;
   }
 
+  /** When to give up on a connection that is not making progress. */
+  export interface ServeTimeouts {
+    /**
+     * From accept until the opening handshake completes, in milliseconds.
+     * `null` disables it.
+     *
+     * RFC 6455's handshake is an HTTP request head and a `101` answer, so this
+     * is the slowloris bound — a peer that opens a connection and never sends
+     * its upgrade request otherwise holds a task and a file descriptor for as
+     * long as it likes, at no cost to itself.
+     *
+     * It does **not** bound an established connection. A WebSocket that has
+     * said nothing for a week is idle, not stalled, and closing it is your
+     * application's decision.
+     *
+     * Default: `10000`.
+     */
+    handshake?: number | null;
+  }
+
   /** Options for {@link serve}. */
   export interface ServeOptions {
     /** Address to bind. Defaults to `"0.0.0.0"`. */
     hostname?: string;
     /** `0` (the default) binds an ephemeral port (read it back from `addr`). */
     port?: number;
+    /**
+     * When to give up on a connection that is not making progress. Same shape
+     * and defaults as `runtime:http`'s `serve({ timeouts })`.
+     */
+    timeouts?: ServeTimeouts;
+    /**
+     * The most connections to hold at once. Unlimited by default.
+     *
+     * A connection over the cap is **held, not refused**: it waits in the
+     * kernel's backlog and is served once a slot frees, costing this server
+     * nothing in the meantime — no descriptor, no task, no buffers.
+     *
+     * Worth setting on a public port. WebSocket connections are long-lived by
+     * design, so unlike an HTTP server's, the count does not fall back down on
+     * its own — this is what decides whether it has an upper bound at all. The
+     * right number follows from your file-descriptor budget, which the runtime
+     * cannot read.
+     */
+    maxConnections?: number | null;
   }
 
   /**

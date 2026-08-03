@@ -157,10 +157,56 @@ class WebSocketServer {
   }
 }
 
+// When to give up on a connection that has not finished its opening handshake.
+// Deliberately the same shape, spelling, and crossing convention as
+// `runtime:http`'s `serve({ timeouts })`: `null` on the wire means "the guest
+// said nothing" so the host default applies, and an explicit `null` from the
+// guest means "off" and crosses as 0. The number itself lives only on the Rust
+// side, so the two copies cannot drift.
+function parseHandshakeTimeout(options) {
+  const t = (options ?? {}).timeouts;
+  if (t === undefined || t === null) return null; // host default
+  if (typeof t !== "object") {
+    throw new TypeError(`serve: timeouts must be an object, got ${typeof t}`);
+  }
+  const v = t.handshake;
+  if (v === undefined) return null; // host default
+  if (v === null) return 0; // explicitly disabled
+  if (typeof v !== "number") {
+    throw new TypeError(`serve: timeouts.handshake must be a number of ms or null`);
+  }
+  if (!Number.isFinite(v) || v < 0) {
+    throw new RangeError("serve: timeouts.handshake must be a finite, non-negative number of ms");
+  }
+  return v;
+}
+
+// The most connections to hold at once. Absent (`null` on the wire) means no
+// limit — the deployment's descriptor budget is not something the runtime can
+// read, and a cap guessed for you would throttle real traffic with no error
+// anywhere to explain it. This matters more here than on an HTTP server: HTTP
+// connections churn, while WebSocket connections are long-lived by design, so
+// this is what decides whether the count has an upper bound at all.
+function parseMaxConnections(options) {
+  const value = (options ?? {}).maxConnections;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number") {
+    throw new TypeError(`serve: maxConnections must be a number or null, got ${typeof value}`);
+  }
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError("serve: maxConnections must be an integer of at least 1");
+  }
+  return value;
+}
+
 function serve(options = {}) {
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
   const port = Number(options.port) || 0;
-  const ready = ops.ws_serve(hostname, port);
+  // Validated before the bind, so a bad option is a TypeError at the call
+  // rather than a server that is listening with the wrong policy.
+  const handshake = parseHandshakeTimeout(options);
+  const maxConnections = parseMaxConnections(options);
+  const ready = ops.ws_serve(hostname, port, handshake, maxConnections);
   return new WebSocketServer(ready);
 }
 

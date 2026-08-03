@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsMessage};
+use es_runtime_providers::{
+    ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsMessage, WsServeOptions, WsTimeouts,
+};
 
 use crate::Result;
 
@@ -129,8 +131,30 @@ pub(crate) fn install(
             let w = w.clone();
             let host = arg_str(&args, 0);
             let port = arg_u16(&args, 1);
+            // The defaults live in the provider, not here and not in JS: the
+            // prelude sends `null` for "the guest said nothing", so there is one
+            // copy of the number to keep true. Same crossing as `http_serve`.
+            let timeouts = WsTimeouts {
+                handshake: arg_timeout(&args, 2, WsTimeouts::default().handshake),
+            };
+            // `null`/absent ⇒ no limit, which is the default: the right number
+            // follows from a deployment's descriptor budget, and a cap guessed
+            // here would throttle real traffic silently.
+            let max_connections = args
+                .get(3)
+                .and_then(Value::as_number)
+                .filter(|n| *n >= 1.0 && n.is_finite())
+                .map(|n| n as usize);
             Box::pin(async move {
-                let (id, info) = require(&w)?.serve(host, port).await.map_err(map_err)?;
+                let (id, info) = require(&w)?
+                    .serve(WsServeOptions {
+                        host,
+                        port,
+                        timeouts,
+                        max_connections,
+                    })
+                    .await
+                    .map_err(map_err)?;
                 Ok(server_value(id, &info))
             })
         })
@@ -198,6 +222,22 @@ fn arg_u64(args: &[Value], i: usize) -> u64 {
 
 fn arg_u16(args: &[Value], i: usize) -> u16 {
     args.get(i).and_then(Value::as_number).unwrap_or(0.0) as u16
+}
+
+/// A timeout in milliseconds from the prelude. Absent (the guest said nothing)
+/// means `default`; `0` or a non-finite value means the guest turned it off.
+/// Identical to `http_ops`' reading of the same crossing, deliberately — a
+/// `timeouts` object should mean the same thing in both modules.
+fn arg_timeout(
+    args: &[Value],
+    i: usize,
+    default: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    match args.get(i).and_then(Value::as_number) {
+        None => default,
+        Some(ms) if ms <= 0.0 || !ms.is_finite() => None,
+        Some(ms) => Some(std::time::Duration::from_millis(ms as u64)),
+    }
 }
 
 /// Collects a JS number array argument as `u64`s (non-numbers skipped).
