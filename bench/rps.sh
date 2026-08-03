@@ -18,6 +18,7 @@
 # Usage:  bench/rps.sh                         (auto-detects installed runtimes)
 #         CONN=250 bench/rps.sh                (higher concurrency)
 #         REQUESTS=1000000 bench/rps.sh        (more requests per runtime)
+#         REPS=5 bench/rps.sh                  (more samples per runtime; best wins)
 #         SERVER=scripts/hono.js bench/rps.sh  (serve through the Hono framework;
 #                                               run `bun install` in bench/ first)
 set -uo pipefail
@@ -37,6 +38,7 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.clos
 PORT="${PORT:-$(pick_free_port)}"
 CONN="${CONN:-100}"
 REQUESTS="${REQUESTS:-500000}"
+REPS="${REPS:-3}"
 
 # Resolve the load generator: prefer oha, then bombardier (also check the usual
 # cargo/go install dirs even if they aren't on PATH). Sets TOOL + LOADER array.
@@ -114,6 +116,27 @@ print(f\"{d['rps']['mean']:.0f} {d['latency']['mean']/1000:.2f}\")" 2>/dev/null 
   fi
 }
 
+# Loads the running server $REPS times and prints the best "<req/s> <avg-lat>".
+#
+# Best, not mean or last: a slower rep is this machine contending with something
+# else, not a property of the server, so the maximum is the closest thing to a
+# contention-free ceiling. The same convention websocket-chat/run-chat.sh uses,
+# and for the same reason.
+#
+# It also gives the runtime a warmup. A single sample was measuring whichever
+# JIT tier the run happened to land in, which is why this number moved by tens
+# of percent between runs while run.sh's (min of N, after a warmup) did not.
+load_best() {
+  local best_rps=0 best_avg=0 rps avg
+  for _ in $(seq "$REPS"); do
+    read -r rps avg <<<"$(load)"
+    case "$rps" in ''|ERR) continue ;; esac
+    if awk "BEGIN{exit !($rps > $best_rps)}"; then best_rps="$rps"; best_avg="$avg"; fi
+  done
+  [ "$best_rps" = 0 ] && { echo "ERR ERR"; return; }
+  echo "$best_rps $best_avg"
+}
+
 # Boots one runtime's server, waits for the port, loads it, tears it down.
 measure() {
   local cmd="$1"
@@ -131,7 +154,7 @@ measure() {
     echo "ERR ERR"
     return
   fi
-  load
+  load_best
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
 }
 
@@ -152,6 +175,7 @@ else
   echo "HTTP requests/sec — hello-world plaintext (\"Hello, World!\")"
   echo "server: $SERVER"
   echo "load: $TOOL -c $CONN -n $REQUESTS -H \"$HDR\" $URL"
+  echo "best of $REPS runs per runtime (the first doubles as a warmup)"
   echo
   printf "%-7s | %12s | %11s\n" "runtime" "req/sec" "avg lat"
   printf -- "--------+--------------+------------\n"
