@@ -103,6 +103,15 @@ ending — the same policy as [the HTTP server](/docs/internals/http#accept) and
 [`runtime:net`](/docs/internals/sockets#listening). Accepted connections queue in
 a channel holding **64**.
 
+`server.close()` **aborts** that loop rather than signalling it. The loop parks
+in two places — on a connection permit, then on `accept` — and a closed channel
+is visible from neither until an accept returns, so at a full cap nothing
+arriving could ever wake it. Aborting releases the listening port immediately
+and resolves an `accept()` already waiting to `null`, which is what lets a
+`for await (const ws of server)` loop end. Connections already accepted are
+untouched: they are their own actor tasks, and they keep working until each is
+closed.
+
 ### What bounds a connection
 
 Two, and they are the HTTP server's mechanisms unchanged — see
