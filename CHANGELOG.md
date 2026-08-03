@@ -8,6 +8,36 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **Connection timeouts in `runtime:http`** (DECISIONS D43). A connection that is not
+  making progress is now closed. Previously none of them ever were: a peer could
+  complete the TCP handshake and then say nothing — one syscall, no state to keep
+  — and hold a task and a file descriptor for as long as it liked.
+
+  Three stages, each settable per server through `serve({ timeouts })` and
+  disabled with `null`:
+
+  | Option | Default | What it bounds |
+  | --- | --- | --- |
+  | `handshake` | `10000`ms | Accept → ready to carry requests: the TLS handshake, and the wait for the first byte the HTTP version is read from |
+  | `headerRead` | `30000`ms | A request head arriving in full; on HTTP/1.1, the idle keep-alive limit too |
+  | `h2KeepAlive` | `20000`ms | PING probes on an idle HTTP/2 connection — a dead peer is reclaimed within twice this, rather than waiting on the OS TCP keepalive (two hours by default on Linux) |
+
+  They bound only connections that are **idle or stalled**. A request in flight,
+  a body still arriving, and a response still streaming are never interrupted,
+  however long they take. They are on by default because a timeout nobody
+  configures protects nobody.
+
+  Two things to know before upgrading. An **idle HTTP/1.1 keep-alive connection
+  is now closed after 30s** where it previously lived forever — clients reopen
+  transparently and this matches nginx (75s) and Node (5s), but it is a
+  behaviour change, not only a hardening. And embedders: `HttpServeOptions`
+  gains a `timeouts` field, so a struct literal needs updating.
+
+  Not covered, and still unbounded: a slow request *body*, total request
+  duration, and the number of concurrent connections.
+
 ### Fixed
 
 - **A failed `accept()` no longer kills a server.** The accept loops behind

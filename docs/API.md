@@ -1089,7 +1089,7 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
 `Handler` is `(request: Request) => Response | Promise<Response>`.
 
@@ -1174,6 +1174,45 @@ replacement for the `Host` header — one URL shape either way. Framing stays th
 server's job on both versions: a handler's own `Content-Length` /
 `Transfer-Encoding` are dropped, and HTTP/2 — which frames bodies itself and
 forbids `Transfer-Encoding` outright — never sees a chunked encoding.
+
+#### Timeouts
+
+A connection that is not making progress is closed. Nothing about this is
+visible to a handler, and there is nothing to switch on:
+
+| Option | Default | What it bounds |
+| --- | --- | --- |
+| `timeouts.handshake` | `10000`ms | From accept until the connection can carry requests: the TLS handshake, and the wait for the first byte the HTTP version is read from. A TLS connection passes both stages, so it may take up to twice this before it counts as established. |
+| `timeouts.headerRead` | `30000`ms | How long a request head may take to arrive in full — and on HTTP/1.1, the **idle keep-alive limit** too. |
+| `timeouts.h2KeepAlive` | `20000`ms | How often an idle HTTP/2 connection is probed with a PING, and how long the ACK may take. A dead peer is reclaimed within twice this. |
+
+Each is a number of milliseconds; `null` disables it; omitting it keeps the
+default. They are on by default because a timeout nobody configures protects
+nobody — without them, a peer that completes the TCP handshake and then says
+nothing holds a task and a descriptor for as long as it likes, at the cost of
+one syscall to it.
+
+```js
+serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler);
+```
+
+They bound only connections that are **idle or stalled**. A request in flight, a
+body still arriving, and a response still streaming are never interrupted,
+however long they take — a live feed or a slow download is unaffected by
+`headerRead` no matter how far past it runs.
+
+Two consequences worth knowing before you tune them:
+
+- On HTTP/1.1 the idle keep-alive limit and the request-head limit are **one
+  timer**, because waiting for the next request on a kept-alive connection *is*
+  waiting for a request head. At the default an idle connection is closed after
+  30s and a client that wants another request opens a new one — the same posture
+  as nginx (75s) and Node (5s).
+- HTTP/2 keeps its connections open by design and has no idle limit, so it uses
+  PING probes instead. Without them a peer that vanishes without a FIN — a NAT
+  that dropped the mapping, a killed VM — keeps its connection *and* its share of
+  the 256-stream budget until the OS TCP keepalive notices, which is two hours by
+  default on Linux.
 
 #### Shutdown
 
