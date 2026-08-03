@@ -3,9 +3,6 @@ title: "Internals: networking"
 description: What happens to a connection from accept to close — every limit, every default, and what each one costs.
 ---
 
-{/* Generated from docs/internals/networking.md by website/scripts/gen-internals.mjs.
-    Edit that file and re-run the script; changes made here are overwritten. */}
-
 # Internals: networking
 
 What actually happens to a TCP connection between `accept` and `close`, which
@@ -195,7 +192,7 @@ peer can still take every slot of a `maxConnections` budget.
 Measured on one machine on one day, by standing each server up and probing it —
 not read from documentation. Reproduce with `bash bench/probe-runtimes.sh`.
 
-{/* BEGIN probe:table */}
+{/* BEGIN probe:table — written by bench/probe-runtimes.sh; do not hand-edit */}
 | | esrun | Node.js | Bun | Deno |
 | --- | --- | --- | --- | --- |
 | Silent connection closed after | 10.0s | 88.1s | 13.0s | never (>150s) |

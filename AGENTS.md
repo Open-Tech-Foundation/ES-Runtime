@@ -19,7 +19,7 @@ Each fact has one home. Restating it elsewhere is how documentation starts lying
 
 * **`api/*` (site) and `docs/API.md`** — *what*: signatures, options, defaults, errors.
 * **`docs/*` and `docs/guides/*` (site)** — *how*: task-shaped instructions.
-* **`docs/internals/*.md` (repo)** — *why, and what it costs*: behaviour, limits and their reasoning, measured comparisons. **Canonical.** The site pages under `website/app/docs/internals/` are generated from these by `node website/scripts/gen-internals.mjs` — edit the repo file, never the generated page. CI regenerates and fails on a diff.
+* **`website/app/docs/internals/*` (site)** — *why, and what it costs*: behaviour, limits and their reasoning, measured comparisons. Edited directly; there is no second copy and no generation step, because two copies of a page is a drift problem invented rather than solved.
 * **`docs/DECISIONS.md`** — the decision and what was rejected. Maintainer-facing; a reader-facing page links to it rather than repeating it.
 
 Any measured number on a page must be reproducible by a committed script (`bench/`), not typed by hand.

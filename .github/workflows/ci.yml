@@ -88,25 +88,6 @@ jobs:
       - run: bun run build
       - run: git diff --exit-code -- ../src/runtime_modules/serialization.js
 
-  docs:
-    name: docs (generated pages in sync)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      # Site pages under app/docs/internals are generated from docs/internals/*.md.
-      # Same reasoning as the committed JS bundle above: a generated file that is
-      # committed can drift from its source and nothing notices until a reader
-      # believes the stale one.
-      - run: node website/scripts/gen-internals.mjs
-      - run: git diff --exit-code -- website/app/docs/internals
-      # Note: `bench/probe-runtimes.sh --check` is deliberately *not* run here.
-      # It needs node, bun and deno installed, takes ~15 minutes, and measures
-      # other runtimes — so it would fail on their release schedule rather than
-      # on a change of ours. Re-run it by hand when the table is being refreshed.
-
   msrv:
     name: msrv build (1.95)
     runs-on: ubuntu-latest

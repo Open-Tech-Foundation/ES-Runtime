@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Measures what each runtime's HTTP server actually does with a connection that
 # is not making progress, and what it advertises in its HTTP/2 SETTINGS. Then
-# rewrites the table in docs/internals/networking.md between its markers.
+# rewrites the table in the internals page between its markers.
 #
 # Documentation numbers rot. These are the ones a reader is most likely to act
 # on and least able to check, so they are produced by running the four servers
@@ -16,7 +16,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOC="$ROOT/docs/internals/networking.md"
+DOC="$ROOT/website/app/docs/internals/networking/page.mdx"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"; kill $(jobs -p) 2>/dev/null' EXIT
 
@@ -176,17 +176,17 @@ fi
 
 # Splice between the markers, leaving the surrounding prose alone.
 NEW="$(awk -v table="$TABLE" '
-  /<!-- BEGIN probe:table -->/ { print; print table; skip = 1; next }
-  /<!-- END probe:table -->/   { skip = 0 }
+  /BEGIN probe:table/ { print; print table; skip = 1; next }
+  /END probe:table/   { skip = 0 }
   !skip { print }
 ' "$DOC")"
 
 if [ "${1:-}" = "--check" ]; then
   if [ "$NEW" = "$(cat "$DOC")" ]; then
-    echo "docs/internals/networking.md is up to date" >&2
+    echo "the internals page is up to date" >&2
     exit 0
   fi
-  echo "docs/internals/networking.md is out of date — run: bash bench/probe-runtimes.sh" >&2
+  echo "the internals page is out of date — run: bash bench/probe-runtimes.sh" >&2
   diff <(echo "$NEW") "$DOC" >&2 || true
   exit 1
 fi
