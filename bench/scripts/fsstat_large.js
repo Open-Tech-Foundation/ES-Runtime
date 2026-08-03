@@ -1,5 +1,9 @@
+// Same N as fsstat_small: `stat` reads metadata, so the file's size is the
+// variable under test and the op count must not also change. At the N=20 the
+// read/write `_large` workloads use (where 20 ops still move 40 MB) this
+// measured 0.2-1.2 ms — timer resolution, published as a 6x ranking.
 (async () => {
-  const N = 20;
+  const N = 5000;
   const tmp = "bench_fsstat.bin";
 
   let stat, write, cleanup;

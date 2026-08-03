@@ -2,8 +2,11 @@
 // them to fire. Measures timer scheduling + firing overhead (breadth, not a
 // chain — chained setTimeout(0) mostly measures each runtime's minimum-delay
 // clamp, not its bookkeeping).
+// N is 100k rather than 10k because at 10k the fastest runtime finished in
+// 2.7 ms — close enough to the timer's own resolution that the ranking was
+// partly noise. The work is unchanged in kind, only in amount.
 (async () => {
-  const N = 10_000;
+  const N = 100_000;
   const run = (n) =>
     new Promise((resolve) => {
       let done = 0;

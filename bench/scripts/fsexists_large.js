@@ -1,5 +1,8 @@
+// Same N as fsexists_small, for the reason given in fsstat_large.js: an
+// existence check reads metadata and moves no bytes, so N=20 measured the clock
+// rather than the runtime.
 (async () => {
-  const N = 20;
+  const N = 5000;
   const tmp = "bench_fsexists.bin";
 
   let exists, write, cleanup;

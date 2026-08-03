@@ -50,8 +50,11 @@ if (isEsrun) {
 // Warmup
 for (let i = 0; i < 5; i++) parseProtobuf();
 
-// Timed run
-const iterations = 50;
+// Timed run. 5 decodes of a 50k-message catalog is 0.5-1.2s depending on the
+// runtime — an order of magnitude above the measurement floor, so the extra
+// iterations only bought wall time. At 50 this was the suite's most expensive
+// row by far: 5-12s per launch, ~4 minutes across the repetitions and runtimes.
+const iterations = 5;
 const start = performance.now();
 for (let i = 0; i < iterations; i++) parseProtobuf();
 const end = performance.now();
