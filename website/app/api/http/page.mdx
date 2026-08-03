@@ -28,7 +28,7 @@ An HTTP/1.1 and HTTP/2 server: `serve((request) => response)`. The handler takes
 | Function | Type | Description | Example |
 | --- | --- | --- | --- |
 | `serve(handler)` | `(Handler) => Server` | Start a server on an ephemeral port (read it from `server.addr`). `handler` is `(request) => response`. | `serve((req) => new Response("hi"))` |
-| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
+| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
 
 ## Serve
 
@@ -88,6 +88,29 @@ default, and a non-number is a `TypeError` at the call rather than a bound port.
 ```js
 serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler);
 ```
+
+## Connection limit
+
+`maxConnections` caps how many connections are served at once. Unlimited by
+default — the right number follows from your file-descriptor budget and the
+memory a connection costs, neither of which the runtime can read.
+
+```js
+serve({ port: 8080, maxConnections: 10_000 }, handler);
+```
+
+A connection over the cap is **held, not refused**: the server stops accepting,
+so it waits in the kernel's backlog and is served as soon as a slot frees.
+Nothing is spent on it while it waits.
+
+The per-connection limits it multiplies against are fixed:
+
+| Limit | Value |
+| --- | --- |
+| HTTP/1.1 header fields | 100 |
+| HTTP/1.1 read buffer | ~408KB |
+| HTTP/2 header list | 16KB (advertised in `SETTINGS`) |
+| HTTP/2 concurrent streams | 256 (advertised in `SETTINGS`) |
 
 ## Bodies
 

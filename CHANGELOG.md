@@ -10,6 +10,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **A connection cap for `runtime:http`** (DECISIONS D45). `serve({ maxConnections })`
+  bounds how many connections one server holds at once. Unlimited by default —
+  the right number follows from your file-descriptor budget and the memory a
+  connection costs, neither of which the runtime can read, and Node, Deno and Go
+  leave it unlimited too. Worth setting on a public port: an HTTP/1.1
+  connection's read buffer can reach ~408KB, so the connection count multiplies
+  straight into memory.
+
+  A connection over the cap is **held, not refused**. The limit is enforced by
+  not accepting, so it waits in the kernel's backlog and is served as soon as a
+  slot frees; nothing is spent on it meanwhile — no descriptor, no task, no read
+  buffer.
+
+  The per-connection limits it multiplies against are now stated in our code at
+  hyper's own current values rather than inherited: 100 header fields and a
+  ~408KB read buffer on HTTP/1.1, a 16KB header list on HTTP/2. No behaviour
+  change — but a hyper release adjusting a default can no longer quietly adjust
+  ours, which is how the 30s header timeout went missing.
+
 - **The client's address, in `runtime:http`** (DECISIONS D44). The handler takes an
   optional second argument describing the connection:
 

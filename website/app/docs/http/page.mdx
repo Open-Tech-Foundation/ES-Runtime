@@ -336,6 +336,36 @@ probes instead, which is what keeps a peer that vanished without a FIN from
 holding its share of the 256-stream budget until the OS TCP keepalive notices,
 two hours later on Linux.
 
+## How many connections at once
+
+`maxConnections` caps how many connections the server holds at once. Unlimited
+by default.
+
+```js
+serve({ port: 8080, maxConnections: 10_000 }, handler);
+```
+
+A connection over the cap is **held, not refused** — the server enforces the
+limit by not accepting, so the connection waits in the kernel's backlog and is
+served as soon as a slot frees. Nothing is spent on it meanwhile: no descriptor,
+no task, no read buffer.
+
+<Callout type="info" title="Why there is no default here">
+  Unlike the timeouts, this one ships off. The right number follows from your
+  file-descriptor budget and the memory a connection costs, and a cap guessed
+  for you would throttle real traffic with nothing anywhere to explain it —
+  a silent throughput cliff is harder to diagnose than a missing limit. Node,
+  Deno and Go leave it unlimited too.
+
+  It is still worth setting on a public port: an HTTP/1.1 connection's read
+  buffer can reach ~408KB, so the connection count multiplies straight into
+  memory.
+</Callout>
+
+The per-connection limits it multiplies against are fixed: 100 header fields and
+a ~408KB read buffer on HTTP/1.1, a 16KB header list and 256 concurrent streams
+on HTTP/2 — the last two advertised to every client in the server's `SETTINGS`.
+
 ## Usage with Hono
 
 Because esrun uses standard Web APIs, frameworks like

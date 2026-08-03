@@ -1089,7 +1089,7 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.
@@ -1244,6 +1244,37 @@ Two consequences worth knowing before you tune them:
   that dropped the mapping, a killed VM — keeps its connection *and* its share of
   the 256-stream budget until the OS TCP keepalive notices, which is two hours by
   default on Linux.
+
+#### How many connections at once
+
+`maxConnections` caps how many connections the server holds at once. Unlimited
+by default:
+
+```js
+serve({ port: 8080, maxConnections: 10_000 }, handler);
+```
+
+A connection over the cap is **held, not refused**. The server enforces the
+limit by not accepting, so the connection waits in the kernel's backlog — and is
+served as soon as a slot frees, rather than being dropped. Nothing is spent on
+it while it waits: no descriptor, no task, no read buffer. (Once the backlog
+itself fills, the OS refuses further connections, which is the only refusal in
+the design and it costs the server nothing.)
+
+There is no default because the right number follows from your file-descriptor
+budget and the memory a connection costs — neither of which the runtime can
+read. It is worth setting on a public port: an HTTP/1.1 connection's read buffer
+can reach ~408KB, so the connection count multiplies straight into memory. Node,
+Deno and Go leave this unlimited too.
+
+The per-connection limits it multiplies against are fixed:
+
+| Limit | Value |
+| --- | --- |
+| HTTP/1.1 header fields | 100 |
+| HTTP/1.1 read buffer | ~408KB |
+| HTTP/2 header list | 16KB (advertised in `SETTINGS`) |
+| HTTP/2 concurrent streams | 256 (advertised in `SETTINGS`) |
 
 #### Shutdown
 

@@ -80,6 +80,20 @@ declare module "runtime:http" {
      * interrupted, however long they take.
      */
     timeouts?: ServeTimeouts;
+    /**
+     * The most connections to serve at once. Unlimited by default.
+     *
+     * A connection over the cap is **held, not refused**: the server stops
+     * accepting, so it waits in the kernel's backlog and is served as soon as a
+     * slot frees. Nothing is spent on it in the meantime — no descriptor, no
+     * task, no read buffer.
+     *
+     * There is no default because the right number follows from the
+     * deployment's file-descriptor budget and the memory a connection costs.
+     * Worth setting on a public port: an HTTP/1.1 connection's read buffer can
+     * reach ~408KB, so the connection count is a memory multiplier.
+     */
+    maxConnections?: number | null;
   }
 
   /**
