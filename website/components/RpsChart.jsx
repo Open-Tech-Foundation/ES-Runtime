@@ -1,6 +1,13 @@
-// Higher-is-better companion to BenchChart for the HTTP requests/sec result
-// (bench/rps.sh). Data is inline because it comes from an external load
-// generator (autocannon), not the bench/run.sh JSON the other charts read.
+// Higher-is-better companion to BenchChart for the HTTP requests/sec result,
+// read from the same generated module as every other chart — bench/rps.sh
+// writes `results_rps` into it via bench/gen-bench-data.sh.
+//
+// This once carried an inline fallback of hand-written numbers for when the key
+// was missing. It is gone on purpose: those numbers went stale (they showed
+// esrun ~43% faster than it measures today) and, being a `||` fallback, they
+// would have appeared on the homepage the moment a run failed to produce the
+// key — silently replacing a measurement with a flattering guess. Missing data
+// now renders nothing at all.
 //
 // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops, and dynamic styles must be
@@ -11,12 +18,15 @@ import bench from "../src/benchmarks.js";
 
 const ORDER = ["deno", "bun", "esrun", "node"];
 
+// A runtime the run could not measure reads as "n/a", never as 0.0k — a zero
+// bar claims a result that was never taken.
 function fmt(v) {
-  return (v / 1000).toFixed(1) + "k";
+  return typeof v === "number" ? (v / 1000).toFixed(1) + "k" : "n/a";
 }
 
 export default function RpsChart() {
-  const httpRps = bench.results_rps?.hono || { deno: 98000, bun: 81700, esrun: 77600, node: 36200 };
+  const httpRps = bench.results_rps?.hono;
+  if (!httpRps) return null;
 
   let max = 0;
   let winner = null;
@@ -26,6 +36,7 @@ export default function RpsChart() {
       winner = rt;
     }
   }
+  if (!max) return null;
 
   const httpRss = bench.results_rss?.http || {};
 
@@ -39,7 +50,8 @@ export default function RpsChart() {
       </div>
       <div className="space-y-1.5">
         {ORDER.map((rt) => {
-          const pct = Math.max((httpRps[rt] / max) * 100, 2);
+          const pct =
+            typeof httpRps[rt] === "number" ? Math.max((httpRps[rt] / max) * 100, 2) : 0;
           const isWin = rt === winner;
           const mem = httpRss[rt] ? ` / ${httpRss[rt]}MB` : "";
           return (
