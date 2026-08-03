@@ -6131,6 +6131,28 @@ mod tests {
     #[derive(Default)]
     struct RecordingHttpServer {
         options: Arc<Mutex<Vec<es_runtime_providers::HttpServeOptions>>>,
+        /// Requests to hand over, one batch, before reporting the server
+        /// closed. Lets a test drive a handler without a socket — which is the
+        /// only way to reach the "the host has no peer to report" branch, since
+        /// a real connection always has one.
+        deliver: Arc<Mutex<Vec<es_runtime_providers::HttpServerRequest>>>,
+        /// What the handler answered, in order.
+        responses: Arc<Mutex<Vec<es_runtime_providers::HttpServerResponse>>>,
+    }
+
+    /// A request with no body, as a provider with no socket would report it.
+    fn canned_request(
+        remote_address: &str,
+        remote_port: u16,
+    ) -> es_runtime_providers::HttpServerRequest {
+        es_runtime_providers::HttpServerRequest {
+            method: "GET".to_string(),
+            url: "http://127.0.0.1:8443/who".to_string(),
+            headers: vec![],
+            body: es_runtime_providers::HttpServerBody::Empty,
+            remote_address: remote_address.to_string(),
+            remote_port,
+        }
     }
 
     impl es_runtime_providers::HttpServerProvider for RecordingHttpServer {
@@ -6165,17 +6187,24 @@ mod tests {
             >,
         > {
             // Empty ⇒ "the server is closed", which ends the accept loop rather
-            // than holding the module open on a server nothing will call.
-            Box::pin(std::future::ready(Ok(Vec::new())))
+            // than holding the module open on a server nothing will call. A
+            // queued batch goes over first, and is only handed out once.
+            let queued: Vec<_> = std::mem::take(&mut *self.deliver.lock().unwrap())
+                .into_iter()
+                .enumerate()
+                .map(|(i, req)| (i as u64 + 1, req))
+                .collect();
+            Box::pin(std::future::ready(Ok(queued)))
         }
 
         fn respond(
             &self,
             _request_id: u64,
-            _response: es_runtime_providers::HttpServerResponse,
+            response: es_runtime_providers::HttpServerResponse,
         ) -> es_runtime_providers::BoxFuture<
             std::result::Result<(), es_runtime_providers::ProviderError>,
         > {
+            self.responses.lock().unwrap().push(response);
             Box::pin(std::future::ready(Ok(())))
         }
 
@@ -6353,6 +6382,80 @@ mod tests {
         );
         assert_eq!(options[0].timeouts.handshake, defaults.handshake);
         assert_eq!(options[0].timeouts.h2_keep_alive, defaults.h2_keep_alive);
+    }
+
+    /// Body of the single response the handler produced.
+    fn recorded_body(http: &RecordingHttpServer) -> String {
+        let responses = http.responses.lock().unwrap();
+        let one = responses.first().expect("the handler answered");
+        match &one.body {
+            es_runtime_providers::HttpServerBody::Bytes(b) => {
+                String::from_utf8_lossy(b).into_owned()
+            }
+            _ => panic!("expected a buffered body"),
+        }
+    }
+
+    /// The handler's second argument carries the peer, in the shape
+    /// `Deno.serve` passes — so the same handler runs on either runtime.
+    #[test]
+    fn a_handler_is_told_which_peer_a_request_came_from() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        http.deliver
+            .lock()
+            .unwrap()
+            .push(canned_request("203.0.113.7", 54321));
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             serve({ port: 8443 }, (request, info) => \
+               new Response(`${info.remoteAddr.transport}/${info.remoteAddr.hostname}/\
+${info.remoteAddr.port}`));",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(recorded_body(&http), "tcp/203.0.113.7/54321");
+    }
+
+    /// A provider with no socket — a mock, an embedder's own transport — has no
+    /// peer to report, and saying so is `null`. An address-shaped object full of
+    /// blanks would be worse than useless: a handler would happily key a rate
+    /// limit on the empty string.
+    #[test]
+    fn an_unknown_peer_is_null_rather_than_a_blank_address() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        http.deliver.lock().unwrap().push(canned_request("", 0));
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             serve({ port: 8443 }, (request, info) => \
+               new Response(String(info.remoteAddr)));",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(recorded_body(&http), "null");
+    }
+
+    /// The argument is additive: every handler written before it exists takes
+    /// one parameter and must keep working untouched.
+    #[test]
+    fn a_handler_that_ignores_the_second_argument_still_works() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        http.deliver
+            .lock()
+            .unwrap()
+            .push(canned_request("203.0.113.7", 54321));
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             serve({ port: 8443 }, (request) => new Response(new URL(request.url).pathname));",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(recorded_body(&http), "/who");
     }
 
     /// Rejected in the prelude, before the bind: a typo in a timeout must not

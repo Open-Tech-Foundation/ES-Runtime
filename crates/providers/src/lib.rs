@@ -1101,6 +1101,22 @@ pub struct HttpServerRequest {
     pub headers: Vec<(String, String)>,
     /// The request body.
     pub body: HttpServerBody,
+    /// The peer this request arrived from — the address of the other end of the
+    /// socket, and nothing else. Empty when the provider has no peer to report
+    /// (a mock, a transport with no address), which is what a guest reads as
+    /// "unknown" rather than as an address it could compare.
+    ///
+    /// This is the *socket* peer, so behind a reverse proxy it is the proxy.
+    /// Resolving a forwarded header to the original client is a deployment's
+    /// decision — it requires knowing which hop to trust, and a header anyone
+    /// can send is not an identity until something says which sender to believe.
+    ///
+    /// On HTTP/2 every stream on a connection reports the same peer, because
+    /// they *are* one connection.
+    pub remote_address: String,
+    /// The peer's port, or `0` when unknown. Mirrors
+    /// [`SocketInfo`](SocketInfo::remote_port)'s convention.
+    pub remote_port: u16,
 }
 
 /// The response a guest hands back for one [`HttpServerRequest`].

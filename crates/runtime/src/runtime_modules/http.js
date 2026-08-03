@@ -1,4 +1,4 @@
-// runtime:http — an HTTP/1.1 + HTTP/2 server: `serve((request) => response)`.
+// runtime:http — an HTTP/1.1 + HTTP/2 server: `serve((request, info) => response)`.
 // The version is the client's to choose and the handler never sees it: over TLS
 // it is ALPN (`h2` and `http/1.1` are both offered unless `alpn` narrows it),
 // and on a cleartext port an HTTP/2 client is served h2c by prior knowledge. The handler
@@ -129,16 +129,33 @@ function watchDisconnect(requestId) {
   return controller.signal;
 }
 
+// What the handler is told about the connection a request arrived on, as its
+// second argument — the shape Deno.serve passes, so a handler ports either way.
+//
+// `remoteAddr` is the *socket* peer and only ever that: behind a reverse proxy
+// it is the proxy. Resolving `X-Forwarded-For` to the original client is the
+// deployment's call, because it takes knowing which hop to trust — a header
+// anyone can send is not an identity until something says whose to believe.
+// Null when the host has no peer to report, which is honest about not knowing
+// rather than handing back an address-shaped object full of blanks.
+function connectionInfo(host, port) {
+  if (!host) return { remoteAddr: null };
+  return { remoteAddr: { transport: "tcp", hostname: host, port } };
+}
+
 // Runs one request through the handler and writes the response back. Never
 // throws: a handler error or a non-Response return becomes a 500. `entry` is the
 // structured tuple from http_next_request: [requestId, method, url, hasBody,
-// headers] (headers as [name, value] pairs) — no per-request JSON parse.
+// headers, peerHost, peerPort] (headers as [name, value] pairs) — no
+// per-request JSON parse.
 async function handleRequest(entry, handler) {
   const requestId = entry[0];
   const method = entry[1];
   const url = entry[2];
   const hasBody = entry[3];
   const headers = entry[4];
+  const peerHost = entry[5];
+  const peerPort = entry[6];
   let response;
   try {
     const init = { method, headers };
@@ -154,7 +171,10 @@ async function handleRequest(entry, handler) {
         },
       });
     }
-    response = await handler(makeServerRequest(url, init, () => watchDisconnect(requestId)));
+    response = await handler(
+      makeServerRequest(url, init, () => watchDisconnect(requestId)),
+      connectionInfo(peerHost, peerPort),
+    );
     if (!(response instanceof Response)) {
       response = new Response(response == null ? "" : String(response));
     }
@@ -226,6 +246,8 @@ class Server {
           const method = flat[i++];
           const url = flat[i++];
           const hasBody = flat[i++];
+          const peerHost = flat[i++];
+          const peerPort = flat[i++];
           const numHeaders = flat[i++];
           
           const headers = [];
@@ -234,7 +256,7 @@ class Server {
           }
           
           // Handle each concurrently
-          handleRequest([requestId, method, url, hasBody, headers], handler);
+          handleRequest([requestId, method, url, hasBody, headers, peerHost, peerPort], handler);
         }
       }
       resolveFinished();

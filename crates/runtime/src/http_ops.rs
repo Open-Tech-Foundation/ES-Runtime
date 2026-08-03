@@ -153,7 +153,8 @@ pub(crate) fn install(
                 return Ok(Value::Null); // server closed
             }
             // A flat array to avoid recursive v8::Array allocations.
-            // Format: [requestId, method, url, hasBody, numHeaders, name1, val1, ...]
+            // Format: [requestId, method, url, hasBody, peerHost, peerPort,
+            // numHeaders, name1, val1, ...]
             let mut flat = Vec::new();
             for (rid, req) in reqs {
                 let has_body = !req.body.is_empty();
@@ -164,6 +165,12 @@ pub(crate) fn install(
                 flat.push(Value::String(req.method));
                 flat.push(Value::String(req.url));
                 flat.push(Value::Bool(has_body));
+                // The socket peer, for the handler's second argument. Empty
+                // when the provider has no peer to report, which the prelude
+                // turns into a null `remoteAddr` rather than an address-shaped
+                // object full of blanks.
+                flat.push(Value::String(req.remote_address));
+                flat.push(Value::Number(req.remote_port as f64));
                 flat.push(Value::Number(req.headers.len() as f64));
                 for (n, v) in req.headers {
                     flat.push(Value::String(n));

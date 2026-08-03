@@ -142,6 +142,26 @@ fn disconnects_stalled_clients_and_leaves_working_ones_alone() {
 }
 
 #[test]
+fn tells_a_handler_which_peer_a_request_came_from() {
+    // A real accept() under the real binary: the address a handler is given has
+    // to come from the socket, which no in-process test of the prelude can
+    // show on its own.
+    let out = run_file("http-peer-address.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(
+        stdout.contains("peer:tcp/127.0.0.1 hasPort:true"),
+        "{stdout}"
+    );
+    // A forged forwarding header changes nothing about the reported peer.
+    assert!(stdout.contains("forged-ignored:true"), "{stdout}");
+    // …but it still reaches the handler, so a deployment can trust it itself.
+    assert!(stdout.contains("header-delivered:198.51.100.9"), "{stdout}");
+    assert!(stdout.contains("one-arg:ignored"), "{stdout}");
+    assert!(stdout.contains("PEER_OK"), "{stdout}");
+}
+
+#[test]
 fn honours_every_fetch_redirect_mode_over_the_wire() {
     // Real 3xx responses from a real runtime:http server through the real
     // reqwest transport — the stub transport in the runtime's own tests cannot

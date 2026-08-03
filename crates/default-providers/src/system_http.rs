@@ -237,7 +237,12 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
 /// The absolute URL is reconstructed from the listener's scheme plus the request
 /// authority — the `Host` header, or on HTTP/2 the `:authority` pseudo-header
 /// hyper puts in the URI — falling back to the bound address.
-fn to_server_request(req: Request<Incoming>, origin: &str) -> HttpServerRequest {
+fn to_server_request(
+    req: Request<Incoming>,
+    origin: &str,
+    peer_host: String,
+    peer_port: u16,
+) -> HttpServerRequest {
     let method = req.method().to_string();
     // `origin` is "<scheme>://<bound address>", the fallback when a request
     // names no authority. The authority replaces only the host part — the scheme
@@ -278,6 +283,10 @@ fn to_server_request(req: Request<Incoming>, origin: &str) -> HttpServerRequest 
         url,
         headers,
         body,
+        // The connection's peer, so every stream of an h2 connection reports
+        // the same one — they are one connection.
+        remote_address: peer_host,
+        remote_port: peer_port,
     }
 }
 
@@ -360,16 +369,23 @@ async fn serve_connection<S>(
     io: S,
     tx: mpsc::Sender<Pending>,
     origin: String,
+    peer: SocketAddr,
     mut drain_rx: watch::Receiver<bool>,
     timeouts: HttpTimeouts,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    // Formatted once per connection rather than per request: an address does
+    // not change under a connection, and on HTTP/2 one connection can carry
+    // hundreds of requests that would each have re-rendered the same string.
+    let peer_host = peer.ip().to_string();
+    let peer_port = peer.port();
     let service = service_fn(move |req: Request<Incoming>| {
         let tx = tx.clone();
         let origin = origin.clone();
+        let peer_host = peer_host.clone();
         async move {
-            let server_req = to_server_request(req, &origin);
+            let server_req = to_server_request(req, &origin, peer_host, peer_port);
             let (rtx, rrx) = oneshot::channel();
             let (dtx, drx) = oneshot::channel();
             if tx.send((server_req, rtx, drx)).await.is_err() {
@@ -488,10 +504,10 @@ impl HttpServerProvider for SystemHttpServer {
                 // what the wait between attempts is protecting.
                 let mut backoff = AcceptBackoff::new();
                 loop {
-                    let stream = match listener.accept().await {
-                        Ok((stream, _peer)) => {
+                    let (stream, peer) = match listener.accept().await {
+                        Ok(accepted) => {
                             backoff.reset();
-                            stream
+                            accepted
                         }
                         Err(e) => {
                             let delay = backoff.next_delay();
@@ -530,11 +546,13 @@ impl HttpServerProvider for SystemHttpServer {
                                 )
                                 .await;
                                 if let Some(Ok(stream)) = handshake {
-                                    serve_connection(stream, tx, origin, drain_rx, timeouts).await;
+                                    serve_connection(stream, tx, origin, peer, drain_rx, timeouts)
+                                        .await;
                                 }
                             }
                             None => {
-                                serve_connection(stream, tx, origin, drain_rx, timeouts).await;
+                                serve_connection(stream, tx, origin, peer, drain_rx, timeouts)
+                                    .await;
                             }
                         }
                         live.leave();
@@ -731,6 +749,22 @@ mod tests {
         .expect("the acceptor is still accepting")
         .unwrap();
         assert_eq!(reqs.len(), 1, "the request after the burst still arrives");
+    }
+
+    /// The peer is the other end of the accepted socket, read from `accept`
+    /// rather than from anything the client can say — a header is not an
+    /// identity. The client's port is ephemeral and unpredictable, so the check
+    /// is against the port the *client socket* actually got.
+    #[tokio::test]
+    async fn a_request_carries_the_address_of_the_socket_it_arrived_on() {
+        let (http, id, port) = bound().await;
+        let sock = request_on_new_conn(port).await;
+        let client_port = sock.local_addr().unwrap().port();
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (_, req) = reqs.into_iter().next().expect("one request");
+        assert_eq!(req.remote_address, "127.0.0.1");
+        assert_eq!(req.remote_port, client_port);
     }
 
     /// The signal a handler's `request.signal` is built on: a client that goes
@@ -1006,6 +1040,57 @@ mod http2_tests {
         )
         .await
         .unwrap();
+    }
+
+    /// Every stream of one HTTP/2 connection reports the same peer, because
+    /// they *are* one connection — a handler keying anything on the address
+    /// must not see it change between multiplexed requests.
+    #[tokio::test]
+    async fn every_stream_on_one_h2_connection_reports_the_same_peer() {
+        let (http, id, port) = super::tests::bound_with(None).await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+
+        // Two requests in flight on one connection: neither is answered until
+        // both have arrived, so they genuinely share the connection.
+        let first = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .get(format!("http://127.0.0.1:{port}/a"))
+                    .send()
+                    .await
+            }
+        });
+        let second = tokio::spawn({
+            let client = client.clone();
+            async move {
+                client
+                    .get(format!("http://127.0.0.1:{port}/b"))
+                    .send()
+                    .await
+            }
+        });
+
+        let mut peers = Vec::new();
+        let mut ids = Vec::new();
+        while ids.len() < 2 {
+            for (rid, req) in http.next_requests(id, 8).await.unwrap() {
+                peers.push((req.remote_address, req.remote_port));
+                ids.push(rid);
+            }
+        }
+        for rid in ids {
+            ok(&http, rid, "shared").await;
+        }
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+
+        assert_eq!(peers[0], peers[1], "one connection, one peer");
+        assert_eq!(peers[0].0, "127.0.0.1");
+        assert_ne!(peers[0].1, 0, "the client's ephemeral port is reported");
     }
 
     /// A cleartext port serves an HTTP/2 client that opens with the connection
