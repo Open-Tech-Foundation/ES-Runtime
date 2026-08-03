@@ -64,9 +64,15 @@ const NAV = [
     items: [{ title: "Global objects", path: "/docs/globals" }],
   },
   {
+    // Deep behaviour, one page per subsystem: why it works the way it does and
+    // what it costs, as opposed to what the API is (/api) or how to use it
+    // (Guides).
+    title: "Internals",
+    items: [{ title: "HTTP server", path: "/docs/internals/http" }],
+  },
+  {
     title: "Runtime",
     items: [
-      { title: "Internals: networking", path: "/docs/internals/networking" },
       { title: "Embedding (preview)", path: "/docs/embed" },
       { title: "Module system", path: "/docs/modules" },
       { title: "Security model", path: "/docs/security" },

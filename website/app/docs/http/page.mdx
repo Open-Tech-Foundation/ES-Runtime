@@ -240,7 +240,7 @@ serve({ port: 443, secureTransport: "on", cert, key, alpn: ["http/1.1"] }, handl
 
 Multiplexing, one handshake per session, HPACK-compressed headers, and a
 `request.url` rebuilt from `:authority` all come with it, with the handler
-untouched — see [Internals: networking](/docs/internals/networking#protocol-version)
+untouched — see [Internals: the HTTP server](/docs/internals/http#protocol-version)
 for what changes on the wire and what it costs.
 
 ### Is it faster?
@@ -320,7 +320,7 @@ refused: it waits, and is served as soon as a slot frees.
   Why the HTTP/1.1 idle limit and the request-head limit are the same timer, why
   the connection cap ships off when the timeouts ship on, what a single
   connection costs in memory, and how all of it compares to Node, Bun and Deno
-  on measured numbers: [Internals: networking](/docs/internals/networking).
+  on measured numbers: [Internals: the HTTP server](/docs/internals/http).
 </Callout>
 
 ## Usage with Hono

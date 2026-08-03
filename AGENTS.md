@@ -19,7 +19,7 @@ Each fact has one home. Restating it elsewhere is how documentation starts lying
 
 * **`api/*` (site) and `docs/API.md`** — *what*: signatures, options, defaults, errors.
 * **`docs/*` and `docs/guides/*` (site)** — *how*: task-shaped instructions.
-* **`website/app/docs/internals/*` (site)** — *why, and what it costs*: behaviour, limits and their reasoning, measured comparisons. Edited directly; there is no second copy and no generation step, because two copies of a page is a drift problem invented rather than solved.
+* **`website/app/docs/internals/*` (site)** — *why, and what it costs*: behaviour, limits and their reasoning, measured comparisons. One page per subsystem, under the sidebar's **Internals** section. Edited directly; there is no second copy and no generation step, because two copies of a page is a drift problem invented rather than solved.
 * **`docs/DECISIONS.md`** — the decision and what was rejected. Maintainer-facing; a reader-facing page links to it rather than repeating it.
 
 Any measured number on a page must be reproducible by a committed script (`bench/`), not typed by hand.

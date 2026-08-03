@@ -10,16 +10,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Documentation
 
-- **An internals tier for the docs.** `/docs/internals/networking` explains what
+- **An internals tier for the docs.** `/docs/internals/http` explains what
   happens to a connection between `accept` and `close` — every limit and default
   with its reasoning, what a connection costs in memory, and a measured
   comparison against Node, Bun and Deno. The reference says *what*, the guides
   say *how*, and this says *why, and what it costs*; each fact has one home and
   the others link to it.
 
+  It also covers the request handoff (why one isolate can answer many
+  connections, and why HTTP/2 multiplexing needed no new machinery), how
+  `request.signal` knows the client went away, and what draining actually waits
+  for.
+
   `bench/probe-runtimes.sh` produces the cross-runtime numbers by standing up all
   four servers and probing them, then rewrites the table in the page. Numbers in
   documentation rot; these can be re-measured with one command.
+
+  These pages live under their own **Internals** section in the docs sidebar, one
+  per subsystem — `runtime:net`, the `fetch` client and WebSockets are not
+  written yet.
 
 ### Added
 

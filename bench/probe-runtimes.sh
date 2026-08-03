@@ -16,7 +16,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DOC="$ROOT/website/app/docs/internals/networking/page.mdx"
+DOC="$ROOT/website/app/docs/internals/http/page.mdx"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"; kill $(jobs -p) 2>/dev/null' EXIT
 

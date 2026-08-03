@@ -1,18 +1,19 @@
 ---
-title: "Internals: networking"
+title: "Internals: the HTTP server"
 description: What happens to a connection from accept to close — every limit, every default, and what each one costs.
 ---
 
-# Internals: networking
+# Internals: the HTTP server
 
-What actually happens to a TCP connection between `accept` and `close`, which
-limit applies at each stage, and why each default is the number it is.
+What actually happens to a connection between `accept` and `close`, which limit
+applies at each stage, why each default is the number it is, and what a
+connection costs while it is open.
 
 This page is for people sizing a deployment, reading a packet capture, or
 deciding what to put in front of the runtime. It explains behaviour rather than
-listing signatures — for those, see the [`runtime:http`](/api/http) and
-[`runtime:net`](/api/net) references. Where a decision had a real alternative,
-the reasoning is recorded in `docs/DECISIONS.md` (D42–D45).
+listing signatures — for those, see the [`runtime:http` reference](/api/http) —
+and it covers the **inbound** server only. Where a decision had a real
+alternative, the reasoning is recorded in `docs/DECISIONS.md` (D42–D45).
 
 ## The life of a connection
 
@@ -166,6 +167,82 @@ of order is the same code path as answering three connections.
 Whether HTTP/2 is *faster* depends entirely on how the client connects — on one
 connection it is 3.65× here, across 50 connections it loses. That is measured
 rather than assumed: see [Benchmarks](/docs/benchmarks#http2).
+
+## The handoff: many connections, one isolate
+
+JavaScript runs on one thread, and connections do not. Everything above the
+socket is shaped by that.
+
+hyper parses a request on whichever reactor thread owns the connection, then
+hands the runtime a triple — the request, a one-shot channel to send the
+response back on, and a half that reports whether the peer is still there — and
+awaits the response. The isolate drains that channel, runs the handler, and
+answers by id. hyper is free to keep feeding the request body while it waits.
+
+The consequence worth understanding: **responses are matched to requests by id,
+not by arrival order**. Nothing in the handoff knows which connection a request
+came from or which order they were asked in, which is why answering three
+multiplexed HTTP/2 streams out of order needed no new machinery — it is the same
+code path as answering three connections.
+
+| Buffer | Size | What it bounds |
+| --- | --- | --- |
+| Request queue | 1024 | Requests parsed and waiting for the isolate, across all connections of one server |
+| Requests per crossing | 64 | How many the isolate takes in one op call, to amortize dispatch over a batch |
+| Response body chunks | 8 | Chunks in flight between a streaming handler and the socket |
+
+Each of those is backpressure rather than a limit that fails. A full request
+queue stalls the connection tasks that are trying to add to it; a streaming
+handler awaits each chunk push, so a client reading slowly slows the handler
+rather than filling memory. The queue is deliberately roomy so many connections
+can each have a request waiting for one batched crossing, instead of the
+isolate paying an op dispatch per request.
+
+This is also why HTTP/2's 256-stream cap matters more than it looks: without it,
+one peer could fill the shared 1024-slot queue from a single connection.
+
+### Knowing the client went away
+
+`request.signal` is built backwards from the delivery half of that triple. The
+connection task *sends* on it once it has the handler's response in hand — so
+"delivered" is an explicit signal, and the future being **dropped** without
+sending is what a vanished client looks like, because hyper drops the service
+future when the connection dies. There is nothing to poll and nothing to clean
+up on either path.
+
+Reading `request.signal` is what starts the watch, so a handler that never asks
+pays nothing for it.
+
+## Shutdown and draining
+
+`server.stop()` stops accepting and resolves once the accept loop has ended.
+In-flight requests still complete.
+
+Draining waits for **connections to close**, not for handlers to return. Those
+are different moments: a response is handed to hyper before it reaches the
+socket, and exiting in between is exactly what turns a completed request into an
+empty reply on the client. So the drain watches live connections, and a
+connection counts as live until its task ends.
+
+Each connection is told to drain through a level-triggered flag rather than a
+notification. That distinction is load-bearing: an edge-triggered signal could
+be missed by a connection accepted a moment before shutdown began, and that
+connection would then hold the process open until its client happened to hang
+up. On the signal, the connection stops reading new requests but finishes the
+one in flight and writes its response — the difference between draining and
+dropping — and the connection future is awaited afterwards, because that final
+poll is what actually pushes the response onto the socket.
+
+`esrun` wires this to `^C` and `SIGTERM`, so a server needs no signal handling
+to shut down cleanly:
+
+| Situation | What happens |
+| --- | --- |
+| A server is running | Stop accepting, drain in flight, exit `128 + signal` |
+| No server is running | Exit immediately — nothing is in flight to protect |
+| The guest installed a signal handler | `esrun` stays out of the way; the handler owns shutdown |
+| A second interrupt during the drain | Exit immediately |
+| The drain outlasts `--shutdown-grace` | Exit anyway (default `10000`ms) |
 
 ## Identity: who is calling
 
