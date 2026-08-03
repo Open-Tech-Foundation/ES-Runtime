@@ -1115,6 +1115,13 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
+    // Before anything that could log. Installing a subscriber is a
+    // process-global act, so a library crate must not do it — which meant that
+    // until this call existed, every `tracing` event the runtime emitted was
+    // discarded, including the accept-loop failures that were written to be
+    // read. Quiet by default (`warn`); `RUST_LOG` opens it up, e.g.
+    // `RUST_LOG=runtime::http=debug`.
+    es_runtime_common::telemetry::init_tracing();
     let config = parse_args()?;
     // The module's canonical specifier (a file: URL — also import.meta.url and
     // the referrer its imports resolve against), its source, and a short label

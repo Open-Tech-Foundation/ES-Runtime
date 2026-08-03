@@ -26,6 +26,11 @@ self_update.workspace = true
 # `esrun types --install` — merge the type package into tsconfig.json.
 serde_json.workspace = true
 
+[dev-dependencies]
+# Test-only: a self-signed cert, so the telemetry e2e can stand up a TLS
+# listener and fail a handshake against it hermetically.
+rcgen.workspace = true
+
 # build.rs runs V8 to bake the prelude snapshot into the binary (see build.rs;
 # host-arch only — cross-compilation would need a target-run step).
 [build-dependencies]
