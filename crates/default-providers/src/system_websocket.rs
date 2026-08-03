@@ -69,6 +69,20 @@ type AcceptRx = mpsc::Receiver<(u64, WebSocketInfo)>;
 pub struct SystemWebSocket {
     conns: Arc<Mutex<HashMap<u64, WsSlot>>>,
     servers: Arc<Mutex<HashMap<u64, AcceptRx>>>,
+    /// The accept task per server, kept so `close_server` can abort it — the
+    /// same handle [`SystemNet`](crate::SystemNet) keeps for a listener, and for
+    /// both of its reasons.
+    ///
+    /// Dropping the receiver is not a signal the acceptor can see. It parks in
+    /// two places — on a connection permit, then on `accept` — and observes the
+    /// closure only *after* an accept returns, so at a full cap no arriving
+    /// connection can wake it and the listening socket stays bound for as long
+    /// as the connections live. For WebSockets that is indefinitely.
+    ///
+    /// Aborting also drops the task's sender, which is the only thing that can
+    /// resolve an `accept` already parked on the channel: it holds the receiver
+    /// checked out, so closing cannot reach it through the registry.
+    server_tasks: Arc<Mutex<HashMap<u64, tokio::task::JoinHandle<()>>>>,
     next_id: Arc<AtomicU64>,
     /// TLS trust anchors. `None` ⇒ the bundled Mozilla roots (webpki-roots);
     /// tests inject a custom store via [`SystemWebSocket::with_tls_roots`].
@@ -441,7 +455,7 @@ impl WebSocketProvider for SystemWebSocket {
             // so a slow handshake never blocks the next accept; on success the
             // connection registers in the shared `conns` map and is queued for
             // `accept`.
-            tokio::spawn(async move {
+            let task = tokio::spawn(async move {
                 // Errors from `accept` are retried, never fatal — see
                 // [`AcceptBackoff`](crate::accept_backoff). Breaking here would
                 // end the server while the port stayed bound, on an error that
@@ -558,6 +572,7 @@ impl WebSocketProvider for SystemWebSocket {
             });
             let server_id = this.id();
             this.servers.lock().unwrap().insert(server_id, rx);
+            this.server_tasks.lock().unwrap().insert(server_id, task);
             let info = SocketInfo {
                 local_address: local.map(|a| a.ip().to_string()).unwrap_or_default(),
                 local_port: local.map(|a| a.port()).unwrap_or(0),
@@ -589,8 +604,21 @@ impl WebSocketProvider for SystemWebSocket {
 
     fn close_server(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
         let servers = self.servers.clone();
+        let tasks = self.server_tasks.clone();
         Box::pin(async move {
             servers.lock().unwrap().remove(&id);
+            // Aborting is what actually stops this server: it drops the
+            // listening socket (so the port comes back now rather than whenever
+            // a slot next frees) and drops the task's sender (so an `accept`
+            // already parked on the channel resolves to `None` instead of
+            // waiting for a connection that can no longer arrive).
+            //
+            // Connections already accepted are untouched — they are separate
+            // actor tasks in `conns`, and the trait promises they keep working
+            // until individually closed.
+            if let Some(task) = tasks.lock().unwrap().remove(&id) {
+                task.abort();
+            }
             Ok(())
         })
     }
@@ -1006,7 +1034,7 @@ mod tracing_tests {
 /// server uses (D43, D45), against real sockets on loopback.
 #[cfg(test)]
 mod bounds_tests {
-    use super::tests::bound_with;
+    use super::tests::{bound, bound_with};
     use super::*;
     use es_runtime_providers::WsTimeouts;
     use std::time::Duration;
@@ -1191,5 +1219,64 @@ mod bounds_tests {
         assert!(accepted.is_some());
         sys.close(cid, Some(1000), String::new()).await.unwrap();
         sys.close_server(server_id).await.unwrap();
+    }
+
+    /// Closing a server must release the listening socket. The acceptor parks in
+    /// two places — on a permit and then on `accept` — and a dropped receiver is
+    /// visible from neither, so nothing but aborting the task can end it while a
+    /// full cap holds it. At the cap this is the difference between the port
+    /// coming back and it staying bound for as long as the connections live,
+    /// which for WebSockets is indefinitely.
+    #[tokio::test]
+    async fn closing_a_capped_server_releases_the_port() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = bound_with(&sys, WsTimeouts::default(), Some(1)).await;
+        let port = info.local_port;
+
+        // Fill the one slot and keep it filled: the acceptor is now parked on
+        // the semaphore, where no arriving connection can wake it.
+        let (cid, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let _held = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the first connection is accepted")
+            .unwrap()
+            .expect("a connection");
+
+        sys.close_server(server_id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        assert!(
+            TcpStream::connect(("127.0.0.1", port)).await.is_err(),
+            "the port must be released by close_server, not held until a slot frees",
+        );
+        let _ = cid;
+    }
+
+    /// And a guest already waiting in `for await (const ws of server)` must be
+    /// let go. A parked `accept` holds the receiver checked out, so closing
+    /// cannot reach it through the registry — only dropping the sender does,
+    /// which is what aborting the acceptor achieves.
+    #[tokio::test]
+    async fn closing_a_server_resolves_a_parked_accept() {
+        let sys = SystemWebSocket::new();
+        let (server_id, _info) = bound(&sys).await;
+
+        let parked = tokio::spawn({
+            let sys = sys.clone();
+            async move { sys.accept(server_id).await }
+        });
+        // Let it get as far as awaiting the channel.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        sys.close_server(server_id).await.unwrap();
+
+        let got = tokio::time::timeout(Duration::from_secs(5), parked)
+            .await
+            .expect("a parked accept must not outlive the server that closed")
+            .unwrap()
+            .unwrap();
+        assert!(got.is_none(), "a closed server's accept resolves to None");
     }
 }

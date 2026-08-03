@@ -76,6 +76,19 @@ namespace) is unstable and may change between minor releases until the API freez
   Both options are spelled as `runtime:http` spells them. **Embedders:** the
   provider trait's `serve(host, port)` is now `serve(WsServeOptions)`.
 
+- **`close()` on a WebSocket server actually stops it.** The accept loop was the
+  only one of the three servers with no handle kept for it, relying instead on
+  its channel closing — which it can only notice *after* an accept returns. With
+  a cap in force it parks on a connection permit first, where no arriving
+  connection can wake it, so the listening port stayed bound until a slot freed;
+  for long-lived WebSocket connections, indefinitely. And an `accept()` already
+  parked when `close()` ran held the receiver checked out, so nothing could
+  resolve it and `for await (const ws of server)` never ended.
+
+  The acceptor is now aborted on close, as `runtime:net`'s listener already was:
+  the port comes back immediately and a parked `accept` resolves to `null`.
+  Connections already accepted are untouched.
+
 - **The servers report their connection failures.** A failed TLS handshake, a
   WebSocket handshake a client got wrong, and a connection hyper ended on a
   protocol error were all dropped silently by `runtime:http`, `runtime:net` and
