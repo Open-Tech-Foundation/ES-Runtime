@@ -305,6 +305,32 @@ server whose chain no client will accept serves zero requests, exactly like a
 server nobody is calling; the handshake event is the only difference between
 them.
 
+### What the others let you find out
+
+Measured by sending one plaintext packet at each runtime's TLS port — a
+handshake none of them can start — and looking at what reaches the operator.
+Reproduce with `bash bench/probe-observability.sh`.
+
+{/* BEGIN probe:observability — written by bench/probe-observability.sh; do not hand-edit */}
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Reported by default | no | no | no | no |
+| Reported under the runtime's debug switch | yes | yes | no | no |
+| A callback receives it, with the peer | no | yes | no | no |
+
+<sub>esrun 0.15.0 · Node 24.14.0 · Bun 1.4.0 · Deno 2.8.3 · Linux · 2026-08-03</sub>
+{/* END probe:observability */}
+
+No runtime reports this by default, and that is the right default in all four.
+The difference is what you can do about it when you suspect it. Node has the
+most direct answer of the others: `tlsClientError` hands you the error object
+and the socket, so a deployment can route it wherever its logs go — and
+`NODE_DEBUG=tls` prints the OpenSSL reason, though as an unfiltered trace of all
+TLS activity rather than a record of failures. For Bun and Deno's `serve`, no
+callback fired and their debug switches printed nothing about the connection;
+`Deno.listenTls` is the lower-level escape hatch, where the handshake error
+surfaces to your own code on first read.
+
 ## How this compares
 
 Measured on one machine on one day, by standing each server up and probing it —
