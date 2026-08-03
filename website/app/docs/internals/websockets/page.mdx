@@ -141,6 +141,37 @@ on an HTTP server. There, connection count is self-limiting — requests finish 
 connections close. Here it only goes up until your application closes something,
 so this option is what decides whether it has an upper bound at all.
 
+### How this compares
+
+Measured by opening a TCP connection to each runtime's WebSocket port and never
+sending the upgrade request, and by establishing one connection against a cap of
+1 and opening a second. Reproduce with `bash bench/probe-ws-bounds.sh`.
+
+{/* BEGIN probe:ws-bounds — written by bench/probe-ws-bounds.sh; do not hand-edit */}
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Connection that never sends a handshake, closed after | 10.0s | 89.8s | 13.0s | never (>150s) |
+| A connection over a cap of 1 is | held | refused | no cap | no cap |
+
+<sub>esrun 0.15.0 · Node 24.14.0 · Bun 1.4.0 · Deno 2.8.3 · Linux · 2026-08-03</sub>
+{/* END probe:ws-bounds */}
+
+The Node figure is a `node:http` server's own bound on a request head, because
+that is what actually bounds a `ws` handshake — `ws` attaches to a `node:http`
+server. It answers `408` before closing, and its ~90s comes from a 60s
+`headersTimeout` polled on a 30s interval.
+
+Deno does not bound this at all, on the same hyper stack we use. Its `serve`
+options carry `tcpBacklog` and `reusePort` but no connection cap, and Bun's
+carry `maxRequestBodySize` but likewise no cap; passing `maxConnections` to
+either is silently ignored, which is what the "no cap" result records.
+
+The row worth reading is the second one. Node has a cap — `server.maxConnections`
+— and reaching it **resets** the next connection immediately. Ours holds it: the
+connection stays open, costing this server nothing, and is served when a slot
+frees. A reset is easier to diagnose; a hold is the difference between a queue
+and a rejection, and it is what makes a cap safe to set conservatively.
+
 ### Still missing
 
 No per-IP cap, so one peer can take every slot of a `maxConnections` budget.
