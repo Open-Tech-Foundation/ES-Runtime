@@ -37,6 +37,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
@@ -426,7 +427,9 @@ impl WebSocketProvider for SystemWebSocket {
                 // says nothing about the listening socket.
                 let mut backoff = AcceptBackoff::new();
                 loop {
-                    let (tcp, _) = match listener.accept().await {
+                    // The peer is kept, not discarded: it is the only thing that
+                    // makes a failed handshake attributable to a client.
+                    let (tcp, peer) = match listener.accept().await {
                         Ok(accepted) => {
                             backoff.reset();
                             accepted
@@ -450,18 +453,42 @@ impl WebSocketProvider for SystemWebSocket {
                     let tx = tx.clone();
                     let conns = conns.clone();
                     let next_id = next_id.clone();
-                    tokio::spawn(async move {
-                        let ws = match tokio_tungstenite::accept_async(tcp).await {
-                            Ok(ws) => ws,
-                            Err(_) => return, // failed handshake
-                        };
-                        let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
-                        let slot = SystemWebSocket::spawn(ws);
-                        conns.lock().unwrap().insert(id, slot);
-                        if tx.send((id, WebSocketInfo::default())).await.is_err() {
-                            conns.lock().unwrap().remove(&id); // server gone before accept
+                    // One span per connection, at `debug`, so the handshake
+                    // failure below and anything logged after it are
+                    // attributable to a peer. See the same shape in
+                    // [`system_http`](crate::system_http).
+                    let span = tracing::debug_span!(
+                        target: "runtime::websocket",
+                        "connection",
+                        peer = %peer,
+                    );
+                    tokio::spawn(
+                        async move {
+                            let ws = match tokio_tungstenite::accept_async(tcp).await {
+                                Ok(ws) => ws,
+                                // A plain HTTP request to a WebSocket port, a
+                                // missing `Sec-WebSocket-Key`, a peer that
+                                // opened a connection and said nothing. Debug,
+                                // not warn: it is peer-driven, so warning would
+                                // let any client set this server's log volume.
+                                Err(e) => {
+                                    tracing::debug!(
+                                        target: "runtime::websocket",
+                                        error = %e,
+                                        "websocket handshake failed",
+                                    );
+                                    return;
+                                }
+                            };
+                            let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
+                            let slot = SystemWebSocket::spawn(ws);
+                            conns.lock().unwrap().insert(id, slot);
+                            if tx.send((id, WebSocketInfo::default())).await.is_err() {
+                                conns.lock().unwrap().remove(&id); // server gone before accept
+                            }
                         }
-                    });
+                        .instrument(span),
+                    );
                 }
             });
             let server_id = this.id();
@@ -836,5 +863,53 @@ mod tests {
             .expect("the allowed address connects");
         client.close(id, None, String::new()).await.unwrap();
         server.await.unwrap();
+    }
+}
+
+/// A WebSocket port that answers nothing gives an operator no way to tell a
+/// client sending the wrong handshake from a server that is not being called.
+/// This event is the difference.
+#[cfg(test)]
+mod tracing_tests {
+    use super::*;
+    use crate::trace_capture;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn a_failed_handshake_is_logged_with_its_peer() {
+        trace_capture::install();
+        let ws = SystemWebSocket::default();
+        let (sid, addr) = ws.serve("127.0.0.1".to_string(), 0).await.unwrap();
+
+        // A plain HTTP request at a WebSocket port: no `Upgrade`, no
+        // `Sec-WebSocket-Key` — tungstenite refuses it.
+        let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", addr.local_port))
+            .await
+            .unwrap();
+        let peer = tcp.local_addr().unwrap();
+        tcp.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mine = trace_capture::wait_for(
+            &["websocket handshake failed", &format!("peer={peer}")],
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            !mine.is_empty(),
+            "the handshake failure must be logged against the peer that caused it; saw: {:?}",
+            trace_capture::lines_containing(&["websocket handshake failed"]),
+        );
+        let line = &mine[0];
+        assert!(
+            line.contains("[DEBUG] runtime::websocket"),
+            "peer-driven failures log at debug on the websocket target: {line}",
+        );
+        assert!(
+            line.contains("error="),
+            "the reason is the whole point of the event: {line}",
+        );
+        ws.close_server(sid).await.unwrap();
     }
 }

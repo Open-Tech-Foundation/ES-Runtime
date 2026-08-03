@@ -42,6 +42,8 @@ mod system_websocket;
 mod task;
 mod timers;
 mod tls;
+#[cfg(test)]
+mod trace_capture;
 
 pub mod path;
 pub mod testing;

@@ -584,7 +584,29 @@ impl NetProvider for SystemNet {
                                 Some(acceptor) => {
                                     let acceptor = acceptor.clone();
                                     handshakes.push(async move {
-                                        acceptor.accept(tcp).await.ok().map(|tls| (tls, remote))
+                                        match acceptor.accept(tcp).await {
+                                            Ok(tls) => Some((tls, remote)),
+                                            // Debug, not warn: on a public port a
+                                            // failed handshake is a scanner or a
+                                            // client with no shared cipher, and
+                                            // one line per attempt would hand any
+                                            // peer a log-flooding lever. But it
+                                            // is also the only signal a
+                                            // misconfigured chain ever gives —
+                                            // without it a server that no client
+                                            // can complete a handshake with looks
+                                            // exactly like a server nobody is
+                                            // calling.
+                                            Err(e) => {
+                                                tracing::debug!(
+                                                    target: "runtime::net",
+                                                    peer = %remote,
+                                                    error = %e,
+                                                    "tls handshake failed",
+                                                );
+                                                None
+                                            }
+                                        }
                                     });
                                 }
                             }
@@ -601,7 +623,9 @@ impl NetProvider for SystemNet {
                             retry_at = None;
                         }
                         Some(done) = handshakes.next(), if !handshakes.is_empty() => {
-                            // A failed handshake yields `None` — drop it silently.
+                            // A failed handshake yields `None`; it has already
+                            // logged for itself above, and ends this connection
+                            // only — never the acceptor.
                             if let Some((tls, remote)) = done
                                 && tx.send((Accepted::Tls(Box::new(tls)), remote)).await.is_err()
                             {
@@ -774,7 +798,7 @@ mod tests {
     }
 
     /// A `SystemNet` trusting only `cert` (so the self-signed server verifies).
-    fn net_trusting(cert: CertificateDer<'static>) -> SystemNet {
+    pub(super) fn net_trusting(cert: CertificateDer<'static>) -> SystemNet {
         let mut roots = RootCertStore::empty();
         roots.add(cert).unwrap();
         SystemNet::with_tls_roots(Arc::new(roots))
@@ -1232,6 +1256,65 @@ mod cancel_safety_tests {
         assert!(accepted.is_some());
         let (cid, _) = connect.await.unwrap().unwrap();
         net.close(cid).await.unwrap();
+        net.close_listener(lid).await.unwrap();
+    }
+}
+
+/// A TLS listener that no client can complete a handshake against is
+/// indistinguishable, from the server side, from a listener nobody is calling —
+/// the connection is dropped and the acceptor moves on, by design. This event
+/// is the only thing that tells those two apart.
+#[cfg(test)]
+mod tracing_tests {
+    use super::tests::net_trusting;
+    use super::*;
+    use crate::trace_capture;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn a_failed_tls_handshake_is_logged_with_its_peer() {
+        trace_capture::install();
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let net = net_trusting(ck.cert.der().clone());
+        let (lid, addr) = net
+            .listen(
+                "127.0.0.1".to_string(),
+                0,
+                ListenOptions {
+                    cert: ck.cert.pem().into_bytes(),
+                    key: ck.signing_key.serialize_pem().into_bytes(),
+                    alpn: vec![],
+                },
+            )
+            .await
+            .unwrap();
+
+        // Plaintext at a TLS port: rejected as a bad first record.
+        let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", addr.local_port))
+            .await
+            .unwrap();
+        let peer = tcp.local_addr().unwrap();
+        let _ = tcp.write_all(b"hello, not a client hello").await;
+
+        let mine = trace_capture::wait_for(
+            &["tls handshake failed", &format!("peer={peer}")],
+            std::time::Duration::from_secs(5),
+        )
+        .await;
+        assert!(
+            !mine.is_empty(),
+            "the handshake failure must be logged against the peer that caused it; saw: {:?}",
+            trace_capture::lines_containing(&["tls handshake failed"]),
+        );
+        let line = &mine[0];
+        assert!(
+            line.contains("[DEBUG] runtime::net"),
+            "peer-driven failures log at debug on the net target, not louder: {line}",
+        );
+        assert!(
+            line.contains("error="),
+            "the reason is the whole point of the event: {line}",
+        );
         net.close_listener(lid).await.unwrap();
     }
 }

@@ -51,6 +51,7 @@ use hyper_util::server::conn::auto;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
+use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
@@ -506,8 +507,8 @@ async fn serve_connection<S>(
     // in flight and writes its response — the difference between draining and
     // dropping. Awaiting the connection afterwards is what makes the response
     // actually reach the socket.
-    tokio::select! {
-        _ = conn.as_mut() => {}
+    let outcome = tokio::select! {
+        outcome = conn.as_mut() => outcome,
         // Wrapped so the borrow `wait_for` hands back — a read guard — is
         // dropped at the end of the statement, rather than living across the
         // await below and making this task non-`Send`.
@@ -515,7 +516,25 @@ async fn serve_connection<S>(
             let _ = drain_rx.wait_for(|draining| *draining).await;
         } => {
             conn.as_mut().graceful_shutdown();
-            let _ = conn.await;
+            conn.await
+        }
+    };
+    // hyper reports a protocol error, an early EOF or a write failure here, and
+    // this is the only place it is ever visible: nothing above the connection
+    // has a channel to carry it. Discarding it is why a malformed-framing bug
+    // looks, from outside, exactly like a client that hung up.
+    if let Err(e) = outcome {
+        // Except a timeout, which is this server's own policy working (D43).
+        // The header-read deadline reaping an idle keep-alive connection is how
+        // a *healthy* connection ends once the client stops asking for
+        // anything; reporting it would put a line in the log for every
+        // well-behaved client, which is the noise that makes a debug filter
+        // unusable on a live server.
+        let by_policy = e
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(hyper::Error::is_timeout);
+        if !by_policy {
+            tracing::debug!(target: "runtime::http", error = %e, "connection ended with an error");
         }
     }
 }
@@ -608,38 +627,72 @@ impl HttpServerProvider for SystemHttpServer {
                     let drain_rx = drain_rx.clone();
                     let tls = tls.clone();
                     live.enter();
-                    tokio::spawn(async move {
-                        // Moved in so the slot is released when this connection
-                        // is done, whichever way it ends — including a panic.
-                        let _permit = permit;
-                        match tls {
-                            // A failed handshake ends this connection only. It is
-                            // an ordinary event on a public port — a scanner, a
-                            // client with no shared cipher — and must never take
-                            // the acceptor down with it.
-                            Some(acceptor) => {
-                                // A handshake that never finishes is the same
-                                // hold on a task and a descriptor as one that
-                                // never starts, and rustls will wait for the
-                                // peer's next flight indefinitely.
-                                let handshake = with_timeout(
-                                    timeouts.handshake,
-                                    acceptor.accept(stream),
-                                    "tls handshake",
-                                )
-                                .await;
-                                if let Some(Ok(stream)) = handshake {
+                    // One span per connection, not per request: on HTTP/2 a
+                    // single connection carries hundreds of requests, and the
+                    // peer is the one thing they all share. Everything logged
+                    // below — the timeout, the handshake failure, the
+                    // connection's own error — inherits it, which is what makes
+                    // two events attributable to the same client. At `debug`,
+                    // so a server nobody is debugging pays a callsite check.
+                    let span = tracing::debug_span!(
+                        target: "runtime::http",
+                        "connection",
+                        peer = %peer,
+                        tls = tls.is_some(),
+                    );
+                    tokio::spawn(
+                        async move {
+                            // Moved in so the slot is released when this
+                            // connection is done, whichever way it ends —
+                            // including a panic.
+                            let _permit = permit;
+                            match tls {
+                                // A failed handshake ends this connection only. It is
+                                // an ordinary event on a public port — a scanner, a
+                                // client with no shared cipher — and must never take
+                                // the acceptor down with it.
+                                Some(acceptor) => {
+                                    // A handshake that never finishes is the same
+                                    // hold on a task and a descriptor as one that
+                                    // never starts, and rustls will wait for the
+                                    // peer's next flight indefinitely.
+                                    let handshake = with_timeout(
+                                        timeouts.handshake,
+                                        acceptor.accept(stream),
+                                        "tls handshake",
+                                    )
+                                    .await;
+                                    match handshake {
+                                        Some(Ok(stream)) => {
+                                            serve_connection(
+                                                stream, tx, origin, peer, drain_rx, timeouts,
+                                            )
+                                            .await;
+                                        }
+                                        // The one place a TLS misconfiguration is
+                                        // observable. A server whose chain the
+                                        // client rejects, or whose cipher suites
+                                        // it cannot meet, is otherwise
+                                        // indistinguishable from a server nobody
+                                        // is connecting to.
+                                        Some(Err(e)) => tracing::debug!(
+                                            target: "runtime::http",
+                                            error = %e,
+                                            "tls handshake failed",
+                                        ),
+                                        // Already logged by `with_timeout`.
+                                        None => {}
+                                    }
+                                }
+                                None => {
                                     serve_connection(stream, tx, origin, peer, drain_rx, timeouts)
                                         .await;
                                 }
                             }
-                            None => {
-                                serve_connection(stream, tx, origin, peer, drain_rx, timeouts)
-                                    .await;
-                            }
+                            live.leave();
                         }
-                        live.leave();
-                    });
+                        .instrument(span),
+                    );
                 }
             })
             .abort_handle();
@@ -2320,5 +2373,136 @@ mod cancel_safety_tests {
             .expect("the request queue survived the abandoned call")
             .unwrap();
         assert_eq!(reqs.len(), 1);
+    }
+}
+
+/// What the server *reports*. A failed handshake and a connection that dies
+/// mid-protocol both end quietly by design — they are peer-driven and must not
+/// take the acceptor down — so the only thing separating "handled correctly"
+/// from "silently swallowed" is whether an operator can see it happen.
+#[cfg(test)]
+mod tracing_tests {
+    use super::tls_tests::{self_signed, tls_options};
+    use super::*;
+    use crate::trace_capture;
+    use tokio::io::AsyncWriteExt;
+
+    const GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// A TLS misconfiguration is invisible from the outside: a server whose
+    /// chain no client will complete a handshake with looks exactly like a
+    /// server nobody is calling. This event is the only difference.
+    #[tokio::test]
+    async fn a_failed_tls_handshake_is_logged_with_its_peer() {
+        trace_capture::install();
+        let (cert_pem, key_pem, _) = self_signed();
+        let (http, id, port) = super::tests::bound_with(Some(tls_options(cert_pem, key_pem))).await;
+
+        // Plain HTTP at a TLS port — rustls rejects it as a bad first record.
+        let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let peer = tcp.local_addr().unwrap();
+        let _ = tcp.write_all(b"GET / HTTP/1.1\r\n\r\n").await;
+
+        let mine =
+            trace_capture::wait_for(&["tls handshake failed", &format!("peer={peer}")], GRACE)
+                .await;
+        assert!(
+            !mine.is_empty(),
+            "the handshake failure must be logged against the peer that caused it; saw: {:?}",
+            trace_capture::lines_containing(&["tls handshake failed"]),
+        );
+        let line = &mine[0];
+        assert!(
+            line.contains("[DEBUG] runtime::http"),
+            "peer-driven failures log at debug on the http target, not louder: {line}",
+        );
+        assert!(
+            line.contains("error="),
+            "the reason is the whole point of the event: {line}",
+        );
+        http.close(id).await.unwrap();
+    }
+
+    /// The connection future is the last place a protocol error exists; above it
+    /// there is no channel to carry one. Dropping it is why malformed framing is
+    /// indistinguishable from a client that hung up.
+    #[tokio::test]
+    async fn a_connection_that_ends_badly_reports_why() {
+        trace_capture::install();
+        let (http, id, port) = super::tests::bound().await;
+
+        // A request line hyper cannot parse: an error on the connection, not a
+        // clean EOF, and never a request the guest sees.
+        let mut tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let peer = tcp.local_addr().unwrap();
+        tcp.write_all(b"NOT-A-REQUEST\r\n\r\n").await.unwrap();
+
+        let mine = trace_capture::wait_for(
+            &["connection ended with an error", &format!("peer={peer}")],
+            GRACE,
+        )
+        .await;
+        assert!(
+            !mine.is_empty(),
+            "the connection error must be attributable to its peer; saw: {:?}",
+            trace_capture::lines_containing(&["connection ended with an error"]),
+        );
+        http.close(id).await.unwrap();
+    }
+
+    /// A connection that is served normally must stay quiet — including when it
+    /// ends the way an idle keep-alive connection ends, on this server's own
+    /// header-read deadline. That is a healthy connection's designed end, and
+    /// one line per well-behaved client is the noise that makes a debug filter
+    /// useless on a live server. (There is no accepted/closed pair for the same
+    /// reason; the span carries the peer instead.)
+    #[tokio::test]
+    async fn a_healthy_connection_logs_no_failure() {
+        trace_capture::install();
+        // Short enough that the idle keep-alive reap happens during the test
+        // rather than 30s after it.
+        let (http, id, port) = super::tests::bound_with_timeouts(
+            None,
+            HttpTimeouts {
+                header_read: Some(std::time::Duration::from_millis(200)),
+                ..HttpTimeouts::default()
+            },
+        )
+        .await;
+        let peer = {
+            let mut tcp = super::tests::request_on_new_conn(port).await;
+            let peer = tcp.local_addr().unwrap();
+            let reqs = tokio::time::timeout(GRACE, http.next_requests(id, 8))
+                .await
+                .expect("a request arrived")
+                .unwrap();
+            let (rid, _) = reqs.into_iter().next().expect("one request");
+            http.respond(
+                rid,
+                HttpServerResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: HttpServerBody::Bytes(b"ok".to_vec()),
+                    trailers: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Read to EOF so the connection is finished, not merely answered.
+            let mut sink = Vec::new();
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut tcp, &mut sink).await;
+            peer
+        };
+
+        let noise = trace_capture::lines_containing(&[&format!("peer={peer}")]);
+        assert!(
+            noise.is_empty(),
+            "a connection that was served and closed cleanly must log nothing: {noise:?}",
+        );
+        http.close(id).await.unwrap();
     }
 }

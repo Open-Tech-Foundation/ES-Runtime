@@ -44,6 +44,8 @@ rustix = { workspace = true, features = ["process"] }
 tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }
 # Test-only: self-signed certs for the hermetic net-TLS round-trip test.
 rcgen.workspace = true
+# Test-only: a capture layer, so a test can assert on what the servers logged.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
