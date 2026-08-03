@@ -113,3 +113,8 @@ for await (const conn of server) {
   conn.readable.pipeTo(conn.writable);     // every byte is encrypted
 }
 ```
+
+## See also
+
+- [`runtime:net` API reference](/api/net) — signatures, options, errors
+- [Internals: sockets](/docs/internals/sockets) — the task-per-socket model, TLS, and what is unbounded

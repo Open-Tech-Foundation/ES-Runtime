@@ -68,7 +68,10 @@ const NAV = [
     // what it costs, as opposed to what the API is (/api) or how to use it
     // (Guides).
     title: "Internals",
-    items: [{ title: "HTTP server", path: "/docs/internals/http" }],
+    items: [
+      { title: "HTTP server", path: "/docs/internals/http" },
+      { title: "Sockets", path: "/docs/internals/sockets" },
+    ],
   },
   {
     title: "Runtime",

@@ -26,9 +26,15 @@ namespace) is unstable and may change between minor releases until the API freez
   four servers and probing them, then rewrites the table in the page. Numbers in
   documentation rot; these can be re-measured with one command.
 
-  These pages live under their own **Internals** section in the docs sidebar, one
-  per subsystem — `runtime:net`, the `fetch` client and WebSockets are not
-  written yet.
+  `/docs/internals/sockets` does the same for `runtime:net`: why every socket
+  owns two spawned tasks (an op cannot poll a socket the event loop is waiting
+  on), how `startTls` reclaims the stream halves back from those tasks without
+  losing buffered bytes, why TLS trust anchors are bundled rather than read from
+  the platform, and what a raw socket deliberately does not bound — including
+  that a `connect()` in progress cannot be cancelled from guest code.
+
+  These pages live under their own **Internals** section in the docs sidebar,
+  one per subsystem — the `fetch` client and WebSockets are not written yet.
 
 ### Added
 

@@ -1,0 +1,197 @@
+---
+title: "Internals: sockets"
+description: How runtime:net moves bytes — the task-per-socket model, TLS, in-place upgrades, and what is deliberately unbounded.
+---
+
+# Internals: sockets
+
+How `runtime:net` gets bytes on and off a TCP socket, what each socket costs
+while it is open, and where the sharp edges are.
+
+This page explains behaviour rather than listing signatures — for those, see the
+[`runtime:net` reference](/api/net) — and it covers raw sockets only. The
+inbound HTTP server has [its own page](/docs/internals/http); it does not share
+this code, only the reasoning behind parts of it.
+
+## Why every socket owns two tasks
+
+The obvious implementation of `read()` is to poll the socket from inside the op
+and return when bytes arrive. That does not work here.
+
+Ops are driven by the JavaScript event loop, and a read that has to *wait* for
+the peer would be polled only when the loop happened to come round again — which,
+if the loop is idle waiting for exactly that read, is never. The socket has to be
+driven by the reactor, not by the isolate.
+
+So each socket is split in half and handed to two spawned tasks:
+
+```
+    guest read()  ←── mpsc(8) ←──  reader task ──→ AsyncRead half
+    guest write() ──→ mpsc(8) ──→  writer task ──→ AsyncWrite half
+```
+
+The ops become channel operations, which are cheap and always make progress, and
+the actual I/O runs on the runtime's reactor threads. It is the same shape the
+HTTP client uses, for the same reason.
+
+Each direction holds **8 chunks** of backpressure. A reader whose channel fills
+stops reading the socket, so the pressure reaches the peer through TCP's own
+window rather than through a growing buffer here. The reader's own buffer is
+**64KB** per socket, which — with the two channels — is the floor of what an idle
+open socket costs.
+
+### The consequences worth knowing
+
+**A read checks the receiver out.** It takes the receiver out of the registry
+and puts it back only once a chunk arrives. Nothing is lost at the *socket*
+level if that wait is abandoned — no bytes have been consumed — but the receiver
+goes with the abandoned call, and the socket reads as EOF from then on. Guest
+code has no way to abandon a read today, so this is a hazard in the shape of the
+code rather than a bug you can reach — but it is the reason a read is not
+something to wrap in a cancelling wrapper.
+
+**EOF is the reader task ending.** It drops its sender, `recv()` yields `None`,
+and the read resolves to `null`. There is no separate end-of-stream flag to keep
+in sync.
+
+**`shutdown()` is dropping a sender.** Clearing the write channel's sender ends
+the writer task's `recv()`, which shuts the write half down — a FIN to the peer,
+with the read half still live. That is half-close, and it falls out of ownership
+rather than needing a state machine.
+
+**`close()` is dropping the slot.** Both channel ends go, both tasks end.
+
+## TLS
+
+`connect({ secureTransport: "on" })` completes the handshake before the socket is
+handed back, so a guest never sees a half-open TLS socket. The address
+information is read off the raw TCP stream *before* the handshake consumes it.
+
+Trust anchors are the bundled Mozilla set (webpki-roots), built once per process
+and shared. That means no platform certificate store is read and no I/O is done
+to find one — a run is portable and deterministic in a way a system-store lookup
+would not be. The trade is that a corporate root installed on the machine is not
+trusted; an embedder overrides the store, a CLI user cannot yet.
+
+Two details that exist for reasons worth stating:
+
+**The crypto provider is named explicitly.** Both `ring` and `aws-lc-rs` end up
+linked in this binary, which makes rustls's process-default provider ambiguous —
+`ClientConfig::builder()` would panic rather than pick. `aws-lc-rs` is selected
+by name at every construction site.
+
+**Client configs are memoized by ALPN list.** Building one re-parses the entire
+root store, which is far too expensive to do per connection. The offered ALPN set
+is the only per-connect input to the config, so it is the cache key; a hit is an
+`Arc` refcount bump.
+
+### Server-side TLS
+
+`listen({ secureTransport: "on", cert, key })` terminates TLS on accept. The
+certificate and key are parsed **once, at bind time** — an unusable certificate
+fails `listen()` rather than every later handshake, because a port that accepts
+connections and then rejects all of them looks like a working server that nothing
+can reach.
+
+Handshakes for accepted connections run inside the accept task, in a
+`FuturesUnordered`, rather than in spawned tasks holding channel senders. Two
+things fall out of that: a slow handshake cannot head-of-line-block the next
+`accept`, and no handshake in progress can keep the accept channel alive past a
+`close`.
+
+### Upgrading in place: `startTls`
+
+`secureTransport: "starttls"` opens plaintext and upgrades later — the SMTP and
+PostgreSQL shape, where the protocol negotiates in the clear and then switches.
+
+This is harder than it looks, because the reader and writer tasks now own the two
+halves of the stream and TLS needs them back. Each task therefore parks on a
+*reclaim* channel alongside its normal work, with the reclaim branch biased to
+win:
+
+1. `startTls` sends each task a one-shot sender.
+2. The reader stops and hands its half back. A cancelled read loses nothing —
+   no bytes were consumed.
+3. The writer **flushes what is still queued** before handing its half back, so
+   nothing the guest wrote before the upgrade is lost.
+4. The halves are rejoined and wrapped in a TLS connector.
+
+There is one more subtlety with real consequences. Between the peer's go-ahead
+and the handshake, the peer may already have sent handshake bytes, and the reader
+task may have buffered them without the guest ever reading them. Those bytes are
+drained out of the read channel and **replayed ahead of the live socket**, so the
+TLS handshake sees the stream the peer actually sent. Dropping them would produce
+a handshake failure that looks like a broken peer.
+
+Only a plaintext client socket carries reclaim handles. An accepted socket or an
+already-TLS socket has none, and asking to upgrade one is an error rather than a
+silent no-op.
+
+## Listening
+
+The accept loop is the same design as the HTTP server's, for the same reason:
+**an error from `accept` is never fatal.** `ECONNABORTED`, `EMFILE`/`ENFILE` and
+`EINTR` are ordinary on a busy public port and say nothing about the listening
+socket, so every error is retried behind a delay that doubles from 5ms to 1s and
+resets on the next accepted connection. See
+[the HTTP page](/docs/internals/http#accept) for the full reasoning.
+
+One task owns the sole channel sender, which is what makes `listener.close()`
+work: aborting the task drops the sender, so an `accept` already parked on
+`recv()` resolves to `None` instead of waiting forever. Removing the receiver
+from the registry is not enough on its own — a parked accept has already checked
+it out.
+
+The accept channel holds **8** connections. Unlike the HTTP server, there is no
+`maxConnections`: a `runtime:net` listener accepts as fast as the guest calls
+`accept()`, and the guest's own loop is the backpressure.
+
+## Capabilities
+
+Reaching out and being reachable are separate privileges, so they are separate
+capabilities with separate allowlists:
+
+| Operation | Capability | Flag |
+| --- | --- | --- |
+| `connect()` | `Net` | `--allow-net=<hosts>` |
+| `listen()` | `NetListen` | `--allow-listen=<addresses>` |
+
+The check happens **before** the socket is created — a denied `listen` claims no
+port and leaves nothing behind.
+
+A host is judged **as written, before resolution**. That is deliberate: a name is
+a name, so a denied name cannot be smuggled past the list by an
+attacker-controlled DNS answer, and an allowed IP never silently admits a name
+that happens to resolve to it. It also means allowing `example.com` does not
+allow the address it resolves to, if the guest connects by address.
+
+## What is not bounded
+
+Worth knowing before putting a `runtime:net` service on a public port:
+
+- **No connect timeout, and no way to cancel one.** `connect()` waits as long as
+  the OS does, which on a dropped SYN is around two minutes on Linux. There is
+  no `signal` option, and `close()` on a socket whose connect is still pending
+  *awaits* that connect rather than aborting it. A guest can stop **waiting** —
+  `Promise.race([socket.opened, timeout])` — and carry on, but the attempt runs
+  to the OS timeout underneath.
+- **No read, write or idle timeout.** A socket that goes quiet stays open until
+  a peer or the guest closes it.
+- **No TLS handshake timeout on `connect`.** The server side of `listen` has
+  none either — unlike the HTTP server, which bounds it at 10s.
+- **No connection cap on a listener**, and no per-peer limit.
+- **No socket count limit.** The descriptor limit is the ceiling.
+
+None of these are oversights in the sense of being unnoticed; they are the gap
+between a raw socket API and a server framework. Most are things a guest can
+impose itself by racing a timer against `socket.opened` or a read — the
+exception is the connect attempt, which cannot be cancelled from guest code at
+all. The HTTP server bounds all of this because a guest there never sees the
+connection to bound it.
+
+## See also
+
+- [`runtime:net` API reference](/api/net) — signatures, options, errors
+- [Sockets guide](/docs/guides/networking) — how to use it
+- [Internals: the HTTP server](/docs/internals/http) — the inbound server's own path
+- [Security model](/docs/security) — how capabilities are granted and denied
