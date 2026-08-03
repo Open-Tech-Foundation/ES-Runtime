@@ -8,6 +8,23 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Documentation
+
+- **An internals tier, with a canonical source.** `docs/internals/networking.md`
+  explains what happens to a connection between `accept` and `close` — every
+  limit and default with its reasoning, what a connection costs in memory, and a
+  measured comparison against Node, Bun and Deno. The reference says *what*, the
+  guides say *how*, and this says *why, and what it costs*; each fact has one
+  home and the others link to it.
+
+  The repo file is canonical; `website/app/docs/internals/` is generated from it
+  by `node website/scripts/gen-internals.mjs`, and CI regenerates and fails on a
+  diff — the same treatment the committed JS bundle already gets.
+
+  `bench/probe-runtimes.sh` produces the cross-runtime numbers by standing up
+  all four servers and probing them, then rewrites the table in place. Numbers
+  in documentation rot; these ones can be re-measured with one command.
+
 ### Added
 
 - **A connection cap for `runtime:http`** (DECISIONS D45). `serve({ maxConnections })`

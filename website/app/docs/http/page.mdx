@@ -238,15 +238,10 @@ runtime sends. Everything else is served HTTP/1.1, exactly as before.
 serve({ port: 443, secureTransport: "on", cert, key, alpn: ["http/1.1"] }, handler);
 ```
 
-What changes on the wire, with the handler untouched:
-
-| | |
-| --- | --- |
-| Multiplexing | many requests in flight on one connection, answered in any order |
-| Handshakes | one TLS handshake per session, not per connection |
-| Headers | HPACK-compressed instead of resent in full each request |
-| `request.url` | rebuilt from `:authority` (HTTP/2 has no `Host` header) |
-| Streams per connection | capped at 256 (advertised in `SETTINGS`), so one peer cannot flood a single-threaded isolate |
+Multiplexing, one handshake per session, HPACK-compressed headers, and a
+`request.url` rebuilt from `:authority` all come with it, with the handler
+untouched — see [Internals: networking](/docs/internals/networking#protocol-version)
+for what changes on the wire and what it costs.
 
 ### Is it faster?
 
@@ -296,75 +291,37 @@ serve({ port: 8080 }, (request, info) => {
   `request.headers.get("x-forwarded-for")?.split(",")[0].trim()`.
 </Callout>
 
-It is `null` when there is no peer to report, rather than a blank address. On
-HTTP/2 every request multiplexed onto one connection reports the same peer,
-because they are one connection.
+It is `null` when there is no peer to report, rather than a blank address.
 
-## Timeouts
+## Timeouts and connection limits
 
-A connection that is not making progress is closed. Nothing to turn on:
+A connection that is not making progress is closed, and you can cap how many are
+served at once. Nothing here has to be turned on:
 
 | Option | Default | What it bounds |
 | --- | --- | --- |
-| `timeouts.handshake` | `10000`ms | Accept → ready to carry requests: the TLS handshake, and the wait for the first byte |
-| `timeouts.headerRead` | `30000`ms | A request head arriving in full — and on HTTP/1.1, the idle keep-alive limit too |
-| `timeouts.h2KeepAlive` | `20000`ms | PING probes on an idle HTTP/2 connection; a dead peer goes within twice this |
+| `timeouts.handshake` | `10000`ms | Accept → ready to carry requests |
+| `timeouts.headerRead` | `30000`ms | A request head arriving in full; on HTTP/1.1, the idle keep-alive limit too |
+| `timeouts.h2KeepAlive` | `20000`ms | PING probes on an idle HTTP/2 connection |
+| `maxConnections` | unlimited | How many connections are served at once |
 
 ```js
-// Milliseconds; `null` disables one; omit it to keep the default.
-serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler);
+// Timeouts are milliseconds; `null` disables one; omit it to keep the default.
+serve({ port: 8080, timeouts: { headerRead: 5000 }, maxConnections: 10_000 }, handler);
 ```
 
 They bound only connections that are **idle or stalled**. A request in flight, a
 body still arriving, and a response still streaming are never interrupted,
 however long they take — a live feed is unaffected by `headerRead` no matter how
-far past it runs.
+far past it runs. A connection over `maxConnections` is held rather than
+refused: it waits, and is served as soon as a slot frees.
 
-<Callout type="info" title="Why these are on by default">
-  Without them, a peer that completes the TCP handshake and then says nothing
-  holds a task and a file descriptor for as long as it likes, at the cost of one
-  syscall to it. A timeout nobody configures protects nobody, so these ship on
-  and you opt out — `null` per option — rather than opting in.
+<Callout type="info" title="How this behaves, and why">
+  Why the HTTP/1.1 idle limit and the request-head limit are the same timer, why
+  the connection cap ships off when the timeouts ship on, what a single
+  connection costs in memory, and how all of it compares to Node, Bun and Deno
+  on measured numbers: [Internals: networking](/docs/internals/networking).
 </Callout>
-
-On HTTP/1.1 the idle limit and the request-head limit are **one timer**, because
-waiting for the next request on a kept-alive connection *is* waiting for a
-request head: at the default, an idle connection is closed after 30s and a client
-that wants another request opens a new one (nginx does this at 75s, Node at 5s).
-HTTP/2 has no idle limit — its connections are long-lived by design — so it
-probes instead, which is what keeps a peer that vanished without a FIN from
-holding its share of the 256-stream budget until the OS TCP keepalive notices,
-two hours later on Linux.
-
-## How many connections at once
-
-`maxConnections` caps how many connections the server holds at once. Unlimited
-by default.
-
-```js
-serve({ port: 8080, maxConnections: 10_000 }, handler);
-```
-
-A connection over the cap is **held, not refused** — the server enforces the
-limit by not accepting, so the connection waits in the kernel's backlog and is
-served as soon as a slot frees. Nothing is spent on it meanwhile: no descriptor,
-no task, no read buffer.
-
-<Callout type="info" title="Why there is no default here">
-  Unlike the timeouts, this one ships off. The right number follows from your
-  file-descriptor budget and the memory a connection costs, and a cap guessed
-  for you would throttle real traffic with nothing anywhere to explain it —
-  a silent throughput cliff is harder to diagnose than a missing limit. Node,
-  Deno and Go leave it unlimited too.
-
-  It is still worth setting on a public port: an HTTP/1.1 connection's read
-  buffer can reach ~408KB, so the connection count multiplies straight into
-  memory.
-</Callout>
-
-The per-connection limits it multiplies against are fixed: 100 header fields and
-a ~408KB read buffer on HTTP/1.1, a 16KB header list and 256 concurrent streams
-on HTTP/2 — the last two advertised to every client in the server's `SETTINGS`.
 
 ## Usage with Hono
 
