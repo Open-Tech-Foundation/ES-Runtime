@@ -23,6 +23,7 @@ mod console;
 mod driver;
 mod entropy;
 mod esm_resolve;
+mod first_byte;
 mod host_allowlist;
 mod import_policy;
 mod modules;

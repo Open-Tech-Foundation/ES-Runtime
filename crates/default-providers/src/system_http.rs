@@ -30,6 +30,7 @@
 
 use std::collections::HashMap;
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -37,7 +38,7 @@ use std::sync::{Arc, Mutex};
 use bytes::Bytes;
 use es_runtime_providers::{
     BoxFuture, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerRequest,
-    HttpServerResponse, ProviderError, SocketInfo,
+    HttpServerResponse, HttpTimeouts, ProviderError, SocketInfo,
 };
 use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -45,13 +46,14 @@ use http_body_util::{BodyExt, Full, StreamBody};
 use hyper::body::{Body as _, Frame, Incoming};
 use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::net::TcpListener;
 use tokio::sync::{Notify, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
 use crate::accept_backoff::AcceptBackoff;
+use crate::first_byte::FirstByteTimeout;
 
 /// The response body handed to hyper: buffered (`Full`) or streamed
 /// (`StreamBody`), erased behind one type so both share the service signature.
@@ -323,6 +325,33 @@ fn status_only(status: StatusCode) -> Response<OutBody> {
 
 /// Serves one accepted connection to completion, honouring the drain signal.
 ///
+/// Awaits `fut` under an optional deadline, logging and yielding `None` if it
+/// expires. `None` for the duration means no deadline, so a disabled timeout
+/// costs a branch rather than a timer.
+async fn with_timeout<F: Future>(
+    limit: Option<std::time::Duration>,
+    fut: F,
+    what: &'static str,
+) -> Option<F::Output> {
+    match limit {
+        None => Some(fut.await),
+        Some(limit) => match tokio::time::timeout(limit, fut).await {
+            Ok(out) => Some(out),
+            Err(_) => {
+                // Debug, not warn: on a public port this is a scanner or a
+                // half-open connection, not an operator's problem, and warning
+                // per connection would hand any peer a log-flooding lever.
+                tracing::debug!(
+                    target: "runtime::http",
+                    timeout_ms = limit.as_millis() as u64,
+                    "{what} timed out; closing the connection",
+                );
+                None
+            }
+        },
+    }
+}
+
 /// Generic over the transport so a plain `TcpStream` and a TLS stream share one
 /// path: everything above the socket — the service, the response handoff, the
 /// graceful shutdown — is identical, and duplicating it per scheme is how the
@@ -332,6 +361,7 @@ async fn serve_connection<S>(
     tx: mpsc::Sender<Pending>,
     origin: String,
     mut drain_rx: watch::Receiver<bool>,
+    timeouts: HttpTimeouts,
 ) where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
@@ -370,12 +400,31 @@ async fn serve_connection<S>(
     // the whole of h2c support on a cleartext port, and over TLS it agrees with
     // whatever ALPN already negotiated (an `h2` client sends the preface first).
     let mut builder = auto::Builder::new(TokioExecutor::new());
+    // Every timeout below needs a timer, and hyper is emphatic about it in both
+    // directions: a *default* timeout with no timer is silently dropped (with a
+    // `warn!` nobody reads — which is how this server ran without hyper's own
+    // 30s header timeout), while an *explicitly configured* one panics. So the
+    // timer goes on both builders before anything else touches them.
+    builder.http1().timer(TokioTimer::new());
+    builder.http2().timer(TokioTimer::new());
+    // Passing `None` disables, which is exactly what `None` means here.
+    builder.http1().header_read_timeout(timeouts.header_read);
+    if let Some(interval) = timeouts.h2_keep_alive {
+        builder
+            .http2()
+            .keep_alive_interval(interval)
+            .keep_alive_timeout(interval);
+    }
     // Explicit rather than inherited: an HTTP/2 peer can open streams far faster
     // than a single-threaded isolate answers them, and every open stream holds a
     // queued `Pending` plus its body channel. Capping concurrency bounds what one
     // connection can make the server hold, and leaves the request channel's
     // buffer for spreading across connections rather than one client filling it.
     builder.http2().max_concurrent_streams(256);
+    // The version-detection read happens inside the connection future, before
+    // any hyper timer exists, so the deadline on it has to come from under the
+    // socket — see [`FirstByteTimeout`](crate::first_byte).
+    let io = FirstByteTimeout::new(io, timeouts.handshake);
     let conn = builder.serve_connection(TokioIo::new(io), service);
     tokio::pin!(conn);
     // Race the connection against the drain signal. On shutdown,
@@ -431,6 +480,7 @@ impl HttpServerProvider for SystemHttpServer {
             let (tx, rx) = mpsc::channel::<Pending>(1024);
             let (draining, drain_rx) = watch::channel(false);
             let live = this.live.clone();
+            let timeouts = options.timeouts;
 
             let acceptor = tokio::spawn(async move {
                 // Errors from `accept` are retried, never fatal — see
@@ -469,11 +519,23 @@ impl HttpServerProvider for SystemHttpServer {
                             // client with no shared cipher — and must never take
                             // the acceptor down with it.
                             Some(acceptor) => {
-                                if let Ok(stream) = acceptor.accept(stream).await {
-                                    serve_connection(stream, tx, origin, drain_rx).await;
+                                // A handshake that never finishes is the same
+                                // hold on a task and a descriptor as one that
+                                // never starts, and rustls will wait for the
+                                // peer's next flight indefinitely.
+                                let handshake = with_timeout(
+                                    timeouts.handshake,
+                                    acceptor.accept(stream),
+                                    "tls handshake",
+                                )
+                                .await;
+                                if let Some(Ok(stream)) = handshake {
+                                    serve_connection(stream, tx, origin, drain_rx, timeouts).await;
                                 }
                             }
-                            None => serve_connection(stream, tx, origin, drain_rx).await,
+                            None => {
+                                serve_connection(stream, tx, origin, drain_rx, timeouts).await;
+                            }
                         }
                         live.leave();
                     });
@@ -622,12 +684,22 @@ mod tests {
     }
 
     pub(super) async fn bound_with(tls: Option<HttpServerTls>) -> (SystemHttpServer, u64, u16) {
+        bound_with_timeouts(tls, HttpTimeouts::default()).await
+    }
+
+    /// Most tests want the shipping defaults; the timeout tests want values
+    /// short enough to wait for, which is the only reason this is a parameter.
+    pub(super) async fn bound_with_timeouts(
+        tls: Option<HttpServerTls>,
+        timeouts: HttpTimeouts,
+    ) -> (SystemHttpServer, u64, u16) {
         let http = SystemHttpServer::new();
         let (id, info) = http
             .serve(HttpServeOptions {
                 host: "127.0.0.1".into(),
                 port: 0,
                 tls,
+                timeouts,
             })
             .await
             .unwrap();
@@ -733,6 +805,7 @@ mod tests {
                 host: "0.0.0.0".to_string(),
                 port: 0,
                 tls: None,
+                timeouts: HttpTimeouts::default(),
             })
             .await
             .err()
@@ -745,6 +818,7 @@ mod tests {
                 host: "127.0.0.1".to_string(),
                 port: 0,
                 tls: None,
+                timeouts: HttpTimeouts::default(),
             })
             .await
             .expect("the allowed address binds");
@@ -766,7 +840,7 @@ mod tls_tests {
     /// A throwaway cert for `localhost`: (PEM cert, PEM key, DER cert). The DER
     /// copy is what the test client trusts, so nothing depends on the host's
     /// certificate store.
-    fn self_signed() -> (Vec<u8>, Vec<u8>, CertificateDer<'static>) {
+    pub(super) fn self_signed() -> (Vec<u8>, Vec<u8>, CertificateDer<'static>) {
         let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         (
             ck.cert.pem().into_bytes(),
@@ -775,7 +849,7 @@ mod tls_tests {
         )
     }
 
-    fn tls_options(cert: Vec<u8>, key: Vec<u8>) -> HttpServerTls {
+    pub(super) fn tls_options(cert: Vec<u8>, key: Vec<u8>) -> HttpServerTls {
         HttpServerTls {
             cert,
             key,
@@ -848,6 +922,7 @@ mod tls_tests {
                 host: "127.0.0.1".into(),
                 port: 0,
                 tls: Some(tls_options(b"not a certificate".to_vec(), key_pem)),
+                timeouts: HttpTimeouts::default(),
             })
             .await;
         assert!(result.is_err(), "an unparseable cert must not bind");
@@ -1504,5 +1579,252 @@ mod http2_tests {
         let (version, body) = request.await.unwrap();
         assert_eq!(version, reqwest::Version::HTTP_11);
         assert_eq!(body, "plain");
+    }
+}
+
+/// Timeouts, from the outside: a client that stalls at each stage in turn must
+/// end up disconnected, and one that is genuinely working must not.
+///
+/// The intervals here are milliseconds rather than the shipping seconds so a
+/// test can wait for them. What is being checked is that each stage *has* a
+/// deadline and that it is the configured one — the values themselves are
+/// [`HttpTimeouts::default`]'s business.
+#[cfg(test)]
+mod timeout_tests {
+    use super::tests::bound_with_timeouts;
+    use super::*;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
+
+    /// Short enough to wait for, long enough that a loaded CI box does not trip
+    /// it by accident on a connection that is genuinely progressing.
+    const SHORT: Duration = Duration::from_millis(200);
+    /// How long a test waits for a close that should already have happened.
+    const GRACE: Duration = Duration::from_secs(10);
+
+    /// Everything off, so each test can switch on exactly the one it is about.
+    const OFF: HttpTimeouts = HttpTimeouts {
+        handshake: None,
+        header_read: None,
+        h2_keep_alive: None,
+    };
+
+    /// Reads until the peer closes, returning `false` if it has not within
+    /// `grace`. Bytes the server sends first (hyper answers a header timeout
+    /// with a 408 before hanging up) are read past rather than treated as an
+    /// answer — what is being waited for is the close.
+    async fn closed_within(sock: &mut TcpStream, grace: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + grace;
+        let mut buf = [0u8; 1024];
+        loop {
+            match tokio::time::timeout_at(deadline, sock.read(&mut buf)).await {
+                Err(_) => return false,    // still open when time ran out
+                Ok(Ok(0)) => return true,  // clean EOF
+                Ok(Err(_)) => return true, // reset
+                Ok(Ok(_)) => continue,     // said something; keep waiting
+            }
+        }
+    }
+
+    /// A peer that completes the TCP handshake and then says nothing never
+    /// reaches hyper — the version-detecting read is what it is stalling — so
+    /// no timeout hyper owns can reach it. It is also the cheapest possible way
+    /// to hold a descriptor: one `connect` and silence.
+    #[tokio::test]
+    async fn a_connection_that_never_speaks_is_closed() {
+        let timeouts = HttpTimeouts {
+            handshake: Some(SHORT),
+            ..OFF
+        };
+        let (_http, _id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(
+            closed_within(&mut sock, GRACE).await,
+            "a silent connection must not be held forever"
+        );
+    }
+
+    /// The same stall one stage later: TLS, where rustls will wait for the
+    /// peer's next handshake flight indefinitely.
+    #[tokio::test]
+    async fn a_tls_client_that_never_starts_the_handshake_is_closed() {
+        let (cert_pem, key_pem, _) = super::tls_tests::self_signed();
+        let timeouts = HttpTimeouts {
+            handshake: Some(SHORT),
+            ..OFF
+        };
+        let tls = super::tls_tests::tls_options(cert_pem, key_pem);
+        let (_http, _id, port) = bound_with_timeouts(Some(tls), timeouts).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(
+            closed_within(&mut sock, GRACE).await,
+            "a connection that never sends a ClientHello must not be held forever"
+        );
+    }
+
+    /// Slowloris: a request head that starts and then dribbles. The first byte
+    /// disarms the handshake deadline, so this is `header_read`'s job alone —
+    /// which is why the handshake timeout is off here.
+    #[tokio::test]
+    async fn a_request_head_that_never_finishes_is_closed() {
+        let timeouts = HttpTimeouts {
+            header_read: Some(SHORT),
+            ..OFF
+        };
+        let (_http, _id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        // A request line and one header, and never the blank line that ends it.
+        sock.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n")
+            .await
+            .unwrap();
+        assert!(
+            closed_within(&mut sock, GRACE).await,
+            "an unfinished request head must not be held forever"
+        );
+    }
+
+    /// The same timer's other half, and the one with a visible consequence: on
+    /// HTTP/1.1, waiting for the *next* request on a kept-alive connection is
+    /// waiting for a request head, so an idle connection is closed after
+    /// `header_read` and a client that wants more opens a new one.
+    #[tokio::test]
+    async fn an_idle_keep_alive_connection_is_closed() {
+        let timeouts = HttpTimeouts {
+            header_read: Some(SHORT),
+            ..OFF
+        };
+        let (http, id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+            .await
+            .unwrap();
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(b"done".to_vec()),
+            },
+        )
+        .await
+        .unwrap();
+
+        // The connection was used, answered, and is now idle — not stalled.
+        assert!(
+            closed_within(&mut sock, GRACE).await,
+            "an idle keep-alive connection must not be held forever"
+        );
+    }
+
+    /// HTTP/2 has no idle timeout to fall back on — its connections are meant
+    /// to be long-lived — so a peer that stops answering is found by probing.
+    /// This client opens properly and then ignores everything, PINGs included,
+    /// which is what a vanished peer looks like from the server's side when no
+    /// FIN ever arrives.
+    #[tokio::test]
+    async fn an_http2_peer_that_stops_answering_pings_is_dropped() {
+        let timeouts = HttpTimeouts {
+            h2_keep_alive: Some(SHORT),
+            ..OFF
+        };
+        let (_http, _id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
+            .await
+            .unwrap();
+        // An empty SETTINGS frame: length 0, type 0x4, no flags, stream 0.
+        sock.write_all(&[0, 0, 0, 4, 0, 0, 0, 0, 0]).await.unwrap();
+
+        assert!(
+            closed_within(&mut sock, GRACE).await,
+            "an h2 peer that never ACKs a PING must not hold its streams forever"
+        );
+    }
+
+    /// The regression that matters most. These deadlines exist to bound
+    /// connections that are *not* making progress, and a response that streams
+    /// for longer than `header_read` is making progress — a live feed, a slow
+    /// query, a large download. If this ever fails, the timeouts have started
+    /// cutting off working traffic, which is far worse than the hold they
+    /// prevent.
+    #[tokio::test]
+    async fn a_response_that_streams_past_the_header_timeout_completes() {
+        let timeouts = HttpTimeouts {
+            header_read: Some(SHORT),
+            handshake: Some(SHORT),
+            h2_keep_alive: Some(SHORT),
+        };
+        let (http, id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let request = tokio::spawn(async move {
+            let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            sock.write_all(b"GET /slow HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut got = Vec::new();
+            sock.read_to_end(&mut got).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        // Each chunk lands after the header timeout would have fired, and the
+        // body runs well past it in total.
+        let chunks = futures_util::stream::unfold(0u8, |i| async move {
+            if i == 3 {
+                return None;
+            }
+            tokio::time::sleep(SHORT * 2).await;
+            Some((
+                Ok::<_, ProviderError>(format!("part{i};").into_bytes()),
+                i + 1,
+            ))
+        });
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Stream(Box::pin(chunks)),
+            },
+        )
+        .await
+        .unwrap();
+
+        let response = request.await.unwrap();
+        assert!(response.contains("200 OK"), "{response}");
+        // Chunk-framed, so the parts arrive with their lengths between them.
+        for part in ["part0;", "part1;", "part2;"] {
+            assert!(
+                response.contains(part),
+                "a slow but progressing response must complete: {part} missing from {response}"
+            );
+        }
+        assert!(
+            response.trim_end().ends_with('0'),
+            "the terminal chunk must arrive, not a cut-off connection: {response}"
+        );
+    }
+
+    /// Off means off. A guest that knows its deployment — a private port behind
+    /// a proxy that already does this — can turn each one off and get the old
+    /// unbounded behaviour back.
+    #[tokio::test]
+    async fn a_disabled_timeout_never_fires() {
+        let (_http, _id, port) = bound_with_timeouts(None, OFF).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        assert!(
+            !closed_within(&mut sock, SHORT * 5).await,
+            "a silent connection must survive when the timeouts are disabled"
+        );
     }
 }

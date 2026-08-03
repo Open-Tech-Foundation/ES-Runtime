@@ -46,6 +46,38 @@ function parseTls(options) {
   return { cert: o.cert, key: o.key, alpn: alpn.map(String) };
 }
 
+// When to give up on a connection that is not making progress. Each one is
+// left `null` unless the guest names it, and `null` means "the host's default"
+// — the numbers live in one place, on the Rust side, so the two cannot drift.
+// A guest that names `null` explicitly means "off", which crosses as 0.
+//
+// These bound only connections that are *idle or stalled*: a request in flight,
+// a body still arriving, and a response still streaming are never interrupted,
+// however long they take.
+function parseTimeouts(options) {
+  const t = (options ?? {}).timeouts;
+  if (t === undefined || t === null) return [null, null, null];
+  if (typeof t !== "object") {
+    throw new TypeError(`serve: timeouts must be an object, got ${typeof t}`);
+  }
+  return [one(t, "handshake"), one(t, "headerRead"), one(t, "h2KeepAlive")];
+
+  function one(o, name) {
+    const v = o[name];
+    if (v === undefined) return null; // host default
+    if (v === null) return 0; // explicitly disabled
+    if (typeof v !== "number") {
+      throw new TypeError(`serve: timeouts.${name} must be a number of ms or null`);
+    }
+    if (!Number.isFinite(v) || v < 0) {
+      throw new RangeError(`serve: timeouts.${name} must be a finite, non-negative number of ms`);
+    }
+    // 0 already means disabled on the wire, and a 0ms timeout would fire before
+    // any peer could answer — so the two agree.
+    return v;
+  }
+}
+
 // Streams a Response's ReadableStream body to the host one chunk at a time.
 // Each push awaits the bounded host channel (download backpressure); a guest
 // stream error is forwarded so the in-flight response aborts the connection —
@@ -158,7 +190,7 @@ async function handleRequest(entry, handler) {
 // The handle returned by serve(): `addr` resolves to the bound address,
 // `finished` resolves when the accept loop ends, `stop()` shuts it down.
 class Server {
-  constructor(hostname, port, tls, handler) {
+  constructor(hostname, port, tls, timeouts, handler) {
     let resolveAddr, rejectAddr, resolveFinished;
     this.addr = new Promise((res, rej) => {
       resolveAddr = res;
@@ -171,9 +203,11 @@ class Server {
     (async () => {
       let info;
       try {
+        // The ALPN list takes the whole argument tail, so everything else —
+        // including the three timeouts — is passed positionally before it.
         info = tls
-          ? await ops.http_serve(hostname, port, tls.cert, tls.key, ...tls.alpn)
-          : await ops.http_serve(hostname, port);
+          ? await ops.http_serve(hostname, port, tls.cert, tls.key, ...timeouts, ...tls.alpn)
+          : await ops.http_serve(hostname, port, null, null, ...timeouts);
       } catch (e) {
         rejectAddr(e);
         resolveFinished();
@@ -225,7 +259,9 @@ function serve(options, handler) {
     throw new TypeError("serve(options, handler): handler must be a function");
   }
   const { hostname, port } = parseAddress(options);
-  return new Server(hostname, port, parseTls(options), handler);
+  // Parsed before the bind, so a bad option is a TypeError rather than a port
+  // that is claimed and then abandoned.
+  return new Server(hostname, port, parseTls(options), parseTimeouts(options), handler);
 }
 
 export { serve };

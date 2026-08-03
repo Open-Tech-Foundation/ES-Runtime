@@ -38,7 +38,7 @@ use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
     ByteStream, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerResponse,
-    HttpServerTls, ProviderError, SocketInfo,
+    HttpServerTls, HttpTimeouts, ProviderError, SocketInfo,
 };
 use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
@@ -74,19 +74,31 @@ pub(crate) fn install(
 
     let h = http.clone();
     engine.register_op(
-        // Args: [host, port, cert?, key?, alpn0, alpn1, …]. A cert *and* key
-        // (both non-empty) turn on TLS termination; the cert/key travel inline
-        // because reading a file is the filesystem's privilege, so serving HTTPS
-        // needs no grant beyond NetListen.
+        // Args: [host, port, cert?, key?, handshakeMs?, headerReadMs?,
+        // h2KeepAliveMs?, alpn0, alpn1, …]. A cert *and* key (both non-empty)
+        // turn on TLS termination; the cert/key travel inline because reading a
+        // file is the filesystem's privilege, so serving HTTPS needs no grant
+        // beyond NetListen. Each timeout is `null` for the provider default or
+        // `0` to disable (see [`arg_timeout`]); the ALPN list stays last so it
+        // can keep taking the whole tail.
         OpDecl::r#async("http_serve", move |args| {
             let h = h.clone();
             let host = arg_str(&args, 0);
             let port = arg_u16(&args, 1);
             let cert = arg_bytes(&args, 2);
             let key = arg_bytes(&args, 3);
+            // The defaults live in the provider, not here and not in JS: the
+            // prelude sends `null` for "the guest said nothing", so there is
+            // one copy of the numbers to keep true.
+            let fallback = HttpTimeouts::default();
+            let timeouts = HttpTimeouts {
+                handshake: arg_timeout(&args, 4, fallback.handshake),
+                header_read: arg_timeout(&args, 5, fallback.header_read),
+                h2_keep_alive: arg_timeout(&args, 6, fallback.h2_keep_alive),
+            };
             let alpn: Vec<String> = args
                 .iter()
-                .skip(4)
+                .skip(7)
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect();
             Box::pin(async move {
@@ -108,7 +120,12 @@ pub(crate) fn install(
                     }
                     _ => None,
                 };
-                let options = HttpServeOptions { host, port, tls };
+                let options = HttpServeOptions {
+                    host,
+                    port,
+                    tls,
+                    timeouts,
+                };
                 let (id, info) = require(&h)?.serve(options).await.map_err(map_err)?;
                 Ok(server_value(id, &info))
             })
@@ -369,6 +386,23 @@ fn arg_bytes(args: &[Value], i: usize) -> Option<Vec<u8>> {
         Some(Value::Bytes(b)) => Some(b.clone()),
         Some(Value::String(s)) => Some(s.as_bytes().to_vec()),
         _ => None,
+    }
+}
+
+/// One timeout from the prelude, in the three states the guest can express:
+/// nothing said (`null`/absent) keeps `default`, `0` disables it, and a positive
+/// number is that many milliseconds. The prelude has already rejected anything
+/// that is not one of those, so a stray value here falls back rather than
+/// failing a bind.
+fn arg_timeout(
+    args: &[Value],
+    i: usize,
+    default: Option<std::time::Duration>,
+) -> Option<std::time::Duration> {
+    match args.get(i).and_then(Value::as_number) {
+        None => default,
+        Some(ms) if ms <= 0.0 || !ms.is_finite() => None,
+        Some(ms) => Some(std::time::Duration::from_millis(ms as u64)),
     }
 }
 

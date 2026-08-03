@@ -18,6 +18,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
 use es_runtime_common::{ErrorCode, ExceptionClass, IntoException};
 
@@ -1125,6 +1126,65 @@ pub struct HttpServeOptions {
     pub port: u16,
     /// TLS to terminate on accept, or `None` for plain HTTP.
     pub tls: Option<HttpServerTls>,
+    /// When to give up on a connection that is not making progress.
+    pub timeouts: HttpTimeouts,
+}
+
+/// When an [`HttpServerProvider`] should give up on a connection.
+///
+/// Every field is `None` to disable that timeout entirely — which is what a
+/// server has if nothing sets these, and why they exist: a connection that
+/// stalls at any stage before its request head is complete otherwise holds a
+/// task and a file descriptor for as long as the peer cares to keep the socket
+/// open, at no cost to the peer. These are the cheapest defences there are, and
+/// they bound only connections that are *not* making progress: a request that is
+/// in flight, a body still arriving, and a response still streaming are all
+/// untouched however long they take.
+///
+/// [`Default`] is the recommended posture rather than "off", so a provider gets
+/// the protection without asking and a guest opts *out* deliberately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HttpTimeouts {
+    /// From accept until the connection is ready to carry requests: the TLS
+    /// handshake, and the wait for the first byte the HTTP version is read from.
+    /// A TLS connection passes both stages, so it may take up to twice this
+    /// before it counts as established.
+    ///
+    /// Default: 10s.
+    pub handshake: Option<Duration>,
+    /// How long a request head may take to arrive in full — the classic
+    /// slowloris bound.
+    ///
+    /// On HTTP/1.1 this is **also the idle keep-alive limit**, because waiting
+    /// for the next request on a kept-alive connection is waiting for a request
+    /// head: an idle connection is closed after this long, and a client that
+    /// wants another request opens a new one. HTTP/2 keeps its connections open
+    /// and relies on [`h2_keep_alive`](Self::h2_keep_alive) instead.
+    ///
+    /// Default: 30s.
+    pub header_read: Option<Duration>,
+    /// How often an idle HTTP/2 connection is probed with a PING, and how long
+    /// the ACK may take before the connection is dropped.
+    ///
+    /// HTTP/2 connections are meant to be long-lived, so there is no idle
+    /// timeout to fall back on: without probing, a peer that vanishes without a
+    /// FIN — a NAT that forgot the mapping, a killed VM, an unplugged cable —
+    /// keeps its connection *and* its share of the concurrent-stream budget
+    /// until the OS TCP keepalive notices, which is two hours by default on
+    /// Linux.
+    ///
+    /// Default: 20s, so a dead peer is reclaimed within 40s.
+    pub h2_keep_alive: Option<Duration>,
+}
+
+impl Default for HttpTimeouts {
+    fn default() -> Self {
+        Self {
+            handshake: Some(Duration::from_secs(10)),
+            header_read: Some(Duration::from_secs(30)),
+            h2_keep_alive: Some(Duration::from_secs(20)),
+        }
+    }
 }
 
 /// Server-side TLS material for [`HttpServeOptions`].
