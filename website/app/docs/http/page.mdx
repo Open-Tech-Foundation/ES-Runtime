@@ -271,6 +271,44 @@ in, which is why it is the interesting one.
   [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md).
 </Callout>
 
+## Trailers
+
+Some things are not known until the body has been produced — the status of a
+gRPC call, a checksum, a row count. Those travel *after* the body, as trailers.
+
+```js
+import { serve, withTrailers } from "runtime:http";
+
+serve({ port: 8080 }, () =>
+  withTrailers(new Response(body), { "grpc-status": "0" }));
+```
+
+The value may be a promise, which is the shape that matters for a streaming
+response: the head goes out, the body streams, and the trailers follow whenever
+they are known. Reading them from the other side takes `trailersOf`, after the
+body has been consumed:
+
+```js
+import { trailersOf } from "runtime:http";
+
+const response = await fetch(url);
+await response.text();
+const status = (await trailersOf(response)).get("grpc-status");
+```
+
+<Callout type="info" title="Why these are imports, not Response options">
+  Trailers are not part of the Fetch API, and no runtime exposes them there —
+  `Deno.serve` and `Bun.serve` cannot send them at all, and no runtime's `fetch`
+  can read them. A `trailers` option on `Response` would look standard and
+  silently do nothing everywhere else; an import shows the dependency. It also
+  makes esrun the only Fetch-API server that can serve native gRPC.
+</Callout>
+
+They go out on both versions. On HTTP/1.1 only the fields named in a `Trailer`
+header travel, and that header is added for you whenever the names are known
+before the head is sent — so the one case to remember is a promise on a
+*streaming* body, where you should declare `Trailer` yourself.
+
 ## Who is calling
 
 The handler's second argument carries the connection's peer — the same shape

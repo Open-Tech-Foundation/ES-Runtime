@@ -1206,6 +1206,51 @@ server's job on both versions: a handler's own `Content-Length` /
 `Transfer-Encoding` are dropped, and HTTP/2 — which frames bodies itself and
 forbids `Transfer-Encoding` outright — never sees a chunked encoding.
 
+#### Trailers
+
+Header fields that follow the body — where gRPC carries the status of a call,
+because it is not known until the body has been produced.
+
+```js
+import { serve, withTrailers, trailersOf } from "runtime:http";
+
+// Sending: the value may be a promise, which is the point of trailers.
+serve({ port: 8080 }, () =>
+  withTrailers(new Response(body), { "grpc-status": "0" }));
+
+// Reading, after the body — trailers are not on the wire before it ends.
+const response = await fetch(url);
+await response.text();
+const status = (await trailersOf(response)).get("grpc-status");
+```
+
+| Export | Signature | Notes |
+| --- | --- | --- |
+| `withTrailers(response, trailers)` | `(Response, HeadersInit \| Promise<HeadersInit>) => Response` | Returns the same `Response`. |
+| `trailersOf(response)` | `(Response) => Promise<Headers>` | Empty `Headers` when there are none; never hangs. |
+
+These are `runtime:http` exports rather than members of `Response`, because
+trailers are **not part of the Fetch API** and no runtime exposes them there —
+`Deno.serve` and `Bun.serve` cannot send them, and no runtime's `fetch` can read
+them. A non-standard property on a standard object would mean code written here
+silently does nothing elsewhere; an import shows the dependency.
+
+Both HTTP versions carry them, so a handler does not produce a different
+response depending on what the client negotiated. Two wire rules are worth
+knowing:
+
+- **HTTP/1.1 sends only the fields named in the response's `Trailer` header.**
+  That header is added for you whenever the names are known before the head goes
+  out — everything except a promise attached to a *streaming* body, where the
+  head has already been sent. Declare `Trailer` yourself there.
+- **A conformant HTTP/1.1 server sends trailers only to a client that asked**
+  (`TE: trailers`, RFC 9110 §10.1.4). `fetch` sends that header, so trailers
+  arrive; a client that does not will not see them, which is correct rather than
+  a fault.
+
+A trailered response is always chunked — a `Content-Length` response has nowhere
+to put a trailer section.
+
 #### Timeouts
 
 A connection that is not making progress is closed. Nothing about this is

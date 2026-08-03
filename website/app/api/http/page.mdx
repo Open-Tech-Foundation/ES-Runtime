@@ -49,6 +49,32 @@ const { hostname, port } = await server.addr;
 console.log(`listening on http://${hostname}:${port}`);
 ```
 
+## Trailers
+
+Header fields that follow the body — where gRPC carries the status of a call.
+
+| Export | Signature | Notes |
+| --- | --- | --- |
+| `withTrailers(response, trailers)` | `(Response, HeadersInit \| Promise<HeadersInit>) => Response` | Sends them after the body. Returns the same `Response`. |
+| `trailersOf(response)` | `(Response) => Promise<Headers>` | Reads them, once the body has been consumed. Empty when there are none. |
+
+```js
+import { serve, withTrailers, trailersOf } from "runtime:http";
+
+serve({ port: 8080 }, () =>
+  withTrailers(new Response(body), { "grpc-status": "0" }));
+
+const response = await fetch(url);
+await response.text();                      // trailers follow the body
+(await trailersOf(response)).get("grpc-status");
+```
+
+Exports rather than members of `Response`: trailers are not part of the Fetch
+API, and no runtime exposes them there. Sent on both HTTP versions. On HTTP/1.1
+the response must be chunked and only fields named in a `Trailer` header travel
+— that header is added automatically when the names are known before the head
+goes out.
+
 ## Connection info
 
 The handler's second argument describes the connection. Taking it is optional —

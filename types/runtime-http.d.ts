@@ -150,9 +150,43 @@ declare module "runtime:http" {
    * reading a file is the filesystem's privilege — so serving HTTPS needs no
    * grant beyond `NetListen`.
    */
+  /**
+   * Sends `trailers` after the response body — the header fields that cannot be
+   * known until the body has been produced, which is where gRPC carries the
+   * status of a call. Returns the same `Response`.
+   *
+   * Trailers are **not part of the Fetch API** and no runtime exposes them
+   * there, which is why this is an import rather than an option on `Response`:
+   * the dependency is visible instead of silently doing nothing elsewhere.
+   *
+   * On HTTP/2 they become a trailing `HEADERS` frame. On HTTP/1.1 the wire
+   * format carries only the fields named in the response's `Trailer` header —
+   * that header is added for you whenever the names are known before the head
+   * goes out, which is everything except a promise attached to a *streaming*
+   * body. Declare `Trailer` yourself in that case.
+   */
+  export function withTrailers(
+    response: Response,
+    trailers: HeadersInit | Promise<HeadersInit>,
+  ): Response;
+
+  /**
+   * The header fields that arrived after a response's body.
+   *
+   * Resolves once the body has been read to its end, because that is when
+   * trailers are on the wire — and to an empty `Headers` for a response with
+   * none, one built locally, or a body that was cancelled rather than read. It
+   * never waits forever on a body nobody is reading.
+   */
+  export function trailersOf(response: Response): Promise<Headers>;
+
   export function serve(handler: Handler): Server;
   export function serve(options: ServeOptions, handler: Handler): Server;
 
-  const http: { serve: typeof serve };
+  const http: {
+    serve: typeof serve;
+    withTrailers: typeof withTrailers;
+    trailersOf: typeof trailersOf;
+  };
   export default http;
 }
