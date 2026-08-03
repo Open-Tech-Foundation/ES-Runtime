@@ -264,6 +264,47 @@ On HTTP/2 every request multiplexed onto one connection reports the same peer,
 because they are one connection. There is no per-IP connection cap yet — one
 peer can still take every slot of a `maxConnections` budget.
 
+## What the server reports
+
+Everything the server says about itself goes to `tracing` on the
+`runtime::http` target. Nothing is printed; the embedder's subscriber is the
+sink, and `esrun` installs one filtered by `RUST_LOG`.
+
+| Event | Level | When |
+| --- | --- | --- |
+| `accept failed; retrying` | `warn` | The listener could not accept, and is backing off |
+| `tls handshake failed` | `debug` | A peer's TLS handshake did not complete |
+| `<what> timed out; closing the connection` | `debug` | A connection hit `handshake` or the first-byte deadline |
+| `connection ended with an error` | `debug` | hyper ended the connection on a protocol error, an early EOF, or a failed write |
+
+Each served connection is a `debug` span carrying `peer` and `tls`, so every
+event above is attributable to one client and correlated across a connection's
+life — which matters on HTTP/2, where one connection carries hundreds of
+requests and the peer is the only thing they share. The span is per connection
+rather than per request for that reason.
+
+The split between `warn` and `debug` is not about severity, it is about **who
+can cause it**. An accept failure is the listening socket's problem and an
+operator's to act on. A failed handshake is something any peer can produce on
+demand, so logging one at a level people run with would hand every client a
+lever on your log volume; a scanner sweeping a public port would write the disk
+full. To see them:
+
+```bash
+RUST_LOG=runtime::http=debug esrun server.js
+```
+
+A connection that is served and closed cleanly logs **nothing**, and neither
+does one reaped by the idle keep-alive deadline — that is a healthy connection's
+designed end, not a fault, and reporting it would put a line in the log for
+every well-behaved client. `connection ended with an error` therefore means
+something actually went wrong on the wire.
+
+This is what distinguishes a misconfigured listener from an idle one. A TLS
+server whose chain no client will accept serves zero requests, exactly like a
+server nobody is calling; the handshake event is the only difference between
+them.
+
 ## How this compares
 
 Measured on one machine on one day, by standing each server up and probing it —

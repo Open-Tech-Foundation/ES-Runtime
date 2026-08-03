@@ -107,6 +107,18 @@ There is no cap on concurrent connections and no handshake timeout, so a
 WebSocket server is less defended than the HTTP one. On a public port, put
 something in front of it.
 
+A failed handshake logs at `debug` on the `runtime::websocket` target, inside a
+`debug` span carrying the peer, so it is attributable to one client:
+
+```bash
+RUST_LOG=runtime::websocket=debug esrun server.js
+```
+
+`debug` rather than `warn` for the same reason as everywhere else here — a peer
+can produce these on demand, and a plain HTTP request to a WebSocket port is one
+of them. It is what tells a client sending the wrong handshake apart from a
+server nobody is calling. Accept errors stay at `warn`.
+
 ## See also
 
 - [WebSocket guide](/docs/guides/websocket) — how to use it

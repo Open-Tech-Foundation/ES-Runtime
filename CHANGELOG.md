@@ -49,6 +49,34 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **The servers report their connection failures.** A failed TLS handshake, a
+  WebSocket handshake a client got wrong, and a connection hyper ended on a
+  protocol error were all dropped silently by `runtime:http`, `runtime:net` and
+  the WebSocket server. Ending the connection quietly is right — a peer must
+  never be able to take an acceptor down — but it left an operator with nothing,
+  and a TLS listener whose chain no client will accept is otherwise
+  indistinguishable from a listener nobody is calling: both serve zero requests
+  and say nothing.
+
+  All of them now log at `debug` on the `runtime::http`, `runtime::net` and
+  `runtime::websocket` targets, with the peer and the reason:
+
+  ```bash
+  RUST_LOG=runtime::http=debug esrun server.js
+  ```
+
+  `debug`, never `warn`, because these are peer-driven: warning per connection
+  would hand any client a lever on your log volume, and a scanner sweeping a
+  public port could write the disk full. Accept-loop errors stay at `warn` —
+  those are about the listening socket, which is the operator's problem.
+
+  Each served connection is a `debug` span carrying its peer, so the events are
+  attributable and correlated across the connection's life — per connection
+  rather than per request, since on HTTP/2 one connection carries hundreds of
+  requests and the peer is all they share. A connection that is served and
+  closed cleanly logs nothing, and neither does one reaped by the idle
+  keep-alive deadline: that is a healthy connection's designed end, not a fault.
+
 - **A connection cap for `runtime:http`** (DECISIONS D45). `serve({ maxConnections })`
   bounds how many connections one server holds at once. Unlimited by default —
   the right number follows from your file-descriptor budget and the memory a

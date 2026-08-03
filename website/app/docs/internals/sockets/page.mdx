@@ -100,6 +100,21 @@ things fall out of that: a slow handshake cannot head-of-line-block the next
 `accept`, and no handshake in progress can keep the accept channel alive past a
 `close`.
 
+A handshake that fails ends that connection and nothing else — the guest never
+sees it, because it never became a socket. It is logged at `debug` on the
+`runtime::net` target with its peer and the reason:
+
+```bash
+RUST_LOG=runtime::net=debug esrun server.js
+```
+
+`debug` rather than `warn` because any peer can produce one on demand, and a
+level people run with would let a scanner set your log volume. Accept errors
+stay at `warn`; those are the listening socket's problem, not a client's. Worth
+turning on when a TLS listener is accepting connections and serving nothing:
+that is what a certificate no client will accept looks like from the server
+side, and it is otherwise indistinguishable from a port nobody is calling.
+
 ### Upgrading in place: `startTls`
 
 `secureTransport: "starttls"` opens plaintext and upgrades later — the SMTP and
