@@ -320,12 +320,48 @@ fn build_response(resp: HttpServerResponse) -> Response<OutBody> {
         }
         builder = builder.header(name, value);
     }
-    let body: OutBody = match resp.body {
-        HttpServerBody::Empty => buffered(Bytes::new()),
-        HttpServerBody::Bytes(b) => buffered(Bytes::from(b)),
-        HttpServerBody::Stream(s) => BodyExt::boxed_unsync(StreamBody::new(
-            s.map(|item| item.map(|chunk| Frame::data(Bytes::from(chunk)))),
-        )),
+    let body: OutBody = match (resp.body, resp.trailers) {
+        (body, None) => match body {
+            HttpServerBody::Empty => buffered(Bytes::new()),
+            HttpServerBody::Bytes(b) => buffered(Bytes::from(b)),
+            HttpServerBody::Stream(s) => BodyExt::boxed_unsync(StreamBody::new(
+                s.map(|item| item.map(|chunk| Frame::data(Bytes::from(chunk)))),
+            )),
+        },
+        // With trailers the body is always a stream, even when it is one known
+        // chunk: a `Full` body has a size hint, which makes hyper frame HTTP/1.1
+        // with `Content-Length` — and a response with no chunked encoding has
+        // nowhere to put a trailer section.
+        (body, Some(trailers)) => {
+            let data = match body {
+                HttpServerBody::Empty => futures_util::stream::empty().boxed(),
+                HttpServerBody::Bytes(b) => {
+                    futures_util::stream::once(async move { Ok(Bytes::from(b)) }).boxed()
+                }
+                HttpServerBody::Stream(s) => s.map(|item| item.map(Bytes::from)).boxed(),
+            };
+            let tail = futures_util::stream::once(async move {
+                let mut map = hyper::HeaderMap::new();
+                for (name, value) in trailers.await {
+                    if let (Ok(name), Ok(value)) = (
+                        hyper::header::HeaderName::from_bytes(name.as_bytes()),
+                        hyper::header::HeaderValue::from_str(&value),
+                    ) {
+                        map.append(name, value);
+                    }
+                }
+                map
+            });
+            BodyExt::boxed_unsync(StreamBody::new(
+                data.map(|item| item.map(Frame::data))
+                    // An empty trailer map would still be a trailers frame, and
+                    // an empty `HEADERS` frame is not what "no trailers" looks
+                    // like on the wire.
+                    .chain(tail.filter_map(|map| async move {
+                        (!map.is_empty()).then(|| Ok(Frame::trailers(map)))
+                    })),
+            ))
+        }
     };
     builder
         .body(body)
@@ -879,6 +915,7 @@ mod tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Bytes(b"ok".to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1008,6 +1045,7 @@ mod tls_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Bytes(b"secure".to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1090,6 +1128,7 @@ mod tls_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Bytes(b"still here".to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1111,6 +1150,7 @@ mod http2_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Bytes(body.as_bytes().to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1383,6 +1423,7 @@ mod http2_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Stream(Box::pin(chunks)),
+                trailers: None,
             },
         )
         .await
@@ -1486,6 +1527,7 @@ mod http2_tests {
                 status: 201,
                 headers: vec![("x-response-note".into(), "from-server".into())],
                 body: HttpServerBody::Bytes(b"created".to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1536,6 +1578,7 @@ mod http2_tests {
                     ("x-kept".into(), "yes".into()),
                 ],
                 body: HttpServerBody::Bytes(b"legacy-ok".to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1582,6 +1625,7 @@ mod http2_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Bytes(vec![b'z'; SIZE]),
+                trailers: None,
             },
         )
         .await
@@ -1871,6 +1915,7 @@ mod timeout_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Bytes(b"done".to_vec()),
+                trailers: None,
             },
         )
         .await
@@ -1954,6 +1999,7 @@ mod timeout_tests {
                 status: 200,
                 headers: vec![],
                 body: HttpServerBody::Stream(Box::pin(chunks)),
+                trailers: None,
             },
         )
         .await
@@ -1986,6 +2032,179 @@ mod timeout_tests {
             !closed_within(&mut sock, SHORT * 5).await,
             "a silent connection must survive when the timeouts are disabled"
         );
+    }
+}
+
+/// Trailers: header fields that follow the body, which is where gRPC carries the
+/// status of a call. What is checked here is the wire, on both versions — an API
+/// that produced a trailer object but no trailer frame would look identical from
+/// inside the runtime.
+#[cfg(test)]
+mod trailer_tests {
+    use super::tests::bound;
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn trailing(pairs: &[(&str, &str)]) -> Option<BoxFuture<Vec<(String, String)>>> {
+        let owned: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
+            .collect();
+        Some(Box::pin(std::future::ready(owned)))
+    }
+
+    /// HTTP/1.1 carries trailers after the terminating chunk, and only the
+    /// fields the response's `Trailer` header names — so the header is part of
+    /// what has to be right, not decoration.
+    #[tokio::test]
+    async fn http1_sends_a_trailer_section_after_the_body() {
+        let (http, id, port) = bound().await;
+        let request = tokio::spawn(async move {
+            let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            sock.write_all(
+                b"GET / HTTP/1.1\r\nHost: x\r\nTE: trailers\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+            let mut got = Vec::new();
+            sock.read_to_end(&mut got).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![("trailer".to_string(), "grpc-status".to_string())],
+                body: HttpServerBody::Bytes(b"hello".to_vec()),
+                trailers: trailing(&[("grpc-status", "0")]),
+            },
+        )
+        .await
+        .unwrap();
+
+        let wire = request.await.unwrap();
+        assert!(wire.contains("200 OK"), "{wire}");
+        // Chunked, because a Content-Length response has nowhere to put a
+        // trailer section.
+        assert!(
+            wire.to_lowercase().contains("transfer-encoding: chunked"),
+            "a trailered response must be chunked: {wire}"
+        );
+        assert!(wire.contains("hello"), "{wire}");
+        assert!(
+            wire.contains("grpc-status: 0"),
+            "the trailer must reach the wire: {wire}"
+        );
+        // …after the terminating chunk, not among the headers. The `Trailer`
+        // header legitimately names the field, so the check is on the field
+        // *with its value*, which may only appear in the trailer section.
+        let head_end = wire.find("\r\n\r\n").expect("a head");
+        assert!(
+            wire.find("grpc-status: 0").unwrap() > head_end,
+            "a trailer must not be sent as a header: {wire}"
+        );
+    }
+
+    /// HTTP/2 carries them as a trailing HEADERS frame, and needs no `Trailer`
+    /// header — so the same handler works either way.
+    #[tokio::test]
+    async fn http2_sends_trailers_as_a_trailing_headers_frame() {
+        let (http, id, port) = super::tests::bound().await;
+        let client = reqwest::Client::builder()
+            .http2_prior_knowledge()
+            .build()
+            .unwrap();
+        let request = tokio::spawn(async move {
+            let resp = client
+                .get(format!("http://127.0.0.1:{port}/grpc"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(resp.version(), reqwest::Version::HTTP_2);
+            // Read the frames rather than the convenience stream: `bytes_stream`
+            // drops trailers, which is the whole thing being asserted.
+            let mut body: hyper::Response<reqwest::Body> = resp.into();
+            let mut found = None;
+            loop {
+                let frame =
+                    std::future::poll_fn(|cx| std::pin::Pin::new(body.body_mut()).poll_frame(cx))
+                        .await;
+                match frame {
+                    Some(Ok(f)) => {
+                        if let Ok(map) = f.into_trailers() {
+                            found = map
+                                .get("grpc-status")
+                                .and_then(|v| v.to_str().ok())
+                                .map(str::to_string);
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            found
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(b"hello".to_vec()),
+                trailers: trailing(&[("grpc-status", "0"), ("grpc-message", "ok")]),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            request.await.unwrap().as_deref(),
+            Some("0"),
+            "the trailing HEADERS frame must carry the status"
+        );
+    }
+
+    /// A response that promises trailers and then has none must not put an
+    /// empty HEADERS frame on the wire — "no trailers" is the absence of the
+    /// frame, not an empty one.
+    #[tokio::test]
+    async fn an_empty_trailer_set_sends_no_trailer_frame() {
+        let (http, id, port) = bound().await;
+        let request = tokio::spawn(async move {
+            let mut sock = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            sock.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+            let mut got = Vec::new();
+            sock.read_to_end(&mut got).await.unwrap();
+            String::from_utf8_lossy(&got).into_owned()
+        });
+
+        let reqs = http.next_requests(id, 8).await.unwrap();
+        let (rid, _) = reqs.into_iter().next().expect("one request");
+        http.respond(
+            rid,
+            HttpServerResponse {
+                status: 200,
+                headers: vec![],
+                body: HttpServerBody::Bytes(b"hello".to_vec()),
+                trailers: trailing(&[]),
+            },
+        )
+        .await
+        .unwrap();
+
+        let wire = request.await.unwrap();
+        assert!(wire.contains("hello"), "{wire}");
+        assert!(wire.trim_end().ends_with('0'), "a clean end: {wire}");
     }
 }
 

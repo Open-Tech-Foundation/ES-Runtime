@@ -51,6 +51,17 @@ use crate::Result;
 const RESPONSE_BODY_BUFFER: usize = 8;
 
 type BodyItem = std::result::Result<Vec<u8>, ProviderError>;
+type Trailers = Vec<(String, String)>;
+
+/// Trailer name/value pairs from a flat `[name, value, …]` JS array.
+fn trailer_pairs(items: Vec<Value>) -> Trailers {
+    let mut out = Vec::with_capacity(items.len() / 2);
+    let mut it = items.into_iter();
+    while let (Some(Value::String(name)), Some(Value::String(value))) = (it.next(), it.next()) {
+        out.push((name, value));
+    }
+    out
+}
 
 pub(crate) fn install(
     engine: &mut dyn Engine,
@@ -70,6 +81,11 @@ pub(crate) fn install(
     let resp_receivers: Rc<RefCell<HashMap<u64, mpsc::Receiver<BodyItem>>>> =
         Rc::new(RefCell::new(HashMap::new()));
     let resp_rids: Rc<RefCell<HashMap<u64, u64>>> = Rc::new(RefCell::new(HashMap::new()));
+    // Trailers for a *streamed* response are not known when the head goes out —
+    // that is what trailers are for — so `http_respond` parks a sender here,
+    // keyed by body-stream id, and `http_response_body_close` delivers them.
+    let resp_trailers: Rc<RefCell<HashMap<u64, futures_channel::oneshot::Sender<Trailers>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
     let resp_id_gen = Rc::new(Cell::new(1u64));
 
     let h = http.clone();
@@ -230,16 +246,22 @@ pub(crate) fn install(
     }
 
     // ---- http_respond ---------------------------------------------------------
-    // Args: [requestId, status, body, bodyStreamId, name0, value0, …] — `body`
-    // is the buffered payload (string/bytes, or null), `bodyStreamId` the id
-    // from http_response_body_new (or null) whose receiver becomes the stream.
+    // Args: [requestId, status, body, bodyStreamId, trailers, name0, value0, …]
+    // — `body` is the buffered payload (string/bytes, or null), `bodyStreamId`
+    // the id from http_response_body_new (or null) whose receiver becomes the
+    // stream. `trailers` is `null` for none, a flat `[name, value, …]` array for
+    // trailers already in hand, or `true` for "they will arrive with the body's
+    // close" — the streamed case, where their values depend on the body that has
+    // not been produced yet.
     {
         let h = http.clone();
         let req_bodies = req_bodies.clone();
         let resp_receivers = resp_receivers;
         let resp_rids = resp_rids.clone();
+        let resp_trailers = resp_trailers.clone();
         engine.register_op(OpDecl::r#async("http_respond", move |args| {
             let h = h.clone();
+            let resp_trailers_for_respond = resp_trailers.clone();
             let mut it = args.into_iter();
             let rid = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u64;
             let status = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u16;
@@ -251,6 +273,7 @@ pub(crate) fn install(
                 _ => None,
             };
             let stream_id = it.next().and_then(|v| v.as_number()).map(|n| n as u64);
+            let trailers_arg = it.next();
 
             let body = match (buffered, stream_id) {
                 (_, Some(sid)) => match resp_receivers.borrow_mut().remove(&sid) {
@@ -278,11 +301,33 @@ pub(crate) fn install(
                 }
             }
 
+            let trailers: Option<es_runtime_providers::BoxFuture<Trailers>> = match trailers_arg {
+                // Already in hand: a buffered body, so the guest could await
+                // them before responding.
+                Some(Value::Array(items)) => {
+                    let pairs = trailer_pairs(items);
+                    Some(Box::pin(std::future::ready(pairs)))
+                }
+                // Promised: park a sender for `http_response_body_close`. If it
+                // is dropped instead — the guest closed without trailers, or the
+                // response was torn down — the receiver resolves to none, which
+                // is exactly "no trailers".
+                Some(Value::Bool(true)) => {
+                    let (tx, rx) = futures_channel::oneshot::channel::<Trailers>();
+                    if let Some(sid) = stream_id {
+                        resp_trailers_for_respond.borrow_mut().insert(sid, tx);
+                    }
+                    Some(Box::pin(async move { rx.await.unwrap_or_default() }))
+                }
+                _ => None,
+            };
+
             Box::pin(async move {
                 let response = HttpServerResponse {
                     status,
                     headers,
                     body,
+                    trailers,
                 };
                 require(&h)?.respond(rid, response).await.map_err(map_err)?;
                 Ok(Value::Undefined)
@@ -318,17 +363,36 @@ pub(crate) fn install(
         }))?;
     }
 
-    // ---- http_response_body_close ---------------------------------------------
+    // ---- http_response_body_close --------------------------------------------
+    // Args: [bodyStreamId, error?, trailers?] — `trailers` is a flat
+    // `[name, value, …]` array when the guest promised them at respond time.
     {
         let resp_senders = resp_senders;
         let req_bodies = req_bodies;
+        let resp_trailers_for_close = resp_trailers;
         engine.register_op(OpDecl::r#async("http_response_body_close", move |args| {
             let resp_senders = resp_senders.clone();
             let req_bodies = req_bodies.clone();
             let resp_rids = resp_rids.clone();
+            let resp_trailers = resp_trailers_for_close.clone();
             let id = arg_u64(&args, 0);
             let err = args.get(1).and_then(Value::as_str).map(str::to_string);
+            // Trailers the guest promised at `http_respond` time, now that the
+            // body they describe has been produced.
+            let trailers = match args.get(2) {
+                Some(Value::Array(items)) => Some(trailer_pairs(items.clone())),
+                _ => None,
+            };
             Box::pin(async move {
+                // Deliver (or drop) the promised trailers before the body ends,
+                // so the provider's trailer future is already settled by the
+                // time it is polled. Dropping the sender means "none", which is
+                // what a close with no trailers should look like.
+                if let Some(tx) = resp_trailers.borrow_mut().remove(&id)
+                    && let Some(trailers) = trailers
+                {
+                    let _ = tx.send(trailers);
+                }
                 // The response is over — drop the request's body stream too, if
                 // the handler never finished (or started) draining it.
                 if let Some(rid) = resp_rids.borrow_mut().remove(&id) {

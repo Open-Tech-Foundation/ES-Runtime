@@ -95,11 +95,57 @@ function parseMaxConnections(options) {
   return value;
 }
 
+// Trailers a handler attached with withTrailers(), keyed by the Response they
+// belong to. A WeakMap rather than a property on the Response: trailers are not
+// part of the Fetch API — no runtime implements them there — so a non-standard
+// key on a standard object would mean code written here silently does nothing
+// elsewhere, and code from elsewhere silently loses trailers here. The import
+// is the honest place for the dependency to show.
+const attachedTrailers = new WeakMap();
+
+// Normalizes HeadersInit-ish input to flat [name, value, ...] pairs.
+function trailerPairs(init) {
+  const flat = [];
+  if (init instanceof Headers || (init && typeof init.forEach === "function" && !Array.isArray(init))) {
+    init.forEach((value, name) => flat.push(String(name), String(value)));
+  } else if (Array.isArray(init)) {
+    for (const pair of init) flat.push(String(pair[0]), String(pair[1]));
+  } else if (init && typeof init === "object") {
+    for (const name of Object.keys(init)) flat.push(name, String(init[name]));
+  } else {
+    throw new TypeError("withTrailers: trailers must be a Headers, an object, or an array of pairs");
+  }
+  return flat;
+}
+
+// Sends `trailers` after the response body — the header fields that cannot be
+// known until the body has been produced, which is what a gRPC status is.
+//
+// `trailers` is a Headers, a plain object, an array of pairs, or a promise of
+// one of those. Returns the same Response, so it reads as a wrapper at the
+// point of return.
+//
+// On HTTP/2 these become a trailing HEADERS frame. On HTTP/1.1 the wire format
+// only carries trailer fields that the response's `Trailer` header names, so one
+// is added automatically when the names are known in time — which they are for
+// everything except a promise attached to a streaming body, where the head has
+// already gone out by the time the names exist.
+function withTrailers(response, trailers) {
+  if (!(response instanceof Response)) {
+    throw new TypeError("withTrailers(response, trailers): response must be a Response");
+  }
+  if (trailers == null) {
+    throw new TypeError("withTrailers(response, trailers): trailers must not be null");
+  }
+  attachedTrailers.set(response, trailers);
+  return response;
+}
+
 // Streams a Response's ReadableStream body to the host one chunk at a time.
 // Each push awaits the bounded host channel (download backpressure); a guest
 // stream error is forwarded so the in-flight response aborts the connection —
 // the only honest signal once the status line is on the wire.
-async function pumpResponseBody(stream, id) {
+async function pumpResponseBody(stream, id, trailers) {
   let reader;
   try {
     reader = stream.getReader(); // throws on a locked/consumed stream
@@ -115,7 +161,17 @@ async function pumpResponseBody(stream, id) {
       const accepted = await ops.http_response_body_push(id, chunk);
       if (!accepted) break; // host receiver gone (client disconnected)
     }
-    await ops.http_response_body_close(id);
+    // The body is complete, so anything the trailers were waiting on has
+    // happened: resolve them now and send them with the close.
+    let pairs = null;
+    if (trailers !== null && trailers !== undefined) {
+      try {
+        pairs = trailerPairs(await trailers);
+      } catch {
+        pairs = null; // a rejected or malformed trailer set is not worth failing the body over
+      }
+    }
+    await ops.http_response_body_close(id, null, pairs);
   } catch (e) {
     await ops.http_response_body_close(id, String((e && e.message) || e));
   } finally {
@@ -214,14 +270,42 @@ async function handleRequest(entry, handler) {
     stream = parts.stream;
   }
   const streamId = stream ? ops.http_response_body_new() : null;
-  const args = [requestId, parts.status, out, streamId];
+
+  // Trailers attached with withTrailers(). A buffered body is already complete,
+  // so they can be awaited here and cross with the response; a streamed body's
+  // cannot, so `true` tells the host to expect them at close time.
+  let trailers = attachedTrailers.get(response);
+  let trailerArg = null;
+  if (trailers !== undefined) {
+    if (stream) {
+      trailerArg = true;
+    } else {
+      try {
+        trailerArg = trailerPairs(await trailers);
+      } catch {
+        trailerArg = null;
+      }
+    }
+  }
+
+  const args = [requestId, parts.status, out, streamId, trailerArg];
+  // HTTP/1.1 sends only the trailer fields named in a `Trailer` header, so add
+  // one when the names are known and the handler did not declare them itself.
+  // HTTP/2 needs nothing here — this is the one place the two versions differ.
+  const declared = Array.isArray(trailerArg) && trailerArg.length > 0;
+  const hasTrailerHeader = parts.headers.some(([name]) => name.toLowerCase() === "trailer");
   for (const [name, value] of parts.headers) args.push(name, value);
+  if (declared && !hasTrailerHeader) {
+    const names = [];
+    for (let i = 0; i < trailerArg.length; i += 2) names.push(trailerArg[i]);
+    args.push("trailer", names.join(", "));
+  }
   // Fire-and-forget: the response is dispatched on this op; not awaiting saves a
   // microtask/tick per request. http_respond only sends on a oneshot (never
   // rejects), so there is no rejection to surface. For a streaming body the
   // status/headers go out now and the chunks flow behind them via the pump.
   ops.http_respond(...args);
-  if (stream) await pumpResponseBody(stream, streamId);
+  if (stream) await pumpResponseBody(stream, streamId, trailers);
 }
 
 // The handle returned by serve(): `addr` resolves to the bound address,
@@ -318,5 +402,5 @@ function serve(options, handler) {
   );
 }
 
-export { serve };
-export default { serve };
+export { serve, withTrailers };
+export default { serve, withTrailers };

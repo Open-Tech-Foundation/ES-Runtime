@@ -1128,6 +1128,20 @@ pub struct HttpServerResponse {
     /// The response body — a [`Stream`](HttpServerBody::Stream) is sent with
     /// chunked transfer-encoding as chunks arrive, never fully materialized.
     pub body: HttpServerBody,
+    /// Header fields to send **after** the body, or `None` for none.
+    ///
+    /// A future rather than a value because that is the only shape that is
+    /// useful: trailers exist to carry something that is not known until the
+    /// body has been produced — the status of a gRPC call, a checksum, a row
+    /// count. It resolves once the guest has them, which for a streamed body is
+    /// after the last chunk has already gone out.
+    ///
+    /// On HTTP/2 these become a trailing `HEADERS` frame. On HTTP/1.1 they
+    /// become a trailer section after the terminating chunk, and **only the
+    /// fields named in the response's `Trailer` header are sent** — that is the
+    /// wire format's rule, not this crate's, and a field not named there is
+    /// dropped by the encoder.
+    pub trailers: Option<BoxFuture<Vec<(String, String)>>>,
 }
 
 /// Where and how an [`HttpServerProvider`] should listen.

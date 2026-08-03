@@ -182,6 +182,28 @@ fn holds_connections_over_the_cap_back_rather_than_refusing_them() {
 }
 
 #[test]
+fn sends_response_trailers_from_a_handler() {
+    // Read off a raw socket under the real binary: `fetch` drops trailers — in
+    // every runtime — so nothing short of the wire can show these arrived.
+    let out = run_file("http-trailers.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("buffered-trailer:true"), "{stdout}");
+    // The `Trailer` header is added for HTTP/1.1 when the names are known in
+    // time, so a handler does not have to know that rule.
+    assert!(stdout.contains("buffered-declared:true"), "{stdout}");
+    // A trailered response cannot use Content-Length; there would be nowhere to
+    // put the trailer section.
+    assert!(stdout.contains("buffered-chunked:true"), "{stdout}");
+    // The gRPC shape: trailers promised at respond time, sent after the body.
+    assert!(stdout.contains("streamed-body:true"), "{stdout}");
+    assert!(stdout.contains("streamed-trailer:true"), "{stdout}");
+    assert!(stdout.contains("plain-ok:true"), "{stdout}");
+    assert!(stdout.contains("bad-arg:TypeError"), "{stdout}");
+    assert!(stdout.contains("TRAILERS_OK"), "{stdout}");
+}
+
+#[test]
 fn honours_every_fetch_redirect_mode_over_the_wire() {
     // Real 3xx responses from a real runtime:http server through the real
     // reqwest transport — the stub transport in the runtime's own tests cannot
