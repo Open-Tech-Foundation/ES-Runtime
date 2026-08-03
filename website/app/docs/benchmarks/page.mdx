@@ -1,6 +1,6 @@
 ---
 title: Benchmarks
-description: Cross-runtime results vs Node.js, Bun, Deno, and LLRT — startup, standard Web APIs, parsers, and WebSocket fan-out.
+description: Cross-runtime results vs Node.js, Bun, Deno, and LLRT — startup, standard Web APIs, parsers, WebAssembly, WASI, and WebSocket fan-out.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -32,6 +32,7 @@ export const standardWorkloads = [
   { key: "async", label: "async/await throughput", unit: "ms" },
   { key: "timers", label: "setTimeout churn", unit: "ms" },
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
+  { key: "compression", label: "CompressionStream round trip (gzip)", unit: "ms" },
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
   { key: "fetch_upload", label: "fetch (streamed upload)", unit: "ms" },
   { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
@@ -58,6 +59,17 @@ export const parserWorkloads = [
   { key: "toml_large", label: "TOML parsing (large dataset)", unit: "ms" },
   { key: "msgpack_small", label: "MessagePack parsing (small dataset)", unit: "ms" },
   { key: "msgpack_large", label: "MessagePack parsing (large dataset)", unit: "ms" },
+];
+
+export const wasmWorkloads = [
+  { key: "wasm_compile", label: "WebAssembly.compile (~250 KB module)", unit: "ms" },
+  { key: "wasm_call", label: "JS\u2194wasm call boundary", unit: "ms" },
+  { key: "wasm_mem", label: "wasm linear memory (shared buffer)", unit: "ms" },
+];
+
+export const wasiWorkloads = [
+  { key: "wasi_start", label: "WASI bootstrap (instantiate + _start)", unit: "ms" },
+  { key: "wasi_syscall", label: "WASI syscalls from inside wasm", unit: "ms" },
 ];
 
 export const protobufWorkloads = [
@@ -119,6 +131,47 @@ reflective); Node, Bun, and Deno decode with `protobuf-es` (`@bufbuild/protobuf`
 Identical bytes, each runtime's real protobuf path.
 
 <BenchChart metrics={protobufWorkloads} />
+
+<span id="wasm"></span>
+
+## WebAssembly
+
+esrun reaches V8's own WebAssembly implementation through the standard JS API,
+as Node and Deno do; Bun uses JavaScriptCore's. LLRT has no `WebAssembly` at all,
+so every cell here is n/a for it.
+
+<BenchChart metrics={wasmWorkloads} />
+
+The three measure different things, and esrun does not place the same in each.
+**Compile** is validation plus baseline codegen on a ~250 KB module, with a
+different salt each iteration so nothing is served from a code cache — one of the
+widest gaps on the page for esrun, roughly 4x Deno's. The **call boundary** (20M
+calls into a trivial exported `add`) and **linear memory** (JS fills a 64 KiB
+window, wasm sums it back) are where real interop spends its time, and there
+esrun is level with Deno and ahead of Bun.
+
+If your payload is compiled once and called many times, the first row matters
+least. If you compile a fresh module per request, it is the only row that
+matters.
+
+<span id="wasi"></span>
+
+## WASI
+
+`wasm32-wasip1`, which is what a compiled CLI targets. **Bootstrap** is 2,000 x
+(construct a WASI, instantiate a command module, run `_start`) with compilation
+hoisted out, so it is the per-invocation cost of *running a wasm program*.
+**Syscalls** runs a guest whose `_start` loops 20,000 times over `random_get`
+and `clock_time_get` — the calls come from inside wasm, where a real program
+makes them, so it measures the host-side preview-1 implementation.
+
+<BenchChart metrics={wasiWorkloads} />
+
+esrun's bootstrap is the fastest measured, a little ahead of Deno and several
+times quicker than Node or Bun. Its syscall path is not: Deno's is around 3x
+faster, because esrun implements preview-1 in JS rather than natively. Bun's
+number on that row is an outlier large enough to be worth checking against your
+own workload before trusting it either way.
 
 <span id="websocket"></span>
 
