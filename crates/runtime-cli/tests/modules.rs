@@ -120,6 +120,28 @@ fn serves_http2_to_a_cleartext_client_that_opens_with_the_preface() {
 }
 
 #[test]
+fn disconnects_stalled_clients_and_leaves_working_ones_alone() {
+    // Real sockets under the real binary: a peer that goes quiet on a socket is
+    // something `fetch` will never do, so this is the only place the timeouts
+    // can be shown to act on the guest-facing path rather than in the
+    // provider's own tests.
+    let out = run_file("http-timeouts.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    // Connect and say nothing — the cheapest hold on a descriptor there is.
+    assert!(stdout.contains("silent-closed:true"), "{stdout}");
+    // A request head that starts and never finishes — slowloris.
+    assert!(stdout.contains("dribble-closed:true"), "{stdout}");
+    // …while the same server answers a real request normally.
+    assert!(stdout.contains("request-ok:200:guarded"), "{stdout}");
+    // Off means off: the identical stall survives when they are disabled.
+    assert!(stdout.contains("disabled-closed:false"), "{stdout}");
+    // And a bad value is a TypeError at the call, not a bound port.
+    assert!(stdout.contains("bad-option:TypeError"), "{stdout}");
+    assert!(stdout.contains("TIMEOUTS_OK"), "{stdout}");
+}
+
+#[test]
 fn honours_every_fetch_redirect_mode_over_the_wire() {
     // Real 3xx responses from a real runtime:http server through the real
     // reqwest transport — the stub transport in the runtime's own tests cannot

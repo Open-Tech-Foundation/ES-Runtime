@@ -6261,4 +6261,128 @@ mod tests {
         );
         assert!(http.options.lock().unwrap()[0].tls.is_none());
     }
+
+    /// A guest that says nothing about timeouts gets the provider's defaults —
+    /// the point of them. The prelude must send "unset" rather than a copy of
+    /// the numbers, so this asserts the values arrive equal to
+    /// `HttpTimeouts::default()` rather than to any literal written here.
+    #[test]
+    fn serve_without_timeouts_uses_the_provider_defaults() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080 }, () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(
+            http.options.lock().unwrap()[0].timeouts,
+            es_runtime_providers::HttpTimeouts::default()
+        );
+    }
+
+    #[test]
+    fn each_timeout_can_be_set_and_they_cross_as_milliseconds() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080, timeouts: { handshake: 1000, headerRead: 2000, \
+                               h2KeepAlive: 3000 } }, () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        assert_eq!(
+            options[0].timeouts,
+            es_runtime_providers::HttpTimeouts {
+                handshake: Some(std::time::Duration::from_secs(1)),
+                header_read: Some(std::time::Duration::from_secs(2)),
+                h2_keep_alive: Some(std::time::Duration::from_secs(3)),
+            }
+        );
+    }
+
+    /// `null` is off, and it has to survive the crossing as off rather than as
+    /// "unset" — otherwise a guest asking for no timeout would silently get the
+    /// default instead, which is the one mistake here that fails safe-looking.
+    #[test]
+    fn a_null_timeout_disables_it_rather_than_falling_back_to_the_default() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080, timeouts: { handshake: null, headerRead: null, \
+                               h2KeepAlive: null } }, () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        assert_eq!(options[0].timeouts.handshake, None);
+        assert_eq!(options[0].timeouts.header_read, None);
+        assert_eq!(options[0].timeouts.h2_keep_alive, None);
+    }
+
+    /// One timeout named, the rest defaulted — the common case, and the one a
+    /// naive "read the object" implementation gets wrong by zeroing the others.
+    #[test]
+    fn naming_one_timeout_leaves_the_others_at_their_defaults() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080, timeouts: { headerRead: 5000 } }, \
+                             () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let defaults = es_runtime_providers::HttpTimeouts::default();
+        let options = http.options.lock().unwrap();
+        assert_eq!(
+            options[0].timeouts.header_read,
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(options[0].timeouts.handshake, defaults.handshake);
+        assert_eq!(options[0].timeouts.h2_keep_alive, defaults.h2_keep_alive);
+    }
+
+    /// Rejected in the prelude, before the bind: a typo in a timeout must not
+    /// claim a port and then serve with a silently different policy.
+    #[test]
+    fn a_bad_timeout_is_rejected_before_the_port_is_bound() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const bad = [['handshake', 'soon'], ['headerRead', -1], ['h2KeepAlive', NaN]]; \
+             const names = []; \
+             for (const [key, value] of bad) { \
+               try { serve({ port: 8080, timeouts: { [key]: value } }, () => new Response('x')); } \
+               catch (e) { names.push(e.constructor.name); } \
+             } \
+             try { serve({ port: 8080, timeouts: 5 }, () => new Response('x')); } \
+             catch (e) { names.push(e.constructor.name); } \
+             globalThis.result = names.join(',');",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(
+            rt.eval("globalThis.result").unwrap(),
+            Value::String("TypeError,RangeError,RangeError,TypeError".to_string())
+        );
+        assert!(
+            http.options.lock().unwrap().is_empty(),
+            "a rejected option must not have reached the provider"
+        );
+    }
 }

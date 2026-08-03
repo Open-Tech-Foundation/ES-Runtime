@@ -39,6 +39,48 @@ declare module "runtime:http" {
      * e.g. `["http/1.1"]`.
      */
     alpn?: string[];
+    /**
+     * When to give up on a connection that is not making progress.
+     *
+     * These bound only connections that are **idle or stalled**: a request in
+     * flight, a body still arriving, and a response still streaming are never
+     * interrupted, however long they take.
+     */
+    timeouts?: ServeTimeouts;
+  }
+
+  /**
+   * Per-connection deadlines for {@link ServeOptions.timeouts}. Each is a
+   * number of milliseconds; `null` disables that one; omitting it keeps the
+   * default.
+   */
+  export interface ServeTimeouts {
+    /**
+     * From accept until the connection can carry requests: the TLS handshake,
+     * and the wait for the first byte the HTTP version is read from. A TLS
+     * connection passes both stages, so it may take up to twice this before it
+     * counts as established. Defaults to `10_000`.
+     */
+    handshake?: number | null;
+    /**
+     * How long a request head may take to arrive in full.
+     *
+     * On HTTP/1.1 this is **also the idle keep-alive limit**, because waiting
+     * for the next request on a kept-alive connection is waiting for a request
+     * head: an idle connection is closed after this long and a client that
+     * wants another request opens a new one. HTTP/2 keeps its connections open
+     * and uses {@link h2KeepAlive} instead. Defaults to `30_000`.
+     */
+    headerRead?: number | null;
+    /**
+     * How often an idle HTTP/2 connection is probed with a PING, and how long
+     * the ACK may take before it is dropped — so a dead peer is reclaimed
+     * within twice this. HTTP/2 connections are long-lived by design and have
+     * no idle limit, so without probing a peer that vanishes without a FIN
+     * keeps its connection until the OS TCP keepalive notices. Defaults to
+     * `20_000`.
+     */
+    h2KeepAlive?: number | null;
   }
 
   /** A running HTTP server. */
