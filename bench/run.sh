@@ -17,9 +17,16 @@
 #    JIT/OS settle) on top of each script's in-process warmup.
 #  * AGGREGATION = MIN over repetitions: interference only ever *adds* time, so
 #    the minimum is the contention-free floor — the stable, fair comparator.
+#  * ADAPTIVE STOP: WORKLOAD_RUNS is a ceiling, not a quota. A row stops being
+#    sampled once every live cell in it is within NOISE_THRESHOLD% (never before
+#    MIN_REPS), because further repetitions cannot move a minimum that has
+#    already settled. Checked per row, so all runtimes keep an equal sample count.
 #  * NOISE is disclosed, not hidden: the coefficient of variation per cell is
-#    computed; cells above NOISE_THRESHOLD% are flagged (`~`) and listed.
-#  * Peak RSS is sampled per runtime (GNU time, skipped if absent).
+#    computed; cells above NOISE_THRESHOLD% are flagged (`~`) and listed, and
+#    BENCH_JSON publishes cov + sample count alongside every number.
+#  * A FAILED CELL IS RETRIED before it is written off, and a timeout is recorded
+#    as distinct from an unsupported API — they reach the site as the same null.
+#  * Peak RSS is sampled per runtime for RSS_ROWS (GNU time, skipped if absent).
 #
 # The fetch workload runs against a local HTTP server on 127.0.0.1:18923
 # (started here with Node; the workload is skipped if Node is missing or the
@@ -37,8 +44,17 @@ cd "$(dirname "$0")"
 ESRUN="${ESRUN:-../target/release/esrun}"
 STARTUP_RUNS="${STARTUP_RUNS:-15}"
 WORKLOAD_RUNS="${WORKLOAD_RUNS:-5}"
-# Coefficient-of-variation (%) above which a measured cell is flagged as noisy.
+# Timed repetitions every row gets before the stability check can end it early.
+MIN_REPS="${MIN_REPS:-3}"
+# Coefficient-of-variation (%) above which a measured cell is flagged as noisy —
+# and, below which, a row is considered settled enough to stop sampling.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
+# Rows to sample peak RSS for. Every row cost a whole extra launch per runtime
+# (~245 launches, an eighth of the suite) to produce numbers the site never
+# read: it only ever charts the startup row's memory.
+RSS_ROWS="${RSS_ROWS:-startup bigscript}"
+# A timed cell below this many ms is measuring the clock, not the runtime.
+MIN_MS="${MIN_MS:-5}"
 ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch fetch_upload http websocket fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream compression wasm_compile wasm_call wasm_mem wasi_start wasi_syscall"
 WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
 BENCH_JSON="${BENCH_JSON:-}"
@@ -138,15 +154,21 @@ start_fetch_server() {
   drop_fetch_workloads
 }
 
-# Removes the server-dependent fetch workloads from the active set (token-safe, so
-# "fetch_upload" isn't mangled by a substring removal of "fetch").
-drop_fetch_workloads() {
-  local kept="" w
+# Removes whole workload tokens from the active set. Token-safe: a substring
+# removal turns "fetch" into a dropped "fetch_upload" too, and leaves an empty
+# token behind where it hits.
+drop_workloads() {  # name...
+  local kept="" w drop
   for w in $WORKLOADS; do
-    case "$w" in fetch | fetch_upload) ;; *) kept="$kept $w" ;; esac
+    for drop in "$@"; do
+      [ "$w" = "$drop" ] && continue 2
+    done
+    kept="$kept $w"
   done
   WORKLOADS="${kept# }"
 }
+
+drop_fetch_workloads() { drop_workloads fetch fetch_upload; }
 
 # --- websocket echo server --------------------------------------------------
 
@@ -161,7 +183,7 @@ start_ws_server() {
   # place of the echo server we meant to start.
   if (echo > "/dev/tcp/127.0.0.1/$WS_PORT") 2>/dev/null; then
     note "websocket workload skipped (port $WS_PORT already in use)"
-    WORKLOADS="${WORKLOADS//websocket/}"
+    drop_workloads websocket
     return
   fi
   local cmd="" script="$SCRATCH/ws-echo.js"
@@ -190,7 +212,7 @@ new WebSocketServer({ host: "127.0.0.1", port: $WS_PORT })
 EOF
   else
     note "websocket workload skipped (needs bun, deno, or node+ws for the echo server)"
-    WORKLOADS="${WORKLOADS//websocket/}"
+    drop_workloads websocket
     return
   fi
   $cmd "$script" >/dev/null 2>&1 &
@@ -202,7 +224,7 @@ EOF
   note "websocket workload skipped (echo server did not come up on :$WS_PORT)"
   kill "$WS_SERVER_PID" 2>/dev/null
   WS_SERVER_PID=""
-  WORKLOADS="${WORKLOADS//websocket/}"
+  drop_workloads websocket
 }
 
 # --- generated big script (startup/parse cost) ------------------------------
@@ -239,29 +261,41 @@ if [ -n "${QUIET:-}" ]; then
   note "QUIET: for lowest variance also run (sudo): cpupower frequency-set -g performance; echo 0 | sudo tee /sys/devices/system/cpu/cpufreq/boost — and close background apps"
 fi
 
-# A single timed launch → one ms sample (or "ERR" if the runtime can't run it).
+# A single timed launch → one ms sample, or a failure token: "ERR" (the runtime
+# could not run it) or "TIMEOUT" (it was still going at WORKLOAD_TIMEOUT). The
+# two are kept apart because they mean opposite things — one is a missing API,
+# the other is a slow answer — and the site renders both as "n/a" otherwise.
 #   startup: process wall-time.   workload: the script's self-reported RESULT_MS.
+#
+# The startup path deliberately runs without `timeout`: at 3-25 ms per launch,
+# `timeout`'s own fork would be a measurable share of the very interval being
+# measured, and it would weigh heaviest on the fastest runtime. Neither
+# startup.js (`void 0`) nor the generated bigscript can hang.
 sample_once() {  # kind cmd script
-  local kind="$1" cmd="$2" script="$3" s e out
+  local kind="$1" cmd="$2" script="$3" s e out rc
   if [ "$kind" = startup ]; then
     s=$(now); $WRAP $cmd "$script" >/dev/null 2>&1; e=$(now)
     to_ms "$(awk "BEGIN{print $e-$s}")"
   else
-    out=$($TIMEOUT_BIN $WRAP $cmd "$script" 2>/dev/null | grep -oE 'RESULT_MS=[0-9.]+' | head -1 | cut -d= -f2)
+    $TIMEOUT_BIN $WRAP $cmd "$script" >"$SCRATCH/sample.out" 2>/dev/null; rc=$?
+    [ "$rc" -eq 124 ] && { echo TIMEOUT; return; }
+    out=$(grep -oE 'RESULT_MS=[0-9.]+' "$SCRATCH/sample.out" | head -1 | cut -d= -f2)
     [ -z "$out" ] && { echo ERR; return; }
     awk "BEGIN{printf \"%.1f\", $out}"
   fi
 }
 
-# Reduces a list of samples to "min cov%": min is the contention-free floor
+# Reduces a list of samples to "min cov% n": min is the contention-free floor
 # (interference only ever adds time); cov is the coefficient of variation, used
-# to flag noisy cells.
+# to flag noisy cells and to decide when a row has stopped moving; n is how many
+# samples that rests on, which the JSON publishes so a cell's precision is
+# visible rather than implied.
 aggregate() {  # "s1 s2 ..."
   awk '{ for (i=1;i<=NF;i++){ x=$i; sum+=x; sq+=x*x; n++; if (n==1 || x<min) min=x } }
-       END{ if (n==0){ print "ERR 0"; exit }
+       END{ if (n==0){ print "ERR 0 0"; exit }
             mean=sum/n; var=(n>1)?(sq-n*mean*mean)/(n-1):0; if (var<0) var=0;
             cov=(mean>0)?100*sqrt(var)/mean:0;
-            printf "%.1f %.1f", min, cov }' <<<"$1"
+            printf "%.1f %.1f %d", min, cov, n }' <<<"$1"
 }
 
 # Peak RSS (MB) of one run, via GNU time or a python3 getrusage fallback.
@@ -301,46 +335,89 @@ KIND[bigscript]=startup; PATHS[bigscript]="$BIGSCRIPT"
 ROWS=(startup bigscript)
 for w in $WORKLOADS; do KIND[$w]=workload; PATHS[$w]="scripts/$w.js"; ROWS+=("$w"); done
 
-declare -A SAMPLES RES COV DEAD
+declare -A SAMPLES RES COV NUM DEAD
+
+# True once every live cell in the row is within NOISE_THRESHOLD — the point
+# where further repetitions stop changing the published minimum. Judged over the
+# whole row, never cell by cell, so every runtime keeps an identical sample
+# count and the interleaving stays balanced.
+row_is_stable() {  # row
+  local row="$1" r c
+  for r in "${ORDER[@]}"; do
+    [ -n "${DEAD[$row,$r]:-}" ] && continue
+    [ -z "${SAMPLES[$row,$r]:-}" ] && return 1
+    read -r _ c _ < <(aggregate "${SAMPLES[$row,$r]}")
+    awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && return 1
+  done
+  return 0
+}
 
 # Interleaved + randomized collection (see header). Repetition 0 is the
-# discarded process-level warmup; a row a runtime can't run errors on that warmup
-# and is then skipped entirely (marked DEAD), so unsupported workloads cost one
-# launch instead of N.
-collect() {  # row reps
+# discarded process-level warmup; a row a runtime can't run fails on that warmup
+# and is then skipped entirely (marked DEAD), so unsupported workloads cost two
+# launches instead of N.
+#
+# `reps` is a ceiling, not a quota: once the row is stable the remaining
+# repetitions cannot move the minimum, so collection stops at MIN_REPS or later.
+# Most cells settle in three, which is where most of the suite's time was going.
+collect() {  # row max_reps
   local row="$1" reps="$2" rep r s
   for rep in $(seq 0 "$reps"); do
     while read -r r; do
       [ -n "${DEAD[$row,$r]:-}" ] && continue
       s=$(sample_once "${KIND[$row]}" "${CMD[$r]}" "${PATHS[$row]}")
-      if [ "$s" = ERR ]; then
-        [ "$rep" -eq 0 ] && DEAD[$row,$r]=1
-        continue
-      fi
+      case "$s" in
+        ERR | TIMEOUT)
+          # Retry once before writing the cell off. A missing API fails
+          # identically every time; a busy port, a cold page cache or a timeout
+          # tripped under momentary load does not — and marking those DEAD
+          # publishes "this runtime cannot do this" about a runtime that can.
+          if [ "$rep" -eq 0 ]; then
+            s=$(sample_once "${KIND[$row]}" "${CMD[$r]}" "${PATHS[$row]}")
+            case "$s" in
+              ERR) DEAD[$row,$r]=unsupported ;;
+              TIMEOUT) DEAD[$row,$r]=timeout ;;
+            esac
+          fi
+          continue
+          ;;
+      esac
       [ "$rep" -eq 0 ] && continue   # discard warmup repetition
       SAMPLES[$row,$r]="${SAMPLES[$row,$r]:-} $s"
     done < <(shuffle "${ORDER[@]}")
+    # Only workload rows stop early. A startup launch costs ~10-25 ms, so the
+    # full STARTUP_RUNS is ~3 s for the whole suite — nothing worth reclaiming
+    # from the row whose wall-clock measurement is the noisiest of the lot.
+    [ "${KIND[$row]}" = workload ] &&
+      [ "$rep" -ge "$MIN_REPS" ] && row_is_stable "$row" && break
   done
+  return 0
 }
 
 for row in "${ROWS[@]}"; do
   if [ "${KIND[$row]}" = startup ]; then collect "$row" "$STARTUP_RUNS"; else collect "$row" "$WORKLOAD_RUNS"; fi
 done
 
-# Aggregate each cell to its min + CoV; collect the noisy ones to disclose.
+# Aggregate each cell to its min + CoV + n; collect the noisy ones to disclose,
+# and the ones so fast the measurement is dominated by timer resolution.
 NOISY=()
+TOOFAST=()
 for row in "${ROWS[@]}"; do
   for r in "${ORDER[@]}"; do
     if [ -z "${SAMPLES[$row,$r]:-}" ]; then RES[$row,$r]=ERR; continue; fi
-    read -r m c < <(aggregate "${SAMPLES[$row,$r]}")
-    RES[$row,$r]=$m; COV[$row,$r]=$c
+    read -r m c n < <(aggregate "${SAMPLES[$row,$r]}")
+    RES[$row,$r]=$m; COV[$row,$r]=$c; NUM[$row,$r]=$n
     awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && NOISY+=("$row/$r ${c}%")
+    [ "${KIND[$row]}" = workload ] &&
+      awk "BEGIN{exit !($m < $MIN_MS)}" && TOOFAST+=("$row/$r ${m}ms")
   done
 done
 
-# RSS is a memory floor (contention doesn't inflate peak RSS): one sample each.
+# RSS is a memory floor (contention doesn't inflate peak RSS): one sample each,
+# and only for the rows in RSS_ROWS — see the note there.
 declare -A RSS
-for row in "${ROWS[@]}"; do
+for row in $RSS_ROWS; do
+  [ -n "${KIND[$row]:-}" ] || continue
   for r in "${ORDER[@]}"; do
     if [ "${RES[$row,$r]:-}" != ERR ] && [ -n "${RES[$row,$r]:-}" ]; then
       RSS[$row,$r]=$(measure_rss "${CMD[$r]}" "${PATHS[$row]}")
@@ -354,8 +431,64 @@ for r in "${ORDER[@]}"; do RES[rss,$r]="${RSS[startup,$r]:-}"; done
 
 [ "${#NOISY[@]}" -gt 0 ] &&
   note "noisy cells (CoV > ${NOISE_THRESHOLD}%; min floor still shown, marked ~): ${NOISY[*]}"
+# A cell under MIN_MS is not a fast runtime, it is a workload that stopped doing
+# enough work to measure — scale its N up rather than publishing the ranking.
+[ "${#TOOFAST[@]}" -gt 0 ] &&
+  note "below the measurement floor (< ${MIN_MS}ms — raise that workload's N): ${TOOFAST[*]}"
+# A cell dropped for taking too long is not a cell the runtime cannot do. Both
+# reach the site as null, so say which is which here.
+TIMEDOUT=()
+for row in "${ROWS[@]}"; do
+  for r in "${ORDER[@]}"; do
+    [ "${DEAD[$row,$r]:-}" = timeout ] && TIMEDOUT+=("$row/$r")
+  done
+done
+[ "${#TIMEDOUT[@]}" -gt 0 ] &&
+  note "timed out at ${WORKLOAD_TIMEOUT:-60}s (recorded n/a, but NOT unsupported): ${TIMEDOUT[*]}"
 
 # --- output -----------------------------------------------------------------
+
+# Why a cell has no number, so the site can distinguish "this runtime has no
+# such API" from "this run could not measure it". Values are pre-quoted: the
+# emitter below prints them bare.
+declare -A STATUS
+for row in "${ROWS[@]}"; do
+  for r in "${ORDER[@]}"; do
+    case "${DEAD[$row,$r]:-}" in
+      unsupported) STATUS[$row,$r]='"unsupported"' ;;
+      timeout) STATUS[$row,$r]='"timeout"' ;;
+      *)
+        if [ -n "${RES[$row,$r]:-}" ] && [ "${RES[$row,$r]}" != ERR ]; then
+          STATUS[$row,$r]='"ok"'
+        else
+          STATUS[$row,$r]='"unmeasured"'
+        fi
+        ;;
+    esac
+  done
+done
+
+# Emits one `row -> runtime -> value` object from an associative array keyed
+# "$row,$rt". Values print bare, so callers pass numbers, `null`, or pre-quoted
+# strings; an empty or ERR cell becomes null.
+emit_matrix() {  # assoc-array-name
+  local -n M="$1"
+  local firstrow=1 first row r v
+  for row in "${ROWS[@]}"; do
+    [ -z "$firstrow" ] && printf ','
+    firstrow=
+    printf '\n    "%s": {' "$row"
+    first=1
+    for r in "${ORDER[@]}"; do
+      [ -z "$first" ] && printf ','
+      first=
+      v="${M[$row,$r]:-null}"
+      case "$v" in '' | ERR) v=null ;; esac
+      printf '\n      "%s": %s' "$r" "$v"
+    done
+    printf '\n    }'
+  done
+}
 
 if [ -n "$BENCH_JSON" ]; then
   printf '{\n  "runtimes": {'
@@ -365,38 +498,30 @@ if [ -n "$BENCH_JSON" ]; then
     first=
     printf '\n    "%s": "%s"' "$r" "${VER[$r]}"
   done
-  printf '\n  },\n  "results_ms": {'
-  firstrow=1
-  for row in "${ROWS[@]}"; do
-    [ -z "$firstrow" ] && printf ','
-    firstrow=
-    printf '\n    "%s": {' "$row"
-    first=1
-    for r in "${ORDER[@]}"; do
-      [ -z "$first" ] && printf ','
-      first=
-      v="${RES[$row,$r]:-null}"
-      case "$v" in ''|ERR) v=null ;; esac
-      printf '\n      "%s": %s' "$r" "$v"
-    done
-    printf '\n    }'
-  done
+  printf '\n  },'
+  # How the numbers below were produced, recorded next to them so the site can
+  # state its own methodology instead of a human restating it in prose.
+  printf '\n  "method": {'
+  printf '\n    "aggregate": "min",'
+  printf '\n    "interleaved": true,'
+  printf '\n    "shuffled": true,'
+  printf '\n    "warmup_reps_discarded": 1,'
+  printf '\n    "min_reps": %s,' "$MIN_REPS"
+  printf '\n    "max_workload_reps": %s,' "$WORKLOAD_RUNS"
+  printf '\n    "max_startup_reps": %s,' "$STARTUP_RUNS"
+  printf '\n    "noise_threshold_cov_pct": %s,' "$NOISE_THRESHOLD"
+  printf '\n    "quiet": %s' "$([ -n "${QUIET:-}" ] && echo true || echo false)"
+  printf '\n  },'
+  printf '\n  "results_ms": {'
+  emit_matrix RES
   printf '\n  },\n  "results_rss": {'
-  firstrow=1
-  for row in "${ROWS[@]}"; do
-    [ -z "$firstrow" ] && printf ','
-    firstrow=
-    printf '\n    "%s": {' "$row"
-    first=1
-    for r in "${ORDER[@]}"; do
-      [ -z "$first" ] && printf ','
-      first=
-      v="${RSS[$row,$r]:-null}"
-      case "$v" in ''|ERR) v=null ;; esac
-      printf '\n      "%s": %s' "$r" "$v"
-    done
-    printf '\n    }'
-  done
+  emit_matrix RSS
+  printf '\n  },\n  "results_cov": {'
+  emit_matrix COV
+  printf '\n  },\n  "results_n": {'
+  emit_matrix NUM
+  printf '\n  },\n  "status": {'
+  emit_matrix STATUS
   printf '\n  }\n}\n'
   exit 0
 fi
