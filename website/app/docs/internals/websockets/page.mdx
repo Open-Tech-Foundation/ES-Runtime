@@ -1,0 +1,114 @@
+---
+title: "Internals: WebSockets"
+description: The actor task behind every WebSocket, how closes and pings are handled, and why sends are coalesced into one write.
+---
+
+# Internals: WebSockets
+
+How a `WebSocket` behaves underneath: who owns the connection, what the host
+answers without telling you, and how a close actually completes.
+
+For signatures see the [Web APIs reference](/docs/globals) and the [WebSocket
+guide](/docs/guides/websocket). Framing is RFC 6455 via `tokio-tungstenite`.
+
+## One actor task per connection
+
+Each connection is owned by a **spawned actor task** holding the split stream and
+running a `select!` loop over two channels:
+
+```
+    ws.send()   ──→ command channel (16) ──→ ┐
+                                             ├─→ actor task ──→ socket
+    ws.onmessage ←── inbound channel (16) ←──┘
+```
+
+The ops never touch the socket; they send and receive on channels. This is the
+same shape as [sockets](/docs/internals/sockets#why-every-socket-owns-two-tasks)
+and for the same reason: the I/O has to be driven by the reactor rather than by
+the event loop, which may be idle waiting for exactly the message that has not
+arrived.
+
+Both channels hold **16** messages. A guest that stops reading eventually stalls
+the actor's forwarding, which stops draining the socket — backpressure reaching
+the peer through TCP, rather than an unbounded queue here.
+
+## What the host answers for you
+
+**Ping is answered with pong, in the host.** The WebSocket IDL has no ping event,
+so a control frame that never reaches the guest is handled where it lands. A
+guest cannot observe a ping and cannot fail to answer one.
+
+**Pong and raw frames are dropped.** Nothing in the guest API can act on them.
+
+The runtime does **not** send pings of its own. There is no keepalive on a
+WebSocket connection and no idle timeout — a connection to a peer that vanished
+without a FIN stays open until the OS TCP keepalive notices it. That is the
+inverse of the [HTTP/2 keepalive](/docs/internals/http#request-head-and-the-idle-connection)
+on the server side, and worth knowing if you hold long-lived client sockets.
+
+## Sends are coalesced into one write
+
+When a command arrives, the actor does not write it and go back to sleep. It
+feeds that message to the sink and then **drains whatever else is already
+queued** before flushing once.
+
+That matters for the fan-out shape — a broadcast that enqueues one frame per
+connected client — where the naive loop costs a socket write and a flush per
+frame. Coalescing turns a burst into a single write. A queue with one message in
+it behaves exactly as before.
+
+## Closing
+
+The closing handshake is a handshake, not a hang-up, and the actor keeps running
+through it.
+
+**When the guest closes:** the close frame is sent and the loop *keeps going*, so
+the peer's acknowledgement is still received and surfaced. Closing does not
+discard what is already queued — pending sends are drained and flushed first.
+
+**When the peer closes:** the code and reason are forwarded to the guest, a close
+frame is sent back to complete the handshake, and the actor stops.
+
+**When the connection breaks** — a stream error, or an end with no close frame —
+the actor drops the inbound channel. The next receive resolves to nothing, which
+the prelude turns into an **abnormal close (1006)**. A peer that closes without a
+status code becomes **1005**, per the specification.
+
+## `wss:`
+
+TLS reuses the same stack as `runtime:net`: rustls with the `aws-lc-rs` provider
+named explicitly (both it and `ring` are linked, so the process default is
+ambiguous and would panic) and bundled webpki-roots.
+
+The handshake is completed **here**, and the established stream handed to the
+WebSocket client — which means no TLS feature of `tokio-tungstenite` is compiled
+in, and one TLS stack is configured in one way across the whole runtime.
+
+**No ALPN is offered.** The WebSocket upgrade rides plain HTTP/1.1, so there is
+nothing to negotiate. (HTTP/2 WebSockets — RFC 8441 extended CONNECT — are not
+implemented in either direction.)
+
+Offered subprotocols go out on the upgrade request, and the negotiated one comes
+back off the response headers along with any extensions.
+
+## The server side
+
+`serve()` binds a listener and runs an accept loop whose **WebSocket handshake
+for each connection happens in its own task**, so a slow or hostile handshake
+never blocks the next accept. A failed handshake ends that connection and
+nothing else.
+
+The accept loop retries every `accept` error behind a doubling delay rather than
+ending — the same policy as [the HTTP server](/docs/internals/http#accept) and
+[`runtime:net`](/docs/internals/sockets#listening). Accepted connections queue in
+a channel holding **64**.
+
+There is no cap on concurrent connections and no handshake timeout, so a
+WebSocket server is less defended than the HTTP one. On a public port, put
+something in front of it.
+
+## See also
+
+- [WebSocket guide](/docs/guides/websocket) — how to use it
+- [Internals: sockets](/docs/internals/sockets) — the same actor pattern for raw TCP
+- [Internals: the HTTP server](/docs/internals/http) — which does bound its connections

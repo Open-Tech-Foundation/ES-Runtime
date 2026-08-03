@@ -1,0 +1,116 @@
+---
+title: "Internals: the fetch client"
+description: What fetch() does on the wire — connection reuse, content codings, redirects and the allowlist, and the one timeout it imposes.
+---
+
+# Internals: the fetch client
+
+What `fetch()` does between the call and the response: which client it uses,
+what it negotiates, where the allowlist applies, and the one deadline it
+imposes on you.
+
+This is the **outbound** side. The inbound server has [its own
+page](/docs/internals/http), and raw sockets [another](/docs/internals/sockets).
+For signatures, see the [Web APIs reference](/docs/globals).
+
+## The clients are built lazily, and there are two
+
+The HTTP client is built on the **first `fetch` that needs one**, not at
+startup. Building it means assembling a TLS configuration and parsing a root
+store, which costs startup milliseconds — and a script that never fetches should
+not pay them. A failure to build surfaces as an error from that first fetch
+rather than from the runtime starting.
+
+There are two clients because **redirect policy is a property of the client in
+reqwest, not of a request**. `redirect: "follow"` and `redirect: "manual"` get
+one each, and a program that only ever uses the default never pays to build the
+other. Both are `Arc` inside, so handing one to a request is a refcount bump.
+
+## What goes out
+
+| | |
+| --- | --- |
+| `User-Agent` | `ES-Runtime/<version>`, matching `navigator.userAgent` so a server sees the identity the guest reports. A request that sets its own overrides it. |
+| `Accept-Encoding` | `gzip, br, deflate` |
+| HTTP version | 1.1 or 2, negotiated by ALPN over TLS |
+| Connect timeout | 30s |
+| TCP keepalive | 60s on pooled connections |
+
+Connections are pooled and reused across requests. The keepalive is what stops a
+peer that vanished *without a FIN* from leaving a dead socket in the pool to be
+handed to a later request — which would surface as a mysterious failure on a
+request that did nothing wrong.
+
+### The one timeout, and why it is only on connect
+
+The 30s bound covers **DNS, TCP and TLS** — getting the connection up — and
+nothing after it. That asymmetry is deliberate.
+
+Fetch defines no timeout, and a response body may be long-lived *by design*:
+server-sent events, a log tail, a large download. A total deadline would break
+correct programs, and the specification already hands the decision to the
+caller:
+
+```js
+await fetch(url, { signal: AbortSignal.timeout(5000) });
+```
+
+What is never the caller's intent is waiting forever on a peer that never
+completes a handshake, which is exactly what an unbounded connect does. So the
+phase with no legitimate reason to be slow is bounded, and the phase that has
+one is left to the caller.
+
+## Content codings
+
+`Accept-Encoding: gzip, br, deflate` goes out; a response in any of those
+arrives **decoded**, with `Content-Encoding` and `Content-Length` dropped from
+the headers — because those would otherwise describe bytes the guest never sees.
+This is Fetch's "decode" step.
+
+Two details that are easy to get wrong and are not:
+
+- **Decoding keys off the response**, not off who asked. A server that
+  compresses without being asked is still handled.
+- **An unknown coding passes through untouched**, headers intact. If a server
+  answers `zstd`, the guest gets the compressed bytes and the header that says
+  so — the honest answer, since pretending to have decoded it would be a lie.
+
+`zstd` is deliberately not negotiated. The three codings offered are exactly the
+set `CompressionStream` implements, which is what Fetch's decode step needs a
+client to understand; advertising a fourth would mean carrying a codec present
+for no other reason.
+
+## Redirects
+
+Following is capped at **20 hops**, which is the Fetch specification's own limit.
+
+The part worth knowing is what happens when a `--allow-net` list is in force:
+**every hop is checked, not just the URL the guest wrote.** Because redirect
+policy is a client-level property, an unchecked implementation would follow a
+`302` from an allowed host to a denied one transparently and hand the guest its
+body — the allowlist enforced at the front door and nowhere else.
+
+A refused hop **fails the request** rather than returning the redirect response.
+A program that asked to follow redirects has nothing sensible to do with one, so
+the error is the honest outcome. It is distinguishable from an exhausted
+redirect budget: the refusal is carried inside the redirect error rather than
+being flattened into it.
+
+## Request bodies stream
+
+A `ReadableStream` request body is sent with chunked transfer-encoding, pulled
+as the connection drains, so an upload is never fully buffered in memory. A
+buffered body (string, bytes) crosses inline.
+
+## Capability
+
+`fetch` is gated on `Net` — the same capability as `runtime:net`'s `connect()`,
+because they are the same privilege: reaching out. The allowlist is checked
+against the host **as written**, before DNS resolution, for the reasons set out
+in [the sockets page](/docs/internals/sockets#capabilities).
+
+## See also
+
+- [Internals: sockets](/docs/internals/sockets) — `runtime:net`, and how the allowlist is judged
+- [Internals: the HTTP server](/docs/internals/http) — the inbound direction
+- [Security model](/docs/security) — how `Net` is granted and denied

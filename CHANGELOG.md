@@ -33,8 +33,19 @@ namespace) is unstable and may change between minor releases until the API freez
   the platform, and what a raw socket deliberately does not bound — including
   that a `connect()` in progress cannot be cancelled from guest code.
 
-  These pages live under their own **Internals** section in the docs sidebar,
-  one per subsystem — the `fetch` client and WebSockets are not written yet.
+  `/docs/internals/fetch` covers the outbound direction: why the HTTP clients are
+  built lazily and why there are two of them, what is negotiated on the wire, why
+  the only timeout is on connect, how content codings are decoded (and why an
+  unknown one passes through untouched), and that **every redirect hop is checked
+  against the allowlist**, not just the URL the guest wrote.
+
+  `/docs/internals/websockets` covers the actor task behind every connection,
+  what the host answers without telling you (ping), why sends are coalesced into
+  one write, how each way of closing actually completes, and that there is no
+  keepalive or connection cap on a WebSocket server.
+
+  All four live under an **Internals** section in the docs sidebar, one page per
+  subsystem.
 
 ### Added
 
