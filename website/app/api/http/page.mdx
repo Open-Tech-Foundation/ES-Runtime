@@ -49,6 +49,28 @@ const { hostname, port } = await server.addr;
 console.log(`listening on http://${hostname}:${port}`);
 ```
 
+## Connection info
+
+The handler's second argument describes the connection. Taking it is optional —
+a one-parameter handler is unaffected.
+
+```js
+serve({ port: 8080 }, (request, info) => {
+  // info.remoteAddr = { transport: "tcp", hostname: "203.0.113.7", port: 54321 }
+  return new Response(`hello ${info.remoteAddr.hostname}`);
+});
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `remoteAddr` | `{ transport, hostname, port }` \| `null` | The socket peer. `null` when the host has no peer to report. Same shape `Deno.serve` passes. |
+
+`remoteAddr` is the **socket** peer and only that: behind a reverse proxy it is
+the proxy, and `X-Forwarded-For` is never consulted — a header anyone can send
+is not an identity until something says which hop to trust. It is delivered
+untouched, so a deployment that knows can resolve it itself. On HTTP/2 every
+stream of one connection reports the same peer.
+
 ## Timeouts
 
 `timeouts` bounds connections that are **idle or stalled**. A request in flight,

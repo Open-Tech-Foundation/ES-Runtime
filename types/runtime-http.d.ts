@@ -14,8 +14,41 @@ declare module "runtime:http" {
    *
    * The HTTP version is negotiated per connection (HTTP/1.1 or HTTP/2) and is
    * not visible here: the same `Request` arrives either way.
+   *
+   * The second argument describes the connection the request arrived on. It is
+   * optional to take — a one-parameter handler is unaffected.
    */
-  export type Handler = (request: Request) => Response | Promise<Response>;
+  export type Handler = (
+    request: Request,
+    info: ConnectionInfo,
+  ) => Response | Promise<Response>;
+
+  /** What the handler is told about the connection a request arrived on. */
+  export interface ConnectionInfo {
+    /**
+     * The other end of the socket, or `null` when the host has no peer to
+     * report (a mock provider, a transport with no address).
+     *
+     * This is the **socket** peer and only ever that: behind a reverse proxy it
+     * is the proxy. `X-Forwarded-For` is never consulted — resolving it takes
+     * knowing which hop to trust, and a header anyone can send is not an
+     * identity. The header is delivered untouched in `request.headers`, so a
+     * deployment that does know can resolve it itself.
+     *
+     * On HTTP/2 every request multiplexed onto one connection reports the same
+     * peer, because they are one connection.
+     */
+    remoteAddr: NetAddr | null;
+  }
+
+  /** A transport address, in the shape `Deno.NetAddr` uses. */
+  export interface NetAddr {
+    transport: "tcp";
+    /** The peer's IP address, e.g. `"203.0.113.7"`. */
+    hostname: string;
+    /** The peer's port — ephemeral for a client, so rarely meaningful alone. */
+    port: number;
+  }
 
   /** Options for {@link serve}. */
   export interface ServeOptions {

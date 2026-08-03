@@ -1091,7 +1091,38 @@ await server.stop();
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
 | `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
-`Handler` is `(request: Request) => Response | Promise<Response>`.
+`Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
+The second argument is optional to take — a one-parameter handler is unaffected.
+
+#### The connection a request came from
+
+`info.remoteAddr` is the other end of the socket, in the shape `Deno.serve`
+passes, so a handler ports either way:
+
+```js
+serve({ port: 8080 }, (request, info) => {
+  // { transport: "tcp", hostname: "203.0.113.7", port: 54321 }
+  return new Response(`hello ${info.remoteAddr.hostname}`);
+});
+```
+
+It is `null` when the host has no peer to report — a mock provider, a transport
+with no address — rather than an address-shaped object full of blanks, which a
+handler would happily key a rate limit on.
+
+**Behind a reverse proxy this is the proxy.** `X-Forwarded-For` is deliberately
+never consulted: resolving it takes knowing which hop to trust, and a header
+anyone can send is not an identity until something says whose to believe. The
+header is delivered untouched, so a deployment that *does* know can resolve it
+itself:
+
+```js
+const client = request.headers.get("x-forwarded-for")?.split(",")[0].trim()
+  ?? info.remoteAddr.hostname;
+```
+
+On HTTP/2 every request multiplexed onto one connection reports the same peer,
+because they are one connection.
 
 **`Server`** — `addr: Promise<{ hostname, port }>` (resolves once listening),
 `finished: Promise<void>` (resolves after `stop()`), `stop(): Promise<void>`.

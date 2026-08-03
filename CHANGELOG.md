@@ -10,6 +10,27 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **The client's address, in `runtime:http`** (DECISIONS D44). The handler takes an
+  optional second argument describing the connection:
+
+  ```js
+  serve({ port: 8080 }, (request, info) => {
+    info.remoteAddr; // { transport: "tcp", hostname: "203.0.113.7", port: 54321 }
+  });
+  ```
+
+  The same shape `Deno.serve` passes, so a handler ports either way, and the
+  Fetch `Request` is left alone. A one-parameter handler is unaffected.
+
+  `remoteAddr` is the **socket** peer and only that — behind a reverse proxy it
+  is the proxy. `X-Forwarded-For` is deliberately never consulted: resolving it
+  takes knowing which hop to trust, and a header anyone can send is not an
+  identity. The header is delivered untouched for deployments that do know. It
+  is `null` when the host has no peer to report, rather than a blank address.
+
+  Costs 1.4% of throughput on the connection-per-request shape (67,697 → 66,759
+  req/s, interleaved best of 5) for the two values now crossing per request.
+
 - **Connection timeouts in `runtime:http`** (DECISIONS D43). A connection that is not
   making progress is now closed. Previously none of them ever were: a peer could
   complete the TCP handshake and then say nothing — one syscall, no state to keep

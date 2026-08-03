@@ -276,6 +276,30 @@ in, which is why it is the interesting one.
   [bench/README.md](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/bench/README.md).
 </Callout>
 
+## Who is calling
+
+The handler's second argument carries the connection's peer — the same shape
+`Deno.serve` passes, so a handler ports either way. Taking it is optional.
+
+```js
+serve({ port: 8080 }, (request, info) => {
+  const ip = info.remoteAddr.hostname; // "203.0.113.7"
+  return new Response(`hello ${ip}`);
+});
+```
+
+<Callout type="warning" title="Behind a proxy, this is the proxy">
+  `remoteAddr` is the other end of the socket and nothing else. esrun never
+  reads `X-Forwarded-For` for you: resolving it takes knowing which hop to
+  trust, and a header anyone can send is not an identity. The header arrives
+  untouched, so a deployment that knows its own topology can do it explicitly —
+  `request.headers.get("x-forwarded-for")?.split(",")[0].trim()`.
+</Callout>
+
+It is `null` when there is no peer to report, rather than a blank address. On
+HTTP/2 every request multiplexed onto one connection reports the same peer,
+because they are one connection.
+
 ## Timeouts
 
 A connection that is not making progress is closed. Nothing to turn on:
