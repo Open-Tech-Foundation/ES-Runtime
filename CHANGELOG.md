@@ -41,13 +41,40 @@ namespace) is unstable and may change between minor releases until the API freez
 
   `/docs/internals/websockets` covers the actor task behind every connection,
   what the host answers without telling you (ping), why sends are coalesced into
-  one write, how each way of closing actually completes, and that there is no
-  keepalive or connection cap on a WebSocket server.
+  one write, how each way of closing actually completes, what now bounds a
+  connection, and that there is still no keepalive and no backpressure a sender
+  can feel.
 
   All four live under an **Internals** section in the docs sidebar, one page per
   subsystem.
 
 ### Added
+
+- **A handshake timeout and a connection cap for the WebSocket server**
+  (DECISIONS D47). It was the least defended of the three servers: `runtime:http`
+  had connection timeouts and a connection cap, and the WebSocket server had
+  neither. A peer could complete the TCP handshake, never send its upgrade
+  request, and hold a task and a file descriptor indefinitely — tungstenite waits
+  for that request forever — and nothing bounded how many connections one server
+  accumulated.
+
+  ```js
+  serve({ port: 4001, timeouts: { handshake: 5_000 }, maxConnections: 10_000 });
+  ```
+
+  `timeouts.handshake` defaults to **10s** and bounds only the opening handshake
+  — RFC 6455's is an HTTP request head, so this is the same slowloris bound the
+  HTTP server puts on the same bytes. An **established** connection is never
+  touched: a socket silent for a week is idle, not stalled, and closing it is the
+  application's decision.
+
+  `maxConnections` is unlimited by default and holds rather than refuses, exactly
+  as the HTTP server's does. It is worth setting here more than there: HTTP
+  connection counts are self-limiting, while WebSocket connections are long-lived
+  by design, so this decides whether the count has an upper bound at all.
+
+  Both options are spelled as `runtime:http` spells them. **Embedders:** the
+  provider trait's `serve(host, port)` is now `serve(WsServeOptions)`.
 
 - **The servers report their connection failures.** A failed TLS handshake, a
   WebSocket handshake a client got wrong, and a connection hyper ended on a

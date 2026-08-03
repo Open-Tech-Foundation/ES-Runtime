@@ -83,8 +83,42 @@ for await (const ws of server) {
 
 | Export | Type | Description |
 | --- | --- | --- |
-| `serve(options)` | `({ hostname?, port }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
+| `serve(options)` | `({ hostname?, port, timeouts?, maxConnections? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). |
+
+### ServeOptions
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `hostname` | `"0.0.0.0"` | Address to bind. |
+| `port` | `0` | `0` picks an ephemeral port — read it back from `server.addr`. |
+| `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. |
+| `maxConnections` | unlimited | The most connections to hold at once; over the cap they wait rather than being refused. |
+
+```js
+const server = serve({
+  port: 4001,
+  timeouts: { handshake: 5_000 },
+  maxConnections: 10_000,
+});
+```
+
+`timeouts.handshake` bounds only the **opening handshake** — RFC 6455's is an
+HTTP request head and a `101` answer, so this is the slowloris bound on those
+bytes. It never reaches an established connection: a socket that has said
+nothing for a week is idle, not stalled, and closing it is your application's
+decision.
+
+`maxConnections` is worth setting on a public port, more so than on an HTTP
+server. HTTP connections churn; WebSocket connections are long-lived by design,
+so the count does not fall back down on its own. Over the cap a connection is
+**held, not refused** — it waits in the kernel's backlog, costing the server no
+descriptor, task or buffer, and is served the moment a slot frees. Unlimited by
+default, because the right number follows from your file-descriptor budget,
+which the runtime cannot read.
+
+Both options are spelled exactly as [`runtime:http`'s `serve()`](/api/http)
+spells them.
 
 ### WebSocketServer
 

@@ -103,9 +103,56 @@ ending — the same policy as [the HTTP server](/docs/internals/http#accept) and
 [`runtime:net`](/docs/internals/sockets#listening). Accepted connections queue in
 a channel holding **64**.
 
-There is no cap on concurrent connections and no handshake timeout, so a
-WebSocket server is less defended than the HTTP one. On a public port, put
-something in front of it.
+### What bounds a connection
+
+Two, and they are the HTTP server's mechanisms unchanged — see
+[Internals: the HTTP server](/docs/internals/http#the-life-of-a-connection) for
+the reasoning behind each.
+
+| Limit | Default | Bounds |
+| --- | --- | --- |
+| `timeouts.handshake` | 10s | From accept until the opening handshake completes |
+| `maxConnections` | unlimited | How many connections this server holds at once |
+| Accept queue | 64 | Accepted connections waiting for an `accept()` call |
+
+The handshake bound exists because RFC 6455's handshake is an HTTP request head,
+and tungstenite will wait for one forever. A peer that completes the TCP
+handshake and then says nothing is the cheapest hold there is — one syscall to
+it, a task and a descriptor to us — so this is the same slowloris bound the HTTP
+server puts on the same bytes.
+
+It stops there. An **established** connection has no deadline at all: no idle
+timeout, no keepalive, no maximum lifetime. A WebSocket that has said nothing
+for a week is idle, not stalled, and that is the whole point of the protocol —
+deciding when silence means a dead peer is the application's job, and the host
+answering ping for you (above) is the tool for it.
+
+`maxConnections` is enforced by **not accepting**: a permit is taken before
+`accept` and released when the connection ends, so at the cap the acceptor
+simply stops and excess connections wait in the kernel's backlog, costing this
+server no descriptor, task or buffer. Held, not refused — when a slot frees the
+waiting connection is served.
+
+The permit is released when the *connection* ends, not when its handshake
+finishes. That difference is the whole design: releasing it early would make the
+cap bound the handshake rate and nothing else, which is backwards for a server
+whose connections are long-lived. It is also why the cap matters more here than
+on an HTTP server. There, connection count is self-limiting — requests finish and
+connections close. Here it only goes up until your application closes something,
+so this option is what decides whether it has an upper bound at all.
+
+### Still missing
+
+No per-IP cap, so one peer can take every slot of a `maxConnections` budget.
+No `wss:` — a TLS WebSocket server waits on RFC 8441 extended CONNECT.
+
+And **no backpressure that a sender can feel.** A connection's command channel
+holds 16 messages; past that the host-side send awaits a slot, but `send()`
+returns immediately either way — it is fire-and-forget by design, since the
+WebSocket API has no way to report a full buffer. So writing faster than a peer
+reads does not stall your code, it accumulates pending host-side sends, one per
+message, with nothing bounding the total. A server fanning out to a peer on a
+slow link should pace itself; the runtime will not do it for you.
 
 A failed handshake logs at `debug` on the `runtime::websocket` target, inside a
 `debug` span carrying the peer, so it is attributable to one client:

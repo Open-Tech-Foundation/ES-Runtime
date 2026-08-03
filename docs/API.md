@@ -1396,8 +1396,16 @@ for await (const ws of server) {
 
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
-| `serve(options)`  | `({ hostname?, port }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
+| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). |
+
+| Option | Default | Description |
+| ------ | ------- | ----------- |
+| `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. RFC 6455's handshake is an HTTP request head, so this is the slowloris bound on the same bytes. It never touches an **established** connection — a socket that has said nothing for a week is idle, not stalled. |
+| `maxConnections` | unlimited | The most connections to hold at once. A connection over the cap is **held, not refused**: it waits in the kernel backlog and is served once a slot frees. Worth setting on a public port — WebSocket connections are long-lived by design, so unlike an HTTP server's the count does not fall back down on its own. |
+
+Both spellings match `runtime:http`'s `serve()`, and the numbers live only in the
+host — the prelude sends "unset", so there is one copy to keep true.
 
 **`WebSocketServer`** — async-iterable of server connections;
 `addr: Promise<{ hostname, port }>`, `accept(): Promise<conn | null>`,
