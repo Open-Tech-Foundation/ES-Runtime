@@ -147,6 +147,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`esrun` installed no `tracing` subscriber, so every event was discarded.**
+  `init_tracing` existed, was documented as the helper the CLI and tests share,
+  and had its own idempotence test — but nothing in the tree ever called it.
+  Installing a subscriber is process-global, so a library crate must not do it;
+  the binary is the only place it can happen, and the binary never did. This was
+  invisible from either side: the emitting code was correct and its unit tests
+  passed, because a test installs its own subscriber.
+
+  `RUST_LOG` now drives the filter, defaulting to `warn` when unset — quiet in
+  normal operation, since the only `warn!` sites are the three accept loops
+  reporting a listening socket they could not accept on. `RUST_LOG=off` silences
+  even those.
+
+  ANSI colour is now gated on stderr being a terminal, and on `NO_COLOR` — the
+  same test the CLI already applied to its own diagnostics. Piped to a file,
+  escape sequences split `peer=1.2.3.4` across the escape that coloured the
+  field name, so the line was not greppable.
+
 - **An abandoned provider call no longer kills the resource it was waiting on.**
   Five calls — `runtime:http`'s `next_requests`, `runtime:net`'s `read` and
   `accept`, and the WebSocket provider's `recv` and `accept` — take a channel

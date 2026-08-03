@@ -314,3 +314,39 @@ esrun stops accepting, lets in-flight requests answer, and exits `130` / `143`.
 Install a handler with [`onSignal`](/api/process) when you have your own cleanup
 — closing a pool, flushing a buffer — and esrun leaves the whole shutdown to
 you.
+
+## Logging
+
+esrun writes structured `tracing` events to **stderr**, separate from your
+program's `console` output. `RUST_LOG` sets the filter.
+
+| | |
+| --- | --- |
+| Default (unset) | `warn` — quiet unless a listening socket is failing |
+| Everything from one subsystem | `RUST_LOG=runtime::http=debug` |
+| Everything, including dependencies | `RUST_LOG=debug` |
+| Off | `RUST_LOG=off` |
+
+Targets are `runtime::http`, `runtime::net` and `runtime::websocket`. Colour is
+used only when stderr is a terminal, and `NO_COLOR` turns it off.
+
+```bash
+RUST_LOG=runtime::http=debug esrun server.js
+```
+
+The level split is about **who can cause an event**, not how bad it is. An
+accept failure is the listening socket's problem and an operator's to act on, so
+it is `warn` and visible by default. A failed TLS or WebSocket handshake is
+something any peer can produce on demand — reporting those by default would let
+a scanner sweeping a public port set your log volume — so they are `debug`. A
+connection that is served and closed cleanly logs nothing at all.
+
+Turn `debug` on when a server is accepting connections and serving nothing: that
+is what a certificate no client will accept looks like from this side, and
+without the log it is indistinguishable from a port nobody is calling. See
+[Internals: the HTTP server](/docs/internals/http#what-the-server-reports) for
+the full event list.
+
+`RUST_LOG` is the name `tracing-subscriber` reads, so embedding the runtime as a
+Rust library and running it under esrun use the same filter syntax and the same
+target names.
