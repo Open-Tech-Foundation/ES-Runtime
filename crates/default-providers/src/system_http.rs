@@ -49,11 +49,24 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, mpsc, oneshot, watch};
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 
 use crate::accept_backoff::AcceptBackoff;
 use crate::first_byte::FirstByteTimeout;
+
+/// The most header fields one HTTP/1.1 request head may carry.
+const MAX_HEADERS: usize = 100;
+
+/// The largest an HTTP/1.1 connection's read buffer may grow. This is the
+/// number that multiplies by the connection count: it is the worst-case memory
+/// a single accepted connection can make the server hold, which is what
+/// [`HttpServeOptions::max_connections`] exists to bound.
+const MAX_H1_BUFFER: usize = 8192 + 4096 * 100;
+
+/// The largest HTTP/2 header block the server will accept, advertised to the
+/// peer in `SETTINGS` so a client learns it before sending one.
+const MAX_H2_HEADER_LIST: u32 = 16 * 1024;
 
 /// The response body handed to hyper: buffered (`Full`) or streamed
 /// (`StreamBody`), erased behind one type so both share the service signature.
@@ -431,6 +444,14 @@ async fn serve_connection<S>(
             .keep_alive_interval(interval)
             .keep_alive_timeout(interval);
     }
+    // Header limits, stated at hyper's own current values rather than left
+    // inherited. Nothing changes today; what changes is that a hyper release
+    // adjusting a default cannot quietly adjust ours. That is not theoretical —
+    // it is how this server ran without hyper's 30s header timeout, which was
+    // present, defaulted, and silently disabled for want of a timer.
+    builder.http1().max_headers(MAX_HEADERS);
+    builder.http1().max_buf_size(MAX_H1_BUFFER);
+    builder.http2().max_header_list_size(MAX_H2_HEADER_LIST);
     // Explicit rather than inherited: an HTTP/2 peer can open streams far faster
     // than a single-threaded isolate answers them, and every open stream holds a
     // queued `Pending` plus its body channel. Capping concurrency bounds what one
@@ -497,6 +518,16 @@ impl HttpServerProvider for SystemHttpServer {
             let (draining, drain_rx) = watch::channel(false);
             let live = this.live.clone();
             let timeouts = options.timeouts;
+            // One permit per connection the server may serve at once. A permit
+            // is taken *before* accepting and released when the connection task
+            // ends, so at the cap the acceptor simply stops accepting: excess
+            // connections wait in the kernel's backlog and are refused by the
+            // OS once that fills. Nothing is spent on a connection this server
+            // will not serve — no descriptor, no task, no read buffer — which
+            // is the whole point under the flood a cap exists for.
+            let slots = options
+                .max_connections
+                .map(|max| Arc::new(Semaphore::new(max)));
 
             let acceptor = tokio::spawn(async move {
                 // Errors from `accept` are retried, never fatal — see
@@ -504,6 +535,18 @@ impl HttpServerProvider for SystemHttpServer {
                 // what the wait between attempts is protecting.
                 let mut backoff = AcceptBackoff::new();
                 loop {
+                    // Held across the accept, then handed to the connection it
+                    // admits. `acquire_owned` only fails on a closed semaphore
+                    // and nothing closes this one, so a failure would mean the
+                    // cap had silently stopped applying — end the loop rather
+                    // than serve unbounded.
+                    let permit = match &slots {
+                        None => None,
+                        Some(slots) => match slots.clone().acquire_owned().await {
+                            Ok(permit) => Some(permit),
+                            Err(_) => break,
+                        },
+                    };
                     let (stream, peer) = match listener.accept().await {
                         Ok(accepted) => {
                             backoff.reset();
@@ -529,6 +572,9 @@ impl HttpServerProvider for SystemHttpServer {
                     let tls = tls.clone();
                     live.enter();
                     tokio::spawn(async move {
+                        // Moved in so the slot is released when this connection
+                        // is done, whichever way it ends — including a panic.
+                        let _permit = permit;
                         match tls {
                             // A failed handshake ends this connection only. It is
                             // an ordinary event on a public port — a scanner, a
@@ -689,7 +735,7 @@ mod tests {
 
     /// Sends a bare `GET /` on a fresh connection and returns it, so a test can
     /// decide when (and whether) to hang up.
-    async fn request_on_new_conn(port: u16) -> TcpStream {
+    pub(super) async fn request_on_new_conn(port: u16) -> TcpStream {
         let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
         sock.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n")
             .await
@@ -705,6 +751,22 @@ mod tests {
         bound_with_timeouts(tls, HttpTimeouts::default()).await
     }
 
+    /// A server that will serve at most `max` connections at once.
+    pub(super) async fn bound_with_max(max: usize) -> (SystemHttpServer, u64, u16) {
+        let http = SystemHttpServer::new();
+        let (id, info) = http
+            .serve(HttpServeOptions {
+                host: "127.0.0.1".into(),
+                port: 0,
+                tls: None,
+                timeouts: HttpTimeouts::default(),
+                max_connections: Some(max),
+            })
+            .await
+            .unwrap();
+        (http, id, info.local_port)
+    }
+
     /// Most tests want the shipping defaults; the timeout tests want values
     /// short enough to wait for, which is the only reason this is a parameter.
     pub(super) async fn bound_with_timeouts(
@@ -718,6 +780,7 @@ mod tests {
                 port: 0,
                 tls,
                 timeouts,
+                max_connections: None,
             })
             .await
             .unwrap();
@@ -840,6 +903,7 @@ mod tests {
                 port: 0,
                 tls: None,
                 timeouts: HttpTimeouts::default(),
+                max_connections: None,
             })
             .await
             .err()
@@ -853,6 +917,7 @@ mod tests {
                 port: 0,
                 tls: None,
                 timeouts: HttpTimeouts::default(),
+                max_connections: None,
             })
             .await
             .expect("the allowed address binds");
@@ -957,6 +1022,7 @@ mod tls_tests {
                 port: 0,
                 tls: Some(tls_options(b"not a certificate".to_vec(), key_pem)),
                 timeouts: HttpTimeouts::default(),
+                max_connections: None,
             })
             .await;
         assert!(result.is_err(), "an unparseable cert must not bind");
@@ -1911,5 +1977,88 @@ mod timeout_tests {
             !closed_within(&mut sock, SHORT * 5).await,
             "a silent connection must survive when the timeouts are disabled"
         );
+    }
+}
+
+/// The connection cap, from the outside. What makes it a *cap* rather than a
+/// counter is where it is enforced: the acceptor stops accepting, so a
+/// connection over the limit costs the server nothing at all until a slot
+/// frees — no descriptor, no task, no read buffer.
+#[cfg(test)]
+mod connection_cap_tests {
+    use super::tests::{bound_with_max, request_on_new_conn};
+    use super::*;
+    use std::time::Duration;
+
+    /// Long enough that a slow machine does not report a held-back connection
+    /// as one that was never going to arrive.
+    const GRACE: Duration = Duration::from_secs(10);
+    /// How long "nothing happened" is given to not happen.
+    const QUIET: Duration = Duration::from_millis(500);
+
+    /// Waits for requests on a task rather than under a `timeout`, because
+    /// `next_requests` is **not cancel-safe**: it checks the receiver out of the
+    /// registry and only puts it back after the await, so a cancelled call
+    /// takes the server's request queue with it. Every wait here is a probe
+    /// that is allowed to finish.
+    fn probe(
+        http: &SystemHttpServer,
+        id: u64,
+    ) -> tokio::task::JoinHandle<Vec<(u64, HttpServerRequest)>> {
+        let http = http.clone();
+        tokio::spawn(async move { http.next_requests(id, 8).await.unwrap() })
+    }
+
+    #[tokio::test]
+    async fn a_connection_over_the_cap_waits_for_a_slot_rather_than_being_served() {
+        let (http, id, port) = bound_with_max(2).await;
+
+        // Two connections, each with a request in flight, fill the cap.
+        let first = request_on_new_conn(port).await;
+        let _second = request_on_new_conn(port).await;
+        let mut served = 0;
+        while served < 2 {
+            served += tokio::time::timeout(GRACE, probe(&http, id))
+                .await
+                .expect("the first two connections are served")
+                .unwrap()
+                .len();
+        }
+
+        // A third connects — the kernel completes the handshake from its
+        // backlog, so this succeeds — but the server must not serve it.
+        let _third = request_on_new_conn(port).await;
+        let held = probe(&http, id);
+        tokio::time::sleep(QUIET).await;
+        assert!(
+            !held.is_finished(),
+            "a connection over the cap must not be served while the cap is full"
+        );
+
+        // Free a slot: that connection ends, its permit drops, and the waiting
+        // connection is admitted — the queue moves rather than being refused.
+        drop(first);
+        let admitted = tokio::time::timeout(GRACE, held)
+            .await
+            .expect("the held connection is served once a slot frees")
+            .unwrap();
+        assert_eq!(admitted.len(), 1);
+    }
+
+    /// The cap is a ceiling on connections held at once, not a total: a server
+    /// that has served its cap and let those connections go keeps serving.
+    #[tokio::test]
+    async fn slots_are_reusable_rather_than_spent() {
+        let (http, id, port) = bound_with_max(1).await;
+
+        for _ in 0..3 {
+            let conn = request_on_new_conn(port).await;
+            let batch = tokio::time::timeout(GRACE, probe(&http, id))
+                .await
+                .expect("each connection in turn is served")
+                .unwrap();
+            assert_eq!(batch.len(), 1);
+            drop(conn);
+        }
     }
 }

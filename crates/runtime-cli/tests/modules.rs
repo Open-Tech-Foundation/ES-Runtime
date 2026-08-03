@@ -162,6 +162,26 @@ fn tells_a_handler_which_peer_a_request_came_from() {
 }
 
 #[test]
+fn holds_connections_over_the_cap_back_rather_than_refusing_them() {
+    // A real accept loop with a real kernel backlog behind it: the cap works by
+    // *not accepting*, which is only observable where there is something for
+    // the connection to wait in.
+    let out = run_file("http-max-connections.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("first:HTTP/1.1 200 OK"), "{stdout}");
+    // Connected, but not served while the only slot is taken.
+    assert!(stdout.contains("second-while-full:silent"), "{stdout}");
+    // …and served once it frees, which is what makes this a queue and not a
+    // refusal.
+    assert!(
+        stdout.contains("second-after-free:HTTP/1.1 200 OK"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("CAP_OK"), "{stdout}");
+}
+
+#[test]
 fn honours_every_fetch_redirect_mode_over_the_wire() {
     // Real 3xx responses from a real runtime:http server through the real
     // reqwest transport — the stub transport in the runtime's own tests cannot

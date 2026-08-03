@@ -78,6 +78,23 @@ function parseTimeouts(options) {
   }
 }
 
+// The most connections to serve at once. Absent (`null` on the wire) means no
+// limit, which is the default: the right number follows from the deployment's
+// file-descriptor budget and the memory a connection costs, neither of which
+// the runtime can read, and a cap guessed for you would throttle real traffic
+// with no error anywhere to explain it.
+function parseMaxConnections(options) {
+  const value = (options ?? {}).maxConnections;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "number") {
+    throw new TypeError(`serve: maxConnections must be a number or null, got ${typeof value}`);
+  }
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RangeError("serve: maxConnections must be an integer of at least 1");
+  }
+  return value;
+}
+
 // Streams a Response's ReadableStream body to the host one chunk at a time.
 // Each push awaits the bounded host channel (download backpressure); a guest
 // stream error is forwarded so the in-flight response aborts the connection —
@@ -210,7 +227,7 @@ async function handleRequest(entry, handler) {
 // The handle returned by serve(): `addr` resolves to the bound address,
 // `finished` resolves when the accept loop ends, `stop()` shuts it down.
 class Server {
-  constructor(hostname, port, tls, timeouts, handler) {
+  constructor(hostname, port, tls, timeouts, maxConnections, handler) {
     let resolveAddr, rejectAddr, resolveFinished;
     this.addr = new Promise((res, rej) => {
       resolveAddr = res;
@@ -226,8 +243,16 @@ class Server {
         // The ALPN list takes the whole argument tail, so everything else —
         // including the three timeouts — is passed positionally before it.
         info = tls
-          ? await ops.http_serve(hostname, port, tls.cert, tls.key, ...timeouts, ...tls.alpn)
-          : await ops.http_serve(hostname, port, null, null, ...timeouts);
+          ? await ops.http_serve(
+              hostname,
+              port,
+              tls.cert,
+              tls.key,
+              ...timeouts,
+              maxConnections,
+              ...tls.alpn,
+            )
+          : await ops.http_serve(hostname, port, null, null, ...timeouts, maxConnections);
       } catch (e) {
         rejectAddr(e);
         resolveFinished();
@@ -283,7 +308,14 @@ function serve(options, handler) {
   const { hostname, port } = parseAddress(options);
   // Parsed before the bind, so a bad option is a TypeError rather than a port
   // that is claimed and then abandoned.
-  return new Server(hostname, port, parseTls(options), parseTimeouts(options), handler);
+  return new Server(
+    hostname,
+    port,
+    parseTls(options),
+    parseTimeouts(options),
+    parseMaxConnections(options),
+    handler,
+  );
 }
 
 export { serve };

@@ -6458,6 +6458,55 @@ ${info.remoteAddr.port}`));",
         assert_eq!(recorded_body(&http), "/who");
     }
 
+    /// No cap unless one is asked for: the right number follows from a
+    /// deployment's descriptor budget, and one guessed here would throttle real
+    /// traffic with nothing to explain it.
+    #[test]
+    fn serve_is_uncapped_unless_max_connections_says_otherwise() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const a = serve({ port: 8080 }, () => new Response('x')); \
+             const b = serve({ port: 8081, maxConnections: 512 }, () => new Response('x')); \
+             globalThis.result = (await a.addr).port + (await b.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        assert_eq!(options[0].max_connections, None);
+        assert_eq!(options[1].max_connections, Some(512));
+    }
+
+    /// A cap of zero would serve nothing at all, and a fractional one is a
+    /// mistake rather than an intention — both are rejected at the call.
+    #[test]
+    fn an_unusable_connection_cap_is_rejected_before_the_port_is_bound() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const names = []; \
+             for (const bad of ['lots', 0, -1, 1.5]) { \
+               try { serve({ port: 8080, maxConnections: bad }, () => new Response('x')); } \
+               catch (e) { names.push(e.constructor.name); } \
+             } \
+             globalThis.result = names.join(',');",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(
+            rt.eval("globalThis.result").unwrap(),
+            Value::String("TypeError,RangeError,RangeError,RangeError".to_string())
+        );
+        assert!(
+            http.options.lock().unwrap().is_empty(),
+            "a rejected option must not have reached the provider"
+        );
+    }
+
     /// Rejected in the prelude, before the bind: a typo in a timeout must not
     /// claim a port and then serve with a silently different policy.
     #[test]

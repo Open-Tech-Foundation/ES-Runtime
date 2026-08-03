@@ -75,7 +75,7 @@ pub(crate) fn install(
     let h = http.clone();
     engine.register_op(
         // Args: [host, port, cert?, key?, handshakeMs?, headerReadMs?,
-        // h2KeepAliveMs?, alpn0, alpn1, …]. A cert *and* key (both non-empty)
+        // h2KeepAliveMs?, maxConnections?, alpn0, alpn1, …]. A cert *and* key (both non-empty)
         // turn on TLS termination; the cert/key travel inline because reading a
         // file is the filesystem's privilege, so serving HTTPS needs no grant
         // beyond NetListen. Each timeout is `null` for the provider default or
@@ -96,9 +96,17 @@ pub(crate) fn install(
                 header_read: arg_timeout(&args, 5, fallback.header_read),
                 h2_keep_alive: arg_timeout(&args, 6, fallback.h2_keep_alive),
             };
+            // `null`/absent ⇒ no limit, which is the default: the right
+            // number follows from a deployment's descriptor budget, and a cap
+            // guessed here would throttle real traffic silently.
+            let max_connections = args
+                .get(7)
+                .and_then(Value::as_number)
+                .filter(|n| *n >= 1.0 && n.is_finite())
+                .map(|n| n as usize);
             let alpn: Vec<String> = args
                 .iter()
-                .skip(7)
+                .skip(8)
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect();
             Box::pin(async move {
@@ -125,6 +133,7 @@ pub(crate) fn install(
                     port,
                     tls,
                     timeouts,
+                    max_connections,
                 };
                 let (id, info) = require(&h)?.serve(options).await.map_err(map_err)?;
                 Ok(server_value(id, &info))

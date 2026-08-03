@@ -1144,6 +1144,19 @@ pub struct HttpServeOptions {
     pub tls: Option<HttpServerTls>,
     /// When to give up on a connection that is not making progress.
     pub timeouts: HttpTimeouts,
+    /// The most connections to serve at once, or `None` for no limit.
+    ///
+    /// `None` is the default because the right number is a deployment's to
+    /// know: it follows from the file-descriptor budget and the memory a
+    /// connection costs, neither of which this crate can read. A cap set too
+    /// low throttles legitimate traffic silently, which is worse than the
+    /// unbounded case it was meant to improve.
+    ///
+    /// An implementation that honours this should hold connections *back*
+    /// rather than accept and discard them — a limit that still costs a
+    /// descriptor and a task per refused connection does not bound anything
+    /// under the flood it exists for.
+    pub max_connections: Option<usize>,
 }
 
 /// When an [`HttpServerProvider`] should give up on a connection.
