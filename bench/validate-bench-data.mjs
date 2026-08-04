@@ -88,12 +88,41 @@ for (const [path, get, source] of sections) {
 
 // The run knows which cells were noisy or timed out. Surfacing them here means
 // the person publishing sees them, rather than only whoever watched stderr.
+// Spread is disclosed; the *floor* is what gets gated.
+//
+// The published number is the minimum, so judging it by coefficient of variation
+// asks the wrong question: one writeback stall or scheduler hiccup sends CoV past
+// 100% while leaving the minimum exactly where it was — which is the whole reason
+// the harness aggregates by min. What decides whether that minimum is real is
+// whether anything corroborates it. `results_floor_gap` is how far the second
+// -lowest sample sits above the lowest; when two samples agree the floor is a
+// measurement, and when nothing comes near it the floor is a fluke.
+//
+// So: high CoV is reported, a lone unsupported minimum is rejected.
+const COV_WOBBLY = 10;
+const FLOOR_GAP_UNPUBLISHABLE = 25;
+
 const cov = data.results_cov || {};
 for (const [key, row] of Object.entries(cov)) {
   for (const rt of runtimes) {
     const c = row?.[rt];
-    if (typeof c === "number" && c > 10) {
+    if (typeof c === "number" && c > COV_WOBBLY) {
       warnings.push(`${key}/${rt}: coefficient of variation ${c}% — the number is wobbly`);
+    }
+  }
+}
+
+const floorGap = data.results_floor_gap || {};
+for (const [key, row] of Object.entries(floorGap)) {
+  for (const rt of runtimes) {
+    const g = row?.[rt];
+    if (typeof g !== "number") continue;
+    if (g > FLOOR_GAP_UNPUBLISHABLE) {
+      errors.push(
+        `results_floor_gap."${key}"."${rt}": the next-lowest sample is ${g}% above ` +
+          `the published minimum — nothing corroborates that floor, so it is one ` +
+          `lucky run rather than a measurement`,
+      );
     }
   }
 }

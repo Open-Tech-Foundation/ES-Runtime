@@ -42,13 +42,16 @@ function parseXML() {
   }
 }
 
-// Warmup
-for (let i = 0; i < 5; i++) {
-  parseXML();
-}
-
 // Timed run
 const iterations = 10;
+
+// Untimed warmup: a tenth of the timed run (the ratio the engine workloads use),
+// never fewer than 5. A flat handful left the JIT-backed libraries measured
+// part-way up the tiers while native parsers started at full speed; on the large
+// documents one parse already does enough work to tier up, so the floor holds.
+for (let i = 0; i < Math.max(iterations / 10, 5); i++) {
+  parseXML();
+}
 const start = performance.now();
 for (let i = 0; i < iterations; i++) {
   parseXML();

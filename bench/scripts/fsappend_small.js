@@ -11,13 +11,13 @@
     append = (p, d) => Deno.writeFile(p, enc.encode(d), { append: true });
     cleanup = (p) => Deno.remove(p).catch(() => {});
   } else if (typeof Bun !== "undefined") {
-    const { appendFile, unlink } = await import("node:fs/promises");
+    const { appendFile, rm } = await import("node:fs/promises");
     append = (p, d) => appendFile(p, d);
-    cleanup = (p) => unlink(p).catch(() => {});
+    cleanup = (p) => rm(p, { force: true }).catch(() => {});
   } else if (typeof process !== "undefined" && process.versions && process.versions.node) {
     const fsp = await import("node:fs/promises");
     append = (p, d) => fsp.appendFile(p, d);
-    cleanup = (p) => fsp.unlink(p).catch(() => {});
+    cleanup = (p) => fsp.rm(p, { force: true }).catch(() => {});
   } else {
     const fs = await import("runtime:fs");
     append = (p, d) => fs.write(p, d, { append: true });
@@ -32,6 +32,8 @@
   const t0 = performance.now();
   await run(N);
   const t1 = performance.now();
-  await cleanup(tmp);
+  // Reported before cleanup: a teardown failure must not discard a measurement
+  // that already succeeded — a missing result reaches the site as "unsupported".
   console.log("RESULT_MS=" + (t1 - t0).toFixed(2));
+  await cleanup(tmp);
 })();

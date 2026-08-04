@@ -24,6 +24,12 @@
 #  * NOISE is disclosed, not hidden: the coefficient of variation per cell is
 #    computed; cells above NOISE_THRESHOLD% are flagged (`~`) and listed, and
 #    BENCH_JSON publishes cov + sample count alongside every number.
+#  * THE FLOOR IS CORROBORATED: since the published number is a minimum, cov is
+#    the wrong thing to judge it by — one stall sends cov past 100% without
+#    moving the minimum at all. BENCH_JSON also publishes results_floor_gap, how
+#    far the second-lowest sample sits above the lowest. Two samples that agree
+#    make the floor a measurement; a low sample nothing else comes near makes it
+#    a fluke, and that is what blocks publication.
 #  * A FAILED CELL IS RETRIED before it is written off, and a timeout is recorded
 #    as distinct from an unsupported API — they reach the site as the same null.
 #  * Peak RSS is sampled per runtime for RSS_ROWS (GNU time, skipped if absent).
@@ -33,11 +39,18 @@
 # port is taken).
 #
 # Usage:  bench/run.sh                      (auto-detects installed runtimes)
+#         bench/run.sh --list                     (groups, and any unclaimed row)
+#         GROUP="fs net" bench/run.sh             (scoped run — one or more groups)
+#         WORKLOADS="url encoding" bench/run.sh   (scoped run — explicit rows)
 #         ESRUN=/path/to/esrun bench/run.sh
-#         WORKLOADS="url encoding" bench/run.sh   (subset of workloads)
 #         WORKLOAD_RUNS=15 bench/run.sh           (more samples per workload)
 #         QUIET=1 bench/run.sh                    (pin CPU + disable ASLR, etc.)
 #         BENCH_JSON=1 bench/run.sh > results.json (machine-readable output)
+#
+# Scoping is the normal way to work: the full suite is long, a group is a couple
+# of minutes. WORKLOADS wins over GROUP when both are set. (The variable is GROUP,
+# not GROUPS: bash reserves GROUPS for the caller's group IDs, so a GROUPS=fs in
+# the environment silently never arrives.)
 set -uo pipefail
 cd "$(dirname "$0")"
 
@@ -49,14 +62,107 @@ MIN_REPS="${MIN_REPS:-3}"
 # Coefficient-of-variation (%) above which a measured cell is flagged as noisy —
 # and, below which, a row is considered settled enough to stop sampling.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
-# Rows to sample peak RSS for. Every row cost a whole extra launch per runtime
-# (~245 launches, an eighth of the suite) to produce numbers the site never
-# read: it only ever charts the startup row's memory.
-RSS_ROWS="${RSS_ROWS:-startup bigscript}"
+# Rows to sample peak RSS for. Sampling every row cost a whole extra launch per
+# runtime (~245 launches, an eighth of the suite) for numbers nothing read. The
+# two that matter are the floor (`startup`, a near-empty process) and the number
+# under load (`rss_load`, which holds a live working set).
+RSS_ROWS="${RSS_ROWS:-startup bigscript rss_load}"
 # A timed cell below this many ms is measuring the clock, not the runtime.
 MIN_MS="${MIN_MS:-5}"
-ALL_WORKLOADS="compute json jsonbig sha256 crypto url url_setter urlpattern encoding base64 structured async timers streams fetch fetch_upload http websocket fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_large fsexists_small fsexists_large glob xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream compression wasm_compile wasm_call wasm_mem wasi_start wasi_syscall"
-WORKLOADS="${WORKLOADS:-$ALL_WORKLOADS}"
+# Rows whose metric is process wall-time (launch + parse), measured externally
+# rather than self-timed. Each is generated or fixed rather than a scripts/*.js
+# workload; see the gen_* functions below.
+LAUNCH_ROWS="startup bigscript modules"
+
+# --- groups -----------------------------------------------------------------
+#
+# Named subsets, so a run can be scoped to the area being worked on instead of
+# the whole suite. `GROUP=fs bench/run.sh` is a two-minute loop; the full suite
+# is not. Groups are also the vocabulary the site's sections use, so a row moving
+# between groups moves on the page too.
+#
+# Every row must appear in exactly one group — `bench/run.sh --list` checks that
+# and is the fastest way to catch a row added to scripts/ but wired up nowhere.
+declare -A GROUP_MEMBERS
+GROUP_MEMBERS[launch]="startup bigscript modules"
+GROUP_MEMBERS[engine]="compute json jsonbig regex strings structured errors async timers"
+GROUP_MEMBERS[webapi]="url url_setter urlpattern encoding base64 date_intl buffers streams compression"
+GROUP_MEMBERS[crypto]="sha256 crypto crypto_asym crypto_kdf"
+GROUP_MEMBERS[fs]="fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_many fsexists_small fsexists_many glob"
+GROUP_MEMBERS[net]="fetch fetch_upload http websocket"
+GROUP_MEMBERS[serialization]="xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream"
+GROUP_MEMBERS[wasm]="wasm_compile wasm_call wasm_mem"
+GROUP_MEMBERS[wasi]="wasi_start wasi_syscall"
+GROUP_MEMBERS[memory]="rss_load"
+GROUP_ORDER=(launch engine webapi crypto fs net serialization wasm wasi memory)
+
+ALL_ROWS=""
+for _g in "${GROUP_ORDER[@]}"; do ALL_ROWS="$ALL_ROWS ${GROUP_MEMBERS[$_g]}"; done
+ALL_ROWS="${ALL_ROWS# }"
+
+# Scripts under scripts/ that are deliberately not rows: servers driven by
+# rps.sh/http2.sh, the OOM probes memory-safety.sh runs, and the module builder
+# the wasm rows import. Listed explicitly so that anything *else* unclaimed is a
+# real oversight rather than noise a reader learns to scroll past.
+NON_ROW_SCRIPTS="helloserver hono mem_large_string mem_nested_json mem_promise_leak wasm-mod"
+
+# --list: print the groups and exit. Also reports any scripts/*.js that no group
+# claims, which is how a new workload gets noticed instead of silently never
+# running.
+if [ "${1:-}" = "--list" ]; then
+  for g in "${GROUP_ORDER[@]}"; do printf '%-14s %s\n' "$g" "${GROUP_MEMBERS[$g]}"; done
+  orphans=""
+  for f in scripts/*.js; do
+    b="$(basename "$f" .js)"
+    case " $ALL_ROWS " in *" $b "*) continue ;; esac
+    case " $NON_ROW_SCRIPTS " in *" $b "*) continue ;; esac
+    orphans="$orphans $b"
+  done
+  printf '\nnot rows (helpers, by design):%s\n' " $NON_ROW_SCRIPTS"
+  if [ -n "$orphans" ]; then
+    printf 'IN scripts/ BUT IN NO GROUP — never run:%s\n' "$orphans"
+  else
+    printf 'every other script in scripts/ belongs to a group.\n'
+  fi
+  # A group naming a row with no script is the same oversight in reverse.
+  missing=""
+  for r in $ALL_ROWS; do
+    case " $LAUNCH_ROWS " in *" $r "*) continue ;; esac
+    [ -f "scripts/$r.js" ] || missing="$missing $r"
+  done
+  [ -n "$missing" ] && printf 'IN A GROUP BUT HAS NO SCRIPT:%s\n' "$missing"
+  exit 0
+fi
+
+# Selection: an explicit WORKLOADS list wins, then GROUP, then everything.
+if [ -n "${WORKLOADS:-}" ]; then
+  SELECTED="$WORKLOADS"
+elif [ -n "${GROUP:-}" ]; then
+  SELECTED=""
+  for g in $GROUP; do
+    if [ -z "${GROUP_MEMBERS[$g]:-}" ]; then
+      echo "unknown group '$g' — try: ${GROUP_ORDER[*]}" >&2
+      exit 2
+    fi
+    SELECTED="$SELECTED ${GROUP_MEMBERS[$g]}"
+  done
+  SELECTED="${SELECTED# }"
+else
+  SELECTED="$ALL_ROWS"
+fi
+
+# Split the selection: launch-kind rows are driven separately from the self-timed
+# workloads, and only the latter are what the fetch/ws servers key off.
+LAUNCH_SELECTED=""
+WORKLOADS=""
+for r in $SELECTED; do
+  case " $LAUNCH_ROWS " in
+    *" $r "*) LAUNCH_SELECTED="$LAUNCH_SELECTED $r" ;;
+    *) WORKLOADS="$WORKLOADS $r" ;;
+  esac
+done
+LAUNCH_SELECTED="${LAUNCH_SELECTED# }"
+WORKLOADS="${WORKLOADS# }"
 BENCH_JSON="${BENCH_JSON:-}"
 FETCH_PORT=18923
 WS_PORT=18924
@@ -229,6 +335,29 @@ EOF
 
 # --- generated big script (startup/parse cost) ------------------------------
 
+# A module *graph*, not one big file. `bigscript` is a single ~100 KB source, so
+# it measures parse throughput; real cold start is dominated by resolving and
+# loading hundreds of small files, which is a different cost (path resolution,
+# per-module instantiation, linking) and the one a serverless deploy actually
+# pays. Flat fan-out from an entry, plus a shared util every module pulls in, so
+# the resolver sees both a wide graph and a repeatedly-requested specifier.
+gen_modules() {
+  local dir="$SCRATCH/modtree" i
+  mkdir -p "$dir"
+  echo 'export const tag = (s) => s + "!";' > "$dir/util.js"
+  for i in $(seq 300); do
+    printf 'import { tag } from "./util.js";\nexport function m%d(x) { return tag("m%d") .length + x; }\n' "$i" "$i" \
+      > "$dir/m$i.js"
+  done
+  {
+    for i in $(seq 300); do printf 'import { m%d } from "./m%d.js";\n' "$i" "$i"; done
+    echo 'let total = 0;'
+    for i in $(seq 300); do printf 'total += m%d(%d);\n' "$i" "$i"; done
+    echo 'void total;'
+  } > "$dir/entry.js"
+  echo "$dir/entry.js"
+}
+
 gen_bigscript() {
   local f="$SCRATCH/bigscript.js" i
   {
@@ -285,17 +414,33 @@ sample_once() {  # kind cmd script
   fi
 }
 
-# Reduces a list of samples to "min cov% n": min is the contention-free floor
-# (interference only ever adds time); cov is the coefficient of variation, used
-# to flag noisy cells and to decide when a row has stopped moving; n is how many
-# samples that rests on, which the JSON publishes so a cell's precision is
+# Reduces a list of samples to "min cov% n gap%": min is the contention-free
+# floor (interference only ever adds time); cov is the coefficient of variation,
+# used to flag noisy cells and to decide when a row has stopped moving; n is how
+# many samples that rests on, which the JSON publishes so a cell's precision is
 # visible rather than implied.
+#
+# gap is how far the *second*-lowest sample sits above the lowest, as a percent.
+# Since the published number is the minimum, cov is the wrong thing to judge it
+# by: one catastrophic outlier (a writeback stall, a scheduler hiccup) sends cov
+# over 100% while leaving the floor exactly where it was. What matters is whether
+# anything corroborates that floor — two samples that agree mean the minimum is a
+# real measurement, and a lone low sample nothing else comes near means it is a
+# fluke. That is the number worth gating publication on.
 aggregate() {  # "s1 s2 ..."
-  awk '{ for (i=1;i<=NF;i++){ x=$i; sum+=x; sq+=x*x; n++; if (n==1 || x<min) min=x } }
-       END{ if (n==0){ print "ERR 0 0"; exit }
+  awk '{ for (i=1;i<=NF;i++){ x=$i; sum+=x; sq+=x*x; n++;
+           # min2 starts unset (-1), not at the first sample: seeding it to
+           # sample one leaves every larger sample failing the `x<min2` test, so
+           # a lone low outlier would report a gap of zero — the exact case this
+           # exists to catch.
+           if (n==1){ min=x; min2=-1 }
+           else if (x<min){ min2=min; min=x }
+           else if (min2<0 || x<min2){ min2=x } } }
+       END{ if (n==0){ print "ERR 0 0 0"; exit }
             mean=sum/n; var=(n>1)?(sq-n*mean*mean)/(n-1):0; if (var<0) var=0;
             cov=(mean>0)?100*sqrt(var)/mean:0;
-            printf "%.1f %.1f %d", min, cov, n }' <<<"$1"
+            gap=(min2>=0 && min>0)?100*(min2-min)/min:0;
+            printf "%.1f %.1f %d %.1f", min, cov, n, gap }' <<<"$1"
 }
 
 # Peak RSS (MB) of one run, via GNU time or a python3 getrusage fallback.
@@ -326,16 +471,24 @@ shuffle() {  # randomize runtime order each repetition (falls back to fixed)
 
 start_fetch_server
 start_ws_server
-BIGSCRIPT="$(gen_bigscript)"
-
-# Rows and their (kind, script path).
+# Rows and their (kind, script path). Launch-kind rows come first and are
+# generated on demand, so a scoped run does not pay to build a module tree it
+# will not measure.
 declare -A KIND PATHS
-KIND[startup]=startup;   PATHS[startup]="scripts/startup.js"
-KIND[bigscript]=startup; PATHS[bigscript]="$BIGSCRIPT"
-ROWS=(startup bigscript)
+ROWS=()
+for r in $LAUNCH_SELECTED; do
+  KIND[$r]=startup
+  case "$r" in
+    startup) PATHS[$r]="scripts/startup.js" ;;
+    bigscript) PATHS[$r]="$(gen_bigscript)" ;;
+    modules) PATHS[$r]="$(gen_modules)" ;;
+    *) echo "launch row '$r' has no generator" >&2; exit 2 ;;
+  esac
+  ROWS+=("$r")
+done
 for w in $WORKLOADS; do KIND[$w]=workload; PATHS[$w]="scripts/$w.js"; ROWS+=("$w"); done
 
-declare -A SAMPLES RES COV NUM DEAD
+declare -A SAMPLES RES COV NUM GAP DEAD
 
 # True once every live cell in the row is within NOISE_THRESHOLD — the point
 # where further repetitions stop changing the published minimum. Judged over the
@@ -346,7 +499,7 @@ row_is_stable() {  # row
   for r in "${ORDER[@]}"; do
     [ -n "${DEAD[$row,$r]:-}" ] && continue
     [ -z "${SAMPLES[$row,$r]:-}" ] && return 1
-    read -r _ c _ < <(aggregate "${SAMPLES[$row,$r]}")
+    read -r _ c _ _ < <(aggregate "${SAMPLES[$row,$r]}")
     awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && return 1
   done
   return 0
@@ -405,8 +558,8 @@ TOOFAST=()
 for row in "${ROWS[@]}"; do
   for r in "${ORDER[@]}"; do
     if [ -z "${SAMPLES[$row,$r]:-}" ]; then RES[$row,$r]=ERR; continue; fi
-    read -r m c n < <(aggregate "${SAMPLES[$row,$r]}")
-    RES[$row,$r]=$m; COV[$row,$r]=$c; NUM[$row,$r]=$n
+    read -r m c n g < <(aggregate "${SAMPLES[$row,$r]}")
+    RES[$row,$r]=$m; COV[$row,$r]=$c; NUM[$row,$r]=$n; GAP[$row,$r]=$g
     awk "BEGIN{exit !($c > $NOISE_THRESHOLD)}" && NOISY+=("$row/$r ${c}%")
     [ "${KIND[$row]}" = workload ] &&
       awk "BEGIN{exit !($m < $MIN_MS)}" && TOOFAST+=("$row/$r ${m}ms")
@@ -425,9 +578,15 @@ for row in $RSS_ROWS; do
   done
 done
 
-# Restoring 'rss' row for site compatibility (represents startup memory floor)
+# Two memory rows, published as ordinary rows so the site charts them like any
+# other. `rss` is the floor: peak resident set of a near-empty process, which is
+# the figure every runtime looks best on and the least like production.
+# `rss_loaded` is the same measurement taken while the rss_load workload holds a
+# live working set, which is the number that decides whether a box stays up.
 for r in "${ORDER[@]}"; do RES[rss,$r]="${RSS[startup,$r]:-}"; done
 [ -n "${RES[rss,${ORDER[0]}]:-}" ] && ROWS+=(rss)
+for r in "${ORDER[@]}"; do RES[rss_loaded,$r]="${RSS[rss_load,$r]:-}"; done
+[ -n "${RES[rss_loaded,${ORDER[0]}]:-}" ] && ROWS+=(rss_loaded)
 
 [ "${#NOISY[@]}" -gt 0 ] &&
   note "noisy cells (CoV > ${NOISE_THRESHOLD}%; min floor still shown, marked ~): ${NOISY[*]}"
@@ -512,6 +671,19 @@ if [ -n "$BENCH_JSON" ]; then
   printf '\n    "noise_threshold_cov_pct": %s,' "$NOISE_THRESHOLD"
   printf '\n    "quiet": %s' "$([ -n "${QUIET:-}" ] && echo true || echo false)"
   printf '\n  },'
+  # The machine, recorded next to the numbers. The fs rows in particular are
+  # meaningless without it — an append benchmark on ext4, on tmpfs and on a
+  # Docker overlay are three different measurements — and the launch rows move
+  # with CPU and frequency governor. Published so a reader can tell whether these
+  # numbers describe hardware like theirs, rather than assuming they do.
+  printf '\n  "environment": {'
+  printf '\n    "os": "%s",' "$(uname -sr 2>/dev/null | tr -d '"')"
+  printf '\n    "arch": "%s",' "$(uname -m 2>/dev/null)"
+  printf '\n    "cpu": "%s",' "$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//; s/"//g')"
+  printf '\n    "cores": "%s",' "$(nproc 2>/dev/null)"
+  printf '\n    "filesystem": "%s",' "$(stat -f -c %T . 2>/dev/null)"
+  printf '\n    "governor": "%s"' "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
+  printf '\n  },'
   printf '\n  "results_ms": {'
   emit_matrix RES
   printf '\n  },\n  "results_rss": {'
@@ -520,6 +692,8 @@ if [ -n "$BENCH_JSON" ]; then
   emit_matrix COV
   printf '\n  },\n  "results_n": {'
   emit_matrix NUM
+  printf '\n  },\n  "results_floor_gap": {'
+  emit_matrix GAP
   printf '\n  },\n  "status": {'
   emit_matrix STATUS
   printf '\n  }\n}\n'

@@ -22,15 +22,48 @@ bench/rps.sh                              # server throughput, external load gen
 bench/http2.sh                            # the same server over HTTP/1.1 vs HTTP/2
 ```
 
+### Scoped runs
+
+The full suite takes a while, and most work touches one area of it. Rows are
+grouped, and a run can be scoped to any of them:
+
+```sh
+bench/run.sh --list                       # the groups, and any row no group claims
+GROUP=fs bench/run.sh                     # just the filesystem rows
+GROUP="engine crypto" bench/run.sh        # several groups
+WORKLOADS="regex strings" bench/run.sh    # or name rows directly
+```
+
+| Group | Rows |
+| --- | --- |
+| `launch` | `startup`, `bigscript`, `modules` |
+| `engine` | `compute`, `json`, `jsonbig`, `regex`, `strings`, `structured`, `errors`, `async`, `timers` |
+| `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `date_intl`, `buffers`, `streams`, `compression` |
+| `crypto` | `sha256`, `crypto`, `crypto_asym`, `crypto_kdf` |
+| `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
+| `net` | `fetch`, `fetch_upload`, `http`, `websocket` |
+| `serialization` | `xml_*`, `yaml_*`, `toml_*`, `msgpack_*`, `protobuf_*`, `jsonl_stream` |
+| `wasm` | `wasm_compile`, `wasm_call`, `wasm_mem` |
+| `wasi` | `wasi_start`, `wasi_syscall` |
+| `memory` | `rss_load` |
+
+`WORKLOADS` wins over `GROUP` when both are set. The variable is `GROUP`, not
+`GROUPS` — bash reserves `GROUPS` for the caller's group IDs, so it can never be
+set from the environment. Every row must belong to
+exactly one group; `--list` reports anything in `scripts/` that none claims,
+which is how a newly added workload gets noticed rather than silently never
+running. Publishing to the site still requires a full run — a scoped run is for
+working, not for regenerating.
+
 Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 15),
 `WORKLOAD_RUNS` (default 5 — a *ceiling*, see the adaptive stop below),
 `MIN_REPS` (repetitions before a row may stop early, default 3),
 `NOISE_THRESHOLD` (CoV % above which a cell is flagged noisy, and below which a
 row counts as settled, default 5), `RSS_ROWS` (rows to sample peak memory for,
-default `startup bigscript`), `MIN_MS` (below this a cell is reported as being
+default `startup bigscript rss_load`), `MIN_MS` (below this a cell is reported as being
 under the measurement floor, default 5), `WORKLOAD_TIMEOUT` (per-workload cap,
 default 60s, so an unsupported workload yields n/a instead of hanging),
-`WORKLOADS="url encoding"` (run a subset), `QUIET=1` (pin to one CPU + disable
+`GROUP="fs net"` / `WORKLOADS="url encoding"` (scoped run, see above), `QUIET=1` (pin to one CPU + disable
 ASLR for lower variance; see Methodology), `BENCH_CPU` (the core to pin under
 `QUIET`, default 0), `BENCH_JSON=1` (machine-readable output for diffing runs
 over time). A runtime
@@ -62,12 +95,40 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **fetch_upload** | 200 sequential POSTs each streaming an 8 KiB `ReadableStream` request body (chunked upload) to the same local server — the request-body streaming path: building the body stream, the per-chunk host channel with backpressure, and chunked transfer-encoding. The server echoes the bytes it received and the workload **verifies** them, so a runtime that doesn't truly stream the body (e.g. LLRT, which coerces the stream) is recorded **n/a** rather than posting a misleadingly fast time. |
 | **http** | 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
 | **websocket** | 20 000 serial message round-trips over one `WebSocket` to a local echo server — the WebSocket *client* seam: opening handshake then per-message `send` + event dispatch (esrun: the `ws_send` op + the receive-pump's `MessageEvent` per tick). Server is whichever built-in WS server is present (Bun/Deno, or Node + `ws`); LLRT has no `WebSocket`, hence n/a. |
+| **fsread_small / _large** | 2 000 reads of a 4 KB file / 20 reads of a 2 MB file. |
+| **fswrite_small / _large** | The same shape for whole-file writes. |
+| **fsappend_small / _large** | 2 000 × 4 KB appends / 60 × 256 KB appends to a growing file. See the sizing note in `fsappend_large.js`: this row is squeezed between the kernel's dirty-page threshold above and the measurement floor below. |
+| **fsstat_small / fsstat_many** | 5 000 `stat`s of one path / 20 rounds of `stat` across 1 000 distinct paths. The second is a directory's worth of dentries rather than one cached entry — what a static-file server or module resolver does. |
+| **fsexists_small / fsexists_many** | The same two shapes for existence checks. |
+| **glob** | 200 × `**/*.txt` scans of a generated 10×10 tree. Deno has no built-in runtime glob, hence n/a. |
 | **wasm_compile** | 60 × `WebAssembly.compile` of a ~250 KB module (600 functions) — validation + codegen. Each module carries a different salt so the bytes differ and no compilation cache can serve the result. |
 | **wasm_call** | 20M calls across the JS↔wasm boundary into an exported `add`, plus 100M iterations of the same arithmetic run *inside* wasm — separates per-call boundary cost from wasm execution. |
 | **wasm_mem** | 8 000 × (JS fills a 64 KiB window of the instance's linear memory through a typed array; wasm sums it back) — the shared-buffer shape most real wasm interop takes. |
 | **wasi_start** | 2 000 × (construct a `WASI`, instantiate a command module against its import object, run `_start`) on a pre-compiled module — what *running a `wasm32-wasip1` program* costs per invocation. The guest makes no syscalls. |
 | **wasi_syscall** | A guest whose `_start` loops 60 000 times calling `random_get` + `clock_time_get`, timed around `start()` alone — the preview-1 implementation on the host side, called from inside wasm where a real program calls it. |
-| **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory floor. |
+| **modules** | Process wall-time loading a generated **300-module graph** (flat fan-out from an entry, plus a shared util every module imports). `bigscript` measures parse throughput on one big file; this measures resolution, per-module instantiation and linking, which is what a real cold start is mostly made of. |
+| **regex** | 200 000 × (route match + field validation + global replace) — the engine's regex implementation (Irregexp for esrun/Node/Deno, JavaScriptCore's for Bun), which runs on essentially every inbound request in real code. |
+| **strings** | 100 000 × (template interpolation, rope-building concatenation, header split/trim, search + slice, case fold) — string internals, plausibly the most-executed shape of code in a web server. |
+| **errors** | 100 000 × throw/catch across three frames **including reading `.stack`** — the unwind plus the stack capture, which is the expensive half and the one a failing endpoint pays. |
+| **buffers** | 20 000 × (4 KiB `TypedArray` copy, big-endian `DataView` field read/write, subarray view) over a 64 KiB block — the layer every binary protocol sits on. |
+| **date_intl** | 50 000 × (`Intl.DateTimeFormat` + `Intl.NumberFormat` + `toISOString`) with formatters constructed once — the ICU-backed surface, which a runtime may bundle, trim, or omit entirely. |
+| **crypto_asym** | 2 000 × ECDSA P-256 sign + verify — public-key work, a different backend from the symmetric rows and the shape of signing or checking a token per request. |
+| **crypto_kdf** | 20 × PBKDF2-HMAC-SHA-256 at 10 000 iterations — a KDF is deliberately slow, so per-call overhead vanishes and this is nearly pure backend hash-loop throughput. Iteration count is well below a production setting; it is a comparison, not a security recommendation. |
+| **rss_load** | Builds a 200 000-entry retained working set while churning short-lived objects against it — allocation and collection cost with a mostly-live heap. Its **peak RSS** is the point (published as `rss_loaded`); the elapsed time is reported too. |
+| **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory **floor**. |
+| **rss_loaded** | Peak resident set (MB) during `rss_load` — memory while something is actually retained. `rss` is the number a runtime looks best on; this is the one that decides whether a box stays up. |
+
+**What the fs rows are and are not.** Every file these workloads touch is
+written moments before it is read and is far smaller than available RAM, so the
+reads are served from page cache and nothing here calls `fsync`. That means they
+measure the **runtime's** cost above the syscall — path resolution, the JS↔native
+boundary, buffer allocation, whether an fd is reopened per call, threadpool
+versus `io_uring` — and not disk speed or durability. That is the right quantity
+for comparing runtimes, since the disk is a constant they all share, but it is
+not "how fast is file I/O": a durability-bound workload with `fsync` in it would
+rank these differently. The absolute numbers are also specific to the filesystem
+they ran on — `results.environment.filesystem` records which — and ext4, tmpfs
+and a Docker overlay are three different answers.
 
 The wasm modules are **assembled in JS** (`scripts/wasm-mod.js`) rather than
 checked in as `.wasm` fixtures, so every runtime compiles byte-identical input
@@ -88,7 +149,21 @@ run to run (see Sources for the rationale):
   runtime equally, so close calls aren't decided by *when* a runtime ran.
 - **Warmup.** Each script does an untimed in-process warmup so the JIT reaches
   steady state; on top of that the first whole repetition is discarded
-  (process-level warmup — fills caches, lets the OS settle).
+  (process-level warmup — fills caches, lets the OS settle). The in-process
+  warmup is a tenth of the timed run (never fewer than 5 iterations), the same
+  ratio everywhere. This matters more than it looks: the serialization workloads
+  once warmed for a flat 5 iterations before 500–1000 timed ones, which cost the
+  JIT-backed parser libraries ~10% and the native parsers nothing — a systematic
+  tilt toward whichever runtime needed no warmup at all.
+- **Each runtime uses the best facility it ships.** Where a workload is not a
+  shared Web API — filesystem, HTTP server, YAML/TOML/XML/MessagePack — every
+  runtime gets its own native surface: `Bun.YAML`/`Bun.TOML`/`Bun.Glob`,
+  `Deno.serve`, `llrt:xml`, esrun's `runtime:serialization`. Only where a runtime
+  genuinely ships nothing does it fall back to the library you would reach for
+  anyway (`js-yaml`, `@iarna/toml`, `fast-xml-parser`, `msgpackr` on Node and
+  Deno). Holding a runtime to a library it does not need understates it — Bun's
+  native TOML is ~3x its `@iarna/toml` number — and turns a native-vs-library
+  row into a claim about the runtime. Those rows are labelled as such on the site.
 - **Min, not median/mean.** Interference only ever *adds* time, so the minimum
   over repetitions is the contention-free floor — the stablest, fairest
   comparator. `startup`/`bigscript` use process wall-time (the launch/parse cost
@@ -484,9 +559,23 @@ generated file. So `bench/validate-bench-data.mjs` gates the write:
 - Every value must be a finite non-negative number or `null`.
 - The sections owned by the other three scripts (`results_rps`, `websocket`,
   `results_http2`) must be present and populated.
-- Noisy cells (CoV > 10%), timeouts, and cells under the measurement floor are
-  reported as warnings, so whoever publishes sees them and not just whoever
-  happened to be watching stderr.
+- Timeouts, cells under the measurement floor, and cells with a coefficient of
+  variation above 10% are reported as warnings, so whoever publishes sees them
+  and not just whoever happened to be watching stderr.
+- **A minimum nothing corroborates is rejected outright.** The gate is
+  `results_floor_gap` — how far the second-lowest sample sits above the lowest —
+  and not CoV, because the published number is a *minimum*. One writeback stall
+  sends CoV past 100% without moving the minimum a millisecond, so gating on
+  spread rejects sound data: on `fsappend_large`, node measured CoV 67% with its
+  floor corroborated to 1.9%, which is a perfectly good number. What is not good
+  is a lone low sample nothing else comes near — bun once published a floor 668%
+  below its own next-lowest reading. Above 25% gap the generation fails.
+
+  That row is also why the gate exists. It appended 2 MB x 20, growing the file
+  to 42 MB per launch and ~1 GB across a row, so past the kernel's dirty-page
+  threshold the number tracked writeback rather than the runtime — and it was
+  charted anyway at 168% variance. It is now 256 KB x 60, sized between the
+  writeback threshold above and the measurement floor below.
 
 On rejection the previous, known-good module is left in place and the generator
 exits non-zero. The fix is to re-run the benchmark, never to edit the module.

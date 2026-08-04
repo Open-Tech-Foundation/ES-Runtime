@@ -11,36 +11,38 @@ for (let i = 0; i < 5000; i++) {
 `;
 }
 
-let esrunParser = null;
+// Each runtime parses with the best facility it actually ships: esrun's native
+// `runtime:serialization`, Bun's native `Bun.YAML`, and js-yaml for Node and
+// Deno, which have no built-in YAML parser. Holding Bun to a JS library it
+// does not need would understate it by roughly 2x.
+let parse = null;
 try {
   const mod = await import('runtime:serialization');
-  esrunParser = mod.YAML.parse;
+  parse = (doc) => mod.YAML.parse(doc);
 } catch (e) {}
-const isEsrun = typeof esrunParser === "function";
-const isLlrt = typeof process !== 'undefined' && process.release?.name === 'llrt';
-
-let jsYaml = null;
-
-if (!isEsrun) {
+if (!parse && typeof Bun !== 'undefined' && Bun.YAML?.parse) {
+  parse = (doc) => Bun.YAML.parse(doc);
+}
+if (!parse) {
   const mod = await import('js-yaml');
-  jsYaml = mod.default || mod;
+  const jsYaml = mod.default || mod;
+  parse = (doc) => jsYaml.load(doc);
 }
 
 function parseYAML() {
-  if (isEsrun) {
-    esrunParser(yamlDoc);
-  } else if (jsYaml) {
-    jsYaml.load(yamlDoc);
-  }
-}
-
-// Warmup
-for (let i = 0; i < 5; i++) {
-  parseYAML();
+  parse(yamlDoc);
 }
 
 // Timed run
 const iterations = 10;
+
+// Untimed warmup: a tenth of the timed run (the ratio the engine workloads use),
+// never fewer than 5. A flat handful left the JIT-backed libraries measured
+// part-way up the tiers while native parsers started at full speed; on the large
+// documents one parse already does enough work to tier up, so the floor holds.
+for (let i = 0; i < Math.max(iterations / 10, 5); i++) {
+  parseYAML();
+}
 const start = performance.now();
 for (let i = 0; i < iterations; i++) {
   parseYAML();

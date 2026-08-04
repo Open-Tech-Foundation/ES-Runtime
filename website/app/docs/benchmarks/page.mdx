@@ -14,38 +14,60 @@ import bench from "../../../src/benchmarks.js";
 export const startup = [
   { key: "startup", label: "Cold start (near-empty script)", unit: "ms" },
   { key: "bigscript", label: "Parse + run ~100 KB script", unit: "ms" },
-  { key: "rss", label: "Peak resident memory", unit: "MB" },
+  { key: "modules", label: "Load a 300-module graph", unit: "ms" },
+  { key: "rss", label: "Peak resident memory (idle)", unit: "MB" },
+  { key: "rss_loaded", label: "Peak resident memory (under load)", unit: "MB" },
 ];
 
-export const standardWorkloads = [
-  { key: "crypto", label: "WebCrypto (sign/verify)", unit: "ms" },
-  { key: "sha256", label: "SubtleCrypto SHA-256", unit: "ms" },
+export const engineWorkloads = [
+  { key: "compute", label: "Tight compute loop", unit: "ms" },
   { key: "json", label: "JSON parse/stringify", unit: "ms" },
   { key: "jsonbig", label: "JSON (large documents)", unit: "ms" },
+  { key: "regex", label: "Regex (match, validate, replace)", unit: "ms" },
+  { key: "strings", label: "String building and slicing", unit: "ms" },
+  { key: "structured", label: "structuredClone", unit: "ms" },
+  { key: "errors", label: "throw/catch + stack capture", unit: "ms" },
+  { key: "async", label: "async/await throughput", unit: "ms" },
+  { key: "timers", label: "setTimeout churn", unit: "ms" },
+];
+
+export const webApiWorkloads = [
   { key: "url", label: "URL parsing", unit: "ms" },
   { key: "url_setter", label: "URL setter", unit: "ms" },
   { key: "urlpattern", label: "URLPattern test", unit: "ms" },
   { key: "encoding", label: "TextEncoder/TextDecoder", unit: "ms" },
   { key: "base64", label: "base64 (atob/btoa)", unit: "ms" },
-  { key: "structured", label: "structuredClone", unit: "ms" },
-  { key: "compute", label: "Tight compute loop", unit: "ms" },
-  { key: "async", label: "async/await throughput", unit: "ms" },
-  { key: "timers", label: "setTimeout churn", unit: "ms" },
+  { key: "buffers", label: "TypedArray / DataView", unit: "ms" },
+  { key: "date_intl", label: "Date + Intl formatting", unit: "ms" },
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
   { key: "compression", label: "CompressionStream round trip (gzip)", unit: "ms" },
+];
+
+export const cryptoWorkloads = [
+  { key: "sha256", label: "SubtleCrypto SHA-256", unit: "ms" },
+  { key: "crypto", label: "HMAC + AES-GCM", unit: "ms" },
+  { key: "crypto_asym", label: "ECDSA P-256 sign + verify", unit: "ms" },
+  { key: "crypto_kdf", label: "PBKDF2 (10k iterations)", unit: "ms" },
+];
+
+export const netWorkloads = [
   { key: "fetch", label: "fetch (local server)", unit: "ms" },
   { key: "fetch_upload", label: "fetch (streamed upload)", unit: "ms" },
   { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
+  { key: "websocket", label: "WebSocket round trips", unit: "ms" },
+];
+
+export const fsWorkloads = [
   { key: "fsread_small", label: "File read (small)", unit: "ms" },
   { key: "fsread_large", label: "File read (large)", unit: "ms" },
   { key: "fswrite_small", label: "File write (small)", unit: "ms" },
   { key: "fswrite_large", label: "File write (large)", unit: "ms" },
   { key: "fsappend_small", label: "File append (small)", unit: "ms" },
   { key: "fsappend_large", label: "File append (large)", unit: "ms" },
-  { key: "fsstat_small", label: "File stat (small)", unit: "ms" },
-  { key: "fsstat_large", label: "File stat (large)", unit: "ms" },
-  { key: "fsexists_small", label: "File exists (small)", unit: "ms" },
-  { key: "fsexists_large", label: "File exists (large)", unit: "ms" },
+  { key: "fsstat_small", label: "File stat (one path)", unit: "ms" },
+  { key: "fsstat_many", label: "File stat (1000 paths)", unit: "ms" },
+  { key: "fsexists_small", label: "File exists (one path)", unit: "ms" },
+  { key: "fsexists_many", label: "File exists (1000 paths)", unit: "ms" },
   { key: "glob", label: "Glob scan", unit: "ms" },
 ];
 
@@ -105,22 +127,46 @@ runtime fits in production. Pick by fit, not by medal count.
 
 ## Startup & footprint
 
-Process wall-time (min of N runs) and peak resident set on a near-empty script.
+Process wall-time (min of N runs). `bigscript` is one large file, `modules` a
+300-module graph — parse cost and resolution cost are not the same thing. Memory
+is given twice: idle, and while a live working set is retained.
 
 <BenchChart metrics={startup} />
 
-## Standard Workloads
+## Engine
 
 Self-timed with `performance.now()` after an untimed JIT warmup; min of N
 interleaved runs, isolating engine cost from process launch.
 
-<BenchChart metrics={standardWorkloads} />
+<BenchChart metrics={engineWorkloads} />
+
+## Web APIs
+
+<BenchChart metrics={webApiWorkloads} />
+
+## Crypto
+
+<BenchChart metrics={cryptoWorkloads} />
+
+## Network
+
+<BenchChart metrics={netWorkloads} />
+
+## Filesystem
+
+Page-cache resident, no `fsync` — this is the runtime's cost above the syscall,
+not disk speed. Numbers are specific to the filesystem in `environment`.
+
+<BenchChart metrics={fsWorkloads} />
 
 ## Native vs Third-Party Parsers
 
-Comparing runtimes running heavily optimized native parsing engines (esrun's
-`runtime:serialization`, LLRT's `llrt:xml`) versus JS-based fallback libraries
-(`fast-xml-parser`) for runtimes that lack native extensions (Node.js, Bun, Deno).
+Each runtime parses with the best facility it ships: esrun's
+`runtime:serialization`, Bun's native `Bun.YAML` and `Bun.TOML`, LLRT's
+`llrt:xml`. Node and Deno ship no parser for these formats, so they use the
+libraries you would reach for anyway (`js-yaml`, `@iarna/toml`,
+`fast-xml-parser`, `msgpackr`) — a native-vs-library gap on those rows, not a
+runtime-vs-runtime one.
 
 <BenchChart metrics={parserWorkloads} />
 
@@ -252,6 +298,9 @@ the JSON that powers these charts:
 ```sh
 # human-readable table
 bench/run.sh
+
+# one section only — see `bench/run.sh --list`
+GROUP=fs bench/run.sh
 
 # regenerate the data module this page renders
 bench/gen-bench-data.sh

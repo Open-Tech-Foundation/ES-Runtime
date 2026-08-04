@@ -50,6 +50,42 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Scoped benchmark runs.** Rows are now grouped — `launch`, `engine`,
+  `webapi`, `crypto`, `fs`, `net`, `serialization`, `wasm`, `wasi`, `memory` —
+  and a run can take any subset: `GROUP=fs bench/run.sh`, `GROUP="engine
+  crypto" bench/run.sh`, or `WORKLOADS="regex strings" bench/run.sh` to name rows
+  directly. The full suite is long enough that working on one area meant either
+  waiting for all of it or hand-assembling a `WORKLOADS` list from memory.
+
+  `bench/run.sh --list` prints the groups and, more usefully, any script in
+  `scripts/` that no group claims. Two workloads were sitting there unrun before
+  this existed; now adding a file without wiring it up is visible in one command.
+
+- **Ten benchmark workloads, covering what a server actually spends time on.**
+  The suite measured JSON, URLs and encoding thoroughly while never once touching
+  a regular expression. Added: `regex` (route match, field validation, global
+  replace), `strings` (interpolation, rope-building concatenation, header
+  splitting, search and slice), `errors` (throw/catch across frames *including*
+  the `.stack` capture, which is the expensive half), `buffers` (TypedArray and
+  `DataView` work, the layer every binary protocol sits on), `date_intl` (the
+  ICU-backed formatters), `crypto_asym` (ECDSA P-256 sign + verify) and
+  `crypto_kdf` (PBKDF2), since the crypto rows covered only symmetric work.
+
+  `modules` loads a generated 300-module graph: `bigscript` measures parse
+  throughput on one large file, but a real cold start is mostly resolution,
+  instantiation and linking across many small ones.
+
+  `rss_load` holds a 200 000-entry working set while churning garbage against it,
+  and publishes `rss_loaded` beside the existing `rss`. The old row measured peak
+  memory on a near-empty process: the floor, which is the figure every runtime
+  looks best on and the least like production.
+
+- **The machine is recorded next to the numbers.** `BENCH_JSON` now emits an
+  `environment` block — OS, arch, CPU model, core count, filesystem type and
+  frequency governor. The filesystem rows are meaningless without it (an append
+  benchmark on ext4, on tmpfs and on a Docker overlay are three different
+  measurements) and the launch rows move with the governor.
+
 - **A handshake timeout and a connection cap for the WebSocket server**
   (DECISIONS D47). It was the least defended of the three servers: `runtime:http`
   had connection timeouts and a connection cap, and the WebSocket server had
@@ -186,6 +222,65 @@ namespace) is unstable and may change between minor releases until the API freez
   duration, and the number of concurrent connections.
 
 ### Fixed
+
+- **The benchmark published four claims about other runtimes that were not
+  true.** A fairness audit of `bench/` found the harness sound — interleaved,
+  shuffled, min-of-N, with an equal sample count per row — but four defects in
+  the workload scripts, all of them tilted the same way.
+
+  Every filesystem workload tore its scratch file down with `fsp.unlink()`,
+  placed *after* the timing but *before* the `RESULT_MS` print. LLRT ships `rm`
+  but no `unlink`, so the call threw, the measurement was discarded, and the site
+  recorded `unsupported` — for eight rows LLRT runs perfectly well, three of
+  which it now **wins**. Cleanup uses `rm(…, { force: true })` and runs after the
+  result is reported: a teardown failure can no longer erase a good measurement,
+  which is the difference between "this run could not measure it" and "this
+  runtime cannot do this". (`fsappend_*` stays n/a for LLRT — that gap is real.)
+
+  YAML and TOML were benchmarked against `js-yaml` and `@iarna/toml` on *every*
+  non-esrun runtime, and the page said those runtimes "lack native extensions".
+  Bun ships native `Bun.YAML` and `Bun.TOML`, roughly 2x faster than the
+  libraries it was being held to; on `toml_large` that is the difference between
+  esrun placing first and Bun beating it by ~3x. Each runtime now parses with the
+  best facility it actually ships, and the page says so.
+
+  The serialization workloads warmed up for a flat 5 iterations before 500–1000
+  timed ones, where the engine workloads use a tenth of the timed run. Measured
+  cost: ~10% for the JIT-backed libraries, zero for native parsers — a systematic
+  tilt applied to exactly the rows esrun wins widest. Warmup is now `max(N/10, 5)`
+  throughout.
+
+  `fsappend_large` appended 2 MB x 20, growing the file to 42 MB per launch and
+  writing ~1 GB across a full row. Past the kernel's dirty-page threshold that
+  measured the writeback scheduler rather than the runtime: run-to-run variance
+  hit **168%**, and it was charted anyway. It is now 256 KB x 60, sized between
+  the writeback threshold above and the measurement floor below.
+
+- **Two benchmark rows were measuring the same thing.** `fsstat_large` differed
+  from `fsstat_small` only by stat'ing a 2 MB file instead of a 4 KB one — but
+  `stat` reads an inode and moves no bytes, so file size is not a variable it
+  has. The two rows agreed to within 4%, and `fsexists_small`/`fsexists_large` to
+  within 0.2% (node 70.6 vs 70.5, bun 51.2 vs 51.0, deno 90.6 vs 90.6): four
+  charted rows carrying two rows of information.
+
+  Replaced by `fsstat_many` and `fsexists_many`, which probe 1 000 distinct paths
+  rather than one path repeatedly. Path *count* is a real second dimension — it
+  walks a directory's worth of dentries instead of hitting one cached entry, the
+  way a static-file server or a module resolver does.
+
+- **The benchmark gate now checks the number it actually publishes.**
+  `bench/run.sh` reports each cell's `results_floor_gap` — how far the
+  second-lowest sample sits above the lowest — and
+  `bench/validate-bench-data.mjs` rejects a run where any cell exceeds 25%.
+
+  Gating on coefficient of variation, the obvious choice, asks the wrong
+  question: the published number is a *minimum*, chosen precisely because
+  interference only ever adds time, so a single writeback stall sends CoV past
+  100% while leaving that minimum untouched. A CoV gate duly rejected a run whose
+  `fsappend_large` floors were corroborated to within 2-7% for node, deno and
+  esrun. What it should catch is the opposite shape — a lone low sample nothing
+  else comes near — which CoV scores no differently. Bun produced exactly that on
+  the same row: a floor 668% below its own next-lowest reading.
 
 - **`esrun` installed no `tracing` subscriber, so every event was discarded.**
   `init_tracing` existed, was documented as the helper the CLI and tests share,
