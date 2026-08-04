@@ -72,6 +72,17 @@ namespace) is unstable and may change between minor releases until the API freez
   reads it into a buffer. The `fsread` rows measure reading a file; this measures
   reading it *and* getting it onto a socket.
 
+- **A `spawn` workload, and a `system` group to hold it.** 200 × (start
+  `/bin/echo`, drain its stdout, wait for exit) through each runtime's own
+  surface — `Deno.Command`, `Bun.spawn`, `node:child_process`, and esrun's
+  `runtime:system` `Command`. esrun is the fastest measured at 84ms against
+  Node's 211ms.
+
+  The Node branch uses `spawn` rather than `execFile` deliberately: LLRT ships
+  the former and not the latter, and reaching for the convenience wrapper
+  recorded LLRT as unable to start a process at all — the same mistake the fs
+  rows once made with `unlink`, caught this time before it was published.
+
 - **`headers` and `formdata` workloads.** Header handling runs on every request a
   server answers, and a case-insensitive multi-map with ordering rules is more
   work than it looks; multipart parsing is what a file upload costs, on

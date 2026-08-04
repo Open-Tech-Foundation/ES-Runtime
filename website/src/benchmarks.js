@@ -456,6 +456,13 @@ export default {
       "deno": 396.2,
       "llrt": 1391.2,
       "esrun": 92.7
+    },
+    "spawn": {
+      "node": 218.9,
+      "bun": 99.5,
+      "deno": 112.7,
+      "llrt": 95,
+      "esrun": 86.6
     }
   },
   "results_rss": {
@@ -880,6 +887,13 @@ export default {
       "esrun": null
     },
     "formdata": {
+      "node": null,
+      "bun": null,
+      "deno": null,
+      "llrt": null,
+      "esrun": null
+    },
+    "spawn": {
       "node": null,
       "bun": null,
       "deno": null,
@@ -1314,6 +1328,13 @@ export default {
       "deno": 2.9,
       "llrt": 1.4,
       "esrun": 1
+    },
+    "spawn": {
+      "node": 3.7,
+      "bun": 2,
+      "deno": 1.2,
+      "llrt": 2.8,
+      "esrun": 1.7
     }
   },
   "results_n": {
@@ -1743,6 +1764,13 @@ export default {
       "deno": 4,
       "llrt": 4,
       "esrun": 4
+    },
+    "spawn": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     }
   },
   "results_floor_gap": {
@@ -2172,6 +2200,13 @@ export default {
       "deno": 0.3,
       "llrt": 2.3,
       "esrun": 1.1
+    },
+    "spawn": {
+      "node": 5.5,
+      "bun": 3.4,
+      "deno": 1.8,
+      "llrt": 0.5,
+      "esrun": 2.4
     }
   },
   "status": {
@@ -2596,6 +2631,13 @@ export default {
       "esrun": "ok"
     },
     "formdata": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
+    "spawn": {
       "node": "ok",
       "bun": "ok",
       "deno": "ok",

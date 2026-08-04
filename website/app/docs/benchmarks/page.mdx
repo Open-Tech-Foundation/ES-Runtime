@@ -61,6 +61,10 @@ export const netWorkloads = [
   { key: "websocket", label: "WebSocket round trips", unit: "ms" },
 ];
 
+export const systemWorkloads = [
+  { key: "spawn", label: "Spawn a child process", unit: "ms" },
+];
+
 export const fsWorkloads = [
   { key: "fsread_small", label: "File read (small)", unit: "ms" },
   { key: "fsread_large", label: "File read (large)", unit: "ms" },
@@ -175,6 +179,13 @@ Page-cache resident, no `fsync` — this is the runtime's cost above the syscall
 not disk speed. Numbers are specific to the filesystem in `environment`.
 
 <BenchChart metrics={fsWorkloads} />
+
+## System
+
+Starting a child process and collecting its output — `Deno.Command`,
+`Bun.spawn`, `node:child_process`, and esrun's `runtime:system` `Command`.
+
+<BenchChart metrics={systemWorkloads} />
 
 ## Behaviour under memory exhaustion
 

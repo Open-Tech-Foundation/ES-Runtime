@@ -93,8 +93,9 @@ GROUP_MEMBERS[net]="fetch fetch_upload http websocket"
 GROUP_MEMBERS[serialization]="xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream"
 GROUP_MEMBERS[wasm]="wasm_compile wasm_call wasm_mem"
 GROUP_MEMBERS[wasi]="wasi_start wasi_syscall"
+GROUP_MEMBERS[system]="spawn"
 GROUP_MEMBERS[memory]="rss_load"
-GROUP_ORDER=(launch engine webapi crypto fs net serialization wasm wasi memory)
+GROUP_ORDER=(launch engine webapi crypto fs net serialization wasm wasi system memory)
 
 ALL_ROWS=""
 for _g in "${GROUP_ORDER[@]}"; do ALL_ROWS="$ALL_ROWS ${GROUP_MEMBERS[$_g]}"; done

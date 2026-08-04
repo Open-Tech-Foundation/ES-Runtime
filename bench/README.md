@@ -45,6 +45,7 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 | `serialization` | `xml_*`, `yaml_*`, `toml_*`, `msgpack_*`, `protobuf_*`, `jsonl_stream` |
 | `wasm` | `wasm_compile`, `wasm_call`, `wasm_mem` |
 | `wasi` | `wasi_start`, `wasi_syscall` |
+| `system` | `spawn` |
 | `memory` | `rss_load` |
 
 `WORKLOADS` wins over `GROUP` when both are set. The variable is `GROUP`, not
@@ -116,6 +117,7 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **date_intl** | 50 000 × (`Intl.DateTimeFormat` + `Intl.NumberFormat` + `toISOString`) with formatters constructed once — the ICU-backed surface, which a runtime may bundle, trim, or omit entirely. |
 | **crypto_asym** | 2 000 × ECDSA P-256 sign + verify — public-key work, a different backend from the symmetric rows and the shape of signing or checking a token per request. |
 | **crypto_kdf** | 20 × PBKDF2-HMAC-SHA-256 at 10 000 iterations — a KDF is deliberately slow, so per-call overhead vanishes and this is nearly pure backend hash-loop throughput. Iteration count is well below a production setting; it is a comparison, not a security recommendation. |
+| **spawn** | 200 × (start `/bin/echo`, drain its stdout, wait for exit) — `Deno.Command`, `Bun.spawn`, `node:child_process` `spawn`, and esrun's `runtime:system` `Command`. `/bin/echo` rather than `/bin/true` because wiring up the output pipe and handing the bytes back is the runtime's half of the cost; fork/exec is the kernel's. Node's branch uses `spawn` rather than `execFile` because LLRT ships only the former, and reaching for the wrapper would have recorded LLRT as unable to start a process at all. |
 | **rss_load** | Builds a 200 000-entry retained working set while churning short-lived objects against it — allocation and collection cost with a mostly-live heap. Its **peak RSS** is the point (published as `rss_loaded`); the elapsed time is reported too. |
 | **rss** | Peak resident set (MB) on the near-empty script — the runtime's memory **floor**. |
 | **rss_loaded** | Peak resident set (MB) during `rss_load` — memory while something is actually retained. `rss` is the number a runtime looks best on; this is the one that decides whether a box stays up. |
