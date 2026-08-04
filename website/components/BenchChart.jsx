@@ -12,6 +12,12 @@ import { betterLabel, winnerOf } from "../src/metric-direction.js";
 const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
 const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 
+// Above this run-to-run variation a cell is marked `~`. The harness already
+// flags these in its terminal output and publishes results_cov for every cell;
+// without surfacing it here a wobbly number renders identically to a firm one,
+// which is the reader assuming a precision the run never claimed.
+const NOISY_COV = 10;
+
 function maxOf(row, runtimes) {
   let max = 0;
   for (const rt of runtimes) {
@@ -21,8 +27,27 @@ function maxOf(row, runtimes) {
   return max || 1;
 }
 
+function covOf(key, rt) {
+  const row = bench.results_cov ? bench.results_cov[key] : null;
+  const c = row ? row[rt] : null;
+  return typeof c === "number" ? c : null;
+}
+
+// Whether any cell drawn by this chart is noisy, so the footnote appears only
+// where it explains something. Plain loops: see the compiler NOTE above.
+function hasNoisyCell(metrics, runtimes) {
+  for (const m of metrics) {
+    for (const rt of runtimes) {
+      const c = covOf(m.key, rt);
+      if (c !== null && c > NOISY_COV) return true;
+    }
+  }
+  return false;
+}
+
 export default function BenchChart({ metrics }) {
   const runtimes = ORDER.filter((rt) => bench.runtimes[rt]);
+  const showNoiseNote = hasNoisyCell(metrics, runtimes);
 
   return (
     <div className="space-y-5">
@@ -48,6 +73,8 @@ export default function BenchChart({ metrics }) {
                   typeof v === "number" ? Math.max((v / max) * 100, 2) : 0;
                 const isWin = rt === winner;
                 const mem = rssRow && rssRow[rt] ? ` / ${rssRow[rt]}MB` : "";
+                const cov = covOf(m.key, rt);
+                const noisy = cov !== null && cov > NOISY_COV;
                 return (
                   <div className="flex items-center gap-2.5">
                     <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600">
@@ -66,12 +93,20 @@ export default function BenchChart({ metrics }) {
                     <span
                       className={
                         isWin
-                          ? "w-20 shrink-0 text-right text-[11px] font-semibold tabular-nums text-emerald-700"
-                          : "w-20 shrink-0 text-right text-[11px] tabular-nums text-zinc-500"
+                          ? "w-24 shrink-0 whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                          : "w-24 shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums text-zinc-500"
                       }
                     >
                       {typeof v === "number" ? v + unit : "—"}
                       {mem}
+                      {noisy ? (
+                        <span
+                          className="ml-0.5 font-normal text-amber-600"
+                          title={`varied ${cov}% run to run — read as approximate`}
+                        >
+                          ~
+                        </span>
+                      ) : null}
                     </span>
                   </div>
                 );
@@ -80,6 +115,12 @@ export default function BenchChart({ metrics }) {
           </div>
         );
       })}
+      {showNoiseNote ? (
+        <p className="text-[10px] text-zinc-400">
+          <span className="text-amber-600">~</span> varied more than {NOISY_COV}% run to
+          run; read as approximate.
+        </p>
+      ) : null}
     </div>
   );
 }

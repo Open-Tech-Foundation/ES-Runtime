@@ -268,6 +268,27 @@ namespace) is unstable and may change between minor releases until the API freez
   walks a directory's worth of dentries instead of hitting one cached entry, the
   way a static-file server or a module resolver does.
 
+- **Noisy cells are marked on the charts, not just in the terminal.** The run
+  computes a coefficient of variation for every cell and `results_cov` was
+  published alongside the numbers, but the site rendered a wobbly figure
+  identically to a firm one — 17 cells above 10% variation charted as though
+  they were precise. Cells now carry a `~` with the actual figure on hover, and
+  a chart containing one gets a one-line footnote.
+
+- **`fsexists_*` was measuring what `fsstat_*` measures.** The existence check
+  was `stat().then(true).catch(false)` on Node, Bun and Deno — the same syscall
+  plus a promise — so two pairs of charted rows carried one pair's worth of
+  information. Each runtime now uses its idiomatic API: `access()` on Node and
+  LLRT, `Bun.file().exists()` on Bun, `runtime:fs` `exists()` on esrun, and
+  `stat` on Deno, which ships no existence primitive. This was hiding a real
+  result — Bun's native check is ~7x faster than its stat path (7.2ms vs 50.8ms).
+
+- **The `http` row said more than it measured.** It drives each runtime's server
+  from a client in the same process, so it measures the server and that
+  runtime's `fetch` together; `bench/rps.sh` exists precisely because that is
+  not server throughput. The harness had said so in a comment since the load
+  generator was split out — the site charted it bare. Now stated on the page.
+
 - **The benchmark gate now checks the number it actually publishes.**
   `bench/run.sh` reports each cell's `results_floor_gap` — how far the
   second-lowest sample sits above the lowest — and

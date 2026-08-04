@@ -1,3 +1,14 @@
+// Existence-check benchmark: does this path exist, asked 5 000 times of one
+// path via each runtime's idiomatic API. The filesystem is not a shared Web
+// API, so each runtime uses its own surface.
+//
+// The check is deliberately NOT `stat().then(true).catch(false)` on every
+// runtime. That is what this row used to do on Node, Bun and Deno, which made
+// it a near-duplicate of the fsstat rows — the same syscall plus a promise.
+// Node and LLRT use `access()` (faccessat answers the question without filling
+// in a stat buffer), Bun its native `Bun.file().exists()`, esrun `runtime:fs`
+// `exists()`. Deno ships no existence primitive, so stat there is the idiomatic
+// answer rather than a shortcut, and that one cell still measures a stat.
 (async () => {
   const N = 5000;
   const tmp = "bench_fsexists.bin";
@@ -6,17 +17,18 @@
   if (typeof Deno !== "undefined") {
     const enc = new TextEncoder();
     write = (p, d) => Deno.writeFile(p, enc.encode(d));
-    exists = (p) => Deno.stat(p).then(()=>true).catch(()=>false);
+    // Deno ships no existence primitive; stat is the idiomatic check.
+    exists = (p) => Deno.stat(p).then(() => true).catch(() => false);
     cleanup = (p) => Deno.remove(p).catch(() => {});
   } else if (typeof Bun !== "undefined") {
-    const { stat, rm } = await import("node:fs/promises");
+    const { rm } = await import("node:fs/promises");
     write = (p, d) => Bun.write(p, d);
-    exists = (p) => stat(p).then(()=>true).catch(()=>false);
+    exists = (p) => Bun.file(p).exists();
     cleanup = (p) => rm(p, { force: true }).catch(() => {});
   } else if (typeof process !== "undefined" && process.versions && process.versions.node) {
     const fsp = await import("node:fs/promises");
     write = (p, d) => fsp.writeFile(p, d);
-    exists = (p) => fsp.stat(p).then(()=>true).catch(()=>false);
+    exists = (p) => fsp.access(p).then(() => true).catch(() => false);
     cleanup = (p) => fsp.rm(p, { force: true }).catch(() => {});
   } else {
     const fs = await import("runtime:fs");

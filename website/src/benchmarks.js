@@ -261,18 +261,18 @@ export default {
       "esrun": 314.5
     },
     "fsexists_small": {
-      "node": 69.1,
-      "bun": 51.7,
-      "deno": 99.2,
-      "llrt": 53,
-      "esrun": 56.3
+      "node": 71.4,
+      "bun": 7.2,
+      "deno": 93.9,
+      "llrt": 50.4,
+      "esrun": 56.8
     },
     "fsexists_many": {
-      "node": 288.8,
-      "bun": 220.3,
-      "deno": 378.5,
-      "llrt": 214.6,
-      "esrun": 245
+      "node": 292.1,
+      "bun": 32,
+      "deno": 376.4,
+      "llrt": 204.2,
+      "esrun": 245.7
     },
     "glob": {
       "node": 202.8,
@@ -1091,18 +1091,18 @@ export default {
       "esrun": 1.9
     },
     "fsexists_small": {
-      "node": 12.5,
-      "bun": 7.5,
-      "deno": 6.3,
+      "node": 5.8,
+      "bun": 3.3,
+      "deno": 9.7,
       "llrt": 4.6,
-      "esrun": 3.2
+      "esrun": 2.7
     },
     "fsexists_many": {
-      "node": 3.5,
-      "bun": 4.7,
-      "deno": 4.9,
-      "llrt": 9.9,
-      "esrun": 0.7
+      "node": 1.3,
+      "bun": 3.4,
+      "deno": 2.5,
+      "llrt": 3.4,
+      "esrun": 0.9
     },
     "glob": {
       "node": 5.2,
@@ -1513,11 +1513,11 @@ export default {
       "esrun": 5
     },
     "fsexists_many": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
-      "llrt": 5,
-      "esrun": 5
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "glob": {
       "node": 5,
@@ -1921,18 +1921,18 @@ export default {
       "esrun": 1.3
     },
     "fsexists_small": {
-      "node": 2.5,
-      "bun": 3.5,
+      "node": 12.9,
+      "bun": 0,
       "deno": 2.6,
-      "llrt": 2.1,
-      "esrun": 0.4
+      "llrt": 0.2,
+      "esrun": 0.7
     },
     "fsexists_many": {
-      "node": 3.9,
-      "bun": 2.8,
-      "deno": 0.9,
-      "llrt": 0.1,
-      "esrun": 0.6
+      "node": 1.9,
+      "bun": 1.2,
+      "deno": 2.9,
+      "llrt": 4.5,
+      "esrun": 1.2
     },
     "glob": {
       "node": 5,

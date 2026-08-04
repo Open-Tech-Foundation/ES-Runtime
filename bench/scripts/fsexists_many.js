@@ -10,6 +10,14 @@
 // row of information. Path *count* is a real second dimension: it walks a
 // directory's worth of dentries instead of hitting one cached entry over and
 // over, which is what a static-file server or a module resolver actually does.
+//
+// The check is deliberately NOT `stat().then(true).catch(false)` on every
+// runtime. That is what this row used to do on Node, Bun and Deno, which made
+// it a near-duplicate of the fsstat rows — the same syscall plus a promise.
+// Node and LLRT use `access()` (faccessat answers the question without filling
+// in a stat buffer), Bun its native `Bun.file().exists()`, esrun `runtime:fs`
+// `exists()`. Deno ships no existence primitive, so stat there is the idiomatic
+// answer rather than a shortcut, and that one cell still measures a stat.
 (async () => {
   const FILES = 1000;
   const ROUNDS = 20;
@@ -20,19 +28,20 @@
     const enc = new TextEncoder();
     mkdir = (p) => Deno.mkdir(p, { recursive: true });
     write = (p, d) => Deno.writeFile(p, enc.encode(d));
+    // Deno ships no existence primitive; stat is the idiomatic check.
     exists = (p) => Deno.stat(p).then(() => true).catch(() => false);
     cleanup = (p) => Deno.remove(p, { recursive: true }).catch(() => {});
   } else if (typeof Bun !== "undefined") {
-    const { stat: statP, mkdir: nmkdir, rm } = await import("node:fs/promises");
+    const { mkdir: nmkdir, rm } = await import("node:fs/promises");
     mkdir = (p) => nmkdir(p, { recursive: true });
     write = (p, d) => Bun.write(p, d);
-    exists = (p) => statP(p).then(() => true).catch(() => false);
+    exists = (p) => Bun.file(p).exists();
     cleanup = (p) => rm(p, { recursive: true, force: true }).catch(() => {});
   } else if (typeof process !== "undefined" && process.versions && process.versions.node) {
     const fsp = await import("node:fs/promises");
     mkdir = (p) => fsp.mkdir(p, { recursive: true });
     write = (p, d) => fsp.writeFile(p, d);
-    exists = (p) => fsp.stat(p).then(() => true).catch(() => false);
+    exists = (p) => fsp.access(p).then(() => true).catch(() => false);
     cleanup = (p) => fsp.rm(p, { recursive: true, force: true }).catch(() => {});
   } else {
     const fs = await import("runtime:fs");

@@ -150,6 +150,11 @@ interleaved runs, isolating engine cost from process launch.
 
 ## Network
 
+`HTTP server` drives each runtime's own server from a client in the **same
+process**, so it measures the server and that runtime's `fetch` together, not
+the server alone. For server throughput on its own, `bench/rps.sh` uses an
+external load generator on separate cores.
+
 <BenchChart metrics={netWorkloads} />
 
 ## Filesystem
