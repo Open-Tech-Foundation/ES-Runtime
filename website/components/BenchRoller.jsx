@@ -5,7 +5,14 @@
 // pauses it; reduced-motion turns it into a normal scroll.
 //
 // The req/s HTTP story is shown separately (RpsChart) as a fixed headline; the
-// in-process `http` micro-metric is intentionally left out here.
+// in-process `http` micro-metric is intentionally left out here — it measures the
+// server together with the client, which is not the claim this belt implies.
+//
+// The list is explicit rather than every row in the data: the roller is a
+// shop window, and a few rows do not belong in one (`http` for the reason above,
+// `rss_load`, whose point is its memory rather than its time, and the paired
+// `_large`/`_many` variants, which say the same thing twice at this size). Keep
+// it in step with new rows by hand — `bench/run.sh --list` names them all.
 import BenchCard from "./BenchCard.jsx";
 
 const METRICS = [
@@ -34,6 +41,20 @@ const METRICS = [
   { key: "structured", label: "structuredClone", unit: "ms" },
   { key: "compute", label: "Tight compute loop", unit: "ms" },
   { key: "bigscript", label: "Parse + run ~100 KB", unit: "ms" },
+  { key: "modules", label: "Load a 300-module graph", unit: "ms" },
+  { key: "regex", label: "Regex match/validate/replace", unit: "ms" },
+  { key: "strings", label: "String building", unit: "ms" },
+  { key: "errors", label: "throw/catch + stack", unit: "ms" },
+  { key: "buffers", label: "TypedArray / DataView", unit: "ms" },
+  { key: "headers", label: "Headers / Request", unit: "ms" },
+  { key: "formdata", label: "Multipart FormData", unit: "ms" },
+  { key: "date_intl", label: "Date + Intl formatting", unit: "ms" },
+  { key: "crypto_asym", label: "ECDSA sign + verify", unit: "ms" },
+  { key: "crypto_kdf", label: "PBKDF2", unit: "ms" },
+  { key: "spawn", label: "Spawn a child process", unit: "ms" },
+  { key: "fsstat_many", label: "File stat (1000 paths)", unit: "ms" },
+  { key: "fsexists_many", label: "File exists (1000 paths)", unit: "ms" },
+  { key: "rss_loaded", label: "Peak memory (under load)", unit: "MB" },
 ];
 
 export default function BenchRoller() {

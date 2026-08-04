@@ -3,6 +3,13 @@ import CodeTabs from "../components/CodeTabs.jsx";
 import RpsChart from "../components/RpsChart.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
+import bench from "../src/benchmarks.js";
+
+// Read from the generated data rather than restating it. This line said "about
+// 7 ms" while the suite measured 7.9, which is how every hand-typed number on a
+// site starts: correct once.
+const startupMs = bench.results_ms?.startup?.esrun;
+const startupPhrase = typeof startupMs === "number" ? `about ${Math.round(startupMs)} ms` : "milliseconds";
 
 const features = [
   {
@@ -23,7 +30,7 @@ const features = [
   },
   {
     title: "Powered by V8",
-    body: "The engine behind Chrome and Node.js, embedded from Rust. A baked startup snapshot opens a full realm in about 7 ms.",
+    body: `The engine behind Chrome and Node.js, embedded from Rust. A baked startup snapshot opens a full realm in ${startupPhrase}.`,
   },
   {
     title: "Embeddable & capability-gated",
