@@ -669,7 +669,11 @@ if [ -n "$BENCH_JSON" ]; then
   printf '\n    "max_workload_reps": %s,' "$WORKLOAD_RUNS"
   printf '\n    "max_startup_reps": %s,' "$STARTUP_RUNS"
   printf '\n    "noise_threshold_cov_pct": %s,' "$NOISE_THRESHOLD"
-  printf '\n    "quiet": %s' "$([ -n "${QUIET:-}" ] && echo true || echo false)"
+  printf '\n    "quiet": %s,' "$([ -n "${QUIET:-}" ] && echo true || echo false)"
+  # Which cores the launches were pinned to, because the breadth changes what
+  # the I/O rows mean: on one core a runtime's threadpool is serialized, so
+  # fs/http/websocket become single-core numbers rather than practical ones.
+  printf '\n    "pinned_cpus": %s' "$([ -n "${QUIET:-}" ] && printf '"%s"' "${BENCH_CPU:-0}" || echo null)"
   printf '\n  },'
   # The machine, recorded next to the numbers. The fs rows in particular are
   # meaningless without it — an append benchmark on ext4, on tmpfs and on a
