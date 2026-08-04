@@ -25,6 +25,9 @@
 # Usage:  bench/rps.sh                         (auto-detects installed runtimes)
 #         CONN=250 bench/rps.sh                (higher concurrency)
 #         REQUESTS=1000000 bench/rps.sh        (more requests per runtime)
+#         DURATION=60s bench/rps.sh            (hold load for a window instead of a
+#                                               fixed count — compare against the
+#                                               burst number to see degradation)
 #         REPS=5 bench/rps.sh                  (more samples per runtime; best wins)
 #         SERVER=scripts/hono.js bench/rps.sh  (serve through the Hono framework;
 #                                               run `bun install` in bench/ first)
@@ -136,15 +139,29 @@ fi
 
 # Runs the load generator against the already-running server, writes JSON to
 # $OUT, then prints "<req/s> <avg-latency-ms>" parsed from it.
+# DURATION (e.g. DURATION=60s) switches both tools from a fixed request count to
+# a fixed wall-clock window. A burst of $REQUESTS answers "how fast is it when
+# fresh"; holding load for a minute answers whether it stays that way once the
+# heap has filled and the allocator has been churning — a different question,
+# and the one a long-lived server actually poses. The published sections use the
+# request-count form; this is for checking degradation by hand against it.
 load() {
   if [ "$TOOL" = "oha" ]; then
-    $LOAD_PIN "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+    if [ -n "${DURATION:-}" ]; then
+      $LOAD_PIN "$OHA" -z "$DURATION" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+    else
+      $LOAD_PIN "$OHA" -n "$REQUESTS" -c "$CONN" --no-tui --output-format json -H "$HDR" "$URL" >"$OUT" 2>/dev/null
+    fi
     python3 -c "
 import json
 d=json.load(open('$OUT'))['summary']
 print(f\"{d['requestsPerSec']:.0f} {d['average']*1000:.2f}\")" 2>/dev/null || echo "ERR ERR"
   else
-    $LOAD_PIN "$BOMB" -c "$CONN" -n "$REQUESTS" -H "$HDR" -o json -p result "$URL" >"$OUT" 2>/dev/null
+    if [ -n "${DURATION:-}" ]; then
+      $LOAD_PIN "$BOMB" -c "$CONN" -d "$DURATION" -H "$HDR" -o json -p result "$URL" >"$OUT" 2>/dev/null
+    else
+      $LOAD_PIN "$BOMB" -c "$CONN" -n "$REQUESTS" -H "$HDR" -o json -p result "$URL" >"$OUT" 2>/dev/null
+    fi
     python3 -c "
 import json
 d=json.load(open('$OUT'))['result']
@@ -224,7 +241,8 @@ if [ -n "${BENCH_JSON:-}" ]; then
   printf '\n      "server": "%s",' "$SERVER"
   printf '\n      "tool": "%s",' "$TOOL"
   printf '\n      "connections": %s,' "$CONN"
-  printf '\n      "requests": %s,' "$REQUESTS"
+  printf '\n      "requests": %s,' "$([ -n "${DURATION:-}" ] && echo null || echo "$REQUESTS")"
+  printf '\n      "duration": %s,' "$([ -n "${DURATION:-}" ] && printf '"%s"' "$DURATION" || echo null)"
   printf '\n      "reps": %s,' "$REPS"
   printf '\n      "aggregate": "max",'
   printf '\n      "cpu_pinning": "%s",' "$PIN_DESC"

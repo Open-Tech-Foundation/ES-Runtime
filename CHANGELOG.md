@@ -50,6 +50,42 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Scoped *publishing*, not just scoped runs.** The data module is fed by five
+  independent scripts and re-running all of them takes most of an hour, which
+  made changing one number an all-or-nothing event. `SECTIONS` picks which
+  actually run — `workloads`, `rps`, `rps_static`, `websocket`, `http2`,
+  `memory_safety` — and anything left out keeps the values already published.
+  `workloads` still replaces the row matrices outright rather than merging, so a
+  row deleted from the suite cannot live on in the data forever — unless it is
+  scoped to named rows, which merges instead.
+
+  Row arguments and sections are now the same mechanism rather than two
+  incompatible modes. They could not previously be combined, which made adding a
+  row and a section in one pass impossible: each failed validation waiting on the
+  other, and the only way through was a full-suite run to change two numbers.
+
+- **Static-file serving, measured externally.** `scripts/staticserver.js` serves
+  a 64 KiB file per response and is driven by `rps.sh`'s external load generator
+  on separate cores, so the number is the server alone. This is where the
+  runtimes differ structurally rather than incrementally: Bun and Deno hand a
+  file handle to the kernel and never touch the bytes, Node streams it, esrun
+  reads it into a buffer. The `fsread` rows measure reading a file; this measures
+  reading it *and* getting it onto a socket.
+
+- **`headers` and `formdata` workloads.** Header handling runs on every request a
+  server answers, and a case-insensitive multi-map with ordering rules is more
+  work than it looks; multipart parsing is what a file upload costs, on
+  untrusted input. Neither was measured.
+
+- **The memory-safety probe now runs, and reaches the site.** It asks three
+  scripts for more memory than the machine can give and records only how the
+  runtime refuses — a catchable error is a failed request, a signal is a dropped
+  process. It had been invoking `esrun <path-to-esrun>` and looking for LLRT at
+  `../llrt`, so neither ever ran, `deno` was called without `run -A`, and the
+  results reached the site not at all. It now shares run.sh's runtime detection
+  and publishes a `memory_safety` section. First finding: LLRT takes a SIGSEGV
+  on a deeply nested `JSON.stringify` where every other runtime fails cleanly.
+
 - **Scoped benchmark runs.** Rows are now grouped — `launch`, `engine`,
   `webapi`, `crypto`, `fs`, `net`, `serialization`, `wasm`, `wasi`, `memory` —
   and a run can take any subset: `GROUP=fs bench/run.sh`, `GROUP="engine

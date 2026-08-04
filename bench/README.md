@@ -38,7 +38,7 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 | --- | --- |
 | `launch` | `startup`, `bigscript`, `modules` |
 | `engine` | `compute`, `json`, `jsonbig`, `regex`, `strings`, `structured`, `errors`, `async`, `timers` |
-| `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `date_intl`, `buffers`, `streams`, `compression` |
+| `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `date_intl`, `buffers`, `headers`, `formdata`, `streams`, `compression` |
 | `crypto` | `sha256`, `crypto`, `crypto_asym`, `crypto_kdf` |
 | `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
 | `net` | `fetch`, `fetch_upload`, `http`, `websocket` |
@@ -111,6 +111,8 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **strings** | 100 000 × (template interpolation, rope-building concatenation, header split/trim, search + slice, case fold) — string internals, plausibly the most-executed shape of code in a web server. |
 | **errors** | 100 000 × throw/catch across three frames **including reading `.stack`** — the unwind plus the stack capture, which is the expensive half and the one a failing endpoint pays. |
 | **buffers** | 20 000 × (4 KiB `TypedArray` copy, big-endian `DataView` field read/write, subarray view) over a 64 KiB block — the layer every binary protocol sits on. |
+| **headers** | 50 000 × (build a 7-header `Headers`, case-insensitive reads, `append`/`set`, full iteration, then the same set through a `Request`) — header handling runs on every request a server answers, and a case-insensitive multi-map with ordering rules is more work than it looks. |
+| **formdata** | 2 000 × (encode a `FormData` with three fields and a 4 KiB file into a request body, then parse it back with `Request.formData()`) — the multipart path a file upload takes, and the parse half is what runs on untrusted input. |
 | **date_intl** | 50 000 × (`Intl.DateTimeFormat` + `Intl.NumberFormat` + `toISOString`) with formatters constructed once — the ICU-backed surface, which a runtime may bundle, trim, or omit entirely. |
 | **crypto_asym** | 2 000 × ECDSA P-256 sign + verify — public-key work, a different backend from the symmetric rows and the shape of signing or checking a token per request. |
 | **crypto_kdf** | 20 × PBKDF2-HMAC-SHA-256 at 10 000 iterations — a KDF is deliberately slow, so per-call overhead vanishes and this is nearly pure backend hash-loop throughput. Iteration count is well below a production setting; it is a comparison, not a security recommendation. |
@@ -537,15 +539,53 @@ measurement.
 [bombardier]: https://github.com/codesenberg/bombardier
 [Hono]: https://hono.dev
 
+### Sustained load
+
+`REQUESTS` fires a fixed burst, which answers "how fast is it when fresh".
+`DURATION=60s bench/rps.sh` holds load for a wall-clock window instead, which
+answers whether it stays that way once the heap has filled and the allocator has
+been churning. Comparing the two is the degradation check; the published
+sections use the burst form, so run the duration form by hand when you want it.
+
+## Memory safety
+
+`bench/memory-safety.sh` is not a speed benchmark. It runs three scripts that
+each ask for more than the machine can give — a 200k-deep nested array through
+`JSON.stringify`, a string doubled past the engine's maximum, and 10M chained
+`.then()` — and records only *how* the runtime refuses.
+
+`graceful` means JS got a catchable error or the process exited cleanly;
+`crash:N` means it took signal N and the guest never got a say, which in a
+server is the difference between one failed request and a dropped process.
+
+```sh
+bench/memory-safety.sh              # human-readable table
+BENCH_JSON=1 bench/memory-safety.sh # the `memory_safety` section
+```
+
+It previously invoked `esrun <path-to-esrun>` and looked for LLRT at `../llrt`,
+so neither ever ran, and it reached the site not at all. Both are fixed; it now
+shares run.sh's runtime detection.
+
 ## Publishing to the site
 
 `website/src/benchmarks.js` is generated, never edited. `bench/gen-bench-data.sh`
 runs the four scripts in machine mode, merges their JSON, and writes the module:
 
 ```sh
-bench/gen-bench-data.sh                  # full suite
-bench/gen-bench-data.sh url encoding     # re-measure a subset, merge into the rest
+bench/gen-bench-data.sh                       # everything
+bench/gen-bench-data.sh url encoding          # re-measure rows, merge into the rest
+SECTIONS=rps_static bench/gen-bench-data.sh   # one section only
+SECTIONS="workloads memory_safety" ...        # or several
 ```
+
+The module is fed by five independent scripts and re-running all of them takes
+most of an hour, so `SECTIONS` picks which actually run: `workloads` (run.sh,
+which owns every charted row), `rps` (Hono req/s), `rps_static` (64 KiB static
+file req/s), `websocket` (the chat fan-out sweep), `http2`, and `memory_safety`.
+A section left out keeps the values already in the module. `workloads` is the
+one exception to merging — it owns the row matrices outright and replaces them,
+so a row deleted from the suite does not live on in the data forever.
 
 The point of a generated module is that no number on the site is ever typed by
 hand — which only holds if a run that went wrong is **rejected** rather than

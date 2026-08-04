@@ -9,6 +9,8 @@ import BenchStandings from "../../../components/BenchStandings.jsx";
 import RuntimeVersions from "../../../components/RuntimeVersions.jsx";
 import WsSweepTable from "../../../components/WsSweepTable.jsx";
 import Http2Table from "../../../components/Http2Table.jsx";
+import RpsChart from "../../../components/RpsChart.jsx";
+import MemorySafetyTable from "../../../components/MemorySafetyTable.jsx";
 import bench from "../../../src/benchmarks.js";
 
 export const startup = [
@@ -38,6 +40,8 @@ export const webApiWorkloads = [
   { key: "encoding", label: "TextEncoder/TextDecoder", unit: "ms" },
   { key: "base64", label: "base64 (atob/btoa)", unit: "ms" },
   { key: "buffers", label: "TypedArray / DataView", unit: "ms" },
+  { key: "headers", label: "Headers / Request parsing", unit: "ms" },
+  { key: "formdata", label: "Multipart FormData round trip", unit: "ms" },
   { key: "date_intl", label: "Date + Intl formatting", unit: "ms" },
   { key: "streams", label: "ReadableStream piping", unit: "ms" },
   { key: "compression", label: "CompressionStream round trip (gzip)", unit: "ms" },
@@ -157,12 +161,28 @@ external load generator on separate cores.
 
 <BenchChart metrics={netWorkloads} />
 
+### Static files, measured externally
+
+A 64 KiB file per response, driven by an external load generator on separate
+cores — the server alone, unlike the in-process row above. Bun and Deno hand a
+file handle to the kernel; Node streams it; esrun reads it into a buffer.
+
+<RpsChart server="staticserver" title="HTTP requests/sec · 64 KiB static file" />
+
 ## Filesystem
 
 Page-cache resident, no `fsync` — this is the runtime's cost above the syscall,
 not disk speed. Numbers are specific to the filesystem in `environment`.
 
 <BenchChart metrics={fsWorkloads} />
+
+## Behaviour under memory exhaustion
+
+What happens when a script asks for more than the machine can give. The question
+is not speed but whether the guest survives: a catchable error is a failed
+request, a signal is a dropped process.
+
+<MemorySafetyTable />
 
 ## Native vs Third-Party Parsers
 

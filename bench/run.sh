@@ -86,7 +86,7 @@ LAUNCH_ROWS="startup bigscript modules"
 declare -A GROUP_MEMBERS
 GROUP_MEMBERS[launch]="startup bigscript modules"
 GROUP_MEMBERS[engine]="compute json jsonbig regex strings structured errors async timers"
-GROUP_MEMBERS[webapi]="url url_setter urlpattern encoding base64 date_intl buffers streams compression"
+GROUP_MEMBERS[webapi]="url url_setter urlpattern encoding base64 date_intl buffers headers formdata streams compression"
 GROUP_MEMBERS[crypto]="sha256 crypto crypto_asym crypto_kdf"
 GROUP_MEMBERS[fs]="fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_many fsexists_small fsexists_many glob"
 GROUP_MEMBERS[net]="fetch fetch_upload http websocket"
@@ -104,7 +104,7 @@ ALL_ROWS="${ALL_ROWS# }"
 # rps.sh/http2.sh, the OOM probes memory-safety.sh runs, and the module builder
 # the wasm rows import. Listed explicitly so that anything *else* unclaimed is a
 # real oversight rather than noise a reader learns to scroll past.
-NON_ROW_SCRIPTS="helloserver hono mem_large_string mem_nested_json mem_promise_leak wasm-mod"
+NON_ROW_SCRIPTS="helloserver hono staticserver mem_large_string mem_nested_json mem_promise_leak wasm-mod"
 
 # --list: print the groups and exit. Also reports any scripts/*.js that no group
 # claims, which is how a new workload gets noticed instead of silently never

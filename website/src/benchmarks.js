@@ -18,7 +18,8 @@ export default {
     "max_workload_reps": 5,
     "max_startup_reps": 15,
     "noise_threshold_cov_pct": 5,
-    "quiet": false
+    "quiet": false,
+    "pinned_cpus": null
   },
   "environment": {
     "os": "Linux 6.12.74+deb13+1-amd64",
@@ -441,6 +442,20 @@ export default {
       "deno": 147,
       "llrt": 156,
       "esrun": 102
+    },
+    "headers": {
+      "node": 458.2,
+      "bun": 276.9,
+      "deno": 1557.9,
+      "llrt": 750.6,
+      "esrun": 440
+    },
+    "formdata": {
+      "node": 308.1,
+      "bun": 19.4,
+      "deno": 396.2,
+      "llrt": 1391.2,
+      "esrun": 92.7
     }
   },
   "results_rss": {
@@ -851,6 +866,20 @@ export default {
       "esrun": null
     },
     "rss_loaded": {
+      "node": null,
+      "bun": null,
+      "deno": null,
+      "llrt": null,
+      "esrun": null
+    },
+    "headers": {
+      "node": null,
+      "bun": null,
+      "deno": null,
+      "llrt": null,
+      "esrun": null
+    },
+    "formdata": {
       "node": null,
       "bun": null,
       "deno": null,
@@ -1271,6 +1300,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "headers": {
+      "node": 0.8,
+      "bun": 0.5,
+      "deno": 2.4,
+      "llrt": 0.6,
+      "esrun": 4.3
+    },
+    "formdata": {
+      "node": 1.3,
+      "bun": 4.7,
+      "deno": 2.9,
+      "llrt": 1.4,
+      "esrun": 1
     }
   },
   "results_n": {
@@ -1686,6 +1729,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "headers": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
+    },
+    "formdata": {
+      "node": 4,
+      "bun": 4,
+      "deno": 4,
+      "llrt": 4,
+      "esrun": 4
     }
   },
   "results_floor_gap": {
@@ -2101,6 +2158,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "headers": {
+      "node": 1.2,
+      "bun": 0.8,
+      "deno": 1.5,
+      "llrt": 0.3,
+      "esrun": 5.1
+    },
+    "formdata": {
+      "node": 0.9,
+      "bun": 2.1,
+      "deno": 0.3,
+      "llrt": 2.3,
+      "esrun": 1.1
     }
   },
   "status": {
@@ -2516,6 +2587,20 @@ export default {
       "deno": "ok",
       "llrt": "ok",
       "esrun": "ok"
+    },
+    "headers": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
+    "formdata": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
     }
   },
   "results_rps": {
@@ -2524,6 +2609,12 @@ export default {
       "bun": 78625,
       "deno": 77174,
       "esrun": 49922
+    },
+    "staticserver": {
+      "node": 12193,
+      "bun": 26962,
+      "deno": 14176,
+      "esrun": 15947
     }
   },
   "rps_method": {
@@ -2540,6 +2631,22 @@ export default {
         "bun": 3.8,
         "deno": 3.4,
         "esrun": 1.1
+      }
+    },
+    "staticserver": {
+      "server": "scripts/staticserver.js",
+      "tool": "oha",
+      "connections": 100,
+      "requests": 500000,
+      "duration": null,
+      "reps": 3,
+      "aggregate": "max",
+      "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
+      "spread_pct": {
+        "node": 1.7,
+        "bun": 2.3,
+        "deno": 1.8,
+        "esrun": 0.7
       }
     }
   },
@@ -2610,6 +2717,29 @@ export default {
       "narrow_h1": 20573,
       "narrow_h2": 73211,
       "split_server": false
+    }
+  },
+  "memory_safety": {
+    "mem_nested_json": {
+      "node": "graceful",
+      "bun": "graceful",
+      "deno": "graceful",
+      "llrt": "crash:11",
+      "esrun": "graceful"
+    },
+    "mem_large_string": {
+      "node": "graceful",
+      "bun": "graceful",
+      "deno": "graceful",
+      "llrt": "graceful",
+      "esrun": "graceful"
+    },
+    "mem_promise_leak": {
+      "node": "graceful",
+      "bun": "graceful",
+      "deno": "graceful",
+      "llrt": "timeout",
+      "esrun": "exit:1"
     }
   }
 }

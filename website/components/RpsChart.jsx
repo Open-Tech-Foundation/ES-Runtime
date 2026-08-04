@@ -24,8 +24,12 @@ function fmt(v) {
   return typeof v === "number" ? (v / 1000).toFixed(1) + "k" : "n/a";
 }
 
-export default function RpsChart() {
-  const httpRps = bench.results_rps?.hono;
+// `server` selects which rps.sh run to draw: "hono" (a framework hello-world)
+// or "staticserver" (a 64 KiB file per response). Both come from the same
+// external-load-generator harness, so they are comparable with each other and
+// not with the in-process `http` row on the benchmarks page.
+export default function RpsChart({ server = "hono", title = "HTTP requests/sec · Hono hello-world" }) {
+  const httpRps = bench.results_rps ? bench.results_rps[server] : null;
   if (!httpRps) return null;
 
   let max = 0;
@@ -44,7 +48,7 @@ export default function RpsChart() {
     <div>
       <div className="mb-1.5 flex items-baseline justify-between">
         <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
-          HTTP requests/sec · Hono hello-world
+          {title}
         </span>
         <span className="text-[10px] text-zinc-400">higher is better</span>
       </div>

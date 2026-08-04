@@ -72,10 +72,16 @@ if (runtimes.includes("esrun") && esrunRows.length === 0) {
 
 // Each entry: the path the site reads, and how to tell "present and populated".
 const sections = [
-  ["results_rps.hono", () => data.results_rps?.hono, "bench/rps.sh"],
-  ["websocket.server", () => data.websocket?.server, "bench/websocket-chat/run-chat.sh"],
-  ["websocket.client", () => data.websocket?.client, "bench/websocket-chat/run-chat.sh"],
-  ["results_http2", () => data.results_http2, "bench/http2.sh"],
+  ["results_rps.hono", () => data.results_rps?.hono, "SECTIONS=rps"],
+  [
+    "results_rps.staticserver",
+    () => data.results_rps?.staticserver,
+    "SECTIONS=rps_static",
+  ],
+  ["websocket.server", () => data.websocket?.server, "SECTIONS=websocket"],
+  ["websocket.client", () => data.websocket?.client, "SECTIONS=websocket"],
+  ["results_http2", () => data.results_http2, "SECTIONS=http2"],
+  ["memory_safety", () => data.memory_safety, "SECTIONS=memory_safety"],
 ];
 for (const [path, get, source] of sections) {
   const v = get();
