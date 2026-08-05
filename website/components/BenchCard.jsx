@@ -65,7 +65,7 @@ export default function BenchCard({ metric }) {
                 }
               >
                 {typeof v === "number" ? v + unit : "—"}
-                {mem ? <span className="font-normal text-zinc-400">{mem}</span> : null}
+                {mem ? <span className="font-normal text-sky-600 dark:text-sky-400">{mem}</span> : null}
               </span>
             </div>
           );

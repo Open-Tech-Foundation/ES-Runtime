@@ -104,7 +104,7 @@ export default function BenchChart({ group, rows }) {
                       }
                     >
                       {typeof v === "number" ? v + unit : "—"}
-                      {mem ? <span className="font-normal text-zinc-400">{mem}</span> : null}
+                      {mem ? <span className="font-normal text-sky-600 dark:text-sky-400">{mem}</span> : null}
                       {noisy ? (
                         <span
                           className="ml-0.5 font-normal text-amber-600"
