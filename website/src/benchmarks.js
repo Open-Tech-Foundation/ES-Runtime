@@ -4,22 +4,22 @@
 export default {
   "results_rps": {
     "hono": {
-      "node": 33899,
-      "bun": 89384,
-      "deno": 87016,
-      "esrun": 51098
+      "node": 32416,
+      "bun": 81596,
+      "deno": 75864,
+      "esrun": 52757
     },
     "staticserver": {
-      "node": 12099,
-      "bun": 25707,
-      "deno": 13465,
-      "esrun": 15417
+      "node": 12387,
+      "bun": 26359,
+      "deno": 14076,
+      "esrun": 15621
     },
     "hono_sustained": {
-      "node": 31243,
-      "bun": 78494,
-      "deno": 76733,
-      "esrun": 48107
+      "node": 32967,
+      "bun": 79823,
+      "deno": 78049,
+      "esrun": 53863
     }
   },
   "rps_method": {
@@ -32,10 +32,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 1.3,
-        "bun": 4.6,
-        "deno": 8,
-        "esrun": 9.2
+        "node": 3.2,
+        "bun": 5.4,
+        "deno": 0.2,
+        "esrun": 3
       },
       "duration": null
     },
@@ -49,10 +49,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 1.2,
-        "bun": 1,
-        "deno": 1.1,
-        "esrun": 1.3
+        "node": 0.8,
+        "bun": 1.5,
+        "deno": 2.7,
+        "esrun": 3.7
       }
     },
     "hono_sustained": {
@@ -65,10 +65,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 0.2,
-        "bun": 1,
-        "deno": 1.2,
-        "esrun": 0.8
+        "node": 1.8,
+        "bun": 4.1,
+        "deno": 3.3,
+        "esrun": 1
       }
     }
   },
@@ -962,32 +962,32 @@ export default {
       "esrun": 97.9
     },
     "fetch": {
-      "node": 88.9,
-      "bun": 18.6,
-      "deno": 33,
-      "llrt": 18.3,
-      "esrun": 39.5
+      "node": 89.3,
+      "bun": 19,
+      "deno": 34.2,
+      "llrt": 18.5,
+      "esrun": 42.7
     },
     "fetch_upload": {
-      "node": 108.6,
-      "bun": 38.9,
-      "deno": 35.4,
+      "node": 107.7,
+      "bun": 41.2,
+      "deno": 35,
       "llrt": null,
       "esrun": 39.7
     },
     "http": {
-      "node": 377.2,
-      "bun": 50.3,
-      "deno": 101.4,
+      "node": 379.7,
+      "bun": 51.2,
+      "deno": 103.3,
       "llrt": null,
-      "esrun": 107.2
+      "esrun": 108.1
     },
     "websocket": {
-      "node": 594.8,
-      "bun": 397.6,
-      "deno": 541.2,
+      "node": 609.9,
+      "bun": 417.8,
+      "deno": 583,
       "llrt": null,
-      "esrun": 697.7
+      "esrun": 743.3
     },
     "fsread_small": {
       "node": 115.4,
@@ -1407,14 +1407,14 @@ export default {
     "fetch": {
       "node": 86,
       "bun": 32,
-      "deno": 63,
+      "deno": 62,
       "llrt": 11,
       "esrun": 35
     },
     "fetch_upload": {
-      "node": 88,
+      "node": 87,
       "bun": 35,
-      "deno": 63,
+      "deno": 62,
       "llrt": null,
       "esrun": 35
     },
@@ -1426,9 +1426,9 @@ export default {
       "esrun": 61
     },
     "websocket": {
-      "node": 70,
+      "node": 69,
       "bun": 36,
-      "deno": 68,
+      "deno": 69,
       "llrt": null,
       "esrun": 37
     },
@@ -1848,32 +1848,32 @@ export default {
       "esrun": 1.3
     },
     "fetch": {
-      "node": 3.2,
-      "bun": 2.9,
-      "deno": 5.3,
-      "llrt": 15.5,
-      "esrun": 4.5
+      "node": 2.8,
+      "bun": 9,
+      "deno": 5,
+      "llrt": 14,
+      "esrun": 7.6
     },
     "fetch_upload": {
-      "node": 3.4,
-      "bun": 4.6,
-      "deno": 2,
+      "node": 2.7,
+      "bun": 6.5,
+      "deno": 4.6,
       "llrt": null,
-      "esrun": 3.5
+      "esrun": 3.3
     },
     "http": {
-      "node": 3,
-      "bun": 2.2,
-      "deno": 0.7,
-      "llrt": null,
-      "esrun": 1.9
-    },
-    "websocket": {
-      "node": 2,
-      "bun": 1.6,
-      "deno": 1.8,
+      "node": 2.6,
+      "bun": 2.7,
+      "deno": 1.9,
       "llrt": null,
       "esrun": 1.7
+    },
+    "websocket": {
+      "node": 3.5,
+      "bun": 1.4,
+      "deno": 2.7,
+      "llrt": null,
+      "esrun": 1.1
     },
     "fsread_small": {
       "node": 5.6,
@@ -2298,11 +2298,11 @@ export default {
       "esrun": 5
     },
     "fetch_upload": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
       "llrt": null,
-      "esrun": 3
+      "esrun": 5
     },
     "http": {
       "node": 3,
@@ -2734,30 +2734,30 @@ export default {
       "esrun": 0.5
     },
     "fetch": {
-      "node": 4.8,
-      "bun": 0.5,
-      "deno": 6.1,
-      "llrt": 0.5,
-      "esrun": 4.1
+      "node": 1.8,
+      "bun": 7.9,
+      "deno": 9.1,
+      "llrt": 7,
+      "esrun": 1.4
     },
     "fetch_upload": {
-      "node": 3.7,
-      "bun": 3.9,
-      "deno": 2.5,
+      "node": 2.9,
+      "bun": 3.4,
+      "deno": 5.4,
       "llrt": null,
-      "esrun": 3
+      "esrun": 0.3
     },
     "http": {
-      "node": 0.5,
-      "bun": 2.8,
-      "deno": 0.1,
+      "node": 3.7,
+      "bun": 1,
+      "deno": 2.6,
       "llrt": null,
-      "esrun": 2.1
+      "esrun": 2.9
     },
     "websocket": {
-      "node": 1.8,
-      "bun": 0.6,
-      "deno": 2.8,
+      "node": 5.2,
+      "bun": 2.2,
+      "deno": 2.3,
       "llrt": null,
       "esrun": 0.4
     },
@@ -3420,6 +3420,26 @@ export default {
       "deno": "ok",
       "llrt": "ok",
       "esrun": "ok"
+    }
+  },
+  "results_rps_rss": {
+    "hono": {
+      "node": 131,
+      "bun": 50,
+      "deno": 72,
+      "esrun": 50
+    },
+    "staticserver": {
+      "node": 281,
+      "bun": 34,
+      "deno": 139,
+      "esrun": 130
+    },
+    "hono_sustained": {
+      "node": 133,
+      "bun": 50,
+      "deno": 71,
+      "esrun": 53
     }
   }
 }

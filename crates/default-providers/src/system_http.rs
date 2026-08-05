@@ -786,10 +786,25 @@ impl HttpServerProvider for SystemHttpServer {
         response: HttpServerResponse,
     ) -> BoxFuture<Result<(), ProviderError>> {
         let pending = self.pending.clone();
+        let delivered = self.delivered.clone();
         Box::pin(async move {
             if let Some(sender) = pending.lock().unwrap().remove(&request_id) {
                 let _ = sender.send(response); // client may have gone away
             }
+            // Drop the disconnect watch too. It is inserted for *every* request
+            // but was only ever removed by `request_disconnected`, which the
+            // guest reaches solely by touching `request.signal` — so a handler
+            // that never looks at the signal (the overwhelmingly common one, and
+            // every hello-world) left one `oneshot::Receiver` in this map per
+            // request, for the life of the server. Measured at ~175 bytes a
+            // request: a server that had answered 500k of them held 112MB where
+            // it started at 25MB, and none of it came back.
+            //
+            // Responding is the right moment: once the response is sent there is
+            // nothing left to report a disconnect to. A handler that asked first
+            // has already taken the receiver out, so this finds nothing and does
+            // nothing.
+            delivered.lock().unwrap().remove(&request_id);
             Ok(())
         })
     }

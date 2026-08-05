@@ -45,7 +45,13 @@ export default function RpsChart({ server = "hono", title = "HTTP requests/sec Â
   }
   if (!max) return null;
 
-  const httpRss = bench.results_rss?.http || {};
+  // The server's own peak RSS, measured by rps.sh alongside the throughput.
+  // This used to read `results_rss.http` â€” the memory of run.sh's in-process
+  // `http` workload, which runs a client *and* a server in one process. That is
+  // a different program on a different benchmark, so pairing its memory with
+  // this chart's req/s was simply mislabeling one measurement as another. It
+  // went unnoticed while that row was unsampled and the figure rendered blank.
+  const serverRss = bench.results_rps_rss?.[server] || {};
 
   return (
     <div>
@@ -60,7 +66,7 @@ export default function RpsChart({ server = "hono", title = "HTTP requests/sec Â
           const pct =
             typeof httpRps[rt] === "number" ? Math.max((httpRps[rt] / max) * 100, 2) : 0;
           const isWin = rt === winner;
-          const mem = httpRss[rt] ? ` / ${httpRss[rt]}MB` : "";
+          const mem = serverRss[rt] ? ` / ${serverRss[rt]}MB` : "";
           return (
             <div className="flex items-center gap-2.5">
               <span className="w-14 shrink-0 text-right text-[11px] font-medium text-zinc-600 dark:text-zinc-400">

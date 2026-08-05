@@ -209,20 +209,31 @@ measure() {
   # else is listening. Check the process we started is still alive.
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     SERVER_PID=""
-    echo "ERR ERR ERR"
+    echo "ERR ERR ERR null"
     return
   fi
-  load_best
+  local result
+  result="$(load_best)"
+  # Peak RSS of the *server* process, read before it is killed. `VmHWM` is the
+  # kernel's high-water mark, so one read after the load run covers the whole of
+  # it. Measured here rather than reused from run.sh's `http` row: that row runs
+  # a client and a server in one process, so its memory is not this server's.
+  local peak
+  peak="$(awk '/^VmHWM:/{printf "%d", $2/1024}' "/proc/$SERVER_PID/status" 2>/dev/null)"
+  [ -z "$peak" ] && peak=null
   kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=""
+  echo "$result $peak"
 }
 
 if [ -n "${BENCH_JSON:-}" ]; then
-  declare -A RPS SPREAD
+  declare -A RPS SPREAD PEAK
   for r in "${ORDER[@]}"; do
-    read -r rps avg spread <<<"$(measure "${CMD[$r]}")"
+    read -r rps avg spread peak <<<"$(measure "${CMD[$r]}")"
     case "$rps" in '' | ERR) rps=null; spread=null ;; esac
+    case "$peak" in '' | ERR) peak=null ;; esac
     RPS[$r]="$rps"
     SPREAD[$r]="$spread"
+    PEAK[$r]="$peak"
   done
   printf '{\n  "results_rps": {\n    "%s": {' "$SERVER_KEY"
   first=1
@@ -232,6 +243,17 @@ if [ -n "${BENCH_JSON:-}" ]; then
     # A runtime that could not be measured emits null, not a bare ERR token —
     # the latter is invalid JSON and would fail the consumer's parse.
     printf '\n      "%s": %s' "$r" "${RPS[$r]}"
+  done
+  printf '\n    }\n  },'
+  # Peak RSS of each server while it served, so the site can show what a runtime
+  # costs to run this workload next to how fast it ran it.
+  printf '\n  "results_rps_rss": {'
+  printf '\n    "%s": {' "$SERVER_KEY"
+  first=1
+  for r in "${ORDER[@]}"; do
+    [ -z "$first" ] && printf ','
+    first=
+    printf '\n      "%s": %s' "$r" "${PEAK[$r]}"
   done
   printf '\n    }\n  },'
   # How this was measured, and how far the reps spread — published so the site
@@ -264,10 +286,10 @@ else
   echo "best of $REPS runs per runtime (the first doubles as a warmup)"
   echo "spread = worst-to-best across the reps; a wide one means the best is a lucky draw"
   echo
-  printf "%-7s | %12s | %11s | %8s\n" "runtime" "req/sec" "avg lat" "spread"
-  printf -- "--------+--------------+-------------+---------\n"
+  printf "%-7s | %12s | %11s | %8s | %8s\n" "runtime" "req/sec" "avg lat" "spread" "peak rss"
+  printf -- "--------+--------------+-------------+----------+----------\n"
   for r in "${ORDER[@]}"; do
-    read -r rps avg spread <<<"$(measure "${CMD[$r]}")"
-    printf "%-7s | %12s | %9s ms | %6s%%\n" "$r" "$rps" "$avg" "$spread"
+    read -r rps avg spread peak <<<"$(measure "${CMD[$r]}")"
+    printf "%-7s | %12s | %9s ms | %6s%% | %6s MB\n" "$r" "$rps" "$avg" "$spread" "$peak"
   done
 fi
