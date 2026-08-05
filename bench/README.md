@@ -255,7 +255,7 @@ workload      |     node |      bun |     deno |     llrt |    esrun
 startup       |     17.2 |     10.9 |     23.2 |      3.4 |      7.8
 bigscript     |     28.5 |     22.8 |     32.1 |     11.1 |     18.7
 modules       |     77.0 |     27.5 |     40.8 |     13.8 |     23.7
-compute       |    193.3 |    110.0 |    213.5 |   2034.8 |    236.5
+compute       |    193.2 |    109.2 |    213.1 |   2041.1 |    233.8
 json          |    261.2 |    178.4 |    192.7 |    630.4 |    183.7
 jsonbig       |    653.7 |    449.4 |    502.3 |   1666.1 |    564.3
 regex         |     65.2 |     19.4 |     62.1 |   1151.3 |     61.0
@@ -318,7 +318,7 @@ rss_loaded    |    132.0 |    162.0 |    147.0 |    156.0 |    103.0
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.14.0, bun 1.4.0-canary.1, deno 2.8.3, llrt v0.8.0-beta, esrun 0.16.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.14.0, bun 1.4.0-canary.1, deno 2.8.3, llrt v0.8.0-beta, esrun 0.17.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 

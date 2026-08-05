@@ -169,7 +169,7 @@ export default {
     "bun": "1.4.0-canary.1+095eb31ae",
     "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.16.0"
+    "esrun": "esrun 0.17.0"
   },
   "method": {
     "aggregate": "min",
@@ -794,11 +794,11 @@ export default {
       "esrun": 171.3
     },
     "compute": {
-      "node": 193.3,
-      "bun": 110,
-      "deno": 213.5,
-      "llrt": 2034.8,
-      "esrun": 236.5
+      "node": 193.2,
+      "bun": 109.2,
+      "deno": 213.1,
+      "llrt": 2041.1,
+      "esrun": 233.8
     },
     "json": {
       "node": 261.2,
@@ -1680,11 +1680,11 @@ export default {
       "esrun": 8.9
     },
     "compute": {
-      "node": 1.7,
-      "bun": 3.1,
-      "deno": 1.6,
-      "llrt": 3.4,
-      "esrun": 1.2
+      "node": 4.7,
+      "bun": 1,
+      "deno": 1.2,
+      "llrt": 0.5,
+      "esrun": 1.8
     },
     "json": {
       "node": 1,
@@ -2566,11 +2566,11 @@ export default {
       "esrun": 4.3
     },
     "compute": {
-      "node": 1.6,
-      "bun": 5.2,
-      "deno": 1.9,
-      "llrt": 3.8,
-      "esrun": 0.9
+      "node": 1.9,
+      "bun": 1.6,
+      "deno": 0.2,
+      "llrt": 0.1,
+      "esrun": 0.1
     },
     "json": {
       "node": 1.5,
