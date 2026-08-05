@@ -376,6 +376,7 @@ impl V8Engine {
             false,
             Some(limits.heap_limit_bytes),
             limits.max_pending_ops as usize,
+            limits.can_block,
         )
     }
 
@@ -386,8 +387,15 @@ impl V8Engine {
     /// snapshot's default context — including any prelude baked into it
     /// (DECISIONS.md D8) — so global state captured at build time is present
     /// immediately.
-    pub fn with_snapshot(limits: Limits, snapshot: Vec<u8>) -> Result<Self> {
-        Self::restore(limits, snapshot, false)
+    ///
+    /// The blob is taken as a `Cow`, so a `&'static [u8]` — an `include_bytes!`
+    /// snapshot, say — is borrowed rather than copied. That matters once a
+    /// process builds many isolates from one blob (every worker agent does).
+    pub fn with_snapshot(
+        limits: Limits,
+        snapshot: impl Into<std::borrow::Cow<'static, [u8]>>,
+    ) -> Result<Self> {
+        Self::restore(limits, snapshot.into(), false)
     }
 
     /// Restores an engine from a snapshot whose `globalThis.__ops.<name>` shells
@@ -398,11 +406,18 @@ impl V8Engine {
     /// the JS function is already present from the snapshot. Ops must be
     /// registered in the same order used at build time so ids line up
     /// (DECISIONS.md D8).
-    pub fn with_snapshot_baked_ops(limits: Limits, snapshot: Vec<u8>) -> Result<Self> {
-        Self::restore(limits, snapshot, true)
+    pub fn with_snapshot_baked_ops(
+        limits: Limits,
+        snapshot: impl Into<std::borrow::Cow<'static, [u8]>>,
+    ) -> Result<Self> {
+        Self::restore(limits, snapshot.into(), true)
     }
 
-    fn restore(limits: Limits, snapshot: Vec<u8>, ops_baked: bool) -> Result<Self> {
+    fn restore(
+        limits: Limits,
+        snapshot: std::borrow::Cow<'static, [u8]>,
+        ops_baked: bool,
+    ) -> Result<Self> {
         limits.validate()?;
         crate::ensure_v8_initialized();
 
@@ -418,6 +433,7 @@ impl V8Engine {
             ops_baked,
             Some(limits.heap_limit_bytes),
             limits.max_pending_ops as usize,
+            limits.can_block,
         )
     }
 
@@ -444,7 +460,10 @@ impl V8Engine {
         let creator = v8::Isolate::snapshot_creator(Some(crate::op::external_references()), None);
         // No heap guard for the short-lived builder isolate — its callback data
         // would dangle through `create_blob` (which itself runs a GC).
-        let mut engine = Self::wire(creator, false, None, limits.max_pending_ops as usize)?;
+        // The builder isolate runs only the prelude, never guest code, and the
+        // flag is isolate configuration rather than heap state — so it is not
+        // serialized and each restored isolate sets its own in `restore`.
+        let mut engine = Self::wire(creator, false, None, limits.max_pending_ops as usize, false)?;
         configure(&mut engine)?;
         engine.into_snapshot_blob()
     }
@@ -483,10 +502,19 @@ impl V8Engine {
         ops_baked: bool,
         heap_limit: Option<usize>,
         max_pending_ops: usize,
+        can_block: bool,
     ) -> Result<Self> {
         // Microtasks run only at our explicit checkpoint, never implicitly when
         // a JS call returns — the embedder owns when reactions fire (D4).
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
+
+        // The ECMAScript agent's [[CanBlock]]. `false` makes `Atomics.wait`
+        // throw a `TypeError` rather than park this thread — mandatory on the
+        // agent that drives the loop, where parking stops timers, async-op
+        // settlement and interrupt delivery alike. HTML makes the same split
+        // between the window agent and worker agents, so the spec-required
+        // exception and the safe behaviour coincide (`Limits::can_block`).
+        isolate.set_allow_atomics_wait(can_block);
 
         let op_state = std::rc::Rc::new(std::cell::RefCell::new(OpState::new()));
         op_state.borrow_mut().set_max_pending_ops(max_pending_ops);
@@ -531,6 +559,10 @@ impl V8Engine {
             // Likewise `__wasm_pending`: loop bookkeeping for async WebAssembly,
             // which V8 runs internally with no op-future for the driver to poll.
             crate::op::install_wasm_builtins(scope, context)?;
+            // StructuredSerialize/Deserialize. A builtin rather than an op
+            // because it must reach the live JS value before the op boundary
+            // flattens it to `Value` (see `serialize`'s module docs).
+            crate::serialize::install_structured_clone(scope, context)?;
         }
 
         // Capture the WebAssembly reflection functions now, while the global is
@@ -982,6 +1014,44 @@ mod tests {
         }
         // The flag was cleared, so the engine is usable again.
         assert_eq!(engine.eval("1 + 1").unwrap(), Value::Number(2.0));
+    }
+
+    #[test]
+    fn atomics_wait_throws_on_an_agent_that_cannot_block() {
+        // ECMAScript gates `Atomics.wait` on the agent's [[CanBlock]]; HTML sets
+        // it false on the agent that drives the loop. Without this the call
+        // parks the driver thread, which stops timers, async-op settlement and
+        // interrupt delivery — a hang recoverable only by the watchdog.
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let err = engine
+            .eval("Atomics.wait(new Int32Array(new SharedArrayBuffer(8)), 0, 0)")
+            .unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("Atomics.wait cannot be called in this context"),
+            "expected the [[CanBlock]] TypeError, got: {message}"
+        );
+    }
+
+    #[test]
+    fn atomics_wait_is_allowed_on_an_agent_that_owns_its_thread() {
+        // A worker agent blocks only itself, which is what `Atomics.wait` is
+        // for. `notify` with no waiters returns 0 and does not block, so this
+        // exercises the permission without parking the test thread.
+        let _v8 = crate::v8_test_guard();
+        let mut engine = V8Engine::new(Limits::default().with_can_block(true)).expect("engine");
+        assert_eq!(
+            engine
+                .eval(
+                    "const a = new Int32Array(new SharedArrayBuffer(8));
+                     Atomics.wait(a, 0, 1)",
+                )
+                .unwrap(),
+            // The value does not match, so `wait` returns immediately rather
+            // than blocking — proof the call was permitted, not that it parked.
+            Value::String("not-equal".to_string())
+        );
     }
 
     #[test]

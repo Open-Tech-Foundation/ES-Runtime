@@ -8,6 +8,49 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Atomics.wait` on the main thread hung the process.** ECMAScript gates the
+  call on the agent record's `[[CanBlock]]`, and HTML sets that `false` on the
+  agent that drives the loop — so the spec-required answer is a `TypeError`. We
+  never set it, and V8 defaults to allowing the call, so
+
+  ```js
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(8)), 0, 0);
+  ```
+
+  parked the only thread that can make progress: no timers fired, no async op
+  settled, no interrupt was delivered. The process hung until `--timeout`
+  terminated it, and with no `--timeout` it hung forever.
+
+  `Limits` gains `can_block` (default `false`), wired to V8's
+  `SetAllowAtomicsWait`. The call now throws, as it does in browsers, Deno and
+  Bun. A worker agent will set it `true` — blocking there stops only its own
+  thread, which is what `Atomics.wait` is for.
+
+### Added
+
+- **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
+  `ValueSerializer`. Not yet reachable from guest code; it is the primitive the
+  `structuredClone` rewrite and worker messaging are built on.
+
+  It exists because an op cannot carry a JS object graph: op handlers receive
+  the closed `Value` enum, so a `Map`, a cycle or a class instance arrives as
+  its `String(value)` coercion. Serializing where the live value still exists
+  keeps the object graph off the op boundary entirely — the op moves a
+  `Vec<u8>` like every other byte-carrying op, and `Value` is unchanged.
+
+  Host types (`Blob`, `MessagePort`, …) ride V8's delegate hooks, which call
+  back into JS, so "what a `Blob` is" stays in the prelude and the engine stays
+  web-agnostic. **The byte format is engine-specific and versioned** — valid
+  only between isolates of the same engine build, never to be persisted or sent
+  over a network.
+
+- `Runtime::with_snapshot_and_limits`, for constructing an isolate with chosen
+  `Limits` from a snapshot. The blob is now taken as `Cow<'static, [u8]>`, so an
+  `include_bytes!` snapshot is shared across agents rather than copied per
+  agent.
+
 ## [0.17.0] - 2026-08-05
 
 ### Fixed

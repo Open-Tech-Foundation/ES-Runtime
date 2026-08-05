@@ -25,6 +25,21 @@ pub struct Limits {
 
     /// Maximum number of in-flight async ops per isolate (bounded concurrency).
     pub max_pending_ops: u32,
+
+    /// Whether this agent may block its own thread — the ECMAScript agent
+    /// record's `[[CanBlock]]`. When `false`, `Atomics.wait` throws a
+    /// `TypeError` instead of parking the thread.
+    ///
+    /// `false` on the agent that drives the loop, because a blocked driver
+    /// stops timers, async-op settlement and interrupts alike: the process
+    /// hangs until the execution watchdog terminates it, and with no
+    /// `--timeout` it hangs forever. HTML makes the same choice, setting
+    /// `[[CanBlock]]` false on the window agent and true on worker agents, so
+    /// the spec-mandated `TypeError` and the safe behaviour are the same thing.
+    ///
+    /// A worker agent sets this `true`: blocking there stops only its own
+    /// thread, which is what `Atomics.wait` is for.
+    pub can_block: bool,
 }
 
 impl Limits {
@@ -58,6 +73,15 @@ impl Limits {
         self
     }
 
+    /// Returns these limits with the agent's `[[CanBlock]]` replaced. Set
+    /// `true` only for an agent that owns its thread — a worker, never the
+    /// driver. See [`can_block`](Self::can_block).
+    #[must_use]
+    pub fn with_can_block(mut self, can_block: bool) -> Self {
+        self.can_block = can_block;
+        self
+    }
+
     /// Validates the limits, rejecting values that would defeat enforcement
     /// (e.g. a zero heap cap). Returns [`Error::Config`] on the first problem.
     pub fn validate(&self) -> Result<()> {
@@ -80,6 +104,8 @@ impl Default for Limits {
             heap_limit_bytes: Limits::DEFAULT_HEAP_LIMIT_BYTES,
             max_stack_depth: Limits::DEFAULT_MAX_STACK_DEPTH,
             max_pending_ops: Limits::DEFAULT_MAX_PENDING_OPS,
+            // The default agent is the one driving the loop. See `can_block`.
+            can_block: false,
         }
     }
 }
@@ -110,6 +136,14 @@ mod tests {
             ..Limits::default()
         };
         assert!(limits.validate().is_err());
+    }
+
+    #[test]
+    fn the_default_agent_cannot_block() {
+        // The default agent drives the loop, so `Atomics.wait` must throw
+        // rather than park the only thread that can make progress.
+        assert!(!Limits::default().can_block);
+        assert!(Limits::default().with_can_block(true).can_block);
     }
 
     #[test]

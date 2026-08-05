@@ -31,6 +31,7 @@ mod engine;
 pub mod error;
 mod module;
 pub mod op;
+mod serialize;
 pub mod snapshot;
 mod value;
 

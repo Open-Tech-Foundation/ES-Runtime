@@ -496,7 +496,7 @@ fn op_dispatch_inner(
 /// configuration re-applied at restore, not a heap-embedded reference.)
 pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalReference]> {
     use v8::MapFnTo;
-    std::borrow::Cow::Owned(vec![
+    let mut refs = vec![
         v8::ExternalReference {
             function: op_dispatch.map_fn_to(),
         },
@@ -512,7 +512,12 @@ pub(crate) fn external_references() -> std::borrow::Cow<'static, [v8::ExternalRe
         v8::ExternalReference {
             function: wasm_module.map_fn_to(),
         },
-    ])
+    ];
+    // Appended last so the indices above are unchanged; the two
+    // structured-clone builtins are heap-reachable from a snapshot the same way
+    // the timer setters are.
+    refs.extend(crate::serialize::external_references());
+    std::borrow::Cow::Owned(refs)
 }
 
 /// Installs op `op_id` as `globalThis.__ops.<name>`, creating the `__ops`

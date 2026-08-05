@@ -422,8 +422,28 @@ impl Runtime {
     /// which [`builtins::install`] guarantees — and does not re-evaluate the
     /// prelude. Equivalent in behaviour to [`new`](Self::new), far cheaper.
     pub fn with_snapshot(snapshot: Vec<u8>, providers: HostProviders) -> Result<Self> {
-        let engine =
-            V8Engine::with_snapshot_baked_ops(es_runtime_common::Limits::default(), snapshot)?;
+        Self::with_snapshot_and_limits(snapshot, es_runtime_common::Limits::default(), providers)
+    }
+
+    /// [`with_snapshot`](Self::with_snapshot) with the isolate's [`Limits`]
+    /// chosen by the caller.
+    ///
+    /// Two reasons this exists. A worker agent needs
+    /// [`Limits::can_block`](es_runtime_common::Limits::can_block) set — it owns
+    /// its thread, so `Atomics.wait` is legal there and a `TypeError` on the
+    /// agent that drives the loop. And a host running many agents wants to size
+    /// each one's heap ceiling, rather than handing every worker the 256 MiB
+    /// single-isolate default.
+    ///
+    /// The blob is `impl Into<Cow<'static, [u8]>>`, so a `&'static [u8]` — the
+    /// `include_bytes!` snapshot a binary carries — is shared across every
+    /// agent rather than copied per agent.
+    pub fn with_snapshot_and_limits(
+        snapshot: impl Into<std::borrow::Cow<'static, [u8]>>,
+        limits: es_runtime_common::Limits,
+        providers: HostProviders,
+    ) -> Result<Self> {
+        let engine = V8Engine::with_snapshot_baked_ops(limits, snapshot)?;
         let mut runtime = Runtime {
             engine: Box::new(engine),
             timers: TimerQueue::default(),
