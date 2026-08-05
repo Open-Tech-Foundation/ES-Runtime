@@ -12,9 +12,8 @@
 // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops.
 import bench from "../src/benchmarks.js";
+import { LABELS, ORDER } from "../src/runtimes.js";
 
-const ORDER = ["esrun", "bun", "node", "deno"];
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
 
 function fmt(v) {
   return typeof v === "number" ? (v / 1000).toFixed(1) + "k" : "n/a";
@@ -35,7 +34,7 @@ export default function SustainedRpsTable() {
   const windowLabel = bench.rps_method?.hono_sustained?.duration || "held";
 
   const runtimes = [];
-  for (const rt of ORDER) if (bench.runtimes[rt]) runtimes.push(rt);
+  for (const rt of ORDER) if (burst[rt] != null || held[rt] != null) runtimes.push(rt);
 
   return (
     <div className="overflow-x-auto">

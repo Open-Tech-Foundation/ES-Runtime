@@ -10,9 +10,8 @@
 // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops.
 import bench from "../src/benchmarks.js";
+import { LABELS, ORDER } from "../src/runtimes.js";
 
-const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 const ROWS = {
   mem_nested_json: "200k-deep nested array → JSON.stringify",
   mem_large_string: "String doubled past the engine maximum",

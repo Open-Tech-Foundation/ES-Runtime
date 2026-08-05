@@ -12,11 +12,9 @@
 // NOTE: the @opentf/web compiler rewrites `.map()` into a reactive list helper,
 // so non-render computations must use plain loops, and dynamic styles must be
 // objects (a style string becomes Object.assign(..., str)).
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
-
 import bench from "../src/benchmarks.js";
+import { LABELS, ORDER } from "../src/runtimes.js";
 
-const ORDER = ["deno", "bun", "esrun", "node"];
 
 // A runtime the run could not measure reads as "n/a", never as 0.0k â€” a zero
 // bar claims a result that was never taken.
@@ -32,9 +30,14 @@ export default function RpsChart({ server = "hono", title = "HTTP requests/sec Â
   const httpRps = bench.results_rps ? bench.results_rps[server] : null;
   if (!httpRps) return null;
 
+  // LLRT has no general HTTP server, so it is absent from this section rather
+  // than n/a in it. Asked of the data instead of kept as a second hand-written
+  // order â€” which is how this component's order drifted out of date before.
+  const runtimes = ORDER.filter((rt) => typeof httpRps[rt] === "number");
+
   let max = 0;
   let winner = null;
-  for (const rt of ORDER) {
+  for (const rt of runtimes) {
     if (httpRps[rt] > max) {
       max = httpRps[rt];
       winner = rt;
@@ -53,7 +56,7 @@ export default function RpsChart({ server = "hono", title = "HTTP requests/sec Â
         <span className="text-[10px] text-zinc-400">higher is better</span>
       </div>
       <div className="space-y-1.5">
-        {ORDER.map((rt) => {
+        {runtimes.map((rt) => {
           const pct =
             typeof httpRps[rt] === "number" ? Math.max((httpRps[rt] / max) * 100, 2) : 0;
           const isWin = rt === winner;

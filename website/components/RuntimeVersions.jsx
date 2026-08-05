@@ -2,7 +2,7 @@
 // generated bench data). Used by app/docs/benchmarks/page.mdx.
 import bench from "../src/benchmarks.js";
 
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
+import { LABELS } from "../src/runtimes.js";
 
 export default function RuntimeVersions() {
   const versions = Object.keys(bench.runtimes).map((k) => ({

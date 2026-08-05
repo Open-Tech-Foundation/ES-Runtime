@@ -9,9 +9,8 @@
 // so all of the tallying below uses plain loops; `.map` appears only in render.
 import bench from "../src/benchmarks.js";
 import { isHigherBetter } from "../src/metric-direction.js";
+import { LABELS, ORDER } from "../src/runtimes.js";
 
-const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 
 
 function medalHead(p) {

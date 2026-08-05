@@ -3,13 +3,13 @@
 // nothing: it is dominated by how many connections the client opened and how
 // many streams it put on each. Used by app/docs/benchmarks/page.mdx.
 //
+import { LABELS, ORDER } from "../src/runtimes.js";
+
 // The `gain` column is deliberately *not* rendered for every row the same way.
 // Node and Bun serve cleartext h2 from `node:http2` while their HTTP/1.1 number
 // comes from `node:http`/`Bun.serve`, so their ratio carries the gap between two
 // implementations on top of the protocol change; those rows are marked and the
 // caption says what the mark means. Comparing down a column is always fair.
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno" };
-const ORDER = ["esrun", "bun", "deno", "node"];
 const fmt = (n) => (n == null ? "n/a" : n.toLocaleString("en-US"));
 const gain = (lo, hi) => (lo == null || hi == null ? "n/a" : `${(hi / lo).toFixed(2)}×`);
 

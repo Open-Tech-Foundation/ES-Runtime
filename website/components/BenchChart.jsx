@@ -13,9 +13,8 @@
 import bench from "../src/benchmarks.js";
 import { resolveRows } from "../src/bench-rows.js";
 import { betterLabel, winnerOf } from "../src/metric-direction.js";
+import { LABELS, ORDER } from "../src/runtimes.js";
 
-const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
 
 // Above this run-to-run variation a cell is marked `~`. The harness already
 // flags these in its terminal output and publishes results_cov for every cell;

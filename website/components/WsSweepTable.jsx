@@ -1,8 +1,7 @@
 // WebSocket fan-out sweep table for the Benchmarks page — RECV messages/sec
 // (higher is better). Columns are the C-sweep keys; rows the runtimes that
 // participated. Used by app/docs/benchmarks/page.mdx.
-const LABELS = { esrun: "esrun", bun: "Bun", node: "Node.js", deno: "Deno", llrt: "LLRT" };
-const WS_ORDER = ["esrun", "bun", "deno", "node"];
+import { LABELS, ORDER as WS_ORDER } from "../src/runtimes.js";
 const fmt = (n) => (n == null ? "n/a" : n.toLocaleString("en-US"));
 
 export default function WsSweepTable({ sweep, header }) {
