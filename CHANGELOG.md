@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-05
+
 ### Fixed
 
 - **The HTTP server leaked a disconnect watch on every request.** Each request
