@@ -228,6 +228,19 @@ codegen-units = 1
 # (the hot paths are V8's, and V8 is a prebuilt static library this never
 # touches).
 overflow-checks = true
+# Ship stripped: 80 MB → 63 MB, a fifth of what users download.
+#
+# There is no DWARF in this binary to remove — release builds carry none, and
+# `readelf` reports zero debug sections. The 17 MB is the *symbol table*, nearly
+# all of it names from the prebuilt V8 static library. `strip = "debuginfo"`
+# therefore does nothing here; only `true` reaches it.
+#
+# What that costs: a `RUST_BACKTRACE=1` panic report gives addresses rather than
+# function names. Acceptable because panics at the V8 boundary are caught and
+# reported as a JS-visible error rather than a crash (D15), and because a
+# developer chasing one can rebuild unstripped — while every user pays the 17 MB
+# on every download. Node, Deno and Bun all ship stripped for the same reason.
+strip = true
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "forbid"      # DECISIONS.md D1
