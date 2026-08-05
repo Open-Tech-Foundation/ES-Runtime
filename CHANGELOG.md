@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-05
+
 ### Documentation
 
 - **An internals tier for the docs.** `/docs/internals/http` explains what
