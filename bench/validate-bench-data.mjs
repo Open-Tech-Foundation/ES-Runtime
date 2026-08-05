@@ -82,6 +82,24 @@ const wanted = [...charted];
 const runtimes = Object.keys(data.runtimes || {});
 if (runtimes.length === 0) errors.push("runtimes is empty — no runtime was detected");
 
+// The numbers must come from the build being shipped, not an older one.
+//
+// This is not hypothetical. v0.12, v0.13, v0.14 and v0.15 all published the same
+// data — identical to the digit, down to `http` at 92.2ms — because it was never
+// regenerated. `runtimes.esrun` said "esrun 0.9.0" on all four, so the site
+// carried numbers from seven minor versions earlier while claiming to describe
+// the current release, and the only clue was a version string nothing compared.
+const cargoToml = readFileSync(join(siteDir, "../Cargo.toml"), "utf8");
+const workspaceVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1];
+const measuredVersion = String(data.runtimes?.esrun || "").match(/\d+\.\d+\.\d+/)?.[0];
+if (workspaceVersion && measuredVersion && workspaceVersion !== measuredVersion) {
+  errors.push(
+    `these numbers were measured on esrun ${measuredVersion}, but the workspace is ` +
+      `${workspaceVersion} — rebuild (\`cargo build --release -p es-runtime-cli\`) and ` +
+      `re-run, or the site will describe a build nobody is shipping`,
+  );
+}
+
 // --- every charted row exists, and carries real numbers ---------------------
 
 const rows = data.results_ms || {};
