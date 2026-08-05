@@ -25,6 +25,13 @@ use crate::path_allowlist::{Access, PathAllowlist};
 /// full conventional set: `?`, `*` (not crossing `/`), `**` (crossing), `[ab]`,
 /// `[a-z]`, `[!abc]` **and** `[^abc]`, `{a,b}`, `\` escaping, and a leading `!`
 /// that negates the whole pattern.
+///
+/// `\` escaping is the one part that is platform-dependent: globset disables it
+/// on Windows, where `\` is the path separator, so `\!x.ts` is a path there
+/// rather than a literal `!x.ts`. Node's minimatch makes the same call
+/// (`windowsPathsNoEscape`). Forcing it on would make pattern semantics uniform
+/// but stop `\` separating components in the real Windows paths this matches
+/// against, which is the trade globset's default is choosing.
 fn parse_glob(pattern: &str) -> Result<(globset::GlobMatcher, bool), ProviderError> {
     // A leading `!` negates; `\!…` is a literal `!` (globset unescapes it).
     let (negated, body) = match pattern.strip_prefix('!') {

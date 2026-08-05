@@ -607,7 +607,15 @@ fn runtime_fs_glob_covers_all_patterns() {
         "negcaret=true,false",
         "brace=true,false",
         "not=true,false",
-        "escape=true,false",
+        // `\` escapes a special character everywhere except Windows, where it is
+        // the path separator and globset disables escaping for that reason (the
+        // same call Node's minimatch makes with `windowsPathsNoEscape`). The
+        // pattern is then a path, and matches nothing here.
+        if cfg!(windows) {
+            "escape=false,false"
+        } else {
+            "escape=true,false"
+        },
     ] {
         assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
     }
@@ -984,7 +992,14 @@ fn import_meta_resolve_resolves_against_the_module() {
         stdout.contains("/up.mjs") && !stdout.contains("/fixtures/up.mjs"),
         "`../` must climb out of the fixtures directory: {stdout}"
     );
-    assert!(stdout.contains("ABS:file:///abs/z.mjs"), "{stdout}");
+    // An absolute POSIX path resolves against the *root of the base URL*, which
+    // on Windows includes the drive letter: `file:///D:/abs/z.mjs`. That is
+    // WHATWG resolution, and what Node prints there too — so assert the shape
+    // rather than a path only Unix produces.
+    assert!(
+        stdout.contains("ABS:file:///") && stdout.contains("/abs/z.mjs"),
+        "{stdout}"
+    );
     assert!(stdout.contains("URL:file:///q.mjs"), "{stdout}");
     // A `runtime:` builtin is already absolute and resolves to itself.
     assert!(stdout.contains("BUILTIN:runtime:process"), "{stdout}");

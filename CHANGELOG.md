@@ -68,6 +68,16 @@ namespace) is unstable and may change between minor releases until the API freez
   and on HTTP/2 one connection can carry hundreds of requests. As `Arc<str>` the
   clone is a refcount bump. Hono **51,209 → 53,928 req/s**, about 5%.
 
+- **Two tests asserted POSIX behaviour and failed on Windows.**
+  `import.meta.resolve` of an absolute path resolves against the root of the base
+  URL, which on Windows includes the drive letter — `file:///D:/abs/z.mjs` is
+  WHATWG resolution and what Node prints there, not a defect. And `\` escaping in
+  a glob is disabled by globset on Windows, where `\` is the path separator (the
+  same call Node's minimatch makes with `windowsPathsNoEscape`), so `\!x.ts` is a
+  path rather than a literal `!x.ts`. Both assertions now state the real
+  behaviour, and the glob helper documents the platform difference it had
+  promised away.
+
 ### Tooling
 
 - **The benchmark gate refuses numbers measured on a different build.** v0.12
