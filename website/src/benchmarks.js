@@ -101,18 +101,18 @@ export default {
       "esrun": 385.1
     },
     "async": {
-      "node": 57.9,
-      "bun": 50,
-      "deno": 31.8,
-      "llrt": 679.8,
-      "esrun": 29.5
+      "node": 57.2,
+      "bun": 50.6,
+      "deno": 32,
+      "llrt": 677.9,
+      "esrun": 28.9
     },
     "timers": {
-      "node": 41,
-      "bun": 30.2,
-      "deno": 205.7,
-      "llrt": 49.9,
-      "esrun": 55.6
+      "node": 40.5,
+      "bun": 29.2,
+      "deno": 197.1,
+      "llrt": 46.2,
+      "esrun": 51.6
     },
     "url": {
       "node": 48,
@@ -206,109 +206,109 @@ export default {
       "esrun": 101.1
     },
     "fsread_small": {
-      "node": 127,
-      "bun": 38.7,
-      "deno": 41.9,
-      "llrt": 27.7,
-      "esrun": 42.9
+      "node": 119.5,
+      "bun": 36.8,
+      "deno": 39.6,
+      "llrt": 26.9,
+      "esrun": 39.9
     },
     "fsread_large": {
-      "node": 64.6,
-      "bun": 24.6,
-      "deno": 65.8,
-      "llrt": 12.7,
+      "node": 60.2,
+      "bun": 25.3,
+      "deno": 66.7,
+      "llrt": 14,
       "esrun": 57.5
     },
     "fswrite_small": {
-      "node": 170.8,
-      "bun": 12.6,
-      "deno": 85.1,
-      "llrt": 100.3,
-      "esrun": 81.5
+      "node": 173.6,
+      "bun": 12.8,
+      "deno": 86.2,
+      "llrt": 97.3,
+      "esrun": 73.3
     },
     "fswrite_large": {
-      "node": 57,
-      "bun": 20,
-      "deno": 43.8,
+      "node": 58,
+      "bun": 20.4,
+      "deno": 41,
       "llrt": 51,
-      "esrun": 21.5
+      "esrun": 20.7
     },
     "fsappend_small": {
-      "node": 112.6,
+      "node": 110.2,
       "bun": 30.7,
-      "deno": 41,
+      "deno": 39.6,
       "llrt": null,
-      "esrun": 33.4
+      "esrun": 30.6
     },
     "fsappend_large": {
-      "node": 23.2,
-      "bun": 7.1,
-      "deno": 15.6,
+      "node": 22.5,
+      "bun": 7.7,
+      "deno": 15.5,
       "llrt": null,
-      "esrun": 6.2
+      "esrun": 5.7
     },
     "fsstat_small": {
-      "node": 74.2,
+      "node": 72.3,
       "bun": 50.8,
-      "deno": 94.8,
-      "llrt": 42.5,
-      "esrun": 74.1
+      "deno": 89.4,
+      "llrt": 42.6,
+      "esrun": 66.6
     },
     "fsstat_many": {
-      "node": 291.1,
-      "bun": 209.2,
-      "deno": 398,
-      "llrt": 179.1,
-      "esrun": 314.5
+      "node": 284.4,
+      "bun": 206.8,
+      "deno": 355.1,
+      "llrt": 181.7,
+      "esrun": 294.4
     },
     "fsexists_small": {
-      "node": 71.4,
-      "bun": 7.2,
-      "deno": 93.9,
-      "llrt": 50.4,
-      "esrun": 56.8
+      "node": 69.2,
+      "bun": 7.3,
+      "deno": 100.1,
+      "llrt": 51.1,
+      "esrun": 51.5
     },
     "fsexists_many": {
-      "node": 292.1,
-      "bun": 32,
-      "deno": 376.4,
-      "llrt": 204.2,
-      "esrun": 245.7
+      "node": 283.3,
+      "bun": 30.7,
+      "deno": 370,
+      "llrt": 210.2,
+      "esrun": 229.2
     },
     "glob": {
-      "node": 202.8,
-      "bun": 30.7,
+      "node": 204.1,
+      "bun": 32.4,
       "deno": null,
       "llrt": null,
-      "esrun": 50.4
+      "esrun": 49.9
     },
     "fetch": {
-      "node": 91.3,
-      "bun": 19.1,
-      "deno": 36.5,
-      "llrt": 18.9,
-      "esrun": 45.2
+      "node": 89.1,
+      "bun": 18.4,
+      "deno": 35.2,
+      "llrt": 18.5,
+      "esrun": 41.2
     },
     "fetch_upload": {
       "node": 107.9,
-      "bun": 40.3,
-      "deno": 37.1,
+      "bun": 39.9,
+      "deno": 34.1,
       "llrt": null,
-      "esrun": 42.6
+      "esrun": 41
     },
     "http": {
-      "node": 396.1,
-      "bun": 51.2,
-      "deno": 105.6,
+      "node": 377.8,
+      "bun": 51,
+      "deno": 98.5,
       "llrt": null,
-      "esrun": 109.2
+      "esrun": 105.5
     },
     "websocket": {
-      "node": 602.1,
-      "bun": 410.1,
-      "deno": 559.3,
+      "node": 603.6,
+      "bun": 404.2,
+      "deno": 575.8,
       "llrt": null,
-      "esrun": 729.1
+      "esrun": 716.7
     },
     "xml_small": {
       "node": 486.5,
@@ -973,18 +973,18 @@ export default {
       "esrun": 2
     },
     "async": {
-      "node": 4,
-      "bun": 5.8,
-      "deno": 9.3,
-      "llrt": 2.7,
-      "esrun": 4.9
+      "node": 3.7,
+      "bun": 4.6,
+      "deno": 2.3,
+      "llrt": 0.5,
+      "esrun": 1.6
     },
     "timers": {
-      "node": 6.7,
-      "bun": 5.6,
-      "deno": 6.1,
-      "llrt": 2.7,
-      "esrun": 2.5
+      "node": 6.2,
+      "bun": 5.2,
+      "deno": 1.4,
+      "llrt": 2.5,
+      "esrun": 1.3
     },
     "url": {
       "node": 0.9,
@@ -1078,109 +1078,109 @@ export default {
       "esrun": 1.5
     },
     "fsread_small": {
-      "node": 4.2,
-      "bun": 3.5,
-      "deno": 11.2,
-      "llrt": 9.7,
-      "esrun": 5.4
+      "node": 8.4,
+      "bun": 6.4,
+      "deno": 5.7,
+      "llrt": 7.9,
+      "esrun": 1.4
     },
     "fsread_large": {
-      "node": 2.8,
-      "bun": 3.8,
-      "deno": 2.2,
-      "llrt": 6.5,
-      "esrun": 11.8
+      "node": 3.8,
+      "bun": 4,
+      "deno": 1.3,
+      "llrt": 1.3,
+      "esrun": 11.9
     },
     "fswrite_small": {
-      "node": 6.8,
-      "bun": 1.2,
-      "deno": 8.4,
-      "llrt": 3.8,
-      "esrun": 5.5
-    },
-    "fswrite_large": {
-      "node": 4.4,
-      "bun": 2.6,
-      "deno": 3,
-      "llrt": 2.3,
-      "esrun": 5.5
-    },
-    "fsappend_small": {
-      "node": 5.4,
-      "bun": 7.4,
-      "deno": 6.6,
-      "llrt": null,
-      "esrun": 2.8
-    },
-    "fsappend_large": {
-      "node": 3.8,
-      "bun": 9.5,
-      "deno": 4,
-      "llrt": null,
-      "esrun": 6.4
-    },
-    "fsstat_small": {
-      "node": 10.5,
-      "bun": 9.9,
-      "deno": 4.4,
-      "llrt": 18.3,
-      "esrun": 2
-    },
-    "fsstat_many": {
-      "node": 5,
-      "bun": 2.3,
-      "deno": 2.5,
-      "llrt": 9.8,
-      "esrun": 1.9
-    },
-    "fsexists_small": {
-      "node": 5.8,
-      "bun": 3.3,
-      "deno": 9.7,
-      "llrt": 4.6,
-      "esrun": 2.7
-    },
-    "fsexists_many": {
-      "node": 1.3,
-      "bun": 3.4,
-      "deno": 2.5,
-      "llrt": 3.4,
-      "esrun": 0.9
-    },
-    "glob": {
-      "node": 5.2,
-      "bun": 4.3,
-      "deno": null,
-      "llrt": null,
-      "esrun": 4.3
-    },
-    "fetch": {
-      "node": 2.4,
-      "bun": 9.9,
-      "deno": 2.6,
-      "llrt": 15.5,
-      "esrun": 3.9
-    },
-    "fetch_upload": {
       "node": 2.6,
-      "bun": 4.1,
-      "deno": 5.3,
-      "llrt": null,
-      "esrun": 4.3
-    },
-    "http": {
-      "node": 2.6,
-      "bun": 1.6,
-      "deno": 2.6,
-      "llrt": null,
+      "bun": 0.4,
+      "deno": 3.9,
+      "llrt": 0.8,
       "esrun": 2.2
     },
-    "websocket": {
-      "node": 1.7,
-      "bun": 0.3,
-      "deno": 2.1,
+    "fswrite_large": {
+      "node": 3.3,
+      "bun": 1.5,
+      "deno": 2.4,
+      "llrt": 3.4,
+      "esrun": 4.7
+    },
+    "fsappend_small": {
+      "node": 4.7,
+      "bun": 3.6,
+      "deno": 5.9,
       "llrt": null,
-      "esrun": 1
+      "esrun": 3.3
+    },
+    "fsappend_large": {
+      "node": 2.9,
+      "bun": 4.5,
+      "deno": 2.7,
+      "llrt": null,
+      "esrun": 7.8
+    },
+    "fsstat_small": {
+      "node": 8.9,
+      "bun": 2.8,
+      "deno": 13.2,
+      "llrt": 2.8,
+      "esrun": 2.2
+    },
+    "fsstat_many": {
+      "node": 4.1,
+      "bun": 4.3,
+      "deno": 7.1,
+      "llrt": 6.3,
+      "esrun": 0.6
+    },
+    "fsexists_small": {
+      "node": 7.2,
+      "bun": 16.2,
+      "deno": 9.2,
+      "llrt": 7.2,
+      "esrun": 0.7
+    },
+    "fsexists_many": {
+      "node": 5.1,
+      "bun": 1.8,
+      "deno": 9.1,
+      "llrt": 18,
+      "esrun": 1.2
+    },
+    "glob": {
+      "node": 4.8,
+      "bun": 3.7,
+      "deno": null,
+      "llrt": null,
+      "esrun": 2.4
+    },
+    "fetch": {
+      "node": 5.4,
+      "bun": 9.2,
+      "deno": 4.6,
+      "llrt": 8.6,
+      "esrun": 7
+    },
+    "fetch_upload": {
+      "node": 4.3,
+      "bun": 5.2,
+      "deno": 3.7,
+      "llrt": null,
+      "esrun": 6.5
+    },
+    "http": {
+      "node": 4.7,
+      "bun": 1.7,
+      "deno": 3.2,
+      "llrt": null,
+      "esrun": 3.1
+    },
+    "websocket": {
+      "node": 0.6,
+      "bun": 3,
+      "deno": 3.5,
+      "llrt": null,
+      "esrun": 4.7
     },
     "xml_small": {
       "node": 3.5,
@@ -1409,11 +1409,11 @@ export default {
       "esrun": 5
     },
     "async": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
-      "llrt": 5,
-      "esrun": 5
+      "node": 4,
+      "bun": 4,
+      "deno": 4,
+      "llrt": 4,
+      "esrun": 4
     },
     "timers": {
       "node": 5,
@@ -1528,18 +1528,18 @@ export default {
       "esrun": 5
     },
     "fswrite_small": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
-      "llrt": 5,
-      "esrun": 5
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "fswrite_large": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
-      "llrt": 5,
-      "esrun": 5
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     },
     "fsappend_small": {
       "node": 5,
@@ -1577,18 +1577,18 @@ export default {
       "esrun": 5
     },
     "fsexists_many": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
-      "llrt": 3,
-      "esrun": 3
-    },
-    "glob": {
       "node": 5,
       "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
+    },
+    "glob": {
+      "node": 4,
+      "bun": 4,
       "deno": null,
       "llrt": null,
-      "esrun": 5
+      "esrun": 4
     },
     "fetch": {
       "node": 5,
@@ -1845,18 +1845,18 @@ export default {
       "esrun": 2.9
     },
     "async": {
-      "node": 1.9,
-      "bun": 1.2,
+      "node": 2.8,
+      "bun": 4.5,
       "deno": 0.3,
-      "llrt": 4.1,
-      "esrun": 1.4
+      "llrt": 0.1,
+      "esrun": 0.7
     },
     "timers": {
-      "node": 12.7,
-      "bun": 1.7,
-      "deno": 0.1,
-      "llrt": 0,
-      "esrun": 1.1
+      "node": 4.2,
+      "bun": 5.8,
+      "deno": 1.3,
+      "llrt": 0.9,
+      "esrun": 0.6
     },
     "url": {
       "node": 0.6,
@@ -1950,109 +1950,109 @@ export default {
       "esrun": 2.1
     },
     "fsread_small": {
-      "node": 2,
-      "bun": 2.8,
-      "deno": 0.5,
+      "node": 1.8,
+      "bun": 2.7,
+      "deno": 4.5,
       "llrt": 1.1,
-      "esrun": 1.4
+      "esrun": 0.8
     },
     "fsread_large": {
-      "node": 2.5,
-      "bun": 0,
-      "deno": 2.1,
-      "llrt": 0.8,
-      "esrun": 1.2
+      "node": 1,
+      "bun": 3.2,
+      "deno": 0.6,
+      "llrt": 0,
+      "esrun": 13.9
     },
     "fswrite_small": {
-      "node": 2.8,
-      "bun": 1.6,
-      "deno": 8.7,
-      "llrt": 0,
+      "node": 2.6,
+      "bun": 0,
+      "deno": 6.3,
+      "llrt": 0.6,
       "esrun": 1.5
     },
     "fswrite_large": {
-      "node": 2.6,
-      "bun": 0.5,
-      "deno": 0.9,
-      "llrt": 0.4,
-      "esrun": 0.9
+      "node": 3.1,
+      "bun": 1,
+      "deno": 2.4,
+      "llrt": 5.7,
+      "esrun": 3.9
     },
     "fsappend_small": {
-      "node": 4.3,
-      "bun": 2,
-      "deno": 2,
+      "node": 0.5,
+      "bun": 0.7,
+      "deno": 6.8,
       "llrt": null,
-      "esrun": 0.3
+      "esrun": 0
     },
     "fsappend_large": {
-      "node": 2.6,
-      "bun": 2.8,
-      "deno": 0.6,
+      "node": 2.2,
+      "bun": 3.9,
+      "deno": 5.2,
       "llrt": null,
-      "esrun": 8.1
+      "esrun": 15.8
     },
     "fsstat_small": {
-      "node": 2.7,
-      "bun": 0.2,
-      "deno": 2,
-      "llrt": 5.2,
-      "esrun": 1.6
+      "node": 6.5,
+      "bun": 1.8,
+      "deno": 1.8,
+      "llrt": 0.9,
+      "esrun": 0.8
     },
     "fsstat_many": {
-      "node": 1.2,
-      "bun": 4.2,
-      "deno": 0.1,
-      "llrt": 1.6,
-      "esrun": 1.3
+      "node": 0.1,
+      "bun": 0.4,
+      "deno": 3.8,
+      "llrt": 6.7,
+      "esrun": 0.8
     },
     "fsexists_small": {
-      "node": 12.9,
-      "bun": 0,
-      "deno": 2.6,
-      "llrt": 0.2,
-      "esrun": 0.7
+      "node": 1.2,
+      "bun": 2.7,
+      "deno": 0.1,
+      "llrt": 3.1,
+      "esrun": 1.2
     },
     "fsexists_many": {
       "node": 1.9,
-      "bun": 1.2,
-      "deno": 2.9,
-      "llrt": 4.5,
-      "esrun": 1.2
+      "bun": 1.3,
+      "deno": 3.9,
+      "llrt": 3.5,
+      "esrun": 0.6
     },
     "glob": {
-      "node": 5,
-      "bun": 5.5,
+      "node": 5.4,
+      "bun": 6.2,
       "deno": null,
+      "llrt": null,
+      "esrun": 2.6
+    },
+    "fetch": {
+      "node": 1.6,
+      "bun": 2.7,
+      "deno": 0.6,
+      "llrt": 4.9,
+      "esrun": 3.6
+    },
+    "fetch_upload": {
+      "node": 3.1,
+      "bun": 4.3,
+      "deno": 2.1,
       "llrt": null,
       "esrun": 0.2
     },
-    "fetch": {
-      "node": 0.3,
-      "bun": 7.9,
-      "deno": 3.3,
-      "llrt": 1.1,
-      "esrun": 4
-    },
-    "fetch_upload": {
-      "node": 1.2,
-      "bun": 6.2,
-      "deno": 6.7,
-      "llrt": null,
-      "esrun": 1.2
-    },
     "http": {
-      "node": 3.2,
-      "bun": 2.7,
-      "deno": 4.5,
+      "node": 2.1,
+      "bun": 2,
+      "deno": 3.4,
       "llrt": null,
-      "esrun": 1.6
+      "esrun": 0.8
     },
     "websocket": {
-      "node": 1.7,
-      "bun": 0.2,
-      "deno": 1.6,
+      "node": 0.8,
+      "bun": 0.3,
+      "deno": 2.2,
       "llrt": null,
-      "esrun": 1.1
+      "esrun": 1
     },
     "xml_small": {
       "node": 0.6,

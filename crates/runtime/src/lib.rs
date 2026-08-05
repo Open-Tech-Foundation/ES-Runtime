@@ -2217,8 +2217,24 @@ mod tests {
     fn async_op_resolves_across_a_tick() {
         let _g = v8_guard();
         let mut rt = runtime();
+        // Pending on the first poll, ready on the second — so this op takes the
+        // registration path rather than the dispatcher's eager one, which is
+        // what `async_ops_settled` counts.
         rt.register_op(OpDecl::r#async("answer", |_args| -> AsyncOp {
-            Box::pin(async { Ok(Value::Number(42.0)) })
+            let mut polled = false;
+            Box::pin(async move {
+                std::future::poll_fn(move |cx| {
+                    if polled {
+                        std::task::Poll::Ready(())
+                    } else {
+                        polled = true;
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                Ok(Value::Number(42.0))
+            })
         }))
         .unwrap();
 
@@ -2232,6 +2248,59 @@ mod tests {
         assert_eq!(status.async_ops_settled, 1);
         assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
         assert!(!rt.has_pending_work());
+    }
+
+    /// An async op whose future is ready on its first poll settles its promise
+    /// during the call, without ever being registered as pending work — but its
+    /// *reactions* still wait for the microtask checkpoint, so `await` behaves
+    /// exactly as it does for an op that took a trip through the loop.
+    ///
+    /// This is the difference between "resolved" and "delivered", and getting it
+    /// wrong would run guest code inside a host op call. The ops this affects are
+    /// the ones that are async only in shape (`fs.exists` answers from a single
+    /// syscall), which were paying a full driver round trip each.
+    #[test]
+    fn an_immediately_ready_async_op_settles_without_a_loop_turn() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.register_op(OpDecl::r#async("answer", |_args| -> AsyncOp {
+            Box::pin(async { Ok(Value::Number(42.0)) })
+        }))
+        .unwrap();
+
+        // Still not delivered synchronously: the reaction is a microtask.
+        rt.eval("globalThis.result = 0; __ops.answer().then((v) => { globalThis.result = v; });")
+            .unwrap();
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(0.0));
+
+        // Nothing was ever registered, so the tick settles no pending op — and
+        // the value arrives all the same.
+        let status = rt.tick(0);
+        assert_eq!(status.async_ops_settled, 0);
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
+        assert!(!rt.has_pending_work());
+    }
+
+    /// A rejected eager op rejects its promise, rather than resolving it or
+    /// throwing synchronously out of the op call.
+    #[test]
+    fn an_immediately_failing_async_op_rejects_its_promise() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.register_op(OpDecl::r#async("boom", |_args| -> AsyncOp {
+            Box::pin(async { Err(OpError::type_error("no")) })
+        }))
+        .unwrap();
+
+        rt.eval(
+            "globalThis.caught = ''; __ops.boom().catch((e) => { globalThis.caught = e.message; });",
+        )
+        .unwrap();
+        rt.tick(0);
+        assert_eq!(
+            rt.eval("globalThis.caught").unwrap(),
+            Value::String("no".into())
+        );
     }
 
     /// The smallest valid module: `(func (export "add") (param i32 i32)

@@ -399,7 +399,59 @@ fn op_dispatch_inner(
             drop(state);
             throw(scope, &err);
         }
-        Outcome::Async(future) => {
+        Outcome::Async(mut future) => {
+            // Poll once before registering. Plenty of "async" ops are only async
+            // in shape: a provider that answers from memory, or one whose work is
+            // a single fast syscall, hands back `std::future::ready(..)` — the
+            // filesystem's `exists` is exactly that. Registering such a future
+            // costs it a full trip out to the driver and back before its promise
+            // can settle, so a guest awaiting them in sequence pays one loop
+            // round trip per call: 11.4µs each on the bench's `exists` row,
+            // against a `try_exists` syscall of well under one.
+            //
+            // This does not make the op synchronous. The promise is resolved, not
+            // its reactions run — those still wait for the microtask checkpoint,
+            // so `await` suspends and resumes exactly as before. What goes away is
+            // only the wait for a loop turn that had nothing left to do.
+            //
+            // Polled with the driver's waker (not a no-op one): a future that
+            // registers the waker and *then* returns `Pending` must still be able
+            // to wake the loop, or it would sit until the fallback timer.
+            let eager = {
+                let waker = state
+                    .async_waker
+                    .clone()
+                    .unwrap_or_else(|| Waker::noop().clone());
+                let mut cx = Context::from_waker(&waker);
+                match future.as_mut().poll(&mut cx) {
+                    Poll::Ready(result) => Some(result),
+                    Poll::Pending => None,
+                }
+            };
+            if let Some(result) = eager {
+                drop(state);
+                let Some(resolver) = v8::PromiseResolver::new(scope) else {
+                    throw(
+                        scope,
+                        &OpError::new(ExceptionClass::Error, "could not create promise"),
+                    );
+                    return;
+                };
+                let promise = resolver.get_promise(scope);
+                match result {
+                    Ok(value) => {
+                        let js = value_to_js(scope, value);
+                        resolver.resolve(scope, js);
+                    }
+                    Err(err) => {
+                        let exception = build_exception(scope, &err);
+                        resolver.reject(scope, exception);
+                    }
+                }
+                rv.set(promise.into());
+                return;
+            }
+
             // Bound in-flight async work so adversarial JS can't pile up
             // unbounded pending ops (SPEC §4).
             if state.pending_async.len() >= state.max_pending_ops {

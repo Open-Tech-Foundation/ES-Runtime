@@ -63,6 +63,19 @@ namespace) is unstable and may change between minor releases until the API freez
   ahead of Node — running the same compiler it always was. This was never a
   compiler gap; it was the loop declining to come back and look.
 
+- **An async op that was already finished still waited for a loop turn.** Many
+  ops are async only in shape: the filesystem's `exists` answers from one
+  `try_exists` and hands back `std::future::ready(..)`. The dispatcher registered
+  it as pending work regardless, so its promise could not settle until the driver
+  came back round — one full round trip per call, for a syscall that had already
+  returned. The dispatcher now polls once before registering and settles the
+  promise there if the future is ready.
+
+  This does not make any op synchronous: the promise is *resolved*, not its
+  reactions run — those still wait for the microtask checkpoint, so `await`
+  suspends and resumes exactly as before. 6–10% off every small filesystem
+  operation, `fetch` and `timers`.
+
 - **`atob` copied its input a byte at a time.** The whitespace strip the spec
   calls for pushed every byte through a `Vec`, which cost more than the base64
   decode it was preparing. It now scans first and borrows the input untouched
