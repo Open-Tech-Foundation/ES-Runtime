@@ -62,11 +62,17 @@ MIN_REPS="${MIN_REPS:-3}"
 # Coefficient-of-variation (%) above which a measured cell is flagged as noisy —
 # and, below which, a row is considered settled enough to stop sampling.
 NOISE_THRESHOLD="${NOISE_THRESHOLD:-5}"
-# Rows to sample peak RSS for. Sampling every row cost a whole extra launch per
-# runtime (~245 launches, an eighth of the suite) for numbers nothing read. The
-# two that matter are the floor (`startup`, a near-empty process) and the number
-# under load (`rss_load`, which holds a live working set).
-RSS_ROWS="${RSS_ROWS:-startup bigscript rss_load}"
+# Rows to sample peak RSS for. Default: every selected row, so each workload
+# reports what it cost in memory as well as in time — "how much RAM does this
+# runtime need to do this" is half the question a reader is asking, and for a
+# server it is often the half that decides.
+#
+# This was once narrowed to three rows because peak RSS needs its own extra
+# launch per runtime and the numbers went unread. They went unread because they
+# were not published; a matrix of nulls is not evidence that nobody wanted them.
+# The cost is real — one more launch per row per runtime, ~25% more launches —
+# so `RSS_ROWS="startup rss_load"` is still the way to skip it while iterating.
+RSS_ROWS="${RSS_ROWS-}"
 # A timed cell below this many ms is measuring the clock, not the runtime.
 MIN_MS="${MIN_MS:-5}"
 # Rows whose metric is process wall-time (launch + parse), measured externally
@@ -220,6 +226,11 @@ for _d in "${SYNTHETIC_ROW_DEFS[@]}"; do _row_def "$_d" synthetic; done
 ALL_ROWS=""
 for _g in "${GROUP_ORDER[@]}"; do ALL_ROWS="$ALL_ROWS ${GROUP_MEMBERS[$_g]}"; done
 ALL_ROWS="${ALL_ROWS# }"
+
+# Resolved here rather than at the knob, which is declared before the row table
+# exists. Unset means every row; the sampler skips any that this run did not
+# select, so a scoped run still only pays for its own rows.
+RSS_ROWS="${RSS_ROWS:-$ALL_ROWS}"
 
 # Scripts under scripts/ that are deliberately not rows: servers driven by
 # rps.sh/http2.sh, the OOM probes memory-safety.sh runs, and the module builder

@@ -99,12 +99,12 @@ export default function BenchChart({ group, rows }) {
                     <span
                       className={
                         isWin
-                          ? "w-24 shrink-0 whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-emerald-700"
-                          : "w-24 shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums text-zinc-500"
+                          ? "w-32 shrink-0 whitespace-nowrap text-right text-[11px] font-semibold tabular-nums text-emerald-700"
+                          : "w-32 shrink-0 whitespace-nowrap text-right text-[11px] tabular-nums text-zinc-500"
                       }
                     >
                       {typeof v === "number" ? v + unit : "—"}
-                      {mem}
+                      {mem ? <span className="font-normal text-zinc-400">{mem}</span> : null}
                       {noisy ? (
                         <span
                           className="ml-0.5 font-normal text-amber-600"

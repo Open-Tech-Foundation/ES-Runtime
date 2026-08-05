@@ -99,6 +99,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Every benchmark row now reports its memory, not just its time.** Peak
+  resident set is sampled for all 61 published rows rather than three, so each
+  cell reads as "234ms / 32MB" — how much RAM a runtime needed to do the work,
+  which for a server is often the half of the question that decides. It was
+  narrowed to three rows once because the numbers went unread; they went unread
+  because they were never published, and a matrix of nulls is not evidence that
+  nobody wanted them. `RSS_ROWS` narrows it again for a fast iteration loop.
+
 - **The benchmark data describes itself, and the site renders from it.**
   `bench/run.sh` now carries one table of row definitions — group, unit, where
   the row is shown, and what to call it — and publishes it as `rows` and

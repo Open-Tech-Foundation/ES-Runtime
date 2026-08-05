@@ -104,26 +104,31 @@ run_section memory_safety "$TMP6" run_memory_safety
 # Merge onto whatever the module already holds, so unselected sections survive.
 # Two levels deep: `results_rps` gains a server key without losing its
 # siblings, and a row-keyed matrix gains rows without dropping the rest.
-# `workloads` is the exception — it owns every row, so its matrices replace
-# rather than merge, or a row deleted from the suite would live on forever.
-# Only a *whole* workloads run owns the matrices; a row-scoped one merges.
-RAN_WORKLOADS=0
+#
+# When a whole (non-row-scoped) run.sh ran, its fragment replaces the keys it
+# owns instead of merging into them — otherwise a row deleted from the suite
+# would live on in the data forever. Which keys those are is read off the
+# fragment rather than guessed: the previous version deleted every `results_*`
+# key, which swept up `results_http2` — owned by http2.sh, not run.sh — and a
+# `SECTIONS=workloads` run therefore destroyed a section it had never measured.
+# The validator caught it and refused to publish, which is what it is for.
+OWNER_FRAGMENT=""
 if [ -z "$ROW_SCOPE" ]; then
-  case " $SECTIONS " in *" workloads "*) RAN_WORKLOADS=1 ;; esac
+  case " $SECTIONS " in *" workloads "*) OWNER_FRAGMENT="$TMP1" ;; esac
 fi
 bun -e '
   const fs = require("fs");
-  const [outPath, existingPath, ranWorkloads, ...fragments] = process.argv.slice(1);
+  const [outPath, existingPath, ownerFragment, ...fragments] = process.argv.slice(1);
   let base = {};
   if (fs.existsSync(existingPath)) {
     const raw = fs.readFileSync(existingPath, "utf8")
       .replace(/^\/\/.*\n/gm, "").replace(/^export default /, "");
     try { base = JSON.parse(raw); } catch { base = {}; }
   }
-    // A full run.sh owns the row matrices outright.
-  if (ranWorkloads === "1") {
-    for (const k of Object.keys(base)) if (k.startsWith("results_") && k !== "results_rps") delete base[k];
-    delete base.status;
+  // A full run.sh owns exactly the top-level keys it emits, and no others.
+  if (ownerFragment) {
+    const owned = JSON.parse(fs.readFileSync(ownerFragment, "utf8"));
+    for (const k of Object.keys(owned)) delete base[k];
   }
   const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
   // The row catalogue is emitted whole by every run.sh invocation, scoped or
@@ -143,7 +148,7 @@ bun -e '
     }
   }
   fs.writeFileSync(outPath, JSON.stringify(base, null, 2));
-' "$TMP_COMBINED" "$OUT" "$RAN_WORKLOADS" "${FRAGMENTS[@]}"
+' "$TMP_COMBINED" "$OUT" "$OWNER_FRAGMENT" "${FRAGMENTS[@]}"
 
 # Check the merged data against what the site actually reads *before* replacing
 # the module. A run that half-failed used to be written out regardless: the
