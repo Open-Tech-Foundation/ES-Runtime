@@ -8,6 +8,76 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **The HTTP server leaked a disconnect watch on every request.** Each request
+  inserted a `oneshot::Receiver` into the provider's `delivered` map, and only
+  `request_disconnected` ever removed one — which the guest reaches solely by
+  touching `request.signal`. A handler that never looks at the signal, which is
+  the common one and every hello-world, therefore left an entry per request for
+  the life of the server.
+
+  Measured on the Hono benchmark: 50k requests → 47MB, 200k → 67MB, 500k →
+  112MB, from an idle 25MB, and none of it came back. About 175 bytes a request.
+  `respond` now drops the watch alongside the response sender — once the response
+  is sent there is nothing left to report a disconnect to, and a handler that
+  asked first has already taken the receiver.
+
+  Peak RSS is now flat at 43MB across 50k, 200k and 500k requests. The published
+  server figures move with it: Hono **223MB → 46MB** (the lowest of the four
+  runtimes, under Bun's 50, Deno's 72 and Node's 128), static files **344MB →
+  131MB**. `request.signal` still fires on client disconnect.
+
+- **`esrun script.js | head` panicked.** Rust ignores `SIGPIPE`, so writing to a
+  closed pipe returns `EPIPE`, and `println!` panics on it — turning an everyday
+  shell idiom into a Rust backtrace on stderr and an exit code of 1. The console
+  sink now treats a broken pipe on stdout as what it is, the reader having taken
+  what it wanted, and exits 0 silently as Node and Deno do.
+
+- **Benchmarks reported Bun as a release that does not exist.** `bun --version`
+  on a `bun upgrade --canary` build prints the unreleased version it is working
+  towards, so every published comparison named "bun 1.4.0" and read as though it
+  had been measured against stable. `bun --revision` says
+  `1.4.0-canary.1+095eb31ae`. Fixed in `run.sh` and in all three probe scripts,
+  whose shared version helper had to stop stripping the suffix that says so.
+
+### Changed
+
+- **`TextDecoder.decode()` decodes UTF-8 by validating it.** The op built an
+  `encoding_rs::Decoder` per call, allocated the encoding label per call, and
+  transcoded into a buffer sized by `max_utf8_buffer_length` — up to three times
+  the input, to produce bytes identical to its input. UTF-8 is what
+  `new TextDecoder()` gives you, and for it `String::from_utf8` checks the buffer
+  in place. Throughput **2.49 → 6.44 GB/s**; verified against Node byte for byte
+  on windows-1252, multi-byte UTF-8, BOM handling, lossy replacement and `fatal`.
+
+  Adds `encoding_large`, a 64 KiB round trip: the existing `encoding` row uses a
+  20-character payload, so it measures per-call cost and could not see this.
+
+- **Typed-array arguments are no longer zeroed before being overwritten.**
+  `marshal` built each landing buffer with `vec![0u8; len]` and handed it to
+  `copy_contents`, which overwrites every byte — a second full pass writing zeros
+  nothing reads. A further 12% on a 64 KiB decode, and it helps every op handed a
+  typed array.
+
+- **The HTTP server shares its per-connection strings.** `peer_host` and
+  `origin` are fixed for a connection's lifetime but were cloned into every
+  request — two allocations and two copies to reproduce bytes that never change,
+  and on HTTP/2 one connection can carry hundreds of requests. As `Arc<str>` the
+  clone is a refcount bump. Hono **51,209 → 53,928 req/s**, about 5%.
+
+### Tooling
+
+- **The benchmark gate refuses numbers measured on a different build.** v0.12
+  through v0.15 all shipped the same data — identical to the digit — because it
+  was never regenerated; `runtimes.esrun` said "esrun 0.9.0" on all four. The
+  site described a build seven minor versions old and nothing compared the two.
+  A mismatch between the measured version and the workspace version is now a
+  rejection.
+
+  This also retires a "15MB memory regression" that was never real: the `http`
+  row's 46MB was measured on 0.9.0, and today's 61MB is 0.16.0.
+
 ## [0.16.0] - 2026-08-05
 
 ### Documentation
