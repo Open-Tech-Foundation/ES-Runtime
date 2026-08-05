@@ -144,6 +144,10 @@ row() {
 version() {
   case "$1" in
     esrun) [ -x "$ESRUN" ] && "$ESRUN" --version 2>/dev/null | awk '{print $NF}' || echo n/a ;;
+    # `--revision`, and unfiltered: a canary's `--version` reports the
+    # unreleased version it precedes ("1.4.0"), and the semver match below would
+    # strip the suffix that says so even from `--revision`.
+    bun) have bun && bun --revision 2>/dev/null || echo n/a ;;
     *) have "$1" && "$1" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo n/a ;;
   esac
 }

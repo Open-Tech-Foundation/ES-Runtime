@@ -313,7 +313,13 @@ add() { # name  "invocation"  "version-cmd"
 }
 ORDER=()
 command -v node >/dev/null 2>&1 && { add node "node" "node --version"; ORDER+=(node); }
-command -v bun  >/dev/null 2>&1 && { add bun  "bun"  "bun --version";  ORDER+=(bun);  }
+# `--revision`, not `--version`: a canary reports the *unreleased* version it is
+# working towards, so `bun --version` on a `bun upgrade --canary` build says
+# "1.4.0" with nothing to show 1.4.0 was never released. `--revision` says
+# "1.4.0-canary.1+095eb31ae". Deno already discloses its channel ("stable,
+# release") and LLRT says "beta"; bun was the only one whose published string
+# could be read as a release when it was not one.
+command -v bun  >/dev/null 2>&1 && { add bun  "bun"  "bun --revision";  ORDER+=(bun);  }
 DENO="$(command -v deno 2>/dev/null)"
 [ -z "$DENO" ] && for d in "$HOME/.deno/bin/deno" /tmp/deno/bin/deno; do
   [ -x "$d" ] && { DENO="$d"; break; }

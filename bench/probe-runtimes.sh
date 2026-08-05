@@ -137,7 +137,8 @@ field() { node -e 'const o=JSON.parse(process.argv[1]||"{}");process.stdout.writ
 version() {
   case "$1" in
     node) have node && node --version | tr -d 'v' || echo "n/a" ;;
-    bun)  have bun  && bun --version || echo "n/a" ;;
+    # `--revision` so a canary is not reported as the release it precedes.
+    bun)  have bun  && bun --revision || echo "n/a" ;;
     deno) have deno && deno --version | head -1 | awk '{print $2}' || echo "n/a" ;;
     esrun) [ -x "$ESRUN" ] && "$ESRUN" --version 2>/dev/null | awk '{print $NF}' || echo "n/a" ;;
   esac
