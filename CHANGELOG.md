@@ -28,11 +28,43 @@ namespace) is unstable and may change between minor releases until the API freez
   Bun. A worker agent will set it `true` — blocking there stops only its own
   thread, which is what `Atomics.wait` is for.
 
+- **`structuredClone` rejected ordinary objects with a class prototype.**
+  `structuredClone(new Foo())` threw `DataCloneError`, where the spec serializes
+  an object's own enumerable String-keyed properties and rebuilds a plain
+  object — what browsers, Node, Deno and Bun all do. The hand-written clone
+  refused any prototype other than `Object.prototype`/`null`.
+
+- **`structuredClone` copied symbol-keyed properties.** StructuredSerialize
+  walks String keys only; the clone used `Reflect.ownKeys`, so an enumerable
+  symbol-keyed property came along.
+
+- **`structuredClone(view, { transfer: [view.buffer] })` threw.** The spec
+  detaches *after* serializing, so a view over a buffer in the transfer list is
+  serialized while the buffer is still live: the clone carries the data and the
+  source is left detached. It now does. An ArrayBuffer that is *already*
+  detached on the way in is still refused, and now as the `DataCloneError` the
+  spec asks for rather than a `TypeError`.
+
+### Changed
+
+- **`structuredClone` is now HTML's StructuredSerialize/StructuredDeserialize**,
+  performed by the engine over V8's `ValueSerializer`, replacing the
+  hand-written JS deep clone. That is where the three fixes above come from.
+
+  It changed because workers need a serialized form that can cross an isolate,
+  and keeping the JS clone alongside it would have meant two implementations of
+  one algorithm — drifting, so that a value cloning fine through
+  `structuredClone` failed through `postMessage`.
+
+  `Blob`, `File` and `DOMException` are host objects V8 has no representation
+  for; they register a codec beside their own definitions, reached through the
+  serializer's delegate. Everything previously supported still round-trips.
+
 ### Added
 
 - **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
-  `ValueSerializer`. Not yet reachable from guest code; it is the primitive the
-  `structuredClone` rewrite and worker messaging are built on.
+  `ValueSerializer`, as the `__structuredSerialize`/`__structuredDeserialize`
+  builtins.
 
   It exists because an op cannot carry a JS object graph: op handlers receive
   the closed `Value` enum, so a `Map`, a cycle or a class instance arrives as

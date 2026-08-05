@@ -56,7 +56,15 @@
   // claimed it; a guest that could replace one could make the host report
   // failures that were handled, or stay silent about ones that were not. The
   // fourth builds `import.meta.resolve`, so replacing it would let guest code
-  // decide what every later module's `resolve` returns.
+  // decide what every later module's `resolve` returns. The last two are the
+  // structured-clone host-object codecs the serializer calls back into: a guest
+  // that replaced one could make a Blob encode as something else, or decide
+  // what a MessagePort deserializes into.
+  //
+  // `__structuredSerialize`/`__structuredDeserialize` are deliberately absent
+  // for the same reason as `__wasm_pending`: the engine reinstalls them on
+  // every isolate, including one restored from this snapshot, and a
+  // non-configurable binding would make that reinstall fail silently.
   //
   // This is honesty, not a capability: `preventDefault()` on the event remains
   // the supported way to take responsibility for a failure.
@@ -65,6 +73,8 @@
     "__dispatch_error_event",
     "__dispatch_unhandled_rejection",
     "__dispatch_rejection_handled",
+    "__structuredWriteHostObject",
+    "__structuredReadHostObject",
   ]) {
     const fn = globalThis[hook];
     if (typeof fn === "function") {

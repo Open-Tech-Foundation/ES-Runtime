@@ -39,6 +39,23 @@
 //! Instances opt in by carrying [`HOST_CLONE_KEY`] (a registered symbol, so both
 //! sides can name it). That keeps the per-object test a single property lookup
 //! in Rust rather than a call into JS for every object in the graph.
+//!
+//! # Re-entering JS from the delegate
+//!
+//! V8 runs the whole of `WriteValue`/`ReadValue` inside a
+//! `DisallowJavascriptExecutionScope`, and its failure mode is `CHECK`-crash,
+//! not an exception — so *any* V8 API that could run JS aborts the process from
+//! inside a delegate callback, a property read included. Blink never hits this
+//! because its host objects are C++ wrappers it reads directly; ours are JS
+//! classes with private fields, which only JS can reach.
+//!
+//! So the callbacks that must reach JS open an `AllowJavascriptExecutionScope`
+//! first. That is sound here for the reason V8 installs the guard at all: the
+//! guard exists to stop *the embedder* re-entering a half-serialized graph by
+//! surprise, and the codecs we call are prelude functions locked in `harden.js`
+//! whose only job is to encode one already-produced value.
+
+#![allow(clippy::allow_attributes)]
 
 use es_runtime_common::{ExceptionClass, IntoException};
 use v8::{ValueDeserializerHelper, ValueSerializerHelper};
@@ -116,11 +133,14 @@ impl v8::ValueSerializerImpl for Serializer {
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
     ) -> Option<bool> {
+        // Called for every object in the graph, so it stays a plain property
+        // read — but even a read is a JS-capable API under V8's guard, hence
+        // the scope. Anything untagged is an ordinary JS value V8 serializes
+        // itself.
+        v8::allow_javascript_execution_scope!(let scope, scope);
         let Some(symbol) = host_clone_symbol(scope) else {
             return Some(false);
         };
-        // One property lookup per object in the graph. Anything untagged is an
-        // ordinary JS value and V8 serializes it itself.
         match object.get(scope, symbol.into()) {
             Some(tag) => Some(tag.is_string()),
             None => Some(false),
@@ -133,6 +153,7 @@ impl v8::ValueSerializerImpl for Serializer {
         object: v8::Local<'s, v8::Object>,
         serializer: &dyn v8::ValueSerializerHelper,
     ) -> Option<bool> {
+        v8::allow_javascript_execution_scope!(let scope, scope);
         let Some(hook) = host_hook(scope, WRITE_HOST_OBJECT) else {
             throw(
                 scope,
@@ -199,6 +220,7 @@ impl v8::ValueDeserializerImpl for Deserializer {
         }
         let bytes = deserializer.read_raw_bytes(length as usize)?.to_vec();
 
+        v8::allow_javascript_execution_scope!(let scope, scope);
         let hook = host_hook(scope, READ_HOST_OBJECT)?;
         let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
         let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);

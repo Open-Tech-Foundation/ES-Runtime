@@ -119,7 +119,56 @@ test("structuredClone rejects a non-ArrayBuffer in the transfer list", () => {
   assertThrows(() => structuredClone({}, { transfer: [{}] }), "DataCloneError");
 });
 
-test("structuredClone rejects a view onto a transferred buffer", () => {
+// The spec detaches *after* serializing, so a view over a buffer in the
+// transfer list is serialized while the buffer is still live: the clone carries
+// the data and the source is left detached. (This asserted a DataCloneError
+// while the clone was hand-written in JS, which was a misreading — the
+// DataCloneError is for a buffer already detached on the way in, below.)
+test("structuredClone serializes a view onto a transferred buffer", () => {
   const view = new Uint8Array([1, 2, 3]);
-  assertThrows(() => structuredClone(view, { transfer: [view.buffer] }), "DataCloneError");
+  const out = structuredClone(view, { transfer: [view.buffer] });
+  assertEquals(out.join(","), "1,2,3");
+  assertEquals(view.byteLength, 0);
+  assertEquals(view.buffer.detached, true);
+});
+
+test("structuredClone rejects an already-detached buffer in the transfer list", () => {
+  const buffer = new ArrayBuffer(8);
+  buffer.transfer();
+  assertThrows(() => structuredClone({}, { transfer: [buffer] }), "DataCloneError");
+});
+
+test("structuredClone rebuilds an ordinary object as a plain object", () => {
+  // StructuredSerialize walks an ordinary object's own enumerable String-keyed
+  // properties; the prototype is not carried, so the clone is a plain object.
+  class Point {
+    constructor() {
+      this.x = 1;
+    }
+  }
+  const out = structuredClone(new Point());
+  assertEquals(out.x, 1);
+  assertEquals(Object.getPrototypeOf(out), Object.prototype);
+});
+
+test("structuredClone drops symbol-keyed properties", () => {
+  const src = { kept: 1 };
+  Object.defineProperty(src, Symbol("dropped"), { value: 2, enumerable: true });
+  const out = structuredClone(src);
+  assertEquals(out.kept, 1);
+  assertEquals(Object.getOwnPropertySymbols(out).length, 0);
+});
+
+test("structuredClone round-trips Blob and File", () => {
+  const blob = structuredClone(new Blob(["hi"], { type: "text/plain" }));
+  assertEquals(blob instanceof Blob, true);
+  assertEquals(blob.type, "text/plain");
+  assertEquals(blob.size, 2);
+
+  const file = structuredClone(
+    new File(["x"], "a.txt", { type: "text/plain", lastModified: 5 }),
+  );
+  assertEquals(file instanceof File, true);
+  assertEquals(file.name, "a.txt");
+  assertEquals(file.lastModified, 5);
 });

@@ -59,5 +59,28 @@
     Object.defineProperty(DOMException, konst, { value: code, enumerable: true });
   }
 
+  // Structured clone: V8 serializes an Error subclass by dropping back to the
+  // nearest type it knows, which would lose `.name` — and for a DOMException
+  // the name *is* the data. So it declares itself a host object and carries the
+  // name across explicitly. The `stack` goes too: unspecified, but it is what
+  // makes a cloned exception useful and every engine preserves it.
+  Object.defineProperty(DOMException.prototype, __internal.hostClone, {
+    value: "DOMException",
+  });
+  __internal.hostCodecs.set("DOMException", {
+    write: (e) =>
+      __internal.hostCodec.pack({
+        message: e.message,
+        name: e.name,
+        stack: typeof e.stack === "string" ? e.stack : undefined,
+      }),
+    read: (bytes) => {
+      const { header } = __internal.hostCodec.unpack(bytes);
+      const e = new DOMException(header.message, header.name);
+      if (header.stack !== undefined) e.stack = header.stack;
+      return e;
+    },
+  });
+
   globalThis.DOMException = DOMException;
 })();

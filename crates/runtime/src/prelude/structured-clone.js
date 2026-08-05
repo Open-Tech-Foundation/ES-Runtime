@@ -1,155 +1,99 @@
-// structuredClone (SPEC §2.1) — pure-JS deep clone of the standard cloneable
-// types, with cycle handling. Functions and symbols throw DataCloneError, as the
-// spec requires. Transferables and a few exotic host types are not supported
-// (documented in SPEC §7); a V8 ValueSerializer-based path is a later refinement.
+// structuredClone (SPEC §2.1) — HTML's StructuredSerialize followed by
+// StructuredDeserialize, both performed by the engine over V8's ValueSerializer.
+//
+// This was a hand-written JS deep clone until workers arrived. Keeping it would
+// have meant two implementations of one algorithm — this one and the engine
+// primitive `postMessage` needs — and they would drift, so that a value cloning
+// fine here failed there. The engine's is also the one already correct: it fixes
+// two divergences the JS version had, both covered by conformance/structured-clone.js:
+//
+//   * an ordinary object with a class prototype threw DataCloneError, where the
+//     spec serializes its own enumerable properties and rebuilds a plain object;
+//   * enumerable symbol-keyed properties were copied, where the spec walks
+//     String keys only.
+//
+// This file now owns three things: the transfer list, the host-object codec
+// dispatch (V8 knows JS types, not Blob or MessagePort), and the entry point.
 (() => {
   "use strict";
-  const BYTES = __internal.bytes;
+  const HOST_CLONE = __internal.hostClone;
+  const CODECS = __internal.hostCodecs;
 
-  const TYPED_ARRAYS = [
-    Int8Array,
-    Uint8Array,
-    Uint8ClampedArray,
-    Int16Array,
-    Uint16Array,
-    Int32Array,
-    Uint32Array,
-    Float32Array,
-    Float64Array,
-    BigInt64Array,
-    BigUint64Array,
-  ];
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
 
-  function cannotClone() {
+  function cannotClone(what) {
     return new DOMException(
-      "The object could not be cloned.",
+      `${what} could not be cloned.`,
       "DataCloneError",
     );
   }
 
-  // The error types the spec lists as serializable. Anything else that is an
-  // Error clones as a plain Error, as the spec requires.
-  const ERROR_TYPES = {
-    Error,
-    EvalError,
-    RangeError,
-    ReferenceError,
-    SyntaxError,
-    TypeError,
-    URIError,
+  // ---- host-object framing -------------------------------------------------
+  //
+  // The engine hands us one object and expects one Uint8Array back, so the tag
+  // has to travel in the bytes for the read side to dispatch on:
+  //
+  //   [tag length: u8][tag: utf-8][payload: the codec's own bytes]
+
+  globalThis.__structuredWriteHostObject = (object) => {
+    const tag = object[HOST_CLONE];
+    const codec = CODECS.get(tag);
+    // Reachable only if something carries the tag with no codec registered —
+    // a forged tag, or a codec fragment that failed to load.
+    if (!codec) throw cannotClone(tag ? `A ${tag}` : "The object");
+
+    const payload = codec.write(object);
+    const tagBytes = encoder.encode(tag);
+    if (tagBytes.length > 255) throw cannotClone(`A ${tag}`);
+
+    const framed = new Uint8Array(1 + tagBytes.length + payload.length);
+    framed[0] = tagBytes.length;
+    framed.set(tagBytes, 1);
+    framed.set(payload, 1 + tagBytes.length);
+    return framed;
   };
 
-  function clone(value, seen, transferred) {
-    if (value === null) return null;
-    const type = typeof value;
-    if (type === "function" || type === "symbol") throw cannotClone();
-    if (type !== "object") return value; // string/number/boolean/bigint/undefined
+  globalThis.__structuredReadHostObject = (bytes) => {
+    const tagLength = bytes[0];
+    const tag = decoder.decode(bytes.subarray(1, 1 + tagLength));
+    const codec = CODECS.get(tag);
+    // The blob named a type this agent does not have. Only reachable across a
+    // version skew, since both ends run the same prelude.
+    if (!codec) throw cannotClone(`A ${tag}`);
+    return codec.read(bytes.subarray(1 + tagLength));
+  };
 
-    if (seen.has(value)) return seen.get(value);
+  // ---- a codec helper the registering fragments share -----------------------
+  //
+  // Every host type so far is "some JSON metadata, optionally followed by raw
+  // bytes", so the framing lives here rather than being repeated per type.
 
-    // Boxed primitives.
-    if (value instanceof Boolean) return new Boolean(value.valueOf());
-    if (value instanceof Number) return new Number(value.valueOf());
-    if (value instanceof String) return new String(value.valueOf());
-
-    if (value instanceof Date) return new Date(value.getTime());
-    if (value instanceof RegExp) return new RegExp(value.source, value.flags);
-
-    if (value instanceof ArrayBuffer) {
-      // A transferred buffer moves into the clone rather than being copied.
-      const moved = transferred.get(value);
-      return moved !== undefined ? moved : value.slice(0);
-    }
-    // A view whose buffer was transferred is reading a detached buffer; the
-    // spec makes that a DataCloneError rather than a TypeError from the copy.
-    if (value instanceof DataView) {
-      if (transferred.has(value.buffer)) throw cannotClone();
-      return new DataView(
-        value.buffer.slice(0),
-        value.byteOffset,
-        value.byteLength,
-      );
-    }
-    for (const TA of TYPED_ARRAYS) {
-      if (value instanceof TA) {
-        if (transferred.has(value.buffer)) throw cannotClone();
-        return new TA(value);
-      }
-    }
-
-    // Blob and File are serializable; both are cloned by value.
-    if (globalThis.Blob && value instanceof Blob) {
-      if (globalThis.File && value instanceof File) {
-        return new File([value[BYTES]()], value.name, {
-          type: value.type,
-          lastModified: value.lastModified,
-        });
-      }
-      return new Blob([value[BYTES]()], { type: value.type });
-    }
-
-    if (Array.isArray(value)) {
-      const out = new Array(value.length);
-      seen.set(value, out);
-      for (let i = 0; i < value.length; i++) {
-        if (i in value) out[i] = clone(value[i], seen, transferred);
-      }
+  Object.assign(__internal.hostCodec, {
+    // [header length: u32 LE][header: JSON utf-8][payload: raw bytes]
+    pack(header, payload = new Uint8Array(0)) {
+      const headerBytes = encoder.encode(JSON.stringify(header));
+      const out = new Uint8Array(4 + headerBytes.length + payload.length);
+      new DataView(out.buffer).setUint32(0, headerBytes.length, true);
+      out.set(headerBytes, 4);
+      out.set(payload, 4 + headerBytes.length);
       return out;
-    }
+    },
+    unpack(bytes) {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const headerLength = view.getUint32(0, true);
+      return {
+        header: JSON.parse(decoder.decode(bytes.subarray(4, 4 + headerLength))),
+        payload: bytes.subarray(4 + headerLength),
+      };
+    },
+  });
 
-    if (value instanceof Map) {
-      const out = new Map();
-      seen.set(value, out);
-      for (const [k, v] of value) out.set(clone(k, seen, transferred), clone(v, seen, transferred));
-      return out;
-    }
-
-    if (value instanceof Set) {
-      const out = new Set();
-      seen.set(value, out);
-      for (const v of value) out.add(clone(v, seen, transferred));
-      return out;
-    }
-
-    if (value instanceof Error) {
-      // DOMException carries its `.name` as data, so it must be reconstructed
-      // through the two-argument constructor rather than by class.
-      let out;
-      if (globalThis.DOMException && value instanceof DOMException) {
-        out = new DOMException(value.message, value.name);
-      } else {
-        const Ctor = ERROR_TYPES[value.name] ?? Error;
-        out = new Ctor(value.message);
-      }
-      seen.set(value, out);
-      // `cause` is part of the serialization; `stack` is not specified but is
-      // what makes a cloned error useful, and every engine carries it over.
-      if ("cause" in value) {
-        out.cause = clone(value.cause, seen, transferred);
-      }
-      if (typeof value.stack === "string") out.stack = value.stack;
-      return out;
-    }
-
-    // Plain objects (and null-prototype objects). Reject exotic platform objects
-    // we cannot faithfully clone.
-    const proto = Object.getPrototypeOf(value);
-    if (proto !== Object.prototype && proto !== null) throw cannotClone();
-
-    const out = Object.create(proto);
-    seen.set(value, out);
-    for (const key of Reflect.ownKeys(value)) {
-      const desc = Object.getOwnPropertyDescriptor(value, key);
-      if (desc.enumerable) out[key] = clone(value[key], seen, transferred);
-    }
-    return out;
-  }
+  // ---- the entry point ------------------------------------------------------
 
   globalThis.structuredClone = (value, options) => {
-    // Transfer first: each listed ArrayBuffer is detached and its contents move
-    // into the clone, so the original is left empty (ES2024 `transfer()` is what
-    // actually detaches — there is no way to do it from JS otherwise).
-    const transferred = new Map();
+    // Validate the whole transfer list before anything is serialized, so a bad
+    // entry throws without having half-detached the good ones.
     const list = options && options.transfer ? [...options.transfer] : [];
     for (const item of list) {
       if (!(item instanceof ArrayBuffer) || typeof item.transfer !== "function") {
@@ -158,9 +102,26 @@
           "DataCloneError",
         );
       }
-      if (transferred.has(item)) continue; // listed twice: transfer once
-      transferred.set(item, item.transfer());
+      // An already-detached buffer is the spec's first check, and it is a
+      // DataCloneError — where letting `transfer()` reject it below would
+      // surface the wrong type (a TypeError).
+      if (item.detached) {
+        throw new DOMException(
+          "An already detached ArrayBuffer could not be transferred.",
+          "DataCloneError",
+        );
+      }
     }
-    return clone(value, new Map(), transferred);
+
+    const bytes = __structuredSerialize(value);
+
+    // Detach after serializing rather than moving the backing store into the
+    // clone. The observable contract is the same — the receiver holds the data,
+    // the source is detached — and it keeps a serialized value a plain byte
+    // array, with nothing travelling out of band. `transfer()` is what actually
+    // detaches; there is no other way to do it from JS.
+    for (const item of list) item.transfer();
+
+    return __structuredDeserialize(bytes);
   };
 })();

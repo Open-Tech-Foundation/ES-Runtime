@@ -9,9 +9,10 @@
 //   encode  FormData multipart encoder  — blob.js  → fetch.js
 //   parts   Response's synchronous parts — fetch.js → runtime_modules/http.js
 //
-// Plus one piece of shared state:
+// Plus shared state:
 //
-//   blobURLs  the object-URL store — blob.js registers, fetch.js resolves
+//   blobURLs   the object-URL store — blob.js registers, fetch.js resolves
+//   hostCodecs the structured-clone codec table — see `hostClone` below
 //
 // `parts` is why this object survives rather than being deleted once the
 // prelude has run: `runtime:http` is imported lazily, long after, and must be
@@ -34,6 +35,25 @@
       // href -> Blob, for URL.createObjectURL. Entries live until revoked;
       // there is no document unload to clear them.
       blobURLs: new Map(),
+
+      // Structured clone's host-object seam. V8's serializer knows JS types,
+      // not ours — Blob, File, DOMException, MessagePort — so those declare a
+      // codec here and tag their prototype with `hostClone`.
+      //
+      // A *registered* symbol, because the engine names the same one from Rust
+      // (`Symbol.for`, not a fresh `Symbol()`): the serializer's per-object test
+      // is then a single property lookup in Rust rather than a call back into
+      // JS for every object in the graph. The value is the codec's tag.
+      //
+      // Forging the tag on an arbitrary object gains nothing: the worst it can
+      // do is miss the codec table and raise DataCloneError.
+      hostClone: Symbol.for("es-runtime.hostClone"),
+      // tag -> { write(object) -> Uint8Array, read(bytes) -> object }
+      hostCodecs: new Map(),
+      // Shared framing helper, filled in by structured-clone.js. Declared here
+      // because the freeze below is shallow: a slot present at freeze time can
+      // still be populated, where a new property on `__internal` could not.
+      hostCodec: {},
     }),
     writable: false,
     enumerable: false,

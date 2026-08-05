@@ -287,6 +287,37 @@
     configurable: true,
   });
 
+  // Structured clone: both are serializable by value, and both are host objects
+  // as far as V8 is concerned — it would otherwise serialize them as plain
+  // objects, dropping the class and the private byte store. `File.prototype`'s
+  // tag shadows the inherited `Blob` one, so a File round-trips as a File.
+  for (const Interface of [Blob, File]) {
+    Object.defineProperty(Interface.prototype, __internal.hostClone, {
+      value: Interface.name,
+    });
+  }
+  __internal.hostCodecs.set("Blob", {
+    write: (b) => __internal.hostCodec.pack({ type: b.type }, b[BYTES]()),
+    read: (bytes) => {
+      const { header, payload } = __internal.hostCodec.unpack(bytes);
+      return new Blob([payload], { type: header.type });
+    },
+  });
+  __internal.hostCodecs.set("File", {
+    write: (f) =>
+      __internal.hostCodec.pack(
+        { type: f.type, name: f.name, lastModified: f.lastModified },
+        f[BYTES](),
+      ),
+    read: (bytes) => {
+      const { header, payload } = __internal.hostCodec.unpack(bytes);
+      return new File([payload], header.name, {
+        type: header.type,
+        lastModified: header.lastModified,
+      });
+    },
+  });
+
   for (const Interface of [Blob, File, FormData]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
       value: Interface.name,
