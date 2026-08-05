@@ -2795,6 +2795,54 @@ mod tests {
         );
     }
 
+    /// The host keeps a small cache of parsed URLs so a component setter need not
+    /// re-parse the href it was just handed. `href -> Url` is a pure function, so
+    /// a hit must be indistinguishable from a miss — this drives enough distinct
+    /// URLs through it to force eviction, interleaves two objects so neither
+    /// keeps the other's entry warm, and checks every result against the same
+    /// value reached by a fresh `new URL()`.
+    #[test]
+    fn url_setters_agree_whether_or_not_the_parse_was_cached() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { \
+               const a = new URL('https://a.test/p?q=1#f'); \
+               const b = new URL('http://b.test:81/x'); \
+               for (let i = 0; i < 40; i++) { \
+                 a.hostname = 'h' + i + '.test'; \
+                 b.pathname = '/p' + i; \
+                 b.host = 'k' + i + '.test:' + (8000 + i); \
+                 a.search = '?n=' + i; \
+                 if (a.href !== new URL('https://h' + i + '.test/p?n=' + i + '#f').href) return false; \
+                 if (b.href !== new URL('http://k' + i + '.test:' + (8000 + i) + '/p' + i).href) return false; \
+                 if (a.origin !== 'https://h' + i + '.test') return false; \
+               } \
+               return true; })()",
+        );
+    }
+
+    /// An invalid component assignment is a silent no-op per WHATWG, and must
+    /// leave the cache holding the URL it did *not* change — a stale entry here
+    /// would make the next setter act on a URL the guest never had.
+    #[test]
+    fn a_rejected_url_setter_leaves_the_next_one_correct() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        assert_true(
+            &mut rt,
+            "(() => { \
+               const u = new URL('https://ok.test/a'); \
+               u.hostname = 'bad host'; \
+               if (u.href !== 'https://ok.test/a') return false; \
+               u.port = 'notaport'; \
+               if (u.href !== 'https://ok.test/a') return false; \
+               u.pathname = '/b'; \
+               return u.href === 'https://ok.test/b'; })()",
+        );
+    }
+
     #[test]
     fn url_search_params_stay_in_sync() {
         let _g = v8_guard();

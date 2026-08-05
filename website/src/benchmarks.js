@@ -115,25 +115,25 @@ export default {
       "esrun": 51.6
     },
     "url": {
-      "node": 48,
-      "bun": 73.1,
-      "deno": 107.2,
-      "llrt": 113.3,
-      "esrun": 87.4
+      "node": 50.4,
+      "bun": 75.9,
+      "deno": 105.3,
+      "llrt": 116.2,
+      "esrun": 90
     },
     "url_setter": {
-      "node": 126.5,
-      "bun": 261.5,
-      "deno": 194.2,
-      "llrt": 113.8,
-      "esrun": 263.2
+      "node": 128.5,
+      "bun": 260.1,
+      "deno": 197.1,
+      "llrt": 111.7,
+      "esrun": 182.7
     },
     "urlpattern": {
-      "node": 392.7,
-      "bun": 700.8,
-      "deno": 4904.9,
+      "node": 404.6,
+      "bun": 721.8,
+      "deno": 4974.9,
       "llrt": null,
-      "esrun": 853.6
+      "esrun": 890.7
     },
     "encoding": {
       "node": 66.8,
@@ -987,25 +987,25 @@ export default {
       "esrun": 1.3
     },
     "url": {
-      "node": 0.9,
-      "bun": 4.5,
-      "deno": 0.8,
-      "llrt": 2.8,
-      "esrun": 2.7
+      "node": 3.8,
+      "bun": 4.7,
+      "deno": 2.9,
+      "llrt": 3.5,
+      "esrun": 5
     },
     "url_setter": {
-      "node": 8.7,
-      "bun": 2.3,
-      "deno": 1.9,
-      "llrt": 14.2,
-      "esrun": 3.4
+      "node": 6.2,
+      "bun": 2.8,
+      "deno": 1.6,
+      "llrt": 5.2,
+      "esrun": 2.6
     },
     "urlpattern": {
-      "node": 5.2,
-      "bun": 1.9,
-      "deno": 2.9,
+      "node": 3.4,
+      "bun": 0.2,
+      "deno": 0.8,
       "llrt": null,
-      "esrun": 2.5
+      "esrun": 2.2
     },
     "encoding": {
       "node": 6,
@@ -1423,11 +1423,11 @@ export default {
       "esrun": 5
     },
     "url": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
-      "llrt": 3,
-      "esrun": 3
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "url_setter": {
       "node": 5,
@@ -1437,11 +1437,11 @@ export default {
       "esrun": 5
     },
     "urlpattern": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
       "llrt": null,
-      "esrun": 5
+      "esrun": 3
     },
     "encoding": {
       "node": 5,
@@ -1859,25 +1859,25 @@ export default {
       "esrun": 0.6
     },
     "url": {
-      "node": 0.6,
-      "bun": 5.6,
-      "deno": 1.1,
-      "llrt": 3.1,
-      "esrun": 3.2
+      "node": 3,
+      "bun": 1.4,
+      "deno": 0.1,
+      "llrt": 1.6,
+      "esrun": 0.1
     },
     "url_setter": {
-      "node": 0.9,
-      "bun": 0.1,
-      "deno": 2.5,
-      "llrt": 4.4,
-      "esrun": 1.2
+      "node": 1.1,
+      "bun": 1.9,
+      "deno": 0.2,
+      "llrt": 6.6,
+      "esrun": 1.4
     },
     "urlpattern": {
-      "node": 1.3,
-      "bun": 0.8,
-      "deno": 0.3,
+      "node": 2.7,
+      "bun": 0.2,
+      "deno": 1,
       "llrt": null,
-      "esrun": 2.4
+      "esrun": 2
     },
     "encoding": {
       "node": 1.2,

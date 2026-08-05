@@ -257,9 +257,9 @@ structured    |    216.9 |    275.7 |    269.6 |    328.2 |    308.1
 errors        |   1407.6 |    354.1 |   4314.4 |    313.3 |    385.1
 async         |     57.2 |     50.6 |     32.0 |    677.9 |     28.9
 timers        |     40.5 |     29.2 |    197.1 |     46.2 |     51.6
-url           |     48.0 |     73.1 |    107.2 |    113.3 |     87.4
-url_setter    |    126.5 |    261.5 |    194.2 |    113.8 |    263.2
-urlpattern    |    392.7 |    700.8 |   4904.9 |      n/a |    853.6
+url           |     50.4 |     75.9 |    105.3 |    116.2 |     90.0
+url_setter    |    128.5 |    260.1 |    197.1 |    111.7 |    182.7
+urlpattern    |    404.6 |    721.8 |   4974.9 |      n/a |    890.7
 encoding      |     66.8 |     21.6 |     67.8 |     72.3 |     84.8
 base64        |      7.1 |     13.9 |      7.7 |     33.0 |     22.5
 buffers       |     14.0 |     20.5 |     13.3 |     73.2 |     12.9
@@ -402,10 +402,28 @@ WinterTC surface**, not "fastest at everything."
   took the complementary fix: op results are **consumed, not copied** (the byte
   buffer *moves* into the `ArrayBuffer`; `decode()` converts valid UTF-8 in
   place). Bun's lead here is JavaScriptCore's specialized encoder fast paths.
-- **base64 (86 ms vs ~8 ms native).** Moving the transcoding loop from a pure-JS
-  per-char concatenation into a host op was a ~4.5× win (386 → 86 ms), but two
-  op crossings per round trip plus string building still trail the native
-  intrinsics. Rarely hot; left as-is.
+
+  A fourth round addressed the **setters** specifically. The JS `URL` holds only
+  its href, so every `u.hostname = ...` re-parsed the whole URL to apply one
+  change — 0.44µs of parse against 0.56µs of doing the work. The host now keeps a
+  bounded cache of parsed URLs keyed by their own serialization, and a setter puts
+  its result back, so the next setter on the same object finds it already parsed.
+  `url_setter` 263 → 183 ms, past Deno and Bun. `href -> Url` is a pure function,
+  which is what makes this safe: a hit cannot give a different answer from a miss.
+  Handles were considered and rejected — they buy the same speed while making
+  every `new URL()` allocate host state reclaimed only when a
+  `FinalizationRegistry` callback happens to run.
+- **base64 (22 ms vs ~7 ms native).** Moving the transcoding loop from a pure-JS
+  per-char concatenation into a host op was a ~4.5× win (386 → 86 ms); dropping
+  the byte-at-a-time whitespace strip in `atob` took it to 22. What remains is two
+  op crossings per round trip and the copy through a Rust `String` in each
+  direction: 0.73µs for `btoa` of 1 KiB against Node's 0.34. Closing that needs
+  ops that read and write V8 strings directly rather than through `Value`, which
+  is the same zero-copy structured path `structured` wants. Two things were tried
+  and measured *not* to help, so they are not worth retrying: copying small
+  results into a V8-allocated `ArrayBuffer` instead of donating the `Vec`, and
+  returning `atob`/`btoa` output as Latin-1 bytes — `rusty_v8`'s `String::new`
+  already detects ASCII and builds a one-byte string directly.
 - **structured (slowest, 343 ms).** `structuredClone` is a pure-JS recursive
   walk in the prelude. Making it a host op would need **structured marshaling of
   arbitrary JS objects across the boundary** — exactly the deferred D3a work; the

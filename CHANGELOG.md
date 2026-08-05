@@ -63,6 +63,21 @@ namespace) is unstable and may change between minor releases until the API freez
   ahead of Node — running the same compiler it always was. This was never a
   compiler gap; it was the loop declining to come back and look.
 
+- **Every URL component setter re-parsed the whole URL.** The JS `URL` object
+  holds nothing but its `href`, so `u.hostname = ...` parsed that string from
+  scratch to apply one change — 0.44µs of parse against 0.56µs of actually doing
+  the work, on a URL the previous call had just produced. The host now keeps a
+  bounded cache of parsed URLs, and a setter puts its result back, so the next
+  setter on the same object finds it already parsed. `url_setter` **263ms →
+  183ms**, past Deno and Bun.
+
+  Keyed by the URL's own serialization, not by a handle. `href -> Url` is a pure
+  function, so a hit cannot give a different answer from a miss — which means
+  nothing on the JS side changes, no object owns a host-side resource, and there
+  is nothing to free. A handle scheme would have bought the same speed while
+  making every `new URL()` allocate host state reclaimed only when a
+  `FinalizationRegistry` callback happened to run.
+
 - **An async op that was already finished still waited for a loop turn.** Many
   ops are async only in shape: the filesystem's `exists` answers from one
   `try_exists` and hands back `std::future::ready(..)`. The dispatcher registered
