@@ -20,8 +20,9 @@ TMP3="$(mktemp)"
 TMP4="$(mktemp)"
 TMP5="$(mktemp)"
 TMP6="$(mktemp)"
+TMP7="$(mktemp)"
 TMP_COMBINED="$(mktemp)"
-trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP_COMBINED"' EXIT
+trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP7" "$TMP_COMBINED"' EXIT
 
 # Scoped or full, one code path.
 #
@@ -36,7 +37,7 @@ trap 'rm -f "$TMP1" "$TMP2" "$TMP3" "$TMP4" "$TMP5" "$TMP6" "$TMP_COMBINED"' EXI
 # `workloads` is bench/run.sh and owns every charted row; the others own one
 # section each. Note the row-level workload update is the argument form above
 # (`gen-bench-data.sh regex strings`), which is cheaper still.
-ALL_SECTIONS="workloads rps rps_static websocket http2 memory_safety"
+ALL_SECTIONS="workloads rps rps_sustained rps_static websocket http2 memory_safety"
 # Row names as arguments scope the `workloads` section to those rows. They used
 # to be a separate mode that could not be combined with anything, so adding a
 # row and a section in one pass was impossible: each failed validation waiting
@@ -74,6 +75,16 @@ run_workloads() {
   else BENCH_JSON=1 bash run.sh; fi
 }
 run_rps_hono() { SERVER=scripts/hono.js BENCH_JSON=1 bash rps.sh; }
+# The same Hono server held under load for a fixed window instead of a fixed
+# burst. The burst above answers "how fast when fresh"; this answers whether it
+# is still that fast once the heap has filled and the collector has been running
+# for a while — the question a long-lived server actually poses. Published under
+# its own key so the site can put the two side by side.
+run_rps_sustained() {
+  SERVER=scripts/hono.js SERVER_KEY=hono_sustained \
+    DURATION="${SUSTAIN_DURATION:-60s}" REPS="${SUSTAIN_REPS:-2}" \
+    BENCH_JSON=1 bash rps.sh
+}
 # Static-file serving, driven by the same external load generator. Not a row in
 # run.sh on purpose: its in-process `http` workload measures the server and the
 # client together, which is the thing rps.sh exists to avoid.
@@ -84,6 +95,7 @@ run_memory_safety() { BENCH_JSON=1 bash memory-safety.sh; }
 
 run_section workloads "$TMP1" run_workloads
 run_section rps "$TMP2" run_rps_hono
+run_section rps_sustained "$TMP7" run_rps_sustained
 run_section websocket "$TMP3" run_websocket
 run_section http2 "$TMP4" run_http2
 run_section rps_static "$TMP5" run_rps_static
@@ -114,10 +126,15 @@ bun -e '
     delete base.status;
   }
   const isPlain = (v) => v && typeof v === "object" && !Array.isArray(v);
+  // The row catalogue is emitted whole by every run.sh invocation, scoped or
+  // not, so it replaces rather than merges — merged, a row deleted from the
+  // suite would keep its label and keep the site asking for it forever.
+  const REPLACE = new Set(["rows", "groups"]);
   for (const f of fragments) {
     const frag = JSON.parse(fs.readFileSync(f, "utf8"));
     for (const [k, v] of Object.entries(frag)) {
-      if (isPlain(v) && isPlain(base[k])) {
+      if (REPLACE.has(k)) base[k] = v;
+      else if (isPlain(v) && isPlain(base[k])) {
         for (const [k2, v2] of Object.entries(v)) {
           if (isPlain(v2) && isPlain(base[k][k2])) Object.assign(base[k][k2], v2);
           else base[k][k2] = v2;

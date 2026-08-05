@@ -52,11 +52,11 @@ export default {
       "esrun": 24.4
     },
     "compute": {
-      "node": 196,
-      "bun": 117,
-      "deno": 215.1,
-      "llrt": 2084.2,
-      "esrun": 238.8
+      "node": 202,
+      "bun": 112.3,
+      "deno": 211.6,
+      "llrt": 2145.4,
+      "esrun": 235.7
     },
     "json": {
       "node": 274.8,
@@ -924,11 +924,11 @@ export default {
       "esrun": 6.2
     },
     "compute": {
-      "node": 4.4,
-      "bun": 9.2,
-      "deno": 2.3,
-      "llrt": 8.8,
-      "esrun": 1.8
+      "node": 2.5,
+      "bun": 1.1,
+      "deno": 4.3,
+      "llrt": 2.6,
+      "esrun": 2.1
     },
     "json": {
       "node": 2.9,
@@ -1360,11 +1360,11 @@ export default {
       "esrun": 15
     },
     "compute": {
-      "node": 5,
-      "bun": 5,
-      "deno": 5,
-      "llrt": 5,
-      "esrun": 5
+      "node": 4,
+      "bun": 4,
+      "deno": 4,
+      "llrt": 4,
+      "esrun": 4
     },
     "json": {
       "node": 5,
@@ -1796,11 +1796,11 @@ export default {
       "esrun": 1.2
     },
     "compute": {
-      "node": 0.1,
-      "bun": 3.8,
-      "deno": 0.1,
-      "llrt": 0.4,
-      "esrun": 1.3
+      "node": 1.1,
+      "bun": 2,
+      "deno": 3,
+      "llrt": 0.9,
+      "esrun": 1.7
     },
     "json": {
       "node": 3.6,
@@ -2647,16 +2647,22 @@ export default {
   },
   "results_rps": {
     "hono": {
-      "node": 31600,
-      "bun": 78625,
-      "deno": 77174,
-      "esrun": 49922
+      "node": 30929,
+      "bun": 78413,
+      "deno": 81142,
+      "esrun": 49117
     },
     "staticserver": {
       "node": 12193,
       "bun": 26962,
       "deno": 14176,
       "esrun": 15947
+    },
+    "hono_sustained": {
+      "node": 31324,
+      "bun": 77637,
+      "deno": 77617,
+      "esrun": 47234
     }
   },
   "rps_method": {
@@ -2669,11 +2675,12 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 2.6,
-        "bun": 3.8,
-        "deno": 3.4,
-        "esrun": 1.1
-      }
+        "node": 0.7,
+        "bun": 2.1,
+        "deno": 5.4,
+        "esrun": 1.4
+      },
+      "duration": null
     },
     "staticserver": {
       "server": "scripts/staticserver.js",
@@ -2689,6 +2696,22 @@ export default {
         "bun": 2.3,
         "deno": 1.8,
         "esrun": 0.7
+      }
+    },
+    "hono_sustained": {
+      "server": "scripts/hono.js",
+      "tool": "oha",
+      "connections": 100,
+      "requests": null,
+      "duration": "60s",
+      "reps": 2,
+      "aggregate": "max",
+      "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
+      "spread_pct": {
+        "node": 0.1,
+        "bun": 1.9,
+        "deno": 0.3,
+        "esrun": 5.2
       }
     }
   },
@@ -2783,5 +2806,570 @@ export default {
       "llrt": "timeout",
       "esrun": "exit:1"
     }
-  }
+  },
+  "rows": {
+    "startup": {
+      "label": "Cold start (near-empty script)",
+      "unit": "ms",
+      "group": "launch",
+      "display": "card",
+      "better": "lower"
+    },
+    "bigscript": {
+      "label": "Parse + run ~100 KB script",
+      "unit": "ms",
+      "group": "launch",
+      "display": "card",
+      "better": "lower"
+    },
+    "modules": {
+      "label": "Load a 300-module graph",
+      "unit": "ms",
+      "group": "launch",
+      "display": "card",
+      "better": "lower"
+    },
+    "rss_load": {
+      "label": "Retain a live working set",
+      "unit": "ms",
+      "group": "memory",
+      "display": "hidden",
+      "better": "lower"
+    },
+    "compute": {
+      "label": "Tight compute loop",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "json": {
+      "label": "JSON parse/stringify",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "jsonbig": {
+      "label": "JSON (large documents)",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "regex": {
+      "label": "Regex (match, validate, replace)",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "strings": {
+      "label": "String building and slicing",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "structured": {
+      "label": "structuredClone",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "errors": {
+      "label": "throw/catch + stack capture",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "async": {
+      "label": "async/await throughput",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "timers": {
+      "label": "setTimeout churn",
+      "unit": "ms",
+      "group": "engine",
+      "display": "card",
+      "better": "lower"
+    },
+    "url": {
+      "label": "URL parsing",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "url_setter": {
+      "label": "URL setter",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "chart",
+      "better": "lower"
+    },
+    "urlpattern": {
+      "label": "URLPattern test",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "chart",
+      "better": "lower"
+    },
+    "encoding": {
+      "label": "TextEncoder/TextDecoder",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "base64": {
+      "label": "base64 (atob/btoa)",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "buffers": {
+      "label": "TypedArray / DataView",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "headers": {
+      "label": "Headers / Request parsing",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "formdata": {
+      "label": "Multipart FormData round trip",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "date_intl": {
+      "label": "Date + Intl formatting",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "streams": {
+      "label": "ReadableStream piping",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "compression": {
+      "label": "CompressionStream round trip (gzip)",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "chart",
+      "better": "lower"
+    },
+    "sha256": {
+      "label": "SubtleCrypto SHA-256",
+      "unit": "ms",
+      "group": "crypto",
+      "display": "card",
+      "better": "lower"
+    },
+    "crypto": {
+      "label": "HMAC + AES-GCM",
+      "unit": "ms",
+      "group": "crypto",
+      "display": "card",
+      "better": "lower"
+    },
+    "crypto_asym": {
+      "label": "ECDSA P-256 sign + verify",
+      "unit": "ms",
+      "group": "crypto",
+      "display": "card",
+      "better": "lower"
+    },
+    "crypto_kdf": {
+      "label": "PBKDF2 (10k iterations)",
+      "unit": "ms",
+      "group": "crypto",
+      "display": "card",
+      "better": "lower"
+    },
+    "fetch": {
+      "label": "fetch (local server)",
+      "unit": "ms",
+      "group": "net",
+      "display": "card",
+      "better": "lower"
+    },
+    "fetch_upload": {
+      "label": "fetch (streamed upload)",
+      "unit": "ms",
+      "group": "net",
+      "display": "chart",
+      "better": "lower"
+    },
+    "http": {
+      "label": "HTTP server (concurrent)",
+      "unit": "ms",
+      "group": "net",
+      "display": "chart",
+      "better": "lower"
+    },
+    "websocket": {
+      "label": "WebSocket round trips",
+      "unit": "ms",
+      "group": "net",
+      "display": "chart",
+      "better": "lower"
+    },
+    "fsread_small": {
+      "label": "File read (small)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsread_large": {
+      "label": "File read (large)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fswrite_small": {
+      "label": "File write (small)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fswrite_large": {
+      "label": "File write (large)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsappend_small": {
+      "label": "File append (small)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsappend_large": {
+      "label": "File append (large)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsstat_small": {
+      "label": "File stat (one path)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsstat_many": {
+      "label": "File stat (1000 paths)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsexists_small": {
+      "label": "File exists (one path)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "fsexists_many": {
+      "label": "File exists (1000 paths)",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "glob": {
+      "label": "Glob scan",
+      "unit": "ms",
+      "group": "fs",
+      "display": "card",
+      "better": "lower"
+    },
+    "spawn": {
+      "label": "Spawn a child process",
+      "unit": "ms",
+      "group": "system",
+      "display": "card",
+      "better": "lower"
+    },
+    "jsonl_stream": {
+      "label": "JSONL streaming (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "xml_small": {
+      "label": "XML parsing (small dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "xml_large": {
+      "label": "XML parsing (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "yaml_small": {
+      "label": "YAML parsing (small dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "yaml_large": {
+      "label": "YAML parsing (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "toml_small": {
+      "label": "TOML parsing (small dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "toml_large": {
+      "label": "TOML parsing (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "msgpack_small": {
+      "label": "MessagePack parsing (small dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "msgpack_large": {
+      "label": "MessagePack parsing (large dataset)",
+      "unit": "ms",
+      "group": "serialization",
+      "display": "chart",
+      "better": "lower"
+    },
+    "protobuf_small": {
+      "label": "Protobuf decode (small dataset)",
+      "unit": "ms",
+      "group": "protobuf",
+      "display": "chart",
+      "better": "lower"
+    },
+    "protobuf_large": {
+      "label": "Protobuf decode (large dataset)",
+      "unit": "ms",
+      "group": "protobuf",
+      "display": "chart",
+      "better": "lower"
+    },
+    "wasm_compile": {
+      "label": "WebAssembly.compile (~250 KB module)",
+      "unit": "ms",
+      "group": "wasm",
+      "display": "chart",
+      "better": "lower"
+    },
+    "wasm_call": {
+      "label": "JS↔wasm call boundary",
+      "unit": "ms",
+      "group": "wasm",
+      "display": "chart",
+      "better": "lower"
+    },
+    "wasm_mem": {
+      "label": "wasm linear memory (shared buffer)",
+      "unit": "ms",
+      "group": "wasm",
+      "display": "chart",
+      "better": "lower"
+    },
+    "wasi_start": {
+      "label": "WASI bootstrap (instantiate + _start)",
+      "unit": "ms",
+      "group": "wasi",
+      "display": "chart",
+      "better": "lower"
+    },
+    "wasi_syscall": {
+      "label": "WASI syscalls from inside wasm",
+      "unit": "ms",
+      "group": "wasi",
+      "display": "chart",
+      "better": "lower"
+    },
+    "rss": {
+      "label": "Peak resident memory (idle)",
+      "unit": "MB",
+      "group": "launch",
+      "display": "card",
+      "better": "lower"
+    },
+    "rss_loaded": {
+      "label": "Peak resident memory (under load)",
+      "unit": "MB",
+      "group": "launch",
+      "display": "card",
+      "better": "lower"
+    }
+  },
+  "groups": [
+    {
+      "id": "launch",
+      "title": "Startup & footprint",
+      "rows": [
+        "startup",
+        "bigscript",
+        "modules",
+        "rss",
+        "rss_loaded"
+      ]
+    },
+    {
+      "id": "engine",
+      "title": "Engine",
+      "rows": [
+        "compute",
+        "json",
+        "jsonbig",
+        "regex",
+        "strings",
+        "structured",
+        "errors",
+        "async",
+        "timers"
+      ]
+    },
+    {
+      "id": "webapi",
+      "title": "Web APIs",
+      "rows": [
+        "url",
+        "url_setter",
+        "urlpattern",
+        "encoding",
+        "base64",
+        "buffers",
+        "headers",
+        "formdata",
+        "date_intl",
+        "streams",
+        "compression"
+      ]
+    },
+    {
+      "id": "crypto",
+      "title": "Crypto",
+      "rows": [
+        "sha256",
+        "crypto",
+        "crypto_asym",
+        "crypto_kdf"
+      ]
+    },
+    {
+      "id": "net",
+      "title": "Network",
+      "rows": [
+        "fetch",
+        "fetch_upload",
+        "http",
+        "websocket"
+      ]
+    },
+    {
+      "id": "fs",
+      "title": "Filesystem",
+      "rows": [
+        "fsread_small",
+        "fsread_large",
+        "fswrite_small",
+        "fswrite_large",
+        "fsappend_small",
+        "fsappend_large",
+        "fsstat_small",
+        "fsstat_many",
+        "fsexists_small",
+        "fsexists_many",
+        "glob"
+      ]
+    },
+    {
+      "id": "system",
+      "title": "System",
+      "rows": [
+        "spawn"
+      ]
+    },
+    {
+      "id": "serialization",
+      "title": "Serialization",
+      "rows": [
+        "jsonl_stream",
+        "xml_small",
+        "xml_large",
+        "yaml_small",
+        "yaml_large",
+        "toml_small",
+        "toml_large",
+        "msgpack_small",
+        "msgpack_large"
+      ]
+    },
+    {
+      "id": "protobuf",
+      "title": "Protobuf",
+      "rows": [
+        "protobuf_small",
+        "protobuf_large"
+      ]
+    },
+    {
+      "id": "wasm",
+      "title": "WebAssembly",
+      "rows": [
+        "wasm_compile",
+        "wasm_call",
+        "wasm_mem"
+      ]
+    },
+    {
+      "id": "wasi",
+      "title": "WASI",
+      "rows": [
+        "wasi_start",
+        "wasi_syscall"
+      ]
+    }
+  ]
 }

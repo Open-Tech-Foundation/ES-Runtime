@@ -1,12 +1,17 @@
 // A dependency-free horizontal bar chart driven by bench/run.sh JSON output
 // (website/src/benchmarks.js). The winner of each row (the best value in that
 // metric's better direction) is drawn in green, everyone else in neutral grey.
-// Pass `metrics` as [{ key, label, unit? }] selecting rows to show.
+//
+// Rows are selected by name, never described here: `group="engine"` charts
+// whatever the harness put in that group, `rows="a b"` picks individual ones,
+// and the labels, units and order all come from the run. The page therefore
+// cannot fall out of step with the data.
 //
 // NOTE: the @opentf/web compiler rewrites every `.map()` into a reactive list
 // helper, so non-render computations must use plain loops (never `.map`), and
 // dynamic styles must be objects (a style string becomes Object.assign(...,str)).
 import bench from "../src/benchmarks.js";
+import { resolveRows } from "../src/bench-rows.js";
 import { betterLabel, winnerOf } from "../src/metric-direction.js";
 
 const ORDER = ["esrun", "bun", "node", "deno", "llrt"];
@@ -45,7 +50,8 @@ function hasNoisyCell(metrics, runtimes) {
   return false;
 }
 
-export default function BenchChart({ metrics }) {
+export default function BenchChart({ group, rows }) {
+  const metrics = resolveRows({ group, rows });
   const runtimes = ORDER.filter((rt) => bench.runtimes[rt]);
   const showNoiseNote = hasNoisyCell(metrics, runtimes);
 

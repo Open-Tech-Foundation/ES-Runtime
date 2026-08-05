@@ -74,28 +74,148 @@ MIN_MS="${MIN_MS:-5}"
 # workload; see the gen_* functions below.
 LAUNCH_ROWS="startup bigscript modules"
 
-# --- groups -----------------------------------------------------------------
+# --- rows and groups --------------------------------------------------------
 #
-# Named subsets, so a run can be scoped to the area being worked on instead of
-# the whole suite. `GROUP=fs bench/run.sh` is a two-minute loop; the full suite
-# is not. Groups are also the vocabulary the site's sections use, so a row moving
-# between groups moves on the page too.
+# One table defines every row: which group it belongs to, what unit it reports,
+# where it is shown, and what to call it. Groups are named subsets, so a run can
+# be scoped to the area being worked on instead of the whole suite
+# (`GROUP=fs bench/run.sh` is a two-minute loop; the full suite is not), and they
+# are also the vocabulary the site's sections use — a row moving between groups
+# moves on the page too.
 #
-# Every row must appear in exactly one group — `bench/run.sh --list` checks that
-# and is the fastest way to catch a row added to scripts/ but wired up nowhere.
-declare -A GROUP_MEMBERS
-GROUP_MEMBERS[launch]="startup bigscript modules"
-GROUP_MEMBERS[engine]="compute json jsonbig regex strings structured errors async timers"
-GROUP_MEMBERS[webapi]="url url_setter urlpattern encoding base64 date_intl buffers headers formdata streams compression"
-GROUP_MEMBERS[crypto]="sha256 crypto crypto_asym crypto_kdf"
-GROUP_MEMBERS[fs]="fsread_small fsread_large fswrite_small fswrite_large fsappend_small fsappend_large fsstat_small fsstat_many fsexists_small fsexists_many glob"
-GROUP_MEMBERS[net]="fetch fetch_upload http websocket"
-GROUP_MEMBERS[serialization]="xml_small xml_large yaml_small yaml_large toml_small toml_large msgpack_small msgpack_large protobuf_small protobuf_large jsonl_stream"
-GROUP_MEMBERS[wasm]="wasm_compile wasm_call wasm_mem"
-GROUP_MEMBERS[wasi]="wasi_start wasi_syscall"
-GROUP_MEMBERS[system]="spawn"
-GROUP_MEMBERS[memory]="rss_load"
-GROUP_ORDER=(launch engine webapi crypto fs net serialization wasm wasi system memory)
+# The label and unit live here rather than in the site because the site should
+# not be describing measurements it did not take. BENCH_JSON publishes this table
+# as `rows` + `groups`, and every component renders from that: the benchmarks
+# page asks for a group, the home-page roller asks for the `card` rows. Adding a
+# row here is the whole of adding it to the site.
+#
+#   group | key | unit | display | label
+#
+# display:  card   — charted on the benchmarks page and carded on the home page
+#           chart  — charted on the benchmarks page only
+#           hidden — measured, shown nowhere (feeds another row)
+#
+# Every row must appear exactly once — `bench/run.sh --list` checks that against
+# scripts/, and is the fastest way to catch a row wired up nowhere.
+ROW_DEFS=(
+  "launch|startup|ms|card|Cold start (near-empty script)"
+  "launch|bigscript|ms|card|Parse + run ~100 KB script"
+  "launch|modules|ms|card|Load a 300-module graph"
+
+  "memory|rss_load|ms|hidden|Retain a live working set"
+
+  "engine|compute|ms|card|Tight compute loop"
+  "engine|json|ms|card|JSON parse/stringify"
+  "engine|jsonbig|ms|card|JSON (large documents)"
+  "engine|regex|ms|card|Regex (match, validate, replace)"
+  "engine|strings|ms|card|String building and slicing"
+  "engine|structured|ms|card|structuredClone"
+  "engine|errors|ms|card|throw/catch + stack capture"
+  "engine|async|ms|card|async/await throughput"
+  "engine|timers|ms|card|setTimeout churn"
+
+  "webapi|url|ms|card|URL parsing"
+  "webapi|url_setter|ms|chart|URL setter"
+  "webapi|urlpattern|ms|chart|URLPattern test"
+  "webapi|encoding|ms|card|TextEncoder/TextDecoder"
+  "webapi|base64|ms|card|base64 (atob/btoa)"
+  "webapi|buffers|ms|card|TypedArray / DataView"
+  "webapi|headers|ms|card|Headers / Request parsing"
+  "webapi|formdata|ms|card|Multipart FormData round trip"
+  "webapi|date_intl|ms|card|Date + Intl formatting"
+  "webapi|streams|ms|card|ReadableStream piping"
+  "webapi|compression|ms|chart|CompressionStream round trip (gzip)"
+
+  "crypto|sha256|ms|card|SubtleCrypto SHA-256"
+  "crypto|crypto|ms|card|HMAC + AES-GCM"
+  "crypto|crypto_asym|ms|card|ECDSA P-256 sign + verify"
+  "crypto|crypto_kdf|ms|card|PBKDF2 (10k iterations)"
+
+  "net|fetch|ms|card|fetch (local server)"
+  "net|fetch_upload|ms|chart|fetch (streamed upload)"
+  "net|http|ms|chart|HTTP server (concurrent)"
+  "net|websocket|ms|chart|WebSocket round trips"
+
+  "fs|fsread_small|ms|card|File read (small)"
+  "fs|fsread_large|ms|card|File read (large)"
+  "fs|fswrite_small|ms|card|File write (small)"
+  "fs|fswrite_large|ms|card|File write (large)"
+  "fs|fsappend_small|ms|card|File append (small)"
+  "fs|fsappend_large|ms|card|File append (large)"
+  "fs|fsstat_small|ms|card|File stat (one path)"
+  "fs|fsstat_many|ms|card|File stat (1000 paths)"
+  "fs|fsexists_small|ms|card|File exists (one path)"
+  "fs|fsexists_many|ms|card|File exists (1000 paths)"
+  "fs|glob|ms|card|Glob scan"
+
+  "system|spawn|ms|card|Spawn a child process"
+
+  "serialization|jsonl_stream|ms|chart|JSONL streaming (large dataset)"
+  "serialization|xml_small|ms|chart|XML parsing (small dataset)"
+  "serialization|xml_large|ms|chart|XML parsing (large dataset)"
+  "serialization|yaml_small|ms|chart|YAML parsing (small dataset)"
+  "serialization|yaml_large|ms|chart|YAML parsing (large dataset)"
+  "serialization|toml_small|ms|chart|TOML parsing (small dataset)"
+  "serialization|toml_large|ms|chart|TOML parsing (large dataset)"
+  "serialization|msgpack_small|ms|chart|MessagePack parsing (small dataset)"
+  "serialization|msgpack_large|ms|chart|MessagePack parsing (large dataset)"
+
+  "protobuf|protobuf_small|ms|chart|Protobuf decode (small dataset)"
+  "protobuf|protobuf_large|ms|chart|Protobuf decode (large dataset)"
+
+  "wasm|wasm_compile|ms|chart|WebAssembly.compile (~250 KB module)"
+  "wasm|wasm_call|ms|chart|JS↔wasm call boundary"
+  "wasm|wasm_mem|ms|chart|wasm linear memory (shared buffer)"
+
+  "wasi|wasi_start|ms|chart|WASI bootstrap (instantiate + _start)"
+  "wasi|wasi_syscall|ms|chart|WASI syscalls from inside wasm"
+)
+
+# Rows nothing runs: derived after aggregation from the peak-RSS samples (see
+# RSS_ROWS). They are charted like any other row, so they carry the same
+# metadata, but they are not in GROUP_MEMBERS — there is no script to select.
+SYNTHETIC_ROW_DEFS=(
+  "launch|rss|MB|card|Peak resident memory (idle)"
+  "launch|rss_loaded|MB|card|Peak resident memory (under load)"
+)
+
+# Section headings the site renders for each group.
+declare -A GROUP_TITLE
+GROUP_TITLE[launch]="Startup & footprint"
+GROUP_TITLE[memory]="Memory"
+GROUP_TITLE[engine]="Engine"
+GROUP_TITLE[webapi]="Web APIs"
+GROUP_TITLE[crypto]="Crypto"
+GROUP_TITLE[net]="Network"
+GROUP_TITLE[fs]="Filesystem"
+GROUP_TITLE[system]="System"
+GROUP_TITLE[serialization]="Serialization"
+GROUP_TITLE[protobuf]="Protobuf"
+GROUP_TITLE[wasm]="WebAssembly"
+GROUP_TITLE[wasi]="WASI"
+
+# Rows where a bigger number is the better one. Empty today — every row is a
+# time or a memory figure — but the site reads the direction from the data
+# rather than keeping its own list, so a throughput row added here is ranked and
+# captioned correctly everywhere without touching a component.
+HIGHER_BETTER_ROWS=""
+
+declare -A GROUP_MEMBERS ROW_GROUP ROW_UNIT ROW_DISPLAY ROW_LABEL
+GROUP_ORDER=()
+CATALOGUE_ORDER=() # every row, in table order (incl. synthetic and hidden)
+DISPLAY_ORDER=()   # only the rows that are shown — what the groups list
+_row_def() {  # "group|key|unit|display|label"  synthetic?
+  local g k u d l
+  IFS='|' read -r g k u d l <<<"$1"
+  ROW_GROUP[$k]="$g"; ROW_UNIT[$k]="$u"; ROW_DISPLAY[$k]="$d"; ROW_LABEL[$k]="$l"
+  case " ${GROUP_ORDER[*]} " in *" $g "*) ;; *) GROUP_ORDER+=("$g") ;; esac
+  CATALOGUE_ORDER+=("$k")
+  [ "$d" = hidden ] || DISPLAY_ORDER+=("$k")
+  [ -n "${2:-}" ] && return 0
+  GROUP_MEMBERS[$g]="${GROUP_MEMBERS[$g]:+${GROUP_MEMBERS[$g]} }$k"
+}
+for _d in "${ROW_DEFS[@]}"; do [ -n "$_d" ] && _row_def "$_d"; done
+for _d in "${SYNTHETIC_ROW_DEFS[@]}"; do _row_def "$_d" synthetic; done
 
 ALL_ROWS=""
 for _g in "${GROUP_ORDER[@]}"; do ALL_ROWS="$ALL_ROWS ${GROUP_MEMBERS[$_g]}"; done
@@ -689,6 +809,35 @@ if [ -n "$BENCH_JSON" ]; then
   printf '\n    "filesystem": "%s",' "$(stat -f -c %T . 2>/dev/null)"
   printf '\n    "governor": "%s"' "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null)"
   printf '\n  },'
+  # The row catalogue: what each row is called, what it reports, and where it is
+  # shown. Published whole on every run — including a scoped one, which measures
+  # a few rows but still knows about all of them — so the site never holds a
+  # partial or stale copy of it. This is what lets the benchmarks page and the
+  # home-page roller render from the data instead of from hand-kept lists.
+  printf '\n  "rows": {'
+  first=1
+  for row in "${CATALOGUE_ORDER[@]}"; do
+    [ -z "$first" ] && printf ','
+    first=
+    printf '\n    "%s": { "label": "%s", "unit": "%s", "group": "%s", "display": "%s", "better": "%s" }' \
+      "$row" "${ROW_LABEL[$row]}" "${ROW_UNIT[$row]}" "${ROW_GROUP[$row]}" "${ROW_DISPLAY[$row]}" \
+      "$(case " $HIGHER_BETTER_ROWS " in *" $row "*) echo higher ;; *) echo lower ;; esac)"
+  done
+  printf '\n  },'
+  printf '\n  "groups": ['
+  first=1
+  for g in "${GROUP_ORDER[@]}"; do
+    members=""
+    for row in "${DISPLAY_ORDER[@]}"; do
+      [ "${ROW_GROUP[$row]}" = "$g" ] && members="${members:+$members, }\"$row\""
+    done
+    [ -z "$members" ] && continue   # a group whose every row is hidden
+    [ -z "$first" ] && printf ','
+    first=
+    printf '\n    { "id": "%s", "title": "%s", "rows": [%s] }' \
+      "$g" "${GROUP_TITLE[$g]:-$g}" "$members"
+  done
+  printf '\n  ],'
   printf '\n  "results_ms": {'
   emit_matrix RES
   printf '\n  },\n  "results_rss": {'

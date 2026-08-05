@@ -11,101 +11,8 @@ import WsSweepTable from "../../../components/WsSweepTable.jsx";
 import Http2Table from "../../../components/Http2Table.jsx";
 import RpsChart from "../../../components/RpsChart.jsx";
 import MemorySafetyTable from "../../../components/MemorySafetyTable.jsx";
+import SustainedRpsTable from "../../../components/SustainedRpsTable.jsx";
 import bench from "../../../src/benchmarks.js";
-
-export const startup = [
-  { key: "startup", label: "Cold start (near-empty script)", unit: "ms" },
-  { key: "bigscript", label: "Parse + run ~100 KB script", unit: "ms" },
-  { key: "modules", label: "Load a 300-module graph", unit: "ms" },
-  { key: "rss", label: "Peak resident memory (idle)", unit: "MB" },
-  { key: "rss_loaded", label: "Peak resident memory (under load)", unit: "MB" },
-];
-
-export const engineWorkloads = [
-  { key: "compute", label: "Tight compute loop", unit: "ms" },
-  { key: "json", label: "JSON parse/stringify", unit: "ms" },
-  { key: "jsonbig", label: "JSON (large documents)", unit: "ms" },
-  { key: "regex", label: "Regex (match, validate, replace)", unit: "ms" },
-  { key: "strings", label: "String building and slicing", unit: "ms" },
-  { key: "structured", label: "structuredClone", unit: "ms" },
-  { key: "errors", label: "throw/catch + stack capture", unit: "ms" },
-  { key: "async", label: "async/await throughput", unit: "ms" },
-  { key: "timers", label: "setTimeout churn", unit: "ms" },
-];
-
-export const webApiWorkloads = [
-  { key: "url", label: "URL parsing", unit: "ms" },
-  { key: "url_setter", label: "URL setter", unit: "ms" },
-  { key: "urlpattern", label: "URLPattern test", unit: "ms" },
-  { key: "encoding", label: "TextEncoder/TextDecoder", unit: "ms" },
-  { key: "base64", label: "base64 (atob/btoa)", unit: "ms" },
-  { key: "buffers", label: "TypedArray / DataView", unit: "ms" },
-  { key: "headers", label: "Headers / Request parsing", unit: "ms" },
-  { key: "formdata", label: "Multipart FormData round trip", unit: "ms" },
-  { key: "date_intl", label: "Date + Intl formatting", unit: "ms" },
-  { key: "streams", label: "ReadableStream piping", unit: "ms" },
-  { key: "compression", label: "CompressionStream round trip (gzip)", unit: "ms" },
-];
-
-export const cryptoWorkloads = [
-  { key: "sha256", label: "SubtleCrypto SHA-256", unit: "ms" },
-  { key: "crypto", label: "HMAC + AES-GCM", unit: "ms" },
-  { key: "crypto_asym", label: "ECDSA P-256 sign + verify", unit: "ms" },
-  { key: "crypto_kdf", label: "PBKDF2 (10k iterations)", unit: "ms" },
-];
-
-export const netWorkloads = [
-  { key: "fetch", label: "fetch (local server)", unit: "ms" },
-  { key: "fetch_upload", label: "fetch (streamed upload)", unit: "ms" },
-  { key: "http", label: "HTTP server (concurrent)", unit: "ms" },
-  { key: "websocket", label: "WebSocket round trips", unit: "ms" },
-];
-
-export const systemWorkloads = [
-  { key: "spawn", label: "Spawn a child process", unit: "ms" },
-];
-
-export const fsWorkloads = [
-  { key: "fsread_small", label: "File read (small)", unit: "ms" },
-  { key: "fsread_large", label: "File read (large)", unit: "ms" },
-  { key: "fswrite_small", label: "File write (small)", unit: "ms" },
-  { key: "fswrite_large", label: "File write (large)", unit: "ms" },
-  { key: "fsappend_small", label: "File append (small)", unit: "ms" },
-  { key: "fsappend_large", label: "File append (large)", unit: "ms" },
-  { key: "fsstat_small", label: "File stat (one path)", unit: "ms" },
-  { key: "fsstat_many", label: "File stat (1000 paths)", unit: "ms" },
-  { key: "fsexists_small", label: "File exists (one path)", unit: "ms" },
-  { key: "fsexists_many", label: "File exists (1000 paths)", unit: "ms" },
-  { key: "glob", label: "Glob scan", unit: "ms" },
-];
-
-export const parserWorkloads = [
-  { key: "jsonl_stream", label: "JSONL streaming (large dataset)", unit: "ms" },
-  { key: "xml_small", label: "XML parsing (small dataset)", unit: "ms" },
-  { key: "xml_large", label: "XML parsing (large dataset)", unit: "ms" },
-  { key: "yaml_small", label: "YAML parsing (small dataset)", unit: "ms" },
-  { key: "yaml_large", label: "YAML parsing (large dataset)", unit: "ms" },
-  { key: "toml_small", label: "TOML parsing (small dataset)", unit: "ms" },
-  { key: "toml_large", label: "TOML parsing (large dataset)", unit: "ms" },
-  { key: "msgpack_small", label: "MessagePack parsing (small dataset)", unit: "ms" },
-  { key: "msgpack_large", label: "MessagePack parsing (large dataset)", unit: "ms" },
-];
-
-export const wasmWorkloads = [
-  { key: "wasm_compile", label: "WebAssembly.compile (~250 KB module)", unit: "ms" },
-  { key: "wasm_call", label: "JS\u2194wasm call boundary", unit: "ms" },
-  { key: "wasm_mem", label: "wasm linear memory (shared buffer)", unit: "ms" },
-];
-
-export const wasiWorkloads = [
-  { key: "wasi_start", label: "WASI bootstrap (instantiate + _start)", unit: "ms" },
-  { key: "wasi_syscall", label: "WASI syscalls from inside wasm", unit: "ms" },
-];
-
-export const protobufWorkloads = [
-  { key: "protobuf_small", label: "Protobuf decode (small dataset)", unit: "ms" },
-  { key: "protobuf_large", label: "Protobuf decode (large dataset)", unit: "ms" },
-];
 
 # Benchmarks
 
@@ -139,22 +46,22 @@ Process wall-time (min of N runs). `bigscript` is one large file, `modules` a
 300-module graph — parse cost and resolution cost are not the same thing. Memory
 is given twice: idle, and while a live working set is retained.
 
-<BenchChart metrics={startup} />
+<BenchChart group="launch" />
 
 ## Engine
 
 Self-timed with `performance.now()` after an untimed JIT warmup; min of N
 interleaved runs, isolating engine cost from process launch.
 
-<BenchChart metrics={engineWorkloads} />
+<BenchChart group="engine" />
 
 ## Web APIs
 
-<BenchChart metrics={webApiWorkloads} />
+<BenchChart group="webapi" />
 
 ## Crypto
 
-<BenchChart metrics={cryptoWorkloads} />
+<BenchChart group="crypto" />
 
 ## Network
 
@@ -163,7 +70,21 @@ process**, so it measures the server and that runtime's `fetch` together, not
 the server alone. For server throughput on its own, `bench/rps.sh` uses an
 external load generator on separate cores.
 
-<BenchChart metrics={netWorkloads} />
+<BenchChart group="net" />
+
+### Hello world, measured externally
+
+A framework hello-world (Hono) per runtime, driven by an external load generator
+on separate cores. LLRT has no general HTTP server, so it is not in this set.
+
+<RpsChart />
+
+### Burst vs sustained
+
+The chart above is a burst against a freshly started process. Held under load
+instead, the heap is full and the collector has been running throughout.
+
+<SustainedRpsTable />
 
 ### Static files, measured externally
 
@@ -178,14 +99,14 @@ file handle to the kernel; Node streams it; esrun reads it into a buffer.
 Page-cache resident, no `fsync` — this is the runtime's cost above the syscall,
 not disk speed. Numbers are specific to the filesystem in `environment`.
 
-<BenchChart metrics={fsWorkloads} />
+<BenchChart group="fs" />
 
 ## System
 
 Starting a child process and collecting its output — `Deno.Command`,
 `Bun.spawn`, `node:child_process`, and esrun's `runtime:system` `Command`.
 
-<BenchChart metrics={systemWorkloads} />
+<BenchChart group="system" />
 
 ## Behaviour under memory exhaustion
 
@@ -204,7 +125,7 @@ libraries you would reach for anyway (`js-yaml`, `@iarna/toml`,
 `fast-xml-parser`, `msgpackr`) — a native-vs-library gap on those rows, not a
 runtime-vs-runtime one.
 
-<BenchChart metrics={parserWorkloads} />
+<BenchChart group="serialization" />
 
 ## Protobuf (each runtime's own path)
 
@@ -212,7 +133,7 @@ esrun decodes with its native `runtime:serialization` Protobuf (pure-JS,
 reflective); Node, Bun, and Deno decode with `protobuf-es` (`@bufbuild/protobuf`).
 Identical bytes, each runtime's real protobuf path.
 
-<BenchChart metrics={protobufWorkloads} />
+<BenchChart group="protobuf" />
 
 <span id="wasm"></span>
 
@@ -222,7 +143,7 @@ esrun reaches V8's own WebAssembly implementation through the standard JS API,
 as Node and Deno do; Bun uses JavaScriptCore's. LLRT has no `WebAssembly` at all,
 so every cell here is n/a for it.
 
-<BenchChart metrics={wasmWorkloads} />
+<BenchChart group="wasm" />
 
 The three measure different things, and esrun does not place the same in each.
 **Compile** is validation plus baseline codegen on a ~250 KB module, with a
@@ -247,7 +168,7 @@ hoisted out, so it is the per-invocation cost of *running a wasm program*.
 and `clock_time_get` — the calls come from inside wasm, where a real program
 makes them, so it measures the host-side preview-1 implementation.
 
-<BenchChart metrics={wasiWorkloads} />
+<BenchChart group="wasi" />
 
 esrun's bootstrap is the fastest measured, a little ahead of Deno and several
 times quicker than Node or Bun. Its syscall path is not: Deno's is around 3x
@@ -340,6 +261,10 @@ GROUP=fs bench/run.sh
 
 # regenerate the data module this page renders
 bench/gen-bench-data.sh
+
+# one section, or a few rows, merged into the rest
+SECTIONS=rps_sustained bench/gen-bench-data.sh
+bench/gen-bench-data.sh regex strings
 
 # just the HTTP/1.1 vs HTTP/2 table
 bench/http2.sh

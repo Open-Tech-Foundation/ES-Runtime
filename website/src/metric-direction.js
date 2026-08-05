@@ -1,12 +1,13 @@
-// Per-metric "which way is better" for the benchmark data. Every current metric
-// is a time (ms) or memory (MB) figure, so lower is better; throughput-style
-// metrics (e.g. req/s) would be higher-is-better. List those keys here and the
-// whole site — standings ranking, chart winner highlight, and the per-row
-// label — stays correct without touching three components.
-export const HIGHER_BETTER = new Set([]);
+// Per-metric "which way is better", read from the benchmark data rather than
+// kept here. bench/run.sh publishes `rows[key].better` for every row it defines,
+// so a throughput row added to the harness is ranked and captioned correctly by
+// the standings table, the chart winner highlight and the per-row label without
+// a component changing. A key outside the catalogue falls back to
+// lower-is-better, which is what every time and memory figure is.
+import bench from "./benchmarks.js";
 
 export function isHigherBetter(key) {
-  return HIGHER_BETTER.has(key);
+  return bench.rows?.[key]?.better === "higher";
 }
 
 // The per-row caption shown next to a metric.

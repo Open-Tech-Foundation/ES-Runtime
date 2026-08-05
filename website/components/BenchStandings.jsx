@@ -25,7 +25,13 @@ export default function BenchStandings() {
   const runtimes = [];
   for (const r of ORDER) if (bench.runtimes[r]) runtimes.push(r);
   const n = runtimes.length;
-  const metrics = Object.keys(bench.results_ms);
+  // Only rows the site actually publishes: the harness also measures feeder
+  // rows (`rss_load` exists to produce the memory numbers), and counting a
+  // placing nobody can see is a medal from an invisible race.
+  const metrics = [];
+  for (const m of Object.keys(bench.results_ms)) {
+    if (bench.rows?.[m] && bench.rows[m].display !== "hidden") metrics.push(m);
+  }
 
   // tally[r] = { tests, pos: [_, c1, c2, …, cn] }
   const tally = {};

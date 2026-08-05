@@ -50,6 +50,36 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **The benchmark data describes itself, and the site renders from it.**
+  `bench/run.sh` now carries one table of row definitions — group, unit, where
+  the row is shown, and what to call it — and publishes it as `rows` and
+  `groups` alongside the numbers. The benchmarks page asks for a group and gets
+  whatever that group holds; the home-page roller asks for the rows marked
+  `card`; `metric-direction.js` reads each row's better-direction from the same
+  place. That retires 61 hand-kept `{ key, label, unit }` literals in the MDX, 39
+  more in the roller, and a third list of higher-is-better keys, each of which
+  had to be edited by hand whenever a row was added and none of which knew when
+  it had gone stale.
+
+  `bench/validate-bench-data.mjs` now checks the two agree in both directions: a
+  group the page names but the run does not define would render an empty
+  section, and a row measured but reaching no chart is a result quietly dropped.
+  The home page is a shop window and shows a subset on purpose; the benchmarks
+  page must show everything, and that is now enforced rather than remembered.
+
+- **Sustained throughput, published next to the burst.** `rps.sh` could already
+  hold load for a wall-clock window instead of firing a fixed burst, but nothing
+  ran it and nothing charted it. `SECTIONS=rps_sustained` runs the same Hono
+  server for 60s and publishes it as `hono_sustained`, and the benchmarks page
+  puts the two side by side with the change between them. The burst answers how
+  fast a runtime is when fresh; this answers whether it is still that fast once
+  the heap has filled and the collector has been running throughout — which is
+  the question a long-lived server actually poses.
+
+- **The Hono req/s chart is on the benchmarks page too.** It was on the landing
+  page only, which made the marketing surface the sole home of a measured
+  result.
+
 - **Scoped *publishing*, not just scoped runs.** The data module is fed by five
   independent scripts and re-running all of them takes most of an hour, which
   made changing one number an all-or-nothing event. `SECTIONS` picks which

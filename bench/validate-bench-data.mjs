@@ -25,16 +25,59 @@ const warnings = [];
 
 // --- what the site asks for -------------------------------------------------
 
-// The benchmarks page declares its rows as `{ key: "...", label: ... }` literals.
-// Reading them back is what keeps this honest: add a row to the page and the
-// generator starts requiring the run to produce it, rather than rendering blank.
+// The run publishes its own row catalogue (label, unit, group, where it is
+// shown); the benchmarks page names groups and lets the data fill them in. So
+// the two have to agree in both directions, and this checks both:
+//
+//   * every group the page charts must exist in the run, or the section renders
+//     empty and nobody notices until someone looks at the page;
+//   * every row the run publishes must reach the page, because a measurement
+//     taken and then shown nowhere is a result quietly dropped. The home page is
+//     a shop window and shows a subset; the benchmarks page shows everything.
+const catalogue = data.rows || {};
+const groups = data.groups || [];
+if (Object.keys(catalogue).length === 0) {
+  errors.push("`rows` is missing — the run published no row catalogue for the site to render");
+}
+
 const mdxPath = join(siteDir, "app/docs/benchmarks/page.mdx");
 const mdx = readFileSync(mdxPath, "utf8");
-const wanted = [...mdx.matchAll(/\{\s*key:\s*"([^"]+)"/g)].map((m) => m[1]);
 
-if (wanted.length === 0) {
-  errors.push(`no { key: "..." } rows found in ${mdxPath} — did the page change shape?`);
+const charted = new Set();
+for (const [, attr, value] of mdx.matchAll(/<BenchChart[^>]*?\b(group|rows)="([^"]+)"/g)) {
+  for (const name of value.trim().split(/\s+/)) {
+    if (attr === "rows") {
+      charted.add(name);
+      continue;
+    }
+    const g = groups.find((x) => x.id === name);
+    if (!g) {
+      errors.push(`the benchmarks page charts group "${name}", which the run does not define`);
+      continue;
+    }
+    for (const key of g.rows) charted.add(key);
+  }
 }
+
+if (charted.size === 0) {
+  errors.push(`no <BenchChart group="..."> found in ${mdxPath} — did the page change shape?`);
+}
+
+for (const key of charted) {
+  if (!(key in catalogue)) {
+    errors.push(`the benchmarks page charts "${key}", which is not a row the run defines`);
+  }
+}
+for (const [key, meta] of Object.entries(catalogue)) {
+  if (meta.display !== "hidden" && !charted.has(key)) {
+    errors.push(
+      `row "${key}" is measured and marked display="${meta.display}" but no chart on the ` +
+        `benchmarks page reaches it — add its group to the page, or mark the row hidden`,
+    );
+  }
+}
+
+const wanted = [...charted];
 
 const runtimes = Object.keys(data.runtimes || {});
 if (runtimes.length === 0) errors.push("runtimes is empty — no runtime was detected");
@@ -73,6 +116,11 @@ if (runtimes.includes("esrun") && esrunRows.length === 0) {
 // Each entry: the path the site reads, and how to tell "present and populated".
 const sections = [
   ["results_rps.hono", () => data.results_rps?.hono, "SECTIONS=rps"],
+  [
+    "results_rps.hono_sustained",
+    () => data.results_rps?.hono_sustained,
+    "SECTIONS=rps_sustained",
+  ],
   [
     "results_rps.staticserver",
     () => data.results_rps?.staticserver,

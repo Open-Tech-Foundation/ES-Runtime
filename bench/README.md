@@ -36,17 +36,18 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 
 | Group | Rows |
 | --- | --- |
-| `launch` | `startup`, `bigscript`, `modules` |
+| `launch` | `startup`, `bigscript`, `modules` (+ the derived `rss`, `rss_loaded`) |
+| `memory` | `rss_load` |
 | `engine` | `compute`, `json`, `jsonbig`, `regex`, `strings`, `structured`, `errors`, `async`, `timers` |
-| `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `date_intl`, `buffers`, `headers`, `formdata`, `streams`, `compression` |
+| `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `buffers`, `headers`, `formdata`, `date_intl`, `streams`, `compression` |
 | `crypto` | `sha256`, `crypto`, `crypto_asym`, `crypto_kdf` |
-| `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
 | `net` | `fetch`, `fetch_upload`, `http`, `websocket` |
-| `serialization` | `xml_*`, `yaml_*`, `toml_*`, `msgpack_*`, `protobuf_*`, `jsonl_stream` |
+| `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
+| `system` | `spawn` |
+| `serialization` | `jsonl_stream`, `xml_*`, `yaml_*`, `toml_*`, `msgpack_*` |
+| `protobuf` | `protobuf_small`, `protobuf_large` |
 | `wasm` | `wasm_compile`, `wasm_call`, `wasm_mem` |
 | `wasi` | `wasi_start`, `wasi_syscall` |
-| `system` | `spawn` |
-| `memory` | `rss_load` |
 
 `WORKLOADS` wins over `GROUP` when both are set. The variable is `GROUP`, not
 `GROUPS` — bash reserves `GROUPS` for the caller's group IDs, so it can never be
@@ -55,6 +56,27 @@ exactly one group; `--list` reports anything in `scripts/` that none claims,
 which is how a newly added workload gets noticed rather than silently never
 running. Publishing to the site still requires a full run — a scoped run is for
 working, not for regenerating.
+
+### The row catalogue
+
+`ROW_DEFS` in `run.sh` is the single definition of a row — group, unit, where it
+is shown, and what to call it:
+
+```
+group | key | unit | display | label
+```
+
+`display` is `card` (charted on the benchmarks page and carded on the home-page
+roller), `chart` (benchmarks page only), or `hidden` (measured, shown nowhere —
+`rss_load` exists to produce the memory numbers, not to be read itself).
+
+`BENCH_JSON` publishes the whole catalogue as `rows` and `groups`, on every run
+including a scoped one, and the site renders from it: the benchmarks page asks
+for a group and gets whatever that group holds, the roller asks for the `card`
+rows, and `metric-direction.js` reads `better` from it. No component names a
+metric, a label, a unit or an order. Adding a line to `ROW_DEFS` is the whole of
+adding a row to the site — and `validate-bench-data.mjs` will not publish a run
+whose rows the benchmarks page does not reach.
 
 Knobs (env vars): `ESRUN=/path/to/esrun`, `STARTUP_RUNS` (default 15),
 `WORKLOAD_RUNS` (default 5 — a *ceiling*, see the adaptive stop below),
@@ -546,8 +568,17 @@ measurement.
 `REQUESTS` fires a fixed burst, which answers "how fast is it when fresh".
 `DURATION=60s bench/rps.sh` holds load for a wall-clock window instead, which
 answers whether it stays that way once the heap has filled and the allocator has
-been churning. Comparing the two is the degradation check; the published
-sections use the burst form, so run the duration form by hand when you want it.
+been churning. Comparing the two is the degradation check, and the site shows it
+as a burst-vs-sustained table:
+
+```sh
+SECTIONS=rps_sustained bench/gen-bench-data.sh   # 60s hold, published as `hono_sustained`
+SUSTAIN_DURATION=30s SUSTAIN_REPS=3 SECTIONS=rps_sustained bench/gen-bench-data.sh
+```
+
+The two runs use the same Hono server and the same load generator, so the only
+difference between them is fixed-count against fixed-window. A runtime that gives
+back more than a few percent is one whose steady state is not its headline.
 
 ## Memory safety
 
@@ -583,8 +614,9 @@ SECTIONS="workloads memory_safety" ...        # or several
 
 The module is fed by five independent scripts and re-running all of them takes
 most of an hour, so `SECTIONS` picks which actually run: `workloads` (run.sh,
-which owns every charted row), `rps` (Hono req/s), `rps_static` (64 KiB static
-file req/s), `websocket` (the chat fan-out sweep), `http2`, and `memory_safety`.
+which owns every charted row), `rps` (Hono req/s), `rps_sustained` (the same
+server held under load for a window), `rps_static` (64 KiB static file req/s),
+`websocket` (the chat fan-out sweep), `http2`, and `memory_safety`.
 A section left out keeps the values already in the module. `workloads` is the
 one exception to merging — it owns the row matrices outright and replaces them,
 so a row deleted from the suite does not live on in the data forever.
@@ -596,8 +628,11 @@ every chart would render "n/a", and the repair would be a human editing the
 generated file. So `bench/validate-bench-data.mjs` gates the write:
 
 - Every row the benchmarks page charts must exist and have at least one measured
-  runtime. The page's `{ key: "..." }` literals are read back out of the MDX, so
-  adding a row there starts requiring the run to produce it.
+  runtime, and every row the run publishes must reach the page. Both directions,
+  because a group the page names but the run does not define renders an empty
+  section, and a row measured but charted nowhere is a result quietly dropped.
+  (The home page shows a subset by design — it is a shop window. The benchmarks
+  page is the full table, and that is what this enforces.)
 - Every value must be a finite non-negative number or `null`.
 - The sections owned by the other three scripts (`results_rps`, `websocket`,
   `results_http2`) must be present and populated.
