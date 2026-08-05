@@ -151,6 +151,34 @@ mod tests {
         assert_eq!(decode("=Zm9v"), None); // interior padding
     }
 
+    /// Encoder/decoder throughput on its own, away from the op boundary — the
+    /// number that decides whether the `base64` bench row is limited by the
+    /// crate or by the JS↔Rust crossing around it. Reported, not asserted.
+    #[test]
+    #[ignore = "measurement: cargo test -p es-runtime --lib --release -- --ignored --nocapture base64_throughput"]
+    #[allow(clippy::print_stdout)]
+    fn base64_throughput() {
+        for size in [1024usize, 65536] {
+            let input: String = "a".repeat(size);
+            let encoded = encode(&input).expect("ascii encodes");
+            let n = (16 * 1024 * 1024 / size).max(16);
+
+            let start = std::time::Instant::now();
+            for _ in 0..n {
+                std::hint::black_box(encode(std::hint::black_box(&input)));
+            }
+            let enc_gbs = (size * n) as f64 / start.elapsed().as_secs_f64() / 1e9;
+
+            let start = std::time::Instant::now();
+            for _ in 0..n {
+                std::hint::black_box(decode(std::hint::black_box(&encoded)));
+            }
+            let dec_gbs = (encoded.len() * n) as f64 / start.elapsed().as_secs_f64() / 1e9;
+
+            println!("{size:>6} B: encode {enc_gbs:5.2} GB/s   decode {dec_gbs:5.2} GB/s");
+        }
+    }
+
     #[test]
     fn decode_strips_all_trailing_padding_like_the_js_it_replaces() {
         // Looser than WHATWG (which allows at most two "="); recorded in the

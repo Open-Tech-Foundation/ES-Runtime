@@ -169,7 +169,7 @@ export default {
     "bun": "1.4.0",
     "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.15.0"
+    "esrun": "esrun 0.16.0"
   },
   "method": {
     "aggregate": "min",
@@ -305,7 +305,14 @@ export default {
       "better": "lower"
     },
     "encoding": {
-      "label": "TextEncoder/TextDecoder",
+      "label": "TextEncoder/TextDecoder (small)",
+      "unit": "ms",
+      "group": "webapi",
+      "display": "card",
+      "better": "lower"
+    },
+    "encoding_large": {
+      "label": "TextEncoder/TextDecoder (64 KiB)",
       "unit": "ms",
       "group": "webapi",
       "display": "card",
@@ -662,6 +669,7 @@ export default {
         "url_setter",
         "urlpattern",
         "encoding",
+        "encoding_large",
         "base64",
         "buffers",
         "headers",
@@ -870,11 +878,11 @@ export default {
       "esrun": 831.1
     },
     "encoding": {
-      "node": 66.4,
-      "bun": 21.4,
-      "deno": 68.5,
-      "llrt": 69.7,
-      "esrun": 82.2
+      "node": 68.5,
+      "bun": 22.8,
+      "deno": 69.5,
+      "llrt": 70.9,
+      "esrun": 80.2
     },
     "base64": {
       "node": 7,
@@ -912,18 +920,18 @@ export default {
       "esrun": 144
     },
     "streams": {
-      "node": 22.1,
-      "bun": 8.1,
-      "deno": 14.1,
+      "node": 22.2,
+      "bun": 8.2,
+      "deno": 15.3,
       "llrt": null,
-      "esrun": 9.9
+      "esrun": 10
     },
     "compression": {
-      "node": 621,
-      "bun": 222.7,
-      "deno": 218.8,
+      "node": 645.7,
+      "bun": 240.1,
+      "deno": 220.3,
       "llrt": null,
-      "esrun": 67.9
+      "esrun": 70.5
     },
     "sha256": {
       "node": 530,
@@ -1066,11 +1074,11 @@ export default {
       "esrun": 79.2
     },
     "jsonl_stream": {
-      "node": 614.5,
-      "bun": 791,
-      "deno": 658.1,
+      "node": 618.7,
+      "bun": 800.9,
+      "deno": 674.1,
       "llrt": null,
-      "esrun": 586.4
+      "esrun": 609.1
     },
     "xml_small": {
       "node": 483.9,
@@ -1190,6 +1198,13 @@ export default {
       "deno": 147,
       "llrt": 156,
       "esrun": 103
+    },
+    "encoding_large": {
+      "node": 301.6,
+      "bun": 67.9,
+      "deno": 234.3,
+      "llrt": 213.4,
+      "esrun": 276.1
     }
   },
   "results_rss": {
@@ -1306,7 +1321,7 @@ export default {
       "esrun": 38
     },
     "encoding": {
-      "node": 62,
+      "node": 61,
       "bun": 59,
       "deno": 73,
       "llrt": 11,
@@ -1349,7 +1364,7 @@ export default {
     },
     "streams": {
       "node": 58,
-      "bun": 38,
+      "bun": 39,
       "deno": 67,
       "llrt": null,
       "esrun": 39
@@ -1502,9 +1517,9 @@ export default {
       "esrun": 31
     },
     "jsonl_stream": {
-      "node": 214,
-      "bun": 162,
-      "deno": 200,
+      "node": 215,
+      "bun": 164,
+      "deno": 204,
       "llrt": null,
       "esrun": 67
     },
@@ -1626,6 +1641,13 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "encoding_large": {
+      "node": 51,
+      "bun": 67,
+      "deno": 64,
+      "llrt": 11,
+      "esrun": 34
     }
   },
   "results_cov": {
@@ -1742,11 +1764,11 @@ export default {
       "esrun": 0.7
     },
     "encoding": {
-      "node": 6.5,
-      "bun": 2.9,
-      "deno": 3.4,
-      "llrt": 2.5,
-      "esrun": 6.1
+      "node": 5.7,
+      "bun": 14.6,
+      "deno": 7.6,
+      "llrt": 5.5,
+      "esrun": 6.9
     },
     "base64": {
       "node": 2.9,
@@ -1785,17 +1807,17 @@ export default {
     },
     "streams": {
       "node": 5.6,
-      "bun": 5.5,
-      "deno": 5.8,
+      "bun": 8.6,
+      "deno": 11.8,
       "llrt": null,
-      "esrun": 3.8
+      "esrun": 4.5
     },
     "compression": {
-      "node": 1.9,
-      "bun": 5.9,
-      "deno": 1.1,
+      "node": 5.4,
+      "bun": 1.3,
+      "deno": 6.1,
       "llrt": null,
-      "esrun": 4.7
+      "esrun": 12.3
     },
     "sha256": {
       "node": 1.2,
@@ -1938,11 +1960,11 @@ export default {
       "esrun": 0.9
     },
     "jsonl_stream": {
-      "node": 1,
-      "bun": 4.2,
-      "deno": 2,
+      "node": 2.5,
+      "bun": 4.1,
+      "deno": 8.7,
       "llrt": null,
-      "esrun": 1.9
+      "esrun": 16
     },
     "xml_small": {
       "node": 0.4,
@@ -2062,6 +2084,13 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "encoding_large": {
+      "node": 0.8,
+      "bun": 2.2,
+      "deno": 0.5,
+      "llrt": 0.7,
+      "esrun": 1
     }
   },
   "results_n": {
@@ -2374,11 +2403,11 @@ export default {
       "esrun": 3
     },
     "jsonl_stream": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
       "llrt": null,
-      "esrun": 3
+      "esrun": 5
     },
     "xml_small": {
       "node": 3,
@@ -2498,6 +2527,13 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "encoding_large": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     }
   },
   "results_floor_gap": {
@@ -2614,11 +2650,11 @@ export default {
       "esrun": 0.3
     },
     "encoding": {
-      "node": 0.3,
-      "bun": 0.5,
-      "deno": 1,
-      "llrt": 0,
-      "esrun": 0.9
+      "node": 2,
+      "bun": 0.4,
+      "deno": 1.2,
+      "llrt": 4.1,
+      "esrun": 1.6
     },
     "base64": {
       "node": 1.4,
@@ -2656,18 +2692,18 @@ export default {
       "esrun": 1.3
     },
     "streams": {
-      "node": 7.7,
+      "node": 3.2,
       "bun": 1.2,
-      "deno": 3.5,
+      "deno": 2.6,
       "llrt": null,
-      "esrun": 3
+      "esrun": 1
     },
     "compression": {
-      "node": 1.2,
-      "bun": 0.9,
-      "deno": 1,
+      "node": 0.1,
+      "bun": 0.2,
+      "deno": 2.1,
       "llrt": null,
-      "esrun": 2.5
+      "esrun": 2.3
     },
     "sha256": {
       "node": 0.5,
@@ -2810,11 +2846,11 @@ export default {
       "esrun": 1.1
     },
     "jsonl_stream": {
-      "node": 1,
-      "bun": 0.1,
-      "deno": 2.4,
+      "node": 3,
+      "bun": 0.6,
+      "deno": 6.6,
       "llrt": null,
-      "esrun": 0.5
+      "esrun": 3.1
     },
     "xml_small": {
       "node": 0.6,
@@ -2934,6 +2970,13 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "encoding_large": {
+      "node": 1.4,
+      "bun": 2.8,
+      "deno": 0.3,
+      "llrt": 0.6,
+      "esrun": 1.4
     }
   },
   "status": {
@@ -3365,6 +3408,13 @@ export default {
       "esrun": "ok"
     },
     "rss_loaded": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
+    "encoding_large": {
       "node": "ok",
       "bun": "ok",
       "deno": "ok",

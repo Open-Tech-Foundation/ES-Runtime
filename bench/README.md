@@ -267,14 +267,15 @@ timers        |     43.4 |     30.4 |    199.1 |     46.5 |     52.1
 url           |     48.6 |     70.0 |     98.2 |    110.6 |     86.7
 url_setter    |    123.2 |    251.1 |    186.5 |    109.6 |    178.8
 urlpattern    |    387.2 |    690.9 |   4812.4 |      n/a |    831.1
-encoding      |     66.4 |     21.4 |     68.5 |     69.7 |     82.2
+encoding      |     68.5 |     22.8 |     69.5 |     70.9 |     80.2
+encoding_large|    301.6 |     67.9 |    234.3 |    213.4 |    276.1
 base64        |      7.0 |     13.7 |      7.4 |     32.7 |     22.4
 buffers       |     13.6 |     20.0 |     12.4 |     73.3 |     12.3
 headers       |    440.3 |    268.8 |   1501.6 |    724.6 |    420.5
 formdata      |    297.6 |     19.0 |    383.0 |   1345.0 |     86.4
 date_intl     |    131.1 |     76.7 |    136.4 |      n/a |    144.0
-streams       |     22.1 |      8.1 |     14.1 |      n/a |      9.9
-compression   |    621.0 |    222.7 |    218.8 |      n/a |     67.9
+streams       |     22.2 |      8.2 |     15.3 |      n/a |     10.0
+compression   |    645.7 |    240.1 |    220.3 |      n/a |     70.5
 sha256        |    530.0 |    419.4 |    475.5 |    328.3 |    335.6
 crypto        |    173.1 |     82.9 |    131.8 |     24.8 |     32.7
 crypto_asym   |    331.8 |    198.1 |   2159.7 |   1029.2 |   1109.2
@@ -295,7 +296,7 @@ fsexists_small|     69.3 |      7.3 |     91.3 |     49.3 |     52.0
 fsexists_many |    265.9 |     30.9 |    371.7 |    203.4 |    227.2
 glob          |    204.5 |     29.7 |      n/a |      n/a |     49.6
 spawn         |    198.0 |     97.8 |    104.1 |     89.0 |     79.2
-jsonl_stream  |    614.5 |    791.0 |    658.1 |      n/a |    586.4
+jsonl_stream  |    618.7 |    800.9 |    674.1 |      n/a |    609.1
 xml_small     |    483.9 |    452.9 |    486.3 |     60.4 |    159.0
 xml_large     |    988.7 |    860.4 |    968.5 |    125.3 |    338.5
 yaml_small    |    186.0 |     96.6 |    179.1 |   4323.3 |    221.5
@@ -317,7 +318,7 @@ rss_loaded    |    132.0 |    162.0 |    147.0 |    156.0 |    103.0
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.14.0, bun 1.4.0, deno 2.8.3, llrt v0.8.0-beta, esrun 0.15.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.14.0, bun 1.4.0, deno 2.8.3, llrt v0.8.0-beta, esrun 0.16.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 

@@ -131,19 +131,44 @@ pub(crate) fn install(engine: &mut dyn Engine) -> Result<()> {
 
     // One-shot decode: no state to keep, so the decoder never leaves the op.
     engine.register_op(OpDecl::sync("decode_once", |args| {
-        let name = args
-            .first()
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
+        let enc = encoding_for(args.first().and_then(Value::as_str).unwrap_or(""))?;
         let fatal = matches!(args.get(2), Some(Value::Bool(true)));
         let ignore_bom = matches!(args.get(3), Some(Value::Bool(true)));
-        let bytes = match args.get(1) {
-            Some(Value::Bytes(b)) => b.as_slice(),
-            _ => &[][..],
+        // Consumes the argument vector to take the byte buffer by value: the
+        // UTF-8 path below turns it into the result string without copying it,
+        // which borrowing would make impossible.
+        let mut bytes = match args.into_iter().nth(1) {
+            Some(Value::Bytes(b)) => b,
+            _ => Vec::new(),
         };
-        let mut decoder = new_decoder(encoding_for(&name)?, ignore_bom);
-        Ok(Value::String(decode(&mut decoder, bytes, fatal, true)?))
+
+        // UTF-8 is what `new TextDecoder()` gives you, so this is the path
+        // almost every call takes — and for it a decode is a *validation*: the
+        // bytes are already the output. `String::from_utf8` checks them in place
+        // and hands back the same allocation.
+        //
+        // The general path cannot do that. It builds an `encoding_rs::Decoder`
+        // per call and transcodes into a fresh `String` sized by
+        // `max_utf8_buffer_length`, which for UTF-8 input is up to three times
+        // the input length — an allocation and a copy, to produce bytes
+        // identical to the ones it was given.
+        if enc == encoding_rs::UTF_8 {
+            if !ignore_bom && bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+                bytes.drain(..3);
+            }
+            return match String::from_utf8(bytes) {
+                Ok(s) => Ok(Value::String(s)),
+                Err(_) if fatal => Err(malformed()),
+                // Same replacement convention as the general path: U+FFFD per
+                // maximal subpart, which is what `utf8_decode` already relies on.
+                Err(e) => Ok(Value::String(
+                    String::from_utf8_lossy(e.as_bytes()).into_owned(),
+                )),
+            };
+        }
+
+        let mut decoder = new_decoder(enc, ignore_bom);
+        Ok(Value::String(decode(&mut decoder, &bytes, fatal, true)?))
     }))?;
 
     // Streaming decode. The registry holds one decoder per in-flight stream;
