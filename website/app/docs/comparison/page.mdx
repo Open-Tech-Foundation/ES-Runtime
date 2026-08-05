@@ -58,7 +58,7 @@ connects and then sends nothing is closed by esrun after **10s**, by Bun after
 interval, hence the <Partial />), while Deno was still holding it open past
 **150s**. An idle keep-alive connection goes at 6s on Node, 12s on Bun and 30s
 on esrun; Deno again held past 150s. Versions: esrun 0.15.0, Node 24.14.0, Bun
-1.4.0, Deno 2.8.3, on Linux, 2026-08-03.
+1.4.0 (canary), Deno 2.8.3, on Linux, 2026-08-03.
 
 **On the HTTP/3 row.** Bun leads here and esrun does not have it. `Bun.serve({
 http3: true })` serves real HTTP/3 over TLS — verified against `curl
