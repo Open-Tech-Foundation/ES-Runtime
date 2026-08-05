@@ -62,9 +62,55 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`Worker`** — the HTML dedicated worker, each with its own OS thread and its
+  own V8 isolate. `postMessage`, `onmessage`/`onmessageerror`/`onerror`,
+  `terminate()`; inside, a `DedicatedWorkerGlobalScope` with `self.postMessage`,
+  `onmessage`, `close()` and `name`. Messages carry the full structured-clone
+  type set — `Map`, `Set`, `Date`, `BigInt`, typed arrays, cycles — not JSON.
+
+  `Worker` is **not** in the WinterTC Minimum Common API; this follows the HTML
+  Standard, as Deno and Bun do. Module workers only: `type: "classic"` throws,
+  because this runtime evaluates every input as a module (SPEC §8) — the same
+  reason `require` is absent. Deno refuses them for the same reason.
+
+  Spawning is a provider (`WorkerHost`), not something the runtime does itself:
+  `runtime` still owns no thread and no loop. `ThreadWorkerHost` is the
+  reference implementation.
+
+  **A worker starts with no capabilities.** It is granted them explicitly, and
+  only ones its parent already holds:
+
+  ```js
+  new Worker(new URL("./w.js", import.meta.url), { permissions: ["net"] })
+  ```
+
+  So no chain of spawns widens the original grant — a difference from Deno,
+  which clones the parent's permissions unmodified. `--deny-workers` refuses the
+  spawn outright. A worker's own static imports still load, under the parent's
+  authority to read them, so deny-by-default does not mean single-file workers;
+  that is safe because instantiation runs no guest code.
+
+  A relative `new Worker("./w.js")` resolves against the entry module. Prefer
+  `new URL("./w.js", import.meta.url)`, which is exact — and what Vite, webpack
+  and Deno all recommend.
+
+  A live worker keeps the process alive, as in Node and Deno; `close()` or
+  `terminate()` ends it. `terminate()` interrupts the isolate, so it stops a
+  worker spinning in a synchronous loop or parked in `Atomics.wait`.
+
 - **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
   `ValueSerializer`, as the `__structuredSerialize`/`__structuredDeserialize`
   builtins.
+
+- `Runtime::instantiate_module_source` / `Runtime::begin_evaluation`, the two
+  halves of `load_module_source`. Instantiation runs no guest code, so an
+  embedder can load a program under one capability set and evaluate it under a
+  narrower one — which is how a worker's graph loads.
+
+- `Driver::drive_while`, for advancing a runtime until a condition rather than
+  to quiescence. An agent holding a pending op on purpose — a worker waiting on
+  `onmessage` — never reaches quiescence, so a failure that must be observed
+  while it runs cannot wait for the drive to return.
 
   It exists because an op cannot carry a JS object graph: op handlers receive
   the closed `Value` enum, so a `Map`, a cycle or a class instance arrives as

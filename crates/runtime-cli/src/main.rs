@@ -42,9 +42,9 @@ use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
     HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport,
     SystemClock, SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess,
-    SystemSignals, SystemSyncFileSystem, SystemWebSocket, TokioTimers, path,
+    SystemSignals, SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost, TokioTimers, path,
 };
-use es_runtime_providers::{Console, ConsoleLevel, Signal};
+use es_runtime_providers::{Console, ConsoleLevel, ProviderError, Signal, WorkerScope, WorkerSpec};
 use url::Url;
 
 const USAGE: &str = "\
@@ -1302,6 +1302,26 @@ async fn run() -> Result<(), String> {
         loader_impl = loader_impl.with_policy(ImportPolicy::from_file(std::path::Path::new(file))?);
     }
     let loader: Arc<dyn ModuleLoader> = Arc::new(loader_impl);
+
+    // Workers. Each gets its own thread and its own isolate, built by this
+    // factory *on that thread* — `V8Engine` is `!Send`, so it cannot be built
+    // here and moved. Passing the factory rather than reaching for the engine
+    // inside the provider is what keeps the worker path engine-agnostic.
+    //
+    // The snapshot is shared, not copied: `&'static [u8]` from `include_bytes!`,
+    // so a worker restores the same blob the main agent did and starts as
+    // cheaply.
+    let worker_providers = providers.clone();
+    let worker_loader = loader.clone();
+    let workers = Arc::new(ThreadWorkerHost::new(Arc::new(
+        move |spec: &WorkerSpec, scope: Arc<dyn WorkerScope>| {
+            let providers = worker_providers.clone().with_worker_scope(scope);
+            let runtime = Runtime::with_snapshot_and_limits(SNAPSHOT, spec.limits, providers)
+                .map_err(|e| ProviderError::Other(e.to_string()))?;
+            Ok((runtime, worker_loader.clone()))
+        },
+    )));
+    let providers = providers.with_workers(workers.clone());
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.

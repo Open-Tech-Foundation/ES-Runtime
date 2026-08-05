@@ -62,7 +62,7 @@ fn deny_all_denies_every_host_facing_capability() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out).trim(),
-        "read,write,imports,net,listen,env,run,signals"
+        "read,write,imports,net,listen,env,run,signals,workers"
     );
 }
 
@@ -217,7 +217,10 @@ fn allow_grants_a_capability_back_under_deny_all() {
         "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert_eq!(stdout(&out).trim(), "read,write,imports,listen,run,signals");
+    assert_eq!(
+        stdout(&out).trim(),
+        "read,write,imports,listen,run,signals,workers"
+    );
 }
 
 #[test]
@@ -283,6 +286,7 @@ fn allowing_everything_back_is_the_same_as_no_flags() {
         "--allow-env",
         "--allow-run",
         "--allow-signals",
+        "--allow-workers",
     ];
     let out = run(
         &flags,

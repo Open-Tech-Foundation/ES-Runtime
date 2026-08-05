@@ -44,6 +44,7 @@ mod timers;
 mod tls;
 #[cfg(test)]
 mod trace_capture;
+mod worker;
 
 pub mod path;
 pub mod testing;
@@ -68,3 +69,4 @@ pub use system_sync_fs::SystemSyncFileSystem;
 pub use system_websocket::SystemWebSocket;
 pub use task::TokioTaskSpawner;
 pub use timers::TokioTimers;
+pub use worker::{ThreadWorkerHost, WorkerRuntimeFactory};

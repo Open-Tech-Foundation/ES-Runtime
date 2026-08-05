@@ -81,6 +81,25 @@ impl Driver {
     /// execution-time watchdog that bounds that is a hardening-phase concern
     /// (SPEC.md §6.9), not the driver's.
     pub async fn run_to_completion(&self, runtime: &mut Runtime) -> DriveOutcome {
+        self.drive_while(runtime, |_| true).await
+    }
+
+    /// [`run_to_completion`](Self::run_to_completion), but stopping early when
+    /// `keep_going` returns `false` for the runtime after a tick.
+    ///
+    /// The reason this exists: an agent that keeps a pending op open on purpose
+    /// — a worker waiting on `onmessage`, a server holding a listener — never
+    /// reaches quiescence, so anything that must be observed *while* it runs
+    /// cannot wait for the drive to return. A worker whose entry module throws
+    /// is exactly that case: its parent's `error` event would otherwise not
+    /// fire until the worker was terminated.
+    ///
+    /// Whatever the predicate stops for is still in the returned outcome; a
+    /// caller that wants to carry on can call again on the same runtime.
+    pub async fn drive_while<F>(&self, runtime: &mut Runtime, keep_going: F) -> DriveOutcome
+    where
+        F: Fn(&mut Runtime) -> bool,
+    {
         let mut outcome = DriveOutcome::default();
 
         // Wire a real waker: a ready op-future will notify us so we re-tick at
@@ -113,6 +132,9 @@ impl Driver {
             // `has_pending_work` (re-read after processing) now also covers
             // in-flight dynamic imports awaiting their module's evaluation.
             if !runtime.has_pending_work() {
+                break;
+            }
+            if !keep_going(runtime) {
                 break;
             }
 

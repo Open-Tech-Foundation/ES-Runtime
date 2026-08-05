@@ -39,6 +39,7 @@ mod system_ops;
 mod timer;
 mod url_ops;
 mod urlpattern_ops;
+mod worker_ops;
 mod ws_ops;
 
 use std::cell::{Cell, RefCell};
@@ -58,7 +59,7 @@ pub use es_runtime_engine::{
 pub use es_runtime_providers::{
     ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console, ConsoleLevel, Entropy,
     FileSystem, HttpServerProvider, ModuleLoader, ModuleSource, NetProvider, NetTransport, Process,
-    Signals, Stdio, SyncFileSystem, WebSocketProvider,
+    Signals, Stdio, SyncFileSystem, WebSocketProvider, WorkerHost, WorkerScope,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -151,6 +152,8 @@ pub struct HostProviders {
     http_server: Option<Arc<dyn HttpServerProvider>>,
     web_socket: Option<Arc<dyn WebSocketProvider>>,
     commands: Option<Arc<dyn CommandProvider>>,
+    workers: Option<Arc<dyn WorkerHost>>,
+    worker_scope: Option<Arc<dyn WorkerScope>>,
 }
 
 impl HostProviders {
@@ -177,6 +180,8 @@ impl HostProviders {
             http_server: None,
             web_socket: None,
             commands: None,
+            workers: None,
+            worker_scope: None,
         }
     }
 
@@ -264,6 +269,28 @@ impl HostProviders {
         self
     }
 
+    /// Adds the [`WorkerHost`] backing the `Worker` global, gated on
+    /// [`Capability::Worker`]. Absent, `new Worker(...)` fails cleanly, like a
+    /// denied capability — an embedder that installs no host has no workers.
+    #[must_use]
+    pub fn with_workers(mut self, workers: Arc<dyn WorkerHost>) -> Self {
+        self.workers = Some(workers);
+        self
+    }
+
+    /// Marks this runtime as **being** a worker agent, and gives it its channel
+    /// back to the parent.
+    ///
+    /// Install this only on a runtime a [`WorkerHost`] is constructing. Its
+    /// presence is what puts `postMessage`/`onmessage`/`close()` on the global
+    /// scope, so setting it on the agent that drives the process would claim
+    /// that agent has a parent to talk to.
+    #[must_use]
+    pub fn with_worker_scope(mut self, scope: Arc<dyn WorkerScope>) -> Self {
+        self.worker_scope = Some(scope);
+        self
+    }
+
     fn clock(&self) -> Arc<dyn Clock> {
         self.clock.clone()
     }
@@ -308,10 +335,21 @@ impl HostProviders {
         self.web_socket.clone()
     }
 
+    fn workers(&self) -> Option<Arc<dyn WorkerHost>> {
+        self.workers.clone()
+    }
+
+    fn worker_scope(&self) -> Option<Arc<dyn WorkerScope>> {
+        self.worker_scope.clone()
+    }
+
     fn commands(&self) -> Option<Arc<dyn CommandProvider>> {
         self.commands.clone()
     }
 }
+
+/// The entry module's specifier, shared with the op that reports it.
+pub(crate) type EntrySlot = Rc<RefCell<Option<String>>>;
 
 /// The embeddable runtime: an engine plus the driven loop's scheduling state.
 pub struct Runtime {
@@ -331,6 +369,11 @@ pub struct Runtime {
     /// Shared by the initial graph load and dynamic `import()` so a module
     /// imported both statically and dynamically is the **same instance**.
     module_map: HashMap<String, ModuleId>,
+    /// The entry module's specifier, remembered so a relative `new Worker(url)`
+    /// has the base URL a browser would take from the document. `import.meta.url`
+    /// is the precise form (`new URL("./w.js", import.meta.url)`), and the one
+    /// to reach for from a non-entry module.
+    entry_specifier: EntrySlot,
     /// The loader used for static graph loading and dynamic `import()`. Stored
     /// (not passed per-call) so dynamic imports raised mid-execution can reach
     /// it — and shared with the `module_resolve_sync` op, which serves
@@ -363,6 +406,7 @@ impl Runtime {
             now_ms: 0,
             module_eval_pending: false,
             module_map: HashMap::new(),
+            entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
@@ -370,14 +414,16 @@ impl Runtime {
         // the pure-JS APIs on top of them (DECISIONS.md D8).
         let capabilities = runtime.capabilities.clone();
         let loader_slot = runtime.module_loader.clone();
+        let entry_slot = runtime.entry_specifier.clone();
         builtins::install(
             runtime.engine.as_mut(),
             &providers,
             capabilities,
             loader_slot,
+            entry_slot,
         )?;
         runtime.engine.eval(&prelude::source())?;
-        runtime.engine.eval(prelude::post_snapshot_source())?;
+        runtime.engine.eval(&prelude::post_snapshot_source())?;
         Ok(runtime)
     }
 
@@ -403,12 +449,12 @@ impl Runtime {
                 // names and order end up in the blob.
                 let capabilities = Rc::new(Cell::new(CapabilitySet::none()));
                 let loader_slot = Rc::new(RefCell::new(None));
-                builtins::install(engine, providers, capabilities, loader_slot).map_err(
-                    |e| match e {
+                let entry_slot = Rc::new(RefCell::new(None));
+                builtins::install(engine, providers, capabilities, loader_slot, entry_slot)
+                    .map_err(|e| match e {
                         Error::Engine(e) => e,
                         other => es_runtime_engine::Error::Internal(other.to_string()),
-                    },
-                )?;
+                    })?;
                 engine.eval(&prelude::source())?;
                 Ok(())
             },
@@ -450,6 +496,7 @@ impl Runtime {
             now_ms: 0,
             module_eval_pending: false,
             module_map: HashMap::new(),
+            entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
@@ -457,15 +504,17 @@ impl Runtime {
         // prelude is already present in the restored context.
         let capabilities = runtime.capabilities.clone();
         let loader_slot = runtime.module_loader.clone();
+        let entry_slot = runtime.entry_specifier.clone();
         builtins::install(
             runtime.engine.as_mut(),
             &providers,
             capabilities,
             loader_slot,
+            entry_slot,
         )?;
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
-        runtime.engine.eval(prelude::post_snapshot_source())?;
+        runtime.engine.eval(&prelude::post_snapshot_source())?;
         Ok(runtime)
     }
 
@@ -532,7 +581,33 @@ impl Runtime {
         entry_source: &str,
         loader: Arc<dyn ModuleLoader>,
     ) -> Result<()> {
+        let entry = self
+            .instantiate_module_source(entry_specifier, entry_source, loader)
+            .await?;
+        self.begin_evaluation(entry)
+    }
+
+    /// The first half of [`load_module_source`](Self::load_module_source):
+    /// compile the entry, load and compile its whole static graph, and
+    /// instantiate it. Returns the entry's id, for
+    /// [`begin_evaluation`](Self::begin_evaluation).
+    ///
+    /// **No guest code runs here** — instantiation only links bindings — which
+    /// is the reason the two halves are separable at all. An embedder that
+    /// loads a program under one capability set and runs it under a narrower
+    /// one (a worker agent loading its graph with the authority of the agent
+    /// that named it, then evaluating with its own) can only do that safely if
+    /// nothing the guest wrote executes in between.
+    pub async fn instantiate_module_source(
+        &mut self,
+        entry_specifier: &str,
+        entry_source: &str,
+        loader: Arc<dyn ModuleLoader>,
+    ) -> Result<ModuleId> {
         *self.module_loader.borrow_mut() = Some(loader);
+        if self.entry_specifier.borrow().is_none() {
+            *self.entry_specifier.borrow_mut() = Some(entry_specifier.to_string());
+        }
 
         let entry_id = self.engine.compile_module(entry_specifier, entry_source)?;
         self.module_map
@@ -542,7 +617,15 @@ impl Runtime {
             .await?;
 
         self.engine.instantiate_module(entry_id, &resolved)?;
-        self.engine.evaluate_module(entry_id)?;
+        Ok(entry_id)
+    }
+
+    /// The second half: start evaluating an instantiated entry module. Its top
+    /// level runs now, so whatever capability set is current is the one the
+    /// guest gets. Advance it with [`tick`](Self::tick) and read the outcome
+    /// from [`module_eval_state`](Self::module_eval_state).
+    pub fn begin_evaluation(&mut self, entry: ModuleId) -> Result<()> {
+        self.engine.evaluate_module(entry)?;
         self.module_eval_pending = true;
         // Anchor any timers the synchronous portion of evaluation created.
         self.drain_new_timers(self.now_ms);

@@ -60,12 +60,24 @@ pub enum Capability {
     /// can do. Withhold it from anything untrusted, and prefer a provider-side
     /// allowlist when it must be granted.
     Run,
+    /// Start a worker agent — its own thread and its own isolate
+    /// (`WorkerHost` provider; backs the `Worker` global).
+    ///
+    /// A resource grant rather than a reach into the host: a worker runs under
+    /// this runtime's confinement, not outside it like [`Run`](Self::Run). What
+    /// it costs is a thread and an isolate's heap, which is why it is gated at
+    /// all — an ungated `Worker` is an unbounded way to consume both.
+    ///
+    /// A worker's own capabilities are **not** inherited. It starts from
+    /// [`CapabilitySet::none`] and is granted explicitly, bounded above by the
+    /// parent's set, so a spawn can never widen what the spawner holds.
+    Worker,
 }
 
 impl Capability {
     /// All capabilities, in a fixed order. Used to build [`CapabilitySet::all`]
     /// and to keep the bit assignment in [`bit`](Self::bit) exhaustive.
-    const ALL: [Capability; 12] = [
+    const ALL: [Capability; 13] = [
         Capability::Clock,
         Capability::Entropy,
         Capability::Timers,
@@ -78,6 +90,7 @@ impl Capability {
         Capability::NetListen,
         Capability::Signals,
         Capability::Run,
+        Capability::Worker,
     ];
 
     /// The **host-facing** capabilities: everything that reaches past the
@@ -88,7 +101,11 @@ impl Capability {
     /// [`Timers`](Self::Timers), [`TaskSpawn`](Self::TaskSpawn)) back
     /// `Date.now()`, `crypto`, and `setTimeout` — no op gates them, and a flag
     /// that revoked them would deny nothing while implying otherwise.
-    pub const HOST_FACING: [Capability; 8] = [
+    ///
+    /// [`Worker`](Self::Worker) is here despite not reaching past the isolate:
+    /// a real op gates it, so `--deny-workers` denies something, and a host
+    /// bounding what a script may consume wants to name it.
+    pub const HOST_FACING: [Capability; 9] = [
         Capability::FileRead,
         Capability::FileWrite,
         Capability::FileSystem,
@@ -97,6 +114,7 @@ impl Capability {
         Capability::Env,
         Capability::Run,
         Capability::Signals,
+        Capability::Worker,
     ];
 
     /// This capability's name in the denial vocabulary — the suffix of `esrun`'s
@@ -117,6 +135,9 @@ impl Capability {
             Capability::Env => Some("env"),
             Capability::Run => Some("run"),
             Capability::Signals => Some("signals"),
+            // Plural, unlike the rest: what it gates is starting workers, and
+            // `--deny-worker` would read as naming one particular worker.
+            Capability::Worker => Some("workers"),
             Capability::Clock
             | Capability::Entropy
             | Capability::Timers
@@ -148,6 +169,7 @@ impl Capability {
             Capability::NetListen => 1 << 9,
             Capability::Signals => 1 << 10,
             Capability::Run => 1 << 11,
+            Capability::Worker => 1 << 12,
         }
     }
 }
@@ -366,7 +388,7 @@ mod tests {
         assert_eq!(
             CapabilitySet::all().without_host_access().denied_names(),
             [
-                "read", "write", "imports", "net", "listen", "env", "run", "signals"
+                "read", "write", "imports", "net", "listen", "env", "run", "signals", "workers"
             ]
         );
         let mut set = CapabilitySet::all();

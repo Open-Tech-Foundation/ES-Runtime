@@ -1127,6 +1127,143 @@ pub trait WebSocketProvider: Send + Sync {
     fn close_server(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
 
+/// Everything a [`WorkerHost`] needs to start one worker agent.
+#[derive(Clone, Debug, Default)]
+pub struct WorkerSpec {
+    /// Absolute URL of the worker's entry module, already resolved against the
+    /// spawning module by the parent — the parent held the authority to resolve
+    /// it, so the worker never needs `FileSystem` merely to start.
+    pub specifier: String,
+    /// The entry module's source, read by the parent — which held the authority
+    /// to read it. Passing it in means a spawn that cannot find or read the
+    /// file fails where the guest can see it, rather than inside a thread that
+    /// has already been created.
+    pub source: String,
+    /// The worker's `name`, as passed to `new Worker(url, { name })`.
+    pub name: String,
+    /// What the worker agent is allowed to do.
+    ///
+    /// **Never inherited.** The runtime builds this from the options the guest
+    /// passed, intersected with the spawning agent's own set, so a spawn cannot
+    /// widen what its parent holds. The default is
+    /// [`CapabilitySet::none`](es_runtime_common::CapabilitySet::none).
+    pub capabilities: es_runtime_common::CapabilitySet,
+    /// The set the worker's **static import graph** is loaded under, before
+    /// [`capabilities`](Self::capabilities) takes effect — the spawning agent's
+    /// own set, narrowed to what module loading needs.
+    ///
+    /// Without this a worker granted nothing could not read its own imports, so
+    /// deny-by-default would mean single-file workers only. The parent already
+    /// held that authority and is the one that named the module, so lending it
+    /// for the load grants nothing new.
+    ///
+    /// It is safe to lend precisely because instantiation runs no guest code:
+    /// the host loads and links the graph under this set, narrows to
+    /// [`capabilities`](Self::capabilities), and only then evaluates. Nothing
+    /// the worker's author wrote executes under the wider set.
+    pub load_capabilities: es_runtime_common::CapabilitySet,
+    /// Resource ceilings for the worker's isolate.
+    ///
+    /// [`can_block`](es_runtime_common::Limits::can_block) is `true` here: a
+    /// worker owns its thread, so `Atomics.wait` blocking it is exactly what
+    /// the call is for, where on the agent driving the loop it is a hang.
+    pub limits: es_runtime_common::Limits,
+}
+
+/// One event from a worker agent, surfaced by [`WorkerHost::recv`].
+pub enum WorkerIncoming {
+    /// A `postMessage` payload, in the engine's structured-clone format.
+    ///
+    /// Opaque here: the bytes are produced and consumed by the two isolates,
+    /// and this seam only moves them. They are **not** a wire format — see the
+    /// engine's `serialize` module.
+    Message(Vec<u8>),
+    /// The worker failed: an uncaught exception, or a module that would not
+    /// load. Surfaces on the parent's `Worker` as an `error` event.
+    Error {
+        /// A human-readable description, already formatted.
+        message: String,
+    },
+    /// The worker ended — `close()`, or its entry module reaching quiescence.
+    Closed,
+}
+
+/// Starts and drives worker agents: each its own thread, each its own isolate
+/// (backs the `Worker` global).
+///
+/// The runtime cannot do this itself and does not try to: it owns no thread and
+/// no loop (ARCHITECTURE §1/§5), so "start an agent" is an injected capability
+/// like every other reach outside the isolate. `spawn` is capability-checked on
+/// [`Capability::Worker`](es_runtime_common::Capability::Worker) before this is
+/// ever called; an embedder that installs no `WorkerHost` has no `Worker` at
+/// all. The remaining methods take an id that a checked `spawn` produced, so
+/// they need no capability of their own — the same reasoning as
+/// [`NetProvider`] reads and [`WebSocketProvider::send`].
+///
+/// This is the seam a scheduler-backed host replaces: an implementation is free
+/// to run agents as green tasks on one thread, or route them to other
+/// processes, so long as the observable contract holds.
+pub trait WorkerHost: Send + Sync {
+    /// Starts a worker agent; resolves to its id once the agent exists and its
+    /// entry module has begun evaluating.
+    ///
+    /// Deliberately does **not** wait for the module to finish: a worker whose
+    /// top level never settles (a server, a `for await` over a queue) is
+    /// ordinary, and `new Worker()` is not allowed to block on it.
+    fn spawn(&self, spec: WorkerSpec) -> BoxFuture<Result<u64, ProviderError>>;
+
+    /// Delivers one structured-clone payload to worker `id`. Ordered with
+    /// respect to other `post` calls on the same id.
+    fn post(&self, id: u64, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Awaits the next event from worker `id`. Resolves to `None` once the
+    /// worker is gone and its queue is drained, which ends the parent's pump.
+    fn recv(&self, id: u64) -> BoxFuture<Result<Option<WorkerIncoming>, ProviderError>>;
+
+    /// Stops worker `id` immediately, wherever it is — `Worker.terminate()`.
+    /// Idempotent, and safe to call on an already-finished worker.
+    ///
+    /// "Immediately" includes a worker running a synchronous loop or parked in
+    /// `Atomics.wait`: an implementation is expected to interrupt the agent,
+    /// not merely ask it to stop.
+    fn terminate(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Whether any spawned worker is still alive.
+    ///
+    /// The embedder's loop reads this to decide whether the process still has
+    /// work: a live worker keeps it running, as it does in Node and Deno, even
+    /// when the main module has reached quiescence.
+    fn has_live_workers(&self) -> bool;
+
+    /// Terminates every live worker and waits for their threads to finish.
+    /// Called during graceful shutdown, after which no agent is running.
+    fn shutdown(&self) -> BoxFuture<()>;
+}
+
+/// The other end of [`WorkerHost`], installed **only** in a worker agent's own
+/// runtime — the `DedicatedWorkerGlobalScope` half.
+///
+/// Its presence is what tells the prelude it is running inside a worker: on the
+/// agent that drives the process there is no `WorkerScope`, so no global
+/// `postMessage`, no `onmessage`, no `close()`. That is the spec's own way of
+/// distinguishing the two, and it is why there is no `isMainThread` flag —
+/// which is a Node-ism, and absent from HTML, Deno and Bun alike.
+pub trait WorkerScope: Send + Sync {
+    /// This worker's `name`, from `new Worker(url, { name })`.
+    fn name(&self) -> String;
+
+    /// Sends one structured-clone payload to the parent agent.
+    fn post(&self, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Awaits the next payload from the parent. `None` once the parent is gone.
+    fn recv(&self) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;
+
+    /// `self.close()`: stop this worker after the current task. The agent
+    /// finishes what it is doing and its loop then ends — unlike
+    /// [`WorkerHost::terminate`], which interrupts from outside.
+    fn close(&self);
+}
+
 /// A body crossing the [`HttpServerProvider`] seam, in either direction.
 ///
 /// Mirrors the outbound [`RequestBody`]: [`Bytes`](HttpServerBody::Bytes) is the

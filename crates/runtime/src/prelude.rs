@@ -59,6 +59,14 @@ pub(crate) fn source() -> String {
 /// missing from every restored context. It runs after [`source`] — on the fresh
 /// path directly, on the restored path against the deserialized context — where
 /// the namespace and the engine's `__wasm_pending` builtin are both present.
-pub(crate) fn post_snapshot_source() -> &'static str {
-    include_str!("prelude/wasm.js")
+/// `worker.js` is here for a different reason: which half of it installs
+/// depends on whether *this* isolate is a worker, which the snapshot cannot
+/// know — one blob is restored into both the agent driving the process and
+/// every worker agent. It asks `__ops.worker_scope_info()` at launch instead.
+pub(crate) fn post_snapshot_source() -> String {
+    [
+        include_str!("prelude/wasm.js"),
+        include_str!("prelude/worker.js"),
+    ]
+    .join("\n")
 }

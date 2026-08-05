@@ -26,6 +26,7 @@ pub(crate) fn install(
     providers: &HostProviders,
     capabilities: Rc<Cell<CapabilitySet>>,
     module_loader: crate::module_ops::LoaderSlot,
+    entry_specifier: crate::EntrySlot,
 ) -> Result<()> {
     install_console(engine, providers.console())?;
     install_performance(engine, providers.clock())?;
@@ -33,7 +34,7 @@ pub(crate) fn install(
     // base64.
     crate::url_ops::install(engine)?;
     // import.meta.resolve for specifiers that need the loader (D41).
-    crate::module_ops::install(engine, module_loader)?;
+    crate::module_ops::install(engine, module_loader.clone())?;
     crate::urlpattern_ops::install(engine)?;
     crate::encoding_ops::install(engine)?;
     crate::base64_ops::install(engine)?;
@@ -59,7 +60,7 @@ pub(crate) fn install(
         providers.process(),
         providers.signals(),
         interrupt,
-        capabilities,
+        capabilities.clone(),
     )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
     crate::fs_ops::install(engine, providers.file_system())?;
@@ -75,6 +76,18 @@ pub(crate) fn install(
     // runtime:system ops: spawn (Run); read/write/wait/kill by child id.
     crate::system_ops::install(engine, providers.commands())?;
     crate::serialization_ops::install(engine)?;
+    // Worker ops: spawn (Worker capability); post/recv/terminate by worker id.
+    // The scope half is installed unconditionally but only *works* on a runtime
+    // a WorkerHost built — that asymmetry is what tells the prelude which agent
+    // it is running on.
+    crate::worker_ops::install(
+        engine,
+        providers.workers(),
+        providers.worker_scope(),
+        capabilities,
+        module_loader,
+        entry_specifier,
+    )?;
     Ok(())
 }
 
