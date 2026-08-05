@@ -237,58 +237,82 @@ run to run (see Sources for the rationale):
 
 ## Representative results
 
-Times in **milliseconds, lower is better** (`rss` in MB). One Linux x86-64 box;
-numbers are indicative and will vary by machine — re-run locally for your own.
+<!-- generated: bench/sync-readme-table.mjs — do not edit by hand -->
+
+Times in **milliseconds, lower is better** (`rss`/`rss_loaded` in MB), from the
+same run that feeds the site. One machine; re-run locally for your own numbers.
 
 ```
-workload    |      node |       bun |      deno |      llrt |     esrun
------------+-----------+-----------+-----------+-----------+-----------
-startup     |      18.8 |       9.5 |      25.2 |       3.5 |       6.9
-bigscript   |      32.6 |      22.9 |      36.1 |      11.6 |      19.5
-compute     |     213.2 |     128.3 |     224.3 |    2390.8 |     253.9
-json        |     317.6 |     234.3 |     247.0 |     756.0 |     227.0
-jsonbig     |     768.9 |     669.5 |     603.9 |    1894.8 |     681.0
-sha256      |     708.4 |     543.6 |     614.6 |     365.5 |     364.4
-crypto      |     238.3 |     113.2 |     174.9 |      27.9 |      35.2
-url         |      55.0 |      84.4 |     115.4 |     123.2 |      99.3
-encoding    |      77.2 |      24.9 |      79.7 |      77.2 |      85.2
-base64      |       7.5 |      15.2 |       8.3 |      35.5 |      71.5
-structured  |     242.5 |     298.2 |     292.3 |     358.1 |     335.9
-async       |      65.3 |      58.4 |      39.4 |     768.9 |      33.6
-timers      |       7.4 |       8.3 |      27.0 |       4.9 |       5.5
-streams     |      25.3 |      22.5 |      15.8 |       n/a |      11.9
-fetch       |     101.7 |      22.0 |      42.2 |      24.3 |      42.9
-http        |     439.8 |      60.0 |     126.4 |       n/a |     103.4
-fsread_small |     169.5 |      49.2 |      54.3 |       n/a |      53.9
-fsread_large |      24.8 |       9.4 |      29.2 |       n/a |      33.3
-fswrite_small |     235.9 |      22.0 |     131.0 |       n/a |     103.8
-fswrite_large |      70.3 |      28.3 |      54.8 |       n/a |      28.8
-fsappend_small |     178.7 |      54.2 |      71.6 |       n/a |      44.5
-fsappend_large |      57.8 |      23.2 |      41.5 |       n/a |      21.2
-fsstat_small |     105.2 |      68.8 |     121.5 |       n/a |      79.6
-fsstat_large |       0.7 |       0.2 |       0.6 |       n/a |       0.3
-fsexists_small |      98.1 |      64.1 |     127.0 |       n/a |      59.7
-fsexists_large |       0.7 |       0.2 |       0.9 |       n/a |       0.2
-glob        |     306.0 |      43.1 |       n/a |       n/a |      68.1
-rss         |        41 |        29 |        54 |        11 |        19
+workload      |     node |      bun |     deno |     llrt |    esrun
+--------------+----------+----------+----------+----------+----------
+startup       |     17.3 |     11.0 |     23.3 |      3.4 |      7.9
+bigscript     |     28.8 |     22.9 |     32.2 |     11.0 |     19.1
+modules       |     76.7 |     27.1 |     40.0 |     14.0 |     24.4
+compute       |    202.0 |    112.3 |    211.6 |   2145.4 |    235.7
+json          |    274.8 |    190.4 |    207.4 |    653.5 |    192.6
+jsonbig       |    671.4 |    470.8 |    536.5 |   1766.6 |    588.9
+regex         |     66.7 |     20.0 |     64.4 |   1206.3 |     63.1
+strings       |     63.9 |     80.2 |     65.7 |    170.1 |     63.8
+structured    |    216.9 |    275.7 |    269.6 |    328.2 |    308.1
+errors        |   1407.6 |    354.1 |   4314.4 |    313.3 |    385.1
+async         |     57.2 |     50.6 |     32.0 |    677.9 |     28.9
+timers        |     40.5 |     29.2 |    197.1 |     46.2 |     51.6
+url           |     48.0 |     73.1 |    107.2 |    113.3 |     87.4
+url_setter    |    126.5 |    261.5 |    194.2 |    113.8 |    263.2
+urlpattern    |    392.7 |    700.8 |   4904.9 |      n/a |    853.6
+encoding      |     66.8 |     21.6 |     67.8 |     72.3 |     84.8
+base64        |      7.1 |     13.9 |      7.7 |     33.0 |     22.5
+buffers       |     14.0 |     20.5 |     13.3 |     73.2 |     12.9
+headers       |    458.2 |    276.9 |   1557.9 |    750.6 |    440.0
+formdata      |    308.1 |     19.4 |    396.2 |   1391.2 |     92.7
+date_intl     |    138.0 |     82.0 |    137.9 |      n/a |    146.9
+streams       |     22.4 |      8.3 |     15.0 |      n/a |     10.1
+compression   |    639.7 |    236.0 |    222.9 |      n/a |     69.0
+sha256        |    583.5 |    437.7 |    496.4 |    335.9 |    339.6
+crypto        |    163.1 |     90.7 |    136.3 |     25.0 |     33.8
+crypto_asym   |    337.0 |    213.0 |   2217.5 |   1045.1 |   1120.3
+crypto_kdf    |     74.2 |     68.7 |     73.2 |    103.1 |    101.1
+fetch         |     89.1 |     18.4 |     35.2 |     18.5 |     41.2
+fetch_upload  |    107.9 |     39.9 |     34.1 |      n/a |     41.0
+http          |    377.8 |     51.0 |     98.5 |      n/a |    105.5
+websocket     |    603.6 |    404.2 |    575.8 |      n/a |    716.7
+fsread_small  |    119.5 |     36.8 |     39.6 |     26.9 |     39.9
+fsread_large  |     60.2 |     25.3 |     66.7 |     14.0 |     57.5
+fswrite_small |    173.6 |     12.8 |     86.2 |     97.3 |     73.3
+fswrite_large |     58.0 |     20.4 |     41.0 |     51.0 |     20.7
+fsappend_small|    110.2 |     30.7 |     39.6 |      n/a |     30.6
+fsappend_large|     22.5 |      7.7 |     15.5 |      n/a |      5.7
+fsstat_small  |     72.3 |     50.8 |     89.4 |     42.6 |     66.6
+fsstat_many   |    284.4 |    206.8 |    355.1 |    181.7 |    294.4
+fsexists_small|     69.2 |      7.3 |    100.1 |     51.1 |     51.5
+fsexists_many |    283.3 |     30.7 |    370.0 |    210.2 |    229.2
+glob          |    204.1 |     32.4 |      n/a |      n/a |     49.9
+spawn         |    218.9 |     99.5 |    112.7 |     95.0 |     86.6
+jsonl_stream  |    635.1 |    770.3 |    671.8 |      n/a |    567.5
+xml_small     |    486.5 |    460.2 |    502.7 |     60.7 |    162.8
+xml_large     |    956.2 |    864.1 |    963.3 |    126.4 |    335.0
+yaml_small    |    191.1 |     97.0 |    180.7 |   4397.7 |    225.2
+yaml_large    |    386.2 |    191.9 |    370.2 |   8647.2 |    440.3
+toml_small    |    205.9 |     54.1 |    216.1 |   4163.8 |    161.4
+toml_large    |    420.9 |    105.1 |    445.5 |   8443.5 |    327.3
+msgpack_small |     41.5 |     62.5 |     39.5 |   1109.3 |     48.3
+msgpack_large |     42.1 |     57.3 |     39.6 |   1113.6 |     52.9
+protobuf_small|    112.3 |    108.4 |    183.9 |   1767.1 |     75.3
+protobuf_large|    610.2 |    515.9 |    936.6 |   8807.8 |    415.3
+wasm_compile  |     45.9 |     66.1 |     35.7 |      n/a |     40.0
+wasm_call     |     89.7 |    147.9 |     79.5 |      n/a |     80.8
+wasm_mem      |    203.6 |    363.6 |    240.0 |      n/a |    241.2
+wasi_start    |    269.3 |    606.8 |     45.9 |      n/a |     45.8
+wasi_syscall  |     44.4 |   4741.1 |     17.1 |      n/a |     52.5
+rss           |     41.0 |     22.0 |     54.0 |     11.0 |     22.0
+rss_loaded    |    132.0 |    161.0 |    147.0 |    156.0 |    102.0
 ```
 
-(node v24, bun 1.3, deno 2.8, llrt 0.8-beta, esrun 0.2; n/a = API the runtime
-lacks. LLRT's QuickJS has no JIT — hence `compute`/`json`/`async` — and no
-streams/HTTP-server/`fs` here.)
+Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-The wasm/WASI rows were added later and measured in their own run (same box,
-node v24, bun 1.4, deno 2.8, esrun 0.10):
+Measured: node v24.14.0, bun 1.4.0, deno 2.8.3, llrt v0.8.0-beta, esrun 0.15.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
-```
-workload      |      node |       bun |      deno |      llrt |     esrun
---------------+-----------+-----------+-----------+-----------+-----------
-wasm_compile  |      46.6 |      70.2 |      36.1 |       n/a |     144.0
-wasm_call     |      91.6 |     151.3 |      81.5 |       n/a |      79.8
-wasm_mem      |     207.4 |     370.7 |     244.0 |       n/a |     244.4
-wasi_start    |     282.9 |     641.1 |      48.1 |       n/a |      48.1
-wasi_syscall  |      44.6 |    4806.5 |      17.3 |       n/a |      55.6
-```
+<!-- /generated -->
 
 ## Interpretation
 
@@ -337,18 +361,28 @@ WinterTC surface**, not "fastest at everything."
 
 **Where esrun trails, and why:**
 
-- **compute (~17% behind Node, same engine).** Flag experiments (`--maglev`,
-  `--max-opt`, …) moved nothing — Maglev and concurrent compilation are already
-  on. The residual is attributed to the prebuilt `rusty_v8` library's build
-  configuration (e.g. pointer compression, which Node builds without) and V8
-  version skew — not addressable from this repo. Far behind Bun's JavaScriptCore.
-- **wasm_compile (144 ms vs Deno's 36, same engine).** Not the async pipeline:
-  compiling the same 60 modules with the synchronous `new WebAssembly.Module`
-  costs 29 ms on esrun against 6 ms on Deno and 5 ms on Node, so the ~5× is in
-  wasm codegen itself, not in tier-up or promise scheduling. No V8 flags are set
-  anywhere in this repo, so this lands with `compute`: attributed to the prebuilt
-  `rusty_v8` library's build configuration rather than to anything on our side.
-  Worth revisiting if wasm payloads become a hot path.
+- **compute (~15% behind Node, same engine) is entirely `Math.log`.** Splitting
+  the row's loop into its parts settles it: `Math.sqrt` costs 27.3 ms on esrun
+  against Node's 27.0 and Deno's 27.6, integer work 11.2 against 11.3 and 11.0,
+  float multiply 40.8 against 41.0 and 40.7 — identical, to the tenth of a
+  millisecond. `Math.log` alone is 221.9 against 167.8 and 176.0, and it is 94%
+  of the row.
+
+  So this is one transcendental function in the V8 build we consume, not
+  anything about how esrun runs JS. Flag experiments (`--maglev`, `--max-opt`, …)
+  moved nothing, which fits — there is no codegen difference to find. The three
+  runtimes are on three V8 versions (Node 13.6, Deno 14.9, ours 15.0) and the
+  cost tracks the version. Not addressable from this repo, and worth knowing
+  before anyone reads `compute` as a general engine verdict: at this workload's
+  mix it is a `Math.log` microbenchmark.
+- **wasm_compile — was 144 ms against Deno's 36; now 40.** This was previously
+  recorded here as wasm codegen rather than the async pipeline, on the evidence
+  that the *synchronous* `new WebAssembly.Module` was also several times slower.
+  That inference was wrong: sync compilation forgoes V8's background threads, so
+  it measures something else, and the async row's gap was the driver parking its
+  1 ms fallback on every compile while waiting for a completion V8 announces
+  through a foreground task that touches no waker. Fixed in the driver; esrun now
+  lands level with Deno and ahead of Node.
 - **wasi_syscall (56 ms vs Deno's 17).** Each preview-1 call is a JS function
   reached from wasm that writes its result into linear memory through a
   `DataView`; Node and Deno drop into native implementations. It is the price of

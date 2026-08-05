@@ -161,3 +161,9 @@ node validate-bench-data.mjs "$TMP_COMBINED" ../website
 } > "$OUT"
 
 echo "wrote $OUT" >&2
+
+# The README quotes the same numbers, so it is regenerated from the module that
+# was just written rather than kept in step by hand. It had rotted badly when it
+# was not: still showing base64 at 71.5ms from before that workload had a Rust
+# implementation, and rows the suite no longer has.
+node sync-readme-table.mjs
