@@ -60,13 +60,22 @@ fn encode(s: &str) -> Option<String> {
 /// `atob`: decode to a string of U+0000–U+00FF code points. `None` on invalid
 /// input.
 fn decode(s: &str) -> Option<String> {
-    // Strip ASCII whitespace, which the spec ignores.
-    let mut cleaned = Vec::with_capacity(s.len());
-    for &b in s.as_bytes() {
-        if !matches!(b, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ') {
-            cleaned.push(b);
-        }
+    const fn is_ws(b: u8) -> bool {
+        matches!(b, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')
     }
+
+    // Strip ASCII whitespace, which the spec ignores — but only when there is
+    // some. Copying every byte through a `Vec::push` cost more than the base64
+    // decode it was preparing for (2.2µs against Node's 0.36µs on the bench's
+    // 1 KiB row); a base64 string with whitespace in it is the rare shape, and
+    // the common one now borrows the input untouched.
+    let borrowed: Vec<u8>;
+    let cleaned: &[u8] = if s.as_bytes().iter().copied().any(is_ws) {
+        borrowed = s.as_bytes().iter().copied().filter(|&b| !is_ws(b)).collect();
+        &borrowed
+    } else {
+        s.as_bytes()
+    };
 
     if cleaned.len() % 4 == 1 {
         return None;
@@ -78,7 +87,11 @@ fn decode(s: &str) -> Option<String> {
 
     let decoded = STANDARD_NO_PAD.decode(&cleaned[..end]).ok()?;
 
-    // Fast path: if the output is valid UTF-8 (e.g. pure ASCII), this is zero-copy.
+    // Fast path: if the output is valid UTF-8 (e.g. pure ASCII), this is
+    // zero-copy, and `v8::String::new` then recognizes the ASCII and builds a
+    // one-byte string directly. Returning the raw bytes for V8 to adopt as
+    // Latin-1 was tried and measured no faster, because that ASCII fast path
+    // already exists — so this keeps the simpler type.
     match String::from_utf8(decoded) {
         Ok(s) => Some(s),
         Err(e) => {
@@ -117,9 +130,9 @@ mod tests {
         let latin1: String = (0u8..=255).map(char::from).collect();
         let encoded = encode(&latin1).expect("latin1 encodes");
         assert_eq!(decode(&encoded).as_deref(), Some(latin1.as_str()));
-        assert_eq!(encode("héllo"), Some("aOlsbG8=".into())); // é = U+00E9, in range
-        assert_eq!(encode("✓"), None);
-        assert_eq!(encode("😀"), None);
+        assert_eq!(encode("h\u{e9}llo"), Some("aOlsbG8=".into())); // \u{e9} = U+00E9, in range
+        assert_eq!(encode("\u{2713}"), None);
+        assert_eq!(encode("\u{1f600}"), None);
     }
 
     #[test]
@@ -134,7 +147,7 @@ mod tests {
     fn decode_rejects_invalid() {
         assert_eq!(decode("Zm9vv"), None); // len % 4 == 1
         assert_eq!(decode("Zm.v"), None); // non-alphabet char
-        assert_eq!(decode("Zm9é"), None); // non-ASCII
+        assert_eq!(decode("Zm9\u{e9}"), None); // non-ASCII
         assert_eq!(decode("=Zm9v"), None); // interior padding
     }
 

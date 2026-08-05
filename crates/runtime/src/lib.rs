@@ -119,6 +119,16 @@ pub struct TickStatus {
     /// The earliest pending timer deadline (embedder ms), if any — a hint for
     /// how long the embedder may park.
     pub next_timer_deadline_ms: Option<u64>,
+    /// Whether V8 is still finishing work on its *own* background threads —
+    /// async WebAssembly compilation today.
+    ///
+    /// This is pending work no waker can announce. An op future signals the
+    /// driver's waker when it becomes ready; V8 instead posts a foreground task
+    /// that only [`tick`](Runtime::tick) discovers, and it does so without
+    /// touching anything the embedder is parked on. An embedder that parks on a
+    /// timeout while this is set therefore adds its whole park to the latency of
+    /// every compile — so it should re-tick promptly instead of sleeping.
+    pub v8_background_work: bool,
 }
 
 /// The host providers a [`Runtime`] consumes for its web APIs.
@@ -846,6 +856,7 @@ impl Runtime {
             uncaught_errors,
             has_pending_work: self.has_pending_work(),
             next_timer_deadline_ms: self.timers.next_deadline_ms(),
+            v8_background_work: self.engine.has_pending_wasm(),
         }
     }
 

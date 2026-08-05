@@ -116,6 +116,24 @@ impl Driver {
                 break;
             }
 
+            // V8 finishing work on its own threads is pending work no waker can
+            // announce: it lands as a foreground task that only `tick` finds,
+            // and posting it touches nothing we are parked on. Parking on a
+            // timeout here therefore charges the whole park to every async wasm
+            // compile — measured at 1.78ms per compile on the bench's 60-module
+            // row, against V8's own cost of about 0.6ms, which is the entire
+            // reason esrun trailed Node and Deno there while running the same
+            // compiler. Yield instead of sleeping: the scheduler comes back in
+            // microseconds and the next tick drains the queue.
+            //
+            // Checked before the timer branch on purpose — an unrelated pending
+            // timer must not put its deadline between a finished compile and the
+            // promise it settles.
+            if status.v8_background_work {
+                tokio::task::yield_now().await;
+                continue;
+            }
+
             match status.next_timer_deadline_ms {
                 Some(deadline) => {
                     // Sleep until the timer is due, but let a ready async op cut

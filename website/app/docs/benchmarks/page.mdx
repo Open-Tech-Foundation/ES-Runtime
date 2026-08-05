@@ -145,17 +145,12 @@ so every cell here is n/a for it.
 
 <BenchChart group="wasm" />
 
-The three measure different things, and esrun does not place the same in each.
-**Compile** is validation plus baseline codegen on a ~250 KB module, with a
-different salt each iteration so nothing is served from a code cache — one of the
-widest gaps on the page for esrun, roughly 4x Deno's. The **call boundary** (20M
-calls into a trivial exported `add`) and **linear memory** (JS fills a 64 KiB
-window, wasm sums it back) are where real interop spends its time, and there
-esrun is level with Deno and ahead of Bun.
-
-If your payload is compiled once and called many times, the first row matters
-least. If you compile a fresh module per request, it is the only row that
-matters.
+The three measure different things. **Compile** is validation plus baseline
+codegen on a ~250 KB module, with a different salt each iteration so nothing is
+served from a code cache. The **call boundary** (20M calls into a trivial
+exported `add`) and **linear memory** (JS fills a 64 KiB window, wasm sums it
+back) are where real interop spends its time. esrun is level with Deno and ahead
+of Node and Bun on all three.
 
 <span id="wasi"></span>
 

@@ -48,6 +48,27 @@ namespace) is unstable and may change between minor releases until the API freez
   All four live under an **Internals** section in the docs sidebar, one page per
   subsystem.
 
+### Fixed
+
+- **Async WebAssembly compilation was paying a millisecond of park latency per
+  compile.** V8 compiles on its own background threads and reports completion as
+  a *foreground task*, which `tick` drains — but posting that task touches
+  nothing the driver is parked on, unlike an op future, which signals the
+  driver's waker. So the loop fell to its 1ms fallback sleep and charged it to
+  every compile: 1.78ms each on the bench's 60-module row, against V8's own cost
+  of about 0.6ms. `TickStatus` now reports V8 background work in flight and the
+  driver yields instead of sleeping while it is.
+
+  `wasm_compile` **143ms → 40ms**, from three times Deno's to level with it and
+  ahead of Node — running the same compiler it always was. This was never a
+  compiler gap; it was the loop declining to come back and look.
+
+- **`atob` copied its input a byte at a time.** The whitespace strip the spec
+  calls for pushed every byte through a `Vec`, which cost more than the base64
+  decode it was preparing. It now scans first and borrows the input untouched
+  when there is no whitespace to strip, which is nearly always. `base64` 29.5ms
+  → 22.2ms.
+
 ### Added
 
 - **The benchmark data describes itself, and the site renders from it.**

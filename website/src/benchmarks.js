@@ -143,11 +143,11 @@ export default {
       "esrun": 84.8
     },
     "base64": {
-      "node": 7.2,
-      "bun": 13.6,
+      "node": 7.1,
+      "bun": 13.9,
       "deno": 7.7,
-      "llrt": 32.8,
-      "esrun": 29.5
+      "llrt": 33,
+      "esrun": 22.5
     },
     "date_intl": {
       "node": 138,
@@ -388,39 +388,39 @@ export default {
       "esrun": 567.5
     },
     "wasm_compile": {
-      "node": 47.1,
-      "bun": 67.1,
-      "deno": 36.1,
+      "node": 45.9,
+      "bun": 66.1,
+      "deno": 35.7,
       "llrt": null,
-      "esrun": 142.9
+      "esrun": 40
     },
     "wasm_call": {
-      "node": 90.2,
-      "bun": 148.4,
-      "deno": 80,
+      "node": 89.7,
+      "bun": 147.9,
+      "deno": 79.5,
       "llrt": null,
-      "esrun": 80.2
+      "esrun": 80.8
     },
     "wasm_mem": {
-      "node": 204.9,
-      "bun": 366.4,
-      "deno": 241.7,
+      "node": 203.6,
+      "bun": 363.6,
+      "deno": 240,
       "llrt": null,
-      "esrun": 242.1
+      "esrun": 241.2
     },
     "wasi_start": {
-      "node": 272.6,
-      "bun": 597.2,
+      "node": 269.3,
+      "bun": 606.8,
       "deno": 45.9,
       "llrt": null,
-      "esrun": 45.9
+      "esrun": 45.8
     },
     "wasi_syscall": {
-      "node": 44.6,
-      "bun": 4751.2,
-      "deno": 17.3,
+      "node": 44.4,
+      "bun": 4741.1,
+      "deno": 17.1,
       "llrt": null,
-      "esrun": 53.4
+      "esrun": 52.5
     },
     "rss_load": {
       "node": 135.5,
@@ -1015,11 +1015,11 @@ export default {
       "esrun": 7.1
     },
     "base64": {
-      "node": 6,
-      "bun": 4,
-      "deno": 3,
-      "llrt": 5.5,
-      "esrun": 9.3
+      "node": 27.1,
+      "bun": 37.2,
+      "deno": 39.6,
+      "llrt": 35.7,
+      "esrun": 32.1
     },
     "date_intl": {
       "node": 1,
@@ -1260,39 +1260,39 @@ export default {
       "esrun": 3.6
     },
     "wasm_compile": {
-      "node": 2.8,
-      "bun": 3.5,
-      "deno": 6.8,
+      "node": 3.1,
+      "bun": 1.4,
+      "deno": 5.3,
       "llrt": null,
-      "esrun": 0.4
+      "esrun": 0.8
     },
     "wasm_call": {
-      "node": 3,
-      "bun": 0.3,
-      "deno": 1.8,
+      "node": 0.5,
+      "bun": 1.4,
+      "deno": 2,
       "llrt": null,
-      "esrun": 1.7
+      "esrun": 2.9
     },
     "wasm_mem": {
-      "node": 1.6,
-      "bun": 1.8,
-      "deno": 0.2,
+      "node": 0.4,
+      "bun": 0.3,
+      "deno": 0.5,
       "llrt": null,
-      "esrun": 0.5
+      "esrun": 0.3
     },
     "wasi_start": {
-      "node": 1.2,
-      "bun": 2,
-      "deno": 1.9,
+      "node": 3.1,
+      "bun": 0.7,
+      "deno": 1,
       "llrt": null,
-      "esrun": 2.4
+      "esrun": 2.5
     },
     "wasi_syscall": {
-      "node": 1.7,
-      "bun": 0.1,
-      "deno": 2.9,
+      "node": 3.4,
+      "bun": 0.3,
+      "deno": 0.6,
       "llrt": null,
-      "esrun": 4.3
+      "esrun": 0.9
     },
     "rss_load": {
       "node": 2.5,
@@ -1887,11 +1887,11 @@ export default {
       "esrun": 0.6
     },
     "base64": {
-      "node": 2.8,
-      "bun": 0,
-      "deno": 2.6,
-      "llrt": 0.6,
-      "esrun": 0.7
+      "node": 4.2,
+      "bun": 0.7,
+      "deno": 3.9,
+      "llrt": 10,
+      "esrun": 2.2
     },
     "date_intl": {
       "node": 0.5,
@@ -2132,39 +2132,39 @@ export default {
       "esrun": 2.1
     },
     "wasm_compile": {
-      "node": 0.6,
-      "bun": 0.1,
-      "deno": 1.1,
+      "node": 0.4,
+      "bun": 1.8,
+      "deno": 7,
       "llrt": null,
-      "esrun": 0.3
+      "esrun": 0.5
     },
     "wasm_call": {
-      "node": 0.2,
-      "bun": 0.3,
-      "deno": 0,
+      "node": 0.9,
+      "bun": 1.4,
+      "deno": 2.6,
       "llrt": null,
-      "esrun": 2.2
+      "esrun": 0.2
     },
     "wasm_mem": {
-      "node": 0.3,
-      "bun": 1.1,
-      "deno": 0.4,
+      "node": 0.7,
+      "bun": 0.5,
+      "deno": 0.6,
       "llrt": null,
-      "esrun": 0.6
+      "esrun": 0.5
     },
     "wasi_start": {
-      "node": 0,
-      "bun": 1.8,
-      "deno": 2.4,
+      "node": 1,
+      "bun": 0.5,
+      "deno": 0,
       "llrt": null,
-      "esrun": 3.5
+      "esrun": 1.1
     },
     "wasi_syscall": {
-      "node": 2.7,
+      "node": 1.1,
       "bun": 0.1,
-      "deno": 1.7,
+      "deno": 0.6,
       "llrt": null,
-      "esrun": 0.9
+      "esrun": 1.1
     },
     "rss_load": {
       "node": 2.7,
