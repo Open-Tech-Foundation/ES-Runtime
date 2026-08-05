@@ -4,22 +4,22 @@
 export default {
   "results_rps": {
     "hono": {
-      "node": 32416,
-      "bun": 81596,
-      "deno": 75864,
-      "esrun": 52757
+      "node": 32741,
+      "bun": 79986,
+      "deno": 79014,
+      "esrun": 53708
     },
     "staticserver": {
-      "node": 12387,
-      "bun": 26359,
-      "deno": 14076,
-      "esrun": 15621
+      "node": 12459,
+      "bun": 26479,
+      "deno": 14083,
+      "esrun": 15703
     },
     "hono_sustained": {
-      "node": 32967,
-      "bun": 79823,
-      "deno": 78049,
-      "esrun": 53863
+      "node": 33639,
+      "bun": 83072,
+      "deno": 78594,
+      "esrun": 54194
     }
   },
   "rps_method": {
@@ -32,10 +32,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 3.2,
-        "bun": 5.4,
-        "deno": 0.2,
-        "esrun": 3
+        "node": 2.6,
+        "bun": 6.9,
+        "deno": 3.4,
+        "esrun": 1.3
       },
       "duration": null
     },
@@ -49,10 +49,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 0.8,
-        "bun": 1.5,
-        "deno": 2.7,
-        "esrun": 3.7
+        "node": 0.6,
+        "bun": 1.2,
+        "deno": 2.1,
+        "esrun": 9.9
       }
     },
     "hono_sustained": {
@@ -65,10 +65,10 @@ export default {
       "aggregate": "max",
       "cpu_pinning": "server on CPUs 0-5, load generator on CPUs 6-11",
       "spread_pct": {
-        "node": 1.8,
-        "bun": 4.1,
-        "deno": 3.3,
-        "esrun": 1
+        "node": 1.4,
+        "bun": 0.2,
+        "deno": 1.5,
+        "esrun": 1.9
       }
     }
   },
@@ -3424,22 +3424,22 @@ export default {
   },
   "results_rps_rss": {
     "hono": {
-      "node": 131,
+      "node": 128,
       "bun": 50,
       "deno": 72,
-      "esrun": 50
+      "esrun": 46
     },
     "staticserver": {
-      "node": 281,
+      "node": 280,
       "bun": 34,
       "deno": 139,
-      "esrun": 130
+      "esrun": 131
     },
     "hono_sustained": {
       "node": 133,
       "bun": 50,
-      "deno": 71,
-      "esrun": 53
+      "deno": 72,
+      "esrun": 55
     }
   }
 }

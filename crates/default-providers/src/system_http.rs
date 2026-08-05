@@ -255,7 +255,7 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
 fn to_server_request(
     req: Request<Incoming>,
     origin: &str,
-    peer_host: String,
+    peer_host: &str,
     peer_port: u16,
 ) -> HttpServerRequest {
     let method = req.method().to_string();
@@ -300,7 +300,7 @@ fn to_server_request(
         body,
         // The connection's peer, so every stream of an h2 connection reports
         // the same one — they are one connection.
-        remote_address: peer_host,
+        remote_address: peer_host.to_owned(),
         remote_port: peer_port,
     }
 }
@@ -419,7 +419,7 @@ async fn with_timeout<F: Future>(
 async fn serve_connection<S>(
     io: S,
     tx: mpsc::Sender<Pending>,
-    origin: String,
+    origin: Arc<str>,
     peer: SocketAddr,
     mut drain_rx: watch::Receiver<bool>,
     timeouts: HttpTimeouts,
@@ -429,14 +429,18 @@ async fn serve_connection<S>(
     // Formatted once per connection rather than per request: an address does
     // not change under a connection, and on HTTP/2 one connection can carry
     // hundreds of requests that would each have re-rendered the same string.
-    let peer_host = peer.ip().to_string();
+    // Both of these are constant for the life of the connection, and both used
+    // to be `String`s cloned into every request — two allocations and two copies
+    // per request to reproduce bytes that never change. As `Arc<str>` the clone
+    // is a refcount bump.
+    let peer_host: Arc<str> = Arc::from(peer.ip().to_string().as_str());
     let peer_port = peer.port();
     let service = service_fn(move |req: Request<Incoming>| {
         let tx = tx.clone();
         let origin = origin.clone();
         let peer_host = peer_host.clone();
         async move {
-            let server_req = to_server_request(req, &origin, peer_host, peer_port);
+            let server_req = to_server_request(req, &origin, &peer_host, peer_port);
             let (rtx, rrx) = oneshot::channel();
             let (dtx, drx) = oneshot::channel();
             if tx.send((server_req, rtx, drx)).await.is_err() {
@@ -566,7 +570,9 @@ impl HttpServerProvider for SystemHttpServer {
             // https:, and reporting http: there would misdescribe the request to
             // any handler that builds an absolute URL from it.
             let scheme = if tls.is_some() { "https" } else { "http" };
-            let origin = format!("{scheme}://{authority}");
+            // Shared, not copied: this is fixed for the listener but was cloned
+            // once per accepted connection and again into every request.
+            let origin: Arc<str> = Arc::from(format!("{scheme}://{authority}").as_str());
             // Roomy buffer so many connections can have a request queued for the
             // consumer to drain in one batch (see `next_requests`), rather than
             // stalling on backpressure between crossings.
