@@ -1,0 +1,1202 @@
+{
+  "html/webappapis/structured-clone/structured-clone.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "primitive undefined": "PASS",
+      "primitive null": "PASS",
+      "primitive true": "PASS",
+      "primitive false": "PASS",
+      "primitive string, empty string": "PASS",
+      "primitive string, lone high surrogate": "PASS",
+      "primitive string, lone low surrogate": "PASS",
+      "primitive string, NUL": "PASS",
+      "primitive string, astral character": "PASS",
+      "primitive number, 0.2": "PASS",
+      "primitive number, 0": "PASS",
+      "primitive number, -0": "PASS",
+      "primitive number, NaN": "PASS",
+      "primitive number, Infinity": "PASS",
+      "primitive number, -Infinity": "PASS",
+      "primitive number, 9007199254740992": "PASS",
+      "primitive number, -9007199254740992": "PASS",
+      "primitive number, 9007199254740994": "PASS",
+      "primitive number, -9007199254740994": "PASS",
+      "primitive BigInt, 0n": "PASS",
+      "primitive BigInt, -0n": "PASS",
+      "primitive BigInt, -9007199254740994000n": "PASS",
+      "primitive BigInt, -9007199254740994000900719925474099400090071992547409940009007199254740994000n": "PASS",
+      "Array primitives": "PASS",
+      "Object primitives": "PASS",
+      "Boolean true": "PASS",
+      "Boolean false": "PASS",
+      "Array Boolean objects": "PASS",
+      "Object Boolean objects": "PASS",
+      "String empty string": "PASS",
+      "String lone high surrogate": "PASS",
+      "String lone low surrogate": "PASS",
+      "String NUL": "PASS",
+      "String astral character": "PASS",
+      "Array String objects": "PASS",
+      "Object String objects": "PASS",
+      "Number 0.2": "PASS",
+      "Number 0": "PASS",
+      "Number -0": "PASS",
+      "Number NaN": "PASS",
+      "Number Infinity": "PASS",
+      "Number -Infinity": "PASS",
+      "Number 9007199254740992": "PASS",
+      "Number -9007199254740992": "PASS",
+      "Number 9007199254740994": "PASS",
+      "Number -9007199254740994": "PASS",
+      "BigInt -9007199254740994n": "PASS",
+      "Array Number objects": "PASS",
+      "Object Number objects": "PASS",
+      "Date 0": "PASS",
+      "Date -0": "PASS",
+      "Date -8.64e15": "PASS",
+      "Date 8.64e15": "PASS",
+      "Array Date objects": "PASS",
+      "Object Date objects": "PASS",
+      "RegExp flags and lastIndex": "PASS",
+      "RegExp sticky flag": "PASS",
+      "RegExp unicode flag": "PASS",
+      "RegExp empty": "PASS",
+      "RegExp slash": "PASS",
+      "RegExp new line": "PASS",
+      "Array RegExp object, RegExp flags and lastIndex": "PASS",
+      "Array RegExp object, RegExp sticky flag": "PASS",
+      "Array RegExp object, RegExp unicode flag": "PASS",
+      "Array RegExp object, RegExp empty": "PASS",
+      "Array RegExp object, RegExp slash": "PASS",
+      "Array RegExp object, RegExp new line": "PASS",
+      "Object RegExp object, RegExp flags and lastIndex": "PASS",
+      "Object RegExp object, RegExp sticky flag": "PASS",
+      "Object RegExp object, RegExp unicode flag": "PASS",
+      "Object RegExp object, RegExp empty": "PASS",
+      "Object RegExp object, RegExp slash": "PASS",
+      "Object RegExp object, RegExp new line": "PASS",
+      "Empty Error object": "PASS",
+      "Error object": "PASS",
+      "EvalError object": "PASS",
+      "RangeError object": "PASS",
+      "ReferenceError object": "PASS",
+      "SyntaxError object": "PASS",
+      "TypeError object": "PASS",
+      "URIError object": "PASS",
+      "Blob basic": "PASS",
+      "Blob unpaired high surrogate (invalid utf-8)": "PASS",
+      "Blob unpaired low surrogate (invalid utf-8)": "PASS",
+      "Blob paired surrogates (invalid utf-8)": "PASS",
+      "Blob empty": "PASS",
+      "Blob NUL": "PASS",
+      "Array Blob object, Blob basic": "PASS",
+      "Array Blob object, Blob unpaired high surrogate (invalid utf-8)": "PASS",
+      "Array Blob object, Blob unpaired low surrogate (invalid utf-8)": "PASS",
+      "Array Blob object, Blob paired surrogates (invalid utf-8)": "PASS",
+      "Array Blob object, Blob empty": "PASS",
+      "Array Blob object, Blob NUL": "PASS",
+      "Array Blob object, two Blobs": "PASS",
+      "Object Blob object, Blob basic": "PASS",
+      "Object Blob object, Blob unpaired high surrogate (invalid utf-8)": "PASS",
+      "Object Blob object, Blob unpaired low surrogate (invalid utf-8)": "PASS",
+      "Object Blob object, Blob paired surrogates (invalid utf-8)": "PASS",
+      "Object Blob object, Blob empty": "PASS",
+      "Object Blob object, Blob NUL": "PASS",
+      "File basic": "PASS",
+      "Array sparse": "PASS",
+      "Array with non-index property": "PASS",
+      "Object with index property and length": "PASS",
+      "Array with circular reference": "PASS",
+      "Object with circular reference": "PASS",
+      "Array with identical property values": "PASS",
+      "Object with identical property values": "PASS",
+      "Object with property on prototype": "PASS",
+      "Object with non-enumerable property": "PASS",
+      "Object with non-writable property": "PASS",
+      "Object with non-configurable property": "PASS",
+      "Object with a getter that throws": "PASS",
+      "ObjectPrototype must lose its exotic-ness when cloned": "PASS",
+      "Serializing a non-serializable platform object fails": "FAIL",
+      "An object whose interface is deleted from the global must still deserialize": "PASS",
+      "A subclass instance will deserialize as its closest serializable superclass": "PASS",
+      "Resizable ArrayBuffer": "PASS",
+      "Growable SharedArrayBuffer": "FAIL",
+      "Length-tracking TypedArray": "PASS",
+      "Length-tracking DataView": "PASS",
+      "Serializing OOB TypedArray throws": "PASS",
+      "Serializing OOB DataView throws": "PASS",
+      "ArrayBuffer": "PASS",
+      "MessagePort": "PASS",
+      "ImageBitmap": "FAIL",
+      "OffscreenCanvas": "FAIL",
+      "A detached ArrayBuffer cannot be transferred": "PASS",
+      "A detached platform object cannot be transferred": "FAIL",
+      "Transferring a non-transferable platform object fails": "PASS",
+      "An object whose interface is deleted from the global object must still be received": "FAIL",
+      "A subclass instance will be received as its closest transferable superclass": "PASS",
+      "Resizable ArrayBuffer is transferable": "PASS",
+      "Length-tracking TypedArray is transferable": "PASS",
+      "Length-tracking DataView is transferable": "PASS",
+      "Transferring OOB TypedArray throws": "PASS",
+      "Transferring OOB DataView throws": "PASS"
+    }
+  },
+  "html/webappapis/structured-clone/structured-clone.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "primitive undefined": "PASS",
+      "primitive null": "PASS",
+      "primitive true": "PASS",
+      "primitive false": "PASS",
+      "primitive string, empty string": "PASS",
+      "primitive string, lone high surrogate": "PASS",
+      "primitive string, lone low surrogate": "PASS",
+      "primitive string, NUL": "PASS",
+      "primitive string, astral character": "PASS",
+      "primitive number, 0.2": "PASS",
+      "primitive number, 0": "PASS",
+      "primitive number, -0": "PASS",
+      "primitive number, NaN": "PASS",
+      "primitive number, Infinity": "PASS",
+      "primitive number, -Infinity": "PASS",
+      "primitive number, 9007199254740992": "PASS",
+      "primitive number, -9007199254740992": "PASS",
+      "primitive number, 9007199254740994": "PASS",
+      "primitive number, -9007199254740994": "PASS",
+      "primitive BigInt, 0n": "PASS",
+      "primitive BigInt, -0n": "PASS",
+      "primitive BigInt, -9007199254740994000n": "PASS",
+      "primitive BigInt, -9007199254740994000900719925474099400090071992547409940009007199254740994000n": "PASS",
+      "Array primitives": "PASS",
+      "Object primitives": "PASS",
+      "Boolean true": "PASS",
+      "Boolean false": "PASS",
+      "Array Boolean objects": "PASS",
+      "Object Boolean objects": "PASS",
+      "String empty string": "PASS",
+      "String lone high surrogate": "PASS",
+      "String lone low surrogate": "PASS",
+      "String NUL": "PASS",
+      "String astral character": "PASS",
+      "Array String objects": "PASS",
+      "Object String objects": "PASS",
+      "Number 0.2": "PASS",
+      "Number 0": "PASS",
+      "Number -0": "PASS",
+      "Number NaN": "PASS",
+      "Number Infinity": "PASS",
+      "Number -Infinity": "PASS",
+      "Number 9007199254740992": "PASS",
+      "Number -9007199254740992": "PASS",
+      "Number 9007199254740994": "PASS",
+      "Number -9007199254740994": "PASS",
+      "BigInt -9007199254740994n": "PASS",
+      "Array Number objects": "PASS",
+      "Object Number objects": "PASS",
+      "Date 0": "PASS",
+      "Date -0": "PASS",
+      "Date -8.64e15": "PASS",
+      "Date 8.64e15": "PASS",
+      "Array Date objects": "PASS",
+      "Object Date objects": "PASS",
+      "RegExp flags and lastIndex": "PASS",
+      "RegExp sticky flag": "PASS",
+      "RegExp unicode flag": "PASS",
+      "RegExp empty": "PASS",
+      "RegExp slash": "PASS",
+      "RegExp new line": "PASS",
+      "Array RegExp object, RegExp flags and lastIndex": "PASS",
+      "Array RegExp object, RegExp sticky flag": "PASS",
+      "Array RegExp object, RegExp unicode flag": "PASS",
+      "Array RegExp object, RegExp empty": "PASS",
+      "Array RegExp object, RegExp slash": "PASS",
+      "Array RegExp object, RegExp new line": "PASS",
+      "Object RegExp object, RegExp flags and lastIndex": "PASS",
+      "Object RegExp object, RegExp sticky flag": "PASS",
+      "Object RegExp object, RegExp unicode flag": "PASS",
+      "Object RegExp object, RegExp empty": "PASS",
+      "Object RegExp object, RegExp slash": "PASS",
+      "Object RegExp object, RegExp new line": "PASS",
+      "Empty Error object": "PASS",
+      "Error object": "PASS",
+      "EvalError object": "PASS",
+      "RangeError object": "PASS",
+      "ReferenceError object": "PASS",
+      "SyntaxError object": "PASS",
+      "TypeError object": "PASS",
+      "URIError object": "PASS",
+      "Blob basic": "PASS",
+      "Blob unpaired high surrogate (invalid utf-8)": "PASS",
+      "Blob unpaired low surrogate (invalid utf-8)": "PASS",
+      "Blob paired surrogates (invalid utf-8)": "PASS",
+      "Blob empty": "PASS",
+      "Blob NUL": "PASS",
+      "Array Blob object, Blob basic": "PASS",
+      "Array Blob object, Blob unpaired high surrogate (invalid utf-8)": "PASS",
+      "Array Blob object, Blob unpaired low surrogate (invalid utf-8)": "PASS",
+      "Array Blob object, Blob paired surrogates (invalid utf-8)": "PASS",
+      "Array Blob object, Blob empty": "PASS",
+      "Array Blob object, Blob NUL": "PASS",
+      "Array Blob object, two Blobs": "PASS",
+      "Object Blob object, Blob basic": "PASS",
+      "Object Blob object, Blob unpaired high surrogate (invalid utf-8)": "PASS",
+      "Object Blob object, Blob unpaired low surrogate (invalid utf-8)": "PASS",
+      "Object Blob object, Blob paired surrogates (invalid utf-8)": "PASS",
+      "Object Blob object, Blob empty": "PASS",
+      "Object Blob object, Blob NUL": "PASS",
+      "File basic": "PASS",
+      "Array sparse": "PASS",
+      "Array with non-index property": "PASS",
+      "Object with index property and length": "PASS",
+      "Array with circular reference": "PASS",
+      "Object with circular reference": "PASS",
+      "Array with identical property values": "PASS",
+      "Object with identical property values": "PASS",
+      "Object with property on prototype": "PASS",
+      "Object with non-enumerable property": "PASS",
+      "Object with non-writable property": "PASS",
+      "Object with non-configurable property": "PASS",
+      "Object with a getter that throws": "PASS",
+      "ObjectPrototype must lose its exotic-ness when cloned": "PASS",
+      "Serializing a non-serializable platform object fails": "FAIL",
+      "An object whose interface is deleted from the global must still deserialize": "PASS",
+      "A subclass instance will deserialize as its closest serializable superclass": "PASS",
+      "Resizable ArrayBuffer": "PASS",
+      "Growable SharedArrayBuffer": "FAIL",
+      "Length-tracking TypedArray": "PASS",
+      "Length-tracking DataView": "PASS",
+      "Serializing OOB TypedArray throws": "PASS",
+      "Serializing OOB DataView throws": "PASS",
+      "ArrayBuffer": "PASS",
+      "MessagePort": "PASS",
+      "ImageBitmap": "FAIL",
+      "OffscreenCanvas": "FAIL",
+      "A detached ArrayBuffer cannot be transferred": "PASS",
+      "A detached platform object cannot be transferred": "FAIL",
+      "Transferring a non-transferable platform object fails": "PASS",
+      "An object whose interface is deleted from the global object must still be received": "FAIL",
+      "A subclass instance will be received as its closest transferable superclass": "PASS",
+      "Resizable ArrayBuffer is transferable": "PASS",
+      "Length-tracking TypedArray is transferable": "PASS",
+      "Length-tracking DataView is transferable": "PASS",
+      "Transferring OOB TypedArray throws": "PASS",
+      "Transferring OOB DataView throws": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_Blob.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: Messages can contain Blobs.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_Blob.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: Messages can contain Blobs.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_DataCloneErr.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Throw a DataCloneError when a host object (e.g. a DOM node) is used with postMessage.": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_DataCloneErr.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Throw a DataCloneError when a host object (e.g. a DOM node) is used with postMessage.": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_clone_port.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: Test Description: When the user agent is to clone a port original port, with the clone being owned by owner, it must return a new MessagePort object": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_clone_port.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: Test Description: When the user agent is to clone a port original port, with the clone being owned by owner, it must return a new MessagePort object": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_clone_port_error.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: Throw a DataCloneError if transfer array in postMessage contains source port.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_clone_port_error.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: Throw a DataCloneError if transfer array in postMessage contains source port.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_event_properties.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: The postMessage() method - Create an event that uses the MessageEvent interface, with the name message, which does not bubble and is not cancelable.": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_event_properties.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: The postMessage() method - Create an event that uses the MessageEvent interface, with the name message, which does not bubble and is not cancelable.": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_ports_readonly_array.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: The postMessage() method - Make new ports into a read only array.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_ports_readonly_array.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: The postMessage() method - Make new ports into a read only array.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_target_source.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: The postMessage() method - Let target port be the port with which source port is entangled, if any.": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_target_source.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test Description: The postMessage() method - Let target port be the port with which source port is entangled, if any.": "PASS"
+    }
+  },
+  "webmessaging/Channel_postMessage_with_transfer_entangled.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "An entangled port transferred to the same origin receives messages in order": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_with_transfer_entangled.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "An entangled port transferred to the same origin receives messages in order": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_with_transfer_incoming_messages.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "When transferring a non-enabled port mutiple times,\n    incoming messages sent at various transfer steps are received in order upon enablement.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_with_transfer_incoming_messages.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "When transferring a non-enabled port mutiple times,\n    incoming messages sent at various transfer steps are received in order upon enablement.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_with_transfer_outgoing_messages.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "When transferring a port,\n    outgoing messages sent at each transfer step are received in order by the entangled port.": "FAIL"
+    }
+  },
+  "webmessaging/Channel_postMessage_with_transfer_outgoing_messages.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "When transferring a port,\n    outgoing messages sent at each transfer step are received in order by the entangled port.": "FAIL"
+    }
+  },
+  "webmessaging/MessageEvent-trusted.any.js:main": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "webmessaging/MessageEvent-trusted.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "With a MessageChannel and its MessagePorts": "FAIL",
+      "With a BroadcastChannel": "FAIL"
+    }
+  },
+  "webmessaging/MessageEvent.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "mozInitMessageEvent on the prototype": "PASS",
+      "mozInitMessageEvent on the instance": "PASS",
+      "msInitMessageEvent on the prototype": "PASS",
+      "msInitMessageEvent on the instance": "PASS",
+      "oInitMessageEvent on the prototype": "PASS",
+      "oInitMessageEvent on the instance": "PASS",
+      "webkitInitMessageEvent on the prototype": "PASS",
+      "webkitInitMessageEvent on the instance": "PASS",
+      "initMessageEvent with no arguments": "PASS"
+    }
+  },
+  "webmessaging/MessageEvent.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "mozInitMessageEvent on the prototype": "PASS",
+      "mozInitMessageEvent on the instance": "PASS",
+      "msInitMessageEvent on the prototype": "PASS",
+      "msInitMessageEvent on the instance": "PASS",
+      "oInitMessageEvent on the prototype": "PASS",
+      "oInitMessageEvent on the instance": "PASS",
+      "webkitInitMessageEvent on the prototype": "PASS",
+      "webkitInitMessageEvent on the instance": "PASS",
+      "initMessageEvent with no arguments": "PASS"
+    }
+  },
+  "webmessaging/MessagePort_initial_disabled.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "MessageChannel: port message queue is initially disabled": "PASS"
+    }
+  },
+  "webmessaging/MessagePort_initial_disabled.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "MessageChannel: port message queue is initially disabled": "PASS"
+    }
+  },
+  "webmessaging/MessagePort_onmessage_start.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "MessageChannel: port.onmessage enables message queue": "PASS"
+    }
+  },
+  "webmessaging/MessagePort_onmessage_start.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "MessageChannel: port.onmessage enables message queue": "PASS"
+    }
+  },
+  "webmessaging/broadcastchannel/basics.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "BroadcastChannel constructor called as normal function": "PASS",
+      "postMessage results in correct event": "FAIL",
+      "messages are delivered in port creation order": "FAIL",
+      "messages aren't delivered to a closed port": "PASS",
+      "messages aren't delivered to a port closed after calling postMessage.": "PASS",
+      "closing and creating channels during message delivery works correctly": "PASS",
+      "Closing a channel in onmessage prevents already queued tasks from firing onmessage events": "PASS"
+    }
+  },
+  "webmessaging/broadcastchannel/basics.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "BroadcastChannel constructor called as normal function": "PASS",
+      "postMessage results in correct event": "FAIL",
+      "messages are delivered in port creation order": "FAIL",
+      "messages aren't delivered to a closed port": "PASS",
+      "messages aren't delivered to a port closed after calling postMessage.": "PASS",
+      "closing and creating channels during message delivery works correctly": "PASS",
+      "Closing a channel in onmessage prevents already queued tasks from firing onmessage events": "PASS"
+    }
+  },
+  "webmessaging/broadcastchannel/interface.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Should throw if no name is provided": "PASS",
+      "Null name should not throw": "PASS",
+      "Undefined name should not throw": "PASS",
+      "Non-empty name should not throw": "PASS",
+      "Non-string name should not throw": "PASS",
+      "postMessage without parameters should throw": "FAIL",
+      "postMessage with null should not throw": "PASS",
+      "close should not throw": "PASS",
+      "close should not throw when called multiple times": "PASS",
+      "postMessage after close should throw": "PASS",
+      "BroadcastChannel should have an onmessage event": "PASS",
+      "postMessage should throw with uncloneable data": "PASS",
+      "postMessage should throw InvalidStateError after close, even with uncloneable data": "PASS"
+    }
+  },
+  "webmessaging/broadcastchannel/interface.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Should throw if no name is provided": "PASS",
+      "Null name should not throw": "PASS",
+      "Undefined name should not throw": "PASS",
+      "Non-empty name should not throw": "PASS",
+      "Non-string name should not throw": "PASS",
+      "postMessage without parameters should throw": "FAIL",
+      "postMessage with null should not throw": "PASS",
+      "close should not throw": "PASS",
+      "close should not throw when called multiple times": "PASS",
+      "postMessage after close should throw": "PASS",
+      "BroadcastChannel should have an onmessage event": "PASS",
+      "postMessage should throw with uncloneable data": "PASS",
+      "postMessage should throw InvalidStateError after close, even with uncloneable data": "PASS"
+    }
+  },
+  "webmessaging/message-channels/basics.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "basic messagechannel test": "PASS"
+    }
+  },
+  "webmessaging/message-channels/basics.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "basic messagechannel test": "PASS"
+    }
+  },
+  "webmessaging/message-channels/close-event/garbage-collected.tentative.any.js:main": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "webmessaging/message-channels/close-event/garbage-collected.tentative.any.js:worker": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "webmessaging/message-channels/close.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Message sent to closed port should not arrive.": "PASS",
+      "Message sent from closed port should not arrive.": "PASS",
+      "Message sent to closed port from transferred port should not arrive.": "FAIL",
+      "Inflight messages should be delivered even when sending port is closed afterwards.": "PASS",
+      "Close in onmessage should not cancel inflight messages.": "PASS",
+      "close() detaches a MessagePort (but not the one its entangled with)": "FAIL"
+    }
+  },
+  "webmessaging/message-channels/close.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Message sent to closed port should not arrive.": "PASS",
+      "Message sent from closed port should not arrive.": "PASS",
+      "Message sent to closed port from transferred port should not arrive.": "FAIL",
+      "Inflight messages should be delivered even when sending port is closed afterwards.": "PASS",
+      "Close in onmessage should not cancel inflight messages.": "PASS",
+      "close() detaches a MessagePort (but not the one its entangled with)": "FAIL"
+    }
+  },
+  "webmessaging/message-channels/dictionary-transferrable.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "basic messagechannel with transfer": "PASS"
+    }
+  },
+  "webmessaging/message-channels/dictionary-transferrable.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "basic messagechannel with transfer": "PASS"
+    }
+  },
+  "webmessaging/message-channels/implied-start.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "onmessage implied start()": "PASS"
+    }
+  },
+  "webmessaging/message-channels/implied-start.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "onmessage implied start()": "PASS"
+    }
+  },
+  "webmessaging/message-channels/no-start.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "without start()": "PASS"
+    }
+  },
+  "webmessaging/message-channels/no-start.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "without start()": "PASS"
+    }
+  },
+  "webmessaging/message-channels/user-activation.tentative.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "user activation messagechannel test": "FAIL"
+    }
+  },
+  "webmessaging/message-channels/user-activation.tentative.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "user activation messagechannel test": "FAIL"
+    }
+  },
+  "webmessaging/message-channels/worker-post-after-close.any.js:main": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "webmessaging/message-channels/worker-post-after-close.any.js:worker": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "webmessaging/message-channels/worker.any.js:main": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "webmessaging/message-channels/worker.any.js:worker": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "workers/Worker-base64.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Tests that atob() / btoa() functions are exposed to workers": "PASS"
+    }
+  },
+  "workers/Worker-call.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test calling functions from WorkerContext.": "PASS"
+    }
+  },
+  "workers/Worker-constructor-proto.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Tests that setting the proto of a built in constructor is not reset.": "FAIL"
+    }
+  },
+  "workers/Worker-custom-event.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test CustomEvents on workers.": "PASS"
+    }
+  },
+  "workers/Worker-formdata.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test FormData interface object": "FAIL"
+    }
+  },
+  "workers/Worker-replace-event-handler.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Tests that repeatedly setting 'onmessage' within a worker doesn't crash.": "PASS"
+    }
+  },
+  "workers/Worker-replace-global-constructor.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test replacing global constructors in a worker context.": "PASS"
+    }
+  },
+  "workers/Worker-replace-self.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test that self is not replaceable.": "FAIL"
+    }
+  },
+  "workers/WorkerGlobalScope_requestAnimationFrame.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Untitled": "FAIL"
+    }
+  },
+  "workers/WorkerNavigator-hardware-concurrency.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test worker navigator hardware concurrency.": "PASS"
+    }
+  },
+  "workers/WorkerNavigator.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Testing Navigator properties on workers.": "FAIL"
+    }
+  },
+  "workers/constructors/Worker/DedicatedWorkerGlobalScope-members.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "existence of postMessage": "PASS",
+      "existence of onmessage": "PASS",
+      "existence of self": "PASS",
+      "existence of location": "FAIL",
+      "existence of close": "PASS",
+      "existence of onerror": "PASS",
+      "existence of onoffline": "FAIL",
+      "existence of ononline": "FAIL",
+      "existence of addEventListener": "PASS",
+      "existence of removeEventListener": "PASS",
+      "existence of dispatchEvent": "PASS",
+      "existence of importScripts": "PASS",
+      "existence of navigator": "PASS",
+      "existence of setTimeout": "PASS",
+      "existence of clearTimeout": "PASS",
+      "existence of setInterval": "PASS",
+      "existence of clearInterval": "PASS",
+      "existence of btoa": "PASS",
+      "existence of atob": "PASS"
+    }
+  },
+  "workers/constructors/Worker/expected-self-properties.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "existence of XMLHttpRequest": "FAIL",
+      "existence of WebSocket": "PASS",
+      "existence of EventSource": "FAIL",
+      "existence of MessageChannel": "PASS",
+      "existence of Worker": "PASS"
+    }
+  },
+  "workers/constructors/Worker/unexpected-self-properties.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "existence of open": "PASS",
+      "existence of print": "PASS",
+      "existence of stop": "PASS",
+      "existence of getComputedStyle": "PASS",
+      "existence of getSelection": "PASS",
+      "existence of releaseEvents": "PASS",
+      "existence of captureEvents": "PASS",
+      "existence of alert": "PASS",
+      "existence of confirm": "PASS",
+      "existence of prompt": "PASS",
+      "existence of addEventStream": "PASS",
+      "existence of removeEventStream": "PASS",
+      "existence of back": "PASS",
+      "existence of forward": "PASS",
+      "existence of attachEvent": "PASS",
+      "existence of detachEvent": "PASS",
+      "existence of navigate": "PASS",
+      "existence of DOMParser": "PASS",
+      "existence of XMLSerializer": "PASS",
+      "existence of XPathEvaluator": "PASS",
+      "existence of XSLTProcessor": "PASS",
+      "existence of opera": "PASS",
+      "existence of Image": "PASS",
+      "existence of Option": "PASS",
+      "existence of frames": "PASS",
+      "existence of Audio": "PASS",
+      "existence of SVGUnitTypes": "PASS",
+      "existence of SVGZoomAndPan": "PASS",
+      "existence of java": "PASS",
+      "existence of netscape": "PASS",
+      "existence of sun": "PASS",
+      "existence of Packages": "PASS",
+      "existence of ByteArray": "PASS",
+      "existence of closed": "PASS",
+      "existence of defaultStatus": "PASS",
+      "existence of document": "PASS",
+      "existence of event": "PASS",
+      "existence of frameElement": "PASS",
+      "existence of history": "PASS",
+      "existence of innerHeight": "PASS",
+      "existence of innerWidth": "PASS",
+      "existence of opener": "PASS",
+      "existence of outerHeight": "PASS",
+      "existence of outerWidth": "PASS",
+      "existence of pageXOffset": "PASS",
+      "existence of pageYOffset": "PASS",
+      "existence of parent": "PASS",
+      "existence of screen": "PASS",
+      "existence of screenLeft": "PASS",
+      "existence of screenTop": "PASS",
+      "existence of screenX": "PASS",
+      "existence of screenY": "PASS",
+      "existence of status": "PASS",
+      "existence of top": "PASS",
+      "existence of window": "PASS",
+      "existence of length": "PASS",
+      "existence of SharedWorker": "PASS"
+    }
+  },
+  "workers/examples/general.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test that should pass": "PASS",
+      "Worker top-level script is a generated script.": "FAIL"
+    }
+  },
+  "workers/examples/general.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Test that should pass": "PASS",
+      "Worker top-level script is the .worker.js file itself.": "FAIL"
+    }
+  },
+  "workers/importscripts_mime.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "importScripts() requires scripty MIME types: text/javascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types: application/javascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types: text/ecmascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types: image/png is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/csv is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: video/mpeg is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/plain is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: application/xml is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: application/octet-stream is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/potato is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: potato/text is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: aaa/aaa is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: zzz/zzz is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/javascript; charset=utf-8 is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types: text/javascript;charset=utf-8 is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types: text/javascript;bla;bla is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types: text/csv; charset=utf-8 is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/csv;charset=utf-8 is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/csv;bla;bla is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: Text/html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: text/Html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: TeXt/HtMl is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types: TEXT/HTML is blocked.": "FAIL"
+    }
+  },
+  "workers/importscripts_mime_local.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "importScripts() requires scripty MIME types for data: URLs: text/javascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: application/javascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/ecmascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: image/png is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/csv is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: video/mpeg is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/plain is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: application/xml is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: application/octet-stream is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/potato is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: potato/text is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: aaa/aaa is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: zzz/zzz is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/javascript; charset=utf-8 is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/javascript;charset=utf-8 is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/javascript;bla;bla is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/csv; charset=utf-8 is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/csv;charset=utf-8 is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/csv;bla;bla is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: Text/html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: text/Html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: TeXt/HtMl is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for data: URLs: TEXT/HTML is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/javascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: application/javascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/ecmascript is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: image/png is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/csv is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: video/mpeg is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/plain is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: application/xml is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: application/octet-stream is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/potato is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: potato/text is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: aaa/aaa is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: zzz/zzz is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/javascript; charset=utf-8 is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/javascript;charset=utf-8 is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/javascript;bla;bla is allowed.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/csv; charset=utf-8 is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/csv;charset=utf-8 is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/csv;bla;bla is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: Text/html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: text/Html is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: TeXt/HtMl is blocked.": "FAIL",
+      "importScripts() requires scripty MIME types for blob: URLs: TEXT/HTML is blocked.": "FAIL"
+    }
+  },
+  "workers/interfaces/DedicatedWorkerGlobalScope/EventTarget.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "removeEventListener": "PASS",
+      "target": "PASS"
+    }
+  },
+  "workers/interfaces/DedicatedWorkerGlobalScope/onmessage.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Setting onmessage to 1": "PASS",
+      "Setting onmessage to an object": "FAIL",
+      "Setting onmessage to a function": "PASS",
+      "Setting onmessage to 1 (again)": "PASS"
+    }
+  },
+  "workers/interfaces/DedicatedWorkerGlobalScope/postMessage/return-value.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "return value of postMessage": "PASS"
+    }
+  },
+  "workers/interfaces/WorkerGlobalScope/location/returns-same-object.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "location === location": "FAIL"
+    }
+  },
+  "workers/interfaces/WorkerGlobalScope/self.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "self === self": "PASS",
+      "self instanceof WorkerGlobalScope": "FAIL",
+      "'self' in self": "PASS",
+      "self = 1": "FAIL"
+    }
+  },
+  "workers/interfaces/WorkerUtils/importScripts/001.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Untitled": "PASS"
+    }
+  },
+  "workers/interfaces/WorkerUtils/importScripts/002.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Untitled": "FAIL"
+    }
+  },
+  "workers/interfaces/WorkerUtils/importScripts/blob-url.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Blob URLs work on importScripts": "FAIL",
+      "A revoked blob URL will fail": "FAIL",
+      "Revoking a blob URL in an earlier script will not fail": "FAIL"
+    }
+  },
+  "workers/interfaces/WorkerUtils/navigator/008.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "navigator properties are read-only": "PASS"
+    }
+  },
+  "workers/modules/dedicated-worker-import-blob-url.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Static import.": "FAIL",
+      "Static import (cross-origin).": "FAIL",
+      "Static import (redirect).": "FAIL",
+      "Nested static import.": "FAIL",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
+  },
+  "workers/modules/dedicated-worker-import-blob-url.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Static import.": "FAIL",
+      "Static import (cross-origin).": "FAIL",
+      "Static import (redirect).": "FAIL",
+      "Nested static import.": "FAIL",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
+  },
+  "workers/modules/dedicated-worker-import-data-url.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Static import.": "FAIL",
+      "Static import (cross-origin).": "FAIL",
+      "Static import (redirect).": "FAIL",
+      "Nested static import.": "FAIL",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
+  },
+  "workers/modules/dedicated-worker-import-data-url.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Static import.": "FAIL",
+      "Static import (cross-origin).": "FAIL",
+      "Static import (redirect).": "FAIL",
+      "Nested static import.": "FAIL",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
+  },
+  "workers/modules/dedicated-worker-import.any.js:main": {
+    "harness": "ERROR",
+    "subtests": {
+      "Static import.": "FAIL",
+      "Static import (cross-origin).": "FAIL",
+      "Static import (redirect).": "FAIL",
+      "Nested static import.": "FAIL",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
+  },
+  "workers/modules/dedicated-worker-import.any.js:worker": {
+    "harness": "ERROR",
+    "subtests": {
+      "Static import.": "FAIL",
+      "Static import (cross-origin).": "FAIL",
+      "Static import (redirect).": "FAIL",
+      "Nested static import.": "FAIL",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
+  },
+  "workers/nested_worker.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Nested worker": "PASS"
+    }
+  },
+  "workers/nested_worker_close_self.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Nested work that closes itself": "PASS"
+    }
+  },
+  "workers/nested_worker_importScripts.worker.js:worker": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "workers/nested_worker_sync_xhr.worker.js:worker": {
+    "harness": "TIMEOUT",
+    "subtests": {}
+  },
+  "workers/semantics/encodings/004.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Decoding invalid utf-8": "PASS"
+    }
+  },
+  "workers/semantics/interface-objects/001.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "The WorkerGlobalScope interface object should be exposed.": "FAIL",
+      "The DedicatedWorkerGlobalScope interface object should be exposed.": "FAIL",
+      "The Worker interface object should be exposed.": "PASS",
+      "The MessagePort interface object should be exposed.": "PASS",
+      "The MessageEvent interface object should be exposed.": "PASS",
+      "The WorkerNavigator interface object should be exposed.": "FAIL",
+      "The MessageChannel interface object should be exposed.": "PASS",
+      "The WorkerLocation interface object should be exposed.": "FAIL",
+      "The ImageData interface object should be exposed.": "FAIL",
+      "The ImageBitmap interface object should be exposed.": "FAIL",
+      "The CanvasGradient interface object should be exposed.": "FAIL",
+      "The CanvasPattern interface object should be exposed.": "FAIL",
+      "The TextMetrics interface object should be exposed.": "FAIL",
+      "The Path2D interface object should be exposed.": "FAIL",
+      "The PromiseRejectionEvent interface object should be exposed.": "PASS",
+      "The EventSource interface object should be exposed.": "FAIL",
+      "The BroadcastChannel interface object should be exposed.": "PASS",
+      "The WebSocket interface object should be exposed.": "PASS",
+      "The CloseEvent interface object should be exposed.": "PASS",
+      "The ArrayBuffer interface object should be exposed.": "PASS",
+      "The Int8Array interface object should be exposed.": "PASS",
+      "The Uint8Array interface object should be exposed.": "PASS",
+      "The Uint8ClampedArray interface object should be exposed.": "PASS",
+      "The Int16Array interface object should be exposed.": "PASS",
+      "The Uint16Array interface object should be exposed.": "PASS",
+      "The Int32Array interface object should be exposed.": "PASS",
+      "The Uint32Array interface object should be exposed.": "PASS",
+      "The Float16Array interface object should be exposed.": "PASS",
+      "The Float32Array interface object should be exposed.": "PASS",
+      "The Float64Array interface object should be exposed.": "PASS",
+      "The DataView interface object should be exposed.": "PASS",
+      "The XMLHttpRequestEventTarget interface object should be exposed.": "FAIL",
+      "The XMLHttpRequestUpload interface object should be exposed.": "FAIL",
+      "The XMLHttpRequest interface object should be exposed.": "FAIL",
+      "The ProgressEvent interface object should be exposed.": "PASS",
+      "The FormData interface object should be exposed.": "PASS",
+      "The URL interface object should be exposed.": "PASS",
+      "The URLSearchParams interface object should be exposed.": "PASS",
+      "The File interface object should be exposed.": "PASS",
+      "The Blob interface object should be exposed.": "PASS",
+      "The FileList interface object should be exposed.": "FAIL",
+      "The FileReader interface object should be exposed.": "FAIL",
+      "The FileReaderSync interface object should be exposed.": "FAIL",
+      "The EventTarget interface object should be exposed.": "PASS",
+      "The ErrorEvent interface object should be exposed.": "PASS",
+      "The Event interface object should be exposed.": "PASS",
+      "The CustomEvent interface object should be exposed.": "PASS",
+      "The DOMException interface object should be exposed.": "PASS",
+      "The ReadableStream interface object should be exposed.": "PASS",
+      "The WritableStream interface object should be exposed.": "PASS",
+      "The ByteLengthQueuingStrategy interface object should be exposed.": "PASS",
+      "The CountQueuingStrategy interface object should be exposed.": "PASS",
+      "The IDBRequest interface object should be exposed.": "FAIL",
+      "The IDBOpenDBRequest interface object should be exposed.": "FAIL",
+      "The IDBVersionChangeEvent interface object should be exposed.": "FAIL",
+      "The IDBFactory interface object should be exposed.": "FAIL",
+      "The IDBDatabase interface object should be exposed.": "FAIL",
+      "The IDBObjectStore interface object should be exposed.": "FAIL",
+      "The IDBIndex interface object should be exposed.": "FAIL",
+      "The IDBKeyRange interface object should be exposed.": "FAIL",
+      "The IDBCursor interface object should be exposed.": "FAIL",
+      "The IDBCursorWithValue interface object should be exposed.": "FAIL",
+      "The IDBTransaction interface object should be exposed.": "FAIL"
+    }
+  },
+  "workers/semantics/interface-objects/002.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "The SharedWorker interface object should not be exposed.": "PASS",
+      "The CanvasPath interface object should not be exposed.": "PASS",
+      "The SharedWorkerGlobalScope interface object should not be exposed.": "PASS",
+      "The AbstractView interface object should not be exposed.": "PASS",
+      "The AbstractWorker interface object should not be exposed.": "PASS",
+      "The ApplicationCache interface object should not be exposed.": "PASS",
+      "The Location interface object should not be exposed.": "PASS",
+      "The Navigator interface object should not be exposed.": "FAIL",
+      "The Audio interface object should not be exposed.": "PASS",
+      "The HTMLCanvasElement interface object should not be exposed.": "PASS",
+      "The Path interface object should not be exposed.": "PASS",
+      "The CanvasProxy interface object should not be exposed.": "PASS",
+      "The CanvasRenderingContext2D interface object should not be exposed.": "PASS",
+      "The DrawingStyle interface object should not be exposed.": "PASS",
+      "The BeforeUnloadEvent interface object should not be exposed.": "PASS",
+      "The PopStateEvent interface object should not be exposed.": "PASS",
+      "The HashChangeEvent interface object should not be exposed.": "PASS",
+      "The PageTransitionEvent interface object should not be exposed.": "PASS",
+      "The DOMImplementation interface object should not be exposed.": "PASS",
+      "The IDBEnvironment interface object should not be exposed.": "PASS",
+      "The Database interface object should not be exposed.": "PASS",
+      "The UIEvent interface object should not be exposed.": "PASS",
+      "The FocusEvent interface object should not be exposed.": "PASS",
+      "The MouseEvent interface object should not be exposed.": "PASS",
+      "The WheelEvent interface object should not be exposed.": "PASS",
+      "The InputEvent interface object should not be exposed.": "PASS",
+      "The KeyboardEvent interface object should not be exposed.": "PASS",
+      "The CompositionEvent interface object should not be exposed.": "PASS",
+      "The VTTCue interface object should not be exposed.": "PASS",
+      "The VTTRegion interface object should not be exposed.": "PASS"
+    }
+  },
+  "workers/semantics/multiple-workers/exposure.any.js:main": {
+    "harness": "OK",
+    "subtests": {
+      "Worker exposure": "PASS",
+      "SharedWorker exposure": "FAIL"
+    }
+  },
+  "workers/semantics/multiple-workers/exposure.any.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Worker exposure": "PASS",
+      "SharedWorker exposure": "FAIL"
+    }
+  },
+  "workers/worker-performance.worker.js:worker": {
+    "harness": "OK",
+    "subtests": {
+      "Can use performance.now in workers": "PASS",
+      "Can use performance.mark in workers": "PASS",
+      "Can use performance.measure in workers": "PASS",
+      "Can use performance.getEntriesByName in workers": "PASS",
+      "Can use performance.getEntriesByType in workers": "PASS",
+      "Performance marks and measures seem to be working correctly in workers": "PASS",
+      "Can use clearMarks and clearMeasures in workers": "PASS",
+      "Resource timing seems to work in workers": "FAIL",
+      "performance.clearResourceTimings in workers": "FAIL",
+      "performance.setResourceTimingBufferSize in workers": "FAIL",
+      "performance.timing is not available in workers": "PASS",
+      "performance.navigation is not available in workers": "PASS",
+      "performance.toJSON is available in workers": "PASS",
+      "There are no navigation type performance entries in workers": "PASS"
+    }
+  }
+}

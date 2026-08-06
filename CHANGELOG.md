@@ -8,6 +8,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **A Web Platform Tests subset for workers** (`wpt/`), running the upstream
+  tests unmodified against a pinned, sparse checkout: `workers/`,
+  `webmessaging/` and `html/webappapis/structured-clone/`. Every test runs
+  **twice** — once on the agent driving the process, once inside a real
+  dedicated worker — which is the first executable coverage the worker global
+  scope has had; the curated `conformance/*.js` suite runs entirely on the
+  driver agent.
+
+  Baseline: **514 / 734 subtests passing across 95 runs**, recorded per subtest
+  in `wpt/expectations.json` and enforced as a floor, with newly-passing
+  subtests reported so a fix cannot land without updating the record.
+
+  It is not yet a CI gate: four runtime defects it found are listed in
+  `wpt/README.md`, and one of them (a terminated worker orphaning its own
+  workers) means a full run does not exit on its own.
+
 ### Fixed
 
 - **`Atomics.wait` on the main thread hung the process.** ECMAScript gates the
