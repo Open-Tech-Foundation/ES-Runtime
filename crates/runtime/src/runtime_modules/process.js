@@ -234,6 +234,7 @@ const PERMISSIONS = Object.freeze([
   "env",
   "run",
   "signals",
+  "workers",
 ]);
 
 const permissions = Object.freeze({

@@ -35,6 +35,13 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`permissions.has("workers")` threw instead of answering.** The capability
+  arrived with workers (D48) and the introspection list was left at eight names,
+  so the supported way to ask got `TypeError: 'workers' is not a permission
+  name` — while `permissions.denied` listed it, since that comes from the Rust
+  side. Nine names now, everywhere: the flag, the `Worker` option, `denied`,
+  `has()` and `PermissionName`.
+
 - **A transferred `MessagePort` never reached the receiver.** A port named in a
   transfer list but not referenced by the message itself was validated,
   detached, and then dropped: its queue was handed to a receiver that never saw

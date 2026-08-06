@@ -891,10 +891,11 @@ if (permissions.has("write")) await fs.write("cache.json", data);
 | Export | Type | Description |
 | ------ | ---- | ----------- |
 | `permissions.denied` | `readonly PermissionName[]` | The names this process may not use, in capability order. |
-| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for a name outside the eight — a typo'd check would otherwise read as a denial and take the degraded path forever. |
+| `permissions.has(name)` | `(PermissionName) => boolean` | Whether `name` is available. Throws `TypeError` for a name outside the nine — a typo'd check would otherwise read as a denial and take the degraded path forever. |
 
 `PermissionName` is `"read" | "write" | "imports" | "net" | "listen" | "env" |
-"run" | "signals"` — the same words the `--deny-<name>` flags use.
+"run" | "signals" | "workers"` — the same words the `--deny-<name>` flags use,
+and the same words `new Worker(url, { permissions })` takes.
 
 Needs no capability, deliberately: it reveals only what a program could learn by
 calling each op and catching the denial, and code that must ask "may I?" is

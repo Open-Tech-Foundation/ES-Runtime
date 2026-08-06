@@ -142,6 +142,30 @@ fn a_granular_flag_denies_only_its_own_capability() {
 }
 
 #[test]
+fn workers_is_a_permission_name_like_any_other() {
+    // `--deny-workers` denies it and `new Worker(url, { permissions })` takes
+    // it, so `has()` has to answer for it too. It did not: the capability
+    // arrived with workers (D48) and the introspection list was left at eight
+    // names, so a program asking the supported way got a TypeError telling it
+    // `workers` is not a permission — while `denied` listed it, since that
+    // comes from the Rust side.
+    let out = run(
+        &["--deny-workers"],
+        "import { permissions } from 'runtime:process'; \
+         console.log(permissions.has('workers'), permissions.denied.join(','));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "false workers");
+
+    let granted = run(
+        &[],
+        "import { permissions } from 'runtime:process'; \
+         console.log(permissions.has('workers'));",
+    );
+    assert_eq!(stdout(&granted).trim(), "true");
+}
+
+#[test]
 fn granular_flags_accumulate() {
     let out = run(
         &["--deny-net", "--deny-run", "--deny-write"],

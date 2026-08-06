@@ -94,6 +94,7 @@ declare module "runtime:process" {
    * - `env` — this module's `env`, `args`, and `cwd()`
    * - `run` — `runtime:system` child processes
    * - `signals` — `onSignal`
+   * - `workers` — starting a `Worker`
    */
   export type PermissionName =
     | "read"
@@ -103,7 +104,8 @@ declare module "runtime:process" {
     | "listen"
     | "env"
     | "run"
-    | "signals";
+    | "signals"
+    | "workers";
 
   /**
    * What this process is allowed to reach. The policy is fixed at launch — by
