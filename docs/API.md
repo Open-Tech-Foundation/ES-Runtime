@@ -388,7 +388,8 @@ Minimum Common API — this follows the HTML Standard, as Deno and Bun do.
 // main.js
 const worker = new Worker(new URL("./worker.js", import.meta.url), {
   name: "resize",
-  permissions: ["net"],          // see Capabilities below
+  permissions: ["net"],                    // see Capabilities below
+  env: { API_BASE: "https://example.test" }, // see Environment below
 });
 worker.onmessage = (e) => console.log(e.data);
 worker.onerror = (e) => { console.error(e.message); e.preventDefault(); };
@@ -423,6 +424,20 @@ if ("DedicatedWorkerGlobalScope" in self && self instanceof DedicatedWorkerGloba
 the honest way to resolve a sibling file — `new URL("./data.bin", location)` —
 and the same set Deno exposes in a module worker.
 
+### Options
+
+| Option | | Description |
+| --- | --- | --- |
+| `type` | standard | `"module"` only; `"classic"` throws (see below) |
+| `name` | standard | The worker's `self.name` |
+| `permissions` | **ours** | Capability names to grant — see [Capabilities](#capabilities-1) |
+| `env` | **ours** | `"inherit"` or an object — see [Environment](#environment) |
+| `credentials` | — | Not supported: it governs how a *classic* script is fetched over HTTP, and a module here comes from a file |
+
+Two of the five are non-standard, and necessarily so: HTML has no notion of a
+capability, and a worker that could read the whole environment because its
+parent could would make deny-by-default stop at the first `new Worker`.
+
 **Module workers only.** `type: "classic"` throws a `TypeError`. This runtime
 evaluates every input as a module, so there is no classic-script path for a
 classic worker to use — the same reason `require` is absent.
@@ -451,7 +466,41 @@ nothing is not limited to a single file.
 > worker holds nothing until you say otherwise.
 
 Nesting is allowed: a worker holding `workers` may start its own, and may only
-pass on what it holds.
+pass on what it holds. Every level re-applies the same rule against its **own**
+set, so a grandchild cannot be handed something its parent lacks even if the
+agent driving the process holds it.
+
+### Environment
+
+`env` decides what the worker's `runtime:process` [`env`](#runtimeprocess)
+reports:
+
+| `env` | The worker sees | Needs `"env"`? |
+| --- | --- | --- |
+| omitted, or `"inherit"` | the host environment, still narrowed by the deployment's `--allow-env=<names>` | **yes** |
+| `{ … }` | exactly those variables | **no** |
+| `{}` | nothing | **no** |
+
+```js
+new Worker(url, { env: { DATABASE_URL: unmask(env.DATABASE_URL) } });
+```
+
+A handed environment needs no permission because nothing is being granted: a
+parent can only pass values it could already read, so this **attenuates** — the
+same move `permissions` makes, applied to data rather than authority. It is also
+the only way to say "this variable and no other", since `--allow-env` is set by
+the deployment rather than at the spawn.
+
+A handed environment **wins** over the host's: a worker holding `env` and given
+one reads what it was given. Secret-looking names are re-masked on arrival by
+the same convention, so a `Secret` from the parent's own `env` can be passed
+straight through and stays a `Secret` on the other side.
+
+Deliberately absent: Node's `SHARE_ENV`. A shared, mutable environment is an
+undeclared side channel between agents, and there is a declared one —
+`postMessage`. For the same reason a parent's own `env.X = …` is not visible to
+its workers: each agent's `env` is seeded from the host snapshot, not from the
+parent's object.
 
 ### Lifetime
 
@@ -660,9 +709,12 @@ Each name takes both prefixes: `--deny-net` and `--allow-net`.
 
 #### Scoped grants
 
-**Seven of the eight** can be granted narrowed to a list rather than whole
-(`imports` is the exception — what may be *loaded* is [its own
-mechanism](#import-policy--what-may-be-loaded)):
+**Seven of the nine** can be granted narrowed to a list rather than whole. The
+two exceptions are all-or-nothing: `imports`, because what may be *loaded* is
+[its own mechanism](#import-policy--what-may-be-loaded), and `workers`, because
+a worker's own grant is set at the spawn (`new Worker(url, { permissions })`)
+rather than on the command line. `--allow-workers=<list>` is **rejected** rather
+than ignored, so a run is never narrower on the command line than in reality:
 
 ```sh
 esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
@@ -745,7 +797,7 @@ than ignored** — that rule outlives the capabilities it was written for, and
 applies to any capability added later. Denials never take a value: a scope narrows a
 grant, so it is written `--deny-all --allow-<name>=<list>`.
 
-`--deny-all` is the union of all eight. It still runs the entry file — that file
+`--deny-all` is the union of all nine. It still runs the entry file — that file
 is read before the runtime exists — but since it includes `--deny-imports`, a
 fully denied run is a **single-file** run; add `--allow-imports` for an app with
 dependencies. `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive
@@ -827,7 +879,7 @@ the script opts a script's own argument out of rule 2.
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
-| `--allow-ffi` | Not one of the eight |
+| `--allow-ffi` | Not one of the nine |
 
 ---
 

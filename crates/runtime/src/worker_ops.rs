@@ -127,6 +127,10 @@ fn install_parent(
             let source = arg_str(&args, 1);
             let name = arg_str(&args, 2);
             let requested = arg_str_vec(&args, 3);
+            // `null` — the ordinary case — means "read the host environment,
+            // if you were granted it". A list of pairs is one the parent built
+            // out of values it already held.
+            let env = arg_pairs(&args, 4);
             // Read *now*, on the calling thread, rather than inside the future:
             // this is the spawning agent's own grant, and it is the ceiling on
             // what the child can be given.
@@ -136,6 +140,7 @@ fn install_parent(
                     specifier,
                     source,
                     name,
+                    env,
                     capabilities: child_capabilities(&requested, parent),
                     // Module loading, and nothing else. The child's static graph
                     // is loaded with the parent's authority to read it (which
@@ -524,6 +529,25 @@ fn arg_bytes(args: &[Value], i: usize) -> Vec<u8> {
         .and_then(Value::as_bytes)
         .map(<[u8]>::to_vec)
         .unwrap_or_default()
+}
+
+/// Reads `[[name, value], …]` — the shape `new Worker(url, { env })` sends.
+/// Absent or null is `None`; an empty list is a worker handed no environment.
+fn arg_pairs(args: &[Value], i: usize) -> Option<Vec<(String, String)>> {
+    let Some(Value::Array(items)) = args.get(i) else {
+        return None;
+    };
+    Some(
+        items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Array(pair) if pair.len() == 2 => {
+                    Some((pair[0].as_str()?.to_string(), pair[1].as_str()?.to_string()))
+                }
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 fn arg_str_vec(args: &[Value], i: usize) -> Vec<String> {

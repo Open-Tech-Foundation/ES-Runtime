@@ -658,6 +658,19 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D49 — A worker's environment is handed to it, not inherited · *Proposed (2026-08-06)*
+
+**Context:** D48 gave a worker its own capability set, so `env` is grantable per spawn. But the grant is binary: with it, the worker reads the deployment's environment (narrowed by `--allow-env=<names>`); without it, nothing. There is no way to say "this variable and no other" at the spawn, and `--allow-env` is set by the deployment rather than by the code that knows what the worker is for. Passing configuration by `postMessage` works, but nothing a library reads by convention — `DATABASE_URL`, `PORT` — is reachable that way.
+
+**Decision:** `new Worker(url, { env })`, taking `"inherit"` (the default: the host environment, still needing the `env` capability and still narrowed by the deployment) or an object of variables (precisely those, and **no capability required**).
+
+- **A handed environment is data, not authority.** A parent can only pass values it could already read, so this attenuates — the same move `permissions` makes, one level down. Requiring `env` for it would mean the narrower thing needed the broader grant; and granting `Env` to serve it would also unlock `args`, `cwd` and `platform`, which is a widening nobody asked for. The op that reports it (`process_env_provided`) is therefore ungated, and can only ever report what a parent handed *this* worker.
+- **A handed environment wins over the host's.** Holding `env` is not a reason to ignore the narrower thing the parent chose.
+- **Secret-looking names are re-masked on arrival**, by the same key convention `runtime:process` already applies, so a `Secret` passed straight through stays one.
+- **Rejected: Node's `SHARE_ENV`.** A shared, mutable environment is an undeclared side channel between agents; `postMessage` is the declared one. For the same reason a parent's own `env.X = …` stays invisible to its workers: each agent seeds `env` from the host snapshot, not from the parent's object.
+
+**Consequences:** `WorkerSpec` gains `env`, `Process` gains a defaulted `provided_env()`, and `WorkerProcess` — which already existed to narrow a worker's process view — serves it. `esrun --deny-all --allow-workers app.js` can now hand a worker exactly one secret with no environment access at all. Verified by 4 end-to-end tests (handed env without the capability, precedence over the host's, `{}`, and a malformed option throwing from the constructor rather than through `onerror`). Two gaps surfaced while building it and were fixed in passing: `permissions.has("workers")` threw, having been left out of the prelude's name list when D48 added the capability; and the build script did not re-run when only the op registrations changed, so a stale snapshot could misbind `__ops` by position (D8) — `rerun-if-changed` now names the runtime and engine sources.
+
 ### D48 — Workers: a second agent, over a provider seam, granted nothing by default · *Proposed (2026-08-06)*
 
 **Context:** `API.md` listed "Workers / multi-thread" as a durable non-goal on the grounds that multi-isolate belongs to the embeddable VM layer (Layer B). That boundary moves; the principle behind it does not.

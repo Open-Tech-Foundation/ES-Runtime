@@ -49,13 +49,20 @@ implementation.
 - **No FFI or native addons.** There is no foreign-function interface and no
   native addon ABI. The host extends the runtime through injected providers and
   capability-gated ops, in Rust.
-- **No Workers (yet).** Web Workers are not exposed. Multi-isolate execution is
-  the goal of the embeddable VM layer (Layer B, the "es-vm"), where the host owns
-  isolate lifecycle — not a Worker global in Layer A.
+- **No `SharedWorker`, and no `data:`/`blob:` worker URLs.** The dedicated
+  `Worker` ships (see [Workers](/docs/internals/workers)); the shared one exists
+  to share a worker between documents, and there are none. A worker's URL names
+  a file.
 
 ## Two layers, one core
 
 esrun is **Layer A**: a single driven runtime that the host ticks. **Layer B** —
-the embeddable "es-vm" — is the path to multiple isolates under host control, and
-is where concurrency primitives like Workers belong. Both ship from the same
-core; the Web-standard surface and capability model are shared.
+the embeddable "es-vm" — is the path to multiple isolates under host control.
+Both ship from the same core; the Web-standard surface and capability model are
+shared.
+
+Workers were once listed here as belonging to Layer B. They ship in Layer A now,
+and the principle behind that boundary held: `runtime` still owns no thread. A
+worker arrives as an injected `WorkerHost`, like every other reach outside the
+isolate, and a scheduler-backed host substitutes for it without anything above
+the seam changing.

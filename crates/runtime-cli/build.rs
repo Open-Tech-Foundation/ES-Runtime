@@ -19,9 +19,19 @@ use es_runtime_default_providers::testing::{MockResponse, MockTransport, SeededE
 use es_runtime_default_providers::{NullConsole, SystemClock};
 
 fn main() {
-    // Rebuilds are driven by cargo's fingerprint of the build-dependencies
-    // themselves (a prelude or runtime change recompiles `es-runtime`, which
-    // re-triggers this script); no rerun-if-changed needed beyond the default.
+    // The snapshot bakes the JS shell for every op, each holding the id it had
+    // when the blob was built — and on a restored snapshot `register_op` binds
+    // handlers by position and creates no shells (D8). A snapshot built from a
+    // different op list than the binary registers therefore does not fail: it
+    // *misbinds*, and `__ops.someName` quietly calls a different op.
+    //
+    // Cargo does not re-run this script when only `es-runtime`'s sources change
+    // — recompiling a build-dependency is not by itself a reason to — so the op
+    // registrations are named here explicitly. Verified the hard way: an op
+    // added to `process_ops.rs` left the previous snapshot in place, and the
+    // binary ran with the old op table.
+    println!("cargo:rerun-if-changed=../runtime/src");
+    println!("cargo:rerun-if-changed=../engine/src");
     let providers = HostProviders::new(
         Arc::new(SystemClock::new()),
         Arc::new(NullConsole),

@@ -35,6 +35,41 @@
     return __internal.transfer.serializeMessage(message, list);
   }
 
+  // `new Worker(url, { env })`: what the worker's `runtime:process` `env`
+  // reports.
+  //
+  //   omitted / "inherit"  the host environment, exactly as today — which the
+  //                        worker still needs the `env` capability to read, and
+  //                        which the deployment's `--allow-env=<names>` still
+  //                        narrows
+  //   { …  }               precisely these variables, and no capability needed
+  //                        to read them: a parent can only pass values it could
+  //                        already read, so this attenuates rather than grants.
+  //                        `{}` is a worker with no environment at all
+  //
+  // Deliberately not Node's `SHARE_ENV`: a shared, mutable environment is an
+  // undeclared side channel between agents, and this runtime already has a
+  // declared one in `postMessage`.
+  function workerEnv(value) {
+    if (value === undefined || value === "inherit") return null;
+    if (value === null || typeof value !== "object") {
+      throw new TypeError(
+        'Worker option "env" must be "inherit" or an object of variables, ' +
+          `not ${JSON.stringify(value)}`,
+      );
+    }
+    return Object.entries(value).map(([name, entry]) => {
+      // A `Secret` from the parent's own `env` carries its real value behind a
+      // registered symbol. Passing one on means passing the value — anything
+      // else would silently hand the worker the string "[redacted]" — and the
+      // worker re-masks it by the same key convention on arrival.
+      const secret = entry === null || typeof entry !== "object"
+        ? undefined
+        : entry[SECRET_VALUE];
+      return [String(name), String(secret ?? entry)];
+    });
+  }
+
   // Every event the platform delivers is trusted; one a script builds and
   // dispatches itself is not.
   const fired = (event) => event[__internal.trustEvent]();
@@ -58,6 +93,11 @@
       },
     };
   }
+
+  // `runtime:process` wraps a secret-looking env value in a `Secret`, whose
+  // real value sits behind this registered symbol. Registered precisely so the
+  // two can meet without the prelude importing the module.
+  const SECRET_VALUE = Symbol.for("runtime.secret.value");
 
   const scope = __ops.worker_scope_info();
 
@@ -88,14 +128,19 @@
         );
       }
 
+      // Validated here rather than in `#start`: a malformed option is a bad
+      // argument, and a bad argument throws from the call that made it. Only a
+      // worker that *fails to start* reports asynchronously, through `onerror`.
+      const env = workerEnv(opts.env);
+
       Object.defineProperty(this, "onmessage", handlerSlot(this, "message"));
       Object.defineProperty(this, "onmessageerror", handlerSlot(this, "messageerror"));
       Object.defineProperty(this, "onerror", handlerSlot(this, "error"));
 
-      this.#ready = this.#start(String(url), opts);
+      this.#ready = this.#start(String(url), opts, env);
     }
 
-    async #start(url, opts) {
+    async #start(url, opts, env) {
       const permissions = Array.isArray(opts.permissions)
         ? opts.permissions.map(String)
         : [];
@@ -104,7 +149,7 @@
       try {
         const absolute = new URL(url, __ops.worker_base()).href;
         const { specifier, source } = await __ops.worker_read_entry(absolute);
-        this.#id = await __ops.worker_spawn(specifier, source, name, permissions);
+        this.#id = await __ops.worker_spawn(specifier, source, name, permissions, env);
       } catch (e) {
         // A worker that cannot start reports through `onerror`, asynchronously
         // — `new Worker()` is not allowed to throw for a script that fails to

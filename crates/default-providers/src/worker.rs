@@ -574,34 +574,57 @@ fn run_worker(
 /// calling `exit(3)` would set the code the *process* exits with, from a thread
 /// the program may not know is running. A worker ending is not the program
 /// ending, so the code is dropped and only the halt survives.
-pub struct WorkerProcess(Arc<dyn es_runtime_providers::Process>);
+pub struct WorkerProcess {
+    inner: Arc<dyn es_runtime_providers::Process>,
+    /// What `new Worker(url, { env })` handed this worker, if anything.
+    env: Option<Vec<(String, String)>>,
+}
 
 impl WorkerProcess {
     /// Wraps `inner` for use inside a worker agent.
     #[must_use]
     pub fn new(inner: Arc<dyn es_runtime_providers::Process>) -> Self {
-        WorkerProcess(inner)
+        WorkerProcess { inner, env: None }
+    }
+
+    /// Serves `env` to this worker instead of the host environment.
+    ///
+    /// The parent could already read every value it passed, so this narrows
+    /// what the worker sees rather than granting it anything — which is why
+    /// reading it needs no capability.
+    #[must_use]
+    pub fn with_env(mut self, env: Option<Vec<(String, String)>>) -> Self {
+        self.env = env;
+        self
     }
 }
 
 impl es_runtime_providers::Process for WorkerProcess {
     fn env(&self) -> Vec<(String, String)> {
-        self.0.env()
+        // The handed environment wins where there is one: a worker given an
+        // explicit `env` must not also see the host's, whatever it holds.
+        match &self.env {
+            Some(env) => env.clone(),
+            None => self.inner.env(),
+        }
+    }
+    fn provided_env(&self) -> Option<Vec<(String, String)>> {
+        self.env.clone()
     }
     fn args(&self) -> Vec<String> {
-        self.0.args()
+        self.inner.args()
     }
     fn cwd(&self) -> Result<String, ProviderError> {
-        self.0.cwd()
+        self.inner.cwd()
     }
     fn platform(&self) -> String {
-        self.0.platform()
+        self.inner.platform()
     }
     fn arch(&self) -> String {
-        self.0.arch()
+        self.inner.arch()
     }
     fn hardware_concurrency(&self) -> u32 {
-        self.0.hardware_concurrency()
+        self.inner.hardware_concurrency()
     }
     fn exit(&self, _code: i32) {
         // Deliberately dropped — see the type's documentation.

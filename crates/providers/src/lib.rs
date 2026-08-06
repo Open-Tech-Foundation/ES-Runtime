@@ -499,6 +499,19 @@ pub trait Process: Send + Sync {
         1
     }
 
+    /// The environment this agent was **handed**, if it was handed one.
+    ///
+    /// `None` — the default, and what the agent driving the process always
+    /// reports — means "read the host environment", which is
+    /// [`Capability::Env`](es_runtime_common::Capability::Env)'s business.
+    /// `Some` is a worker whose parent passed `new Worker(url, { env })`: the
+    /// parent narrowed what it already held and handed the result over, so it
+    /// is *data*, not authority, and reading it needs no capability. An empty
+    /// vector is a real answer — a worker given no environment at all.
+    fn provided_env(&self) -> Option<Vec<(String, String)>> {
+        None
+    }
+
     /// Records a guest `process.exit(code)` request. The runtime also halts
     /// execution (via its interrupt handle); the embedder reads
     /// [`requested_exit_code`](Self::requested_exit_code) after the run to learn
@@ -1156,6 +1169,12 @@ pub struct WorkerSpec {
     pub source: String,
     /// The worker's `name`, as passed to `new Worker(url, { name })`.
     pub name: String,
+    /// The environment the worker is handed, or `None` to read the host's.
+    ///
+    /// A parent can only pass values it could already read, so this narrows
+    /// rather than grants: it is how a worker is given `DATABASE_URL` without
+    /// being given the environment.
+    pub env: Option<Vec<(String, String)>>,
     /// What the worker agent is allowed to do.
     ///
     /// **Never inherited.** The runtime builds this from the options the guest

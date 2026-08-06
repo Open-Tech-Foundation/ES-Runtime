@@ -134,17 +134,23 @@ already gone out.
 
 ## Messaging
 
-One agent — no workers, no second realm — so the other end of a channel is
-always in this isolate and delivery is a queued task, not a cross-thread hop.
-Messages are still structured-cloned at `postMessage` and delivered in order.
+Messages are structured-cloned at `postMessage`, delivered in order, and reach
+other agents — a worker is a second isolate on its own thread. See
+[Workers](/docs/internals/workers).
 
 | Global | Notes |
 | --- | --- |
+| `Worker` | module workers only; starts with no capabilities, granted per spawn |
 | `MessageChannel` / `MessagePort` | a port buffers until `start()`; assigning `onmessage` starts it |
-| `BroadcastChannel` | reaches every open channel of the same name except itself |
+| `BroadcastChannel` | reaches every open channel of the same name except itself, in creation order |
 
-Transferring a `MessagePort` is a `DataCloneError`: with one agent there is
-nowhere to transfer it to.
+A `MessagePort` may be **transferred** and may not be cloned — two ends of a
+channel cannot become three — and arrives through `event.ports`. `ArrayBuffer`
+and streams transfer too; a `SharedArrayBuffer` is *shared* rather than
+transferred, which is what makes `Atomics` between agents mean anything.
+
+Inside a worker the global scope is a `DedicatedWorkerGlobalScope`, with
+`WorkerNavigator` and `WorkerLocation` alongside it.
 
 ## Data
 
@@ -245,6 +251,6 @@ Node, Deno and Bun.
 | Global | Why not |
 | --- | --- |
 | `process` / `Buffer` / `require` | Node.js globals — not provided (use `runtime:` modules) |
-| `Worker` | no Workers in Layer A (see [Scope](/docs/scope)) |
+| `SharedWorker` | shares one worker between documents, and there are none |
 | `localStorage` / `window` | browser globals — out of scope |
 | `navigator.*` beyond `userAgent` | document/device/permission surface — out of scope |

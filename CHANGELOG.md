@@ -109,6 +109,26 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`new Worker(url, { env })`** — the environment a worker reports from
+  `runtime:process`, either `"inherit"` (the default: the host environment,
+  still needing the `env` permission and still narrowed by `--allow-env`) or an
+  object of variables:
+
+  ```js
+  new Worker(url, { env: { DATABASE_URL: unmask(env.DATABASE_URL) } });
+  ```
+
+  A handed environment needs **no permission**, because nothing is granted: a
+  parent can only pass values it could already read, so this attenuates — the
+  same move `permissions` makes, applied to data rather than authority. It is
+  also the only way to say "this variable and no other", since `--allow-env` is
+  set by the deployment rather than at the spawn.
+
+  A handed environment wins over the host's, `{}` is a worker with no
+  environment, and secret-looking names are re-masked on arrival — so a `Secret`
+  can be passed straight through and stays one. Node's `SHARE_ENV` has no
+  equivalent, deliberately (DECISIONS D49).
+
 - **A worker's global scope is now a real `DedicatedWorkerGlobalScope`.** The
   members were always there, but the interfaces behind them were not, so the
   one question the platform answers by them — *am I in a worker?* — could not

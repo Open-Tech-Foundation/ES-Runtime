@@ -13,6 +13,22 @@ HTML [dedicated worker](https://html.spec.whatwg.org/multipage/workers.html) —
 not part of the WinterTC Minimum Common API, so this is a deliberate step into
 the HTML Standard, in the direction Deno and Bun took.
 
+## The options
+
+| Option | | Description |
+| --- | --- | --- |
+| `type` | standard | `"module"` only; `"classic"` throws |
+| `name` | standard | the worker's `self.name` |
+| `permissions` | **ours** | capability names to grant, bounded by the spawning agent's own set |
+| `env` | **ours** | `"inherit"` or an object of variables |
+| `credentials` | — | unsupported: it governs how a *classic* script is fetched over HTTP |
+
+Two of the five are non-standard, and necessarily so. HTML has no notion of a
+capability, and a worker that could read the whole environment because its
+parent could would make deny-by-default stop at the first `new Worker`. Deno
+reaches the same conclusion and spells it `deno: { permissions }` — still behind
+`--unstable-worker-options`; here it is part of the constructor.
+
 ## One thread, one isolate, and a provider between
 
 The runtime spawns nothing. Starting an agent is an injected capability like
@@ -77,6 +93,28 @@ specific reason: **instantiation runs no guest code**. Nothing the worker's
 author wrote executes under the wider set.
 
 Nesting works, bounded by the same chain rather than by hiding the constructor.
+Every level re-applies the rule against its *own* set: a grandchild asking for
+`net` gets nothing if its parent has none, however much the agent driving the
+process holds.
+
+**The environment is attenuated, not inherited.** `permissions` narrows
+authority; `env` narrows *data*:
+
+```js
+new Worker(url, { env: { DATABASE_URL: unmask(env.DATABASE_URL) } })
+```
+
+A worker handed an environment needs no `env` permission to read it, because
+nothing was granted — the parent could already read every value it passed on.
+That is the same move `permissions` makes, one level down, and it is the only
+way to say "this variable and no other": `--allow-env=<names>` is set by the
+deployment, not at the spawn. A handed environment wins over the host's, and
+secret-looking names are re-masked on arrival, so a `Secret` stays one.
+
+Node's `SHARE_ENV` has no equivalent, deliberately. A shared mutable environment
+is an undeclared side channel between agents; `postMessage` is the declared one.
+For the same reason a parent's own `env.X = …` is invisible to its workers: each
+agent's `env` is seeded from the host snapshot, not from the parent's object.
 
 **Process control is not delegated.** `onSignal` is refused inside a worker: a
 signal is delivered to the process, and watching one suppresses the default

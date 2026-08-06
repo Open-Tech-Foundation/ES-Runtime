@@ -19,7 +19,7 @@ esrun -e=<code>             Run an inline module snippet
 esrun --deny-all            Run with no host access at all
 esrun --deny-<name>         Deny one capability; repeatable
 esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
-esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the eight)
+esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the nine)
 esrun --import-policy=<file>
                             JSON policy for what may be loaded
 esrun -t=<ms>, --timeout=<ms>
@@ -62,9 +62,9 @@ script that genuinely wants a flag esrun also knows.
 | `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
 | `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
 | `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
-| `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`. Cannot be combined with `--deny-all`. |
+| `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`. Cannot be combined with `--deny-all`. |
 | `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
-| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — see `--import-policy`. See [Scoped grants](#scoped-grants). |
+| `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — see `--import-policy` — and neither does `workers`, whose scope is set at the spawn. See [Scoped grants](#scoped-grants). |
 | `--import-policy=<file>` | A JSON file of `"allow"` and/or `"deny"` lists of package names and paths, bounding what the module loader may resolve. Never auto-discovered. A second layer, not a substitute for the `imports` capability. See [Import policy](#import-policy). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
@@ -139,6 +139,7 @@ overrides another.
 | `env` | `runtime:process` env / args / cwd |
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` onSignal |
+| `workers` | `new Worker(...)` — what the worker itself may do is granted at the spawn |
 
 A denied operation throws `NotAllowedError` (`ERR_CAPABILITY_DENIED`) before the
 effect happens. Importing a `runtime:` module always works — the gate is the
@@ -152,7 +153,7 @@ operation, not the import.
 
 ### Scoped grants
 
-**Seven of the eight** `--allow-<name>` flags take a comma-separated list that
+**Seven of the nine** `--allow-<name>` flags take a comma-separated list that
 narrows the grant instead of handing over the whole capability. `imports` is the
 exception — what may be *loaded* has [its own mechanism](#import-policy).
 
@@ -282,7 +283,8 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 | `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |
 | `esrun app.js --deny-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
-| `--allow-ffi` | Not one of the eight |
+| `--allow-ffi` | Not one of the nine |
+| `--allow-workers=x` | `workers` is all-or-nothing; the scope is set at the spawn |
 | `--timeout 500` | Same rule 1 — this is the parser's grammar, not a permission rule |
 
 <Callout type="note" title="--deny-all alone runs a single file">

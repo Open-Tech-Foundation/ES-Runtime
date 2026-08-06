@@ -77,7 +77,8 @@ whole. At this stage `--allow-net` means "any host, anywhere".
 
 ### 3. Narrow each grant to a list
 
-Seven of the eight names take a comma-separated list. Go back through the
+Seven of the nine names take a comma-separated list — `imports` and `workers`
+are all-or-nothing. Go back through the
 command and replace each whole grant with what the service actually touches:
 
 ```sh

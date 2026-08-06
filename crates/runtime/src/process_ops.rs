@@ -40,6 +40,25 @@ pub(crate) fn install(
     capabilities: Rc<Cell<CapabilitySet>>,
     is_worker: bool,
 ) -> Result<()> {
+    // Ungated, unlike `process_env` beside it, and safe for one reason: it can
+    // only report what a *parent handed this worker* — values that parent could
+    // already read and chose to pass on. On the agent driving the process it is
+    // always null. Reading data someone handed you is not an authority, which
+    // is why `new Worker(url, { env })` works without granting `env`.
+    let p = process.clone();
+    engine.register_op(OpDecl::sync("process_env_provided", move |_args| {
+        let proc = require(&p)?;
+        Ok(match proc.provided_env() {
+            Some(pairs) => Value::Array(
+                pairs
+                    .into_iter()
+                    .map(|(k, v)| Value::Array(vec![Value::String(k), Value::String(v)]))
+                    .collect(),
+            ),
+            None => Value::Null,
+        })
+    }))?;
+
     let p = process.clone();
     engine.register_op(
         OpDecl::sync("process_env", move |_args| {

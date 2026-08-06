@@ -163,6 +163,119 @@ fn a_worker_starts_with_nothing_and_is_granted_explicitly() {
 }
 
 #[test]
+fn a_worker_can_be_handed_an_environment_instead_of_the_capability() {
+    // Attenuation, the same move `permissions` makes, applied to data: the
+    // parent narrows what it can already read and hands over the result. No
+    // `env` capability is involved, because nothing is being granted — reading
+    // what someone handed you is not an authority.
+    write(
+        "env-worker.mjs",
+        r#"
+        import { env, permissions, unmask } from "runtime:process";
+        postMessage(JSON.stringify({
+          capability: permissions.has("env"),
+          keys: Object.keys(env).sort(),
+          token: `${env.API_TOKEN ?? ""}`,
+          real: env.API_TOKEN ? unmask(env.API_TOKEN) : null,
+        }));
+        "#,
+    );
+    let app = write(
+        "env-main.mjs",
+        r#"
+        const w = new Worker(new URL("./env-worker.mjs", import.meta.url), {
+          permissions: [],
+          env: { API_TOKEN: "sk-handed", MODE: "worker" },
+        });
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        w.onerror = (e) => { console.log(`err: ${e.message}`); e.preventDefault(); w.terminate(); };
+        "#,
+    );
+    let out = esrun().arg(&app).env("API_TOKEN", "sk-from-host").output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains(r#""capability":false"#), "{stdout}");
+    assert!(stdout.contains(r#""keys":["API_TOKEN","MODE"]"#), "{stdout}");
+    // The host's own API_TOKEN is not what it got.
+    assert!(stdout.contains(r#""real":"sk-handed""#), "{stdout}");
+    // And a secret-looking name is re-masked on arrival, by the same
+    // convention the parent's environment follows.
+    assert!(stdout.contains(r#""token":"[redacted]""#), "{stdout}");
+}
+
+#[test]
+fn a_handed_environment_wins_over_the_hosts() {
+    // A worker holding `env` *and* handed one reads what it was handed: being
+    // allowed to read the host environment is not a reason to ignore the
+    // narrower thing its parent chose.
+    write(
+        "envwin-worker.mjs",
+        r#"
+        import { env } from "runtime:process";
+        postMessage(Object.keys(env).join(","));
+        "#,
+    );
+    let app = write(
+        "envwin-main.mjs",
+        r#"
+        const w = new Worker(new URL("./envwin-worker.mjs", import.meta.url), {
+          permissions: ["env"],
+          env: { ONLY: "this" },
+        });
+        w.onmessage = (e) => { console.log(`saw:${e.data}`); w.terminate(); };
+        "#,
+    );
+    let out = esrun().arg(&app).env("SECRET_FROM_HOST", "leak").output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "saw:ONLY");
+}
+
+#[test]
+fn an_empty_handed_environment_is_an_empty_environment() {
+    write(
+        "envnone-worker.mjs",
+        r#"
+        import { env } from "runtime:process";
+        postMessage(`${Object.keys(env).length}`);
+        "#,
+    );
+    let app = write(
+        "envnone-main.mjs",
+        r#"
+        const w = new Worker(new URL("./envnone-worker.mjs", import.meta.url), { env: {} });
+        w.onmessage = (e) => { console.log(`count:${e.data}`); w.terminate(); };
+        w.onerror = (e) => { console.log(`err: ${e.message}`); e.preventDefault(); w.terminate(); };
+        "#,
+    );
+    let out = esrun().arg(&app).output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "count:0");
+}
+
+#[test]
+fn a_malformed_env_option_throws_from_the_constructor() {
+    // A bad argument throws where the bad argument was written. Only a worker
+    // that fails to *start* reports asynchronously through `onerror`.
+    let app = write(
+        "envbad-main.mjs",
+        r#"
+        try {
+          new Worker(new URL("./envbad-main.mjs", import.meta.url), { env: "nope" });
+        } catch (e) {
+          console.log(`${e.constructor.name}: ${e.message}`);
+        }
+        "#,
+    );
+    let out = esrun().arg(&app).output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.starts_with("TypeError:"), "{stdout}");
+    assert!(stdout.contains(r#""env" must be "inherit" or an object"#), "{stdout}");
+    // It names what it got, so the fix is obvious from the message alone.
+    assert!(stdout.contains(r#""nope""#), "{stdout}");
+}
+
+#[test]
 fn a_worker_cannot_be_granted_what_its_parent_lacks() {
     // The whole point of narrowing-only: a sandboxed program must not be able
     // to escape by spawning something less sandboxed than itself.

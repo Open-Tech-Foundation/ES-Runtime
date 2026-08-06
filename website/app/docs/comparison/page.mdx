@@ -127,8 +127,9 @@ code may be fetched from, which esrun has no equivalent of because it refuses
 remote modules outright. Node's module policy mechanism was deprecated and
 removed.
 
-esrun's eight denial names — `read`, `write`, `imports`, `net`, `listen`, `env`,
-`run`, `signals` — are also what `permissions.has()` takes. See
+esrun's nine denial names — `read`, `write`, `imports`, `net`, `listen`, `env`,
+`run`, `signals`, `workers` — are also what `permissions.has()` takes, and what
+`new Worker(url, { permissions })` takes. See
 [Security model](/docs/security#denying-capabilities-in-esrun).
 
 ## Where the API surface differs

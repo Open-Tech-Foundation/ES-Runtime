@@ -61,11 +61,13 @@ USAGE:
     esrun --deny-<name>         Deny one capability; repeatable
     esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
                                 <name> is one of: read, write, imports, net,
-                                listen, env, run, signals
+                                listen, env, run, signals, workers
     esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list:
                                 read/write (paths), net/listen (addresses),
                                 run (programs), env (variable names),
-                                signals (signal names)
+                                signals (signal names). imports and workers
+                                take no list — a worker's own grant is set at
+                                the spawn, `new Worker(url, { permissions })`
     esrun --import-policy=<file>
                                 JSON policy for what may be loaded (allow/deny
                                 lists of packages and paths)
@@ -1347,7 +1349,9 @@ async fn run() -> Result<(), String> {
                 // halting is already per-agent, but the exit *code* is recorded
                 // on a shared provider, so a worker would otherwise decide what
                 // the process exits with.
-                .with_process(Arc::new(WorkerProcess::new(worker_process.clone())));
+                .with_process(Arc::new(
+                    WorkerProcess::new(worker_process.clone()).with_env(spec.env.clone()),
+                ));
             if let Some(host) = factory_slot.get() {
                 providers = providers.with_workers(host.clone());
             }

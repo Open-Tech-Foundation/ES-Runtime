@@ -99,7 +99,14 @@ function seeded(target, fill) {
 // writes, and deletes work in-process; they do not (yet) propagate to the host
 // process or future child processes. Secret-keyed values are wrapped (above).
 const env = seeded({}, (target) => {
-  for (const [key, value] of ops.process_env()) {
+  // A worker its parent handed an `env` reads that, and needs no capability for
+  // it: those values came from the parent, which already held them. Everyone
+  // else reads the host environment, which does need `Env` — the call below is
+  // the one that throws when it was not granted.
+  const provided = ops.process_env_provided();
+  for (const [key, value] of provided ?? ops.process_env()) {
+    // Masked by the same key convention either way. A parent that unwrapped a
+    // Secret to pass it on does not thereby unmask it for the worker.
     target[key] = SECRET_KEY.test(key) ? new Secret(value) : value;
   }
 });
