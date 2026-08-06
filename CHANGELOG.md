@@ -35,6 +35,27 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`Worker.postMessage()` could deliver messages out of order.** A dedicated
+  worker's port is entangled when the constructor returns, so HTML has no window
+  in which posting order can be lost — but this runtime's spawn is asynchronous
+  (the entry is read, then the agent starts), so messages posted meanwhile are
+  queued in the `Worker` and flushed once there is an id to send them to. That
+  flush awaited each message, and the id was already set, so a `postMessage` from
+  a microtask took the direct path and overtook messages still waiting:
+
+  ```js
+  const w = new Worker(url);
+  for (let i = 0; i < 5; i++) w.postMessage(i);            // queued
+  Promise.resolve().then().then().then(() => {
+    for (let i = 10; i < 15; i++) w.postMessage(i);        // overtook 1..4
+  });
+  // the worker received 0,10,11,12,13,14,1,2,3,4,…
+  ```
+
+  The queue is now flushed synchronously, so nothing runs between the id
+  becoming observable and the queue being empty. Node, Deno and Bun all deliver
+  this in order; now so do we.
+
 - **`permissions.has("workers")` threw instead of answering.** The capability
   arrived with workers (D48) and the introspection list was left at eight names,
   so the supported way to ask got `TypeError: 'workers' is not a permission

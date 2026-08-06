@@ -55,6 +55,50 @@ fn a_worker_echoes_a_message_back() {
 }
 
 #[test]
+fn messages_arrive_in_the_order_they_were_posted() {
+    // A dedicated worker's implicit port is entangled when the constructor
+    // returns, so HTML has no window in which posting order can be lost. Ours
+    // is the only spawn that is asynchronous — the entry is read and the agent
+    // started over two awaits — so messages posted meanwhile are queued in the
+    // `Worker` and flushed once there is an id to send them to.
+    //
+    // Flushing them one await at a time reordered the queue against anything
+    // posted from a microtask: the id was already set, so a later `postMessage`
+    // took the direct path and overtook messages still waiting to be drained.
+    // Node, Deno and Bun all deliver 0..19 here.
+    let out = run(
+        "order",
+        r#"
+        const seen = [];
+        self.onmessage = (e) => {
+          if (e.data === "end") { postMessage(seen.join(",")); return; }
+          seen.push(e.data);
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        // Posted before the spawn resolves: these queue in the `Worker`.
+        for (let i = 0; i < 5; i++) w.postMessage(i);
+        // Posted from microtasks that run *while* the queue is being flushed.
+        queueMicrotask(() => { for (let i = 5; i < 10; i++) w.postMessage(i); });
+        Promise.resolve().then(() => {}).then(() => {}).then(() => {
+          for (let i = 10; i < 15; i++) w.postMessage(i);
+        });
+        // And once the worker is long since running.
+        setTimeout(() => {
+          for (let i = 15; i < 20; i++) w.postMessage(i);
+          w.postMessage("end");
+        }, 300);
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let expected: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+    assert_eq!(stdout(&out).trim(), expected.join(","));
+}
+
+#[test]
 fn a_message_crosses_as_a_real_object_graph() {
     // The point of structured clone over JSON: a Map, a Set, a Date and a cycle
     // all survive a crossing between two isolates.

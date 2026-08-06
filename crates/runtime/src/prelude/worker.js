@@ -166,8 +166,19 @@
         return null;
       }
 
-      for (const bytes of this.#pending) await __ops.worker_post(this.#id, bytes);
+      // Flushed **synchronously**, and that is the whole point: nothing may run
+      // between `#id` becoming observable and the queue being empty, or a
+      // `postMessage` from a microtask would take the direct path below and
+      // overtake messages posted before the spawn resolved. Awaiting each post
+      // here yielded exactly that window, and reordered the ordinary
+      // `new Worker(u); w.postMessage(x)` against anything posted from a `.then`.
+      //
+      // Un-awaited is not fire-and-forget of the ordering: pending async ops are
+      // polled in the order they were registered, which is what already keeps
+      // every steady-state `postMessage` in order.
+      const pending = this.#pending;
       this.#pending = [];
+      for (const bytes of pending) __ops.worker_post(this.#id, bytes);
       this.#pump();
       return this.#id;
     }
