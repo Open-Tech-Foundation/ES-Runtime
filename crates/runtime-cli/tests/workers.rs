@@ -177,9 +177,9 @@ fn an_error_in_a_running_worker_reaches_the_parent_at_once_and_ends_it() {
     // ended — so a parent that terminated the worker never heard about it at
     // all, and one that waited heard about it far too late to retry anything.
     //
-    // The `close` that follows is the other half of the signal: `error` then
-    // `close` is one clean transition, which is what a pool restarting on
-    // failure reads. Node, Deno and Bun all end the worker here too.
+    // Ending the worker is the other half of the signal: an `error` on a
+    // `Worker` now means "this one is gone", which is the single fact a pool
+    // restarting on failure needs. Node, Deno and Bun all end it here too.
     let out = run(
         "runtime-error",
         r#"
