@@ -117,8 +117,10 @@ export const SUBTESTS = [
   },
   {
     file: /^workers\/modules\//,
-    match: /^Static import \(cross-origin\)\.$/,
-    reason: "needs a second origin, and the helper is a `.sub.js` the WPT server rewrites",
+    match: /^Static import \((cross-origin|redirect)\)\.$/,
+    reason:
+      "needs the WPT server: one helper imports an unsubstituted " +
+      "`https://{{domains[www1]}}` template, the other a `redirect.py` handler",
   },
   {
     file: /^html\/webappapis\/structured-clone\//,

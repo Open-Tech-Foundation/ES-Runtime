@@ -265,7 +265,10 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
     engine.register_op(OpDecl::sync("worker_scope_info", move |_args| {
         Ok(match s.as_ref() {
             None => Value::Null,
-            Some(scope) => Value::Object(vec![("name".to_string(), Value::String(scope.name()))]),
+            Some(scope) => Value::Object(vec![
+                ("name".to_string(), Value::String(scope.name())),
+                ("url".to_string(), Value::String(scope.url())),
+            ]),
         })
     }))?;
 

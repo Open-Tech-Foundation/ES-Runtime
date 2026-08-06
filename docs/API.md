@@ -398,10 +398,30 @@ worker.postMessage({ job: 42 });
 self.onmessage = (e) => postMessage(`${self.name} did ${e.data.job}`);
 ```
 
-Inside a worker the global scope is a `DedicatedWorkerGlobalScope`:
-`postMessage`, `onmessage`, `onmessageerror`, `close()` and `name`. That is also
-how you tell where you are — there is no `isMainThread`, which is a Node-ism;
-HTML, Deno and Bun all distinguish the two by the shape of the global.
+Inside a worker the global scope really is a `DedicatedWorkerGlobalScope`:
+`postMessage`, `onmessage`, `onmessageerror`, `close()` and `name`, on a
+prototype chain of `DedicatedWorkerGlobalScope` → `WorkerGlobalScope` →
+`EventTarget`. That is also how you tell where you are — there is no
+`isMainThread`, which is a Node-ism; HTML, Deno and Bun all distinguish the two
+by the shape of the global:
+
+```js
+if ("DedicatedWorkerGlobalScope" in self && self instanceof DedicatedWorkerGlobalScope) {
+  // in a worker
+}
+```
+
+`self` is a readonly attribute of that interface, so it cannot be reassigned.
+
+| In a worker | On the agent driving the process |
+| --- | --- |
+| `WorkerGlobalScope`, `DedicatedWorkerGlobalScope` | — |
+| `navigator` is a `WorkerNavigator` | `navigator` is a `Navigator` |
+| `location` — a `WorkerLocation` over the worker's own module URL | no `location`: no one script is *the* script |
+
+`location` is read-only in every part, since there is nothing to navigate. It is
+the honest way to resolve a sibling file — `new URL("./data.bin", location)` —
+and the same set Deno exposes in a module worker.
 
 **Module workers only.** `type: "classic"` throws a `TypeError`. This runtime
 evaluates every input as a module, so there is no classic-script path for a

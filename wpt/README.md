@@ -45,8 +45,8 @@ and WPT's substituting server), `.sub.js` (server-side substitution), `.window.j
 ```
                 total   runnable   skipped   errored   timeout   passed   failed
   files            70         53        17
-  runs             79         72         —         0         7
-  subtests        600        566        34         —         —      513       53
+  runs             79         72         —         2         5
+  subtests        618        580        38         —         —      528       52
 ```
 
 - **total** — everything discovered in the three directories.
@@ -99,10 +99,11 @@ Two deliberate distortions, both forced by this being a module-only runtime:
   done earlier. Without it, tests fail over how they addressed a file rather than
   what they assert.
 
-`testharness.js` picks its environment by `instanceof DedicatedWorkerGlobalScope`.
-This runtime has no such interface object, so it selects `ShellTestEnvironment`
-in **both** modes — which is why the collector reports results directly rather
-than through the harness's worker message protocol.
+`testharness.js` picks its environment by `instanceof DedicatedWorkerGlobalScope`,
+so worker mode now selects `DedicatedWorkerTestEnvironment` — which waits to be
+told the file has finished adding tests. That is why the bundler appends
+`done()` in worker mode, exactly as upstream's own `*.any.worker.js` wrapper
+does. Main mode gets `ShellTestEnvironment` and completes on its own.
 
 ## Expectations
 

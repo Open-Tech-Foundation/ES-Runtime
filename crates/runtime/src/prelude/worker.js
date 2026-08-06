@@ -196,31 +196,161 @@
 
   // ---- the worker's half: DedicatedWorkerGlobalScope -------------------------
 
+  // ---- WorkerLocation -------------------------------------------------------
+  //
+  // The worker's own script URL, read-only. A server runtime has no document to
+  // locate, but a worker does have a location in the spec's sense — the module
+  // it was started from — and code that resolves a sibling file with
+  // `new URL("./data.bin", location)` is doing something meaningful here, not
+  // borrowing a browser idiom. Deno exposes it for the same reason; the driver
+  // agent still has none, since that scope has no script URL that is *the*
+  // script.
+  function makeLocation(href) {
+    const url = new URL(href);
+    class WorkerLocation {
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+      toString() {
+        return url.href;
+      }
+    }
+    for (const part of [
+      "href",
+      "origin",
+      "protocol",
+      "host",
+      "hostname",
+      "port",
+      "pathname",
+      "search",
+      "hash",
+    ]) {
+      // Accessors with no setter: `location.href = "…"` is a navigation, and
+      // there is nothing here to navigate.
+      Object.defineProperty(WorkerLocation.prototype, part, {
+        get: () => url[part],
+        enumerable: true,
+        configurable: true,
+      });
+    }
+    Object.defineProperty(WorkerLocation.prototype, Symbol.toStringTag, {
+      value: "WorkerLocation",
+      configurable: true,
+    });
+    return { WorkerLocation, location: Object.create(WorkerLocation.prototype) };
+  }
+
+  // ---- the scope interfaces -------------------------------------------------
+  //
+  // `WorkerGlobalScope` and `DedicatedWorkerGlobalScope` exist so that the two
+  // scopes can be *told apart*: `self instanceof DedicatedWorkerGlobalScope` is
+  // how the platform says "am I in a worker", and WPT's own helpers, Deno and
+  // real worker code all use exactly that. Without them the members were still
+  // there and the question was unanswerable, which is worse than either.
+  //
+  // The members move onto the prototypes rather than staying own properties of
+  // the global, because that is what makes `self` a readonly attribute of an
+  // interface rather than a variable a script can overwrite.
+  //
+  // The global object cannot be a real instance — it has no private fields to
+  // brand — so these prototypes hold no per-instance state and close over what
+  // they need. Reaching them through the chain is what `instanceof` checks, and
+  // that is the observable half.
+  // A worker's `navigator` is a **WorkerNavigator**, and `Navigator` is not
+  // exposed in a worker at all — one interface per scope is how the two are
+  // told apart, and WPT checks both halves.
+  //
+  // Built from `Navigator.prototype`'s own descriptors rather than written out
+  // again, so the two interfaces cannot drift; the members read no `this`, so
+  // they work on this receiver. `navigator.js` cannot do this itself: it is
+  // baked into the snapshot, where which scope this will be is not yet known.
+  function makeNavigator() {
+    class WorkerNavigator {
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+    }
+    for (const [member, descriptor] of Object.entries(
+      Object.getOwnPropertyDescriptors(Object.getPrototypeOf(globalThis.navigator)),
+    )) {
+      if (member === "constructor") continue;
+      Object.defineProperty(WorkerNavigator.prototype, member, descriptor);
+    }
+    Object.defineProperty(WorkerNavigator.prototype, Symbol.toStringTag, {
+      value: "WorkerNavigator",
+      configurable: true,
+    });
+    return {
+      WorkerNavigator,
+      navigator: Object.create(WorkerNavigator.prototype),
+    };
+  }
+
   function installWorkerScope(info) {
-    Object.defineProperty(globalThis, "name", {
-      value: info.name,
+    const { WorkerNavigator, navigator } = makeNavigator();
+    const { WorkerLocation, location } = makeLocation(info.url);
+
+    class WorkerGlobalScope extends EventTarget {
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+      get self() {
+        return globalThis;
+      }
+      get location() {
+        return location;
+      }
+      get navigator() {
+        return navigator;
+      }
+    }
+
+    class DedicatedWorkerGlobalScope extends WorkerGlobalScope {
+      constructor() {
+        throw new TypeError("Illegal constructor");
+      }
+      get name() {
+        return info.name;
+      }
+      postMessage(message, options) {
+        __ops.worker_self_post(serialize(message, options));
+      }
+      close() {
+        __ops.worker_self_close();
+      }
+    }
+
+    for (const [Interface, tag] of [
+      [WorkerGlobalScope, "WorkerGlobalScope"],
+      [DedicatedWorkerGlobalScope, "DedicatedWorkerGlobalScope"],
+    ]) {
+      Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
+        value: tag,
+        configurable: true,
+      });
+    }
+
+    globalThis.WorkerGlobalScope = WorkerGlobalScope;
+    globalThis.DedicatedWorkerGlobalScope = DedicatedWorkerGlobalScope;
+    globalThis.WorkerNavigator = WorkerNavigator;
+    globalThis.WorkerLocation = WorkerLocation;
+    // `Navigator` is the window's interface and is not exposed in a worker;
+    // `navigator` here is the WorkerNavigator built above.
+    delete globalThis.Navigator;
+    Object.defineProperty(globalThis, "navigator", {
+      value: navigator,
       writable: false,
       enumerable: true,
       configurable: true,
     });
 
-    Object.defineProperty(globalThis, "postMessage", {
-      value(message, options) {
-        __ops.worker_self_post(serialize(message, options));
-      },
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
+    // `self` is an own, writable property on every agent (globals.js). In a
+    // worker the interface's readonly accessor takes over, so the own one has
+    // to go or it would keep shadowing it — and `self = 1` would keep sticking.
+    delete globalThis.self;
 
-    Object.defineProperty(globalThis, "close", {
-      value() {
-        __ops.worker_self_close();
-      },
-      writable: true,
-      enumerable: true,
-      configurable: true,
-    });
+    Object.setPrototypeOf(globalThis, DedicatedWorkerGlobalScope.prototype);
 
     Object.defineProperty(globalThis, "onmessage", handlerSlot(globalThis, "message"));
     Object.defineProperty(

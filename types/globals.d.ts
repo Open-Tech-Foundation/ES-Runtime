@@ -35,3 +35,13 @@ interface Navigator {
    */
   readonly hardwareConcurrency: number;
 }
+
+/**
+ * The same member, on the interface a *worker's* `navigator` implements.
+ * `Navigator` is not exposed inside a worker, and `WorkerNavigator` is not
+ * exposed outside one — which interface you have is how the two scopes are told
+ * apart.
+ */
+interface WorkerNavigator {
+  readonly hardwareConcurrency: number;
+}

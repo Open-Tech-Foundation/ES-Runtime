@@ -33,6 +33,36 @@ namespace) is unstable and may change between minor releases until the API freez
   `wpt/README.md`, and one of them (a terminated worker orphaning its own
   workers) means a full run does not exit on its own.
 
+### Added
+
+- **A worker's global scope is now a real `DedicatedWorkerGlobalScope`.** The
+  members were always there, but the interfaces behind them were not, so the
+  one question the platform answers by them — *am I in a worker?* — could not
+  be asked:
+
+  ```js
+  if ("DedicatedWorkerGlobalScope" in self && self instanceof DedicatedWorkerGlobalScope) {
+  ```
+
+  which is the idiom HTML intends, Deno supports, and WPT's own helpers use. A
+  worker whose scope did not answer it silently took no branch at all.
+
+  `WorkerGlobalScope` and `DedicatedWorkerGlobalScope` are exposed in a worker
+  (and only there), the members move onto their prototypes, and the global's
+  prototype chain becomes `DedicatedWorkerGlobalScope` → `WorkerGlobalScope` →
+  `EventTarget`. `self` becomes the interface's readonly attribute, so it can no
+  longer be overwritten.
+
+- **`navigator` in a worker is a `WorkerNavigator`**, and `Navigator` is no
+  longer exposed there. One interface per scope, as the spec has it; the members
+  are unchanged, and are built from `Navigator`'s own descriptors so the two
+  cannot drift.
+
+- **`location` in a worker**, a read-only `WorkerLocation` over the worker's own
+  module URL — so `new URL("./data.bin", location)` resolves a sibling file. The
+  agent driving the process still has none: no one script there is *the* script.
+  The same set Deno exposes in a module worker.
+
 ### Fixed
 
 - **`terminate()` left a worker's own workers running.** HTML terminates the

@@ -627,7 +627,7 @@
   "workers/Worker-constructor-proto.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Tests that setting the proto of a built in constructor is not reset.": "FAIL"
+      "Tests that setting the proto of a built in constructor is not reset.": "PASS"
     }
   },
   "workers/Worker-custom-event.any.js:worker": {
@@ -657,7 +657,7 @@
   "workers/Worker-replace-self.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Test that self is not replaceable.": "FAIL"
+      "Test that self is not replaceable.": "PASS"
     }
   },
   "workers/WorkerNavigator-hardware-concurrency.any.js:worker": {
@@ -678,7 +678,7 @@
       "existence of postMessage": "PASS",
       "existence of onmessage": "PASS",
       "existence of self": "PASS",
-      "existence of location": "FAIL",
+      "existence of location": "PASS",
       "existence of close": "PASS",
       "existence of onerror": "PASS",
       "existence of onoffline": "SKIP",
@@ -807,16 +807,16 @@
   "workers/interfaces/WorkerGlobalScope/location/returns-same-object.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "location === location": "FAIL"
+      "location === location": "PASS"
     }
   },
   "workers/interfaces/WorkerGlobalScope/self.any.js:worker": {
     "harness": "OK",
     "subtests": {
       "self === self": "PASS",
-      "self instanceof WorkerGlobalScope": "FAIL",
+      "self instanceof WorkerGlobalScope": "PASS",
       "'self' in self": "PASS",
-      "self = 1": "FAIL"
+      "self = 1": "PASS"
     }
   },
   "workers/interfaces/WorkerUtils/navigator/008.worker.js:worker": {
@@ -826,12 +826,32 @@
     }
   },
   "workers/modules/dedicated-worker-import.any.js:main": {
-    "harness": "TIMEOUT",
-    "subtests": {}
+    "harness": "ERROR",
+    "subtests": {
+      "Static import.": "PASS",
+      "Static import (cross-origin).": "SKIP",
+      "Static import (redirect).": "SKIP",
+      "Nested static import.": "PASS",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
   },
   "workers/modules/dedicated-worker-import.any.js:worker": {
-    "harness": "TIMEOUT",
-    "subtests": {}
+    "harness": "ERROR",
+    "subtests": {
+      "Static import.": "PASS",
+      "Static import (cross-origin).": "SKIP",
+      "Static import (redirect).": "SKIP",
+      "Nested static import.": "PASS",
+      "Static import and then dynamic import.": "FAIL",
+      "Dynamic import.": "FAIL",
+      "Nested dynamic import.": "FAIL",
+      "Dynamic import and then static import.": "FAIL",
+      "eval(import()).": "FAIL"
+    }
   },
   "workers/nested_worker.worker.js:worker": {
     "harness": "OK",
@@ -854,14 +874,14 @@
   "workers/semantics/interface-objects/001.worker.js:worker": {
     "harness": "OK",
     "subtests": {
-      "The WorkerGlobalScope interface object should be exposed.": "FAIL",
-      "The DedicatedWorkerGlobalScope interface object should be exposed.": "FAIL",
+      "The WorkerGlobalScope interface object should be exposed.": "PASS",
+      "The DedicatedWorkerGlobalScope interface object should be exposed.": "PASS",
       "The Worker interface object should be exposed.": "PASS",
       "The MessagePort interface object should be exposed.": "PASS",
       "The MessageEvent interface object should be exposed.": "PASS",
-      "The WorkerNavigator interface object should be exposed.": "FAIL",
+      "The WorkerNavigator interface object should be exposed.": "PASS",
       "The MessageChannel interface object should be exposed.": "PASS",
-      "The WorkerLocation interface object should be exposed.": "FAIL",
+      "The WorkerLocation interface object should be exposed.": "PASS",
       "The ImageData interface object should be exposed.": "SKIP",
       "The ImageBitmap interface object should be exposed.": "SKIP",
       "The CanvasGradient interface object should be exposed.": "SKIP",
@@ -929,7 +949,7 @@
       "The AbstractWorker interface object should not be exposed.": "PASS",
       "The ApplicationCache interface object should not be exposed.": "PASS",
       "The Location interface object should not be exposed.": "PASS",
-      "The Navigator interface object should not be exposed.": "FAIL",
+      "The Navigator interface object should not be exposed.": "PASS",
       "The Audio interface object should not be exposed.": "PASS",
       "The HTMLCanvasElement interface object should not be exposed.": "PASS",
       "The Path interface object should not be exposed.": "PASS",

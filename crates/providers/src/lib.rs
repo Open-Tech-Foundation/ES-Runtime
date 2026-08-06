@@ -1335,6 +1335,11 @@ pub trait WorkerScope: Send + Sync {
     /// This worker's `name`, from `new Worker(url, { name })`.
     fn name(&self) -> String;
 
+    /// The absolute URL of the worker's entry module — what `location` reports
+    /// inside it. The same string as [`WorkerSpec::specifier`], handed back to
+    /// the agent that is running it.
+    fn url(&self) -> String;
+
     /// Sends one structured-clone payload to the parent agent.
     fn post(&self, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
 

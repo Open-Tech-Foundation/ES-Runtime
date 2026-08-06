@@ -64,6 +64,8 @@ where
 /// channels, plus the flag `self.close()` sets.
 struct ThreadScope {
     name: String,
+    /// The entry module's absolute URL, which is what `location` reports.
+    url: String,
     to_parent: mpsc::UnboundedSender<WorkerIncoming>,
     // `Arc`, not a plain field: `BoxFuture` is `'static`, so a future returned
     // from `&self` cannot borrow — it has to own a handle.
@@ -79,6 +81,10 @@ struct ThreadScope {
 impl WorkerScope for ThreadScope {
     fn name(&self) -> String {
         self.name.clone()
+    }
+
+    fn url(&self) -> String {
+        self.url.clone()
     }
 
     fn post(&self, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>> {
@@ -232,6 +238,7 @@ impl WorkerHost for ThreadWorkerHost {
         let factory = self.factory.clone();
         let scope = Arc::new(ThreadScope {
             name: spec.name.clone(),
+            url: spec.specifier.clone(),
             to_parent: to_parent.clone(),
             from_parent: Arc::new(Mutex::new(worker_inbox)),
             closed: closed.clone(),
