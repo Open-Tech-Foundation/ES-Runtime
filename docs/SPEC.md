@@ -167,11 +167,16 @@ Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM
   cross-agent `SharedArrayBuffer`, agent-cluster `BroadcastChannel`
   (`BroadcastHub`), transferable `MessagePort` (`PortHub`) and transferable
   streams.
-  - **Deferred: cross-agent `blob:` URLs.** `URL.createObjectURL` registers in a
-    per-isolate map, where the spec scopes the blob URL store to the agent
-    cluster — so a `blob:` URL minted on one agent does not resolve on another.
-    Closing it needs a host-side blob registry (a fifth messaging provider); the
-    single-agent behaviour is unchanged and correct.
+  - **Not planned: cross-agent `blob:` URLs, and `blob:`/`data:` worker URLs.**
+    `URL.createObjectURL` registers in a per-isolate map, where the spec scopes
+    the blob URL store to the agent cluster — so a `blob:` URL minted on one
+    agent does not resolve on another, and neither scheme names a module a
+    worker can start from. Closing the first would need a host-side blob
+    registry (a fifth messaging provider), and the second a non-file module
+    source. Both exist to move code and data *within a page*; on a server the
+    file is already there and the bytes already cross by `postMessage`. Reviewed
+    2026-08-06 and left undone deliberately: no server-side use case was found
+    for either. The single-agent `blob:` behaviour is unchanged and correct.
   - **Deferred: the zero-copy op crossing** (D3a Phase 8), now *measured* rather
     than assumed. `bench/worker-postmessage.js`, release build: 1 KiB messages
     cost 0.065 ms each and 8 MiB messages 4.34 ms. The 1 KiB figure is fixed

@@ -120,7 +120,7 @@
       "An object whose interface is deleted from the global must still deserialize": "PASS",
       "A subclass instance will deserialize as its closest serializable superclass": "PASS",
       "Resizable ArrayBuffer": "PASS",
-      "Growable SharedArrayBuffer": "FAIL",
+      "Growable SharedArrayBuffer": "SKIP",
       "Length-tracking TypedArray": "PASS",
       "Length-tracking DataView": "PASS",
       "Serializing OOB TypedArray throws": "PASS",
@@ -262,7 +262,7 @@
       "An object whose interface is deleted from the global must still deserialize": "PASS",
       "A subclass instance will deserialize as its closest serializable superclass": "PASS",
       "Resizable ArrayBuffer": "PASS",
-      "Growable SharedArrayBuffer": "FAIL",
+      "Growable SharedArrayBuffer": "SKIP",
       "Length-tracking TypedArray": "PASS",
       "Length-tracking DataView": "PASS",
       "Serializing OOB TypedArray throws": "PASS",
@@ -281,18 +281,6 @@
       "Length-tracking DataView is transferable": "PASS",
       "Transferring OOB TypedArray throws": "PASS",
       "Transferring OOB DataView throws": "PASS"
-    }
-  },
-  "webmessaging/Channel_postMessage_Blob.any.js:main": {
-    "harness": "OK",
-    "subtests": {
-      "Test Description: Messages can contain Blobs.": "FAIL"
-    }
-  },
-  "webmessaging/Channel_postMessage_Blob.any.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Test Description: Messages can contain Blobs.": "FAIL"
     }
   },
   "webmessaging/Channel_postMessage_DataCloneErr.any.js:main": {
@@ -701,7 +689,7 @@
     "subtests": {
       "existence of XMLHttpRequest": "SKIP",
       "existence of WebSocket": "PASS",
-      "existence of EventSource": "FAIL",
+      "existence of EventSource": "SKIP",
       "existence of MessageChannel": "PASS",
       "existence of Worker": "PASS"
     }
@@ -889,7 +877,7 @@
       "The TextMetrics interface object should be exposed.": "SKIP",
       "The Path2D interface object should be exposed.": "SKIP",
       "The PromiseRejectionEvent interface object should be exposed.": "PASS",
-      "The EventSource interface object should be exposed.": "FAIL",
+      "The EventSource interface object should be exposed.": "SKIP",
       "The BroadcastChannel interface object should be exposed.": "PASS",
       "The WebSocket interface object should be exposed.": "PASS",
       "The CloseEvent interface object should be exposed.": "PASS",
@@ -915,7 +903,7 @@
       "The File interface object should be exposed.": "PASS",
       "The Blob interface object should be exposed.": "PASS",
       "The FileList interface object should be exposed.": "SKIP",
-      "The FileReader interface object should be exposed.": "FAIL",
+      "The FileReader interface object should be exposed.": "SKIP",
       "The FileReaderSync interface object should be exposed.": "SKIP",
       "The EventTarget interface object should be exposed.": "PASS",
       "The ErrorEvent interface object should be exposed.": "PASS",

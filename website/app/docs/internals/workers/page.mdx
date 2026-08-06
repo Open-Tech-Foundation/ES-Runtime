@@ -153,4 +153,6 @@ isolate, so an unbounded `new Worker()` loop is a way to exhaust both.
 
 A `blob:` URL minted on one agent does **not** resolve on another: the
 object-URL store is per-isolate, where the spec scopes it to the agent cluster.
-Closing that needs a host-side blob registry.
+A worker's URL must name a file, so `data:` and `blob:` are refused there too.
+Neither is planned — both schemes carry code and data around a page, and here
+the file is already on disk and the bytes already cross by `postMessage`.

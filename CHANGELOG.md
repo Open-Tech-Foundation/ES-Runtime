@@ -18,13 +18,13 @@ namespace) is unstable and may change between minor releases until the API freez
   scope has had; the curated `conformance/*.js` suite runs entirely on the
   driver agent.
 
-  Baseline: **513 / 566 runnable subtests (90.6%)** across 72 completed runs,
+  Baseline: **528 / 573 runnable subtests (92.1%)** across 70 completed runs,
   recorded per subtest in `wpt/expectations.json` and enforced as a floor, with
   newly-passing subtests reported so a fix cannot land without updating the
   record.
 
   What counts as *runnable* is decided by `wpt/scope.js`, which excludes — with
-  a reason each, and only for things inapplicable by design — 17 files and 34
+  a reason each, and only for things inapplicable by design — 18 files and 43
   subtests that test a renderer, a document, browser-local storage or classic
   scripts. Nothing is excluded for merely being unimplemented, so the failing
   count is exactly the work left.
@@ -32,6 +32,18 @@ namespace) is unstable and may change between minor releases until the API freez
   It is not yet a CI gate: the runtime defects it found are listed in
   `wpt/README.md`, and one of them (a terminated worker orphaning its own
   workers) means a full run does not exit on its own.
+
+### Changed
+
+- **`blob:` URLs across agents, and `blob:`/`data:` worker URLs, are now stated
+  non-goals** rather than deferrals (SPEC §14, DECISIONS D48). Both schemes
+  exist to carry code and data around inside a page; on a server the file is
+  already on disk and the bytes already cross by `postMessage`. Behaviour is
+  unchanged — `new Worker("data:…")` is refused with the scheme named, and a
+  `blob:` URL still resolves on the agent that minted it. `FileReader` and
+  `EventSource` are likewise declined: `Blob.text()`/`.arrayBuffer()`/`.stream()`
+  supersede the first, and the second is a client for a protocol a server
+  implements rather than consumes.
 
 ### Added
 

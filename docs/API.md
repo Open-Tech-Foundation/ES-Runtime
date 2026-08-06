@@ -481,9 +481,12 @@ graphs all survive — this is not JSON. Transferable in a transfer list:
 A `MessagePort` and a stream may be transferred but not cloned; either outside
 the transfer list is a `DataCloneError`.
 
-**Not yet:** a `blob:` URL minted on one agent does not resolve on another —
+**Not planned:** a `blob:` URL minted on one agent does not resolve on another —
 the object-URL store is per-isolate, where the spec scopes it to the agent
-cluster.
+cluster — and a worker's URL must name a file: `new Worker("data:…")` and
+`new Worker("blob:…")` are refused. Both schemes exist to move code and data
+around inside a page; here the file is already on disk, and bytes cross by
+`postMessage`.
 
 ---
 

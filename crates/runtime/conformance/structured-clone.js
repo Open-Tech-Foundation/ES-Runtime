@@ -79,6 +79,50 @@ test("structuredClone detaches a transferred ArrayBuffer", () => {
   assertEquals(ab.byteLength, 0);
 });
 
+// A growable SharedArrayBuffer (ES2024) grows in place instead of being
+// reallocated and copied — which for a *shared* buffer is the difference
+// between resizing and running a protocol to get every agent onto a new one.
+// It only ever grows: another agent may be reading it, and shrinking under a
+// reader would be unsafe.
+//
+// Asserted here because WPT's own case for it is out of scope — it tests the
+// browser's cross-origin-isolation gate on cloning SABs, not growability (see
+// wpt/scope.js) — so without these there is nothing guarding the behaviour.
+test("a SharedArrayBuffer can be growable", () => {
+  const sab = new SharedArrayBuffer(8, { maxByteLength: 64 });
+  assertEquals(sab.growable, true);
+  assertEquals(sab.maxByteLength, 64);
+  assertEquals(sab.byteLength, 8);
+  // A plain one is not, and says so rather than being undefined.
+  assertEquals(new SharedArrayBuffer(8).growable, false);
+});
+
+test("growing a SharedArrayBuffer carries its length-tracking views along", () => {
+  const sab = new SharedArrayBuffer(8, { maxByteLength: 64 });
+  // No explicit length: the view tracks the buffer.
+  const view = new Uint8Array(sab);
+  assertEquals(view.length, 8);
+  sab.grow(32);
+  assertEquals(sab.byteLength, 32);
+  assertEquals(view.length, 32);
+  // Shrinking is not a thing a shared buffer may do: a reader in another agent
+  // could be inside the part being taken away. `RangeError`, per the spec's
+  // step for a newLength below the current one.
+  assertThrows(() => sab.grow(16), "RangeError");
+  // Nor past the maximum reserved up front.
+  assertThrows(() => sab.grow(128), "RangeError");
+});
+
+test("structuredClone keeps a growable SharedArrayBuffer shared and growable", () => {
+  const sab = new SharedArrayBuffer(8, { maxByteLength: 64 });
+  const clone = structuredClone(sab);
+  assertEquals(clone.growable, true);
+  assertEquals(clone.maxByteLength, 64);
+  // Shared, not copied: the same bytes in both handles.
+  new Uint8Array(sab)[0] = 42;
+  assertEquals(new Uint8Array(clone)[0], 42);
+});
+
 test("structuredClone preserves the standard Error subclasses", () => {
   for (const Ctor of [Error, EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError]) {
     const c = structuredClone(new Ctor("m"));

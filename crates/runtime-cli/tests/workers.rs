@@ -58,16 +58,22 @@ fn a_worker_echoes_a_message_back() {
 fn a_message_crosses_as_a_real_object_graph() {
     // The point of structured clone over JSON: a Map, a Set, a Date and a cycle
     // all survive a crossing between two isolates.
+    //
+    // The Blob is here for a different reason. It is a *host* object — V8's
+    // serializer has no representation for one, so it crosses through the codec
+    // registered beside its own definition — and it is the only type in this
+    // message whose contents live outside the value graph.
     let out = run(
         "graph",
         r#"
-        self.onmessage = (e) => {
-          const { map, set, date, cyclic } = e.data;
+        self.onmessage = async (e) => {
+          const { map, set, date, cyclic, blob } = e.data;
           postMessage([
             map instanceof Map && map.get("k") === "v",
             set instanceof Set && set.has(7),
             date instanceof Date && date.getTime() === 1234,
             cyclic.self === cyclic,
+            blob instanceof Blob && blob.type === "text/plain" && (await blob.text()) === "hi",
           ].join(","));
         };
         "#,
@@ -81,12 +87,13 @@ fn a_message_crosses_as_a_real_object_graph() {
           set: new Set([7]),
           date: new Date(1234),
           cyclic,
+          blob: new Blob(["hi"], { type: "text/plain" }),
         });
         "#,
         &[],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert_eq!(stdout(&out).trim(), "true,true,true,true");
+    assert_eq!(stdout(&out).trim(), "true,true,true,true,true");
 }
 
 #[test]

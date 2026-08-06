@@ -84,7 +84,15 @@ export const FILES = [
     match: /^workers\/modules\/dedicated-worker-import-(data|blob)-url\.any\.js$/,
     reason:
       "needs WPT's server: every case appends ?pipe=header(Access-Control-Allow-Origin,*) " +
-      "and turns on a worker having a null origin — an HTTP-origin test, not a module-worker one",
+      "and turns on a worker having a null origin — an HTTP-origin test, not a module-worker one. " +
+      "`data:` and `blob:` worker URLs are separately a non-goal (API.md): a module comes from a file",
+  },
+  {
+    match: /^webmessaging\/Channel_postMessage_Blob\.any\.js$/,
+    reason:
+      "reads the Blob back with FileReader, which this runtime does not have — Blob's own " +
+      "text()/arrayBuffer() supersede it. A Blob crossing a port is covered instead by " +
+      "`a_message_crosses_as_a_real_object_graph` in crates/runtime-cli/tests/workers.rs",
   },
 ];
 
@@ -126,6 +134,26 @@ export const SUBTESTS = [
     file: /^html\/webappapis\/structured-clone\//,
     match: /^(ImageBitmap|OffscreenCanvas)$/,
     reason: "cloning a canvas object, which needs a rendering engine",
+  },
+  {
+    // Both decided against rather than unbuilt, so they belong here rather than
+    // in the failing count: `FileReader` is the callback-era way to read a Blob,
+    // and `Blob.text()`/`.arrayBuffer()`/`.stream()` already cover it;
+    // `EventSource` is a client for a protocol a server implements rather than
+    // consumes, and `fetch` with a stream reads one in a few lines.
+    match: /^(The (FileReader|EventSource) interface object should be exposed\.|existence of (FileReader|EventSource))$/,
+    reason: "decided against: Blob's own read methods supersede FileReader; EventSource is a browser-side SSE client",
+  },
+  {
+    file: /^html\/webappapis\/structured-clone\//,
+    match: /^Growable SharedArrayBuffer$/,
+    reason:
+      "an origin-isolation test wearing a SharedArrayBuffer costume: its assertion is only " +
+      "reached when cloning a SAB is *refused*, which in a browser means a context that is not " +
+      "crossOriginIsolated. We have no origin isolation and clone it successfully, at which point " +
+      "the shared helper asserts a SharedArrayBuffer `instanceof ArrayBuffer` — false in every " +
+      "engine, by ECMAScript. Growable SABs themselves work: created, grown, length-tracking " +
+      "views, and shared across agents",
   },
   {
     file: /^workers\/worker-performance\.worker\.js$/,
