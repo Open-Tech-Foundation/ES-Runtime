@@ -136,6 +136,15 @@ impl Process for SystemProcess {
         std::env::consts::OS.to_string()
     }
 
+    fn hardware_concurrency(&self) -> u32 {
+        // `available_parallelism` respects cgroup/affinity limits, so a
+        // container sees its share rather than the whole machine — which is the
+        // number a pool should be sized from.
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1)
+    }
+
     fn arch(&self) -> String {
         std::env::consts::ARCH.to_string()
     }

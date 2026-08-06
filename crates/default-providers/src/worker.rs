@@ -438,3 +438,49 @@ fn run_worker(
     closed.store(true, Ordering::SeqCst);
     let _ = to_parent.send(WorkerIncoming::Closed);
 }
+
+/// A [`Process`] view for a worker agent: everything the host one reports, but
+/// `exit` stops only this worker.
+///
+/// `runtime:process` `exit(code)` does two things — record the code, and halt
+/// execution. Halting is already per-agent, because each runtime interrupts its
+/// own isolate. Recording is not: the `Process` provider is shared, so a worker
+/// calling `exit(3)` would set the code the *process* exits with, from a thread
+/// the program may not know is running. A worker ending is not the program
+/// ending, so the code is dropped and only the halt survives.
+pub struct WorkerProcess(Arc<dyn es_runtime_providers::Process>);
+
+impl WorkerProcess {
+    /// Wraps `inner` for use inside a worker agent.
+    #[must_use]
+    pub fn new(inner: Arc<dyn es_runtime_providers::Process>) -> Self {
+        WorkerProcess(inner)
+    }
+}
+
+impl es_runtime_providers::Process for WorkerProcess {
+    fn env(&self) -> Vec<(String, String)> {
+        self.0.env()
+    }
+    fn args(&self) -> Vec<String> {
+        self.0.args()
+    }
+    fn cwd(&self) -> Result<String, ProviderError> {
+        self.0.cwd()
+    }
+    fn platform(&self) -> String {
+        self.0.platform()
+    }
+    fn arch(&self) -> String {
+        self.0.arch()
+    }
+    fn hardware_concurrency(&self) -> u32 {
+        self.0.hardware_concurrency()
+    }
+    fn exit(&self, _code: i32) {
+        // Deliberately dropped — see the type's documentation.
+    }
+    fn requested_exit_code(&self) -> Option<i32> {
+        None
+    }
+}

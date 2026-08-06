@@ -481,3 +481,102 @@ fn atomics_wait_blocks_in_a_worker_but_throws_on_the_main_agent() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out), "main: TypeError\nworker: not-equal\n");
 }
+
+#[test]
+fn a_worker_may_start_its_own_worker() {
+    // The spec allows nesting. What bounds it is the capability chain, not
+    // hiding the constructor: a worker can only spawn if it holds `workers`,
+    // and can only pass on what it holds, so a chain narrows and never widens.
+    write("nested-inner.mjs", r#"postMessage("inner ran"); close();"#);
+    let out = run(
+        "nested",
+        r#"
+        const inner = new Worker(new URL("./nested-inner.mjs", import.meta.url), {
+          permissions: ["workers", "imports"],
+        });
+        inner.onmessage = (e) => { postMessage(`nested: ${e.data}`); inner.terminate(); close(); };
+        inner.onerror = (e) => { postMessage(`nested error: ${e.message}`); e.preventDefault(); close(); };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["workers", "imports"],
+        });
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        w.onerror = (e) => { console.log(`err: ${e.message}`); e.preventDefault(); w.terminate(); };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "nested: inner ran");
+}
+
+#[test]
+fn a_worker_cannot_watch_signals() {
+    // A signal is delivered to the process, and watching one suppresses the
+    // default action — so a worker taking SIGTERM would decide, from a thread
+    // the program may not know is running, whether the process declines to die.
+    let out = run(
+        "signals",
+        r#"
+        import { onSignal } from "runtime:process";
+        try {
+          onSignal("SIGINT", () => {});
+          postMessage("watched");
+        } catch (e) {
+          postMessage("refused");
+        }
+        close();
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["signals", "imports"],
+        });
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "refused");
+}
+
+#[test]
+fn process_exit_in_a_worker_ends_only_that_worker() {
+    let out = run(
+        "exit",
+        r#"
+        import { exit } from "runtime:process";
+        postMessage("worker exiting");
+        exit(3);
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["env", "imports"],
+        });
+        w.onmessage = (e) => console.log(e.data);
+        setTimeout(() => { console.log("parent still alive"); w.terminate(); }, 300);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "worker exiting\nparent still alive\n");
+}
+
+#[test]
+fn a_timeout_stops_a_worker_spinning_in_a_synchronous_loop() {
+    let out = run(
+        "spin",
+        r#"postMessage("spinning"); while (true) {}"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => console.log(e.data);
+        setTimeout(() => {}, 60000);
+        "#,
+        &["--timeout=1000"],
+    );
+    // The deadline is the point: without it this test would not finish.
+    assert!(
+        stderr(&out).contains("timed out"),
+        "expected a timeout; stderr: {}",
+        stderr(&out)
+    );
+}

@@ -61,6 +61,7 @@ pub(crate) fn install(
         providers.signals(),
         interrupt,
         capabilities.clone(),
+        providers.worker_scope().is_some(),
     )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
     crate::fs_ops::install(engine, providers.file_system())?;

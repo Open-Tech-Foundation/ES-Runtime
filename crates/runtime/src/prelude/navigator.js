@@ -5,9 +5,13 @@
 // document, device and permission APIs that mean nothing in a server runtime —
 // `language`, `onLine`, `clipboard`, `geolocation` — and inventing plausible
 // answers for them would be worse than their absence: a feature check would
-// pass and the behaviour behind it would be a lie. `hardwareConcurrency` is the
-// one arguable omission; it is host information, so it would need a provider
-// rather than a constant, and the Minimum Common API does not ask for it.
+// pass and the behaviour behind it would be a lie.
+//
+// `hardwareConcurrency` is the exception, and it earned its place when workers
+// arrived: it is the number a pool is sized from, and a program that cannot ask
+// simply guesses worse. It comes from the `Process` provider — host
+// information, not a constant — and is ungated for the same reason `platform`
+// is: it describes the machine the guest is already running on.
 //
 // The version is substituted from the crate's own `CARGO_PKG_VERSION` when the
 // prelude is assembled (see `prelude::source`), so the string cannot drift from
@@ -29,6 +33,12 @@
     }
     get userAgent() {
       return USER_AGENT;
+    }
+    get hardwareConcurrency() {
+      // Read on access, never at load: this fragment is baked into the startup
+      // snapshot, where there is no host to ask, and the answer would then be
+      // frozen into every launch on every machine.
+      return __ops.process_concurrency();
     }
   }
 

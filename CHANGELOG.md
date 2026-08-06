@@ -47,6 +47,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **A worker may start its own workers.** The spec allows nesting, and what
+  bounds it is the capability chain — a worker can only spawn if it holds
+  `workers`, and can only pass on what it holds — rather than withholding the
+  constructor.
+
+- **`onSignal` is refused inside a worker.** A signal is delivered to the
+  process and watching one suppresses the default action, so a worker taking
+  `SIGTERM` would decide, from a thread the program may not know is running,
+  whether the process declines to die. Node reaches the same conclusion.
+
+- **`exit()` inside a worker ends that worker, not the program.** Halting was
+  already per-agent, but the exit *code* was recorded on a shared provider, so
+  a worker could set what the whole process exited with.
+
 - **A started `MessagePort` delivers its queue asynchronously**, as the spec's
   task-based delivery requires. `start()` used to flush the buffer inline, so a
   handler had already run by the time it returned; it now runs a turn later, as
@@ -137,6 +151,11 @@ namespace) is unstable and may change between minor releases until the API freez
   writing agent's `write()` does not settle until it does — so a fast producer
   cannot run away into the port's queue. Like a port, a stream may be
   transferred and may not be cloned.
+
+- **`navigator.hardwareConcurrency`** — the number a worker pool is sized from,
+  via the `Process` provider (`available_parallelism`, so a container sees its
+  share rather than the whole machine). Ungated, like `platform` and `arch`: it
+  describes the machine the guest already runs on.
 
 - **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
   `ValueSerializer`, as the `__structuredSerialize`/`__structuredDeserialize`

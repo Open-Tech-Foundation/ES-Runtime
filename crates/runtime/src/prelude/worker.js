@@ -255,13 +255,18 @@
     })();
   }
 
-  if (scope === null || scope === undefined) {
-    Object.defineProperty(Worker.prototype, Symbol.toStringTag, {
-      value: "Worker",
-      configurable: true,
-    });
-    globalThis.Worker = Worker;
-  } else {
-    installWorkerScope(scope);
-  }
+  // `Worker` goes on **every** agent, not only the one driving the process: a
+  // dedicated worker may start its own, and the spec says so. What a worker
+  // adds is its global scope on top — the two are not alternatives.
+  //
+  // Nesting stays bounded by the capability chain rather than by hiding the
+  // constructor: a worker can only spawn if it was granted `workers`, and can
+  // only pass on what it holds, so a chain narrows and never widens.
+  Object.defineProperty(Worker.prototype, Symbol.toStringTag, {
+    value: "Worker",
+    configurable: true,
+  });
+  globalThis.Worker = Worker;
+
+  if (scope !== null && scope !== undefined) installWorkerScope(scope);
 })();

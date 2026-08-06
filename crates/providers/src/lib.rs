@@ -489,6 +489,16 @@ pub trait Process: Send + Sync {
     /// (`"x86_64"`, `"aarch64"`, `"arm"`, …).
     fn arch(&self) -> String;
 
+    /// How many workers can usefully run at once — `navigator.hardwareConcurrency`.
+    ///
+    /// Defaults to 1, which is honest for a host that does not know or does not
+    /// wish to say. Ungated for the same reason as [`platform`](Self::platform):
+    /// it describes the machine the guest is already running on, and a program
+    /// that cannot ask simply guesses its pool size worse.
+    fn hardware_concurrency(&self) -> u32 {
+        1
+    }
+
     /// Records a guest `process.exit(code)` request. The runtime also halts
     /// execution (via its interrupt handle); the embedder reads
     /// [`requested_exit_code`](Self::requested_exit_code) after the run to learn

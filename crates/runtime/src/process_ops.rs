@@ -38,6 +38,7 @@ pub(crate) fn install(
     signals: Option<Arc<dyn Signals>>,
     interrupt: InterruptHandle,
     capabilities: Rc<Cell<CapabilitySet>>,
+    is_worker: bool,
 ) -> Result<()> {
     let p = process.clone();
     engine.register_op(
@@ -86,6 +87,16 @@ pub(crate) fn install(
     }))?;
 
     let p = process.clone();
+    engine.register_op(OpDecl::sync("process_concurrency", move |_args| {
+        // Ungated, like platform/arch above, and with a working default when no
+        // Process provider is installed: `navigator.hardwareConcurrency` is
+        // defined to be a number, so reporting 1 is better than throwing.
+        Ok(Value::Number(
+            p.as_ref().map_or(1, |proc| proc.hardware_concurrency()) as f64,
+        ))
+    }))?;
+
+    let p = process.clone();
     engine.register_op(OpDecl::sync("process_arch", move |_args| {
         let proc = require(&p)?;
         Ok(Value::String(proc.arch()))
@@ -122,18 +133,29 @@ pub(crate) fn install(
         Ok(Value::Undefined)
     }))?;
 
-    install_signals(engine, signals)?;
+    install_signals(engine, signals, is_worker)?;
     Ok(())
 }
 
 /// Registers the signal ops, gated on [`Capability::Signals`] — a separate grant
 /// from `Env` because watching a signal suppresses its default action, which is
 /// the privilege to decline to die on request, not a read of process state.
-fn install_signals(engine: &mut dyn Engine, signals: Option<Arc<dyn Signals>>) -> Result<()> {
+fn install_signals(
+    engine: &mut dyn Engine,
+    signals: Option<Arc<dyn Signals>>,
+    is_worker: bool,
+) -> Result<()> {
+    // A worker agent does not watch signals. A signal is delivered to the
+    // *process*, and watching one suppresses the default action — so a worker
+    // that took `SIGTERM` would be deciding, from a thread the program may not
+    // even know is running, whether the whole process declines to die. Process
+    // control belongs to the agent that owns the process. Node reaches the same
+    // conclusion: `process.on('SIGTERM')` in a worker thread does nothing.
+    let signals = if is_worker { None } else { signals };
     let s = signals.clone();
     engine.register_op(
         OpDecl::sync("signal_available", move |_args| {
-            let signals = require_signals(&s)?;
+            let signals = require_signals(&s, is_worker)?;
             Ok(Value::Array(
                 signals
                     .available()
@@ -148,7 +170,7 @@ fn install_signals(engine: &mut dyn Engine, signals: Option<Arc<dyn Signals>>) -
     let s = signals.clone();
     engine.register_op(
         OpDecl::sync("signal_watch", move |args| {
-            let signals = require_signals(&s)?;
+            let signals = require_signals(&s, is_worker)?;
             signals.watch(parse_signal(&args)?).map_err(|e| {
                 OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
             })?;
@@ -160,7 +182,7 @@ fn install_signals(engine: &mut dyn Engine, signals: Option<Arc<dyn Signals>>) -
     let s = signals.clone();
     engine.register_op(
         OpDecl::sync("signal_unwatch", move |args| {
-            require_signals(&s)?.unwatch(parse_signal(&args)?);
+            require_signals(&s, is_worker)?.unwatch(parse_signal(&args)?);
             Ok(Value::Undefined)
         })
         .requires(Capability::Signals),
@@ -173,7 +195,7 @@ fn install_signals(engine: &mut dyn Engine, signals: Option<Arc<dyn Signals>>) -
         OpDecl::r#async("signal_next", move |_args| {
             let signals = signals.clone();
             Box::pin(async move {
-                let signals = require_signals(&signals)?;
+                let signals = require_signals(&signals, is_worker)?;
                 Ok(match signals.next().await {
                     Some(sig) => Value::String(sig.name().to_string()),
                     None => Value::Null,
@@ -199,11 +221,18 @@ fn parse_signal(args: &[Value]) -> std::result::Result<Signal, OpError> {
 
 fn require_signals(
     signals: &Option<Arc<dyn Signals>>,
+    is_worker: bool,
 ) -> std::result::Result<Arc<dyn Signals>, OpError> {
     signals.clone().ok_or_else(|| {
         OpError::new(
             ExceptionClass::Error,
-            "signals are unavailable (no Signals provider configured)",
+            if is_worker {
+                "signals cannot be watched from a worker: a signal is delivered \
+                 to the process, and watching one suppresses the default action, \
+                 so that belongs to the agent that owns the process"
+            } else {
+                "signals are unavailable (no Signals provider configured)"
+            },
         )
         .with_code(ErrorCode::ProviderUnavailable)
     })

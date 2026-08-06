@@ -43,7 +43,7 @@ use es_runtime_default_providers::{
     HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ProcessBroadcastHub,
     ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
     SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, ThreadWorkerHost, TokioTimers, path,
+    SystemWebSocket, ThreadWorkerHost, TokioTimers, WorkerProcess, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, ProviderError, Signal, WorkerScope, WorkerSpec};
 use url::Url;
@@ -1318,15 +1318,36 @@ async fn run() -> Result<(), String> {
     // so a worker restores the same blob the main agent did and starts as
     // cheaply.
     let worker_providers = providers.clone();
+    let worker_process = process.clone();
     let worker_loader = loader.clone();
+    // Late-bound, because the host and the runtimes it builds each need the
+    // other: a worker must itself be able to start workers (the spec allows
+    // nesting, and the capability chain is what bounds it), so the bundle its
+    // runtime gets has to name the very host that is being constructed here.
+    // Filled in immediately below, and only read on a worker thread — long
+    // after.
+    let worker_host_slot: Arc<std::sync::OnceLock<Arc<dyn es_runtime_providers::WorkerHost>>> =
+        Arc::new(std::sync::OnceLock::new());
+    let factory_slot = worker_host_slot.clone();
     let workers = Arc::new(ThreadWorkerHost::new(Arc::new(
         move |spec: &WorkerSpec, scope: Arc<dyn WorkerScope>| {
-            let providers = worker_providers.clone().with_worker_scope(scope);
+            let mut providers = worker_providers
+                .clone()
+                .with_worker_scope(scope)
+                // `exit()` inside a worker stops that worker, not the program:
+                // halting is already per-agent, but the exit *code* is recorded
+                // on a shared provider, so a worker would otherwise decide what
+                // the process exits with.
+                .with_process(Arc::new(WorkerProcess::new(worker_process.clone())));
+            if let Some(host) = factory_slot.get() {
+                providers = providers.with_workers(host.clone());
+            }
             let runtime = Runtime::with_snapshot_and_limits(SNAPSHOT, spec.limits, providers)
                 .map_err(|e| ProviderError::Other(e.to_string()))?;
             Ok((runtime, worker_loader.clone()))
         },
     )));
+    let _ = worker_host_slot.set(workers.clone());
     let providers = providers.with_workers(workers.clone());
 
     // Restore the prelude from the snapshot baked in at build time (build.rs)
