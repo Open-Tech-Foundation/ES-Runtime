@@ -18,13 +18,13 @@ namespace) is unstable and may change between minor releases until the API freez
   scope has had; the curated `conformance/*.js` suite runs entirely on the
   driver agent.
 
-  Baseline: **528 / 573 runnable subtests (92.1%)** across 70 completed runs,
+  Baseline: **560 / 570 runnable subtests (98.2%)** across 70 completed runs,
   recorded per subtest in `wpt/expectations.json` and enforced as a floor, with
   newly-passing subtests reported so a fix cannot land without updating the
   record.
 
   What counts as *runnable* is decided by `wpt/scope.js`, which excludes — with
-  a reason each, and only for things inapplicable by design — 18 files and 43
+  a reason each, and only for things inapplicable by design — 18 files and 48
   subtests that test a renderer, a document, browser-local storage or classic
   scripts. Nothing is excluded for merely being unimplemented, so the failing
   count is exactly the work left.
