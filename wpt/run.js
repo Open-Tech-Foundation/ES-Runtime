@@ -221,24 +221,8 @@ async function bundle(testPath, meta, mode) {
 (0, eval)(${JSON.stringify(parts.join("\n;\n"))});
 `;
   const bundlePath = testPath.replace(/\.js$/, `.__wpt_${mode}.js`);
-  await writeWhole(new URL(bundlePath, UPSTREAM).pathname, module);
+  await write(new URL(bundlePath, UPSTREAM).pathname, module);
   return bundlePath;
-}
-
-// `await write()` can resolve before the bytes are on disk: over 64 KiB
-// `runtime:fs` takes an async path that never flushes the file, so reading (or
-// importing) the path immediately afterwards sees an empty or half-written file.
-// Every bundle here is >64 KiB, because testharness.js alone is 194 KiB. Waiting
-// for the size to match is the only thing a guest can do about it.
-// See wpt/README.md.
-async function writeWhole(path, contents) {
-  const expected = new TextEncoder().encode(contents).length;
-  await write(path, contents);
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if ((await file(path).stat()).size === expected) return;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-  throw new Error(`${path}: still short after 500 ms`);
 }
 
 // ---- running ----------------------------------------------------------------

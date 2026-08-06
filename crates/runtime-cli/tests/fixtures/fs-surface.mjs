@@ -58,6 +58,19 @@ if (platform !== "windows") {
   console.log(`READLINK plain:${target}`);
 }
 
+// A write that has resolved must be readable in full. Over 64 KiB this takes
+// the async path, which used to resolve while the bytes were still in flight —
+// so the read below saw an empty or half-written file. Repeated, because it was
+// a race that one attempt could pass by luck.
+const big = "x".repeat(300_000);
+let torn = 0;
+for (let attempt = 0; attempt < 10; attempt++) {
+  const path = `${dir}/big-${attempt}.bin`;
+  await write(path, big);
+  if ((await file(path).text()).length !== big.length) torn += 1;
+}
+console.log(`WRITE readable-in-full:${torn === 0} torn:${torn}`);
+
 await remove(dir, { recursive: true });
 await remove(other, { recursive: true });
 console.log("FS_SURFACE_OK");

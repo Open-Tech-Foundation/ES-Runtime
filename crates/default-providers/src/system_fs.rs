@@ -296,6 +296,15 @@ impl FileSystem for SystemFileSystem {
             }
             let mut f = opts.open(&p).await.map_err(|e| other(&path, e))?;
             f.write_all(&data).await.map_err(|e| other(&path, e))?;
+            // `tokio::fs::File` dispatches writes to the blocking pool and
+            // returns before they land, so `write_all` alone leaves the promise
+            // resolving over a file that is still empty or half-written — and
+            // the `truncate` above has already run, so a reader sees *less* than
+            // it would have before the write. Flushing is what makes this
+            // method's contract ("resolves to the number of bytes written")
+            // true. The sub-64 KiB branch is a synchronous `std::fs` write and
+            // was never affected, which is why only large writes tore.
+            f.flush().await.map_err(|e| other(&path, e))?;
             Ok(len)
         })
     }
@@ -683,6 +692,38 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let fs = SystemFileSystem::new(&root, &root);
         (root, fs)
+    }
+
+    #[tokio::test]
+    async fn a_write_is_readable_in_full_the_moment_it_resolves() {
+        // Over 64 KiB `write` takes the async path, which used to resolve while
+        // the bytes were still in flight: the read below saw 0 bytes, or a
+        // prefix, in most attempts. Repeated because it was a race, and one
+        // lucky pass would have hidden it.
+        let (root, fs) = jail("write-visibility");
+        let data = vec![b'x'; 260_000];
+        for attempt in 0..20 {
+            let name = format!("big-{attempt}.bin");
+            let n = fs.write(name.clone(), data.clone(), false).await.unwrap();
+            assert_eq!(n, data.len() as u64);
+            assert_eq!(
+                fs.read(name.clone()).await.unwrap().len(),
+                data.len(),
+                "attempt {attempt}: write() resolved over a file that was not written yet",
+            );
+            // Not just through this provider: the file itself is complete.
+            assert_eq!(std::fs::metadata(root.join(&name)).unwrap().len(), 260_000);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_appended_write_is_also_complete_when_it_resolves() {
+        let (_root, fs) = jail("append-visibility");
+        let chunk = vec![b'y'; 100_000];
+        for i in 1..=3 {
+            fs.write("log.bin".into(), chunk.clone(), true).await.unwrap();
+            assert_eq!(fs.read("log.bin".into()).await.unwrap().len(), 100_000 * i);
+        }
     }
 
     #[tokio::test]

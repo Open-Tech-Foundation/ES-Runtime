@@ -687,6 +687,11 @@ pub trait FileSystem: Send + Sync {
     /// Writes `data` to `path`, resolving to the number of bytes written. With
     /// `append`, bytes are added at the end (creating the file if needed);
     /// otherwise the file is created or truncated.
+    ///
+    /// It must resolve only once the bytes are **visible to a subsequent read**.
+    /// An implementation that buffers has to flush before it resolves: a guest's
+    /// `await write(p, data)` followed by `read(p)` is ordinary code, and
+    /// resolving early makes it return a truncated file.
     fn write(
         &self,
         path: String,

@@ -113,7 +113,7 @@ fix. Re-record with `--update-expectations`.
 
 ## Runtime bugs this runner has to work around
 
-Found by building it. All three are in `CHANGELOG.md`; the workarounds here exist
+Found by building it, and recorded in `CHANGELOG.md`. The workarounds here exist
 so the numbers measure conformance rather than these.
 
 1. **`exit()` hangs a module that used top-level `await`** unless it is the very
@@ -136,10 +136,10 @@ so the numbers measure conformance rather than these.
    await import("./x.js");       // resolves after 3000 ms, not 3 ms
    ```
 
-3. **`write()` resolves before the bytes are on disk, above 64 KiB.** Reading or
-   importing the path immediately afterwards sees an empty or half-written file.
-   Every bundle here is over that threshold (`testharness.js` is 194 KiB alone),
-   so `writeWhole()` waits for the size to match.
+3. ~~**`write()` resolves before the bytes are on disk, above 64 KiB.**~~ Fixed —
+   the provider now flushes before resolving. Every bundle here is over that
+   threshold (`testharness.js` is 194 KiB alone), so this runner was where it
+   surfaced.
 
 4. **`terminate()` does not terminate a worker's own workers.** HTML terminates
    the nested ones with the parent; here they are orphaned, and a live worker

@@ -29,11 +29,26 @@ namespace) is unstable and may change between minor releases until the API freez
   scripts. Nothing is excluded for merely being unimplemented, so the failing
   count is exactly the work left.
 
-  It is not yet a CI gate: four runtime defects it found are listed in
+  It is not yet a CI gate: the runtime defects it found are listed in
   `wpt/README.md`, and one of them (a terminated worker orphaning its own
   workers) means a full run does not exit on its own.
 
 ### Fixed
+
+- **`runtime:fs` `write()` could resolve over a file that was not written yet.**
+  Above 64 KiB the write takes an async path, and `tokio::fs::File` dispatches
+  writes to a blocking pool: `write_all` returned before they landed and the
+  file was dropped without a flush. Since the same call had already truncated
+  the file, a read straight afterwards saw *less* than before the write —
+
+  ```js
+  await write("big.json", payload);      // 260 KB
+  await file("big.json").text();         // 0 bytes, or a prefix
+  ```
+
+  — in 18 of 25 attempts at 260 KB. It now flushes before resolving, which is
+  what the `FileSystem::write` contract always claimed. Under 64 KiB is a
+  synchronous `std::fs` write and was never affected.
 
 - **`Atomics.wait` on the main thread hung the process.** ECMAScript gates the
   call on the agent record's `[[CanBlock]]`, and HTML sets that `false` on the

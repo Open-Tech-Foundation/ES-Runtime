@@ -1072,6 +1072,7 @@ fn the_added_fs_surface_works_against_a_real_disk() {
     assert!(stdout.contains("TRUNCATE text:hello"), "{stdout}");
     assert!(stdout.contains("REALPATH clean:true"), "{stdout}");
     assert!(stdout.contains("CHMOD ok:true"), "{stdout}");
+    assert!(stdout.contains("WRITE readable-in-full:true"), "{stdout}");
     assert!(
         stdout.contains("REALPATH missing:ERR_NOT_FOUND"),
         "{stdout}"
