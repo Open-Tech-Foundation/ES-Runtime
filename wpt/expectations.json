@@ -825,62 +825,6 @@
       "navigator properties are read-only": "PASS"
     }
   },
-  "workers/modules/dedicated-worker-import-blob-url.any.js:main": {
-    "harness": "OK",
-    "subtests": {
-      "Static import.": "FAIL",
-      "Static import (cross-origin).": "FAIL",
-      "Static import (redirect).": "FAIL",
-      "Nested static import.": "FAIL",
-      "Static import and then dynamic import.": "FAIL",
-      "Dynamic import.": "FAIL",
-      "Nested dynamic import.": "FAIL",
-      "Dynamic import and then static import.": "FAIL",
-      "eval(import()).": "FAIL"
-    }
-  },
-  "workers/modules/dedicated-worker-import-blob-url.any.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Static import.": "FAIL",
-      "Static import (cross-origin).": "FAIL",
-      "Static import (redirect).": "FAIL",
-      "Nested static import.": "FAIL",
-      "Static import and then dynamic import.": "FAIL",
-      "Dynamic import.": "FAIL",
-      "Nested dynamic import.": "FAIL",
-      "Dynamic import and then static import.": "FAIL",
-      "eval(import()).": "FAIL"
-    }
-  },
-  "workers/modules/dedicated-worker-import-data-url.any.js:main": {
-    "harness": "OK",
-    "subtests": {
-      "Static import.": "FAIL",
-      "Static import (cross-origin).": "FAIL",
-      "Static import (redirect).": "FAIL",
-      "Nested static import.": "FAIL",
-      "Static import and then dynamic import.": "FAIL",
-      "Dynamic import.": "FAIL",
-      "Nested dynamic import.": "FAIL",
-      "Dynamic import and then static import.": "FAIL",
-      "eval(import()).": "FAIL"
-    }
-  },
-  "workers/modules/dedicated-worker-import-data-url.any.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Static import.": "FAIL",
-      "Static import (cross-origin).": "FAIL",
-      "Static import (redirect).": "FAIL",
-      "Nested static import.": "FAIL",
-      "Static import and then dynamic import.": "FAIL",
-      "Dynamic import.": "FAIL",
-      "Nested dynamic import.": "FAIL",
-      "Dynamic import and then static import.": "FAIL",
-      "eval(import()).": "FAIL"
-    }
-  },
   "workers/modules/dedicated-worker-import.any.js:main": {
     "harness": "TIMEOUT",
     "subtests": {}

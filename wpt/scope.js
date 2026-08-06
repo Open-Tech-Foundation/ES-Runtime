@@ -80,6 +80,12 @@ export const FILES = [
     match: /close-event\/garbage-collected\.tentative\./,
     reason: "tentative spec text, and requires script-visible control over GC",
   },
+  {
+    match: /^workers\/modules\/dedicated-worker-import-(data|blob)-url\.any\.js$/,
+    reason:
+      "needs WPT's server: every case appends ?pipe=header(Access-Control-Allow-Origin,*) " +
+      "and turns on a worker having a null origin — an HTTP-origin test, not a module-worker one",
+  },
 ];
 
 /**
@@ -108,6 +114,11 @@ export const SUBTESTS = [
     file: /^workers\/constructors\/Worker\/DedicatedWorkerGlobalScope-members\.worker\.js$/,
     match: /^existence of on(offline|online)$/,
     reason: "online/offline events: a browser's connectivity model, not a server's",
+  },
+  {
+    file: /^workers\/modules\//,
+    match: /^Static import \(cross-origin\)\.$/,
+    reason: "needs a second origin, and the helper is a `.sub.js` the WPT server rewrites",
   },
   {
     file: /^html\/webappapis\/structured-clone\//,

@@ -44,9 +44,9 @@ and WPT's substituting server), `.sub.js` (server-side substitution), `.window.j
 
 ```
                 total   runnable   skipped   errored   timeout   passed   failed
-  files            70         55        15
-  runs             83         76         —         0         7
-  subtests        636        602        34         —         —      513       89
+  files            70         53        17
+  runs             79         72         —         0         7
+  subtests        600        566        34         —         —      513       53
 ```
 
 - **total** — everything discovered in the three directories.
