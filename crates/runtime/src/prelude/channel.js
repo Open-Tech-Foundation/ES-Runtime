@@ -1,20 +1,31 @@
 // MessageChannel / MessagePort / BroadcastChannel (HTML messaging).
 //
-// This runtime has one agent: there are no workers and no second realm, so
-// "the other side" is always in this isolate. That makes delivery a queued task
-// rather than a cross-thread hop, but the observable contract is the same —
-// messages are structured-cloned (a mutation after `postMessage` is not seen by
-// the receiver), delivered asynchronously in order, and a port buffers until it
-// is started.
+// A port's queue lives in the host, not in this isolate, which is what lets a
+// port be **transferred** to another agent: what travels in a `postMessage` is
+// the port's id, and whichever agent holds it is the one its peer's messages
+// reach. Everything already in flight stays queued where it was.
 //
-// Not supported: transferring a MessagePort itself. `structuredClone` has no
-// way to move one, so a port in the transfer list is a DataCloneError. With a
-// single agent there is nothing to transfer it *to*.
+// With no PortHub installed — an embedder that has no workers either, so
+// nowhere to transfer a port *to* — ports fall back to the agent-local pair
+// this file used to implement, and transferring one is a DataCloneError. The
+// observable contract is the same either way: messages are structured-cloned
+// (a mutation after `postMessage` is not seen by the receiver), delivered
+// asynchronously and in order, and a port buffers until it is started.
 (() => {
   "use strict";
   const INTERNAL = Symbol("MessagePort.construct");
   const DELIVER = Symbol("deliver");
   const ENTANGLE = Symbol("entangle");
+  const DETACH = __internal.portDetach;
+  const PORT_ID = Symbol("MessagePort id");
+
+  // Asked on first use, not now: "now" is snapshot-build time, and one blob is
+  // restored into every agent. See the same note on BroadcastChannel below.
+  let hostedPortsCache = null;
+  function hostedPorts() {
+    if (hostedPortsCache === null) hostedPortsCache = __ops.port_available();
+    return hostedPortsCache;
+  }
 
   // Extracts the transfer list from either overload: postMessage(msg, [t]) or
   // postMessage(msg, { transfer: [t] }).
@@ -27,16 +38,63 @@
   }
 
   class MessagePort extends EventTarget {
+    // Host-backed: the port's queue id. `null` in the agent-local fallback.
+    #id = null;
     #peer = null;
     #started = false;
     #closed = false;
+    // Transferred away: this object is a husk, and the agent that received the
+    // id is the one the queue now belongs to.
+    #detached = false;
+    #pumping = false;
     #queue = [];
     #onmessage = null;
     #onmessageerror = null;
 
-    constructor(key) {
+    constructor(key, id = null) {
       super();
       if (key !== INTERNAL) throw new TypeError("Illegal constructor");
+      this.#id = id;
+    }
+
+    get [PORT_ID]() {
+      return this.#id;
+    }
+
+    // Called by structured-clone.js once this port has been serialized into a
+    // transfer. Stopping the host-side read matters: an outstanding `recv`
+    // holding a message would swallow it, and the agent receiving the port must
+    // find everything that was already in flight.
+    [DETACH]() {
+      this.#detached = true;
+      if (this.#id !== null) __ops.port_detach(this.#id);
+    }
+
+    // One outstanding op at a time, on the ordinary tick contract — the same
+    // shape as the worker and WebSocket pumps, so a started port keeps its
+    // agent alive exactly while it could still receive something.
+    async #pump() {
+      if (this.#pumping) return;
+      this.#pumping = true;
+      for (;;) {
+        if (this.#closed || this.#detached) return;
+        let bytes;
+        try {
+          bytes = await __ops.port_recv(this.#id);
+        } catch {
+          return;
+        }
+        if (bytes === null || bytes === undefined) return;
+        if (this.#closed || this.#detached) return;
+        let data;
+        try {
+          data = __structuredDeserialize(bytes);
+        } catch {
+          this.dispatchEvent(new MessageEvent("messageerror"));
+          continue;
+        }
+        this.dispatchEvent(new MessageEvent("message", { data }));
+      }
     }
 
     [ENTANGLE](peer) {
@@ -55,10 +113,17 @@
     }
 
     postMessage(message, options) {
-      if (this.#closed || this.#peer === null) return; // no peer: silently dropped
-      // Cloning happens now, synchronously, so a later mutation of `message`
-      // is not visible to the receiver — and a non-cloneable value throws here,
-      // at the call site, rather than in a detached task.
+      if (this.#closed || this.#detached) return;
+      if (this.#id !== null) {
+        // Serialized now, synchronously, so a later mutation of `message` is
+        // not visible to the receiver — and a non-cloneable value throws here,
+        // at the call site, rather than in a detached task. The op is
+        // synchronous too, which is what keeps successive posts in order.
+        const bytes = __internal.transfer.serialize(message, transferList(options));
+        __ops.port_post(this.#id, bytes);
+        return;
+      }
+      if (this.#peer === null) return; // no peer: silently dropped
       const data = structuredClone(message, { transfer: transferList(options) });
       const peer = this.#peer;
       setTimeout(() => peer[DELIVER](data), 0);
@@ -67,6 +132,10 @@
     start() {
       if (this.#started || this.#closed) return;
       this.#started = true;
+      if (this.#id !== null) {
+        this.#pump();
+        return;
+      }
       const queued = this.#queue;
       this.#queue = [];
       for (const data of queued) {
@@ -77,6 +146,10 @@
     close() {
       this.#closed = true;
       this.#queue = [];
+      if (this.#id !== null) {
+        __ops.port_close(this.#id);
+        return;
+      }
       // Closing one end disentangles the pair; the peer's sends now go nowhere.
       const peer = this.#peer;
       this.#peer = null;
@@ -114,6 +187,14 @@
     #port1;
     #port2;
     constructor() {
+      if (hostedPorts()) {
+        // Synchronous, as the constructor is: allocating two queues has nothing
+        // to await, and `new MessageChannel().port1` must exist immediately.
+        const [a, b] = __ops.port_create();
+        this.#port1 = new MessagePort(INTERNAL, a);
+        this.#port2 = new MessagePort(INTERNAL, b);
+        return;
+      }
       this.#port1 = new MessagePort(INTERNAL);
       this.#port2 = new MessagePort(INTERNAL);
       this.#port1[ENTANGLE](this.#port2);
@@ -284,6 +365,40 @@
       }
     }
   }
+
+  // Structured clone: a port is a host object, and the *only* one that may not
+  // be cloned. The spec allows a port to be transferred and refuses to copy it —
+  // two ends of a channel cannot become three — and by the time the codec sees
+  // the object, being named in the transfer list is the only difference.
+  Object.defineProperty(MessagePort.prototype, __internal.hostClone, {
+    value: "MessagePort",
+  });
+  __internal.hostCodecs.set("MessagePort", {
+    write(port) {
+      if (!__internal.transferringPorts.has(port)) {
+        throw new DOMException(
+          "A MessagePort can only be transferred, not cloned.",
+          "DataCloneError",
+        );
+      }
+      const id = port[PORT_ID];
+      if (id === null) {
+        // The agent-local fallback: nowhere to transfer it to, which is the
+        // same situation this interface was in before workers existed.
+        throw new DOMException(
+          "A MessagePort could not be transferred.",
+          "DataCloneError",
+        );
+      }
+      return __internal.hostCodec.pack({ id });
+    },
+    read(bytes) {
+      const { header } = __internal.hostCodec.unpack(bytes);
+      // Arrives unstarted, as the spec requires: whatever was queued for it
+      // waits until the receiver calls `start()` or assigns `onmessage`.
+      return new MessagePort(INTERNAL, header.id);
+    },
+  });
 
   for (const Interface of [MessageChannel, MessagePort, BroadcastChannel]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {

@@ -19,38 +19,17 @@
 
   // ---- shared ---------------------------------------------------------------
 
-  // postMessage(msg, [t]) and postMessage(msg, { transfer: [t] }) are both
-  // spelled in the wild; the same reading as channel.js.
-  function transferList(options) {
-    if (Array.isArray(options)) return options;
-    if (options && typeof options === "object" && Array.isArray(options.transfer)) {
-      return options.transfer;
-    }
-    return [];
-  }
-
-  // Serialize, then detach — the order structuredClone uses, and the spec's:
-  // the graph is serialized while the listed buffers are still live, and they
-  // are detached afterwards.
+  // Transfer semantics live in structured-clone.js, shared with
+  // `structuredClone` and `MessagePort.postMessage` — one reading of the spec
+  // rather than three. Both overloads are spelled in the wild:
+  // postMessage(msg, [t]) and postMessage(msg, { transfer: [t] }).
   function serialize(message, options) {
-    const list = transferList(options);
-    for (const item of list) {
-      if (!(item instanceof ArrayBuffer) || typeof item.transfer !== "function") {
-        throw new DOMException(
-          "Only ArrayBuffer objects can be transferred.",
-          "DataCloneError",
-        );
-      }
-      if (item.detached) {
-        throw new DOMException(
-          "An already detached ArrayBuffer could not be transferred.",
-          "DataCloneError",
-        );
-      }
-    }
-    const bytes = __structuredSerialize(message);
-    for (const item of list) item.transfer();
-    return bytes;
+    const list = Array.isArray(options)
+      ? options
+      : options && typeof options === "object" && Array.isArray(options.transfer)
+        ? options.transfer
+        : [];
+    return __internal.transfer.serialize(message, list);
   }
 
   // A single-handler slot (`onmessage = fn`) over an EventTarget: assigning

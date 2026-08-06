@@ -59,7 +59,7 @@ pub use es_runtime_engine::{
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
     ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader, ModuleSource, NetProvider,
-    NetTransport, Process, Signals, Stdio, SyncFileSystem, WebSocketProvider, WorkerHost,
+    NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, WebSocketProvider, WorkerHost,
     WorkerScope,
 };
 
@@ -156,6 +156,7 @@ pub struct HostProviders {
     workers: Option<Arc<dyn WorkerHost>>,
     worker_scope: Option<Arc<dyn WorkerScope>>,
     broadcast: Option<Arc<dyn BroadcastHub>>,
+    ports: Option<Arc<dyn PortHub>>,
 }
 
 impl HostProviders {
@@ -185,6 +186,7 @@ impl HostProviders {
             workers: None,
             worker_scope: None,
             broadcast: None,
+            ports: None,
         }
     }
 
@@ -345,6 +347,20 @@ impl HostProviders {
     pub fn with_broadcast(mut self, broadcast: Arc<dyn BroadcastHub>) -> Self {
         self.broadcast = Some(broadcast);
         self
+    }
+
+    /// Adds the [`PortHub`] that owns `MessagePort` queues, which is what lets
+    /// a port be transferred to another agent. Absent, ports stay agent-local
+    /// and transferring one is a `DataCloneError` — there being nowhere to
+    /// transfer it to without workers.
+    #[must_use]
+    pub fn with_ports(mut self, ports: Arc<dyn PortHub>) -> Self {
+        self.ports = Some(ports);
+        self
+    }
+
+    fn ports(&self) -> Option<Arc<dyn PortHub>> {
+        self.ports.clone()
     }
 
     fn broadcast(&self) -> Option<Arc<dyn BroadcastHub>> {
@@ -1295,7 +1311,8 @@ mod tests {
         let engine = V8Engine::new(Limits::default()).expect("engine");
         Runtime::new(
             Box::new(engine),
-            HostProviders::new(clock, console, net, entropy),
+            HostProviders::new(clock, console, net, entropy)
+                .with_ports(Arc::new(TestPortHub::default())),
         )
         .expect("runtime")
     }
@@ -2106,6 +2123,92 @@ mod tests {
         );
     }
 
+    /// An in-process [`PortHub`] for the tests, so `MessagePort` exercises the
+    /// host-backed path the CLI uses rather than the agent-local fallback.
+    /// Deliberately simple: one inbox per port, delivery to the peer.
+    #[derive(Default)]
+    struct TestPortHub {
+        ports: Arc<std::sync::Mutex<HashMap<u64, TestPort>>>,
+        next: std::sync::atomic::AtomicU64,
+    }
+
+    #[derive(Default)]
+    struct TestPort {
+        peer: Option<u64>,
+        queue: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    impl es_runtime_providers::PortHub for TestPortHub {
+        fn create(&self) -> std::result::Result<(u64, u64), es_runtime_providers::ProviderError> {
+            let mut ports = self.ports.lock().expect("port lock");
+            let a = self.next.fetch_add(2, std::sync::atomic::Ordering::SeqCst) + 1;
+            let b = a + 1;
+            ports.insert(
+                a,
+                TestPort {
+                    peer: Some(b),
+                    ..TestPort::default()
+                },
+            );
+            ports.insert(
+                b,
+                TestPort {
+                    peer: Some(a),
+                    ..TestPort::default()
+                },
+            );
+            Ok((a, b))
+        }
+
+        fn post(
+            &self,
+            id: u64,
+            message: Vec<u8>,
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            let mut ports = self.ports.lock().expect("port lock");
+            if let Some(peer) = ports.get(&id).and_then(|port| port.peer)
+                && let Some(port) = ports.get_mut(&peer)
+            {
+                port.queue.push_back(message);
+            }
+            Ok(())
+        }
+
+        fn recv(
+            &self,
+            id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<Option<Vec<u8>>, es_runtime_providers::ProviderError>,
+        > {
+            // Stays `Pending` while the queue is empty. No waker is registered
+            // because none is needed: the runtime re-polls every pending op on
+            // each tick, which is exactly what these tests drive by hand.
+            let ports = self.ports.clone();
+            Box::pin(std::future::poll_fn(move |_cx| {
+                let mut ports = ports.lock().expect("port lock");
+                match ports.get_mut(&id) {
+                    None => std::task::Poll::Ready(Ok(None)),
+                    Some(port) => match port.queue.pop_front() {
+                        Some(message) => std::task::Poll::Ready(Ok(Some(message))),
+                        None => std::task::Poll::Pending,
+                    },
+                }
+            }))
+        }
+
+        fn detach_reader(&self, _id: u64) {}
+
+        fn close(&self, id: u64) {
+            let mut ports = self.ports.lock().expect("port lock");
+            if let Some(port) = ports.remove(&id)
+                && let Some(peer) = port.peer
+                && let Some(peer) = ports.get_mut(&peer)
+            {
+                peer.peer = None;
+            }
+        }
+    }
+
     fn test_providers() -> HostProviders {
         HostProviders::new(
             Arc::new(FixedClock {
@@ -2116,6 +2219,7 @@ mod tests {
             Arc::new(MockNet::stub()),
             Arc::new(TestEntropy::new()),
         )
+        .with_ports(Arc::new(TestPortHub::default()))
     }
 
     #[test]
@@ -3578,6 +3682,12 @@ mod tests {
         let mut rt = runtime();
         // addEventListener does not start a port; only start() (or assigning
         // onmessage) does. Messages sent before then are buffered, not dropped.
+        //
+        // Delivery after `start()` is a *task*, not a synchronous flush inside
+        // the call — so the turn below is part of the assertion, not padding.
+        // (This read `seen` immediately after `start()` while ports were
+        // pure-JS objects and the queue was drained inline, which was the
+        // shortcut rather than the spec.)
         let out = eval_async(
             &mut rt,
             "const ch = new MessageChannel(); \
@@ -3588,6 +3698,7 @@ mod tests {
              await new Promise((r) => setTimeout(r, 0)); \
              const beforeStart = seen.length; \
              ch.port2.start(); \
+             await new Promise((r) => setTimeout(r, 0)); \
              return beforeStart + '|' + seen.join(',');",
         );
         assert_eq!(out, Value::String("0|early".into()));

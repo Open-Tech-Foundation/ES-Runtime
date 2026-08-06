@@ -91,6 +91,8 @@ pub(crate) fn install(
     // BroadcastChannel's cross-agent delivery. Ungated; absent hub means the
     // prelude keeps agent-local delivery.
     crate::worker_ops::install_broadcast(engine, providers.broadcast())?;
+    // MessagePort queues, so a port can be transferred between agents.
+    crate::worker_ops::install_ports(engine, providers.ports())?;
     Ok(())
 }
 

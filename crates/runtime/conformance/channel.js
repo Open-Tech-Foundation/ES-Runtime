@@ -36,13 +36,33 @@ test("postMessage on a closed or unpaired port is a no-op", () => {
   ch.port2.postMessage("y");
 });
 
-test("a MessagePort transfer list is rejected", () => {
+// A port may be transferred and may not be cloned: two ends of a channel cannot
+// become three. (This asserted that *any* port in a transfer list was rejected,
+// which was true only while there was nowhere to transfer one to.)
+test("a MessagePort can be cloned only by transferring it", () => {
   const ch = new MessageChannel();
   const other = new MessageChannel();
-  assertThrows(
-    () => ch.port1.postMessage("x", [other.port1]),
-    "DataCloneError",
-  );
+  // Not in the transfer list: a copy, which the spec refuses.
+  assertThrows(() => ch.port1.postMessage(other.port1), "DataCloneError");
+  // In the transfer list: allowed.
+  ch.port1.postMessage("x", [other.port1]);
+});
+
+test("a transferred MessagePort delivers what was queued before the transfer", () => {
+  const source = new MessageChannel();
+  const carrier = new MessageChannel();
+  // Posted while `source.port2` is still here, then the port moves.
+  source.port1.postMessage("queued before transfer");
+
+  carrier.port2.onmessage = (e) => {
+    e.data.port.onmessage = (m) => {
+      assertEquals(m.data, "queued before transfer");
+      carrier.port1.close();
+      carrier.port2.close();
+      source.port1.close();
+    };
+  };
+  carrier.port1.postMessage({ port: source.port2 }, [source.port2]);
 });
 
 test("BroadcastChannel requires a name and reports it", () => {

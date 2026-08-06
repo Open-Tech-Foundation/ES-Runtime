@@ -129,6 +129,9 @@ pub struct OpDecl {
     pub required_capabilities: Vec<Capability>,
     /// The handler to invoke.
     pub handler: OpHandler,
+    /// Whether a call to this op that is still in flight should keep the
+    /// embedder's loop running. See [`unref`](Self::unref).
+    pub keeps_loop_alive: bool,
 }
 
 impl OpDecl {
@@ -141,6 +144,7 @@ impl OpDecl {
             name: name.into(),
             required_capabilities: Vec::new(),
             handler: OpHandler::Sync(Box::new(handler)),
+            keeps_loop_alive: true,
         }
     }
 
@@ -153,6 +157,7 @@ impl OpDecl {
             name: name.into(),
             required_capabilities: Vec::new(),
             handler: OpHandler::Async(Box::new(handler)),
+            keeps_loop_alive: true,
         }
     }
 
@@ -168,16 +173,40 @@ impl OpDecl {
         }
         self
     }
+
+    /// Marks this op as **not** keeping the loop alive on its own — Node's
+    /// `unref`.
+    ///
+    /// An in-flight call is still polled and still resolves; it simply stops
+    /// counting towards [`has_pending_async_ops`](crate::Engine::has_pending_async_ops),
+    /// so a loop with nothing else to do may finish rather than waiting on it
+    /// forever.
+    ///
+    /// For a receive that only something *inside this agent* could satisfy. A
+    /// `MessagePort` whose peer is in this isolate is the case: with the loop
+    /// otherwise idle there is no code left to post to it, so waiting is
+    /// provably futile, and a program that merely opened a channel would
+    /// otherwise never exit. Do **not** use it where the sender is elsewhere —
+    /// another agent, a socket, a timer — because there the wait is exactly the
+    /// point.
+    #[must_use]
+    pub fn unref(mut self) -> Self {
+        self.keeps_loop_alive = false;
+        self
+    }
 }
 
 struct OpEntry {
     required_capabilities: Vec<Capability>,
     handler: OpHandler,
+    keeps_loop_alive: bool,
 }
 
 struct PendingAsync {
     future: AsyncOp,
     resolver: v8::Global<v8::PromiseResolver>,
+    /// Copied from the op's declaration; see [`OpDecl::unref`].
+    keeps_loop_alive: bool,
 }
 
 struct TimerEntry {
@@ -274,18 +303,23 @@ impl OpState {
         &mut self,
         required_capabilities: Vec<Capability>,
         handler: OpHandler,
+        keeps_loop_alive: bool,
     ) -> i32 {
         let id = self.ops.len() as i32;
         self.ops.push(OpEntry {
             required_capabilities,
             handler,
+            keeps_loop_alive,
         });
         id
     }
 
     /// Whether any async op is still awaiting completion.
+    /// Whether any in-flight async op should hold the loop open. An unref'd op
+    /// is still pending and still polled — it just does not, by itself, stop
+    /// the embedder finishing (see [`OpDecl::unref`]).
     pub(crate) fn has_pending_async(&self) -> bool {
-        !self.pending_async.is_empty()
+        self.pending_async.iter().any(|op| op.keeps_loop_alive)
     }
 
     /// Drains timers created since the previous call.
@@ -381,6 +415,9 @@ fn op_dispatch_inner(
         Err(OpError),
         Async(AsyncOp),
     }
+    // Read before the handler borrow, so it is available when the pending entry
+    // is built below.
+    let keeps_loop_alive = state.ops[idx].keeps_loop_alive;
     let outcome = match &mut state.ops[idx].handler {
         OpHandler::Sync(handler) => match handler(argv) {
             Ok(value) => Outcome::Ok(value),
@@ -472,7 +509,11 @@ fn op_dispatch_inner(
             };
             let promise = resolver.get_promise(scope);
             let resolver = v8::Global::new(scope, resolver);
-            state.pending_async.push(PendingAsync { future, resolver });
+            state.pending_async.push(PendingAsync {
+                future,
+                resolver,
+                keeps_loop_alive,
+            });
             // Wake the driver so it re-ticks and polls this future now, rather
             // than parking first: the future hasn't been polled yet, so it has
             // registered no waker and nothing else would wake the loop until a

@@ -50,10 +50,26 @@
       hostClone: Symbol.for("es-runtime.hostClone"),
       // tag -> { write(object) -> Uint8Array, read(bytes) -> object }
       hostCodecs: new Map(),
+
+      // The ports named in the transfer list of the serialization currently
+      // running. The MessagePort codec consults it to tell a *transferred* port
+      // from a *cloned* one: the spec allows the first and refuses the second,
+      // and by the time the codec sees the object that is the only difference
+      // between them.
+      transferringPorts: new Set(),
+      // channel.js's "you have been transferred away" hook, called by
+      // structured-clone.js once serialization has succeeded.
+      portDetach: Symbol("MessagePort detach"),
       // Shared framing helper, filled in by structured-clone.js. Declared here
       // because the freeze below is shallow: a slot present at freeze time can
       // still be populated, where a new property on `__internal` could not.
       hostCodec: {},
+      // structured-clone.js fills in `transfer.serialize`, the shared
+      // transfer-list reading used by structuredClone, Worker.postMessage and
+      // MessagePort.postMessage. An object for the same reason as `hostCodec`:
+      // the freeze below is shallow, so a slot present now can be populated,
+      // where a new property on `__internal` could not.
+      transfer: {},
     }),
     writable: false,
     enumerable: false,

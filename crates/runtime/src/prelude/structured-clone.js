@@ -89,39 +89,67 @@
     },
   });
 
-  // ---- the entry point ------------------------------------------------------
+  // ---- transfer -------------------------------------------------------------
 
-  globalThis.structuredClone = (value, options) => {
-    // Validate the whole transfer list before anything is serialized, so a bad
-    // entry throws without having half-detached the good ones.
-    const list = options && options.transfer ? [...options.transfer] : [];
+  // The one place that knows what a transfer list may hold, shared by
+  // `structuredClone`, `Worker.postMessage` and `MessagePort.postMessage` — the
+  // three call sites the spec gives the same transfer semantics, which should
+  // not be three readings of them.
+  //
+  // Order matters and is the spec's: validate the whole list first, so a bad
+  // entry throws before anything is half-detached; serialize while the listed
+  // objects are still live; detach only once that has succeeded.
+  function serializeWithTransfer(message, list) {
+    const ports = [];
     for (const item of list) {
-      if (!(item instanceof ArrayBuffer) || typeof item.transfer !== "function") {
-        throw new DOMException(
-          "Only ArrayBuffer objects can be transferred.",
-          "DataCloneError",
-        );
+      if (item instanceof ArrayBuffer && typeof item.transfer === "function") {
+        if (item.detached) {
+          throw new DOMException(
+            "An already detached ArrayBuffer could not be transferred.",
+            "DataCloneError",
+          );
+        }
+        continue;
       }
-      // An already-detached buffer is the spec's first check, and it is a
-      // DataCloneError — where letting `transfer()` reject it below would
-      // surface the wrong type (a TypeError).
-      if (item.detached) {
-        throw new DOMException(
-          "An already detached ArrayBuffer could not be transferred.",
-          "DataCloneError",
-        );
+      if (globalThis.MessagePort && item instanceof globalThis.MessagePort) {
+        ports.push(item);
+        continue;
       }
+      throw new DOMException(
+        "Only ArrayBuffer and MessagePort objects can be transferred.",
+        "DataCloneError",
+      );
     }
 
-    const bytes = __structuredSerialize(value);
+    const transferring = __internal.transferringPorts;
+    for (const port of ports) transferring.add(port);
+    let bytes;
+    try {
+      bytes = __structuredSerialize(message);
+    } finally {
+      // Cleared even on failure: leaving a port marked as "being transferred"
+      // would let a *later* clone of it succeed where it should not.
+      transferring.clear();
+    }
 
-    // Detach after serializing rather than moving the backing store into the
-    // clone. The observable contract is the same — the receiver holds the data,
-    // the source is detached — and it keeps a serialized value a plain byte
-    // array, with nothing travelling out of band. `transfer()` is what actually
-    // detaches; there is no other way to do it from JS.
-    for (const item of list) item.transfer();
+    // `transfer()` is what actually detaches an ArrayBuffer; there is no other
+    // way from JS. A port's detach hands its queue over to whoever received it.
+    for (const item of list) {
+      if (item instanceof ArrayBuffer) item.transfer();
+    }
+    for (const port of ports) port[__internal.portDetach]();
+    return bytes;
+  }
 
-    return __structuredDeserialize(bytes);
-  };
+  __internal.transfer.serialize = serializeWithTransfer;
+
+  // ---- the entry point ------------------------------------------------------
+
+  globalThis.structuredClone = (value, options) =>
+    __structuredDeserialize(
+      serializeWithTransfer(
+        value,
+        options && options.transfer ? [...options.transfer] : [],
+      ),
+    );
 })();

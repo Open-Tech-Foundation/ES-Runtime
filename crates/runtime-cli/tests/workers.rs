@@ -340,6 +340,59 @@ fn a_broadcast_channel_reaches_every_agent_but_never_its_sender() {
 }
 
 #[test]
+fn a_message_port_transferred_into_a_worker_carries_a_private_channel() {
+    // The HTML spec's composition primitive: hand a worker one end of a channel
+    // and talk to it directly, rather than through the Worker object.
+    let out = run(
+        "port",
+        r#"
+        self.onmessage = (e) => {
+          const port = e.data.port;
+          port.onmessage = (m) => port.postMessage(`echo: ${m.data}`);
+          postMessage("worker holds the port");
+        };
+        "#,
+        r#"
+        const { port1, port2 } = new MessageChannel();
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        port1.onmessage = (e) => {
+          console.log(e.data);
+          port1.close();
+          w.terminate();
+        };
+        w.onmessage = (e) => {
+          console.log(e.data);
+          port1.postMessage("over the port");
+        };
+        w.postMessage({ port: port2 }, [port2]);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "worker holds the port\necho: over the port\n");
+}
+
+#[test]
+fn a_message_channel_alone_does_not_keep_the_process_running() {
+    // An open port is not a reason to stay alive: its peer is in this agent, so
+    // with the loop otherwise idle nothing could ever post to it. Before ports
+    // were host-backed this exited on its own, and it still must — otherwise
+    // every program that merely opened a channel would hang.
+    let out = run(
+        "lifetime",
+        r#"postMessage("unused");"#,
+        r#"
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = (e) => console.log(`got ${e.data}`);
+        port2.postMessage("hi");
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "got hi\n");
+}
+
+#[test]
 fn atomics_wait_blocks_in_a_worker_but_throws_on_the_main_agent() {
     // The ECMAScript agent record's [[CanBlock]]: false where the loop is
     // driven (parking it stops everything), true in a worker, which owns its

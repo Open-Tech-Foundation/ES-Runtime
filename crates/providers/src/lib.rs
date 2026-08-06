@@ -1240,6 +1240,46 @@ pub trait WorkerHost: Send + Sync {
     fn shutdown(&self) -> BoxFuture<()>;
 }
 
+/// The queues behind `MessagePort`, so that a port can be **transferred** to
+/// another agent.
+///
+/// A port is host-owned rather than a pair of JS objects because transferring
+/// one has to survive leaving the isolate that made it: what travels in a
+/// `postMessage` is the port's id, and whichever agent holds that id is the one
+/// its peer's messages reach. Two entangled ports are two ids; moving one
+/// between agents moves nothing but a number.
+///
+/// Ungated. A port conveys no authority — an agent can only be handed one by
+/// something that already had it.
+pub trait PortHub: Send + Sync {
+    /// Creates an entangled pair, returning both ids (`MessageChannel`).
+    ///
+    /// Synchronous, and so are `post`, `detach_reader` and `close` below:
+    /// `new MessageChannel()` and `port.postMessage(x)` are synchronous in the
+    /// specification, and a queue push has nothing to wait for. Only
+    /// [`recv`](Self::recv) waits, because waiting is what it is for.
+    fn create(&self) -> Result<(u64, u64), ProviderError>;
+
+    /// Queues `message` for the **peer** of `id`. Dropped if the peer is gone,
+    /// which is what a closed or never-transferred port looks like.
+    fn post(&self, id: u64, message: Vec<u8>) -> Result<(), ProviderError>;
+
+    /// Awaits the next message for `id`; `None` once the port is closed, or as
+    /// soon as [`detach_reader`](Self::detach_reader) is called.
+    fn recv(&self, id: u64) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;
+
+    /// Stops this agent reading `id`, **without consuming a queued message** —
+    /// the port has been transferred, and the agent receiving it must find
+    /// everything that was already in flight.
+    ///
+    /// This is why the pump cannot simply be abandoned: an outstanding `recv`
+    /// holding a message would swallow it on the way out.
+    fn detach_reader(&self, id: u64);
+
+    /// Closes `id` and disentangles its peer. Idempotent.
+    fn close(&self, id: u64);
+}
+
 /// The broker behind `BroadcastChannel`: delivery to every other channel of the
 /// same name, across every agent.
 ///

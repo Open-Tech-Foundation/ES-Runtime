@@ -47,6 +47,11 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **A started `MessagePort` delivers its queue asynchronously**, as the spec's
+  task-based delivery requires. `start()` used to flush the buffer inline, so a
+  handler had already run by the time it returned; it now runs a turn later, as
+  it does in a browser.
+
 - **`structuredClone` is now HTML's StructuredSerialize/StructuredDeserialize**,
   performed by the engine over V8's `ValueSerializer`, replacing the
   hand-written JS deep clone. That is where the three fixes above come from.
@@ -112,9 +117,23 @@ namespace) is unstable and may change between minor releases until the API freez
   embedder that installs none keeps the previous agent-local behaviour. A
   channel still never receives its own posts.
 
+- **A `MessagePort` can be transferred**, including into a worker — the HTML
+  spec's composition primitive, and the way to hand a worker a private channel
+  rather than routing everything through the `Worker` object. Port queues move
+  to the new `PortHub` provider (`ProcessPortHub` covers one process), so
+  transferring a port moves its id and leaves messages already in flight
+  queued where they were. A port still cannot be *cloned*: two ends of a
+  channel cannot become three, so a port outside the transfer list is a
+  `DataCloneError`. With no hub installed, ports stay agent-local and
+  transferring one is refused, as before.
+
 - **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
   `ValueSerializer`, as the `__structuredSerialize`/`__structuredDeserialize`
   builtins.
+
+- `OpDecl::unref`, marking an async op that should not by itself keep the
+  embedder's loop running — Node's `unref`. Used by the `MessagePort` and
+  `BroadcastChannel` receive pumps.
 
 - `Runtime::instantiate_module_source` / `Runtime::begin_evaluation`, the two
   halves of `load_module_source`. Instantiation runs no guest code, so an

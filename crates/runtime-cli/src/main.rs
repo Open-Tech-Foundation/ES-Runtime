@@ -41,9 +41,9 @@ use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
     HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ProcessBroadcastHub,
-    ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet,
-    SystemProcess, SystemSignals, SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost,
-    TokioTimers, path,
+    ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
+    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
+    SystemWebSocket, ThreadWorkerHost, TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, ProviderError, Signal, WorkerScope, WorkerSpec};
 use url::Url;
@@ -1290,7 +1290,9 @@ async fn run() -> Result<(), String> {
     .with_commands(Arc::new(commands))
     // BroadcastChannel's agent cluster is this process: every worker `esrun`
     // starts shares the hub, so a channel opened in one reaches the rest.
-    .with_broadcast(Arc::new(ProcessBroadcastHub::new()));
+    .with_broadcast(Arc::new(ProcessBroadcastHub::new()))
+    // MessagePort queues, so a port transferred into a worker keeps working.
+    .with_ports(Arc::new(ProcessPortHub::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project

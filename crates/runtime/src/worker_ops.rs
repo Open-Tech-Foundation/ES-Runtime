@@ -302,6 +302,102 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
     Ok(())
 }
 
+// ---- MessagePort ------------------------------------------------------------
+
+/// Ops behind `MessagePort`, routed through the [`PortHub`].
+///
+/// Ungated, like `BroadcastChannel`: a port carries no authority, and an agent
+/// only ever receives one from something that already held it. With no hub the
+/// prelude keeps its agent-local ports, which is all an embedder without
+/// workers could use anyway.
+pub(crate) fn install_ports(
+    engine: &mut dyn Engine,
+    hub: Option<Arc<dyn es_runtime_providers::PortHub>>,
+) -> Result<()> {
+    let present = hub.is_some();
+    engine.register_op(OpDecl::sync("port_available", move |_args| {
+        Ok(Value::Bool(present))
+    }))?;
+
+    // Sync: `new MessageChannel()` is synchronous in the specification, and
+    // allocating two queues has nothing to await.
+    let h = hub.clone();
+    engine.register_op(OpDecl::sync("port_create", move |_args| {
+        let (a, b) = require_ports(&h)?.create().map_err(map_err)?;
+        Ok(Value::Array(vec![
+            Value::Number(a as f64),
+            Value::Number(b as f64),
+        ]))
+    }))?;
+
+    // Sync too, and for a stronger reason: `postMessage` must be ordered with
+    // respect to later ones, which an async op's scheduling would not
+    // guarantee.
+    let h = hub.clone();
+    engine.register_op(OpDecl::sync("port_post", move |args| {
+        let id = arg_u64(&args, 0);
+        let message = arg_bytes(&args, 1);
+        require_ports(&h)?.post(id, message).map_err(map_err)?;
+        Ok(Value::Undefined)
+    }))?;
+
+    let h = hub.clone();
+    engine.register_op(
+        OpDecl::r#async("port_recv", move |args| {
+            let h = h.clone();
+            let id = arg_u64(&args, 0);
+            Box::pin(async move {
+                Ok(match require_ports(&h)?.recv(id).await.map_err(map_err)? {
+                    Some(bytes) => Value::Bytes(bytes),
+                    None => Value::Null,
+                })
+            })
+        })
+        // Unref'd: an open port must not, by itself, keep the process running.
+        // `new MessageChannel()` with an `onmessage` is ordinary code, and
+        // before ports were host-backed it exited cleanly; a pump that counted
+        // as work would turn every such program into one that hangs.
+        //
+        // Nothing is lost by it. A port whose peer is in this agent can only
+        // receive if this agent runs code, so waiting on it with the loop
+        // otherwise idle is provably futile. A port whose peer is in *another*
+        // agent is held open by that agent instead — the worker keeps the
+        // process alive, and this pump resolves whenever it posts.
+        .unref(),
+    )?;
+
+    let h = hub.clone();
+    engine.register_op(OpDecl::sync("port_detach", move |args| {
+        let id = arg_u64(&args, 0);
+        if let Some(hub) = h.as_ref() {
+            hub.detach_reader(id);
+        }
+        Ok(Value::Undefined)
+    }))?;
+
+    let h = hub;
+    engine.register_op(OpDecl::sync("port_close", move |args| {
+        let id = arg_u64(&args, 0);
+        if let Some(hub) = h.as_ref() {
+            hub.close(id);
+        }
+        Ok(Value::Undefined)
+    }))?;
+    Ok(())
+}
+
+fn require_ports(
+    hub: &Option<Arc<dyn es_runtime_providers::PortHub>>,
+) -> std::result::Result<Arc<dyn es_runtime_providers::PortHub>, OpError> {
+    hub.clone().ok_or_else(|| {
+        OpError::new(
+            ExceptionClass::Error,
+            "MessagePort cannot be transferred (no PortHub configured)",
+        )
+        .with_code(ErrorCode::ProviderUnavailable)
+    })
+}
+
 // ---- BroadcastChannel -------------------------------------------------------
 
 /// Ops behind `BroadcastChannel`, routed through the [`BroadcastHub`].
@@ -345,16 +441,22 @@ pub(crate) fn install_broadcast(
     }))?;
 
     let h = hub.clone();
-    engine.register_op(OpDecl::r#async("broadcast_recv", move |args| {
-        let h = h.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
-            Ok(match require_hub(&h)?.recv(id).await.map_err(map_err)? {
-                Some(bytes) => Value::Bytes(bytes),
-                None => Value::Null,
+    engine.register_op(
+        OpDecl::r#async("broadcast_recv", move |args| {
+            let h = h.clone();
+            let id = arg_u64(&args, 0);
+            Box::pin(async move {
+                Ok(match require_hub(&h)?.recv(id).await.map_err(map_err)? {
+                    Some(bytes) => Value::Bytes(bytes),
+                    None => Value::Null,
+                })
             })
         })
-    }))?;
+        // Unref'd, for the same reason as `port_recv`: an open BroadcastChannel
+        // is not a reason for the process to keep running. A live worker that
+        // might still post to it is.
+        .unref(),
+    )?;
 
     let h = hub;
     engine.register_op(OpDecl::r#async("broadcast_close", move |args| {
