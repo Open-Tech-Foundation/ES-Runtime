@@ -181,3 +181,63 @@ test("ReadableStream.from rejects a non-iterable", () => {
   assertThrows(() => ReadableStream.from(123), "TypeError");
   assertThrows(() => ReadableStream.from(null), "TypeError");
 });
+
+// ---- transferable streams (Streams Standard §9) -----------------------------
+//
+// A stream is not copied — its chunks flow across a MessageChannel as they are
+// produced — so transferring one locks the original and yields a live stream on
+// the other side.
+
+test("a ReadableStream can be transferred but not cloned", () => {
+  const stream = new ReadableStream({ start: (c) => c.close() });
+  assertThrows(() => structuredClone({ stream }), "DataCloneError");
+
+  const moved = structuredClone({ stream }, { transfer: [stream] });
+  assertEquals(moved.stream instanceof ReadableStream, true);
+  // Piping into the transfer is what locks it: the original is no longer usable
+  // where it came from, which is the point of a transfer.
+  assertEquals(stream.locked, true);
+});
+
+test("a transferred ReadableStream delivers its chunks", async () => {
+  const stream = new ReadableStream({
+    start(c) {
+      c.enqueue("a");
+      c.enqueue("b");
+      c.close();
+    },
+  });
+  const moved = structuredClone({ stream }, { transfer: [stream] }).stream;
+  const seen = [];
+  for await (const chunk of moved) seen.push(chunk);
+  assertEquals(seen.join(","), "a,b");
+});
+
+test("a WritableStream can be transferred", async () => {
+  const written = [];
+  let done;
+  const finished = new Promise((r) => {
+    done = r;
+  });
+  const sink = new WritableStream({
+    write: (c) => void written.push(c),
+    close: () => done(),
+  });
+
+  const moved = structuredClone({ sink }, { transfer: [sink] }).sink;
+  assertEquals(moved instanceof WritableStream, true);
+  const writer = moved.getWriter();
+  await writer.write("x");
+  await writer.close();
+  await finished;
+  assertEquals(written.join(","), "x");
+});
+
+test("a locked stream cannot be transferred", () => {
+  const stream = new ReadableStream({ start: (c) => c.close() });
+  stream.getReader();
+  assertThrows(
+    () => structuredClone({ stream }, { transfer: [stream] }),
+    "DataCloneError",
+  );
+});

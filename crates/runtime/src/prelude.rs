@@ -34,6 +34,9 @@ pub(crate) fn source() -> String {
         // messaging needs EventTarget + MessageEvent (events) and structuredClone.
         include_str!("prelude/channel.js"),
         include_str!("prelude/streams.js"),
+        // Transferable streams: needs the stream classes above, and the port
+        // operations channel.js published.
+        include_str!("prelude/transferable-streams.js"),
         // encoding streams need TransformStream + TextEncoder/TextDecoder.
         include_str!("prelude/encoding-streams.js"),
         // compression streams need TransformStream.

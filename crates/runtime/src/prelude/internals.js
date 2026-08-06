@@ -57,6 +57,10 @@
       // and by the time the codec sees the object that is the only difference
       // between them.
       transferringPorts: new Set(),
+      // The same, for streams: a ReadableStream/WritableStream/TransformStream
+      // may be transferred and may not be cloned, and by the time the codec
+      // runs the transfer list is the only thing that distinguishes them.
+      transferringStreams: new Set(),
       // channel.js's "you have been transferred away" hook, called by
       // structured-clone.js once serialization has succeeded.
       portDetach: Symbol("MessagePort detach"),
@@ -70,6 +74,11 @@
       // the freeze below is shallow, so a slot present now can be populated,
       // where a new property on `__internal` could not.
       transfer: {},
+      // channel.js fills these in: `adopt(id)` wraps a transferred port id in a
+      // MessagePort, `idOf(port)` reads one back. Transferable streams need
+      // both — a stream is transferred *as* a port pair — and they cannot reach
+      // channel.js's own constructor symbol.
+      ports: {},
     }),
     writable: false,
     enumerable: false,

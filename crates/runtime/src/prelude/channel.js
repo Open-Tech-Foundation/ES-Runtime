@@ -400,6 +400,16 @@
     },
   });
 
+  // Transferable streams are carried by a port pair, and live in their own
+  // fragment (they need ReadableStream, which loads later). They cannot reach
+  // `INTERNAL`, so the two operations they need are published here.
+  Object.assign(__internal.ports, {
+    available: hostedPorts,
+    create: () => __ops.port_create(),
+    adopt: (id) => new MessagePort(INTERNAL, id),
+    idOf: (port) => port[PORT_ID],
+  });
+
   for (const Interface of [MessageChannel, MessagePort, BroadcastChannel]) {
     Object.defineProperty(Interface.prototype, Symbol.toStringTag, {
       value: Interface.name,

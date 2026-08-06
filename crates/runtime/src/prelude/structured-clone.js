@@ -99,8 +99,17 @@
   // Order matters and is the spec's: validate the whole list first, so a bad
   // entry throws before anything is half-detached; serialize while the listed
   // objects are still live; detach only once that has succeeded.
+  function isStream(value) {
+    return (
+      (globalThis.ReadableStream && value instanceof globalThis.ReadableStream) ||
+      (globalThis.WritableStream && value instanceof globalThis.WritableStream) ||
+      (globalThis.TransformStream && value instanceof globalThis.TransformStream)
+    );
+  }
+
   function serializeWithTransfer(message, list) {
     const ports = [];
+    const streams = [];
     for (const item of list) {
       if (item instanceof ArrayBuffer && typeof item.transfer === "function") {
         if (item.detached) {
@@ -115,21 +124,29 @@
         ports.push(item);
         continue;
       }
+      if (isStream(item)) {
+        streams.push(item);
+        continue;
+      }
       throw new DOMException(
-        "Only ArrayBuffer and MessagePort objects can be transferred.",
+        "Only ArrayBuffer, MessagePort and stream objects can be transferred.",
         "DataCloneError",
       );
     }
 
-    const transferring = __internal.transferringPorts;
-    for (const port of ports) transferring.add(port);
+    const transferringPorts = __internal.transferringPorts;
+    const transferringStreams = __internal.transferringStreams;
+    for (const port of ports) transferringPorts.add(port);
+    for (const stream of streams) transferringStreams.add(stream);
     let bytes;
     try {
       bytes = __structuredSerialize(message);
     } finally {
-      // Cleared even on failure: leaving a port marked as "being transferred"
-      // would let a *later* clone of it succeed where it should not.
-      transferring.clear();
+      // Cleared even on failure: leaving something marked as "being
+      // transferred" would let a *later* clone of it succeed where it should
+      // not.
+      transferringPorts.clear();
+      transferringStreams.clear();
     }
 
     // `transfer()` is what actually detaches an ArrayBuffer; there is no other

@@ -373,6 +373,65 @@ fn a_message_port_transferred_into_a_worker_carries_a_private_channel() {
 }
 
 #[test]
+fn a_readable_stream_transferred_to_a_worker_streams_rather_than_copies() {
+    // A stream is not serialized — its chunks cross a MessageChannel as they
+    // are produced, which is why an infinite stream is transferable at all.
+    let out = run(
+        "stream",
+        r#"
+        self.onmessage = async (e) => {
+          const seen = [];
+          for await (const chunk of e.data.stream) seen.push(chunk);
+          postMessage(`worker read ${seen.join(",")}`);
+        };
+        "#,
+        r#"
+        const stream = new ReadableStream({
+          start(c) { c.enqueue("a"); c.enqueue("b"); c.enqueue("c"); c.close(); },
+        });
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        w.postMessage({ stream }, [stream]);
+        console.log(`sender locked: ${stream.locked}`);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "sender locked: true\nworker read a,b,c\n");
+}
+
+#[test]
+fn a_transferred_stream_applies_backpressure_across_agents() {
+    // The `pull` half of the protocol, and the reason it exists: without it an
+    // unbounded producer would serialize its whole output into the port queue,
+    // which is precisely what a stream is for avoiding.
+    let out = run(
+        "backpressure",
+        r#"
+        self.onmessage = async (e) => {
+          const reader = e.data.stream.getReader();
+          await reader.read();
+          await reader.read();
+          postMessage("read 2");
+        };
+        "#,
+        r#"
+        let produced = 0;
+        const stream = new ReadableStream({ pull(c) { c.enqueue(++produced); } });
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = () => setTimeout(() => {
+          console.log(produced < 20 ? "bounded" : `ran away (${produced})`);
+          w.terminate();
+        }, 300);
+        w.postMessage({ stream }, [stream]);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "bounded");
+}
+
+#[test]
 fn a_message_channel_alone_does_not_keep_the_process_running() {
     // An open port is not a reason to stay alive: its peer is in this agent, so
     // with the loop otherwise idle nothing could ever post to it. Before ports

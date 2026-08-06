@@ -127,6 +127,17 @@ namespace) is unstable and may change between minor releases until the API freez
   `DataCloneError`. With no hub installed, ports stay agent-local and
   transferring one is refused, as before.
 
+- **Transferable streams** — `ReadableStream`, `WritableStream` and
+  `TransformStream` in a transfer list, including into a worker. A stream is not
+  copied: its chunks cross a `MessageChannel` as they are produced, which is
+  what makes an endless stream transferable at all. Transferring locks the
+  original, as the spec requires, and a locked stream cannot be transferred.
+
+  Backpressure crosses with it — the reading agent asks for each chunk and the
+  writing agent's `write()` does not settle until it does — so a fast producer
+  cannot run away into the port's queue. Like a port, a stream may be
+  transferred and may not be cloned.
+
 - **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
   `ValueSerializer`, as the `__structuredSerialize`/`__structuredDeserialize`
   builtins.
