@@ -45,7 +45,7 @@ The following are deliberate, durable boundaries — not unimplemented features:
 | Bundler / linter / formatter / test runner | Left to dedicated tools.                         |
 | Watch mode               | No built-in file watcher / auto-restart.                           |
 | FFI / native addons      | Host extends via injected providers + ops (Rust), not FFI.         |
-| Workers / multi-thread   | Multi-isolate is the embeddable VM layer (Layer B), not a global.  |
+| Node.js `worker_threads` | `Worker` is the HTML interface (module workers only); there is no `isMainThread`. |
 
 See `website/app/docs/scope` for the rendered version.
 
@@ -55,7 +55,7 @@ The global scope tracks the WinterTC Minimum Common Web Platform API. Host
 capabilities (filesystem, process, network) are **not** globals — they live in
 [`runtime:` modules](#the-runtime-scheme).
 
-- **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` only — `"ES-Runtime/<version>"`)
+- **Core:** `globalThis`, `self`, `console` ([full method set](#console)), `queueMicrotask`, `structuredClone`, `reportError`, `navigator` (`userAgent` — `"ES-Runtime/<version>"` — and `hardwareConcurrency`)
 - **Modules:** `import.meta.url`, `import.meta.resolve(specifier)` — pure URL resolution against the current module, with no I/O and no existence check. **Bare and `#private` specifiers resolve too**, through the module loader — useful for locating a file *inside* a dependency (a migration, a `.proto`, a template) whose install path you cannot hardcode. That reads `package.json` files, so it needs the same `FileSystem` grant an import does, and it obeys the same root jail and import policy; a denied run gets a `NotAllowedError` rather than a location.
 - **Timers:** `setTimeout`, `clearTimeout`, `setInterval`, `clearInterval`
 - **URL:** `URL` (incl. `canParse`, `parse`, and `createObjectURL`/`revokeObjectURL` for in-process `blob:` URLs), `URLSearchParams`, `URLPattern`
@@ -67,7 +67,8 @@ capabilities (filesystem, process, network) are **not** globals — they live in
 - **Events:** `Event`, `EventTarget`, `CustomEvent`, `MessageEvent`, `CloseEvent`, `ErrorEvent`, `ProgressEvent`, `PromiseRejectionEvent`, `AbortController`, `AbortSignal` — plus `addEventListener`/`removeEventListener`/`dispatchEvent` on the global scope itself
 - **Network:** `WebSocket`, `WebSocketStream`, `WebSocketError` (capability-gated — see below)
 - **Data:** `Blob`, `File`, `FormData`, `DOMException`
-- **Messaging:** `MessageChannel`, `MessagePort`, `BroadcastChannel` — one agent, so the other end of a channel is always in this isolate and delivery is a queued task rather than a cross-thread hop. Messages are still structured-cloned at `postMessage`, delivered asynchronously and in order, and a port buffers until `start()` (which assigning `onmessage` does implicitly). Transferring a `MessagePort` is a `DataCloneError`: with one agent there is nowhere to transfer it to.
+- **Messaging:** `MessageChannel`, `MessagePort`, `BroadcastChannel` — messages are structured-cloned at `postMessage`, delivered asynchronously and in order, and a port buffers until `start()` (which assigning `onmessage` does implicitly). A `MessagePort` can be **transferred**, including into a worker, which is how you hand one a private channel; it cannot be *cloned* (two ends of a channel cannot become three). A `BroadcastChannel` reaches every agent, as the spec's agent-cluster scope requires, and never its own sender.
+- **Workers:** `Worker` — see [Workers](#workers) below.
 - **Performance:** `performance` — `now()`, `timeOrigin`, and User Timing (`mark`, `measure`, `getEntries`/`getEntriesByName`/`getEntriesByType`, `clearMarks`, `clearMeasures`), with `PerformanceEntry`, `PerformanceMark`, `PerformanceMeasure`
 - **WebAssembly:** `WebAssembly` — `validate`, `compile`, `instantiate`, `compileStreaming`, `instantiateStreaming`, `Module`, `Instance`, `Memory`, `Table`, `Global`, `CompileError`, `LinkError`, `RuntimeError`
 
@@ -213,11 +214,11 @@ slots over the same events: assigning twice replaces rather than accumulates.
 rejection is unclaimed at the end of a tick; attaching a handler afterwards tells
 you the report has been superseded, but the process still fails — a rejection
 that was unhandled when it mattered is a bug worth surfacing.
-**Not available:** `process`/`Buffer`/`require` (Node), `Worker`,
-`localStorage`/`window` (browser). `navigator` exists but carries only
-`userAgent`: the rest of the browser `Navigator` is document, device and
-permission surface, and answering those with plausible constants would make a
-feature check pass and then lie.
+**Not available:** `process`/`Buffer`/`require` (Node), `localStorage`/`window`
+(browser). `navigator` carries `userAgent` and `hardwareConcurrency` only: the
+rest of the browser `Navigator` is document, device and permission surface, and
+answering those with plausible constants would make a feature check pass and
+then lie.
 
 ---
 
@@ -369,9 +370,100 @@ diagnostic, like a syntax error.
 **Not yet supported:** source-phase imports (`import source m from "./m.wasm"`)
 and the component model.
 
-`SharedArrayBuffer` and `shared: true` memories do construct, but there are no
-workers to share them with (see **Not available** above), so they buy nothing
-here — and `Atomics.wait` on the only thread would deadlock the loop.
+`SharedArrayBuffer` and `shared: true` memories cross to a worker as **one
+allocation**, so `Atomics` between two agents arbitrate the same bytes.
+`Atomics.wait` blocks inside a worker, which owns its thread, and throws a
+`TypeError` on the agent driving the loop — the ECMAScript agent record's
+`[[CanBlock]]`, and the same split HTML makes.
+
+---
+
+## Workers
+
+The HTML [dedicated worker](https://html.spec.whatwg.org/multipage/workers.html):
+its own thread, its own isolate, no shared scope. Not part of the WinterTC
+Minimum Common API — this follows the HTML Standard, as Deno and Bun do.
+
+```js
+// main.js
+const worker = new Worker(new URL("./worker.js", import.meta.url), {
+  name: "resize",
+  permissions: ["net"],          // see Capabilities below
+});
+worker.onmessage = (e) => console.log(e.data);
+worker.onerror = (e) => { console.error(e.message); e.preventDefault(); };
+worker.postMessage({ job: 42 });
+
+// worker.js
+self.onmessage = (e) => postMessage(`${self.name} did ${e.data.job}`);
+```
+
+Inside a worker the global scope is a `DedicatedWorkerGlobalScope`:
+`postMessage`, `onmessage`, `onmessageerror`, `close()` and `name`. That is also
+how you tell where you are — there is no `isMainThread`, which is a Node-ism;
+HTML, Deno and Bun all distinguish the two by the shape of the global.
+
+**Module workers only.** `type: "classic"` throws a `TypeError`. This runtime
+evaluates every input as a module, so there is no classic-script path for a
+classic worker to use — the same reason `require` is absent.
+
+**Resolving the URL.** A relative string resolves against the *entry* module.
+Prefer `new URL("./worker.js", import.meta.url)`, which is exact wherever it is
+written, and what Vite, webpack and Deno all recommend.
+
+### Capabilities
+
+A worker starts with **nothing** and is granted capabilities explicitly, by the
+[denial vocabulary](#capabilities) names:
+
+```js
+new Worker(url, { permissions: ["net", "read"] })
+```
+
+It can never be granted what its parent lacks, so no chain of spawns widens the
+original grant. Spawning at all requires `workers` (`--deny-workers` refuses
+it). A worker's own `import`s still load — under the parent's authority to read
+them, resolved before any of the worker's code runs — so a worker granted
+nothing is not limited to a single file.
+
+> This is stricter than Deno, which gives a worker its parent's permissions
+> unmodified. Under `esrun`, where the parent normally holds everything, a
+> worker holds nothing until you say otherwise.
+
+Nesting is allowed: a worker holding `workers` may start its own, and may only
+pass on what it holds.
+
+### Lifetime
+
+A live worker keeps the process running, as in Node and Deno. It ends when it
+calls `close()`, when its work finishes, or when the parent calls `terminate()`.
+`terminate()` interrupts the isolate, so it stops a worker spinning in a
+synchronous loop or parked in `Atomics.wait`.
+
+`exit()` from `runtime:process` inside a worker ends **that worker**, and does
+not set the code the process exits with. `onSignal` is refused inside a worker:
+a signal is delivered to the process, and watching one suppresses the default
+action, so that belongs to the agent that owns the process.
+
+### What crosses
+
+`postMessage` uses the structured clone algorithm, so `Map`, `Set`, `Date`,
+`RegExp`, `BigInt`, typed arrays, `Blob`, `File`, `DOMException` and cyclic
+graphs all survive — this is not JSON. Transferable in a transfer list:
+
+| Type | On transfer |
+| --- | --- |
+| `ArrayBuffer` | Sender detaches; receiver holds the data |
+| `SharedArrayBuffer` | Not transferred — *shared*, as one allocation in both agents |
+| `MessagePort` | Moves to the receiver, with anything already queued for it |
+| `ReadableStream` / `WritableStream` / `TransformStream` | Original locks; chunks then flow across, with backpressure |
+
+A `MessagePort` and a stream may be transferred but not cloned; either outside
+the transfer list is a `DataCloneError`.
+
+**Not yet:** a `blob:` URL minted on one agent does not resolve on another —
+the object-URL store is per-isolate, where the spec scopes it to the agent
+cluster.
 
 ---
 

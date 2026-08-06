@@ -156,6 +156,31 @@ Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM
 - No `deno_core` or any pre-built runtime framework.
 
 **Deferrals:**
+- **Workers** → ☑ **implemented** (DECISIONS D48): the HTML dedicated `Worker`,
+  each with its own thread and isolate, over the `WorkerHost` provider seam —
+  `runtime` still spawns nothing. Module workers only (`type: "classic"`
+  throws, for the same reason `require` is absent). A worker starts with **no**
+  capabilities and is granted them explicitly, bounded above by its parent's
+  set; its static import graph loads under the parent's authority, which is safe
+  because instantiation runs no guest code. Nesting is allowed and bounded by
+  that chain. With it came HTML `structuredClone` over V8's `ValueSerializer`,
+  cross-agent `SharedArrayBuffer`, agent-cluster `BroadcastChannel`
+  (`BroadcastHub`), transferable `MessagePort` (`PortHub`) and transferable
+  streams.
+  - **Deferred: cross-agent `blob:` URLs.** `URL.createObjectURL` registers in a
+    per-isolate map, where the spec scopes the blob URL store to the agent
+    cluster — so a `blob:` URL minted on one agent does not resolve on another.
+    Closing it needs a host-side blob registry (a fifth messaging provider); the
+    single-agent behaviour is unchanged and correct.
+  - **Deferred: the zero-copy op crossing** (D3a Phase 8), now *measured* rather
+    than assumed. `bench/worker-postmessage.js`, release build: 1 KiB messages
+    cost 0.065 ms each and 8 MiB messages 4.34 ms. The 1 KiB figure is fixed
+    overhead — two op crossings, a promise, a tick, a thread wake-up — against
+    which a 1 KiB memcpy is ~0.1 µs, so the copy is ~0.2% at the sizes messages
+    usually are and ~10% at 8 MiB. Removing it means giving every provider
+    signature that carries bytes a container able to own a V8 backing store,
+    plus an `unsafe` outside `engine`. Not worth that trade at these numbers;
+    revisit if large-payload messaging becomes a workload.
 - **Panic-across-FFI containment** (`catch_unwind` around op/timer/reject callbacks, per D12) — ☑ **implemented in Phase 9**: a host op panic is contained as a JS exception, not an abort (assumes `panic = "unwind"`). (DECISIONS D15.)
 - **`DOMException` engine reconciliation** — ☑ **implemented**: the engine dynamically resolves `globalThis.DOMException` when marshaling a native `DOMException`, surfacing it as a proper instance of the JS class (resolves DECISIONS D3a).
 - **Byte/BYOB streams** (`ReadableByteStreamController`, BYOB readers) — ☑ **implemented in Phase 9** (copy-based, no ArrayBuffer transfer/detach; DECISIONS D19). Default streams + encoding streams shipped in Phase 5.

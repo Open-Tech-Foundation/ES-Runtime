@@ -1,12 +1,14 @@
 // Type definitions for ES Runtime (esrun) — the `runtime:` standard modules.
 // Ambient `declare module` blocks: include this package and editors resolve
-// `import … from "runtime:fs"` (and process/path) with full completion + types.
+// `import … from "runtime:fs"` (and process/path) with full completion + types,
+// plus the few globals whose shape here differs from the standard libs.
 //
 // Setup (tsconfig.json):
 //   { "compilerOptions": { "types": ["@opentf/esrun-types"] } }
 // or a triple-slash reference in one file:
 //   /// <reference types="@opentf/esrun-types" />
 
+/// <reference path="./globals.d.ts" />
 /// <reference path="./runtime-process.d.ts" />
 /// <reference path="./runtime-path.d.ts" />
 /// <reference path="./runtime-fs.d.ts" />

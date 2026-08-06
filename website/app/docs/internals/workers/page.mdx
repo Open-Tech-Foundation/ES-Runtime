@@ -1,0 +1,156 @@
+---
+title: "Internals: Workers"
+description: One thread and one isolate per worker, why the object graph never crosses the op boundary, what a worker is allowed to do, and what keeps the process alive.
+---
+
+# Internals: Workers
+
+How a `Worker` behaves underneath: who owns the thread, what actually crosses
+between two agents, and why an open port does not hold the process open.
+
+For signatures see the [Web APIs reference](/docs/globals). The interface is the
+HTML [dedicated worker](https://html.spec.whatwg.org/multipage/workers.html) —
+not part of the WinterTC Minimum Common API, so this is a deliberate step into
+the HTML Standard, in the direction Deno and Bun took.
+
+## One thread, one isolate, and a provider between
+
+The runtime spawns nothing. Starting an agent is an injected capability like
+every other reach outside the isolate:
+
+```
+  new Worker(url)
+    └▶ worker_spawn op  ── capability: workers
+         └▶ WorkerHost provider
+              └▶ OS thread ──▶ its own V8 isolate ──▶ its own Driver
+```
+
+`V8Engine` is `!Send` by V8's threading model, so a worker's runtime is *built
+on* the thread that will drive it — the host is handed a factory rather than a
+runtime. Deno's `WebWorker` is constructed the same way, for the same reason.
+
+That seam is what a scheduler-backed host replaces: agents could be green tasks
+on one thread, or live in other processes, and nothing above the provider
+changes.
+
+## The object graph never crosses the op boundary
+
+An op handler receives a marshaled `Value` — a closed enum. A `Map`, a cycle or
+a class instance arriving that way would be flattened to its `String(value)`
+coercion, so `postMessage(anything)` cannot be an op that takes the message.
+
+Instead the graph is serialized **on the JS side**, before the op:
+
+```
+  worker.postMessage(msg, [buf])
+    └▶ __structuredSerialize(msg)   engine builtin, V8 ValueSerializer
+    └▶ __ops.worker_post(id, bytes) the op moves a byte array, as every op does
+         └▶ WorkerHost::post ──▶ channel ──▶ worker thread
+              └▶ __structuredDeserialize ──▶ MessageEvent
+```
+
+So the op contract is untouched, and `Value` never grew a variant. Deno's
+`op_message_port_post_message` has the same shape.
+
+The bytes are V8's serialization format, which is **engine-specific and
+versioned**. They are valid only between isolates of the same build — never a
+wire format, never something to persist.
+
+## What a worker may do
+
+A worker starts with **no capabilities** and is granted them explicitly, bounded
+above by its parent's set:
+
+```js
+new Worker(url, { permissions: ["net"] })
+```
+
+No chain of spawns widens the original grant. This is stricter than Deno, which
+clones the parent's permissions unmodified — under `esrun`, where the parent
+usually holds everything, a worker holds nothing until you say so.
+
+**Its own imports still load.** Otherwise deny-by-default would mean single-file
+workers. The static graph is loaded and linked under the *parent's* authority —
+the parent named the module and could already read it — and the capability set
+narrows to the worker's own before evaluation begins. That is safe for one
+specific reason: **instantiation runs no guest code**. Nothing the worker's
+author wrote executes under the wider set.
+
+Nesting works, bounded by the same chain rather than by hiding the constructor.
+
+**Process control is not delegated.** `onSignal` is refused inside a worker: a
+signal is delivered to the process, and watching one suppresses the default
+action, so a worker taking `SIGTERM` would be deciding — from a thread the
+program may not know is running — whether the process declines to die. `exit()`
+inside a worker ends that worker without setting the process's exit code.
+
+## What keeps the process alive
+
+| Still running | Keeps the process alive? |
+| --- | --- |
+| A live worker | **Yes** — as in Node and Deno |
+| An open `MessagePort` | No |
+| An open `BroadcastChannel` | No |
+
+The two "no" rows are deliberate and narrow. A port's receive pump is an
+outstanding async op, so left counted it would make `new MessageChannel()` with
+an `onmessage` — ordinary code — never exit. Those receives are marked *unref*:
+still polled, still resolving, but not a reason for the loop to stay open.
+
+The justification is that a port whose peer is in **this** agent can only receive
+if this agent runs code, so waiting while the loop is idle is provably futile. A
+port transferred to a worker is held open by that worker instead, via the row
+above.
+
+`terminate()` interrupts the isolate, so it stops a worker spinning in a
+synchronous loop or parked in `Atomics.wait`.
+
+## Transfers
+
+| Type | On transfer |
+| --- | --- |
+| `ArrayBuffer` | Contents travel in the message; sender detaches |
+| `SharedArrayBuffer` | Not transferred — the allocation is *shared*, in both agents at once |
+| `MessagePort` | The id moves; anything already queued for it stays queued |
+| Streams | Original locks; chunks flow across a port pair, with backpressure |
+
+`SharedArrayBuffer` is the one case where memory is genuinely shared, which is
+what makes `Atomics` between agents mean anything. `Atomics.wait` blocks inside
+a worker and throws a `TypeError` on the agent driving the loop — the
+ECMAScript agent record's `[[CanBlock]]`, and the split HTML makes between
+window and worker agents. Without that, one call would park the only thread that
+can make progress and hang the process.
+
+A transferred stream is not copied: it is piped across a channel as chunks are
+produced, so an endless stream is transferable. Backpressure crosses with it —
+the reading agent asks for each chunk and the writing agent's `write()` waits —
+so a fast producer cannot run away into the port's queue.
+
+## Costs
+
+Message round trip, release build, from `bench/worker-postmessage.js`:
+
+| Payload | Per message | Throughput |
+| --- | --- | --- |
+| 1 KiB | 0.065 ms | 15 MiB/s |
+| 64 KiB | 0.131 ms | 476 MiB/s |
+| 1 MiB | 0.512 ms | 1952 MiB/s |
+| 8 MiB | 4.342 ms | 1843 MiB/s |
+
+The 1 KiB row is fixed overhead — two op crossings, a promise, a tick, a thread
+wake-up. Messages are not free; a worker earns its keep on work, not chatter.
+
+The serialized payload is copied once on the JS→Rust crossing. At 1 KiB that is
+roughly 0.2% of the cost and at 8 MiB roughly 10%. Removing it would mean giving
+every provider signature that carries bytes a container able to own a V8 backing
+store, which is not a trade worth making at these numbers.
+
+## Limits
+
+Each worker's isolate carries the standard heap ceiling, and the reference host
+caps concurrently live workers (64 by default) — a worker costs a thread and an
+isolate, so an unbounded `new Worker()` loop is a way to exhaust both.
+
+A `blob:` URL minted on one agent does **not** resolve on another: the
+object-URL store is per-isolate, where the spec scopes it to the agent cluster.
+Closing that needs a host-side blob registry.

@@ -326,13 +326,22 @@ impl Console for StdoutConsole {
     fn write(&self, level: ConsoleLevel, message: &str) {
         use std::io::Write;
 
+        // One `write_all` of message-plus-newline, under one lock, because
+        // more than one agent writes here now: `writeln!` on the unlocked
+        // handle can take the lock once for the message and again for the
+        // newline, which is a window for another worker's line to land in the
+        // middle of this one.
+        let mut line = String::with_capacity(message.len() + 1);
+        line.push_str(message);
+        line.push('\n');
+
         if matches!(level, ConsoleLevel::Warn | ConsoleLevel::Error) {
             // Nothing useful to do if stderr itself is gone.
-            let _ = writeln!(std::io::stderr(), "{message}");
+            let _ = std::io::stderr().lock().write_all(line.as_bytes());
             return;
         }
 
-        if let Err(err) = writeln!(std::io::stdout(), "{message}") {
+        if let Err(err) = std::io::stdout().lock().write_all(line.as_bytes()) {
             // A closed pipe is how `esrun script.js | head` ends, not a failure:
             // the reader took what it wanted and left. `println!` panics on it,
             // which turned an everyday shell idiom into a Rust backtrace on
