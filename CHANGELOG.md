@@ -98,6 +98,20 @@ namespace) is unstable and may change between minor releases until the API freez
   `terminate()` ends it. `terminate()` interrupts the isolate, so it stops a
   worker spinning in a synchronous loop or parked in `Atomics.wait`.
 
+- **`SharedArrayBuffer` crosses to a worker as one allocation**, not a copy:
+  the backing store is handed over, so `Atomics` between two agents operate on
+  the same memory. `API.md` said it "buys nothing here" because there was
+  nothing to share with; there is now. A transferred `ArrayBuffer` still moves
+  by value — the sender detaches, the receiver holds the data.
+
+- **`BroadcastChannel` reaches every agent**, not just its own. The spec scopes
+  it to the agent cluster, which was indistinguishable from "this isolate" while
+  there was one agent; with workers it is not, and a channel that reached only
+  its own agent would be wrong rather than merely limited. Delivery goes through
+  the new `BroadcastHub` provider (`ProcessBroadcastHub` covers one process); an
+  embedder that installs none keeps the previous agent-local behaviour. A
+  channel still never receives its own posts.
+
 - **StructuredSerialize/StructuredDeserialize in the engine**, over V8's
   `ValueSerializer`, as the `__structuredSerialize`/`__structuredDeserialize`
   builtins.

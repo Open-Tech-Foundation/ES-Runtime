@@ -129,13 +129,35 @@
 
   // ---- BroadcastChannel ----------------------------------------------------
 
-  // name -> set of open channels. One agent, so every channel with the same
-  // name is a peer; a channel never receives its own messages.
+  // The spec scopes a BroadcastChannel to the **agent cluster**: every channel
+  // of the same name, in this agent and every other. Two deliveries in one:
+  //
+  //   * with a BroadcastHub installed, the host is the broker and reaches every
+  //     agent — including this one, so same-agent peers arrive that way too and
+  //     there is a single path;
+  //   * with no hub — an embedder that installed none, which is also one that
+  //     has no workers — the map below keeps the agent-local behaviour this
+  //     interface always had.
+  //
+  // Asked on first use rather than now, because "now" is snapshot-build time —
+  // one blob is restored into every agent, and the builder isolate has no hub
+  // at all. Baking the answer in would leave every launch agent-local.
+  let hostedCache = null;
+  function hosted() {
+    if (hostedCache === null) hostedCache = __ops.broadcast_available();
+    return hostedCache;
+  }
+
+  // name -> set of open channels, for the no-hub case.
   const channels = new Map();
 
   class BroadcastChannel extends EventTarget {
     #name;
     #closed = false;
+    // Hub subscription id, once `#subscribe` resolves; null before that and in
+    // the no-hub case.
+    #id = null;
+    #pending = [];
     #onmessage = null;
     #onmessageerror = null;
 
@@ -145,12 +167,52 @@
         throw new TypeError("BroadcastChannel requires a name");
       }
       this.#name = String(name);
+      if (hosted()) {
+        this.#subscribe();
+        return;
+      }
       let peers = channels.get(this.#name);
       if (!peers) {
         peers = new Set();
         channels.set(this.#name, peers);
       }
       peers.add(this);
+    }
+
+    // Subscribe, then pump. The pump is one outstanding async op at a time, on
+    // the ordinary tick contract — the same shape as the worker and WebSocket
+    // pumps, so an open channel keeps its agent alive exactly as a browser tab
+    // stays reachable while one is open.
+    async #subscribe() {
+      try {
+        this.#id = await __ops.broadcast_subscribe(this.#name);
+      } catch {
+        return;
+      }
+      // Anything posted before the subscription resolved goes out now, in order.
+      for (const bytes of this.#pending) __ops.broadcast_publish(this.#id, bytes);
+      this.#pending = [];
+      if (this.#closed) {
+        __ops.broadcast_close(this.#id);
+        return;
+      }
+      for (;;) {
+        let bytes;
+        try {
+          bytes = await __ops.broadcast_recv(this.#id);
+        } catch {
+          return;
+        }
+        if (bytes === null || bytes === undefined || this.#closed) return;
+        let data;
+        try {
+          data = __structuredDeserialize(bytes);
+        } catch {
+          this.dispatchEvent(new MessageEvent("messageerror"));
+          continue;
+        }
+        this.dispatchEvent(new MessageEvent("message", { data }));
+      }
     }
 
     get name() {
@@ -160,6 +222,15 @@
     postMessage(message) {
       if (this.#closed) {
         throw new DOMException("The channel is closed.", "InvalidStateError");
+      }
+      if (hosted()) {
+        // Serialized here, at post time, so a later mutation of `message` is
+        // not seen by any receiver — the same guarantee the local path gets
+        // from cloning eagerly below.
+        const bytes = __structuredSerialize(message);
+        if (this.#id === null) this.#pending.push(bytes);
+        else __ops.broadcast_publish(this.#id, bytes);
+        return;
       }
       const data = structuredClone(message);
       const peers = channels.get(this.#name);
@@ -177,6 +248,13 @@
     close() {
       if (this.#closed) return;
       this.#closed = true;
+      if (hosted()) {
+        this.#pending = [];
+        // Before the subscription resolves there is no id to close; `#subscribe`
+        // sees `#closed` and closes it the moment there is one.
+        if (this.#id !== null) __ops.broadcast_close(this.#id);
+        return;
+      }
       const peers = channels.get(this.#name);
       if (peers) {
         peers.delete(this);

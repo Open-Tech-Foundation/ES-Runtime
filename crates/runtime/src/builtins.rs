@@ -88,6 +88,9 @@ pub(crate) fn install(
         module_loader,
         entry_specifier,
     )?;
+    // BroadcastChannel's cross-agent delivery. Ungated; absent hub means the
+    // prelude keeps agent-local delivery.
+    crate::worker_ops::install_broadcast(engine, providers.broadcast())?;
     Ok(())
 }
 

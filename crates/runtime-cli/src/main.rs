@@ -40,9 +40,10 @@ use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, 
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
-    HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ReqwestTransport,
-    SystemClock, SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess,
-    SystemSignals, SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost, TokioTimers, path,
+    HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ProcessBroadcastHub,
+    ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem, SystemHttpServer, SystemNet,
+    SystemProcess, SystemSignals, SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost,
+    TokioTimers, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, ProviderError, Signal, WorkerScope, WorkerSpec};
 use url::Url;
@@ -1286,7 +1287,10 @@ async fn run() -> Result<(), String> {
     // Child processes for runtime:system. Unrestricted unless
     // `--allow-run=<programs>` named the ones that may be spawned (D38) — the
     // same provider seam an embedder uses to grant Run without granting a shell.
-    .with_commands(Arc::new(commands));
+    .with_commands(Arc::new(commands))
+    // BroadcastChannel's agent cluster is this process: every worker `esrun`
+    // starts shares the hub, so a channel opened in one reaches the rest.
+    .with_broadcast(Arc::new(ProcessBroadcastHub::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory, from which it detects the sandbox root (the project

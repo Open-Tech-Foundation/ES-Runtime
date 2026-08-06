@@ -78,6 +78,69 @@ fn data_clone_error(message: &str) -> OpError {
     OpError::new(ExceptionClass::DomException("DataCloneError"), message)
 }
 
+// ---- SharedArrayBuffer ------------------------------------------------------
+
+/// A `SharedArrayBuffer`'s backing store, in transit between two agents.
+///
+/// Unlike an `ArrayBuffer` — whose contents are copied into the serialized
+/// bytes — a `SharedArrayBuffer` cannot be represented in the byte stream at
+/// all: *sharing the memory* is the whole point, so what travels is an id
+/// against this registry, and the receiving agent rebuilds a
+/// `SharedArrayBuffer` over the very same allocation.
+struct SharedBuffer(v8::SharedRef<v8::BackingStore>);
+
+// SAFETY: a `SharedArrayBuffer` backing store is the one V8 allocation designed
+// to be reached from several isolates on several threads at once — that is what
+// makes `SharedArrayBuffer` and `Atomics` work, and V8 hands the same
+// `BackingStore` to every isolate that shares one. The handle here is a C++
+// `shared_ptr`, whose control block is atomically refcounted, so cloning and
+// dropping it from another thread is exactly the operation the type is built
+// for. `BackingStore` itself is already `Send` in these bindings; only the
+// `SharedRef` wrapper lacks the impl, because it is generic over shared types
+// that are not all thread-safe.
+//
+// The bytes are guest-visible shared memory either way: races over them are
+// what `Atomics` exists to arbitrate, and are the guest's to resolve, not a
+// memory-safety property of this map.
+unsafe impl Send for SharedBuffer {}
+// SAFETY: as above — `&SharedRef` is only ever used to clone it, and the
+// refcount is atomic.
+unsafe impl Sync for SharedBuffer {}
+
+/// Backing stores handed over by a `postMessage`, keyed by the id written into
+/// the serialized bytes.
+///
+/// Process-global because the two ends are different isolates on different
+/// threads: the sender registers, the receiver takes. An entry is removed when
+/// it is read, so the common path leaves nothing behind; a message that is
+/// never delivered — its worker terminated first — leaves its entry until the
+/// process ends, which is bounded by how many such messages were in flight.
+static SHARED_BUFFERS: std::sync::OnceLock<
+    std::sync::Mutex<(u32, std::collections::HashMap<u32, SharedBuffer>)>,
+> = std::sync::OnceLock::new();
+
+fn shared_buffers() -> &'static std::sync::Mutex<(u32, std::collections::HashMap<u32, SharedBuffer>)>
+{
+    SHARED_BUFFERS.get_or_init(|| std::sync::Mutex::new((0, std::collections::HashMap::new())))
+}
+
+/// Registers a backing store for transit and returns its id.
+fn register_shared(store: v8::SharedRef<v8::BackingStore>) -> Option<u32> {
+    let mut guard = shared_buffers().lock().ok()?;
+    let id = guard.0.checked_add(1)?;
+    guard.0 = id;
+    guard.1.insert(id, SharedBuffer(store));
+    Some(id)
+}
+
+/// Takes a registered backing store back out. `None` for an id that was never
+/// registered or has already been claimed — a forged id in a hand-written blob,
+/// which becomes a `DataCloneError` rather than a wrong allocation.
+fn take_shared(id: u32) -> Option<v8::SharedRef<v8::BackingStore>> {
+    let mut guard = shared_buffers().lock().ok()?;
+    guard.1.remove(&id).map(|shared| shared.0)
+}
+
 /// Looks up one of the prelude's host-object hooks. Absent (or not a function)
 /// means the prelude has not installed it, which is a build error rather than
 /// something guest code can cause — the caller turns it into a
@@ -119,8 +182,11 @@ impl v8::ValueSerializerImpl for Serializer {
     ) {
         // V8 supplies the message ("… could not be cloned."); re-throw it as a
         // real `DOMException` so `err.name === "DataCloneError"` holds, which is
-        // what the spec and every test assert on.
+        // what the spec and every test assert on. Building one means calling the
+        // prelude's `DOMException` constructor, hence the scope (see the module
+        // docs) — without it the class lookup alone aborts the process.
         let text = message.to_rust_string_lossy(scope);
+        v8::allow_javascript_execution_scope!(let scope, scope);
         throw(scope, &data_clone_error(&text));
     }
 
@@ -177,6 +243,16 @@ impl v8::ValueSerializerImpl for Serializer {
         serializer.write_raw_bytes(&bytes);
         Some(true)
     }
+
+    fn get_shared_array_buffer_id<'s>(
+        &self,
+        _scope: &mut v8::PinScope<'s, '_>,
+        shared_array_buffer: v8::Local<'s, v8::SharedArrayBuffer>,
+    ) -> Option<u32> {
+        // Hand the *allocation* over, not a copy of it. Returning `None` here
+        // is what made `postMessage(new SharedArrayBuffer(8))` a DataCloneError.
+        register_shared(shared_array_buffer.get_backing_store())
+    }
 }
 
 /// Serializes `value` to V8's structured-clone format.
@@ -228,6 +304,19 @@ impl v8::ValueDeserializerImpl for Deserializer {
         let undefined = v8::undefined(scope).into();
         let rebuilt = hook.call(scope, undefined, &[view.into()])?;
         v8::Local::<v8::Object>::try_from(rebuilt).ok()
+    }
+
+    fn get_shared_array_buffer_from_id<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        transfer_id: u32,
+    ) -> Option<v8::Local<'s, v8::SharedArrayBuffer>> {
+        // The same allocation the sender handed over, wrapped in this isolate's
+        // own `SharedArrayBuffer` object. Two agents, two JS objects, one piece
+        // of memory — which is what makes `Atomics` between them mean anything.
+        let store = take_shared(transfer_id)?;
+        v8::allow_javascript_execution_scope!(let scope, scope);
+        Some(v8::SharedArrayBuffer::with_backing_store(scope, &store))
     }
 }
 

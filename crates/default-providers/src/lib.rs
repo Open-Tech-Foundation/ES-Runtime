@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 mod accept_backoff;
+mod broadcast;
 mod checkout;
 mod clock;
 mod console;
@@ -49,6 +50,7 @@ mod worker;
 pub mod path;
 pub mod testing;
 
+pub use broadcast::ProcessBroadcastHub;
 pub use clock::SystemClock;
 pub use console::{NullConsole, TracingConsole};
 pub use driver::Driver;

@@ -241,6 +241,105 @@ fn a_workers_own_imports_load_even_though_it_was_granted_nothing() {
 }
 
 #[test]
+fn an_array_buffer_transfers_rather_than_copying() {
+    let out = run(
+        "transfer",
+        r#"
+        self.onmessage = (e) => {
+          const u = new Uint8Array(e.data);
+          postMessage(`${u.byteLength} bytes, first=${u[0]}`);
+        };
+        "#,
+        r#"
+        const buf = new ArrayBuffer(8);
+        new Uint8Array(buf)[0] = 42;
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => {
+          console.log(`worker: ${e.data}`);
+          console.log(`sender detached: ${buf.detached}`);
+          w.terminate();
+        };
+        w.postMessage(buf, [buf]);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "worker: 8 bytes, first=42\nsender detached: true\n"
+    );
+}
+
+#[test]
+fn a_shared_array_buffer_is_one_allocation_in_both_agents() {
+    // Not a copy: the worker writes and the parent reads the same slot. This is
+    // what `SharedArrayBuffer` is for, and what made it useless before workers
+    // existed — the backing store is handed over, where an ArrayBuffer's
+    // contents would be copied into the message.
+    let out = run(
+        "sab",
+        r#"
+        self.onmessage = (e) => {
+          Atomics.store(new Int32Array(e.data), 0, 99);
+          postMessage(`shared=${e.data instanceof SharedArrayBuffer}`);
+        };
+        "#,
+        r#"
+        const sab = new SharedArrayBuffer(16);
+        const a = new Int32Array(sab);
+        Atomics.store(a, 0, 1);
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => {
+          console.log(e.data);
+          console.log(`parent reads ${Atomics.load(a, 0)}`);
+          w.terminate();
+        };
+        w.postMessage(sab);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "shared=true\nparent reads 99\n");
+}
+
+#[test]
+fn a_broadcast_channel_reaches_every_agent_but_never_its_sender() {
+    // The spec scopes a BroadcastChannel to the agent cluster. With one agent
+    // that was indistinguishable from "this isolate"; with workers it is not,
+    // and a channel that reached only its own agent would be wrong rather than
+    // merely limited.
+    let out = run(
+        "broadcast",
+        r#"
+        const ch = new BroadcastChannel("room");
+        ch.onmessage = (e) => { postMessage(`worker heard ${e.data}`); ch.close(); };
+        "#,
+        r#"
+        const sender = new BroadcastChannel("room");
+        const peer = new BroadcastChannel("room");
+        let heardBySender = false;
+        sender.onmessage = () => { heardBySender = true; };
+        peer.onmessage = (e) => console.log(`same-agent peer heard ${e.data}`);
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => {
+          console.log(e.data);
+          console.log(`sender heard itself: ${heardBySender}`);
+          peer.close();
+          sender.close();
+          w.terminate();
+        };
+        setTimeout(() => sender.postMessage("it"), 150);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "same-agent peer heard it\nworker heard it\nsender heard itself: false\n"
+    );
+}
+
+#[test]
 fn atomics_wait_blocks_in_a_worker_but_throws_on_the_main_agent() {
     // The ECMAScript agent record's [[CanBlock]]: false where the loop is
     // driven (parking it stops everything), true in a worker, which owns its

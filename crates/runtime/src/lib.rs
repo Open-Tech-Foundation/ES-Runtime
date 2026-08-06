@@ -57,9 +57,10 @@ pub use es_runtime_engine::{
     V8Engine, Value,
 };
 pub use es_runtime_providers::{
-    ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console, ConsoleLevel, Entropy,
-    FileSystem, HttpServerProvider, ModuleLoader, ModuleSource, NetProvider, NetTransport, Process,
-    Signals, Stdio, SyncFileSystem, WebSocketProvider, WorkerHost, WorkerScope,
+    BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
+    ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader, ModuleSource, NetProvider,
+    NetTransport, Process, Signals, Stdio, SyncFileSystem, WebSocketProvider, WorkerHost,
+    WorkerScope,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -154,6 +155,7 @@ pub struct HostProviders {
     commands: Option<Arc<dyn CommandProvider>>,
     workers: Option<Arc<dyn WorkerHost>>,
     worker_scope: Option<Arc<dyn WorkerScope>>,
+    broadcast: Option<Arc<dyn BroadcastHub>>,
 }
 
 impl HostProviders {
@@ -182,6 +184,7 @@ impl HostProviders {
             commands: None,
             workers: None,
             worker_scope: None,
+            broadcast: None,
         }
     }
 
@@ -333,6 +336,19 @@ impl HostProviders {
 
     fn web_socket(&self) -> Option<Arc<dyn WebSocketProvider>> {
         self.web_socket.clone()
+    }
+
+    /// Adds the [`BroadcastHub`] that carries `BroadcastChannel` messages
+    /// between agents. Absent, a channel reaches only its own agent — which is
+    /// all there is to reach without workers.
+    #[must_use]
+    pub fn with_broadcast(mut self, broadcast: Arc<dyn BroadcastHub>) -> Self {
+        self.broadcast = Some(broadcast);
+        self
+    }
+
+    fn broadcast(&self) -> Option<Arc<dyn BroadcastHub>> {
+        self.broadcast.clone()
     }
 
     fn workers(&self) -> Option<Arc<dyn WorkerHost>> {

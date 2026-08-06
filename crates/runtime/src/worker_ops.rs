@@ -302,6 +302,86 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
     Ok(())
 }
 
+// ---- BroadcastChannel -------------------------------------------------------
+
+/// Ops behind `BroadcastChannel`, routed through the [`BroadcastHub`].
+///
+/// Ungated, as the interface always has been: a channel reaches only agents
+/// this runtime started, and carries a payload the sender could already build.
+/// With no hub installed the prelude keeps its agent-local delivery, which is
+/// what an embedder gets when it has no workers either.
+pub(crate) fn install_broadcast(
+    engine: &mut dyn Engine,
+    hub: Option<Arc<dyn es_runtime_providers::BroadcastHub>>,
+) -> Result<()> {
+    // Sync, and the prelude's test for whether cross-agent delivery exists.
+    let present = hub.is_some();
+    engine.register_op(OpDecl::sync("broadcast_available", move |_args| {
+        Ok(Value::Bool(present))
+    }))?;
+
+    let h = hub.clone();
+    engine.register_op(OpDecl::r#async("broadcast_subscribe", move |args| {
+        let h = h.clone();
+        let name = arg_str(&args, 0);
+        Box::pin(async move {
+            let id = require_hub(&h)?.subscribe(name).await.map_err(map_err)?;
+            Ok(Value::Number(id as f64))
+        })
+    }))?;
+
+    let h = hub.clone();
+    engine.register_op(OpDecl::r#async("broadcast_publish", move |args| {
+        let h = h.clone();
+        let id = arg_u64(&args, 0);
+        let message = arg_bytes(&args, 1);
+        Box::pin(async move {
+            require_hub(&h)?
+                .publish(id, message)
+                .await
+                .map_err(map_err)?;
+            Ok(Value::Undefined)
+        })
+    }))?;
+
+    let h = hub.clone();
+    engine.register_op(OpDecl::r#async("broadcast_recv", move |args| {
+        let h = h.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            Ok(match require_hub(&h)?.recv(id).await.map_err(map_err)? {
+                Some(bytes) => Value::Bytes(bytes),
+                None => Value::Null,
+            })
+        })
+    }))?;
+
+    let h = hub;
+    engine.register_op(OpDecl::r#async("broadcast_close", move |args| {
+        let h = h.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            if let Some(hub) = h.as_ref() {
+                hub.close(id).await.map_err(map_err)?;
+            }
+            Ok(Value::Undefined)
+        })
+    }))?;
+    Ok(())
+}
+
+fn require_hub(
+    hub: &Option<Arc<dyn es_runtime_providers::BroadcastHub>>,
+) -> std::result::Result<Arc<dyn es_runtime_providers::BroadcastHub>, OpError> {
+    hub.clone().ok_or_else(|| {
+        OpError::new(
+            ExceptionClass::Error,
+            "BroadcastChannel cannot reach other agents (no BroadcastHub configured)",
+        )
+        .with_code(ErrorCode::ProviderUnavailable)
+    })
+}
+
 // ---- shared -----------------------------------------------------------------
 
 /// A `{ type, data }` envelope the prelude's pump dispatches on.

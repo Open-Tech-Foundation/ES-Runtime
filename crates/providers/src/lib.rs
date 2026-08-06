@@ -1240,6 +1240,34 @@ pub trait WorkerHost: Send + Sync {
     fn shutdown(&self) -> BoxFuture<()>;
 }
 
+/// The broker behind `BroadcastChannel`: delivery to every other channel of the
+/// same name, across every agent.
+///
+/// A provider rather than a map in the prelude because the spec's scope is the
+/// **agent cluster**, not one agent. With a single agent that distinction did
+/// not exist; once workers do, a `BroadcastChannel` that reached only its own
+/// isolate would be quietly wrong rather than merely limited. Where the cluster
+/// lives is the host's business — one process here, potentially more than one
+/// under a scheduler-backed host — which is exactly why it is a seam.
+///
+/// Ungated. It conveys no authority: a channel reaches only agents this runtime
+/// already started, and the payload is one the sender could already construct.
+pub trait BroadcastHub: Send + Sync {
+    /// Opens a subscription to `name`, returning its id. Two subscriptions to
+    /// the same name are peers even within one agent.
+    fn subscribe(&self, name: String) -> BoxFuture<Result<u64, ProviderError>>;
+
+    /// Delivers `message` to every open subscription to the same name **except**
+    /// `id` — a channel never receives its own posts.
+    fn publish(&self, id: u64, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Awaits the next message for subscription `id`; `None` once it is closed.
+    fn recv(&self, id: u64) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;
+
+    /// Closes subscription `id`. Idempotent.
+    fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
+}
+
 /// The other end of [`WorkerHost`], installed **only** in a worker agent's own
 /// runtime — the `DedicatedWorkerGlobalScope` half.
 ///

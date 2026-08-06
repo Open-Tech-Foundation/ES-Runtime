@@ -21,10 +21,15 @@
 //! ## Safety
 //!
 //! `unsafe` is permitted in this crate alone (ARCHITECTURE.md §7), under
-//! `#![forbid(unsafe_op_in_unsafe_fn)]` (workspace lint, DECISIONS.md D1). Phase
-//! 1 requires **no** `unsafe`: the `v8` crate's scope-based API is entirely safe
-//! for what we do here. The forbid lint stands guard for when later phases need
-//! it; any `unsafe` block added must carry a `// SAFETY:` invariant note.
+//! `#![forbid(unsafe_op_in_unsafe_fn)]` (workspace lint, DECISIONS.md D1). The
+//! `v8` crate's scope-based API is safe for nearly everything we do, and every
+//! `unsafe` here carries a `// SAFETY:` note.
+//!
+//! There is exactly one, in [`serialize`]: `Send`/`Sync` for the handle to a
+//! `SharedArrayBuffer`'s backing store, so it can be carried from the agent
+//! that posted it to the agent that receives it. Reaching one allocation from
+//! several isolates on several threads is precisely what that V8 type exists
+//! for; the impl is what lets us say so to Rust.
 
 mod convert;
 mod engine;
