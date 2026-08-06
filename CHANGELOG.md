@@ -35,6 +35,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`terminate()` left a worker's own workers running.** HTML terminates the
+  nested ones along with the parent; here they were orphaned — unreachable,
+  since the agent holding them was gone, and still keeping the process alive,
+  since a live worker is a reason not to exit. A worker that started a worker
+  could therefore make a program that never terminates.
+
+  The host now tracks which agent started which (the calling thread identifies
+  the calling agent — one agent per thread is the whole model) and terminates
+  the subtree. Every member is told to stop before any of them is joined, which
+  the ordering demands: a parent's loop holds an outstanding receive on each
+  child, so joining the parent first waits for a child that has not been asked
+  to stop.
+
+- **`close()` did not end a worker that had other work outstanding.** It turns
+  back the receive pump, so an agent holding any other pending op — a worker
+  waiting on a worker of its own, most obviously — carried on driving forever.
+  HTML has `close()` discard the remaining tasks; the drive now stops with it.
+
 - **`runtime:fs` `write()` could resolve over a file that was not written yet.**
   Above 64 KiB the write takes an async path, and `tokio::fs::File` dispatches
   writes to a blocking pool: `write_all` returned before they landed and the

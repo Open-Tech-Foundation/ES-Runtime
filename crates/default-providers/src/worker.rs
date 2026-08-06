@@ -130,12 +130,23 @@ struct Live {
     // A std mutex: only ever held to swap the handle in or out, never across an
     // await.
     join: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The workers this one started. HTML terminates a worker's own workers
+    /// along with it, and ids are otherwise flat, so this is the only record of
+    /// who belongs to whom.
+    children: std::sync::Mutex<Vec<u64>>,
 }
 
 /// A [`WorkerHost`] that runs each agent on its own OS thread.
 pub struct ThreadWorkerHost {
     factory: Arc<dyn WorkerRuntimeFactory>,
     registry: Arc<std::sync::Mutex<HashMap<u64, Arc<Live>>>>,
+    /// Which agent is running on which thread.
+    ///
+    /// `spawn` carries no caller identity — `WorkerSpec` says *what* to start,
+    /// not who asked — but one agent per thread is this host's whole model, so
+    /// the calling thread is exactly the calling agent. The driver agent's
+    /// thread is simply absent from the map, which is what makes it the root.
+    agent_threads: Arc<std::sync::Mutex<HashMap<std::thread::ThreadId, u64>>>,
     next_id: AtomicU64,
     /// Ceiling on live workers. A worker costs a thread and an isolate heap, so
     /// an unbounded `new Worker()` in a loop is a way to exhaust both — the
@@ -152,6 +163,7 @@ impl ThreadWorkerHost {
         ThreadWorkerHost {
             factory,
             registry: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_threads: Arc::new(std::sync::Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
             max_workers: Self::DEFAULT_MAX_WORKERS,
         }
@@ -181,7 +193,16 @@ impl WorkerHost for ThreadWorkerHost {
             interrupt: Mutex::new(None),
             closed: closed.clone(),
             join: std::sync::Mutex::new(None),
+            children: std::sync::Mutex::new(Vec::new()),
         });
+
+        // Whoever is on this thread is the agent doing the spawning; absent
+        // means the driver agent, which is nobody's child.
+        let parent = self
+            .agent_threads
+            .lock()
+            .ok()
+            .and_then(|threads| threads.get(&std::thread::current().id()).copied());
 
         let id = {
             let Ok(mut workers) = self.registry.lock() else {
@@ -199,6 +220,12 @@ impl WorkerHost for ThreadWorkerHost {
             }
             let id = self.next_id.fetch_add(1, Ordering::SeqCst);
             workers.insert(id, live.clone());
+            if let Some(parent) = parent
+                && let Some(parent) = workers.get(&parent)
+                && let Ok(mut children) = parent.children.lock()
+            {
+                children.push(id);
+            }
             id
         };
 
@@ -212,13 +239,23 @@ impl WorkerHost for ThreadWorkerHost {
         });
 
         let thread_live = live.clone();
+        let registry = self.registry.clone();
+        let agent_threads = self.agent_threads.clone();
         let thread = std::thread::Builder::new()
             .name(if spec.name.is_empty() {
                 format!("worker-{id}")
             } else {
                 spec.name.clone()
             })
-            .spawn(move || run_worker(&factory, spec, scope, &to_parent, &thread_live, &closed));
+            .spawn(move || {
+                if let Ok(mut threads) = agent_threads.lock() {
+                    threads.insert(std::thread::current().id(), id);
+                }
+                run_worker(&factory, spec, scope, &to_parent, &thread_live, &closed, &registry);
+                if let Ok(mut threads) = agent_threads.lock() {
+                    threads.remove(&std::thread::current().id());
+                }
+            });
 
         match thread {
             Ok(handle) => {
@@ -281,10 +318,14 @@ impl WorkerHost for ThreadWorkerHost {
     }
 
     fn terminate(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
-        let live = self.registry.lock().ok().and_then(|mut w| w.remove(&id));
+        // The whole subtree: HTML's "terminate a worker" destroys the global
+        // scope, and destroying it terminates the workers started from it. Left
+        // running, a nested worker is unreachable — its parent is gone — and
+        // still holds the process open, since a live worker is a reason not to
+        // exit.
+        let subtree = take_subtree(&self.registry, id);
         Box::pin(async move {
-            let Some(live) = live else { return Ok(()) };
-            terminate_live(&live).await;
+            terminate_all(&subtree).await;
             Ok(())
         })
     }
@@ -299,19 +340,42 @@ impl WorkerHost for ThreadWorkerHost {
             .lock()
             .map(|mut w| w.drain().map(|(_, live)| live).collect())
             .unwrap_or_default();
-        Box::pin(async move {
-            for live in all {
-                terminate_live(&live).await;
-            }
-        })
+        Box::pin(async move { terminate_all(&all).await })
     }
 }
 
-/// Stops one worker and waits for its thread. Interrupt first, then join: the
-/// flag alone only stops a *cooperative* agent, and a worker spinning in a
-/// synchronous loop or parked in `Atomics.wait` needs V8's own termination —
-/// which is exactly what `InterruptHandle` delivers cross-thread.
-async fn terminate_live(live: &Live) {
+/// Removes `id` and everything descended from it, returning them parent-first.
+///
+/// Removed under one lock, so a concurrent `terminate` of the same subtree gets
+/// the empty half rather than a second chance to join a thread already being
+/// joined. Nothing is awaited while the lock is held.
+fn take_subtree(
+    registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
+    id: u64,
+) -> Vec<Arc<Live>> {
+    let Ok(mut workers) = registry.lock() else {
+        return Vec::new();
+    };
+    let mut taken = Vec::new();
+    let mut pending = vec![id];
+    while let Some(next) = pending.pop() {
+        let Some(live) = workers.remove(&next) else {
+            continue;
+        };
+        if let Ok(children) = live.children.lock() {
+            pending.extend(children.iter().copied());
+        }
+        taken.push(live);
+    }
+    taken
+}
+
+/// Tells one worker to stop, without waiting for it. Interrupt first, then
+/// close its channel: the flag alone only stops a *cooperative* agent, and a
+/// worker spinning in a synchronous loop or parked in `Atomics.wait` needs V8's
+/// own termination — which is exactly what `InterruptHandle` delivers
+/// cross-thread.
+async fn stop_live(live: &Live) {
     live.closed.store(true, Ordering::SeqCst);
     if let Some(handle) = live.interrupt.lock().await.as_ref() {
         handle.terminate();
@@ -319,12 +383,31 @@ async fn terminate_live(live: &Live) {
     // Drop the sender: closing the channel wakes a worker parked waiting for
     // its next message, which the interrupt above does not reach.
     live.to_worker.lock().await.take();
+}
 
+/// Waits for a stopped worker's thread to end.
+async fn join_live(live: &Live) {
     let join = live.join.lock().ok().and_then(|mut slot| slot.take());
     if let Some(join) = join {
         // Joining blocks, so it goes to the blocking pool rather than stalling
         // the caller's reactor.
         let _ = tokio::task::spawn_blocking(move || join.join()).await;
+    }
+}
+
+/// Stops a whole set of workers and waits for all of them.
+///
+/// Every one is told to stop **before** any of them is joined, and the order
+/// matters: a parent's loop holds an outstanding receive on each child, so it
+/// cannot finish until that child's channel closes. Stopping the parent and
+/// then joining it before touching the child is a deadlock — the parent waits
+/// for the child, and the join waits for the parent.
+async fn terminate_all(workers: &[Arc<Live>]) {
+    for live in workers {
+        stop_live(live).await;
+    }
+    for live in workers {
+        join_live(live).await;
     }
 }
 
@@ -337,6 +420,7 @@ fn run_worker(
     to_parent: &mpsc::UnboundedSender<WorkerIncoming>,
     live: &Arc<Live>,
     closed: &Arc<AtomicBool>,
+    registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
 ) {
     let report = |message: String| {
         let _ = to_parent.send(WorkerIncoming::Error { message });
@@ -412,8 +496,17 @@ fn run_worker(
             return Err(message);
         }
 
-        // Settled cleanly; carry on for as long as the worker has work.
-        let rest = driver.run_to_completion(&mut runtime).await;
+        // Settled cleanly; carry on for as long as the worker has work — but
+        // stop the moment it closes itself. `close()` only turns back the
+        // receive pump, so an agent holding any *other* outstanding op would
+        // drive on forever: a worker that started a worker of its own is
+        // waiting on that child, and the child is waiting to be told to stop by
+        // the parent that just ended. HTML says close() discards the remaining
+        // tasks, and that is what makes this terminate rather than hang.
+        let closing = closed.clone();
+        let rest = driver
+            .drive_while(&mut runtime, |_| !closing.load(Ordering::SeqCst))
+            .await;
         outcome
             .unhandled_rejections
             .extend(rest.unhandled_rejections);
@@ -436,6 +529,32 @@ fn run_worker(
     }
 
     closed.store(true, Ordering::SeqCst);
+
+    // This agent is over — by `close()`, by quiescence, or by a failure above —
+    // and its global scope goes with it, so the workers it started go too. The
+    // same rule as `terminate()`, applied to the end a worker reaches on its
+    // own; without it, a parent that simply finished would leave its children
+    // running and the process unable to exit.
+    //
+    // Inside a runtime, because joining those threads is async work. Only the
+    // children: this worker's own entry is the caller's to remove.
+    let own_children: Vec<u64> = live
+        .children
+        .lock()
+        .map(|children| children.clone())
+        .unwrap_or_default();
+    let orphans: Vec<Arc<Live>> = own_children
+        .into_iter()
+        .flat_map(|child| take_subtree(registry, child))
+        .collect();
+    if !orphans.is_empty() {
+        tokio_runtime.block_on(terminate_all(&orphans));
+    }
+    // This worker's own entry is deliberately left in place: `recv` retires it
+    // when the parent sees the `Closed` below, and removing it from here would
+    // race that — a parent between two receives would find no entry, and the
+    // messages still queued in it would go nowhere.
+
     let _ = to_parent.send(WorkerIncoming::Closed);
 }
 

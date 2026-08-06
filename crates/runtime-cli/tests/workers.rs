@@ -511,6 +511,75 @@ fn a_worker_may_start_its_own_worker() {
 }
 
 #[test]
+fn terminating_a_worker_terminates_the_workers_it_started() {
+    // HTML's "terminate a worker" destroys the global scope, and that takes the
+    // workers started from it. Left running, a nested worker is unreachable —
+    // its parent is gone — and still holds the process open, because a live
+    // worker is a reason not to exit. The test is the process exiting at all:
+    // the grandchild here would otherwise keep it alive forever.
+    write(
+        "orphan-inner.mjs",
+        r#"
+        // Deliberately immortal: an onmessage handler is an outstanding
+        // receive, so this agent never reaches quiescence on its own.
+        self.onmessage = () => {};
+        postMessage("inner up");
+        "#,
+    );
+    let out = run(
+        "orphan",
+        r#"
+        const inner = new Worker(new URL("./orphan-inner.mjs", import.meta.url), {
+          permissions: ["workers", "imports"],
+        });
+        inner.onmessage = (e) => postMessage(e.data);
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["workers", "imports"],
+        });
+        w.onmessage = (e) => {
+          console.log(`grandchild reported: ${e.data}`);
+          w.terminate();
+          console.log("outer terminated");
+        };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("grandchild reported: inner up"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("outer terminated"), "{}", stdout(&out));
+}
+
+#[test]
+fn a_worker_that_finishes_takes_its_own_workers_with_it() {
+    // The same rule at the end a worker reaches by itself: `close()` destroys
+    // this global scope too, so its children are not left behind.
+    write(
+        "closing-inner.mjs",
+        r#"self.onmessage = () => {}; postMessage("inner up");"#,
+    );
+    let out = run(
+        "closing",
+        r#"
+        const inner = new Worker(new URL("./closing-inner.mjs", import.meta.url), {
+          permissions: ["workers", "imports"],
+        });
+        inner.onmessage = (e) => { postMessage(e.data); close(); };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["workers", "imports"],
+        });
+        w.onmessage = (e) => console.log(`reported: ${e.data}`);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("reported: inner up"), "{}", stdout(&out));
+}
+
+#[test]
 fn a_worker_cannot_watch_signals() {
     // A signal is delivered to the process, and watching one suppresses the
     // default action — so a worker taking SIGTERM would decide, from a thread

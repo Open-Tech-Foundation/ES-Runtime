@@ -141,7 +141,13 @@ so the numbers measure conformance rather than these.
    threshold (`testharness.js` is 194 KiB alone), so this runner was where it
    surfaced.
 
-4. **`terminate()` does not terminate a worker's own workers.** HTML terminates
-   the nested ones with the parent; here they are orphaned, and a live worker
-   keeps the process alive — so a run that touches the nested-worker tests never
-   exits. Run it under `timeout`, or `esrun --timeout=<ms>`, until that is fixed.
+4. ~~**`terminate()` does not terminate a worker's own workers.**~~ Fixed — a
+   terminated worker now takes the workers it started with it, and so does one
+   that ends by itself. `--mode=worker` exits on its own because of it.
+
+   A **`--mode=main` run still does not exit**, and that part is not a defect:
+   tests running on the driver agent create workers of their own and never
+   terminate them, and a live worker is a reason for the process to stay up, as
+   in Node and Deno. In a browser the page goes away; here nothing does. Run a
+   full sweep under `timeout` until `exit()` works (#1) and the runner can end
+   itself.
