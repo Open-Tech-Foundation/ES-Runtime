@@ -112,29 +112,32 @@ against it: a subtest that used to pass and now does not fails the run; one that
 starts passing is reported so the record can be updated in the same commit as the
 fix. Re-record with `--update-expectations`.
 
-## Runtime bugs this runner has to work around
+## Runtime bugs this runner found
 
-Found by building it, and recorded in `CHANGELOG.md`. The workarounds here exist
-so the numbers measure conformance rather than these.
+Building it turned up four, all now fixed and recorded in `CHANGELOG.md`. Listed
+because each one shaped the runner, and because the shapes are worth knowing.
 
-1. **`exit()` hangs a module that used top-level `await`** unless it is the very
-   last statement — the process parks in `epoll_wait` forever. The runner never
-   calls `exit()`; it falls off the end or throws.
+1. ~~**`exit()` hangs a module that used top-level `await`**~~ unless it was the
+   very last statement — the process parked in `epoll_wait` forever. The runner
+   now ends with `exit()`, which is what lets a `--mode=main` sweep terminate at
+   all: tests there start workers of their own and never terminate them, and a
+   live worker keeps the process alive, correctly.
 
    ```js
    await null;
    exit(0);
-   console.log("unreachable");   // never runs, and the process never exits
+   console.log("unreachable");   // never ran, and the process never exited
    ```
 
-2. **A dynamic `import()` resolves only when the event loop next wakes for some
-   other reason.** With a pending timer it is delayed by that timer's *full*
-   duration. Arming the per-test deadline before the import made every import take
-   the whole timeout and every test "time out"; the deadline is armed after.
+2. ~~**A dynamic `import()` resolves only when the event loop next wakes for some
+   other reason.**~~ With a pending timer it was delayed by that timer's *full*
+   duration — arming the per-test deadline before the import made every import
+   take the whole timeout and every test "time out". The deadline is still armed
+   after the import, which is the honest order regardless.
 
    ```js
    setTimeout(() => {}, 3000);
-   await import("./x.js");       // resolves after 3000 ms, not 3 ms
+   await import("./x.js");       // resolved after 3000 ms, not 3 ms
    ```
 
 3. ~~**`write()` resolves before the bytes are on disk, above 64 KiB.**~~ Fixed —
@@ -146,9 +149,7 @@ so the numbers measure conformance rather than these.
    terminated worker now takes the workers it started with it, and so does one
    that ends by itself. `--mode=worker` exits on its own because of it.
 
-   A **`--mode=main` run still does not exit**, and that part is not a defect:
-   tests running on the driver agent create workers of their own and never
-   terminate them, and a live worker is a reason for the process to stay up, as
-   in Node and Deno. In a browser the page goes away; here nothing does. Run a
-   full sweep under `timeout` until `exit()` works (#1) and the runner can end
-   itself.
+   Tests running on the driver agent still leak workers of their own, which is
+   not a defect either — a live worker is a reason for the process to stay up, as
+   in Node and Deno. In a browser the page goes away; here the runner's final
+   `exit()` does.

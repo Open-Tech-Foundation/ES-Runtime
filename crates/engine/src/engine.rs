@@ -105,20 +105,40 @@ pub struct WasmModuleInfo {
 /// It is `Send + Sync` (V8's `IsolateHandle` is), so the watchdog can live on
 /// another thread while the engine is driven on its own.
 #[derive(Clone)]
-pub struct InterruptHandle(v8::IsolateHandle);
+pub struct InterruptHandle {
+    isolate: v8::IsolateHandle,
+    /// Latches that a termination was asked for.
+    ///
+    /// V8's own flag answers a narrower question than it appears to: it reports
+    /// whether *currently running* JavaScript is unwinding, so it reads false
+    /// again the moment the stack returns to the host. A `process.exit()` at the
+    /// end of a timer callback is exactly that shape — the op requests the
+    /// termination, the callback then returns normally with nothing left to
+    /// reach an interrupt check, and by the time the embedder looks there is
+    /// nothing to see. The request is still live and will terminate the next
+    /// entry into JS, so the embedder must be able to learn about it. Hence a
+    /// latch, shared by every clone of the handle for one isolate.
+    requested: Arc<AtomicBool>,
+}
 
 impl InterruptHandle {
     /// Terminates the engine's currently executing JavaScript. Safe to call from
     /// any thread and idempotent; a no-op if nothing is running.
     pub fn terminate(&self) {
-        self.0.terminate_execution();
+        self.requested.store(true, Ordering::SeqCst);
+        self.isolate.terminate_execution();
     }
 
-    /// Whether the engine is currently in the terminating state (a `terminate`
-    /// has fired and not yet been cleared). Lets a driver stop ticking a
+    /// Whether execution has been terminated — a `terminate` was requested, or
+    /// JavaScript is unwinding from one right now. Lets a driver stop ticking a
     /// runtime that has been interrupted. Safe to call from any thread.
+    ///
+    /// Deliberately sticky: a termination is not something an engine recovers
+    /// from on its own, and the two questions a driver could ask instead ("is
+    /// JS unwinding?", "is there pending work?") are both false in exactly the
+    /// case that matters.
     pub fn is_terminating(&self) -> bool {
-        self.0.is_execution_terminating()
+        self.requested.load(Ordering::SeqCst) || self.isolate.is_execution_terminating()
     }
 }
 
@@ -126,6 +146,9 @@ impl InterruptHandle {
 /// for the isolate's lifetime so the raw `*mut c_void` we hand V8 stays valid.
 struct HeapGuard {
     handle: v8::IsolateHandle,
+    /// The same latch [`InterruptHandle`] carries: a heap-limit termination is
+    /// a termination, and the driver has to stop for it too.
+    requested: Arc<AtomicBool>,
     /// Set when the guard trips, read by `eval` to label the termination reason.
     tripped: Arc<AtomicBool>,
     /// Extra bytes granted to the callback's returned limit so V8 has room to
@@ -144,6 +167,7 @@ unsafe extern "C" fn near_heap_limit(
     // box owned by the `V8Engine` for at least as long as this isolate.
     let guard = unsafe { &*(data as *const HeapGuard) };
     guard.tripped.store(true, Ordering::SeqCst);
+    guard.requested.store(true, Ordering::SeqCst);
     guard.handle.terminate_execution();
     current_limit.saturating_add(guard.headroom)
 }
@@ -345,6 +369,9 @@ pub struct V8Engine {
     /// Set by the near-heap-limit callback; lets `eval` label a termination as a
     /// heap-limit hit vs a watchdog interrupt.
     heap_tripped: Arc<AtomicBool>,
+    /// Latch behind [`InterruptHandle::is_terminating`] — see the field on that
+    /// type for why V8's own flag is not enough.
+    terminate_requested: Arc<AtomicBool>,
     /// `WebAssembly.Module.imports` / `.exports`, captured at construction —
     /// before any guest code can run — so the ES-module integration reflects a
     /// module through pristine functions rather than whatever the global happens
@@ -532,6 +559,7 @@ impl V8Engine {
 
         let interrupt = isolate.thread_safe_handle();
         let heap_tripped = Arc::new(AtomicBool::new(false));
+        let terminate_requested = Arc::new(AtomicBool::new(false));
 
         // Install the near-heap-limit guard so a heap-bomb terminates cleanly
         // instead of OOM-ing the host (SPEC §4). Skipped for snapshot builders.
@@ -539,6 +567,7 @@ impl V8Engine {
             let guard = Box::new(HeapGuard {
                 handle: interrupt.clone(),
                 tripped: heap_tripped.clone(),
+                requested: terminate_requested.clone(),
                 // A little room (≥2 MiB) for V8 to unwind to the termination.
                 headroom: (limit / 8).max(2 * 1024 * 1024),
             });
@@ -587,6 +616,7 @@ impl V8Engine {
             ops_baked,
             interrupt,
             heap_tripped,
+            terminate_requested,
             wasm_imports_fn,
             wasm_exports_fn,
             _heap_guard,
@@ -785,7 +815,17 @@ impl Engine for V8Engine {
     }
 
     fn fire_timer(&mut self, id: TimerId) -> bool {
-        crate::op::fire_timer(&mut self.isolate, &self.context, &self.op_state, id)
+        let (terminated, fired) =
+            crate::op::fire_timer(&mut self.isolate, &self.context, &self.op_state, id);
+        // Re-raise what the callback's TryCatch absorbed, now that its scope is
+        // gone. A `process.exit()` (or a watchdog, or the heap guard) inside a
+        // timer callback is otherwise invisible to the embedder: the isolate
+        // looks runnable, and the loop parks on the next timer instead of
+        // stopping.
+        if terminated {
+            self.isolate.terminate_execution();
+        }
+        fired
     }
 
     fn timer_is_active(&self, id: TimerId) -> bool {
@@ -801,7 +841,10 @@ impl Engine for V8Engine {
     }
 
     fn interrupt_handle(&self) -> InterruptHandle {
-        InterruptHandle(self.interrupt.clone())
+        InterruptHandle {
+            isolate: self.interrupt.clone(),
+            requested: self.terminate_requested.clone(),
+        }
     }
 
     fn capabilities(&self) -> CapabilitySet {

@@ -119,15 +119,29 @@ impl Driver {
                 .extend(status.unhandled_rejections);
             outcome.uncaught_errors.extend(status.uncaught_errors);
 
+            // Execution was terminated — `process.exit()`, the watchdog, a
+            // `Worker.terminate()`, the heap guard. Nothing more can run, and
+            // whatever was suspended when it hit stays suspended: a module
+            // waiting at a top-level `await` never settles, so quiescence never
+            // arrives and this loop would spin for as long as the process
+            // lives. Stopping is the only correct move, and the caller reads
+            // the reason (an exit code, a deadline) from where it was recorded.
+            if status.terminated {
+                break;
+            }
+
             // Resolve + load any dynamic import()s raised this tick (async I/O),
             // linking each so a later tick settles its promise. A processing
             // error here is an internal failure, not a guest rejection.
-            if let Err(err) = runtime.process_dynamic_imports().await {
-                outcome
-                    .unhandled_rejections
-                    .push(format!("dynamic import failed: {err}"));
-                break;
-            }
+            let linked = match runtime.process_dynamic_imports().await {
+                Ok(linked) => linked,
+                Err(err) => {
+                    outcome
+                        .unhandled_rejections
+                        .push(format!("dynamic import failed: {err}"));
+                    break;
+                }
+            };
 
             // `has_pending_work` (re-read after processing) now also covers
             // in-flight dynamic imports awaiting their module's evaluation.
@@ -151,7 +165,13 @@ impl Driver {
             // Checked before the timer branch on purpose — an unrelated pending
             // timer must not put its deadline between a finished compile and the
             // promise it settles.
-            if status.v8_background_work {
+            // The same trap as V8's background work, from the other direction: a
+            // dynamic import that was just linked has its promise settled by the
+            // *next* tick, not by the linking. Parking first charges the whole
+            // park to the import — an unrelated 3-second timer pending made
+            // `await import("./x.js")` take three seconds, and with nothing
+            // pending but the import it was the fallback park instead. Re-tick.
+            if linked || status.v8_background_work {
                 tokio::task::yield_now().await;
                 continue;
             }

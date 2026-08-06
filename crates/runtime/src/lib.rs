@@ -131,6 +131,17 @@ pub struct TickStatus {
     /// timeout while this is set therefore adds its whole park to the latency of
     /// every compile — so it should re-tick promptly instead of sleeping.
     pub v8_background_work: bool,
+    /// Whether execution has been **terminated** — `process.exit()`, a
+    /// watchdog, a `Worker.terminate()`, or the heap guard.
+    ///
+    /// An embedder must stop driving when this is set, and cannot decide it from
+    /// [`has_pending_work`](Self::has_pending_work) instead. A termination
+    /// unwinds whatever was running without settling it: a module suspended at
+    /// a top-level `await` stays pending, an op stays outstanding, and no
+    /// further JS can run to finish either. The loop would then have work that
+    /// can never complete, and would spin on it for as long as the process
+    /// lives.
+    pub terminated: bool,
 }
 
 /// The host providers a [`Runtime`] consumes for its web APIs.
@@ -828,14 +839,22 @@ impl Runtime {
     /// module namespace (or rejecting it). Async because resolution/loading is
     /// I/O; the embedder/driver calls this each loop iteration alongside
     /// [`tick`](Self::tick). A no-op when nothing dynamic is pending.
-    pub async fn process_dynamic_imports(&mut self) -> Result<()> {
+    ///
+    /// Returns whether it linked or rejected anything. A caller that parks
+    /// between iterations **must not park when this is `true`**: the request's
+    /// promise is settled by the *next* [`tick`](Self::tick), so parking first
+    /// charges the whole park to the `import()`. Parking on an unrelated 3-second
+    /// timer made a dynamic import take three seconds.
+    pub async fn process_dynamic_imports(&mut self) -> Result<bool> {
+        let mut linked = false;
         // Re-drain: linking a module evaluates it, which can synchronously raise
         // further `import()` calls; loop until none remain.
         loop {
             let pending = self.engine.take_pending_dynamic_imports();
             if pending.is_empty() {
-                return Ok(());
+                return Ok(linked);
             }
+            linked = true;
             for (reqid, specifier, referrer, import_type) in pending {
                 match self
                     .load_for_dynamic_import(&specifier, &referrer, import_type.as_deref())
@@ -992,6 +1011,9 @@ impl Runtime {
             has_pending_work: self.has_pending_work(),
             next_timer_deadline_ms: self.timers.next_deadline_ms(),
             v8_background_work: self.engine.has_pending_wasm(),
+            // Read after the JS above rather than before: a sync op can request
+            // it mid-tick, and `process.exit()` is exactly that.
+            terminated: self.engine.interrupt_handle().is_terminating(),
         }
     }
 

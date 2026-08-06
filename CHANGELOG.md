@@ -65,6 +65,43 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`exit()` hung the process unless it was the last statement to run.** It
+  terminates the isolate, and a termination unwinds whatever was running without
+  settling it — so a module suspended at a top-level `await` stayed pending
+  forever, and the loop waited on work that could never finish:
+
+  ```js
+  await null;
+  exit(0);
+  console.log("unreachable");   // never runs, and the process never exits
+  ```
+
+  Every ordinary shape was affected — an early exit from a loop, a guard clause,
+  a timer callback — and it reproduces back to 0.13.0. The driver now stops when
+  execution has been terminated, which also covers the watchdog and the heap
+  guard.
+
+  Finding it needed one more step than expected: V8's own "is terminating" flag
+  answers a narrower question than it appears to, reporting only whether
+  *currently running* JavaScript is unwinding. `exit()` at the end of a timer
+  callback sets the request, the callback then returns normally with nothing
+  left to reach an interrupt check, and by the time the loop looks there is
+  nothing to see. `InterruptHandle` now latches the request.
+
+- **A dynamic `import()` waited for an unrelated timer.** A linked import's
+  promise is settled by the *next* tick, and the driver parked before taking it
+  — so the import inherited whatever the loop was about to park on:
+
+  ```js
+  setTimeout(() => {}, 3000);
+  await import("./x.js");       // resolved after 3000 ms, not 3 ms
+  ```
+
+  With nothing else pending it took the loop's fallback park instead. Any lazily
+  imported module in a program that also has timers or I/O in flight paid this.
+  The driver now re-ticks immediately after linking, the same rule it already
+  applied to V8's background compilation.
+
 - **`terminate()` left a worker's own workers running.** HTML terminates the
   nested ones along with the parent; here they were orphaned — unreachable,
   since the agent holding them was gone, and still keeping the process alive,

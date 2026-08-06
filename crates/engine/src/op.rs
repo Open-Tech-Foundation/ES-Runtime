@@ -890,14 +890,21 @@ fn timer_clear_inner(
 
 /// Invokes the JS callback for timer `id`. One-shot timers are removed first.
 /// Returns `false` if the timer is no longer active (cleared).
+/// Fires timer `id`, returning `(terminated, fired)` — whether the callback's
+/// execution was *terminated* (`process.exit()`, a watchdog, the heap guard),
+/// and whether there was a timer to fire at all.
+///
+/// The termination has to be reported rather than left in the isolate: the
+/// TryCatch below absorbs it, and the caller re-raises it. Without that the
+/// embedder's loop sees a runnable isolate with work that can never finish.
 pub(crate) fn fire_timer(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     op_state: &Rc<RefCell<OpState>>,
     id: TimerId,
-) -> bool {
+) -> (bool, bool) {
     if !op_state.borrow().timers.contains_key(&id) {
-        return false;
+        return (false, false);
     }
 
     v8::scope!(let scope, isolate);
@@ -925,12 +932,21 @@ pub(crate) fn fire_timer(
     // platform reports it — an `error` event on the global scope, then the
     // embedder's report if no listener claimed it. Silently dropping it, as this
     // used to, loses the failure entirely.
-    if callback.call(scope, recv, &args).is_none()
-        && let Some(error) = scope.exception()
-    {
-        report_uncaught(scope, op_state, error);
+    let mut terminated = false;
+    if callback.call(scope, recv, &args).is_none() {
+        // A termination is not a throw and has no exception to report: the
+        // callback called `process.exit()`, or a watchdog or the heap guard
+        // fired. The TryCatch has absorbed it, which would leave the isolate
+        // looking runnable to the embedder's loop — so it is re-raised below,
+        // once this scope is gone.
+        terminated = scope.has_terminated();
+        if !terminated
+            && let Some(error) = scope.exception()
+        {
+            report_uncaught(scope, op_state, error);
+        }
     }
-    true
+    (terminated, true)
 }
 
 /// Installs the promise-reject callback that records unhandled rejections.

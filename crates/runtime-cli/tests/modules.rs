@@ -491,6 +491,67 @@ fn runtime_process_exit_sets_exit_code() {
     );
 }
 
+#[test]
+fn exit_after_a_top_level_await_still_exits() {
+    // `exit()` terminates the isolate, which does not settle the module's
+    // evaluation promise — so a program that had already awaited stayed
+    // "pending" forever and the process hung, unless `exit()` happened to be
+    // the very last statement. The shapes below are the ordinary ones: an early
+    // return from a loop, and a guard clause.
+    for (label, snippet) in [
+        (
+            "loop",
+            "for (const x of [1]) { await null; console.log('bye'); exit(9); }",
+        ),
+        (
+            "guard",
+            "await null; if (true) { console.log('bye'); exit(9); }\nconsole.log('after');",
+        ),
+        (
+            "timer",
+            "setTimeout(() => { console.log('bye'); exit(9); }, 5);\nsetTimeout(() => {}, 60_000);",
+        ),
+    ] {
+        let out = esrun()
+            .arg(format!(
+                "-e=import {{ exit }} from 'runtime:process';\n{snippet}"
+            ))
+            .output()
+            .expect("spawn esrun");
+        assert_eq!(out.status.code(), Some(9), "{label}: {}", stderr(&out));
+        assert!(stdout(&out).contains("bye"), "{label}: {}", stdout(&out));
+        assert!(
+            !stdout(&out).contains("after"),
+            "{label}: exit did not halt: {}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
+fn a_dynamic_import_does_not_wait_for_an_unrelated_timer() {
+    // A linked import()'s promise is settled by the *next* tick, so a driver
+    // that parked first charged the whole park to the import: with a 3s timer
+    // pending, `await import(…)` took 3s. The margin is wide on purpose — the
+    // assertion is "did not wait for the timer", not a latency budget.
+    let out = esrun()
+        .arg("-e=const t0 = Date.now();\
+              const timer = setTimeout(() => {}, 3000);\
+              await import('runtime:path');\
+              clearTimeout(timer);\
+              console.log('ELAPSED', Date.now() - t0);")
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    let elapsed: u64 = stdout
+        .split_whitespace()
+        .last()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("no elapsed in {stdout}"));
+    assert!(elapsed < 1_000, "import waited for the timer: {elapsed}ms");
+}
+
 // POSIX-only: separators/roots are platform-specific and the CI test job runs
 // on Linux (macOS is also POSIX). Windows path semantics are exercised by hand.
 #[cfg(unix)]

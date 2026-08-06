@@ -15,7 +15,7 @@
 // and a server that does substitution; this is a server-side runtime, so they
 // are out of scope rather than failing (SPEC §14).
 import { file, write, remove, Glob } from "runtime:fs";
-import { args } from "runtime:process";
+import { args, exit } from "runtime:process";
 import { fileScope, subtestScope } from "./scope.js";
 
 const UPSTREAM = new URL("./upstream/", import.meta.url);
@@ -403,9 +403,6 @@ if (flags.json) await write(flags.json, JSON.stringify({ totals, results, skippe
 // not fails the run. A subtest that starts passing is reported too — the record
 // is stale, and a fix should land with its expectation updated.
 //
-// Nothing here calls `exit()`. It does not work: `exit()` from a module that
-// used top-level `await` hangs the process unless it is the very last statement
-// — see wpt/README.md. The runner ends by falling off the end, or by throwing.
 const regressions = [];
 
 if (flags.update) {
@@ -438,4 +435,8 @@ if (flags.update) {
   }
 }
 
-if (regressions.length > 0) throw new Error(`${regressions.length} WPT regression(s)`);
+// `exit()` rather than falling off the end: tests running on the driver agent
+// start workers of their own and never terminate them, and a live worker keeps
+// the process alive — correctly, as in Node and Deno. In a browser the page
+// goes away; here this is what does.
+exit(regressions.length > 0 ? 1 : 0);
