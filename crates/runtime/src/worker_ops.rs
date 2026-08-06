@@ -419,14 +419,14 @@ pub(crate) fn install_broadcast(
         Ok(Value::Bool(present))
     }))?;
 
+    // Sync, like `port_create` and for the same reason: `new BroadcastChannel()`
+    // joins the channel as it is constructed, so there must be no window in
+    // which a channel misses what the next line posts.
     let h = hub.clone();
-    engine.register_op(OpDecl::r#async("broadcast_subscribe", move |args| {
-        let h = h.clone();
+    engine.register_op(OpDecl::sync("broadcast_subscribe", move |args| {
         let name = arg_str(&args, 0);
-        Box::pin(async move {
-            let id = require_hub(&h)?.subscribe(name).await.map_err(map_err)?;
-            Ok(Value::Number(id as f64))
-        })
+        let id = require_hub(&h)?.subscribe(name).map_err(map_err)?;
+        Ok(Value::Number(id as f64))
     }))?;
 
     let h = hub.clone();
@@ -445,12 +445,15 @@ pub(crate) fn install_broadcast(
 
     let h = hub.clone();
     engine.register_op(
-        OpDecl::r#async("broadcast_recv", move |args| {
+        OpDecl::r#async("broadcast_recv_next", move |args| {
             let h = h.clone();
-            let id = arg_u64(&args, 0);
+            let _ = args;
             Box::pin(async move {
-                Ok(match require_hub(&h)?.recv(id).await.map_err(map_err)? {
-                    Some(bytes) => Value::Bytes(bytes),
+                // One receive for the agent, not one per channel: the order
+                // messages come back in *is* the delivery order, and the id
+                // says which channel each is for.
+                Ok(match require_hub(&h)?.recv_next().await.map_err(map_err)? {
+                    Some((id, bytes)) => envelope_id(id, Value::Bytes(bytes)),
                     None => Value::Null,
                 })
             })
@@ -488,6 +491,14 @@ fn require_hub(
 }
 
 // ---- shared -----------------------------------------------------------------
+
+/// A `{ id, data }` envelope: which subscription a broadcast is for.
+fn envelope_id(id: u64, data: Value) -> Value {
+    Value::Object(vec![
+        ("id".to_string(), Value::Number(id as f64)),
+        ("data".to_string(), data),
+    ])
+}
 
 /// A `{ type, data }` envelope the prelude's pump dispatches on.
 fn envelope(kind: &str, data: Value) -> Value {

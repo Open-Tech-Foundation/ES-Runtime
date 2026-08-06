@@ -1298,6 +1298,11 @@ pub trait PortHub: Send + Sync {
 /// The broker behind `BroadcastChannel`: delivery to every other channel of the
 /// same name, across every agent.
 ///
+/// One delivered broadcast: the subscription it is for, and its bytes.
+pub type Broadcast = (u64, Vec<u8>);
+
+/// Delivers `BroadcastChannel` messages across the agent cluster.
+///
 /// A provider rather than a map in the prelude because the spec's scope is the
 /// **agent cluster**, not one agent. With a single agent that distinction did
 /// not exist; once workers do, a `BroadcastChannel` that reached only its own
@@ -1310,14 +1315,30 @@ pub trait PortHub: Send + Sync {
 pub trait BroadcastHub: Send + Sync {
     /// Opens a subscription to `name`, returning its id. Two subscriptions to
     /// the same name are peers even within one agent.
-    fn subscribe(&self, name: String) -> BoxFuture<Result<u64, ProviderError>>;
+    ///
+    /// Synchronous, because `new BroadcastChannel(name)` is: a channel is
+    /// joined the moment it is constructed, with no window in which it can miss
+    /// a message posted by the line after it. Registering a subscriber has
+    /// nothing to await anyway — the same reasoning as [`PortHub::create`].
+    fn subscribe(&self, name: String) -> Result<u64, ProviderError>;
 
     /// Delivers `message` to every open subscription to the same name **except**
-    /// `id` — a channel never receives its own posts.
+    /// `id` — a channel never receives its own posts — in the order those
+    /// subscriptions were opened, which is the delivery order the spec requires
+    /// ("port creation order").
     fn publish(&self, id: u64, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
 
-    /// Awaits the next message for subscription `id`; `None` once it is closed.
-    fn recv(&self, id: u64) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;
+    /// Awaits the next message for **the calling agent**, across every
+    /// subscription it holds. `None` once that agent has no open subscription
+    /// left.
+    ///
+    /// One stream per agent rather than per channel, because that is the order
+    /// the spec delivers in: its channels share an event loop, so every
+    /// destination of one post is delivered before any destination of the next.
+    /// A receive per channel would hand back whichever future happened to be
+    /// polled first instead. Which agent is asking is identified the way this
+    /// host identifies agents everywhere — by the calling thread.
+    fn recv_next(&self) -> BoxFuture<Result<Option<Broadcast>, ProviderError>>;
 
     /// Closes subscription `id`. Idempotent.
     fn close(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;

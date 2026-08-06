@@ -325,4 +325,12 @@
     });
     globalThis[Interface.name] = Interface;
   }
+
+  // `FormData` is **not** serializable, where Blob and File are (their codecs
+  // are registered above). Tagged with no codec, so a clone raises
+  // DataCloneError naming it rather than walking it as an ordinary object and
+  // handing back an empty one — see the same note in fetch.js.
+  Object.defineProperty(FormData.prototype, __internal.hostClone, {
+    value: "FormData",
+  });
 })();

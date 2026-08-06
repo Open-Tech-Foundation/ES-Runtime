@@ -18,6 +18,12 @@
   const ENTANGLE = Symbol("entangle");
   const DETACH = __internal.portDetach;
   const PORT_ID = Symbol("MessagePort id");
+  // Whether `close()` has been called, and whether the port has already been
+  // transferred away. Either makes it detached, and the structured-clone codec
+  // refuses to transfer a detached object.
+  const PORT_CLOSED = Symbol("MessagePort closed");
+  const PORT_DETACHED = Symbol("MessagePort detached");
+  const DELIVER_BROADCAST = Symbol("BroadcastChannel deliver");
 
   // Asked on first use, not now: "now" is snapshot-build time, and one blob is
   // restored into every agent. See the same note on BroadcastChannel below.
@@ -29,6 +35,28 @@
 
   // Extracts the transfer list from either overload: postMessage(msg, [t]) or
   // postMessage(msg, { transfer: [t] }).
+  // Unwraps the `[message, ports]` pair a `postMessage` puts on the wire; the
+  // ports become `event.ports`.
+  function receive(bytes) {
+    const [data, ports] = __structuredDeserialize(bytes);
+    return { data, ports };
+  }
+
+  // Every message event the platform delivers is trusted; one a script builds
+  // and dispatches itself is not.
+  function fire(target, type, init) {
+    target.dispatchEvent(new MessageEvent(type, init)[__internal.trustEvent]());
+  }
+
+  // What an event-handler IDL attribute stores. WebIDL's `EventHandler` is
+  // `[LegacyTreatNonObjectAsNull]`: anything that is not an object becomes
+  // null, and an object that is not callable is *kept* — the getter returns
+  // what was assigned — but is never invoked. Only functions become listeners.
+  function eventHandler(value) {
+    if (typeof value === "function") return value;
+    return value !== null && typeof value === "object" ? value : null;
+  }
+
   function transferList(options) {
     if (Array.isArray(options)) return options;
     if (options && typeof options === "object" && Array.isArray(options.transfer)) {
@@ -61,6 +89,14 @@
       return this.#id;
     }
 
+    get [PORT_CLOSED]() {
+      return this.#closed;
+    }
+
+    get [PORT_DETACHED]() {
+      return this.#detached;
+    }
+
     // Called by structured-clone.js once this port has been serialized into a
     // transfer. Stopping the host-side read matters: an outstanding `recv`
     // holding a message would swallow it, and the agent receiving the port must
@@ -86,14 +122,14 @@
         }
         if (bytes === null || bytes === undefined) return;
         if (this.#closed || this.#detached) return;
-        let data;
+        let message;
         try {
-          data = __structuredDeserialize(bytes);
+          message = receive(bytes);
         } catch {
-          this.dispatchEvent(new MessageEvent("messageerror"));
+          fire(this, "messageerror", {});
           continue;
         }
-        this.dispatchEvent(new MessageEvent("message", { data }));
+        fire(this, "message", message);
       }
     }
 
@@ -109,17 +145,28 @@
         this.#queue.push(data);
         return;
       }
-      this.dispatchEvent(new MessageEvent("message", { data }));
+      fire(this, "message", { data });
     }
 
     postMessage(message, options) {
+      if (arguments.length < 1) {
+        throw new TypeError("MessagePort.postMessage requires a message");
+      }
+      // "If transfer contains this port, throw a DataCloneError." Sending a
+      // port down itself would leave nothing to receive it.
+      if (transferList(options).includes(this)) {
+        throw new DOMException(
+          "A MessagePort cannot be transferred through itself.",
+          "DataCloneError",
+        );
+      }
       if (this.#closed || this.#detached) return;
       if (this.#id !== null) {
         // Serialized now, synchronously, so a later mutation of `message` is
         // not visible to the receiver — and a non-cloneable value throws here,
         // at the call site, rather than in a detached task. The op is
         // synchronous too, which is what keeps successive posts in order.
-        const bytes = __internal.transfer.serialize(message, transferList(options));
+        const bytes = __internal.transfer.serializeMessage(message, transferList(options));
         __ops.port_post(this.#id, bytes);
         return;
       }
@@ -138,9 +185,7 @@
       }
       const queued = this.#queue;
       this.#queue = [];
-      for (const data of queued) {
-        this.dispatchEvent(new MessageEvent("message", { data }));
-      }
+      for (const data of queued) fire(this, "message", { data });
     }
 
     close() {
@@ -160,9 +205,13 @@
       return this.#onmessage;
     }
     set onmessage(handler) {
-      if (this.#onmessage) this.removeEventListener("message", this.#onmessage);
-      this.#onmessage = typeof handler === "function" ? handler : null;
-      if (this.#onmessage) this.addEventListener("message", this.#onmessage);
+      if (typeof this.#onmessage === "function") {
+        this.removeEventListener("message", this.#onmessage);
+      }
+      this.#onmessage = eventHandler(handler);
+      if (typeof this.#onmessage === "function") {
+        this.addEventListener("message", this.#onmessage);
+      }
       // Assigning onmessage implicitly starts the port, per the spec — which is
       // why the addEventListener form needs an explicit start() and this does
       // not.
@@ -173,11 +222,11 @@
       return this.#onmessageerror;
     }
     set onmessageerror(handler) {
-      if (this.#onmessageerror) {
+      if (typeof this.#onmessageerror === "function") {
         this.removeEventListener("messageerror", this.#onmessageerror);
       }
-      this.#onmessageerror = typeof handler === "function" ? handler : null;
-      if (this.#onmessageerror) {
+      this.#onmessageerror = eventHandler(handler);
+      if (typeof this.#onmessageerror === "function") {
         this.addEventListener("messageerror", this.#onmessageerror);
       }
     }
@@ -232,13 +281,44 @@
   // name -> set of open channels, for the no-hub case.
   const channels = new Map();
 
+  // Hosted delivery is one stream for the whole agent, not one per channel:
+  // every destination of a post is delivered before any destination of the
+  // next, which is the order a single event-loop task queue gives and what the
+  // spec means by "in port creation order". A receive per channel would hand
+  // back whichever op happened to settle first.
+  //
+  // subscription id -> the BroadcastChannel it belongs to.
+  const subscribed = new Map();
+  let pumping = false;
+
+  async function pumpBroadcasts() {
+    if (pumping) return;
+    pumping = true;
+    try {
+      for (;;) {
+        let event;
+        try {
+          event = await __ops.broadcast_recv_next();
+        } catch {
+          return;
+        }
+        // Null once this agent holds no open channel; a later one restarts the
+        // pump.
+        if (event === null || event === undefined) return;
+        const channel = subscribed.get(event.id);
+        if (channel === undefined) continue;
+        channel[DELIVER_BROADCAST](event.data);
+      }
+    } finally {
+      pumping = false;
+    }
+  }
+
   class BroadcastChannel extends EventTarget {
     #name;
     #closed = false;
-    // Hub subscription id, once `#subscribe` resolves; null before that and in
-    // the no-hub case.
+    // Hub subscription id; null in the no-hub case.
     #id = null;
-    #pending = [];
     #onmessage = null;
     #onmessageerror = null;
 
@@ -249,7 +329,16 @@
       }
       this.#name = String(name);
       if (hosted()) {
-        this.#subscribe();
+        // Synchronously, as the constructor is: a channel that subscribed a
+        // turn later would miss what the next line posts, and the spec has no
+        // such window.
+        try {
+          this.#id = __ops.broadcast_subscribe(this.#name);
+        } catch {
+          return;
+        }
+        subscribed.set(this.#id, this);
+        pumpBroadcasts();
         return;
       }
       let peers = channels.get(this.#name);
@@ -260,40 +349,17 @@
       peers.add(this);
     }
 
-    // Subscribe, then pump. The pump is one outstanding async op at a time, on
-    // the ordinary tick contract — the same shape as the worker and WebSocket
-    // pumps, so an open channel keeps its agent alive exactly as a browser tab
-    // stays reachable while one is open.
-    async #subscribe() {
+    // Called by the agent's single broadcast pump, in delivery order.
+    [DELIVER_BROADCAST](bytes) {
+      if (this.#closed) return;
+      let data;
       try {
-        this.#id = await __ops.broadcast_subscribe(this.#name);
+        data = __structuredDeserialize(bytes);
       } catch {
+        fire(this, "messageerror", {});
         return;
       }
-      // Anything posted before the subscription resolved goes out now, in order.
-      for (const bytes of this.#pending) __ops.broadcast_publish(this.#id, bytes);
-      this.#pending = [];
-      if (this.#closed) {
-        __ops.broadcast_close(this.#id);
-        return;
-      }
-      for (;;) {
-        let bytes;
-        try {
-          bytes = await __ops.broadcast_recv(this.#id);
-        } catch {
-          return;
-        }
-        if (bytes === null || bytes === undefined || this.#closed) return;
-        let data;
-        try {
-          data = __structuredDeserialize(bytes);
-        } catch {
-          this.dispatchEvent(new MessageEvent("messageerror"));
-          continue;
-        }
-        this.dispatchEvent(new MessageEvent("message", { data }));
-      }
+      fire(this, "message", { data });
     }
 
     get name() {
@@ -301,6 +367,9 @@
     }
 
     postMessage(message) {
+      if (arguments.length < 1) {
+        throw new TypeError("BroadcastChannel.postMessage requires a message");
+      }
       if (this.#closed) {
         throw new DOMException("The channel is closed.", "InvalidStateError");
       }
@@ -309,8 +378,7 @@
         // not seen by any receiver — the same guarantee the local path gets
         // from cloning eagerly below.
         const bytes = __structuredSerialize(message);
-        if (this.#id === null) this.#pending.push(bytes);
-        else __ops.broadcast_publish(this.#id, bytes);
+        if (this.#id !== null) __ops.broadcast_publish(this.#id, bytes);
         return;
       }
       const data = structuredClone(message);
@@ -321,7 +389,7 @@
         if (peer === this || peer.#closed) continue;
         setTimeout(() => {
           if (peer.#closed) return;
-          peer.dispatchEvent(new MessageEvent("message", { data }));
+          fire(peer, "message", { data });
         }, 0);
       }
     }
@@ -330,10 +398,10 @@
       if (this.#closed) return;
       this.#closed = true;
       if (hosted()) {
-        this.#pending = [];
-        // Before the subscription resolves there is no id to close; `#subscribe`
-        // sees `#closed` and closes it the moment there is one.
-        if (this.#id !== null) __ops.broadcast_close(this.#id);
+        if (this.#id !== null) {
+          subscribed.delete(this.#id);
+          __ops.broadcast_close(this.#id);
+        }
         return;
       }
       const peers = channels.get(this.#name);
@@ -347,20 +415,24 @@
       return this.#onmessage;
     }
     set onmessage(handler) {
-      if (this.#onmessage) this.removeEventListener("message", this.#onmessage);
-      this.#onmessage = typeof handler === "function" ? handler : null;
-      if (this.#onmessage) this.addEventListener("message", this.#onmessage);
+      if (typeof this.#onmessage === "function") {
+        this.removeEventListener("message", this.#onmessage);
+      }
+      this.#onmessage = eventHandler(handler);
+      if (typeof this.#onmessage === "function") {
+        this.addEventListener("message", this.#onmessage);
+      }
     }
 
     get onmessageerror() {
       return this.#onmessageerror;
     }
     set onmessageerror(handler) {
-      if (this.#onmessageerror) {
+      if (typeof this.#onmessageerror === "function") {
         this.removeEventListener("messageerror", this.#onmessageerror);
       }
-      this.#onmessageerror = typeof handler === "function" ? handler : null;
-      if (this.#onmessageerror) {
+      this.#onmessageerror = eventHandler(handler);
+      if (typeof this.#onmessageerror === "function") {
         this.addEventListener("messageerror", this.#onmessageerror);
       }
     }
@@ -375,6 +447,15 @@
   });
   __internal.hostCodecs.set("MessagePort", {
     write(port) {
+      // A detached port is a husk: `close()` detaches it, and so does having
+      // been transferred already. Either way the queue belongs to someone else
+      // now, and a detached object cannot be transferred.
+      if (port[PORT_CLOSED] || port[PORT_DETACHED]) {
+        throw new DOMException(
+          "A detached MessagePort cannot be transferred.",
+          "DataCloneError",
+        );
+      }
       if (!__internal.transferringPorts.has(port)) {
         throw new DOMException(
           "A MessagePort can only be transferred, not cloned.",

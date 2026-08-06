@@ -116,7 +116,7 @@
       "Object with non-configurable property": "PASS",
       "Object with a getter that throws": "PASS",
       "ObjectPrototype must lose its exotic-ness when cloned": "PASS",
-      "Serializing a non-serializable platform object fails": "FAIL",
+      "Serializing a non-serializable platform object fails": "PASS",
       "An object whose interface is deleted from the global must still deserialize": "PASS",
       "A subclass instance will deserialize as its closest serializable superclass": "PASS",
       "Resizable ArrayBuffer": "PASS",
@@ -130,9 +130,9 @@
       "ImageBitmap": "SKIP",
       "OffscreenCanvas": "SKIP",
       "A detached ArrayBuffer cannot be transferred": "PASS",
-      "A detached platform object cannot be transferred": "FAIL",
+      "A detached platform object cannot be transferred": "PASS",
       "Transferring a non-transferable platform object fails": "PASS",
-      "An object whose interface is deleted from the global object must still be received": "FAIL",
+      "An object whose interface is deleted from the global object must still be received": "PASS",
       "A subclass instance will be received as its closest transferable superclass": "PASS",
       "Resizable ArrayBuffer is transferable": "PASS",
       "Length-tracking TypedArray is transferable": "PASS",
@@ -258,7 +258,7 @@
       "Object with non-configurable property": "PASS",
       "Object with a getter that throws": "PASS",
       "ObjectPrototype must lose its exotic-ness when cloned": "PASS",
-      "Serializing a non-serializable platform object fails": "FAIL",
+      "Serializing a non-serializable platform object fails": "PASS",
       "An object whose interface is deleted from the global must still deserialize": "PASS",
       "A subclass instance will deserialize as its closest serializable superclass": "PASS",
       "Resizable ArrayBuffer": "PASS",
@@ -272,9 +272,9 @@
       "ImageBitmap": "SKIP",
       "OffscreenCanvas": "SKIP",
       "A detached ArrayBuffer cannot be transferred": "PASS",
-      "A detached platform object cannot be transferred": "FAIL",
+      "A detached platform object cannot be transferred": "PASS",
       "Transferring a non-transferable platform object fails": "PASS",
-      "An object whose interface is deleted from the global object must still be received": "FAIL",
+      "An object whose interface is deleted from the global object must still be received": "PASS",
       "A subclass instance will be received as its closest transferable superclass": "PASS",
       "Resizable ArrayBuffer is transferable": "PASS",
       "Length-tracking TypedArray is transferable": "PASS",
@@ -298,25 +298,27 @@
   "webmessaging/Channel_postMessage_clone_port.any.js:main": {
     "harness": "OK",
     "subtests": {
-      "Test Description: Test Description: When the user agent is to clone a port original port, with the clone being owned by owner, it must return a new MessagePort object": "FAIL"
+      "Test Description: Test Description: When the user agent is to clone a port original port, with the clone being owned by owner, it must return a new MessagePort object": "PASS",
+      "Data sent through remote port is received by the new cloned port": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_clone_port.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Test Description: Test Description: When the user agent is to clone a port original port, with the clone being owned by owner, it must return a new MessagePort object": "FAIL"
+      "Test Description: Test Description: When the user agent is to clone a port original port, with the clone being owned by owner, it must return a new MessagePort object": "PASS",
+      "Data sent through remote port is received by the new cloned port": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_clone_port_error.any.js:main": {
     "harness": "OK",
     "subtests": {
-      "Test Description: Throw a DataCloneError if transfer array in postMessage contains source port.": "FAIL"
+      "Test Description: Throw a DataCloneError if transfer array in postMessage contains source port.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_clone_port_error.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Test Description: Throw a DataCloneError if transfer array in postMessage contains source port.": "FAIL"
+      "Test Description: Throw a DataCloneError if transfer array in postMessage contains source port.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_event_properties.any.js:main": {
@@ -334,13 +336,13 @@
   "webmessaging/Channel_postMessage_ports_readonly_array.any.js:main": {
     "harness": "OK",
     "subtests": {
-      "Test Description: The postMessage() method - Make new ports into a read only array.": "FAIL"
+      "Test Description: The postMessage() method - Make new ports into a read only array.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_ports_readonly_array.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Test Description: The postMessage() method - Make new ports into a read only array.": "FAIL"
+      "Test Description: The postMessage() method - Make new ports into a read only array.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_target_source.any.js:main": {
@@ -358,37 +360,37 @@
   "webmessaging/Channel_postMessage_with_transfer_entangled.any.js:main": {
     "harness": "OK",
     "subtests": {
-      "An entangled port transferred to the same origin receives messages in order": "FAIL"
+      "An entangled port transferred to the same origin receives messages in order": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_with_transfer_entangled.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "An entangled port transferred to the same origin receives messages in order": "FAIL"
+      "An entangled port transferred to the same origin receives messages in order": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_with_transfer_incoming_messages.any.js:main": {
     "harness": "OK",
     "subtests": {
-      "When transferring a non-enabled port mutiple times,\n    incoming messages sent at various transfer steps are received in order upon enablement.": "FAIL"
+      "When transferring a non-enabled port mutiple times,\n    incoming messages sent at various transfer steps are received in order upon enablement.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_with_transfer_incoming_messages.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "When transferring a non-enabled port mutiple times,\n    incoming messages sent at various transfer steps are received in order upon enablement.": "FAIL"
+      "When transferring a non-enabled port mutiple times,\n    incoming messages sent at various transfer steps are received in order upon enablement.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_with_transfer_outgoing_messages.any.js:main": {
     "harness": "OK",
     "subtests": {
-      "When transferring a port,\n    outgoing messages sent at each transfer step are received in order by the entangled port.": "FAIL"
+      "When transferring a port,\n    outgoing messages sent at each transfer step are received in order by the entangled port.": "PASS"
     }
   },
   "webmessaging/Channel_postMessage_with_transfer_outgoing_messages.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "When transferring a port,\n    outgoing messages sent at each transfer step are received in order by the entangled port.": "FAIL"
+      "When transferring a port,\n    outgoing messages sent at each transfer step are received in order by the entangled port.": "PASS"
     }
   },
   "webmessaging/MessageEvent-trusted.any.js:main": {
@@ -398,8 +400,8 @@
   "webmessaging/MessageEvent-trusted.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "With a MessageChannel and its MessagePorts": "FAIL",
-      "With a BroadcastChannel": "FAIL"
+      "With a MessageChannel and its MessagePorts": "PASS",
+      "With a BroadcastChannel": "PASS"
     }
   },
   "webmessaging/MessageEvent.any.js:main": {
@@ -458,8 +460,8 @@
     "harness": "OK",
     "subtests": {
       "BroadcastChannel constructor called as normal function": "PASS",
-      "postMessage results in correct event": "FAIL",
-      "messages are delivered in port creation order": "FAIL",
+      "postMessage results in correct event": "SKIP",
+      "messages are delivered in port creation order": "PASS",
       "messages aren't delivered to a closed port": "PASS",
       "messages aren't delivered to a port closed after calling postMessage.": "PASS",
       "closing and creating channels during message delivery works correctly": "PASS",
@@ -470,8 +472,8 @@
     "harness": "OK",
     "subtests": {
       "BroadcastChannel constructor called as normal function": "PASS",
-      "postMessage results in correct event": "FAIL",
-      "messages are delivered in port creation order": "FAIL",
+      "postMessage results in correct event": "SKIP",
+      "messages are delivered in port creation order": "PASS",
       "messages aren't delivered to a closed port": "PASS",
       "messages aren't delivered to a port closed after calling postMessage.": "PASS",
       "closing and creating channels during message delivery works correctly": "PASS",
@@ -486,7 +488,7 @@
       "Undefined name should not throw": "PASS",
       "Non-empty name should not throw": "PASS",
       "Non-string name should not throw": "PASS",
-      "postMessage without parameters should throw": "FAIL",
+      "postMessage without parameters should throw": "PASS",
       "postMessage with null should not throw": "PASS",
       "close should not throw": "PASS",
       "close should not throw when called multiple times": "PASS",
@@ -504,7 +506,7 @@
       "Undefined name should not throw": "PASS",
       "Non-empty name should not throw": "PASS",
       "Non-string name should not throw": "PASS",
-      "postMessage without parameters should throw": "FAIL",
+      "postMessage without parameters should throw": "PASS",
       "postMessage with null should not throw": "PASS",
       "close should not throw": "PASS",
       "close should not throw when called multiple times": "PASS",
@@ -531,10 +533,10 @@
     "subtests": {
       "Message sent to closed port should not arrive.": "PASS",
       "Message sent from closed port should not arrive.": "PASS",
-      "Message sent to closed port from transferred port should not arrive.": "FAIL",
+      "Message sent to closed port from transferred port should not arrive.": "PASS",
       "Inflight messages should be delivered even when sending port is closed afterwards.": "PASS",
       "Close in onmessage should not cancel inflight messages.": "PASS",
-      "close() detaches a MessagePort (but not the one its entangled with)": "FAIL"
+      "close() detaches a MessagePort (but not the one its entangled with)": "PASS"
     }
   },
   "webmessaging/message-channels/close.any.js:worker": {
@@ -542,10 +544,10 @@
     "subtests": {
       "Message sent to closed port should not arrive.": "PASS",
       "Message sent from closed port should not arrive.": "PASS",
-      "Message sent to closed port from transferred port should not arrive.": "FAIL",
+      "Message sent to closed port from transferred port should not arrive.": "PASS",
       "Inflight messages should be delivered even when sending port is closed afterwards.": "PASS",
       "Close in onmessage should not cancel inflight messages.": "PASS",
-      "close() detaches a MessagePort (but not the one its entangled with)": "FAIL"
+      "close() detaches a MessagePort (but not the one its entangled with)": "PASS"
     }
   },
   "webmessaging/message-channels/dictionary-transferrable.any.js:main": {
@@ -627,7 +629,7 @@
   "workers/Worker-formdata.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Test FormData interface object": "FAIL"
+      "Test FormData interface object": "PASS"
     }
   },
   "workers/Worker-replace-event-handler.any.js:worker": {
@@ -657,7 +659,7 @@
   "workers/WorkerNavigator.any.js:worker": {
     "harness": "OK",
     "subtests": {
-      "Testing Navigator properties on workers.": "FAIL"
+      "Testing Navigator properties on workers.": "SKIP"
     }
   },
   "workers/constructors/Worker/DedicatedWorkerGlobalScope-members.worker.js:worker": {
@@ -760,14 +762,14 @@
     "harness": "OK",
     "subtests": {
       "Test that should pass": "PASS",
-      "Worker top-level script is a generated script.": "FAIL"
+      "Worker top-level script is a generated script.": "SKIP"
     }
   },
   "workers/examples/general.worker.js:worker": {
     "harness": "OK",
     "subtests": {
       "Test that should pass": "PASS",
-      "Worker top-level script is the .worker.js file itself.": "FAIL"
+      "Worker top-level script is the .worker.js file itself.": "SKIP"
     }
   },
   "workers/interfaces/DedicatedWorkerGlobalScope/EventTarget.worker.js:worker": {
@@ -781,7 +783,7 @@
     "harness": "OK",
     "subtests": {
       "Setting onmessage to 1": "PASS",
-      "Setting onmessage to an object": "FAIL",
+      "Setting onmessage to an object": "PASS",
       "Setting onmessage to a function": "PASS",
       "Setting onmessage to 1 (again)": "PASS"
     }

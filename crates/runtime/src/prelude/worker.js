@@ -29,19 +29,32 @@
       : options && typeof options === "object" && Array.isArray(options.transfer)
         ? options.transfer
         : [];
-    return __internal.transfer.serialize(message, list);
+    // The messaging form: transferred objects travel with the message, so a
+    // port named only in the transfer list reaches the other side as
+    // `event.ports` rather than being detached into nothing.
+    return __internal.transfer.serializeMessage(message, list);
   }
+
+  // Every event the platform delivers is trusted; one a script builds and
+  // dispatches itself is not.
+  const fired = (event) => event[__internal.trustEvent]();
 
   // A single-handler slot (`onmessage = fn`) over an EventTarget: assigning
   // twice replaces rather than accumulates, and the listener list is separate.
+  // WebIDL's `EventHandler` is `[LegacyTreatNonObjectAsNull]`: a non-object
+  // becomes null, and a non-callable *object* is kept — the getter returns what
+  // was assigned — but is never invoked. Only a function becomes a listener.
   function handlerSlot(target, type) {
     let current = null;
     return {
       get: () => current,
-      set(fn) {
-        if (current) target.removeEventListener(type, current);
-        current = typeof fn === "function" ? fn : null;
-        if (current) target.addEventListener(type, current);
+      set(value) {
+        if (typeof current === "function") target.removeEventListener(type, current);
+        current =
+          typeof value === "function" || (value !== null && typeof value === "object")
+            ? value
+            : null;
+        if (typeof current === "function") target.addEventListener(type, current);
       },
     };
   }
@@ -130,15 +143,16 @@
 
         if (event.type === "message") {
           let data;
+          let ports;
           try {
-            data = __structuredDeserialize(event.data);
+            [data, ports] = __structuredDeserialize(event.data);
           } catch {
             // The payload arrived but could not be rebuilt here — exactly what
             // `messageerror` is for.
-            this.dispatchEvent(new MessageEvent("messageerror"));
+            this.dispatchEvent(fired(new MessageEvent("messageerror")));
             continue;
           }
-          this.dispatchEvent(new MessageEvent("message", { data }));
+          this.dispatchEvent(fired(new MessageEvent("message", { data, ports })));
         } else if (event.type === "error") {
           this.#fail(event.data);
         } else if (event.type === "close") {
@@ -374,13 +388,14 @@
         if (bytes === null || bytes === undefined) return;
 
         let data;
+        let ports;
         try {
-          data = __structuredDeserialize(bytes);
+          [data, ports] = __structuredDeserialize(bytes);
         } catch {
-          globalThis.dispatchEvent(new MessageEvent("messageerror"));
+          globalThis.dispatchEvent(fired(new MessageEvent("messageerror")));
           continue;
         }
-        globalThis.dispatchEvent(new MessageEvent("message", { data }));
+        globalThis.dispatchEvent(fired(new MessageEvent("message", { data, ports })));
       }
     })();
   }

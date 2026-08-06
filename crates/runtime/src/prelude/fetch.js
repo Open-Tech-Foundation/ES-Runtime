@@ -911,6 +911,14 @@
       value: Interface.name,
       configurable: true,
     });
+    // Not serializable. Tagged with no codec registered, so structuredClone and
+    // postMessage raise DataCloneError naming the interface, instead of walking
+    // it as an ordinary object and producing `{}` — a clone that silently threw
+    // the value away. A platform object either has a serialization or refuses;
+    // an interface that gains one registers a codec under the same tag.
+    Object.defineProperty(Interface.prototype, __internal.hostClone, {
+      value: Interface.name,
+    });
     globalThis[Interface.name] = Interface;
   }
   globalThis.fetch = fetch;

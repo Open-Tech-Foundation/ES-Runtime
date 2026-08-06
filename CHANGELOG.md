@@ -33,6 +33,61 @@ namespace) is unstable and may change between minor releases until the API freez
   `wpt/README.md`, and one of them (a terminated worker orphaning its own
   workers) means a full run does not exit on its own.
 
+### Fixed
+
+- **A transferred `MessagePort` never reached the receiver.** A port named in a
+  transfer list but not referenced by the message itself was validated,
+  detached, and then dropped: its queue was handed to a receiver that never saw
+  the port. `event.ports` was empty in every case — which is the *only* way the
+  spec hands a transferred port over:
+
+  ```js
+  channel.port1.postMessage("here", [other.port1]);   // event.ports was []
+  ```
+
+  A `postMessage` now carries its transferables with the message.
+  `structuredClone` is unchanged: what it transfers, it transfers into the value
+  it returns.
+
+- **`MessageEvent.ports` is a frozen array**, as WebIDL's `FrozenArray` requires.
+
+- **Messaging refusals the spec asks for**, each previously silent: transferring
+  a port through *itself*, transferring a port that has been closed, and
+  transferring one that was already transferred away. All three now raise
+  `DataCloneError`.
+
+- **`postMessage()` with no arguments now throws** on `MessagePort` and
+  `BroadcastChannel`, instead of sending `undefined`.
+
+- **Events the platform fires report `isTrusted: true`.** It was hard-coded
+  `false`, so a listener could not tell a delivered message from one any script
+  could dispatch — which is the attribute's only purpose.
+
+- **A platform object with no serialization now refuses to be cloned.**
+  `structuredClone(new Response())` walked it as an ordinary object and returned
+  `{}` — a clone that quietly threw the value away. `Response`, `Request`,
+  `Headers` and `FormData` now raise `DataCloneError` naming the interface.
+
+- **Transferring no longer depends on the interface still being global.**
+  `delete globalThis.MessagePort` made a port untransferable, because the check
+  was `instanceof globalThis.MessagePort`; the spec's algorithm never consults
+  the global, and now neither does this.
+
+- **An event handler attribute keeps a non-callable object.** `onmessage = {…}`
+  stored `null`; WebIDL's `[LegacyTreatNonObjectAsNull]` keeps the object (the
+  getter returns it) and simply never invokes it. Only a non-object becomes
+  null.
+
+- **`BroadcastChannel` delivery order.** Two faults: `new BroadcastChannel()`
+  subscribed *asynchronously*, so a channel missed anything posted before its
+  subscription resolved — the spec joins the channel as the constructor runs —
+  and the hub iterated a `HashMap`, so a post reached the other channels in
+  whatever order the hasher gave rather than the order they were created.
+
+  Delivery is now one ordered stream per agent instead of one receive per
+  channel, which is what makes every destination of one post arrive before any
+  destination of the next, exactly as the spec's single task queue does.
+
 ### Changed
 
 - **`blob:` URLs across agents, and `blob:`/`data:` worker URLs, are now stated

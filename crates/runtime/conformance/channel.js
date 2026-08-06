@@ -86,3 +86,73 @@ test("BroadcastChannel rejects a non-cloneable message", () => {
   assertThrows(() => bc.postMessage(Symbol("nope")), "DataCloneError");
   bc.close();
 });
+
+// A transferred port arrives through `event.ports`, not through the message —
+// it is not part of the value graph, which is why naming one in a transfer list
+// has to carry it separately. Asserted through the synchronous half here; the
+// delivery order and the cross-agent case are gated by the Rust tests.
+test("a port named only in the transfer list is carried, not dropped", () => {
+  const carrier = new MessageChannel();
+  const moved = new MessageChannel();
+  // Nothing in the message refers to the port; the transfer list is the only
+  // mention of it.
+  carrier.port1.postMessage("take this", [moved.port1]);
+  // The original is detached: transferring it again is refused.
+  assertThrows(
+    () => carrier.port1.postMessage("again", [moved.port1]),
+    "DataCloneError",
+  );
+});
+
+test("a port cannot be transferred through itself", () => {
+  const ch = new MessageChannel();
+  assertThrows(() => ch.port1.postMessage("x", [ch.port1]), "DataCloneError");
+});
+
+test("a closed port cannot be transferred", () => {
+  const ch = new MessageChannel();
+  const closed = new MessageChannel();
+  closed.port1.close();
+  assertThrows(() => ch.port1.postMessage("x", [closed.port1]), "DataCloneError");
+});
+
+test("postMessage requires a message", () => {
+  const ch = new MessageChannel();
+  assertThrows(() => ch.port1.postMessage(), "TypeError");
+  assertThrows(() => new BroadcastChannel("arity").postMessage(), "TypeError");
+});
+
+test("an event handler attribute keeps a non-callable object", () => {
+  // WebIDL's EventHandler is [LegacyTreatNonObjectAsNull]: a non-object becomes
+  // null, an object is kept and returned, and only a function is ever invoked.
+  const ch = new MessageChannel();
+  ch.port1.onmessage = 1;
+  assertEquals(ch.port1.onmessage, null);
+  const object = { handleEvent() { throw new Error("must not be invoked"); } };
+  ch.port1.onmessage = object;
+  assertEquals(ch.port1.onmessage, object);
+  ch.port1.dispatchEvent(new Event("message"));
+});
+
+test("a platform object with no serialization refuses to be cloned", () => {
+  // Not `{}`: a clone that silently dropped the value would be worse than one
+  // that fails.
+  assertThrows(() => structuredClone(new Response()), "DataCloneError");
+  assertThrows(() => structuredClone(new Request("http://x/")), "DataCloneError");
+  assertThrows(() => structuredClone(new Headers()), "DataCloneError");
+  assertThrows(() => structuredClone(new FormData()), "DataCloneError");
+});
+
+test("transferring does not depend on the interface still being global", () => {
+  // The spec's algorithm never consults the global object, and a script that
+  // deletes `globalThis.MessagePort` still holds usable ports.
+  const ch = new MessageChannel();
+  const MessagePortInterface = globalThis.MessagePort;
+  delete globalThis.MessagePort;
+  try {
+    const moved = structuredClone(ch.port1, { transfer: [ch.port1] });
+    assert(moved instanceof MessagePortInterface);
+  } finally {
+    globalThis.MessagePort = MessagePortInterface;
+  }
+});

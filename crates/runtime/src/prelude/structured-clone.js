@@ -99,15 +99,28 @@
   // Order matters and is the spec's: validate the whole list first, so a bad
   // entry throws before anything is half-detached; serialize while the listed
   // objects are still live; detach only once that has succeeded.
-  function isStream(value) {
-    return (
-      (globalThis.ReadableStream && value instanceof globalThis.ReadableStream) ||
-      (globalThis.WritableStream && value instanceof globalThis.WritableStream) ||
-      (globalThis.TransformStream && value instanceof globalThis.TransformStream)
-    );
+  // What *kind* of transferable an object is, by its clone tag rather than by
+  // `instanceof globalThis.X`. The global is a mutable property: a script that
+  // deletes `globalThis.MessagePort` must still be able to transfer a port it
+  // already holds, and the spec's algorithm never consults the global either.
+  // (A forged tag buys nothing: the codec below still refuses anything that is
+  // not the real thing.)
+  const STREAM_TAGS = new Set(["ReadableStream", "WritableStream", "TransformStream"]);
+  function tagOf(value) {
+    return value !== null && typeof value === "object" ? value[HOST_CLONE] : undefined;
   }
 
-  function serializeWithTransfer(message, list) {
+  // `carryTransferables` distinguishes the two callers. `structuredClone` wants
+  // the message alone: what it transfers, it transfers into the value it
+  // returns. A `postMessage` wants the transferred objects *carried with* the
+  // message even when nothing in the message refers to them — the receiver
+  // reaches them through `event.ports`, which is the whole point of naming a
+  // port in a transfer list — so those go over as a `[message, ports]` pair.
+  //
+  // Without this, a port named only in the transfer list was validated,
+  // detached, and then dropped: its queue was handed to a receiver that never
+  // saw the port.
+  function serializeWithTransfer(message, list, carryTransferables = false) {
     const ports = [];
     const streams = [];
     for (const item of list) {
@@ -120,11 +133,12 @@
         }
         continue;
       }
-      if (globalThis.MessagePort && item instanceof globalThis.MessagePort) {
+      const tag = tagOf(item);
+      if (tag === "MessagePort") {
         ports.push(item);
         continue;
       }
-      if (isStream(item)) {
+      if (STREAM_TAGS.has(tag)) {
         streams.push(item);
         continue;
       }
@@ -140,7 +154,7 @@
     for (const stream of streams) transferringStreams.add(stream);
     let bytes;
     try {
-      bytes = __structuredSerialize(message);
+      bytes = __structuredSerialize(carryTransferables ? [message, ports] : message);
     } finally {
       // Cleared even on failure: leaving something marked as "being
       // transferred" would let a *later* clone of it succeed where it should
@@ -159,6 +173,11 @@
   }
 
   __internal.transfer.serialize = serializeWithTransfer;
+  // The messaging form: `[message, ports]`, unwrapped by whoever dispatches the
+  // MessageEvent. Used by MessagePort/Worker `postMessage`, never by
+  // `structuredClone`.
+  __internal.transfer.serializeMessage = (message, list) =>
+    serializeWithTransfer(message, list, true);
 
   // ---- the entry point ------------------------------------------------------
 

@@ -156,6 +156,29 @@ export const SUBTESTS = [
       "views, and shared across agents",
   },
   {
+    file: /^webmessaging\/broadcastchannel\/basics\.any\.js$/,
+    match: /^postMessage results in correct event$/,
+    reason:
+      "asserts `event.origin === location.origin` — the browser origin model. " +
+      "Agents here share a process and have no origins; reporting a plausible " +
+      "one would make the check pass and then lie (the rule navigator.js states)",
+  },
+  {
+    file: /^workers\/WorkerNavigator\.any\.js$/,
+    match: /^Testing Navigator properties on workers\.$/,
+    reason:
+      "asserts appName === 'Netscape', appVersion, platform and product — the browser " +
+      "Navigator's compatibility surface, deliberately absent (API.md): answering it with " +
+      "constants would make a feature check pass and then lie",
+  },
+  {
+    file: /^workers\/examples\/general\.(any|worker)\.js$/,
+    match: /^Worker top-level script is /,
+    reason:
+      "runner artifact: it asserts `location.href` is the test file's own URL, and this " +
+      "runner runs a generated bundle beside it, which necessarily has a different name",
+  },
+  {
     file: /^workers\/worker-performance\.worker\.js$/,
     match: /^(Resource timing seems to work in workers|performance\.(clearResourceTimings|setResourceTimingBufferSize) in workers)$/,
     reason: "Resource Timing instruments a browser's subresource fetches; User Timing is the part implemented (SPEC §2.11)",

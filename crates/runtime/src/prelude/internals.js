@@ -64,6 +64,10 @@
       // channel.js's "you have been transferred away" hook, called by
       // structured-clone.js once serialization has succeeded.
       portDetach: Symbol("MessagePort detach"),
+      // Marks an event as fired by the platform rather than by script, which is
+      // what `Event.isTrusted` reports. Guest code cannot reach the symbol, so
+      // it cannot forge the flag — the point of the attribute.
+      trustEvent: Symbol("Event isTrusted"),
       // Shared framing helper, filled in by structured-clone.js. Declared here
       // because the freeze below is shallow: a slot present at freeze time can
       // still be populated, where a new property on `__internal` could not.

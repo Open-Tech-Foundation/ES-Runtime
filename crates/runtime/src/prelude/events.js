@@ -24,6 +24,10 @@
     #timeStamp;
     #inDispatch = false;
     #stopped = false;
+    // `isTrusted`: true for an event the platform fired, false for one script
+    // built and dispatched itself. Set through an internal symbol below, so
+    // there is no way for guest code to claim it.
+    #trusted = false;
 
     constructor(type, options = {}) {
       if (arguments.length < 1) {
@@ -67,10 +71,14 @@
       return this.#inDispatch ? 2 : 0; // AT_TARGET : NONE
     }
     get isTrusted() {
-      return false;
+      return this.#trusted;
     }
     composedPath() {
       return this.#currentTarget ? [this.#currentTarget] : [];
+    }
+    [__internal.trustEvent]() {
+      this.#trusted = true;
+      return this;
     }
     preventDefault() {
       if (this.#cancelable) this.#defaultPrevented = true;
@@ -250,7 +258,9 @@
       this.#lastEventId =
         options.lastEventId !== undefined ? String(options.lastEventId) : "";
       this.#source = options.source ?? null;
-      this.#ports = options.ports ? [...options.ports] : [];
+      // A FrozenArray in WebIDL: the receiver may read the ports it was sent
+      // and may not add to them.
+      this.#ports = Object.freeze(options.ports ? [...options.ports] : []);
     }
     get data() {
       return this.#data;
