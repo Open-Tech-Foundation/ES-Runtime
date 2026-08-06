@@ -127,8 +127,8 @@
       "Serializing OOB DataView throws": "PASS",
       "ArrayBuffer": "PASS",
       "MessagePort": "PASS",
-      "ImageBitmap": "FAIL",
-      "OffscreenCanvas": "FAIL",
+      "ImageBitmap": "SKIP",
+      "OffscreenCanvas": "SKIP",
       "A detached ArrayBuffer cannot be transferred": "PASS",
       "A detached platform object cannot be transferred": "FAIL",
       "Transferring a non-transferable platform object fails": "PASS",
@@ -269,8 +269,8 @@
       "Serializing OOB DataView throws": "PASS",
       "ArrayBuffer": "PASS",
       "MessagePort": "PASS",
-      "ImageBitmap": "FAIL",
-      "OffscreenCanvas": "FAIL",
+      "ImageBitmap": "SKIP",
+      "OffscreenCanvas": "SKIP",
       "A detached ArrayBuffer cannot be transferred": "PASS",
       "A detached platform object cannot be transferred": "FAIL",
       "Transferring a non-transferable platform object fails": "PASS",
@@ -538,14 +538,6 @@
       "basic messagechannel test": "PASS"
     }
   },
-  "webmessaging/message-channels/close-event/garbage-collected.tentative.any.js:main": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
-  "webmessaging/message-channels/close-event/garbage-collected.tentative.any.js:worker": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
   "webmessaging/message-channels/close.any.js:main": {
     "harness": "OK",
     "subtests": {
@@ -602,18 +594,6 @@
     "harness": "OK",
     "subtests": {
       "without start()": "PASS"
-    }
-  },
-  "webmessaging/message-channels/user-activation.tentative.any.js:main": {
-    "harness": "OK",
-    "subtests": {
-      "user activation messagechannel test": "FAIL"
-    }
-  },
-  "webmessaging/message-channels/user-activation.tentative.any.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "user activation messagechannel test": "FAIL"
     }
   },
   "webmessaging/message-channels/worker-post-after-close.any.js:main": {
@@ -680,12 +660,6 @@
       "Test that self is not replaceable.": "FAIL"
     }
   },
-  "workers/WorkerGlobalScope_requestAnimationFrame.worker.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Untitled": "FAIL"
-    }
-  },
   "workers/WorkerNavigator-hardware-concurrency.any.js:worker": {
     "harness": "OK",
     "subtests": {
@@ -707,8 +681,8 @@
       "existence of location": "FAIL",
       "existence of close": "PASS",
       "existence of onerror": "PASS",
-      "existence of onoffline": "FAIL",
-      "existence of ononline": "FAIL",
+      "existence of onoffline": "SKIP",
+      "existence of ononline": "SKIP",
       "existence of addEventListener": "PASS",
       "existence of removeEventListener": "PASS",
       "existence of dispatchEvent": "PASS",
@@ -725,7 +699,7 @@
   "workers/constructors/Worker/expected-self-properties.worker.js:worker": {
     "harness": "OK",
     "subtests": {
-      "existence of XMLHttpRequest": "FAIL",
+      "existence of XMLHttpRequest": "SKIP",
       "existence of WebSocket": "PASS",
       "existence of EventSource": "FAIL",
       "existence of MessageChannel": "PASS",
@@ -808,88 +782,6 @@
       "Worker top-level script is the .worker.js file itself.": "FAIL"
     }
   },
-  "workers/importscripts_mime.any.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "importScripts() requires scripty MIME types: text/javascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types: application/javascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types: text/ecmascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types: image/png is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/csv is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: video/mpeg is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/plain is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: application/xml is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: application/octet-stream is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/potato is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: potato/text is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: aaa/aaa is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: zzz/zzz is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/javascript; charset=utf-8 is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types: text/javascript;charset=utf-8 is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types: text/javascript;bla;bla is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types: text/csv; charset=utf-8 is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/csv;charset=utf-8 is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/csv;bla;bla is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: Text/html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: text/Html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: TeXt/HtMl is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types: TEXT/HTML is blocked.": "FAIL"
-    }
-  },
-  "workers/importscripts_mime_local.any.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "importScripts() requires scripty MIME types for data: URLs: text/javascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: application/javascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/ecmascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: image/png is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/csv is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: video/mpeg is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/plain is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: application/xml is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: application/octet-stream is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/potato is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: potato/text is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: aaa/aaa is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: zzz/zzz is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/javascript; charset=utf-8 is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/javascript;charset=utf-8 is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/javascript;bla;bla is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/csv; charset=utf-8 is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/csv;charset=utf-8 is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/csv;bla;bla is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: Text/html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: text/Html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: TeXt/HtMl is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for data: URLs: TEXT/HTML is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/javascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: application/javascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/ecmascript is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: image/png is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/csv is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: video/mpeg is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/plain is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: application/xml is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: application/octet-stream is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/potato is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: potato/text is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: aaa/aaa is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: zzz/zzz is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/javascript; charset=utf-8 is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/javascript;charset=utf-8 is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/javascript;bla;bla is allowed.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/csv; charset=utf-8 is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/csv;charset=utf-8 is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/csv;bla;bla is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: Text/html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: text/Html is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: TeXt/HtMl is blocked.": "FAIL",
-      "importScripts() requires scripty MIME types for blob: URLs: TEXT/HTML is blocked.": "FAIL"
-    }
-  },
   "workers/interfaces/DedicatedWorkerGlobalScope/EventTarget.worker.js:worker": {
     "harness": "OK",
     "subtests": {
@@ -925,26 +817,6 @@
       "self instanceof WorkerGlobalScope": "FAIL",
       "'self' in self": "PASS",
       "self = 1": "FAIL"
-    }
-  },
-  "workers/interfaces/WorkerUtils/importScripts/001.worker.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Untitled": "PASS"
-    }
-  },
-  "workers/interfaces/WorkerUtils/importScripts/002.worker.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Untitled": "FAIL"
-    }
-  },
-  "workers/interfaces/WorkerUtils/importScripts/blob-url.worker.js:worker": {
-    "harness": "OK",
-    "subtests": {
-      "Blob URLs work on importScripts": "FAIL",
-      "A revoked blob URL will fail": "FAIL",
-      "Revoking a blob URL in an earlier script will not fail": "FAIL"
     }
   },
   "workers/interfaces/WorkerUtils/navigator/008.worker.js:worker": {
@@ -1010,32 +882,12 @@
     }
   },
   "workers/modules/dedicated-worker-import.any.js:main": {
-    "harness": "ERROR",
-    "subtests": {
-      "Static import.": "FAIL",
-      "Static import (cross-origin).": "FAIL",
-      "Static import (redirect).": "FAIL",
-      "Nested static import.": "FAIL",
-      "Static import and then dynamic import.": "FAIL",
-      "Dynamic import.": "FAIL",
-      "Nested dynamic import.": "FAIL",
-      "Dynamic import and then static import.": "FAIL",
-      "eval(import()).": "FAIL"
-    }
+    "harness": "TIMEOUT",
+    "subtests": {}
   },
   "workers/modules/dedicated-worker-import.any.js:worker": {
-    "harness": "ERROR",
-    "subtests": {
-      "Static import.": "FAIL",
-      "Static import (cross-origin).": "FAIL",
-      "Static import (redirect).": "FAIL",
-      "Nested static import.": "FAIL",
-      "Static import and then dynamic import.": "FAIL",
-      "Dynamic import.": "FAIL",
-      "Nested dynamic import.": "FAIL",
-      "Dynamic import and then static import.": "FAIL",
-      "eval(import()).": "FAIL"
-    }
+    "harness": "TIMEOUT",
+    "subtests": {}
   },
   "workers/nested_worker.worker.js:worker": {
     "harness": "OK",
@@ -1048,14 +900,6 @@
     "subtests": {
       "Nested work that closes itself": "PASS"
     }
-  },
-  "workers/nested_worker_importScripts.worker.js:worker": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
-  "workers/nested_worker_sync_xhr.worker.js:worker": {
-    "harness": "TIMEOUT",
-    "subtests": {}
   },
   "workers/semantics/encodings/004.worker.js:worker": {
     "harness": "OK",
@@ -1074,12 +918,12 @@
       "The WorkerNavigator interface object should be exposed.": "FAIL",
       "The MessageChannel interface object should be exposed.": "PASS",
       "The WorkerLocation interface object should be exposed.": "FAIL",
-      "The ImageData interface object should be exposed.": "FAIL",
-      "The ImageBitmap interface object should be exposed.": "FAIL",
-      "The CanvasGradient interface object should be exposed.": "FAIL",
-      "The CanvasPattern interface object should be exposed.": "FAIL",
-      "The TextMetrics interface object should be exposed.": "FAIL",
-      "The Path2D interface object should be exposed.": "FAIL",
+      "The ImageData interface object should be exposed.": "SKIP",
+      "The ImageBitmap interface object should be exposed.": "SKIP",
+      "The CanvasGradient interface object should be exposed.": "SKIP",
+      "The CanvasPattern interface object should be exposed.": "SKIP",
+      "The TextMetrics interface object should be exposed.": "SKIP",
+      "The Path2D interface object should be exposed.": "SKIP",
       "The PromiseRejectionEvent interface object should be exposed.": "PASS",
       "The EventSource interface object should be exposed.": "FAIL",
       "The BroadcastChannel interface object should be exposed.": "PASS",
@@ -1097,18 +941,18 @@
       "The Float32Array interface object should be exposed.": "PASS",
       "The Float64Array interface object should be exposed.": "PASS",
       "The DataView interface object should be exposed.": "PASS",
-      "The XMLHttpRequestEventTarget interface object should be exposed.": "FAIL",
-      "The XMLHttpRequestUpload interface object should be exposed.": "FAIL",
-      "The XMLHttpRequest interface object should be exposed.": "FAIL",
+      "The XMLHttpRequestEventTarget interface object should be exposed.": "SKIP",
+      "The XMLHttpRequestUpload interface object should be exposed.": "SKIP",
+      "The XMLHttpRequest interface object should be exposed.": "SKIP",
       "The ProgressEvent interface object should be exposed.": "PASS",
       "The FormData interface object should be exposed.": "PASS",
       "The URL interface object should be exposed.": "PASS",
       "The URLSearchParams interface object should be exposed.": "PASS",
       "The File interface object should be exposed.": "PASS",
       "The Blob interface object should be exposed.": "PASS",
-      "The FileList interface object should be exposed.": "FAIL",
+      "The FileList interface object should be exposed.": "SKIP",
       "The FileReader interface object should be exposed.": "FAIL",
-      "The FileReaderSync interface object should be exposed.": "FAIL",
+      "The FileReaderSync interface object should be exposed.": "SKIP",
       "The EventTarget interface object should be exposed.": "PASS",
       "The ErrorEvent interface object should be exposed.": "PASS",
       "The Event interface object should be exposed.": "PASS",
@@ -1118,17 +962,17 @@
       "The WritableStream interface object should be exposed.": "PASS",
       "The ByteLengthQueuingStrategy interface object should be exposed.": "PASS",
       "The CountQueuingStrategy interface object should be exposed.": "PASS",
-      "The IDBRequest interface object should be exposed.": "FAIL",
-      "The IDBOpenDBRequest interface object should be exposed.": "FAIL",
-      "The IDBVersionChangeEvent interface object should be exposed.": "FAIL",
-      "The IDBFactory interface object should be exposed.": "FAIL",
-      "The IDBDatabase interface object should be exposed.": "FAIL",
-      "The IDBObjectStore interface object should be exposed.": "FAIL",
-      "The IDBIndex interface object should be exposed.": "FAIL",
-      "The IDBKeyRange interface object should be exposed.": "FAIL",
-      "The IDBCursor interface object should be exposed.": "FAIL",
-      "The IDBCursorWithValue interface object should be exposed.": "FAIL",
-      "The IDBTransaction interface object should be exposed.": "FAIL"
+      "The IDBRequest interface object should be exposed.": "SKIP",
+      "The IDBOpenDBRequest interface object should be exposed.": "SKIP",
+      "The IDBVersionChangeEvent interface object should be exposed.": "SKIP",
+      "The IDBFactory interface object should be exposed.": "SKIP",
+      "The IDBDatabase interface object should be exposed.": "SKIP",
+      "The IDBObjectStore interface object should be exposed.": "SKIP",
+      "The IDBIndex interface object should be exposed.": "SKIP",
+      "The IDBKeyRange interface object should be exposed.": "SKIP",
+      "The IDBCursor interface object should be exposed.": "SKIP",
+      "The IDBCursorWithValue interface object should be exposed.": "SKIP",
+      "The IDBTransaction interface object should be exposed.": "SKIP"
     }
   },
   "workers/semantics/interface-objects/002.worker.js:worker": {
@@ -1170,14 +1014,14 @@
     "harness": "OK",
     "subtests": {
       "Worker exposure": "PASS",
-      "SharedWorker exposure": "FAIL"
+      "SharedWorker exposure": "SKIP"
     }
   },
   "workers/semantics/multiple-workers/exposure.any.js:worker": {
     "harness": "OK",
     "subtests": {
       "Worker exposure": "PASS",
-      "SharedWorker exposure": "FAIL"
+      "SharedWorker exposure": "SKIP"
     }
   },
   "workers/worker-performance.worker.js:worker": {
@@ -1190,9 +1034,9 @@
       "Can use performance.getEntriesByType in workers": "PASS",
       "Performance marks and measures seem to be working correctly in workers": "PASS",
       "Can use clearMarks and clearMeasures in workers": "PASS",
-      "Resource timing seems to work in workers": "FAIL",
-      "performance.clearResourceTimings in workers": "FAIL",
-      "performance.setResourceTimingBufferSize in workers": "FAIL",
+      "Resource timing seems to work in workers": "SKIP",
+      "performance.clearResourceTimings in workers": "SKIP",
+      "performance.setResourceTimingBufferSize in workers": "SKIP",
       "performance.timing is not available in workers": "PASS",
       "performance.navigation is not available in workers": "PASS",
       "performance.toJSON is available in workers": "PASS",

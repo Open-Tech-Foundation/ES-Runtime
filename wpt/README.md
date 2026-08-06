@@ -40,6 +40,31 @@ and WPT's substituting server), `.sub.js` (server-side substitution), `.window.j
 (window-only by definition), and tests whose only `global=` scopes are
 `sharedworker`/`serviceworker`/`shadowrealm` — none of which this runtime has.
 
+## What the numbers mean
+
+```
+                total   runnable   skipped   errored   timeout   passed   failed
+  files            70         55        15
+  runs             83         76         —         0         7
+  subtests        636        602        34         —         —      513       89
+```
+
+- **total** — everything discovered in the three directories.
+- **runnable** — what is a test *of this runtime*: total minus everything
+  `scope.js` rules out.
+- **skipped** — ruled out by `scope.js`, with a reason per entry. Only for things
+  inapplicable **by design** and traceable to a recorded decision — a renderer, a
+  document, browser-local storage, classic scripts. Never "not implemented yet".
+- **errored** — the file threw before any test could report.
+- **timeout** — no result before the deadline; usually a worker that never
+  replied, which is a defect, not a slow test.
+- **passed / failed** — of the runnable subtests. **`failed` is the number to
+  drive to zero**; every one of them is a real deviation or an unimplemented but
+  legitimately server-side API.
+
+The pass rate is quoted over *runnable*, so it can reach 100% and a browser-only
+test can never flatter or depress it.
+
 ## How a test is run
 
 Each test becomes one generated module written next to the original (so relative
@@ -66,8 +91,13 @@ Two deliberate distortions, both forced by this being a module-only runtime:
   `crates/runtime/conformance/run.js` already does.
 - **`importScripts` is a shim** that accepts `/resources/testharness.js` (already
   in the bundle) and throws for anything else. There is no classic-script path to
-  implement it against (SPEC §8), so a test that genuinely needs it fails, which
-  is the honest answer.
+  implement it against (SPEC §8); the tests that exist only to exercise it are
+  out of scope in `scope.js` rather than failing.
+- **Root-relative paths are mapped textually.** WPT serves the checkout at `/`,
+  so a test may name a helper `"/workers/support/x.js"`. With no server, the
+  bundler rewrites those string literals to the checkout path — the same mapping,
+  done earlier. Without it, tests fail over how they addressed a file rather than
+  what they assert.
 
 `testharness.js` picks its environment by `instanceof DedicatedWorkerGlobalScope`.
 This runtime has no such interface object, so it selects `ShellTestEnvironment`
