@@ -41,6 +41,20 @@ const ASYNC_FALLBACK_MS: u64 = 1;
 pub struct Driver {
     clock: Arc<dyn Clock>,
     timers: Arc<dyn Timers>,
+    on_failure: Option<Arc<dyn Fn(DriveFailure) + Send + Sync>>,
+}
+
+/// One failure the guest did not claim, handed over the tick it happened.
+///
+/// The two arms are the same two the [`DriveOutcome`] carries; a sink gets them
+/// separately because only the consumer knows how to word them.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum DriveFailure {
+    /// An exception that escaped a host-invoked callback.
+    UncaughtError(String),
+    /// A promise rejection no listener took responsibility for.
+    UnhandledRejection(String),
 }
 
 /// What a drive to quiescence surfaced that the guest did not take
@@ -70,7 +84,32 @@ impl DriveOutcome {
 impl Driver {
     /// Builds a driver from a clock and a timer source.
     pub fn new(clock: Arc<dyn Clock>, timers: Arc<dyn Timers>) -> Self {
-        Driver { clock, timers }
+        Driver {
+            clock,
+            timers,
+            on_failure: None,
+        }
+    }
+
+    /// Hands each unclaimed failure to `sink` **the tick it happens**, instead of
+    /// collecting it into the [`DriveOutcome`] returned at the end.
+    ///
+    /// For an agent that never reaches quiescence, the outcome arrives too late
+    /// to be a report: a worker holds its receive pump open on purpose, so a
+    /// throw inside `onmessage` would sit in the outcome until the worker was
+    /// terminated — by which time whoever needed to hear about it has usually
+    /// given up. A sink is how a worker's failures reach its parent while the
+    /// worker is still running.
+    ///
+    /// Failures given to the sink are **not** also in the outcome; a consumer
+    /// picks one or the other, never both.
+    #[must_use]
+    pub fn reporting_failures_to<F>(mut self, sink: F) -> Self
+    where
+        F: Fn(DriveFailure) + Send + Sync + 'static,
+    {
+        self.on_failure = Some(Arc::new(sink));
+        self
     }
 
     /// Advances `runtime` until no async ops or timers remain, parking between
@@ -114,10 +153,24 @@ impl Driver {
         loop {
             let now = self.clock.monotonic_ms();
             let status = runtime.tick(now);
-            outcome
-                .unhandled_rejections
-                .extend(status.unhandled_rejections);
-            outcome.uncaught_errors.extend(status.uncaught_errors);
+            match &self.on_failure {
+                // Handed over now, while the agent that produced them is still
+                // running and whoever is watching can still act.
+                Some(sink) => {
+                    for message in status.uncaught_errors {
+                        sink(DriveFailure::UncaughtError(message));
+                    }
+                    for message in status.unhandled_rejections {
+                        sink(DriveFailure::UnhandledRejection(message));
+                    }
+                }
+                None => {
+                    outcome
+                        .unhandled_rejections
+                        .extend(status.unhandled_rejections);
+                    outcome.uncaught_errors.extend(status.uncaught_errors);
+                }
+            }
 
             // Execution was terminated — `process.exit()`, the watchdog, a
             // `Worker.terminate()`, the heap guard. Nothing more can run, and

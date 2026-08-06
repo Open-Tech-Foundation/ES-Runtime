@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
-use es_runtime_providers::{Broadcast, BoxFuture, BroadcastHub, ProviderError};
+use es_runtime_providers::{BoxFuture, Broadcast, BroadcastHub, ProviderError};
 use tokio::sync::Notify;
 
 /// One open `BroadcastChannel`.

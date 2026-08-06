@@ -78,6 +78,14 @@
       // the freeze below is shallow, so a slot present now can be populated,
       // where a new property on `__internal` could not.
       transfer: {},
+      // worker.js fills in `unclaimed(error)`: what to do with a failure no
+      // listener took responsibility for. Only a worker installs one — it
+      // reports the failure to its parent and ends the agent — and returning
+      // true is how it says the failure has been dealt with, which is what
+      // keeps `reportError` from also writing it to this agent's console.
+      // An object for the same reason as `hostCodec`: the freeze below is
+      // shallow, so a slot present now can still be populated.
+      failure: {},
       // channel.js fills these in: `adopt(id)` wraps a transferred port id in a
       // MessagePort, `idOf(port)` reads one back. Transferable streams need
       // both — a stream is transferred *as* a port pair — and they cannot reach

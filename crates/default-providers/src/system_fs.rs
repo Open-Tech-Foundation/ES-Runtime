@@ -721,7 +721,9 @@ mod tests {
         let (_root, fs) = jail("append-visibility");
         let chunk = vec![b'y'; 100_000];
         for i in 1..=3 {
-            fs.write("log.bin".into(), chunk.clone(), true).await.unwrap();
+            fs.write("log.bin".into(), chunk.clone(), true)
+                .await
+                .unwrap();
             assert_eq!(fs.read("log.bin".into()).await.unwrap().len(), 100_000 * i);
         }
     }

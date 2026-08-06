@@ -54,7 +54,7 @@ pub mod testing;
 pub use broadcast::ProcessBroadcastHub;
 pub use clock::SystemClock;
 pub use console::{NullConsole, TracingConsole};
-pub use driver::Driver;
+pub use driver::{DriveFailure, Driver};
 pub use entropy::OsEntropy;
 pub use host_allowlist::HostAllowlist;
 pub use import_policy::ImportPolicy;

@@ -940,9 +940,7 @@ pub(crate) fn fire_timer(
         // looking runnable to the embedder's loop — so it is re-raised below,
         // once this scope is gone.
         terminated = scope.has_terminated();
-        if !terminated
-            && let Some(error) = scope.exception()
-        {
+        if !terminated && let Some(error) = scope.exception() {
             report_uncaught(scope, op_state, error);
         }
     }

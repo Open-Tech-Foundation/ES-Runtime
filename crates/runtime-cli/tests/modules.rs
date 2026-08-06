@@ -535,11 +535,13 @@ fn a_dynamic_import_does_not_wait_for_an_unrelated_timer() {
     // pending, `await import(…)` took 3s. The margin is wide on purpose — the
     // assertion is "did not wait for the timer", not a latency budget.
     let out = esrun()
-        .arg("-e=const t0 = Date.now();\
+        .arg(
+            "-e=const t0 = Date.now();\
               const timer = setTimeout(() => {}, 3000);\
               await import('runtime:path');\
               clearTimeout(timer);\
-              console.log('ELAPSED', Date.now() - t0);")
+              console.log('ELAPSED', Date.now() - t0);",
+        )
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));

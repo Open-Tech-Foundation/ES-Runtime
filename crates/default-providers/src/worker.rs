@@ -19,6 +19,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use es_runtime::{ModuleLoader, Runtime};
+
+use crate::DriveFailure;
 use es_runtime_providers::{
     BoxFuture, ProviderError, WorkerHost, WorkerIncoming, WorkerScope, WorkerSpec,
 };
@@ -117,6 +119,15 @@ impl WorkerScope for ThreadScope {
         // future waiter is pointless here, since the flag above already turns
         // the next `recv` back immediately.
         self.closing.notify_waiters();
+    }
+
+    fn report_error(&self, message: String) {
+        let _ = self.to_parent.send(WorkerIncoming::Error { message });
+        // Ending the agent is half the contract — see the trait's docs. The
+        // drive loop reads the flag after the current tick, so nothing further
+        // of the worker's runs, and the `Closed` its thread sends on the way
+        // out is what tells the parent the agent is gone.
+        self.close();
     }
 }
 
@@ -258,7 +269,15 @@ impl WorkerHost for ThreadWorkerHost {
                 if let Ok(mut threads) = agent_threads.lock() {
                     threads.insert(std::thread::current().id(), id);
                 }
-                run_worker(&factory, spec, scope, &to_parent, &thread_live, &closed, &registry);
+                run_worker(
+                    &factory,
+                    spec,
+                    scope,
+                    &to_parent,
+                    &thread_live,
+                    &closed,
+                    &registry,
+                );
                 if let Ok(mut threads) = agent_threads.lock() {
                     threads.remove(&std::thread::current().id());
                 }
@@ -356,10 +375,7 @@ impl WorkerHost for ThreadWorkerHost {
 /// Removed under one lock, so a concurrent `terminate` of the same subtree gets
 /// the empty half rather than a second chance to join a thread already being
 /// joined. Nothing is awaited while the lock is held.
-fn take_subtree(
-    registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
-    id: u64,
-) -> Vec<Arc<Live>> {
+fn take_subtree(registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>, id: u64) -> Vec<Arc<Live>> {
     let Ok(mut workers) = registry.lock() else {
         return Vec::new();
     };
@@ -416,6 +432,22 @@ async fn terminate_all(workers: &[Arc<Live>]) {
     for live in workers {
         join_live(live).await;
     }
+}
+
+/// Words one failure the driver surfaced and hands it to the agent's own
+/// [`WorkerScope::report_error`], which is where the policy lives.
+///
+/// The two routes a failure can take into here are the two the guest cannot
+/// intercept for itself: an exception escaping a host-invoked callback, and a
+/// rejection nothing claimed. The third route — an exception thrown by an event
+/// listener — is caught by `dispatchEvent` and reported from the prelude, which
+/// calls `worker_self_fail` and lands in the same place.
+fn fail_agent(scope: &ThreadScope, failure: DriveFailure) {
+    let message = match failure {
+        DriveFailure::UncaughtError(message) => message,
+        DriveFailure::UnhandledRejection(message) => format!("unhandled rejection: {message}"),
+    };
+    scope.report_error(message);
 }
 
 /// The worker thread's body: build the runtime, load under the parent's
@@ -484,17 +516,20 @@ fn run_worker(
             return Err(format!("{err}"));
         }
 
-        let driver = crate::Driver::new(
-            Arc::new(crate::SystemClock::new()),
-            Arc::new(crate::TokioTimers),
-        );
+        let clock: Arc<dyn es_runtime_providers::Clock> = Arc::new(crate::SystemClock::new());
+        let timers: Arc<dyn es_runtime_providers::Timers> = Arc::new(crate::TokioTimers);
 
         // Two stages, because a worker with an `onmessage` never reaches
         // quiescence — its receive pump is a deliberately outstanding op, which
         // is what keeps it alive between messages. Waiting for the drive to
         // return would mean an entry module that throws is not reported to the
         // parent until the worker is terminated.
-        let mut outcome = driver
+        //
+        // Stage one drives to the entry module settling, and does it *without* a
+        // failure sink: a module that throws at its top level rejects its own
+        // evaluation, which surfaces as an unhandled rejection as well, and the
+        // `Failed` state below is the better-worded of the two reports.
+        let started = crate::Driver::new(clock.clone(), timers.clone())
             .drive_while(&mut runtime, |rt| {
                 rt.module_eval_state() == es_runtime::ModuleEvalState::Pending
             })
@@ -502,37 +537,35 @@ fn run_worker(
         if let es_runtime::ModuleEvalState::Failed(message) = runtime.module_eval_state() {
             return Err(message);
         }
+        for message in started.uncaught_errors {
+            fail_agent(&scope, DriveFailure::UncaughtError(message));
+        }
+        for message in started.unhandled_rejections {
+            fail_agent(&scope, DriveFailure::UnhandledRejection(message));
+        }
 
         // Settled cleanly; carry on for as long as the worker has work — but
         // stop the moment it closes itself. `close()` only turns back the
         // receive pump, so an agent holding any *other* outstanding op would
         // drive on forever: a worker that started a worker of its own is
         // waiting on that child, and the child is waiting to be told to stop by
-        // the parent that just ended. HTML says close() discards the remaining
-        // tasks, and that is what makes this terminate rather than hang.
+        // the parent that just ended. `close()` discarding the remaining tasks
+        // is what makes this terminate rather than hang.
+        //
+        // Stage two reports through a sink, so a failure reaches the parent the
+        // tick it happens rather than whenever this drive finally returns — and
+        // `fail_agent` ends the worker, so the same flag stops this loop.
         let closing = closed.clone();
-        let rest = driver
+        let sink_scope = scope.clone();
+        let _ = crate::Driver::new(clock, timers)
+            .reporting_failures_to(move |failure| fail_agent(&sink_scope, failure))
             .drive_while(&mut runtime, |_| !closing.load(Ordering::SeqCst))
             .await;
-        outcome
-            .unhandled_rejections
-            .extend(rest.unhandled_rejections);
-        outcome.uncaught_errors.extend(rest.uncaught_errors);
-        Ok(outcome)
+        Ok(())
     });
 
-    match outcome {
-        Err(message) => report(message),
-        Ok(drive) => {
-            // Whatever the guest did not claim is the parent's to hear about,
-            // the same way the CLI reports it for the main agent.
-            for message in drive.uncaught_errors {
-                report(message);
-            }
-            for message in drive.unhandled_rejections {
-                report(format!("unhandled rejection: {message}"));
-            }
-        }
+    if let Err(message) = outcome {
+        report(message);
     }
 
     closed.store(true, Ordering::SeqCst);

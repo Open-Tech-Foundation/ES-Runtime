@@ -74,9 +74,12 @@
     } finally {
       reporting = false;
     }
-    if (notHandled) {
-      globalThis.console.error(stackOf(error));
-    }
+    if (!notHandled) return;
+    // Nothing here claimed it. In a worker that means the parent hears about it
+    // instead — and since the parent reports what *it* does not claim, writing
+    // it to this agent's console too would report one failure twice.
+    if (__internal.failure.unclaimed?.(error)) return;
+    globalThis.console.error(stackOf(error));
   };
 
   // ---- import.meta.resolve -------------------------------------------------

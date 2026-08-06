@@ -170,6 +170,128 @@ fn a_worker_that_throws_reaches_the_parents_onerror() {
 }
 
 #[test]
+fn an_error_in_a_running_worker_reaches_the_parent_at_once_and_ends_it() {
+    // The failure that matters to a supervisor: not a worker that fails to
+    // start, but one that has been serving and throws on a job. It used to be
+    // collected into the drive's outcome and reported only when the worker
+    // ended — so a parent that terminated the worker never heard about it at
+    // all, and one that waited heard about it far too late to retry anything.
+    //
+    // The `close` that follows is the other half of the signal: `error` then
+    // `close` is one clean transition, which is what a pool restarting on
+    // failure reads. Node, Deno and Bun all end the worker here too.
+    let out = run(
+        "runtime-error",
+        r#"
+        self.onmessage = (e) => {
+          if (e.data === "bad") throw new TypeError("job failed");
+          postMessage("handled " + e.data);
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        const seen = [];
+        w.onmessage = (e) => seen.push(e.data);
+        w.onerror = (e) => {
+          console.log("error:", e.message.split("\n")[0]);
+          e.preventDefault();
+        };
+        w.postMessage("first");
+        setTimeout(() => w.postMessage("bad"), 100);
+        setTimeout(() => w.postMessage("after the error"), 300);
+        setTimeout(() => {
+          console.log("handled:", JSON.stringify(seen));
+          w.terminate();
+        }, 600);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(
+        out.contains("error: TypeError: job failed"),
+        "the parent should hear about it while the worker is still the one \
+         running the job; stdout: {out}"
+    );
+    // Ended by the error, so the message posted afterwards was never handled —
+    // which is what makes an `error` on the parent mean "this worker is gone".
+    assert!(
+        out.contains(r#"handled: ["handled first"]"#),
+        "stdout: {out}"
+    );
+}
+
+#[test]
+fn an_unhandled_rejection_in_a_running_worker_reaches_the_parent_at_once() {
+    // The same rule, by the other route in: a rejection nothing took
+    // responsibility for is a failure the worker's author did not handle, so it
+    // is reported and it ends the agent. Node, Deno and Bun agree — Node exits
+    // the thread with code 1.
+    let out = run(
+        "runtime-rejection",
+        r#"
+        self.onmessage = () => { Promise.reject(new RangeError("nobody caught me")); };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => console.log("still serving:", e.data);
+        w.onerror = (e) => { console.log("error:", e.message); e.preventDefault(); };
+        w.postMessage("go");
+        setTimeout(() => w.postMessage("are you there"), 300);
+        setTimeout(() => { console.log("done"); w.terminate(); }, 600);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(
+        out.contains("unhandled rejection: RangeError: nobody caught me"),
+        "stdout: {out}"
+    );
+    assert!(!out.contains("still serving"), "stdout: {out}");
+}
+
+#[test]
+fn a_worker_that_claims_its_own_error_is_neither_reported_nor_ended() {
+    // The escape hatch, and the reason ending the worker costs nothing: a
+    // worker that takes responsibility for its own failures says so in its own
+    // source, with the same `preventDefault()` that keeps an error off the
+    // console on any other agent. Claimed means the parent is never told and
+    // the agent carries on — which is how a worker absorbs a bad job without
+    // being recycled for it.
+    let out = run(
+        "claimed",
+        r#"
+        self.addEventListener("error", (e) => {
+          postMessage("absorbed: " + e.message);
+          e.preventDefault();
+        });
+        self.onmessage = (e) => {
+          if (e.data === "bad") throw new TypeError("job failed");
+          postMessage("handled " + e.data);
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => console.log(e.data);
+        w.onerror = (e) => { console.log("PROPAGATED (it should not have)"); e.preventDefault(); };
+        w.postMessage("bad");
+        setTimeout(() => w.postMessage("the next job"), 200);
+        setTimeout(() => w.terminate(), 500);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(out.contains("absorbed: job failed"), "{out}");
+    assert!(
+        out.contains("handled the next job"),
+        "a claimed failure must leave the worker running; stdout: {out}"
+    );
+    assert!(!out.contains("PROPAGATED"), "{out}");
+}
+
+#[test]
 fn a_live_worker_keeps_the_process_alive_and_close_ends_it() {
     // The parent's module finishes immediately; the message still arrives,
     // because the worker is live work. `close()` then lets the process exit —
@@ -235,11 +357,18 @@ fn a_worker_can_be_handed_an_environment_instead_of_the_capability() {
         w.onerror = (e) => { console.log(`err: ${e.message}`); e.preventDefault(); w.terminate(); };
         "#,
     );
-    let out = esrun().arg(&app).env("API_TOKEN", "sk-from-host").output().unwrap();
+    let out = esrun()
+        .arg(&app)
+        .env("API_TOKEN", "sk-from-host")
+        .output()
+        .unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let stdout = stdout(&out);
     assert!(stdout.contains(r#""capability":false"#), "{stdout}");
-    assert!(stdout.contains(r#""keys":["API_TOKEN","MODE"]"#), "{stdout}");
+    assert!(
+        stdout.contains(r#""keys":["API_TOKEN","MODE"]"#),
+        "{stdout}"
+    );
     // The host's own API_TOKEN is not what it got.
     assert!(stdout.contains(r#""real":"sk-handed""#), "{stdout}");
     // And a secret-looking name is re-masked on arrival, by the same
@@ -269,7 +398,11 @@ fn a_handed_environment_wins_over_the_hosts() {
         w.onmessage = (e) => { console.log(`saw:${e.data}`); w.terminate(); };
         "#,
     );
-    let out = esrun().arg(&app).env("SECRET_FROM_HOST", "leak").output().unwrap();
+    let out = esrun()
+        .arg(&app)
+        .env("SECRET_FROM_HOST", "leak")
+        .output()
+        .unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "saw:ONLY");
 }
@@ -314,7 +447,10 @@ fn a_malformed_env_option_throws_from_the_constructor() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let stdout = stdout(&out);
     assert!(stdout.starts_with("TypeError:"), "{stdout}");
-    assert!(stdout.contains(r#""env" must be "inherit" or an object"#), "{stdout}");
+    assert!(
+        stdout.contains(r#""env" must be "inherit" or an object"#),
+        "{stdout}"
+    );
     // It names what it got, so the fix is obvious from the message alone.
     assert!(stdout.contains(r#""nope""#), "{stdout}");
 }
@@ -711,8 +847,16 @@ fn terminating_a_worker_terminates_the_workers_it_started() {
         &[],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert!(stdout(&out).contains("grandchild reported: inner up"), "{}", stdout(&out));
-    assert!(stdout(&out).contains("outer terminated"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("grandchild reported: inner up"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        stdout(&out).contains("outer terminated"),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]
@@ -740,7 +884,11 @@ fn a_worker_that_finishes_takes_its_own_workers_with_it() {
         &[],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
-    assert!(stdout(&out).contains("reported: inner up"), "{}", stdout(&out));
+    assert!(
+        stdout(&out).contains("reported: inner up"),
+        "{}",
+        stdout(&out)
+    );
 }
 
 #[test]

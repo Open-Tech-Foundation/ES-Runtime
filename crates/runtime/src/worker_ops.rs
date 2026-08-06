@@ -300,10 +300,33 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
         })
     }))?;
 
-    let s = scope;
+    let s = scope.clone();
     engine.register_op(OpDecl::sync("worker_self_close", move |_args| {
         if let Some(scope) = s.as_ref() {
             scope.close();
+        }
+        Ok(Value::Undefined)
+    }))?;
+
+    // `worker_self_fail(message)`: a failure this worker's own listeners did not
+    // claim. Reported to the parent and fatal to this agent — see
+    // `WorkerScope::report_error`.
+    //
+    // The prelude calls it for the one route the host cannot see: an exception
+    // thrown by an event listener, which `dispatchEvent` catches and hands to
+    // `reportError` rather than letting escape. A throw inside `onmessage` is
+    // exactly that, and it is the failure a worker is most likely to have.
+    //
+    // Sync, because it must take effect within the tick that produced it: the
+    // drive loop reads the flag it sets as soon as this tick ends.
+    let s = scope;
+    engine.register_op(OpDecl::sync("worker_self_fail", move |args| {
+        let message = arg_str(&args, 0);
+        // Not an error when there is no scope: on the agent driving the process
+        // the prelude never installs the hook that calls this, and an embedder
+        // without workers has no parent for a report to reach.
+        if let Some(scope) = s.as_ref() {
+            scope.report_error(message);
         }
         Ok(Value::Undefined)
     }))?;

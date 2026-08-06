@@ -33,6 +33,38 @@ namespace) is unstable and may change between minor releases until the API freez
   `wpt/README.md`, and one of them (a terminated worker orphaning its own
   workers) means a full run does not exit on its own.
 
+### Changed
+
+- **A worker that fails now says so at once, and stops.** An uncaught error or
+  unhandled rejection inside a *running* worker was collected into the drive's
+  outcome and reported only when the worker ended — so a parent that terminated
+  it never heard about the failure at all, and one that waited heard far too
+  late to retry anything. A throw inside `onmessage` never reached the parent by
+  any route, because `dispatchEvent` catches a listener's exception and reports
+  it through `reportError`, which never left the worker's own agent.
+
+  Each unclaimed failure now reaches the parent's `onerror` the tick it happens,
+  and ends the worker: an exception that escaped every handler its author wrote
+  leaves the agent in a state nobody can vouch for, so a supervisor gets one
+  clean transition to restart on rather than an agent that stays in the rotation.
+  Node, Deno and Bun all end the worker here too.
+
+  A worker that takes responsibility is unaffected — `preventDefault()` in its
+  own `error` or `unhandledrejection` listener claims the failure, which is
+  neither reported nor fatal:
+
+  ```js
+  self.addEventListener("error", (e) => {
+    postMessage({ failed: currentJob, reason: e.message });
+    e.preventDefault();          // absorbed; this worker keeps its next job
+  });
+  ```
+
+  A worker that merely *hears* about a child worker's failure has not failed
+  itself, so an unclaimed `error` on a `Worker` object is written to the console
+  rather than escalated — without that, one leaf failure would take down every
+  ancestor that had not attached an `onerror`.
+
 ### Fixed
 
 - **`Worker.postMessage()` could deliver messages out of order.** A dedicated

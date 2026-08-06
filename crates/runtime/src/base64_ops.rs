@@ -71,7 +71,12 @@ fn decode(s: &str) -> Option<String> {
     // the common one now borrows the input untouched.
     let borrowed: Vec<u8>;
     let cleaned: &[u8] = if s.as_bytes().iter().copied().any(is_ws) {
-        borrowed = s.as_bytes().iter().copied().filter(|&b| !is_ws(b)).collect();
+        borrowed = s
+            .as_bytes()
+            .iter()
+            .copied()
+            .filter(|&b| !is_ws(b))
+            .collect();
         &borrowed
     } else {
         s.as_bytes()

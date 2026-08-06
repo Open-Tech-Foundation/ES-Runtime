@@ -1390,6 +1390,24 @@ pub trait WorkerScope: Send + Sync {
     /// finishes what it is doing and its loop then ends — unlike
     /// [`WorkerHost::terminate`], which interrupts from outside.
     fn close(&self);
+
+    /// A failure this worker's own listeners did not claim: report it to the
+    /// parent as [`WorkerIncoming::Error`], then end the agent as `close()`
+    /// would.
+    ///
+    /// Both halves are the policy. Reporting has to happen *now* rather than
+    /// when the worker finishes, because a worker holding a receive pump open
+    /// never finishes on its own — a supervisor asking "did this job fail?"
+    /// needs the answer while the job is still the current one. Ending follows
+    /// because the failure escaped every handler the worker's author wrote, so
+    /// the agent's state is whatever the exception left behind; a pool
+    /// restarting on failure wants one clean transition, not an agent that
+    /// stays in the rotation with unknown state.
+    ///
+    /// A worker that *takes* responsibility never reaches here: an `error` or
+    /// `unhandledrejection` listener calling `preventDefault()` claims the
+    /// failure, and a claimed failure is neither reported nor fatal.
+    fn report_error(&self, message: String);
 }
 
 /// A body crossing the [`HttpServerProvider`] seam, in either direction.

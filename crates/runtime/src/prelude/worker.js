@@ -228,9 +228,17 @@
       });
       const claimed = !this.dispatchEvent(event);
       if (!claimed) {
-        // Nobody took responsibility. Report it the way an uncaught error on
-        // this agent would be, rather than letting a worker fail in silence.
-        reportError(new Error(String(message)));
+        // Nobody took responsibility, so it goes to the console rather than
+        // being lost — but *only* to the console.
+        //
+        // Deliberately not `reportError`: that dispatches the failure as this
+        // agent's own uncaught error, and an agent's own uncaught error ends it.
+        // A worker that has merely *heard* about its child's failure has not
+        // failed — its state is intact, and it may well be the thing that
+        // restarts the child. Escalating would mean a single leaf failure took
+        // down every ancestor that had not attached an `onerror`, which is a
+        // blast radius nobody asked for.
+        globalThis.console.error(String(message));
       }
     }
 
@@ -428,6 +436,30 @@
       "onmessageerror",
       handlerSlot(globalThis, "messageerror"),
     );
+
+    // A failure nothing in this worker claimed. `reportError` has already
+    // dispatched the `error` event and found no listener willing to take
+    // responsibility, so it belongs to the parent: reported there, and fatal
+    // here — the exception escaped every handler the author wrote, so what the
+    // agent's state is from now on is anybody's guess.
+    //
+    // This is the route the host cannot see on its own. An exception thrown by
+    // an event listener never escapes to the engine at all: `dispatchEvent`
+    // catches it so that one bad listener does not cancel the rest of the
+    // dispatch, and hands it to `reportError`. A throw inside `onmessage` — the
+    // way a worker most commonly fails — takes exactly that path.
+    //
+    // The stack, where there is one: it opens with the same
+    // `TypeError: message` line the parent shows, and the frames below it say
+    // where in the worker to look.
+    __internal.failure.unclaimed = (error) => {
+      __ops.worker_self_fail(
+        error && typeof error === "object" && error.stack
+          ? String(error.stack)
+          : String(error),
+      );
+      return true;
+    };
 
     // The worker's own pump. Pending for as long as the parent may send, which
     // is what keeps a worker with an `onmessage` alive after its module has

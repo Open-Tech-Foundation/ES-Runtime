@@ -53,7 +53,6 @@ const POSITIONS: [Position; 15] = [
 const PASSWORD_START: usize = 3;
 const PASSWORD_END: usize = 4;
 
-
 /// A small cache of already-parsed URLs, keyed by their own serialization.
 ///
 /// Every component setter used to re-parse the whole URL from its `href`, because
