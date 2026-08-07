@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-07
+
 ### Added
 
 - **`reusePort` on `runtime:http` `serve()` and `runtime:net` `listen()`.**
