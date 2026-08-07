@@ -216,6 +216,36 @@
     return { bytes: encoder.encode(String(input)), type: "text/plain;charset=UTF-8" };
   }
 
+  // The body half of `clone()` — and of `new Request(otherRequest)`, which the
+  // Fetch standard defines in the same terms ("create a proxy for inputBody").
+  // Returns a fresh state for the copy, mutating `state` where the two must
+  // share a source.
+  //
+  // A byte-backed body needs no tee: the bytes are immutable and each side
+  // reads them independently, so the copy takes the same reference (a deferred
+  // string likewise). Only a stream-backed body — every `fetch` response, and
+  // any `new Response(stream)` — has a single consumable source, and there both
+  // sides get a tee branch. Sharing one stream is what made `r.clone()` on a
+  // fetch response fail with "stream is already locked" the moment either half
+  // was read.
+  function cloneBodyState(state, what) {
+    if (state.used) {
+      throw new TypeError(`Cannot clone ${what}: its body has already been consumed`);
+    }
+    if (state.stream !== null && state.stream.locked) {
+      throw new TypeError(`Cannot clone ${what}: its body stream is locked`);
+    }
+    if (state.bytes !== null || state.str !== null) {
+      return { bytes: state.bytes, str: state.str, stream: null, used: false };
+    }
+    if (state.stream !== null) {
+      const [mine, theirs] = state.stream.tee();
+      state.stream = mine;
+      return { bytes: null, str: null, stream: theirs, used: false };
+    }
+    return { bytes: null, str: null, stream: null, used: false };
+  }
+
   async function consumeBody(state) {
     if (state.used) throw new TypeError("Body has already been consumed");
     state.used = true;
@@ -497,17 +527,25 @@
       this.#keepalive = Boolean(
         options.keepalive ?? (input instanceof Request ? input.#keepalive : false),
       );
-      const extracted =
-        options.body !== undefined && options.body !== null
-          ? extractBody(options.body)
-          : { bytes: null, stream: null, type: null };
-      if (extracted.type) {
-        this.#ensureHeaders();
-        if (!this.#headers.has("content-type")) {
-          this.#headers.set("content-type", extracted.type);
+      if (options.body !== undefined && options.body !== null) {
+        const extracted = extractBody(options.body);
+        if (extracted.type) {
+          this.#ensureHeaders();
+          if (!this.#headers.has("content-type")) {
+            this.#headers.set("content-type", extracted.type);
+          }
         }
+        this[BODY] = makeBodyState(extracted);
+      } else if (input instanceof Request) {
+        // No `init.body`, so the body is the *input request's* — which is what
+        // makes `clone()` (below) and `fetch(new Request(req))` carry a payload
+        // at all. Dropping it here is how a POST built from another Request
+        // came to go out empty. The content-type rode in with the headers,
+        // which were copied from `input` above.
+        this[BODY] = cloneBodyState(input[BODY], "a Request");
+      } else {
+        this[BODY] = makeBodyState({ bytes: null, stream: null, type: null });
       }
-      this[BODY] = makeBodyState(extracted);
     }
     #ensureHeaders() {
       if (this.#headers === null) {
@@ -648,7 +686,7 @@
         redirected: this.#redirected,
         [INTERNAL_RESPONSE]: true,
       });
-      r[BODY] = { ...this[BODY] };
+      r[BODY] = cloneBodyState(this[BODY], "a Response");
       return r;
     }
     static json(data, init = {}) {

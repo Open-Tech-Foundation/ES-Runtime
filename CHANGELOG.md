@@ -8,6 +8,49 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- `ERR_INVALID_PATH` — a path argument that names no valid target: it is empty,
+  or it is the filesystem root jail itself and the operation would mutate it.
+
+### Fixed
+
+- **`runtime:fs` no longer treats the root jail as a target.** `Path::join("")`
+  is the path itself, so an empty path argument silently *became* the jail root
+  and the operation ran against it: `remove("", { recursive: true })` deleted the
+  entire project directory, `chmod("", 0)` locked it to mode `000`, and
+  `rename("", "")` succeeded. Two guards, both at the jail — so `runtime:wasi`
+  and any direct op call are covered on the same terms as `runtime:fs`:
+
+  - An **empty path** is refused outright, for reads as well as writes. No
+    operation intends it, and Node's `fs` rejects it too.
+  - A **mutation whose resolved target is the root** is refused however it is
+    spelled — `.`, `./`, `data/..`, or the root's own absolute path. Removing,
+    renaming, truncating or `chmod`ing the root destroys the sandbox the guest
+    is running in and is never a coherent request from inside it.
+
+  Reads of the root are unaffected (`stat(".")`, `readDir(".")`, `realPath(".")`
+  work as before), as are writes to entries *inside* it — including the temp
+  entries `makeTempDir`/`makeTempFile` create there by default. Both failures
+  carry the new `ERR_INVALID_PATH` code.
+
+- **`Request.clone()` and `new Request(otherRequest)` carry the body.** The
+  `Request` constructor never copied the body from an input `Request`, so both
+  produced a request with no body at all — and since `clone()` *is*
+  `new Request(this)`, a cloned request was always empty. `fetch(new
+  Request(url, { method: "POST", body }))` sent nothing, which is the form
+  middleware and request-rewriting code is written in. `init.body` still wins
+  when given.
+
+- **`Response.clone()` tees a stream-backed body instead of sharing it.** The
+  clone took a shallow copy of the body state, so both halves pointed at one
+  stream and reading either then the other threw `TypeError: stream is already
+  locked`. Every `fetch` response is stream-backed, so the everyday `const r =
+  await fetch(u); const c = r.clone();` was the failing case. Byte-backed bodies
+  still share their (immutable) bytes rather than paying for a tee. Cloning a
+  body that is already consumed or locked is now a `TypeError`, as the Fetch
+  standard requires, rather than producing a broken clone.
+
 ## [0.18.0] - 2026-08-07
 
 ### Added

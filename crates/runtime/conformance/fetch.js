@@ -94,6 +94,40 @@ test("a cloned Request keeps the original's signal", () => {
   assertEquals(r.clone().signal, c.signal);
 });
 
+test("a cloned Request carries the body, and both halves are readable", async () => {
+  const r = new Request("https://a.example/", { method: "POST", body: "payload" });
+  const c = r.clone();
+  assertEquals(await c.text(), "payload");
+  assertEquals(await r.text(), "payload");
+});
+
+test("Request built from another Request inherits its body", async () => {
+  const first = new Request("https://a.example/", { method: "POST", body: "carried" });
+  assertEquals(await new Request(first).text(), "carried");
+});
+
+test("init.body wins over the input Request's body", async () => {
+  const first = new Request("https://a.example/", { method: "POST", body: "old" });
+  assertEquals(await new Request(first, { body: "new" }).text(), "new");
+});
+
+test("a cloned Request tees a stream body", async () => {
+  const r = new Request("https://a.example/", {
+    method: "POST",
+    body: ReadableStream.from([new TextEncoder().encode("streamed")]),
+    duplex: "half",
+  });
+  const c = r.clone();
+  assertEquals(await c.text(), "streamed");
+  assertEquals(await r.text(), "streamed");
+});
+
+test("cloning a Request whose body was consumed is a TypeError", async () => {
+  const r = new Request("https://a.example/", { method: "POST", body: "x" });
+  await r.text();
+  assertThrows(() => r.clone(), "TypeError");
+});
+
 test("Request exposes the standard mode/credentials/redirect defaults", () => {
   const r = new Request("https://a.example/");
   assertEquals(r.redirect, "follow");
@@ -245,6 +279,33 @@ test("Response.redirect() produces a redirect response", () => {
   }
   assertThrows(() => Response.redirect("https://a.example/", 200), "RangeError");
   assertThrows(() => Response.redirect("not a url"), "TypeError");
+});
+
+test("a cloned Response tees a stream body so both halves read in full", async () => {
+  // The shape every `fetch` response has: one consumable source. Sharing it
+  // instead of teeing made the second read throw "stream is already locked".
+  const r = new Response(ReadableStream.from([new TextEncoder().encode("streamy")]));
+  const c = r.clone();
+  assertEquals(await r.text(), "streamy");
+  assertEquals(await c.text(), "streamy");
+});
+
+test("a cloned Response reads independently of the original", async () => {
+  const r = new Response("bytes-backed");
+  const c = r.clone();
+  await r.text();
+  assertEquals(r.bodyUsed, true);
+  assertEquals(c.bodyUsed, false);
+  assertEquals(await c.text(), "bytes-backed");
+});
+
+test("cloning a consumed or locked Response body is a TypeError", async () => {
+  const consumed = new Response("x");
+  await consumed.text();
+  assertThrows(() => consumed.clone(), "TypeError");
+  const locked = new Response("x");
+  locked.body.getReader();
+  assertThrows(() => locked.clone(), "TypeError");
 });
 
 test("a cloned Response keeps its type", () => {

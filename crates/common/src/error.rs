@@ -107,6 +107,9 @@ pub enum ErrorCode {
     DirectoryNotEmpty,
     /// A real (canonicalized) path escapes the filesystem root jail (D25).
     JailEscape,
+    /// The path argument names no valid target: it is empty, or it is the root
+    /// jail itself and the operation would mutate it.
+    InvalidPath,
     /// The peer refused the connection.
     ConnectionRefused,
     /// The connection was reset or aborted by the peer.
@@ -142,6 +145,7 @@ impl ErrorCode {
             ErrorCode::NotDirectory => "ERR_NOT_DIRECTORY",
             ErrorCode::DirectoryNotEmpty => "ERR_DIRECTORY_NOT_EMPTY",
             ErrorCode::JailEscape => "ERR_JAIL_ESCAPE",
+            ErrorCode::InvalidPath => "ERR_INVALID_PATH",
             ErrorCode::ConnectionRefused => "ERR_CONNECTION_REFUSED",
             ErrorCode::ConnectionReset => "ERR_CONNECTION_RESET",
             ErrorCode::TimedOut => "ERR_TIMED_OUT",

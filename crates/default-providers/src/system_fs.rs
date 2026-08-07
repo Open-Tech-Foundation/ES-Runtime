@@ -142,7 +142,7 @@ impl SystemFileSystem {
     /// link to a regular file, fail with `EINVAL`. The parent is still fully
     /// resolved and jailed, so the link being read is provably inside the root.
     fn jailed_nofollow(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
-        let raw = Path::new(p);
+        let raw = reject_empty(p)?;
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
@@ -151,20 +151,76 @@ impl SystemFileSystem {
         let (parent, name) = match (abs.parent(), abs.file_name()) {
             (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
             // No final component to hold back (a bare root); fall through.
-            _ => return self.scoped(confine(&abs, &self.root)?, access),
+            _ => {
+                return self.scoped(
+                    reject_root_mutation(confine(&abs, &self.root)?, &self.root, access)?,
+                    access,
+                );
+            }
         };
-        self.scoped(confine(&parent, &self.root)?.join(name), access)
+        let resolved = confine(&parent, &self.root)?.join(name);
+        self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
     }
 
     fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
-        let raw = Path::new(p);
+        let raw = reject_empty(p)?;
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        self.scoped(confine(&abs, &self.root)?, access)
+        let resolved = confine(&abs, &self.root)?;
+        self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
     }
+}
+
+/// Rejects the empty path before it can be joined onto the base directory.
+///
+/// `Path::new("").is_absolute()` is false and `base.join("")` is `base`, so an
+/// empty argument silently *becomes the root jail* — which is how
+/// `remove("", { recursive: true })` came to delete the whole project. There is
+/// no operation for which an empty path is the intended target, and Node's
+/// `fs` rejects it too (`ENOENT` on `""`), so it fails here rather than
+/// resolving to something the caller never named.
+pub(crate) fn reject_empty(p: &str) -> Result<&Path, ProviderError> {
+    if p.is_empty() {
+        return Err(ProviderError::Coded {
+            code: ErrorCode::InvalidPath,
+            message: "path is empty (an empty path names no file; it is not the current directory)"
+                .into(),
+        });
+    }
+    Ok(Path::new(p))
+}
+
+/// Refuses a **mutation** whose resolved target is the root jail itself.
+///
+/// The empty-path guard above closes the sharpest spelling, but not the others:
+/// `.`, `./`, `data/..` and the root's own absolute path all legitimately
+/// resolve to the root, and reads of them (`stat(".")`, `readDir(".")`) are
+/// ordinary and must keep working. What must not happen is a *write* landing
+/// there — removing, renaming, truncating or chmod'ing the root is never a
+/// coherent request from inside the jail, and every one of them destroys the
+/// sandbox the guest is running in.
+///
+/// Writes *below* the root are unaffected, and so is creating an entry directly
+/// in it: this compares the resolved target, and a new child resolves to
+/// `root/<name>`, not to `root`.
+pub(crate) fn reject_root_mutation(
+    resolved: PathBuf,
+    root: &Path,
+    access: Access,
+) -> Result<PathBuf, ProviderError> {
+    if access == Access::Write && resolved == root {
+        return Err(ProviderError::Coded {
+            code: ErrorCode::InvalidPath,
+            message: format!(
+                "refusing to modify the filesystem root jail {} itself (mutating the root would destroy the sandbox; name an entry inside it)",
+                root.display()
+            ),
+        });
+    }
+    Ok(resolved)
 }
 
 fn escape(p: &Path, root: &Path) -> ProviderError {
@@ -612,6 +668,100 @@ mod tests {
             .with_read_allowlist(PathAllowlist::parse(["data"], &root).unwrap())
             .with_write_allowlist(PathAllowlist::parse(["out"], &root).unwrap());
         (root, fs)
+    }
+
+    /// `base.join("")` is `base`, so an empty path used to resolve to the root
+    /// jail — and `remove("", { recursive: true })` deleted the whole project.
+    #[tokio::test]
+    async fn an_empty_path_is_refused_rather_than_resolving_to_the_root() {
+        let (root, fs) = jail("empty-path");
+        std::fs::write(root.join("keep.txt"), b"data").unwrap();
+        for err in [
+            fs.remove(String::new(), true).await.unwrap_err(),
+            fs.chmod(String::new(), 0o000).await.unwrap_err(),
+            fs.write(String::new(), b"x".to_vec(), false)
+                .await
+                .unwrap_err(),
+            fs.truncate(String::new(), 0).await.unwrap_err(),
+            fs.mkdir(String::new(), false).await.unwrap_err(),
+            fs.rename(String::new(), String::new()).await.unwrap_err(),
+            fs.stat(String::new())
+                .await
+                .err()
+                .expect("empty path must not stat"),
+        ] {
+            assert_eq!(err.code(), Some(ErrorCode::InvalidPath), "{err}");
+        }
+        // The root and its contents are untouched.
+        assert!(root.join("keep.txt").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// `.`, `./` and `data/..` all legitimately resolve to the root. Reading
+    /// them is ordinary; mutating the root is never a coherent request from
+    /// inside the jail, and destroys the sandbox the guest runs in.
+    #[tokio::test]
+    async fn mutating_the_root_itself_is_refused_however_it_is_spelled() {
+        let (root, fs) = jail("root-mutation");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("data/db.txt"), b"important").unwrap();
+        let root_str = root.to_string_lossy().to_string();
+        for spelling in [".", "./", "data/..", root_str.as_str()] {
+            let err = fs.remove(spelling.into(), true).await.unwrap_err();
+            assert_eq!(
+                err.code(),
+                Some(ErrorCode::InvalidPath),
+                "remove {spelling}: {err}"
+            );
+            let err = fs.chmod(spelling.into(), 0o000).await.unwrap_err();
+            assert_eq!(
+                err.code(),
+                Some(ErrorCode::InvalidPath),
+                "chmod {spelling}: {err}"
+            );
+            let err = fs
+                .rename(spelling.into(), "moved".into())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                err.code(),
+                Some(ErrorCode::InvalidPath),
+                "rename {spelling}: {err}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(root.join("data/db.txt")).unwrap(),
+            b"important"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The guard is on the resolved *target*, so it must not catch reads of the
+    /// root, nor writes to entries directly inside it.
+    #[tokio::test]
+    async fn reading_the_root_and_writing_inside_it_still_work() {
+        let (root, fs) = jail("root-still-usable");
+        std::fs::write(root.join("there.txt"), b"x").unwrap();
+        assert!(fs.stat(".".into()).await.unwrap().is_dir);
+        assert_eq!(fs.read_dir(".".into()).await.unwrap().len(), 1);
+        assert_eq!(
+            fs.real_path(".".into()).await.unwrap(),
+            path::canonicalize(&root).unwrap().to_string_lossy()
+        );
+        // A new entry in the root resolves to `root/<name>`, not to `root`.
+        fs.write("fresh.txt".into(), b"ok".to_vec(), false)
+            .await
+            .unwrap();
+        fs.mkdir("sub".into(), false).await.unwrap();
+        fs.remove("fresh.txt".into(), false).await.unwrap();
+        // Temp entries default to the base directory and must keep working.
+        assert!(
+            !fs.make_temp_dir(String::new(), String::new())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]

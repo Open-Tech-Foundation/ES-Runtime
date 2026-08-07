@@ -19,7 +19,7 @@ use es_runtime_providers::{
 
 use crate::path;
 use crate::path_allowlist::{Access, PathAllowlist};
-use crate::system_fs::{confine, file_stat};
+use crate::system_fs::{confine, file_stat, reject_empty, reject_root_mutation};
 
 /// What a handle refers to. A directory is kept as a path rather than an OS
 /// handle: WASI uses directory fds only as anchors for path resolution, and
@@ -94,13 +94,14 @@ impl SystemSyncFileSystem {
     /// every call, exactly as the async jail does: caching a validated path would
     /// let a later symlink swap escape it.
     fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
-        let raw = Path::new(p);
+        let raw = reject_empty(p)?;
         let abs = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             self.base.join(raw)
         };
-        self.scoped(confine(&abs, &self.root)?, access)
+        let resolved = confine(&abs, &self.root)?;
+        self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
     }
 
     /// Runs `f` against the handle for `fd`, holding the table lock for the call.
@@ -275,6 +276,7 @@ impl SyncFileSystem for SystemSyncFileSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use es_runtime_common::ErrorCode;
 
     fn fs_in(name: &str) -> (SystemSyncFileSystem, PathBuf) {
         let dir = std::env::temp_dir().join(format!("esrt-syncfs-{name}-{}", std::process::id()));
@@ -282,6 +284,38 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let fs = SystemSyncFileSystem::new(&dir, &dir);
         (fs, dir)
+    }
+
+    /// The same root guard the async jail applies — `runtime:wasi` is the other
+    /// door onto this filesystem, so an empty path must not resolve to the root
+    /// here either, and the root must not be removable through it.
+    #[test]
+    fn the_root_guard_holds_for_wasi_too() {
+        let (fs, dir) = fs_in("root-guard");
+        std::fs::write(dir.join("keep.txt"), b"data").unwrap();
+        std::fs::create_dir_all(dir.join("data")).unwrap();
+        for err in [
+            fs.remove_dir("").unwrap_err(),
+            fs.remove_file("").unwrap_err(),
+            fs.mkdir("").unwrap_err(),
+            fs.rename("", "").unwrap_err(),
+        ] {
+            assert_eq!(err.code(), Some(ErrorCode::InvalidPath), "{err}");
+        }
+        for spelling in [".", "./", "data/.."] {
+            let err = fs.remove_dir(spelling).unwrap_err();
+            assert_eq!(
+                err.code(),
+                Some(ErrorCode::InvalidPath),
+                "{spelling}: {err}"
+            );
+        }
+        // Reads of the root, and writes to entries inside it, are unaffected.
+        assert!(fs.stat(".").unwrap().is_dir);
+        assert_eq!(fs.read_dir(".").unwrap().len(), 2);
+        fs.mkdir("sub").unwrap();
+        assert!(dir.join("keep.txt").exists());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

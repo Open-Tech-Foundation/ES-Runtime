@@ -2581,7 +2581,8 @@ mod tests {
         let host = Arc::new(TestWorkerHost::default());
         let mut rt = runtime_with_workers(host.clone());
         drive_worker_main(&mut rt, "globalThis.__w = new Worker('./w.mjs');");
-        rt.eval("__w.terminate(); __w.postMessage('dropped');").unwrap();
+        rt.eval("__w.terminate(); __w.postMessage('dropped');")
+            .unwrap();
         for _ in 0..8 {
             rt.tick(0);
         }
@@ -2590,7 +2591,10 @@ mod tests {
         assert!(calls.contains(&"terminate 1".to_string()), "{calls:?}");
         // Nothing is posted after a terminate, even though the host would
         // happily have taken it.
-        let after = calls.iter().position(|c| c == "terminate 1").expect("terminate");
+        let after = calls
+            .iter()
+            .position(|c| c == "terminate 1")
+            .expect("terminate");
         assert!(
             !calls[after..].iter().any(|c| c.starts_with("post")),
             "{calls:?}"

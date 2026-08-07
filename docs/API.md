@@ -1264,6 +1264,15 @@ invitation. Nothing is cleaned up automatically — what you create, you remove.
 gating it on the write alone would let a guest with no read access duplicate a
 file it cannot see into somewhere it can reach by another route.
 
+**The root is not a target.** An **empty path** is `ERR_INVALID_PATH` on every
+operation — it names no file, and joining it onto the base directory would
+otherwise resolve to the jail root. A **mutation** whose resolved target *is*
+the root is refused the same way, however it is spelled (`.`, `./`, `data/..`,
+the root's own absolute path): removing, renaming, truncating or `chmod`ing the
+root destroys the sandbox the program is running in. Reading the root is
+ordinary and unaffected — `stat(".")`, `readDir(".")` and `realPath(".")` work —
+as is writing entries *inside* it.
+
 ### `FsFile` (from `file(path)`)
 
 `text()`, `json()`, `bytes()` (`Uint8Array`), `arrayBuffer()`, `stream()`
@@ -2013,6 +2022,7 @@ try {
 | `ERR_IS_DIRECTORY` / `ERR_NOT_DIRECTORY` | A file op hit a directory / a directory op hit a non-directory. |
 | `ERR_DIRECTORY_NOT_EMPTY` | The directory is not empty. |
 | `ERR_JAIL_ESCAPE` | The real (canonicalized) path escapes the filesystem root jail. |
+| `ERR_INVALID_PATH` | The path names no valid target: it is empty, or it is the root jail itself and the operation would mutate it. |
 | `ERR_CONNECTION_REFUSED` | The peer refused the connection. |
 | `ERR_CONNECTION_RESET` | The connection was reset/aborted by the peer. |
 | `ERR_TIMED_OUT` | The operation timed out. |

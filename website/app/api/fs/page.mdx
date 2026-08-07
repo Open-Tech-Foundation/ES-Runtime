@@ -87,3 +87,4 @@ try {
 | `TypeError` | A path isn't a string, URL, or `file()` handle; a non-`file:` URL is passed; `write()` gets an unsupported input type; or `chmod()` gets a non-integer mode. |
 | `DOMException` | name `"NotAllowedError"` — the FileRead or FileWrite capability is not granted. |
 | `Error` | A filesystem failure surfaced by the OS (not found, permission denied, etc.). |
+| `ERR_INVALID_PATH` | The path is empty, or a mutation targets the root jail itself (`.`, `./`, `data/..`). Reads of the root are fine. |

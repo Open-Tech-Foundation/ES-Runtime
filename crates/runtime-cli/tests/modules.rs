@@ -599,6 +599,64 @@ fn runtime_path_exposes_modern_surface() {
     }
 }
 
+/// The jail root is not a target. `base.join("")` is `base`, so an empty path
+/// used to resolve to the root and `remove('', { recursive: true })` deleted the
+/// whole project — this runs the real binary against a real directory to prove
+/// the guard holds end to end, and that reads of `.` still work.
+#[test]
+fn the_jail_root_cannot_be_removed_renamed_or_chmodded() {
+    let tmp = std::env::temp_dir().join(format!("esrun-rootguard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("data")).expect("mktemp");
+    std::fs::write(tmp.join("data/db.txt"), b"important").expect("seed");
+    let script = "import { remove, chmod, rename, truncate, write, mkdir, stat, readDir } from 'runtime:fs';\
+        const chk = async (label, fn) => { try { await fn(); console.log(label + '=SUCCEEDED'); }\
+          catch (e) { console.log(label + '=' + e.code); } };\
+        await chk('EMPTY_REMOVE', () => remove('', { recursive: true }));\
+        await chk('EMPTY_WRITE', () => write('', 'x'));\
+        await chk('EMPTY_MKDIR', () => mkdir(''));\
+        await chk('EMPTY_TRUNCATE', () => truncate(''));\
+        await chk('DOT_REMOVE', () => remove('.', { recursive: true }));\
+        await chk('DOTSLASH_REMOVE', () => remove('./', { recursive: true }));\
+        await chk('UPWARD_REMOVE', () => remove('data/..', { recursive: true }));\
+        await chk('DOT_CHMOD', () => chmod('.', 0));\
+        await chk('DOT_RENAME', () => rename('.', 'moved'));\
+        console.log('READ_DOT=' + (await stat('.')).isDir);\
+        console.log('LIST=' + (await readDir('.')).map(e => e.name).sort().join(','));\
+        await write('inside.txt', 'ok');\
+        console.log('WROTE_INSIDE=' + (await stat('inside.txt')).size);";
+    let out = esrun()
+        .current_dir(&tmp)
+        .arg(format!("-e={script}"))
+        .output()
+        .expect("spawn esrun");
+    let s = stdout(&out);
+    let survived = tmp.join("data/db.txt").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    for expected in [
+        "EMPTY_REMOVE=ERR_INVALID_PATH",
+        "EMPTY_WRITE=ERR_INVALID_PATH",
+        "EMPTY_MKDIR=ERR_INVALID_PATH",
+        "EMPTY_TRUNCATE=ERR_INVALID_PATH",
+        "DOT_REMOVE=ERR_INVALID_PATH",
+        "DOTSLASH_REMOVE=ERR_INVALID_PATH",
+        "UPWARD_REMOVE=ERR_INVALID_PATH",
+        "DOT_CHMOD=ERR_INVALID_PATH",
+        "DOT_RENAME=ERR_INVALID_PATH",
+        // Reads of the root, and writes to entries inside it, are untouched.
+        "READ_DOT=true",
+        "LIST=data",
+        "WROTE_INSIDE=2",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+    assert!(
+        survived,
+        "the seeded file under the jail root was destroyed"
+    );
+}
+
 #[test]
 fn runtime_fs_read_write_stat_and_jail() {
     // A scratch dir that becomes the jail root (no package.json there, so the
