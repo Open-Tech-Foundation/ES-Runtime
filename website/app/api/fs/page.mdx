@@ -89,3 +89,4 @@ try {
 | `Error` | A filesystem failure surfaced by the OS (not found, permission denied, etc.). |
 | `ERR_INVALID_PATH` | The path is empty, or a mutation targets the root jail itself (`.`, `./`, `data/..`). Reads of the root are fine. |
 | `ERR_SAME_FILE` | `copy()`'s source and destination are the same file, including two hardlinks to one inode. |
+| `ERR_NOT_DIRECTORY` | A directory operation hit a non-directory — including a path written with a trailing `/` that names a file. |

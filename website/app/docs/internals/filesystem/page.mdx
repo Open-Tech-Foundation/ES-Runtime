@@ -55,6 +55,20 @@ The guard is on the *resolved target*, which is what keeps it from catching the
 ordinary cases: a new entry in the root resolves to `root/<name>`, not to `root`,
 so `makeTempDir()` — which defaults to the base directory — still works.
 
+## A path must name what it says it names
+
+Two refusals that are not about the root, but about a path describing something
+the filesystem disagrees with.
+
+**A trailing separator on something that is not a directory.** POSIX reads
+`file.txt/` as "this name must be a directory" and the kernel refuses it with
+`ENOTDIR` — which is what Node and Bun surface, because they hand the path to
+the syscall untouched. Resolution here canonicalizes, and that drops the
+separator, so every operation but `readDir` treated `file.txt/` and `file.txt` as
+the same path. The requirement is now checked against the resolved target, which
+fails with `ERR_NOT_DIRECTORY`; a path that does not exist is left alone, so
+`mkdir("newdir/")` still means what it says.
+
 **A copy onto the file being copied.** `fs::copy` opens the destination
 truncating before it reads the source, so `copy(p, p)` emptied the file and
 reported success with 0 bytes copied. Path equality is not enough to catch it —
@@ -100,8 +114,8 @@ the host: `await write(p, data)` followed by `read(p)` is ordinary code, and
 resolving early would make that return a truncated file.
 
 Failures carry a stable `code` (`ERR_NOT_FOUND`, `ERR_ALREADY_EXISTS`,
-`ERR_JAIL_ESCAPE`, `ERR_INVALID_PATH`, `ERR_SAME_FILE`, …), which is the contract to branch on;
-messages are prose and may be reworded.
+`ERR_JAIL_ESCAPE`, `ERR_INVALID_PATH`, `ERR_NOT_DIRECTORY`, `ERR_SAME_FILE`, …),
+which is the contract to branch on; messages are prose and may be reworded.
 
 ## See also
 

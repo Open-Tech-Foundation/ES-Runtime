@@ -29,6 +29,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A trailing `/` no longer opens a file.** POSIX reads `file.txt/` as "this
+  name must be a directory" and the kernel refuses it with `ENOTDIR`, which is
+  what Node and Bun surface. Path resolution here canonicalizes, and that drops
+  the trailing separator, so `file.txt/` reached the operation indistinguishable
+  from `file.txt` and was read, written, stat'd, renamed, copied and removed as
+  though the separator had never been written — only `readDir` refused it, being
+  the one call whose syscall re-derives the requirement. The requirement is now
+  enforced at resolution and reports `ERR_NOT_DIRECTORY`, on the `runtime:wasi`
+  door onto the same jail as well. A trailing separator on an actual directory is
+  unaffected, and a path that does not exist still reports that, so
+  `mkdir("newdir/")` is unchanged.
+
 - **`env` values are coerced to strings.** An environment is a string-to-string
   map, and a string is the only thing a child process can receive — but an
   assignment stored whatever it was given, so `env.PORT = 8080` left a *number*

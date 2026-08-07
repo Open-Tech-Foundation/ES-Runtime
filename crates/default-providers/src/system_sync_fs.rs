@@ -19,7 +19,9 @@ use es_runtime_providers::{
 
 use crate::path;
 use crate::path_allowlist::{Access, PathAllowlist};
-use crate::system_fs::{confine, file_stat, reject_empty, reject_root_mutation};
+use crate::system_fs::{
+    confine, file_stat, reject_empty, reject_root_mutation, reject_trailing_slash_on_a_file,
+};
 
 /// What a handle refers to. A directory is kept as a path rather than an OS
 /// handle: WASI uses directory fds only as anchors for path resolution, and
@@ -101,6 +103,7 @@ impl SystemSyncFileSystem {
             self.base.join(raw)
         };
         let resolved = confine(&abs, &self.root)?;
+        reject_trailing_slash_on_a_file(p, &resolved)?;
         self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
     }
 
@@ -284,6 +287,25 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let fs = SystemSyncFileSystem::new(&dir, &dir);
         (fs, dir)
+    }
+
+    /// The trailing-separator rule holds on this door too: `runtime:wasi` reaches
+    /// the same jail, and `file.txt/` must not open the file there either.
+    #[test]
+    fn a_trailing_separator_on_a_file_is_refused_for_wasi_too() {
+        let (fs, dir) = fs_in("trailing-slash");
+        std::fs::write(dir.join("file.txt"), b"contents").unwrap();
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+
+        let err = fs.stat("file.txt/").err().expect("stat must refuse it");
+        assert_eq!(err.code(), Some(ErrorCode::NotDirectory), "{err}");
+        let err = fs
+            .open("file.txt/", SyncOpenOptions::default())
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::NotDirectory), "{err}");
+
+        // A real directory keeps its conventional trailing separator.
+        assert!(fs.stat("sub/").expect("stat sub/").is_dir);
     }
 
     /// The same root guard the async jail applies — `runtime:wasi` is the other

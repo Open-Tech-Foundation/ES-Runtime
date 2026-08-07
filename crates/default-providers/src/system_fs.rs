@@ -159,6 +159,7 @@ impl SystemFileSystem {
             }
         };
         let resolved = confine(&parent, &self.root)?.join(name);
+        reject_trailing_slash_on_a_file(p, &resolved)?;
         self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
     }
 
@@ -170,6 +171,7 @@ impl SystemFileSystem {
             self.base.join(raw)
         };
         let resolved = confine(&abs, &self.root)?;
+        reject_trailing_slash_on_a_file(p, &resolved)?;
         self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
     }
 }
@@ -280,6 +282,46 @@ pub(crate) fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError>
             }
             None => return Err(escape(abs, root)),
         }
+    }
+}
+
+/// Whether the path the guest wrote ends in a separator, which POSIX reads as
+/// "this name must be a directory".
+fn has_trailing_separator(p: &str) -> bool {
+    // Windows accepts either separator; Unix treats a backslash as an ordinary
+    // filename character, so only `/` counts there.
+    p.ends_with('/') || (cfg!(windows) && p.ends_with('\\'))
+}
+
+/// Rejects `file.txt/` — a trailing separator on something that is not a
+/// directory.
+///
+/// Resolution canonicalizes, and canonicalizing drops the trailing separator, so
+/// `file.txt/` arrived at the operation indistinguishable from `file.txt` and
+/// read, wrote and stat'd the file as though the slash had never been written.
+/// The kernel would have refused it (`ENOTDIR`), which is what Node and Bun
+/// surface because they hand the path over untouched; only `readDir` failed
+/// here, because it is the one call whose syscall re-derives the requirement.
+///
+/// Checked against the resolved target rather than re-attaching the separator
+/// for the kernel to judge: every operation downstream compares and joins these
+/// paths, and a trailing separator would change what those comparisons mean.
+///
+/// A target that does not exist is left alone — the operation reports that
+/// itself, and `mkdir("newdir/")` is a legitimate request to create one.
+pub(crate) fn reject_trailing_slash_on_a_file(
+    input: &str,
+    resolved: &Path,
+) -> Result<(), ProviderError> {
+    if !has_trailing_separator(input) {
+        return Ok(());
+    }
+    match std::fs::metadata(resolved) {
+        Ok(md) if !md.is_dir() => Err(ProviderError::Coded {
+            code: ErrorCode::NotDirectory,
+            message: format!("{input}: not a directory (the trailing separator requires one)"),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -990,6 +1032,75 @@ mod tests {
         let n = fs.copy("src.txt".into(), "dst.txt".into()).await.unwrap();
         assert_eq!(n, 3);
         assert_eq!(std::fs::read(root.join("dst.txt")).unwrap(), b"new");
+    }
+
+    /// `file.txt/` is not `file.txt`: POSIX reads a trailing separator as "this
+    /// name must be a directory", and the kernel refuses it with `ENOTDIR` —
+    /// which is what Node and Bun surface, because they hand the path over
+    /// untouched. Resolution here canonicalizes, and canonicalizing drops the
+    /// separator, so every operation but `readDir` treated the two as the same
+    /// path and read, wrote and stat'd the file anyway.
+    #[tokio::test]
+    async fn a_trailing_separator_on_a_file_is_refused() {
+        let (root, fs) = jail("trailing-slash");
+        std::fs::write(root.join("file.txt"), b"contents").unwrap();
+
+        for err in [
+            fs.read("file.txt/".into()).await.unwrap_err(),
+            fs.stat("file.txt/".into())
+                .await
+                .err()
+                .expect("stat must refuse it"),
+            fs.write("file.txt/".into(), b"X".to_vec(), false)
+                .await
+                .unwrap_err(),
+            fs.remove("file.txt/".into(), false).await.unwrap_err(),
+            fs.rename("file.txt/".into(), "other.txt".into())
+                .await
+                .unwrap_err(),
+            fs.copy("file.txt/".into(), "copy.txt".into())
+                .await
+                .unwrap_err(),
+        ] {
+            assert_eq!(err.code(), Some(ErrorCode::NotDirectory), "{err}");
+        }
+
+        assert_eq!(
+            std::fs::read(root.join("file.txt")).unwrap(),
+            b"contents",
+            "a refused write must not have touched the file",
+        );
+    }
+
+    /// A symlink to a file is the same case: the trailing separator forces the
+    /// link to be followed, and what it names is still not a directory.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_trailing_separator_through_a_symlink_to_a_file_is_refused() {
+        let (root, fs) = jail("trailing-slash-link");
+        std::fs::write(root.join("file.txt"), b"contents").unwrap();
+        std::os::unix::fs::symlink("file.txt", root.join("link.txt")).unwrap();
+
+        let err = fs.read("link.txt/".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::NotDirectory), "{err}");
+    }
+
+    /// The guard must not cost directories their trailing separator, which is
+    /// how a directory is conventionally written, nor block creating one.
+    #[tokio::test]
+    async fn a_trailing_separator_on_a_directory_still_works() {
+        let (root, fs) = jail("trailing-slash-dir");
+        std::fs::create_dir_all(root.join("dir")).unwrap();
+
+        assert!(fs.stat("dir/".into()).await.unwrap().is_dir);
+        assert!(fs.read_dir("dir/".into()).await.unwrap().is_empty());
+        fs.mkdir("made/".into(), false).await.expect("mkdir");
+        assert!(fs.stat("made/".into()).await.unwrap().is_dir);
+        // A path that does not exist reports that, rather than the new error.
+        assert_eq!(
+            fs.read("nope/".into()).await.unwrap_err().code(),
+            Some(ErrorCode::NotFound),
+        );
     }
 
     #[tokio::test]
