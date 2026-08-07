@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use es_runtime_common::{CapabilitySet, ExceptionClass, Limits, UncaughtError};
+use es_runtime_common::{CapabilitySet, IntoException, Limits, UncaughtError};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
@@ -365,12 +365,7 @@ pub trait Engine {
     /// Rejects dynamic-import request `reqid` (its graph could not be loaded),
     /// with an exception of `class` (e.g. a module with a syntax error rejects
     /// with a `SyntaxError`, a missing module with an `Error`).
-    fn reject_dynamic_import(
-        &mut self,
-        reqid: u64,
-        class: ExceptionClass,
-        message: &str,
-    ) -> Result<()>;
+    fn reject_dynamic_import(&mut self, reqid: u64, error: &dyn IntoException) -> Result<()>;
 
     /// Settles linked dynamic imports whose module evaluation has completed
     /// (resolving with the namespace or rejecting with the error). Call each tick.
@@ -971,19 +966,13 @@ impl Engine for V8Engine {
         )
     }
 
-    fn reject_dynamic_import(
-        &mut self,
-        reqid: u64,
-        class: ExceptionClass,
-        message: &str,
-    ) -> Result<()> {
+    fn reject_dynamic_import(&mut self, reqid: u64, error: &dyn IntoException) -> Result<()> {
         crate::module::reject_dynamic(
             &mut self.isolate,
             &self.context,
             &self.modules,
             reqid,
-            class,
-            message,
+            error,
         )
     }
 
@@ -999,6 +988,7 @@ impl Engine for V8Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use es_runtime_common::ExceptionClass;
 
     fn engine() -> V8Engine {
         V8Engine::new(Limits::default()).expect("engine construction")
@@ -1445,6 +1435,25 @@ mod tests {
         assert_eq!(engine.eval("globalThis.tla").unwrap(), Value::Number(7.0));
     }
 
+    /// A stand-in for whatever the runtime hands `reject_dynamic_import` — the
+    /// engine only ever reads the class, the code and the message off it.
+    #[derive(Debug)]
+    struct LoadFailure(&'static str);
+
+    impl std::fmt::Display for LoadFailure {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for LoadFailure {}
+
+    impl IntoException for LoadFailure {
+        fn exception_class(&self) -> ExceptionClass {
+            ExceptionClass::Error
+        }
+    }
+
     #[test]
     fn dynamic_import_rejection_is_catchable() {
         let _v8 = crate::v8_test_guard();
@@ -1460,7 +1469,7 @@ mod tests {
         for _ in 0..100 {
             for (reqid, _spec, _referrer, _ty) in engine.take_pending_dynamic_imports() {
                 engine
-                    .reject_dynamic_import(reqid, ExceptionClass::Error, "cannot find module")
+                    .reject_dynamic_import(reqid, &LoadFailure("cannot find module"))
                     .unwrap();
             }
             engine.settle_dynamic_imports();

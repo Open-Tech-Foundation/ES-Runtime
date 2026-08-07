@@ -93,6 +93,56 @@ namespace) is unstable and may change between minor releases until the API freez
   thing that distinguishes running out of memory from a watchdog, a
   `process.exit()` or a `terminate()`.
 
+- **A denied import now says which import, and where the grant is made.** The
+  refusal was `capability denied: FileSystem (permission "imports")` — an
+  internal capability, a permission the author may never have mentioned, and no
+  clue which of the file's imports failed.
+
+  It matters most inside a worker, where the advice differs: a worker's grants
+  are set at the spawn, in the parent, so `--allow-imports` is the flag for the
+  wrong agent.
+
+  ```
+  in a worker:   cannot import "./dep.mjs": this worker was not granted the
+                 "imports" permission — grant it at the spawn,
+                 new Worker(url, { permissions: ["imports"] })
+  otherwise:     cannot import "./dep.mjs": the "imports" permission is not
+                 granted — add --allow-imports
+  ```
+
+  This is the one a worker actually hits, because static and dynamic imports are
+  not the same operation: a worker's static graph is resolved by its parent up
+  front, so `import` works where `import()` does not. That asymmetry is
+  deliberate — `import()` picks its specifier at runtime and so reads *and
+  executes* a file chosen while the worker runs — and is now documented rather
+  than discovered.
+
+- **A denied dynamic `import()` now rejects with the exception it always
+  should have.** `reject_dynamic_import` hand-rolled the rejection from four
+  builtin classes and flattened everything else to a plain `Error`, so a
+  capability refusal arrived as `Error` with no `code` and could only be
+  recognised by matching its text. It now builds the exception the same way
+  every other Rust error crossing into JS does:
+
+  ```js
+  try { await import("./x.mjs"); }
+  catch (e) {
+    e.name  // "NotAllowedError"        (was: "Error")
+    e.code  // "ERR_CAPABILITY_DENIED"  (was: undefined)
+  }
+  ```
+
+  A syntax error still rejects with a `SyntaxError`, as before. Embedders:
+  `Engine::reject_dynamic_import` now takes `&dyn IntoException` in place of
+  `(ExceptionClass, &str)`.
+
+- **A remote module specifier said `npm install`.** `import("https://…")` fell
+  through the `node_modules` walk and reported `cannot find package "https:" …
+  run npm install?`, sending the reader after something no install could fix.
+  Remote modules are a stated non-goal, and the message now says so. (The
+  fall-through happened whenever the URL did not parse — a well-formed one was
+  already reported correctly.)
+
 - **A refused spawn now names the flag that fixes it.** Starting a worker takes
   `imports` as well as `workers` — the parent reads the worker's entry module,
   and reading a module is what `imports` grants — so `--deny-all

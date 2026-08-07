@@ -463,9 +463,23 @@ it) **and `imports`**, because starting a worker means reading its entry module
 and reading a module is what `imports` grants — so `--deny-all --allow-workers`
 alone is refused, and the refusal says which flag to add. Node needs
 `--allow-fs-read` alongside `--allow-worker` for the same reason; Deno needs
-`--allow-read`. A worker's own `import`s still load — under the parent's authority to read
-them, resolved before any of the worker's code runs — so a worker granted
+`--allow-read`. A worker's own **static** `import`s still load — under the parent's authority to
+read them, resolved before any of the worker's code runs — so a worker granted
 nothing is not limited to a single file.
+
+Dynamic `import()` is different, and needs `imports` at the spawn:
+
+```js
+new Worker(url, { permissions: ["imports"] })
+```
+
+The two are not the same operation. A static graph is literal specifiers, in
+source the parent already read, instantiated with no guest code running.
+`import()` computes its specifier at runtime — from a message, from input — so
+it reads and *executes* a file chosen while the worker is running, on the
+worker's own authority. Gating it is what makes "a worker starts with nothing"
+mean anything; the refusal names the spawn, since `--allow-imports` grants it to
+the wrong agent.
 
 > This is stricter than Deno, which gives a worker its parent's permissions
 > unmodified. Under `esrun`, where the parent normally holds everything, a

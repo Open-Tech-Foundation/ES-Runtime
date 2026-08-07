@@ -706,6 +706,81 @@ fn workers_and_imports_together_can_spawn() {
 }
 
 #[test]
+fn a_workers_dynamic_import_says_where_the_grant_is_made() {
+    // The asymmetry is deliberate and worth knowing about: a worker's *static*
+    // graph is resolved by its parent before the worker exists — literal
+    // specifiers, in source the parent already read, instantiated with no guest
+    // code running — while `import()` computes its specifier at runtime and is
+    // therefore a read-and-execute primitive on the worker's own authority.
+    //
+    // So `import` works where `import()` does not, and the refusal has to say
+    // where the grant is made: in the parent, at the spawn. `--allow-imports`
+    // cannot help — it is the flag for the agent that is not the one refused.
+    write("dynimport-dep.mjs", "export const answer = 42;");
+    let out = run(
+        "dynimport",
+        r#"
+        import { answer } from "./dynimport-dep.mjs";
+        postMessage("static ok: " + answer);
+        try {
+          const m = await import("./dynimport-dep.mjs");
+          postMessage("dynamic ok: " + m.answer);
+        } catch (e) {
+          postMessage("dynamic failed: " + e.message);
+          postMessage(e.name + "|" + e.code);
+        }
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        let seen = 0;
+        w.onmessage = (e) => { console.log(e.data); if (++seen === 3) w.terminate(); };
+        w.onerror = (e) => { console.log("err:", e.message); e.preventDefault(); };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(out.contains("static ok: 42"), "stdout: {out}");
+    assert!(
+        out.contains(r#"cannot import "./dynimport-dep.mjs": this worker was not granted"#),
+        "stdout: {out}"
+    );
+    // The remedy is the point: it names the spawn, not a flag.
+    assert!(
+        out.contains(r#"grant it at the spawn, new Worker(url, { permissions: ["imports"] })"#),
+        "stdout: {out}"
+    );
+    // And it is still a permission failure to catch, not a plain `Error` to
+    // substring-match.
+    assert!(
+        out.contains("NotAllowedError|ERR_CAPABILITY_DENIED"),
+        "stdout: {out}"
+    );
+}
+
+#[test]
+fn a_worker_granted_imports_can_import_dynamically() {
+    write("dynimport-ok-dep.mjs", "export const answer = 42;");
+    let out = run(
+        "dynimport-ok",
+        r#"
+        const m = await import("./dynimport-ok-dep.mjs");
+        postMessage("dynamic ok: " + m.answer);
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["imports"],
+        });
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        w.onerror = (e) => { console.log("err:", e.message); e.preventDefault(); };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "dynamic ok: 42");
+}
+
+#[test]
 fn deny_workers_refuses_the_spawn() {
     let out = run(
         "denied",

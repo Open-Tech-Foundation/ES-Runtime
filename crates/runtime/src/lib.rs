@@ -80,6 +80,17 @@ pub enum Error {
     /// building a module graph ([`Runtime::load_module_source`]).
     #[error("module loading failed: {0}")]
     ModuleLoad(String),
+
+    /// An import was refused because the agent lacks the `FileSystem`
+    /// capability, worded for the agent that hit it — see
+    /// [`Runtime::require_module_capability`].
+    ///
+    /// Separate from [`Common`](Self::Common) only to carry that wording: it
+    /// surfaces as the same `NotAllowedError` with the same
+    /// [`ErrorCode::PermissionDenied`](es_runtime_common::ErrorCode), so
+    /// anything catching a permission failure is unaffected.
+    #[error("{0}")]
+    ImportDenied(String),
 }
 
 impl es_runtime_common::IntoException for Error {
@@ -88,6 +99,20 @@ impl es_runtime_common::IntoException for Error {
             Error::Engine(e) => e.exception_class(),
             Error::Common(e) => e.exception_class(),
             Error::ModuleLoad(_) => es_runtime_common::ExceptionClass::Error,
+            Error::ImportDenied(_) => es_runtime_common::ExceptionClass::NOT_ALLOWED,
+        }
+    }
+
+    fn exception_code(&self) -> Option<es_runtime_common::ErrorCode> {
+        match self {
+            Error::Engine(e) => e.exception_code(),
+            Error::Common(e) => e.exception_code(),
+            Error::ModuleLoad(_) => None,
+            // The same code the bare capability denial carried, so a guest that
+            // branches on `e.code` sees no difference from the better wording.
+            Error::ImportDenied(_) => {
+                es_runtime_common::Error::CapabilityDenied(Capability::FileSystem).exception_code()
+            }
         }
     }
 }
@@ -421,6 +446,14 @@ pub struct Runtime {
     /// it — and shared with the `module_resolve_sync` op, which serves
     /// `import.meta.resolve` and is registered long before a loader exists (D41).
     module_loader: Rc<RefCell<Option<Arc<dyn ModuleLoader>>>>,
+    /// Whether this agent is a worker — it was given a [`WorkerScope`] to reach
+    /// its parent through.
+    ///
+    /// Only ever consulted to word a refusal. A worker is granted its
+    /// capabilities at the spawn rather than on the command line, so
+    /// "add `--allow-imports`" is the wrong advice inside one, and the right
+    /// advice is unreachable from where the failure happens.
+    is_worker: bool,
     /// A read-only mirror of the engine's capability set, shared with the ops
     /// that report on it (`runtime:process` `permissions`, D38).
     ///
@@ -450,6 +483,7 @@ impl Runtime {
             module_map: HashMap::new(),
             entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
+            is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
         // Register the world-touching ops, then evaluate the prelude that builds
@@ -540,6 +574,7 @@ impl Runtime {
             module_map: HashMap::new(),
             entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
+            is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
@@ -809,7 +844,7 @@ impl Runtime {
                 } else {
                     // A file / node_modules import: the capability-gated,
                     // loader-touching path.
-                    self.require_module_capability()?;
+                    self.require_module_capability(&raw)?;
                     let loader = self.loader()?;
                     let canonical = loader
                         .resolve(&raw, &referrer_spec)
@@ -880,12 +915,11 @@ impl Runtime {
                 {
                     Ok(id) => self.engine.link_dynamic_import(reqid, id)?,
                     Err(err) => {
-                        // Preserve the failure's class: a module with a syntax
-                        // error rejects import() with a SyntaxError, not Error.
-                        use es_runtime_common::IntoException;
-                        let class = err.exception_class();
-                        self.engine
-                            .reject_dynamic_import(reqid, class, &err.to_string())?;
+                        // The failure itself, so the rejection carries its class
+                        // and its code: a module with a syntax error rejects
+                        // with a `SyntaxError`, and an import refused for want
+                        // of a capability with a `NotAllowedError`.
+                        self.engine.reject_dynamic_import(reqid, &err)?;
                     }
                 }
             }
@@ -909,7 +943,7 @@ impl Runtime {
             self.engine.instantiate_module(id, &resolved)?;
             return Ok(id);
         }
-        self.require_module_capability()?;
+        self.require_module_capability(specifier)?;
         let loader = self.loader()?;
         let canonical = loader
             .resolve(specifier, referrer)
@@ -950,13 +984,29 @@ impl Runtime {
         self.engine.module_eval_state()
     }
 
-    /// Errors unless the `FileSystem` capability needed to load modules is granted.
-    fn require_module_capability(&self) -> Result<()> {
+    /// Errors unless the `FileSystem` capability needed to load modules is
+    /// granted, saying which import failed and where the grant is made.
+    ///
+    /// The bare denial — `capability denied: FileSystem (permission "imports")`
+    /// — names an internal capability and a permission the author may never
+    /// have mentioned, and says nothing about where to fix it. That matters
+    /// most inside a worker: a worker's grants are set at the spawn, in the
+    /// parent, so the one place `--allow-imports` cannot help is the one place
+    /// this is most likely to be hit — a worker's static graph is resolved by
+    /// its parent up front, so `import` works and `import()` does not.
+    fn require_module_capability(&self, specifier: &str) -> Result<()> {
         if self.engine.capabilities().contains(Capability::FileSystem) {
-            Ok(())
-        } else {
-            Err(es_runtime_common::Error::CapabilityDenied(Capability::FileSystem).into())
+            return Ok(());
         }
+        let remedy = if self.is_worker {
+            "this worker was not granted the \"imports\" permission — grant it at \
+             the spawn, new Worker(url, { permissions: [\"imports\"] })"
+        } else {
+            "the \"imports\" permission is not granted — add --allow-imports"
+        };
+        Err(Error::ImportDenied(format!(
+            "cannot import {specifier:?}: {remedy}"
+        )))
     }
 
     /// Injects the [`Waker`](std::task::Waker) the engine uses to poll pending
@@ -5797,7 +5847,23 @@ mod tests {
         let loader = MapLoader::new(&[("./a.mjs", "export const v = 1;")]);
         let err = block_on(rt.load_module_source(ENTRY, "import './a.mjs';", loader.clone()))
             .unwrap_err();
-        assert!(matches!(err, Error::Common(_)), "got {err:?}");
+        assert!(matches!(err, Error::ImportDenied(_)), "got {err:?}");
+        // Names the import that failed and where the grant is made — and stays
+        // the exception a permission failure has always been.
+        assert!(
+            err.to_string().contains(r#"cannot import "./a.mjs""#),
+            "{err}"
+        );
+        assert!(err.to_string().contains("--allow-imports"), "{err}");
+        use es_runtime_common::IntoException;
+        assert_eq!(
+            err.exception_class(),
+            es_runtime_common::ExceptionClass::NOT_ALLOWED
+        );
+        assert_eq!(
+            err.exception_code(),
+            es_runtime_common::Error::CapabilityDenied(Capability::FileSystem).exception_code()
+        );
     }
 
     #[test]

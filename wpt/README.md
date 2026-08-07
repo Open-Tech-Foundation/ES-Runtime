@@ -112,6 +112,37 @@ against it: a subtest that used to pass and now does not fails the run; one that
 starts passing is reported so the record can be updated in the same commit as the
 fix. Re-record with `--update-expectations`.
 
+## The 10 subtests that stay failing
+
+All ten are in `workers/modules/dedicated-worker-import.any.js`, and both of the
+reasons are deliberate rather than unfinished:
+
+- **Five are dynamic `import()` inside a worker the test spawned itself**
+  (`Dynamic import.`, `Nested dynamic import.`, `Static import and then dynamic
+  import.`, `Dynamic import and then static import.`, `eval(import()).`), each
+  run in both modes. A worker starts with no capabilities (D48), and a browser's
+  `new Worker(url, { type: "module" })` has no way to grant one — so a worker the
+  *test* starts holds nothing, and `import()` needs `imports`.
+
+  The worker's *static* graph still loads: its parent resolves it up front, from
+  literal specifiers in source the parent already read, with no guest code
+  running during instantiation. `import()` computes its specifier at runtime, so
+  it is a read-and-execute primitive on the worker's own authority and is gated.
+  The refusal now says where the grant is made.
+
+  These are **not** excluded in `scope.js`, by that file's own rule: the tests
+  are applicable, and it is a judgment call that they fail — the same treatment
+  `data:`/`blob:` worker URLs get. Counting them keeps the number honest.
+
+- **The file's harness status is `ERROR`** because two of its cases are
+  cross-origin (`*-remote-origin-*.sub.js`) and import
+  `https://{{domains[www1]}}:{{ports[https][0]}}/…`. A `.sub.js` file is a
+  template the WPT *server* substitutes; with no server the placeholders survive
+  into the specifier. Remote modules are a stated non-goal either way, so these
+  can never pass here. (They used to be reported as a missing npm package, since
+  an unsubstituted URL fails to parse as one and fell through to the
+  `node_modules` walk. Now they say what they are.)
+
 ## Runtime bugs this runner found
 
 Building it turned up four, all now fixed and recorded in `CHANGELOG.md`. Listed

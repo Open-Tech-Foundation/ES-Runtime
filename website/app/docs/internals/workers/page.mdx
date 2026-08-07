@@ -98,12 +98,20 @@ parent has to read the worker's entry module, and reading a module is what
 refusal names the flag to add. Node requires `--allow-fs-read` alongside
 `--allow-worker` for the same reason; Deno requires `--allow-read`.
 
-**Its own imports still load.** Otherwise deny-by-default would mean single-file
-workers. The static graph is loaded and linked under the *parent's* authority —
-the parent named the module and could already read it — and the capability set
-narrows to the worker's own before evaluation begins. That is safe for one
-specific reason: **instantiation runs no guest code**. Nothing the worker's
-author wrote executes under the wider set.
+**Its own static imports still load.** Otherwise deny-by-default would mean
+single-file workers. The static graph is loaded and linked under the *parent's*
+authority — the parent named the module and could already read it — and the
+capability set narrows to the worker's own before evaluation begins. That is safe
+for one specific reason: **instantiation runs no guest code**. Nothing the
+worker's author wrote executes under the wider set.
+
+**Dynamic `import()` is not the same operation**, and needs `imports` granted at
+the spawn. A static graph is literal specifiers in source the parent already
+read; `import()` computes its specifier while the worker runs — from a message,
+from input — so it reads and *executes* a file chosen at runtime, on the worker's
+own authority. Gating it is what makes "starts with nothing" mean anything, and
+the refusal names the spawn rather than `--allow-imports`, which would grant it
+to the wrong agent.
 
 Nesting works, bounded by the same chain rather than by hiding the constructor.
 Every level re-applies the rule against its *own* set: a grandchild asking for
