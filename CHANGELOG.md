@@ -15,6 +15,27 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **MessagePack carries binary data again.** `encode` wrote `nil` for a
+  `Uint8Array` and `decode` returned a plain `Array` of numbers for a `bin`
+  value, so binary — the reason to choose the format — was destroyed in both
+  directions, silently and in full. Both paths now handle the `bin` family
+  directly: a typed-array view or `ArrayBuffer` encodes as `bin` and decodes
+  back to a `Uint8Array`, and an `ext` value keeps its payload bytes.
+
+  The cause was the JSON pivot the module uses everywhere (parse to a JSON
+  string, let the guest's `JSON.parse` build the graph — measurably faster than
+  marshaling a value tree). JSON has no byte string. That pivot is kept for
+  documents that *are* JSON-shaped, which is the common case; a document
+  carrying `bin`/`ext` is detected by an exact structural scan that allocates
+  nothing, and only that document pays for a value tree.
+
+  Values with no own enumerable properties crossed the boundary as `{}` and
+  encoded as an empty map — every entry gone. A `Map` now encodes as a map, a
+  `Set` as an array, and a `Date` as its ISO-8601 string (so a `Date`
+  round-trips as a *string*, not a `Date`). A value with no representation at
+  all — a function, a symbol, a `BigInt` — now throws a `TypeError` instead of
+  being written as `nil`.
+
 - **WebCrypto key usages are enforced.** `sign`, `verify`, `encrypt`, `decrypt`,
   `deriveBits` and `deriveKey` ignored `key.usages` entirely: a key imported for
   `["verify"]` would sign, an encrypt-only key would decrypt. They now throw

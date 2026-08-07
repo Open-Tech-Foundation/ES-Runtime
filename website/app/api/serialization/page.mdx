@@ -75,6 +75,17 @@ Synchronous parsing, building, and validation of binary MessagePack data.
 | `MessagePack.encode(obj)` | `(object) => Uint8Array` | Serializes a JavaScript object into a MessagePack byte array. | `MessagePack.encode({ key: "value" })` |
 | `MessagePack.validate(msgpack, options?)` | `(Uint8Array, object) => boolean \| object` | Validates a MessagePack byte array. Option `detailed?` (boolean, default `false`): return `{ valid, error? }` instead of a boolean. | `MessagePack.validate(bytes, { detailed: true })` |
 
+### Type mapping
+
+| JavaScript | Wire | Decodes back as |
+| --- | --- | --- |
+| `Uint8Array`, any view, `ArrayBuffer` | `bin` | `Uint8Array` |
+| `Map` | map (keys stringified) | `object` |
+| `Set` | array | `Array` |
+| `Date` | ISO-8601 `str` | `string` |
+| function, symbol, `BigInt` | — | throws `TypeError` |
+| — | `ext` | `Uint8Array` (payload) |
+
 ## Protobuf
 
 Schema-aware Protobuf decoding and encoding. Pure-JS and reflective: the `.proto`

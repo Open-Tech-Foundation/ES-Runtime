@@ -1771,6 +1771,20 @@ For binary formats like MessagePack, the namespace is slightly different:
 | `MessagePack.encode(obj)` | Serializes a JavaScript object into a MessagePack `Uint8Array`. |
 | `MessagePack.validate(bytes, opts?)` | Validates the given byte array. |
 
+**MessagePack type mapping.** A `Uint8Array` (and any other typed-array view,
+and an `ArrayBuffer`) encodes as the **`bin`** family and decodes back to a
+`Uint8Array` — binary is the reason to reach for the format, so it round-trips
+rather than degrading to an array of numbers. An `ext` value decodes to its
+payload bytes; there is no JS type that corresponds to one, and inventing a
+wrapper would make it indistinguishable from real data.
+
+Values with no own enumerable properties are converted rather than flattened to
+`{}`: a `Map` encodes as a map (keys stringified), a `Set` as an array, and a
+`Date` as its ISO-8601 string — so a `Date` **round-trips as a string**, not as
+a `Date`. Anything with no MessagePack representation at all (a function, a
+symbol, a `BigInt`) **throws** a `TypeError`; the encoder never substitutes
+`nil` for a value it could not represent.
+
 For JSONL, it provides transform streams under the `JSONL` namespace:
 
 | Export | Description |

@@ -33,10 +33,47 @@ export const YAML = {
   build: (obj: unknown) => yaml_build(obj),
 };
 
+// Values that cross to the host as an *empty object* because they carry no own
+// enumerable properties — a `Map`, a `Set`, an `ArrayBuffer`. Encoding those as
+// `{}` is silent data loss, so the ones MessagePack can carry faithfully are
+// converted to a shape that survives, and the rest are refused by the encoder.
+//
+// Only containers are walked, and only on the encode path.
+function toEncodable(value: unknown, depth = 0): unknown {
+  if (depth > 256) throw new RangeError("MessagePack: value nests too deeply to encode");
+  if (value === null || typeof value !== "object") return value;
+  if (value instanceof Uint8Array) return value;
+  // Any other view, and a bare buffer, become bytes — this is a binary format.
+  if (ArrayBuffer.isView(value)) {
+    const v = value as ArrayBufferView;
+    return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  }
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (value instanceof Map) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of value) out[String(k)] = toEncodable(v, depth + 1);
+    return out;
+  }
+  if (value instanceof Set) return [...value].map((v) => toEncodable(v, depth + 1));
+  if (Array.isArray(value)) return value.map((v) => toEncodable(v, depth + 1));
+  if (value instanceof Date) return value.toISOString();
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(value)) out[k] = toEncodable((value as Record<string, unknown>)[k], depth + 1);
+  return out;
+}
+
 export const MessagePack = {
   validate: (msgpack: Uint8Array, options?: ValidateOptions) => validateWith(msgpack_validate, msgpack, options),
-  decode: (msgpack: Uint8Array) => JSON.parse(msgpack_parse(msgpack)),
-  encode: (obj: unknown) => msgpack_build(obj),
+  // The host returns a JSON *string* for a JSON-shaped document — the fast
+  // pivot, parsed here — and the decoded value itself when the document
+  // carries `bin`/`ext`, which JSON cannot represent. A string result is
+  // therefore always JSON to parse, never a decoded top-level string: that
+  // case arrives pre-decoded.
+  decode: (msgpack: Uint8Array) => {
+    const decoded = msgpack_parse(msgpack);
+    return typeof decoded === "string" ? JSON.parse(decoded) : decoded;
+  },
+  encode: (obj: unknown) => msgpack_build(toEncodable(obj)),
 };
 
 class JSONLDecoderStream extends TransformStream {

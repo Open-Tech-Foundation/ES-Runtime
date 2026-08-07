@@ -178,3 +178,77 @@ assertThrows(() => MessagePack.decode(invalidMsgpack), "MessagePack decode inval
 
 console.log("MessagePack tests passed!");
 });
+
+// ---- MessagePack binary fidelity -------------------------------------------
+//
+// The `bin` family is the reason to choose a binary format, and it used to be
+// destroyed in both directions: `encode` wrote `nil` for a `Uint8Array` (the
+// whole payload gone, silently) and `decode` returned a plain `Array` of
+// numbers for a `bin` value, so nothing round-tripped and foreign MessagePack
+// lost its type.
+test("MessagePack round-trips binary data", async () => {
+  const { MessagePack } = await import("runtime:serialization");
+  const bytes = new Uint8Array([0, 1, 254, 255]);
+
+  const encoded = MessagePack.encode(bytes);
+  assertEquals(encoded[0], 0xc4, "a Uint8Array must encode as the bin family, not nil");
+  const back = MessagePack.decode(encoded);
+  assert(back instanceof Uint8Array, "bin must decode to a Uint8Array");
+  assertEquals([...back].join(), [...bytes].join());
+
+  // …nested, where the containing document is otherwise JSON-shaped.
+  const doc = { name: "blob", data: new Uint8Array([9, 8, 7]), n: 1 };
+  const rt = MessagePack.decode(MessagePack.encode(doc));
+  assert(rt.data instanceof Uint8Array, "nested bin must survive as bytes");
+  assertEquals([...rt.data].join(), "9,8,7");
+  assertEquals(rt.name, "blob");
+  assertEquals(rt.n, 1);
+});
+
+test("MessagePack decodes foreign bin and ext without flattening them", async () => {
+  const { MessagePack } = await import("runtime:serialization");
+  // Hand-built: bin8 of three bytes, and fixext1 of type 5.
+  const bin = MessagePack.decode(new Uint8Array([0xc4, 0x03, 1, 2, 3]));
+  assert(bin instanceof Uint8Array, "hand-built bin8 must decode to bytes");
+  assertEquals([...bin].join(), "1,2,3");
+  const ext = MessagePack.decode(new Uint8Array([0xd4, 0x05, 0x42]));
+  assert(ext instanceof Uint8Array, "an ext payload must be kept");
+  assertEquals([...ext].join(), "66");
+});
+
+test("MessagePack keeps values that carry no enumerable properties", async () => {
+  const { MessagePack } = await import("runtime:serialization");
+  const rt = (v) => MessagePack.decode(MessagePack.encode(v));
+  // Each of these used to cross the boundary as `{}` and encode as an empty
+  // map — every entry silently dropped.
+  assertEquals(JSON.stringify(rt(new Map([["a", 1]]))), '{"a":1}');
+  assertEquals(JSON.stringify(rt(new Set([1, 2]))), "[1,2]");
+  assertEquals(rt(new Date(0)), "1970-01-01T00:00:00.000Z");
+  const buf = rt(new Uint8Array([7]).buffer);
+  assert(buf instanceof Uint8Array, "an ArrayBuffer must encode as bytes");
+  assertEquals([...buf].join(), "7");
+});
+
+test("MessagePack refuses a value it cannot represent instead of writing nil", async () => {
+  const { MessagePack } = await import("runtime:serialization");
+  // Silently encoding these as nil is what made the data loss invisible.
+  assertThrows(() => MessagePack.encode(() => {}), "TypeError");
+  assertThrows(() => MessagePack.encode(1n), "TypeError");
+});
+
+test("MessagePack still round-trips the JSON-shaped documents on the fast path", async () => {
+  const { MessagePack } = await import("runtime:serialization");
+  // No bin anywhere, so this takes the JSON pivot; the numeric forms are the
+  // ones the encoder picks per width.
+  const doc = {
+    s: "héllo 😀", t: true, f: false, nil: null,
+    ints: [0, 127, 128, 255, 256, 65535, 65536, 4294967296, -1, -32, -33, -128, -32768, -2147483648],
+    float: 1.5,
+    nested: { a: [{ b: "c" }] },
+  };
+  assertEquals(JSON.stringify(MessagePack.decode(MessagePack.encode(doc))), JSON.stringify(doc));
+  // A string long enough to leave the fixstr range, and an empty container.
+  assertEquals(MessagePack.decode(MessagePack.encode("x".repeat(40000))).length, 40000);
+  assertEquals(JSON.stringify(MessagePack.decode(MessagePack.encode({}))), "{}");
+  assertEquals(JSON.stringify(MessagePack.decode(MessagePack.encode([]))), "[]");
+});

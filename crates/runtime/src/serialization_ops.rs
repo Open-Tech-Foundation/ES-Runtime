@@ -530,6 +530,24 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
             None => return Err(OpError::type_error("msgpack_parse expects a Uint8Array")),
         };
 
+        // JSON is the fast pivot (a string the guest's `JSON.parse` builds from,
+        // which beats marshaling a value tree across the boundary) but it has no
+        // byte string: routing `bin` through it turned every binary payload into
+        // an array of numbers. So the pivot is kept for documents that are
+        // JSON-shaped, and only a document that actually carries `bin`/`ext`
+        // pays for the value tree.
+        match crate::msgpack::scan_binary(msgpack_bytes) {
+            Ok(true) => {
+                return crate::msgpack::read_value(msgpack_bytes).map_err(|e| {
+                    OpError::new(ExceptionClass::SyntaxError, format!("Parse failed: {e}"))
+                });
+            }
+            Ok(false) => {}
+            // Malformed input: let the JSON path below produce the error, so the
+            // message stays the one callers already match on.
+            Err(_) => {}
+        }
+
         let mut deserializer = rmp_serde::Deserializer::new(msgpack_bytes);
         // Pre-allocate buffer aiming for an average 2x size increase
         let mut out = Vec::with_capacity(msgpack_bytes.len() * 2);
@@ -564,9 +582,11 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
     engine.register_op(OpDecl::sync("msgpack_build", |mut args| {
         let val = args.drain(..).next().unwrap_or(Value::Null);
-        let json_val = value_to_json(val);
-
-        match rmp_serde::to_vec_named(&json_val) {
+        // Encoded straight from the value tree rather than through
+        // `serde_json::Value`, which has no byte string: a `Uint8Array` used to
+        // reach the encoder as JSON `null` and go out as `nil`, silently losing
+        // the payload in the one format chosen for carrying it.
+        match crate::msgpack::write_value(&val) {
             Ok(bytes) => Ok(Value::Bytes(bytes)),
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }

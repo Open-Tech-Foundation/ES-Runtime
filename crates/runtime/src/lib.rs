@@ -28,6 +28,7 @@ mod fs_ops;
 pub mod fuzz;
 mod http_ops;
 mod module_ops;
+mod msgpack;
 mod net_ops;
 mod prelude;
 mod process_ops;

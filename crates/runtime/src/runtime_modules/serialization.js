@@ -2804,10 +2804,43 @@ var YAML = {
   parse: (yaml) => yaml_parse(yaml),
   build: (obj) => yaml_build(obj)
 };
+function toEncodable(value, depth = 0) {
+  if (depth > 256)
+    throw new RangeError("MessagePack: value nests too deeply to encode");
+  if (value === null || typeof value !== "object")
+    return value;
+  if (value instanceof Uint8Array)
+    return value;
+  if (ArrayBuffer.isView(value)) {
+    const v = value;
+    return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  }
+  if (value instanceof ArrayBuffer)
+    return new Uint8Array(value);
+  if (value instanceof Map) {
+    const out2 = {};
+    for (const [k, v] of value)
+      out2[String(k)] = toEncodable(v, depth + 1);
+    return out2;
+  }
+  if (value instanceof Set)
+    return [...value].map((v) => toEncodable(v, depth + 1));
+  if (Array.isArray(value))
+    return value.map((v) => toEncodable(v, depth + 1));
+  if (value instanceof Date)
+    return value.toISOString();
+  const out = {};
+  for (const k of Object.keys(value))
+    out[k] = toEncodable(value[k], depth + 1);
+  return out;
+}
 var MessagePack = {
   validate: (msgpack, options) => validateWith(msgpack_validate, msgpack, options),
-  decode: (msgpack) => JSON.parse(msgpack_parse(msgpack)),
-  encode: (obj) => msgpack_build(obj)
+  decode: (msgpack) => {
+    const decoded = msgpack_parse(msgpack);
+    return typeof decoded === "string" ? JSON.parse(decoded) : decoded;
+  },
+  encode: (obj) => msgpack_build(toEncodable(obj))
 };
 
 class JSONLDecoderStream extends TransformStream {
