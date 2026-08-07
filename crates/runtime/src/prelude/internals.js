@@ -61,6 +61,35 @@
       // may be transferred and may not be cloned, and by the time the codec
       // runs the transfer list is the only thing that distinguishes them.
       transferringStreams: new Set(),
+      // The one normalization of a body-stream chunk to bytes, shared by every
+      // place that drains one: `Response`/`Request` body consumption and the
+      // `fetch` upload pump (fetch.js), and the `serve` download pump
+      // (runtime_modules/http.js).
+      //
+      // It lives here because it used to be written out at each of those sites
+      // and one copy was wrong: body consumption sized chunks by `.length`,
+      // which is an element count rather than a byte count, and never checked
+      // the type at all. A string chunk was accepted and `Uint8Array.set`
+      // coerced each character to `NaN`, so `new Response(stream).text()`
+      // returned that many NUL bytes; a `Uint32Array` reported a quarter of its
+      // bytes; a bare `ArrayBuffer` has no `.length` at all and silently became
+      // empty. Three copies is how they drifted, so now there is one.
+      //
+      // A view or an `ArrayBuffer` is accepted and converted rather than
+      // refused. Fetch says a body stream yields `Uint8Array` and Node and Deno
+      // hold to that, but the upload pump here has always taken any
+      // `BufferSource`, and a chunk that works going out and throws coming back
+      // would be the more surprising rule. Anything that is not bytes at all
+      // throws, as it does in all three.
+      toBodyChunk(value) {
+        if (value instanceof Uint8Array) return value;
+        if (ArrayBuffer.isView(value)) {
+          return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+        }
+        if (value instanceof ArrayBuffer) return new Uint8Array(value);
+        throw new TypeError("ReadableStream body must yield Uint8Array chunks");
+      },
+
       // channel.js's "you have been transferred away" hook, called by
       // structured-clone.js once serialization has succeeded.
       portDetach: Symbol("MessagePort detach"),

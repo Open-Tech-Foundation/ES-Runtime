@@ -171,12 +171,7 @@ async function pumpResponseBody(stream, id, trailers) {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
-      let chunk;
-      if (value instanceof Uint8Array) chunk = value;
-      else if (ArrayBuffer.isView(value)) {
-        chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-      } else if (value instanceof ArrayBuffer) chunk = new Uint8Array(value);
-      else throw new TypeError("ReadableStream body must yield Uint8Array chunks");
+      const chunk = __internal.toBodyChunk(value);
       const accepted = await ops.http_response_body_push(id, chunk);
       if (!accepted) break; // host receiver gone (client disconnected)
     }
@@ -192,6 +187,13 @@ async function pumpResponseBody(stream, id, trailers) {
     }
     await ops.http_response_body_close(id, null, pairs);
   } catch (e) {
+    // Aborting the connection is the honest signal — the status line is already
+    // on the wire, so there is no status left to change and a clean close would
+    // claim a truncated body was complete. But the abort reaches the *client*,
+    // and left the server's own author nothing to go on: `serve` has no error
+    // hook, so a handler whose stream yields a bad chunk saw a connection reset
+    // and no reason for it. Reported so it surfaces where uncaught errors do.
+    reportError(e);
     await ops.http_response_body_close(id, String((e && e.message) || e));
   } finally {
     if (reader) reader.releaseLock();

@@ -202,3 +202,45 @@ fn a_bind_failure_handled_through_accept_does_not_also_fail_the_run() {
         stderr(&out)
     );
 }
+
+/// A response body stream that yields something other than bytes.
+///
+/// Aborting the connection is the honest outcome — the status line is already on
+/// the wire, so there is no status left to change and a clean close would claim
+/// a truncated body was complete. Deno hangs on this and Bun closes cleanly with
+/// a 200 and a silently truncated body, so the abort is the right half.
+///
+/// What was missing is the other half: `serve` has no error hook, so the abort
+/// reached the client and left the server's own author a connection reset with
+/// no reason attached. The cause is now reported where uncaught errors go.
+#[test]
+fn a_bad_response_body_chunk_aborts_the_connection_and_reports_why() {
+    let out = esrun(
+        r#"
+import { serve } from "runtime:http";
+const server = serve({ port: 0, hostname: "127.0.0.1" }, () =>
+  new Response(new ReadableStream({
+    start(c) { c.enqueue(new TextEncoder().encode("a")); c.enqueue(42); c.close(); },
+  })));
+const { port } = await server.addr;
+try {
+  const r = await fetch(`http://127.0.0.1:${port}/`);
+  await r.text();
+  console.log("client=no error");
+} catch (e) {
+  console.log("client=" + e.name);
+}
+await server.stop();
+"#,
+    );
+    let err = stderr(&out);
+    let s = stdout(&out);
+    assert!(
+        s.contains("client=TypeError"),
+        "the client must see the stream fail rather than a truncated success:\n{s}"
+    );
+    assert!(
+        err.contains("ReadableStream body must yield Uint8Array chunks"),
+        "the server's author must be told why the connection was aborted:\n{err}"
+    );
+}

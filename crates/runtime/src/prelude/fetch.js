@@ -276,16 +276,25 @@
       const reader = state.stream.getReader();
       const chunks = [];
       let total = 0;
-      let x;
-      while (!(x = await reader.read()).done) {
-        chunks.push(x.value);
-        total += x.value.length;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          // Sized by `byteLength`, never `.length`: on any view but a
+          // Uint8Array those differ, and on an ArrayBuffer `.length` does not
+          // exist at all.
+          const chunk = __internal.toBodyChunk(value);
+          chunks.push(chunk);
+          total += chunk.byteLength;
+        }
+      } finally {
+        reader.releaseLock();
       }
       const out = new Uint8Array(total);
       let off = 0;
       for (const c of chunks) {
         out.set(c, off);
-        off += c.length;
+        off += c.byteLength;
       }
       return out;
     }
@@ -772,12 +781,7 @@
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        let chunk;
-        if (value instanceof Uint8Array) chunk = value;
-        else if (ArrayBuffer.isView(value)) {
-          chunk = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-        } else if (value instanceof ArrayBuffer) chunk = new Uint8Array(value);
-        else throw new TypeError("ReadableStream body must yield Uint8Array chunks");
+        const chunk = __internal.toBodyChunk(value);
         const accepted = await ops.fetch_request_body_push(id, chunk);
         if (!accepted) break; // host receiver gone (request finished/failed)
       }

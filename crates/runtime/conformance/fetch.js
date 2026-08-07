@@ -347,3 +347,40 @@ test("formData() rejects a body it cannot parse", async () => {
   }
   assertEquals(name, "TypeError");
 });
+
+test("a body stream chunk that is not bytes is a TypeError", async () => {
+  // Consuming a body sized chunks by `.length` and never checked their type, so
+  // a string chunk was accepted and `Uint8Array.set` coerced each character to
+  // NaN — `text()` returned that many NUL bytes rather than failing.
+  const mk = (chunks) => new ReadableStream({
+    start(c) { for (const x of chunks) c.enqueue(x); c.close(); },
+  });
+  const bytes = new TextEncoder().encode("a");
+  for (const chunk of ["hello", 42, { x: 1 }, null, undefined, true]) {
+    let name = null;
+    try { await new Response(mk([bytes, chunk])).text(); } catch (e) { name = e.name; }
+    assertEquals(name, "TypeError");
+  }
+});
+
+test("a body stream chunk is measured in bytes, not elements", async () => {
+  const mk = (chunks) => new ReadableStream({
+    start(c) { for (const x of chunks) c.enqueue(x); c.close(); },
+  });
+  // `.length` on a Uint32Array is its element count, a quarter of its bytes, and
+  // an ArrayBuffer has no `.length` at all — it used to arrive empty.
+  const u32 = new Uint32Array([1, 2]);
+  const out = new Uint8Array(await new Response(mk([u32])).arrayBuffer());
+  assertEquals(out.length, 8);
+
+  const buf = new Uint8Array([9, 9, 9]).buffer;
+  const fromBuffer = new Uint8Array(await new Response(mk([buf])).arrayBuffer());
+  assertEquals(fromBuffer.length, 3);
+
+  // A view onto part of a buffer contributes only its own window.
+  const view = new Uint8Array([1, 2, 3, 4, 5]).subarray(1, 3);
+  const fromView = new Uint8Array(await new Response(mk([view])).arrayBuffer());
+  assertEquals(fromView.length, 2);
+  assertEquals(fromView[0], 2);
+  assertEquals(fromView[1], 3);
+});

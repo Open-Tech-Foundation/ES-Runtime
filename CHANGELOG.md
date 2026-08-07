@@ -29,6 +29,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A body stream chunk that is not bytes is a `TypeError`.** Draining a body
+  sized each chunk by `.length` and never checked its type. A string chunk was
+  accepted and `Uint8Array.set` coerced every character to `NaN`, so
+  `new Response(stream).text()` returned that many **NUL bytes** instead of
+  failing; a number or object surfaced an internal `RangeError` about offsets.
+  The same `.length` is an element count, not a byte count, so a `Uint32Array`
+  chunk contributed a quarter of its bytes and a bare `ArrayBuffer` — which has
+  no `.length` — arrived **empty**. Chunks are now measured in bytes and
+  validated, matching what the `fetch` upload pump and the `serve` download pump
+  already did; the three had drifted because each wrote the conversion out
+  itself, and there is now one shared implementation.
+
+- **A failing response body says why.** `serve` aborts the connection when a
+  body stream yields a bad chunk, which is right — the status line is already on
+  the wire, and closing cleanly would claim a truncated body was complete — but
+  `serve` has no error hook, so the abort reached the client and left the
+  server's own author a connection reset with nothing to go on. The cause is now
+  reported where uncaught errors are.
+
 - **A trailing `/` no longer opens a file.** POSIX reads `file.txt/` as "this
   name must be a directory" and the kernel refuses it with `ENOTDIR`, which is
   what Node and Bun surface. Path resolution here canonicalizes, and that drops
