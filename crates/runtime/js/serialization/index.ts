@@ -4,6 +4,7 @@
 // XML/YAML/TOML/JSONL/MessagePack are thin wrappers over the Rust host ops;
 // Protobuf is a pure-JS reflective implementation (./protobuf).
 export { Protobuf } from "./protobuf/schema.js";
+import { Protobuf as ProtobufDefault } from "./protobuf/schema.js";
 
 const ops = (globalThis as unknown as { __ops: Record<string, (...a: any[]) => any> }).__ops;
 const {
@@ -159,4 +160,17 @@ export const XML = {
   parse: (xml: string) => xml_parse(xml),
   build: (obj: unknown) => xml_build(obj),
   DecoderStream: XMLDecoderStream,
+};
+
+// The aggregate default, so `import serialization from "runtime:serialization"`
+// works — every other `runtime:` module offers one, and this was the only
+// exception, which made the namespace inconsistent for no reason a caller could
+// see.
+export default {
+  XML,
+  YAML,
+  TOML,
+  JSONL,
+  MessagePack,
+  Protobuf: ProtobufDefault,
 };

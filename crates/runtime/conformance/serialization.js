@@ -302,3 +302,20 @@ test("XML requires a root element", async () => {
   // always used for one — the point here is only that it *is* a root.
   assertEquals(JSON.stringify(XML.parse("<r/>")), '{"r":""}');
 });
+
+test("runtime:serialization has a default export like every other runtime: module", async () => {
+  // It was the only one of the nine without one, so
+  // `import serialization from "runtime:serialization"` was a SyntaxError for
+  // no reason a caller could see.
+  const mod = await import("runtime:serialization");
+  assert(mod.default !== undefined, "a default export must exist");
+  assertEquals(
+    Object.keys(mod.default).sort().join(","),
+    "JSONL,MessagePack,Protobuf,TOML,XML,YAML",
+  );
+  // The aggregate carries the real namespaces, not copies of their names.
+  assertEquals(mod.default.YAML, mod.YAML);
+  assertEquals(mod.default.XML, mod.XML);
+  assertEquals(mod.default.Protobuf, mod.Protobuf);
+  assertEquals(typeof mod.default.MessagePack.encode, "function");
+});

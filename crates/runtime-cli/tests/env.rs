@@ -191,3 +191,46 @@ fn secret_key_convention_covers_the_full_pattern_set() {
         assert!(s.contains(plain), "expected {plain}\n{s}");
     }
 }
+
+/// Masking applies to what a program *writes*, not only to the host snapshot.
+///
+/// `env.MY_API_KEY = "…"` — how a program threads a value it just fetched down
+/// to a child — stored the string raw, so the same key that arrives masked from
+/// the environment stayed unmasked when the program set it, and leaked in a log
+/// line or a `JSON.stringify` like any other value.
+#[test]
+fn a_secret_key_assigned_at_runtime_is_masked_too() {
+    let app = write(
+        "runtime-secret.mjs",
+        r#"
+import { env, unmask, Secret } from "runtime:process";
+env.MY_API_KEY = "secret_123";
+env.PLAIN_VALUE = "not a secret";
+console.log("wrapped=" + (env.MY_API_KEY instanceof Secret));
+console.log("string=" + String(env.MY_API_KEY));
+console.log("json=" + JSON.stringify({ k: env.MY_API_KEY }));
+console.log("template=" + `${env.MY_API_KEY}`);
+// The real value is still reachable deliberately…
+console.log("unmask=" + unmask(env.MY_API_KEY));
+// …a key that is not secret-bearing is untouched…
+console.log("plain=" + env.PLAIN_VALUE);
+// …and an already-wrapped value is not wrapped twice.
+env.OTHER_TOKEN = new Secret("wrapped once");
+console.log("double=" + unmask(env.OTHER_TOKEN));
+"#,
+    );
+    let out = esrun().arg(&app).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "wrapped=true",
+        "string=[redacted]",
+        "json={\"k\":\"[redacted]\"}",
+        "template=[redacted]",
+        "unmask=secret_123",
+        "plain=not a secret",
+        "double=wrapped once",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}

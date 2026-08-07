@@ -2768,7 +2768,6 @@ class Schema {
   }
 }
 var Protobuf = { Schema };
-
 // serialization/index.ts
 var ops = globalThis.__ops;
 var {
@@ -2940,7 +2939,16 @@ var XML = {
   build: (obj) => xml_build(obj),
   DecoderStream: XMLDecoderStream
 };
+var serialization_default = {
+  XML,
+  YAML,
+  TOML,
+  JSONL,
+  MessagePack,
+  Protobuf
+};
 export {
+  serialization_default as default,
   YAML,
   XML,
   TOML,

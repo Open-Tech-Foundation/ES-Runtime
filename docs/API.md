@@ -1042,7 +1042,7 @@ environment wins on a conflict unless `--env-override` is passed, and later
 
 | Export            | Type                                | Description                                                                                                                                                                              |
 | ----------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Secret-keyed values are `Secret` wrappers (see below). |
+| `env`             | `Record<string, string \| Secret>`  | Environment variables as a **mutable in-process object**, seeded from a host snapshot taken at module evaluation (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do **not** propagate to the host process or to child processes. Secret-keyed values are `Secret` wrappers (see below) — including ones the program **assigns at runtime**, so `env.MY_API_KEY = "…"` masks on the same convention the snapshot does. |
 | `args`            | `readonly string[]`                 | Program arguments after the runtime binary and the script (or `-e` snippet). **Frozen.** Excludes the executable and script path.                                                          |
 | `platform`        | `string`                            | Host OS — the OS-native value (`std::env::consts::OS`): `"linux"`, `"macos"`, `"windows"`, …                                                                                              |
 | `arch`            | `string`                            | Host CPU architecture — the OS-native value (`std::env::consts::ARCH`): `"x86_64"`, `"aarch64"`, `"arm"`, …                                                                               |
@@ -1831,6 +1831,12 @@ For XML, it also provides a `DecoderStream`:
 | `new XML.DecoderStream()` | A `TransformStream` that parses XML chunks. |
 
 For Protobuf, schemas are compiled from `.proto` source at runtime (pure JS, reflective — proto3 and editions 2023/2024; proto2-only constructs are rejected):
+
+| Export | Description |
+| --- | --- |
+| `default` | An aggregate of all named exports (`XML`, `YAML`, `TOML`, `JSONL`, `MessagePack`, `Protobuf`), as every other `runtime:` module provides. |
+
+For Protobuf, schemas are compiled from `.proto` source at runtime:
 
 | Export | Description |
 | --- | --- |

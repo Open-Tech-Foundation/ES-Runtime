@@ -26,6 +26,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Secret masking applies to values the program assigns.** `env.MY_API_KEY =
+  "…"` — how a program threads a value it just fetched down to a child — stored
+  the string raw, so a key that arrives masked from the host environment stayed
+  an unmasked string when the program set it, and leaked in a log line, a
+  template or a `JSON.stringify` like any other value. The same key convention
+  now applies on write; a value that is already a `Secret` is not wrapped twice,
+  and `unmask` still reveals it.
+
+- **`runtime:serialization` has a default export.** It was the only one of the
+  nine `runtime:` modules without one, so `import serialization from
+  "runtime:serialization"` was a `SyntaxError` for no reason a caller could see.
+
 - **Failures are reported when they happen, not at exit.** An unhandled
   rejection or a throw out of a timer was collected and printed only once the
   drive loop returned — and a listening server keeps that loop alive, so a

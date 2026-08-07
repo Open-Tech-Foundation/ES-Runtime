@@ -68,7 +68,7 @@ function unmask(value) {
 // *first access* rather than at module evaluation. Under `--deny-env` this
 // module still imports (and `exit`, `onSignal`, `permissions` still work);
 // touching `env`/`args` is what throws.
-function seeded(target, fill) {
+function seeded(target, fill, onWrite) {
   let done = false;
   const seed = () => {
     if (done) return;
@@ -81,7 +81,9 @@ function seeded(target, fill) {
   // is indistinguishable from one built eagerly.
   return new Proxy(target, {
     get: (t, k, r) => (seed(), Reflect.get(t, k, r)),
-    set: (t, k, v, r) => (seed(), Reflect.set(t, k, v, r)),
+    set: (t, k, v, r) => (
+      seed(), Reflect.set(t, k, onWrite === undefined ? v : onWrite(k, v), r)
+    ),
     has: (t, k) => (seed(), Reflect.has(t, k)),
     deleteProperty: (t, k) => (seed(), Reflect.deleteProperty(t, k)),
     ownKeys: (t) => (seed(), Reflect.ownKeys(t)),
@@ -113,9 +115,21 @@ const env = seeded({}, (target) => {
   for (const [key, value] of provided ?? ops.process_env()) {
     // Masked by the same key convention either way. A parent that unwrapped a
     // Secret to pass it on does not thereby unmask it for the worker.
-    target[key] = SECRET_KEY.test(key) ? new Secret(value) : value;
+    target[key] = maskIfSecret(key, value);
   }
-});
+}, maskIfSecret);
+
+// The masking rule, applied to the host snapshot *and* to anything written
+// later. A key assigned at runtime — `env.MY_API_KEY = "…"`, which is how a
+// program threads a value it just fetched down to a child — was stored raw, so
+// the same name that arrives masked from the environment stayed a plain string
+// when the program set it, and leaked in a log line or a `JSON.stringify` like
+// any other. A value that is *already* a Secret is left alone rather than
+// wrapped twice.
+function maskIfSecret(key, value) {
+  if (value instanceof Secret) return value;
+  return SECRET_KEY.test(String(key)) ? new Secret(value) : value;
+}
 
 // `args`: the program arguments after the runtime binary and the script/-e code.
 // Frozen once seeded, so it is read-only exactly as an eager `Object.freeze`
