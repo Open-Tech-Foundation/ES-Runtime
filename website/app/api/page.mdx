@@ -26,10 +26,11 @@ import { env, args } from "runtime:process";
 | Module | Status | Capability |
 | --- | --- | --- |
 | [`runtime:process`](/api/process) | Available | Env / Signals |
-| [`runtime:path`](/api/path) | Available | Env |
+| [`runtime:path`](/api/path) | Available | Env (only to read `cwd()`) |
 | [`runtime:fs`](/api/fs) | Available | FileRead / FileWrite |
 | [`runtime:net`](/api/net) | Available | Net / NetListen |
 | [`runtime:http`](/api/http) | Available | NetListen |
 | [`runtime:websocket`](/api/websocket#server) | Available | NetListen |
 | [`runtime:serialization`](/api/serialization) | Available | — |
 | [`runtime:system`](/api/system) | Available | Run |
+| [`runtime:wasi`](/docs/internals/wasi) | Available | — to construct; the host providers it reaches are gated |

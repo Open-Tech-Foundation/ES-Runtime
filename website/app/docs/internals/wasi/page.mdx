@@ -1,0 +1,164 @@
+---
+title: "Internals: WASI"
+description: How runtime:wasi runs a preview-1 module — where its authority comes from, why every import is defined, and what the sandbox actually is.
+---
+
+# Internals: WASI
+
+`runtime:wasi` implements **WASI preview 1** (`wasi_snapshot_preview1`) in
+JavaScript, over the same host providers everything else uses. This page is
+about where a wasm module's authority comes from, what the syscalls do underneath,
+and which parts are deliberately refused.
+
+`runtime:wasi` is the one standard module with no reference page of its own yet,
+so this page carries the constructor's shape as well as the reasoning. The
+[module index](/api) lists it alongside the rest.
+
+## A WASI instance has no ambient authority
+
+This is the design decision everything else follows from. Node's `node:wasi`
+can hand a module the host's real `process.argv` and `process.env`; this one
+cannot, because there is nothing to hand it — **arguments, environment and
+directories come from the constructor and nowhere else**:
+
+```js
+const wasi = new WASI({
+  args: ["prog", "--flag"],
+  env: { LOG: "debug" },
+  preopens: { "/sandbox": "./data" },   // the only files it can reach
+});
+```
+
+A `WASI` therefore needs **no capability to construct**, and inherits nothing.
+Forwarding the real environment is possible but has to be written down —
+`env: { ...realEnv }` from the `Env`-gated [`runtime:process`](/api/process) —
+which puts the grant at the call site where it can be read.
+
+Node's own documentation is careful to say its threat model "does not provide
+secure sandboxing" and that WASI capabilities there "do not form a security
+model". Here the sandbox is the runtime's own: a module reaches exactly as far
+as the imports you hand it, and no further.
+
+## The surface
+
+| | |
+| --- | --- |
+| `new WASI({ args?, env?, preopens?, version? })` | `version` must be `"preview1"`; anything else is a `TypeError`. |
+| `wasi.getImportObject()` | The `wasi_snapshot_preview1` object to instantiate with. |
+| `wasi.start(instance)` | Runs a **command** module's `_start`; returns the exit status. |
+| `wasi.initialize(instance)` | Runs a **reactor** module's `_initialize` if it exports one, leaving the instance live. |
+
+```js
+import { WASI } from "runtime:wasi";
+import { file } from "runtime:fs";
+
+const wasi = new WASI({ args: ["prog"], preopens: { "/sandbox": "./data" } });
+const { instance } = await WebAssembly.instantiate(
+  await file("./prog.wasm").bytes(),
+  wasi.getImportObject(),
+);
+const status = wasi.start(instance);
+```
+
+## The filesystem is preopens, then the same jail as everything else
+
+WASI has no absolute paths. A guest's libc walks `fd_prestat_get` from fd 3
+upward at startup, collecting the directories it was given, and every later path
+is resolved *relative to one of those fds*. So the preopen map is the whole
+namespace: a directory absent from it has no name a guest can express.
+
+Resolution happens twice, and the two checks answer different questions:
+
+**The instance refuses to leave its preopen.** A `..` that would climb above the
+anchor is rejected outright rather than clamped, so a traversal attempt is an
+error the guest sees rather than a silently rewritten path. This is what keeps
+two preopens from addressing each other.
+
+**The provider's root jail is the real boundary.** Every resolved path then goes
+through the same confinement `runtime:fs` uses — canonicalized, checked against
+the project root, re-resolved on every call — and the same `--allow-read` /
+`--allow-write` scope lists. `runtime:wasi` and `runtime:fs` are two doors onto
+one filesystem, and **a WASI guest is not a way around `--allow-read`.** A jail
+escape surfaces to the guest as `ENOTCAPABLE`.
+
+The synchronous provider exists for this module alone: WASI's syscalls return
+values, not promises, so the async filesystem cannot serve them. It is a
+separate implementation of identical rules, which is why both are tested against
+the same cases.
+
+## Every import is defined, including the ones that refuse
+
+An absent import is a `LinkError` at instantiation — which would break a program
+that merely *links* a symbol without ever calling it, and toolchains link far
+more of preview 1 than a given program uses. So all 46 functions exist, and the
+unimplemented ones return an errno instead of being missing:
+
+| | |
+| --- | --- |
+| `sock_send`, `sock_recv`, `sock_accept`, `sock_shutdown` | `ENOTCAPABLE` |
+| `path_link`, `path_symlink`, `path_readlink` | `ENOTCAPABLE` |
+| `fd_pread`, `fd_pwrite`, `fd_allocate`, `fd_renumber` | `ENOTCAPABLE` |
+| `fd_filestat_set_size`, `fd_filestat_set_times`, `path_filestat_set_times` | `ENOTCAPABLE` |
+| `poll_oneoff` | `ENOSYS` |
+
+The distinction is deliberate. `ENOTCAPABLE` says *this instance was not given
+that authority* — which is true, and is what a guest's libc turns into a
+permission error. `ENOSYS` says *the runtime does not implement this at all*,
+which is the honest answer for `poll_oneoff`: it is preview 1's event loop, and
+implementing it over a runtime whose loop belongs to the isolate is a design
+question, not a stub.
+
+Sockets are refused rather than wired to [`runtime:net`](/api/net) for the same
+reason the rest of this page gives: a WASI instance's authority is what its
+constructor was handed, and a socket API that ignored that would be a hole in
+the model, not a feature.
+
+## Clocks, randomness, stdio
+
+`clock_time_get` reads `performance.timeOrigin + performance.now()` for the
+realtime clock and `performance.now()` for the monotonic one, converted to
+nanoseconds **through `BigInt`** — a `Number` loses precision past
+2<sup>53</sup>, which a nanosecond timestamp passes in 1970 terms almost
+immediately. `random_get` fills from `crypto.getRandomValues`, so it reaches the
+same injected entropy provider as WebCrypto rather than an ambient source.
+
+**stdout and stderr are line-buffered onto the console.** WASI writes raw bytes
+with its own newlines while the console sink is line-oriented, so the bytes are
+buffered and flushed at each `\n`; a `print("a"); print("b\n")` stays one line
+rather than becoming two. Decoding uses a streaming decoder, so a multi-byte
+character split across two writes is not mangled. Anything left after the last
+newline is flushed when the program finishes, so a final unterminated write is
+not swallowed.
+
+The consequence worth knowing: a WASI module's output goes through the runtime's
+console, not to a raw file descriptor. It interleaves with `console.log` from
+the surrounding JavaScript, and an embedder's console provider sees it.
+
+## Finishing
+
+`start(instance)` runs a **command** module's `_start` and returns its exit
+status; `initialize(instance)` runs a **reactor** module's `_initialize` (if it
+exports one) and leaves the instance live for the caller to drive.
+
+`proc_exit` is not an error. It throws an internal marker that unwinds out of
+the guest and is turned back into a status — so returning from `_start` normally
+gives `0`, calling `proc_exit(3)` gives `3`, and a genuine fault still throws.
+Buffered stdio is flushed on every one of those paths.
+
+## What it costs
+
+Everything runs on the isolate's thread, synchronously. A WASI syscall is a
+JavaScript function call into a filesystem provider that blocks; a module that
+reads a large file blocks the loop while it does. This is the price of preview
+1's synchronous ABI, and it is why `poll_oneoff` is not implemented rather than
+faked.
+
+Preview 2 and the component model are not implemented. `version` accepts only
+`"preview1"` and throws a `TypeError` for anything else, rather than accepting
+the option and ignoring it.
+
+## See also
+
+- [Internals: the filesystem](/docs/internals/filesystem) — the jail these paths go through
+- [Internals: WebCrypto](/docs/internals/crypto) — the entropy provider `random_get` reaches
+- [Security model](/docs/security) — capabilities and the denial flags

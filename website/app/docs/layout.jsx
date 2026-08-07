@@ -79,6 +79,7 @@ const NAV = [
       { title: "Paths", path: "/docs/internals/path" },
       { title: "Serialization", path: "/docs/internals/serialization" },
       { title: "WebCrypto", path: "/docs/internals/crypto" },
+      { title: "WASI", path: "/docs/internals/wasi" },
     ],
   },
   {
