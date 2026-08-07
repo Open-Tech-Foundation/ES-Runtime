@@ -1768,6 +1768,10 @@ For each string format (XML, YAML, TOML), the module provides a namespace with t
 | `<Format>.build(obj)` | Serializes a JavaScript object into the given format. |
 | `<Format>.validate(data, opts?)` | Validates the given data without full allocation. `opts.detailed` provides `{ valid: boolean, error: string }`. |
 
+`XML` requires a **well-formed** document: every element closed, and no input
+left over inside an open one. A truncated document (`"<r>"`, `"<r><a>1"`) is a
+`SyntaxError` from `parse` and `false` from `validate` — the two always agree.
+
 For binary formats like MessagePack, the namespace is slightly different:
 
 | Export | Description |

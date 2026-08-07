@@ -219,7 +219,21 @@ fn parse_xml_node(
             Ok(Event::End(ref e)) if Some(e.name().as_ref()) == current_tag => {
                 break;
             }
-            Ok(Event::Eof) => break,
+            Ok(Event::Eof) => {
+                // EOF is only an ending at the top level. Inside an element it
+                // means the document stopped before the tag closed, and
+                // breaking here returned whatever had been collected so far:
+                // `<r>` parsed to `{"r":{}}` and `<r><a>1` silently lost the
+                // `1`. A mismatched end tag was already an error, so only the
+                // truncated document was getting through.
+                if let Some(tag) = current_tag {
+                    return Err(format!(
+                        "Parse failed: unexpected end of input inside <{}>",
+                        String::from_utf8_lossy(tag)
+                    ));
+                }
+                break;
+            }
             Err(e) => return Err(format!("Parse failed: {}", e)),
             _ => {}
         }
@@ -408,9 +422,24 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         };
 
         let mut reader = Reader::from_str(xml);
+        // Element depth, so an unclosed tag is caught. The reader reports a
+        // *mismatched* end tag on its own but ends a truncated document with a
+        // plain `Eof`, so `validate("<r>")` answered `true` for a document
+        // `parse` could not represent — the two now agree.
+        let mut depth: usize = 0;
         loop {
             match reader.read_event() {
-                Ok(Event::Eof) => break,
+                Ok(Event::Start(_)) => depth += 1,
+                Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+                Ok(Event::Eof) => {
+                    if depth > 0 {
+                        return Ok(Value::String(
+                            "Validation failed: unexpected end of input with unclosed elements"
+                                .into(),
+                        ));
+                    }
+                    break;
+                }
                 Err(e) => return Ok(Value::String(format!("Validation failed: {}", e))),
                 _ => (),
             }

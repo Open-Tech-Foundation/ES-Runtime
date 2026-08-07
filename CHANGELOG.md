@@ -15,6 +15,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`XML.parse` rejects a truncated document.** Reaching the end of the input
+  with elements still open ended the parse quietly, so `"<r>"` produced
+  `{"r":{}}` and `"<r><a>1"` silently dropped the `1` — a partial object
+  returned as though it were the document. It is a `SyntaxError` now, and
+  `XML.validate` agrees: it answered `true` for the same input, because it
+  only surfaced errors the reader raised and a truncated document raises none.
+  A *mismatched* end tag was already caught, so only this case got through.
+
+- **A name that cannot resolve reports `ERR_DNS`.** It reported the catch-all
+  `ERR_IO`: the classifier returns early on any I/O error carrying a specific
+  kind, and a resolver failure carries a kind with no stable name — which maps
+  to `Io` — so the check that recognises a lookup failure never ran. The
+  generic code is now a fallback rather than an early return, leaving the more
+  specific classifications (`ERR_CONNECTION_REFUSED`, `ERR_TLS`) untouched.
+
 - **`FormData` stores a `Blob` value as a `File`.** Creating an entry converts
   a plain `Blob` to a `File` named `"blob"` (the standard's "create an entry"
   step), which it was only doing when an explicit filename was passed. Without

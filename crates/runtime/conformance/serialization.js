@@ -252,3 +252,37 @@ test("MessagePack still round-trips the JSON-shaped documents on the fast path",
   assertEquals(JSON.stringify(MessagePack.decode(MessagePack.encode({}))), "{}");
   assertEquals(JSON.stringify(MessagePack.decode(MessagePack.encode([]))), "[]");
 });
+
+// ---- XML well-formedness ---------------------------------------------------
+//
+// EOF inside an open element used to end the parse quietly, so a truncated
+// document produced a partial object instead of an error: `<r>` parsed to
+// `{"r":{}}`, and `validate` agreed it was fine. A *mismatched* end tag was
+// already caught, so only the truncated case got through.
+test("XML rejects a document that ends with elements still open", async () => {
+  const { XML } = await import("runtime:serialization");
+  for (const src of ["<r>", "<r><a>", "<r><a>1</a>", "<r><a>1"]) {
+    assertThrows(() => XML.parse(src), "SyntaxError");
+    assertEquals(XML.validate(src), false, `validate ${JSON.stringify(src)}`);
+  }
+  for (const src of ["<r></x>", "</r>", '<r a="1>']) {
+    assertThrows(() => XML.parse(src), "SyntaxError");
+  }
+  assertEquals(JSON.stringify(XML.parse("<r><a>1</a></r>")), '{"r":{"a":{"$text":"1"}}}');
+  assertEquals(XML.validate("<r><a/><a/></r>"), true);
+  assertEquals(XML.validate("<r><a>1</a></r>"), true);
+});
+
+test("YAML block scalars chomp per the spec", async () => {
+  const { YAML } = await import("runtime:serialization");
+  const a = (src) => YAML.parse(src).a;
+  // Clip (the default) keeps exactly one trailing break when the source has
+  // one, and none at EOF where there is nothing to keep.
+  assertEquals(a("a: |\n  l1\n  l2\n"), "l1\nl2\n");
+  assertEquals(a("a: >\n  l1\n  l2\n"), "l1 l2\n");
+  assertEquals(a("a: |\n  l1\n  l2"), "l1\nl2");
+  assertEquals(a("a: |\n  l1\n  l2\n\n\n"), "l1\nl2\n");
+  // Strip removes it; keep retains every one.
+  assertEquals(a("a: |-\n  l1\n  l2\n"), "l1\nl2");
+  assertEquals(a("a: |+\n  l1\n  l2\n\n"), "l1\nl2\n\n");
+});

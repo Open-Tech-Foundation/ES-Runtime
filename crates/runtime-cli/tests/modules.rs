@@ -191,7 +191,7 @@ fn fetch_reports_network_failures_as_type_errors() {
     for expected in [
         "refused:TypeError:TypeError:ERR_CONNECTION_REFUSED",
         "badscheme:TypeError:TypeError:",
-        "dns:TypeError:TypeError:",
+        "dns:TypeError:TypeError:ERR_DNS",
         // The stable `code` survives the rewrap — guests branch on it.
         "loop:TypeError:TypeError:ERR_TOO_MANY_REDIRECTS",
         "redirect-error-mode:TypeError:TypeError:",

@@ -195,14 +195,22 @@ fn classify_reqwest(e: reqwest::Error) -> ProviderError {
     // Walk the source chain for the underlying io error / failure text.
     let mut source: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(&e);
     let mut chain_text = String::new();
+    // An io kind that classified to something specific wins outright. A kind
+    // with no stable name — which is what a failed name resolution surfaces as
+    // — classifies to the catch-all `Io`, and returning *that* immediately is
+    // what made every DNS failure `ERR_IO`: the "lookup"/"dns" text below never
+    // got a chance to run. Kept as a fallback instead, so it still applies when
+    // nothing more specific is found.
+    let mut io_fallback: Option<ErrorCode> = None;
     while let Some(err) = source {
         if let Some(io) = err.downcast_ref::<std::io::Error>()
             && io.kind() != std::io::ErrorKind::Other
         {
-            return ProviderError::Coded {
-                code: ErrorCode::from_io_kind(io.kind()),
-                message,
-            };
+            let code = ErrorCode::from_io_kind(io.kind());
+            if code != ErrorCode::Io {
+                return ProviderError::Coded { code, message };
+            }
+            io_fallback = Some(code);
         }
         chain_text.push_str(&err.to_string());
         chain_text.push(' ');
@@ -218,7 +226,7 @@ fn classify_reqwest(e: reqwest::Error) -> ProviderError {
     } else if lower.contains("reset") || lower.contains("broken pipe") {
         Some(ErrorCode::ConnectionReset)
     } else {
-        None
+        io_fallback
     };
     match code {
         Some(code) => ProviderError::Coded { code, message },
@@ -391,6 +399,41 @@ mod tests {
             let _ = sock.flush().await;
         });
         (port, task)
+    }
+
+    /// A name that cannot resolve is `ERR_DNS`, not the catch-all `ERR_IO`.
+    ///
+    /// The classifier returns early on any io error whose kind is not `Other`,
+    /// and a resolver failure carries a kind with no stable name — which maps
+    /// to the catch-all `Io`. Returning *that* immediately meant the
+    /// "lookup"/"dns" text check below it never ran, so every DNS failure was
+    /// reported as a generic I/O error.
+    ///
+    /// `.invalid` is reserved by RFC 2606 precisely so it can never resolve, so
+    /// this needs no network to be deterministic.
+    #[tokio::test]
+    async fn a_name_that_cannot_resolve_is_reported_as_dns() {
+        let transport = ReqwestTransport::new().unwrap();
+        let err = transport
+            .fetch(request("http://no.such.host.invalid/"))
+            .await
+            .err()
+            .expect("an unresolvable name must fail");
+        assert_eq!(err.code(), Some(ErrorCode::Dns), "{err}");
+    }
+
+    /// …while a refusal from a host that *did* resolve keeps its own code, so
+    /// the fallback did not swallow the more specific classifications.
+    #[tokio::test]
+    async fn a_refused_connection_is_still_connection_refused() {
+        let transport = ReqwestTransport::new().unwrap();
+        // Port 1 on loopback: resolves instantly, refuses instantly.
+        let err = transport
+            .fetch(request("http://127.0.0.1:1/"))
+            .await
+            .err()
+            .expect("a refused connection must fail");
+        assert_eq!(err.code(), Some(ErrorCode::ConnectionRefused), "{err}");
     }
 
     #[tokio::test]
