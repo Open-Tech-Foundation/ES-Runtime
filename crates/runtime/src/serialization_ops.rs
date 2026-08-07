@@ -239,6 +239,15 @@ fn parse_xml_node(
         }
     }
 
+    // A document must have a root element. At the top level an empty map means
+    // none was found: `""` produced `{}` and `"not xml at all"` came back as
+    // that same string, so anything at all parsed "successfully" and a caller
+    // validating input before trusting it learned nothing. Nested calls are
+    // unaffected — an element whose content is only text (`<a>1</a>`) is
+    // ordinary, and that is what the branch below returns.
+    if depth == 0 && map.is_empty() {
+        return Err("Parse failed: no root element".to_string());
+    }
     if map.is_empty() && !text_content.is_empty() {
         Ok(Value::String(text_content))
     } else {
@@ -427,9 +436,16 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
         // plain `Eof`, so `validate("<r>")` answered `true` for a document
         // `parse` could not represent — the two now agree.
         let mut depth: usize = 0;
+        // A document with no element at all is not XML, however well-formed the
+        // bytes are — `validate` agreed with `parse` that `""` was fine.
+        let mut saw_element = false;
         loop {
             match reader.read_event() {
-                Ok(Event::Start(_)) => depth += 1,
+                Ok(Event::Start(_)) => {
+                    depth += 1;
+                    saw_element = true;
+                }
+                Ok(Event::Empty(_)) => saw_element = true,
                 Ok(Event::End(_)) => depth = depth.saturating_sub(1),
                 Ok(Event::Eof) => {
                     if depth > 0 {
@@ -437,6 +453,9 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
                             "Validation failed: unexpected end of input with unclosed elements"
                                 .into(),
                         ));
+                    }
+                    if !saw_element {
+                        return Ok(Value::String("Validation failed: no root element".into()));
                     }
                     break;
                 }

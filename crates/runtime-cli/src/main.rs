@@ -32,15 +32,13 @@ mod dotenv;
 
 use std::collections::HashMap;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use es_runtime::{
-    HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, Process, Runtime, UncaughtError,
-};
+use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, Process, Runtime};
 use es_runtime_common::{Capability, CapabilitySet};
-use es_runtime_default_providers::Driver;
+use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
     HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ProcessBroadcastHub,
     ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
@@ -1455,7 +1453,45 @@ async fn run() -> Result<(), String> {
     // to quiescence. The timeout is a backstop for runaways that live in async
     // callbacks, which yield to the executor (where a blocking watchdog can't
     // preempt them).
-    let driver = Driver::new(clock, timers);
+    // Failures are handed over *as they happen* rather than collected for a
+    // quiescence that a server never reaches: an unhandled rejection or a throw
+    // out of a timer in a long-running program was only printed when the
+    // process finally exited, which for a listening server is never. They are
+    // still counted, so the exit status is unchanged.
+    // Buffered for one tick rather than printed from the sink directly, because
+    // the entry module's *own* top-level throw also arrives here as an unhandled
+    // rejection — and that failure is reported once, below, as an uncaught
+    // exception naming the file. Holding each batch until the module's
+    // evaluation has settled is what lets that one be dropped instead of
+    // printed twice; for a long-running server (the case this exists for) the
+    // module settled long ago and a tick is no delay at all.
+    let pending = Arc::new(Mutex::new(Vec::<Failure>::new()));
+    let sink = pending.clone();
+    let driver = Driver::new(clock, timers).reporting_failures_to(move |failure| {
+        let (headline, error) = match failure {
+            DriveFailure::UncaughtError(e) => ("uncaught exception in a timer callback", e),
+            DriveFailure::UnhandledRejection(e) => ("unhandled promise rejection", e),
+            // The enum is non-exhaustive; anything added later is still reported
+            // rather than silently dropped.
+            other => {
+                sink.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(Failure {
+                        text: format!("error: {other:?}"),
+                        body: String::new(),
+                    });
+                return;
+            }
+        };
+        let body = error.to_string();
+        sink.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Failure {
+                text: format!("error: {headline}\n{body}"),
+                body,
+            });
+    });
+    let reported = Arc::new(AtomicI32::new(0));
     // Stopped as soon as the entry module's evaluation *fails*, rather than at
     // quiescence. A program whose top-level code threw has already failed, and
     // anything it started before throwing — a server holding a listener is the
@@ -1465,8 +1501,14 @@ async fn run() -> Result<(), String> {
     //
     // Reported below by the existing `ModuleEvalState::Failed` check, which
     // until now could only be reached by programs that happened to quiesce.
-    let drive = driver.drive_while(&mut runtime, |rt| {
-        !matches!(rt.module_eval_state(), ModuleEvalState::Failed(_))
+    let flush_pending = pending.clone();
+    let flush_count = reported.clone();
+    let drive = driver.drive_while(&mut runtime, move |rt| {
+        let state = rt.module_eval_state();
+        if !matches!(state, ModuleEvalState::Pending) {
+            flush_failures(&flush_pending, &flush_count, &state);
+        }
+        !matches!(state, ModuleEvalState::Failed(_))
     });
     let outcome = match config.timeout {
         Some(deadline) => match tokio::time::timeout(deadline, drive).await {
@@ -1505,41 +1547,20 @@ async fn run() -> Result<(), String> {
         return Err(format!("uncaught exception in {label}\n{message}"));
     }
 
-    // An exception out of a timer callback has no caller to propagate to, so
-    // this is where it surfaces. Reported before rejections: it is a throw that
-    // already happened, not a promise nobody got around to handling.
-    if !outcome.uncaught_errors.is_empty() {
-        return Err(joined(
-            &format!(
-                "{} uncaught exception(s) in a timer callback",
-                outcome.uncaught_errors.len()
-            ),
-            &outcome.uncaught_errors,
-        ));
-    }
+    // Anything the drive stopped before flushing, on the same terms.
+    flush_failures(&pending, &reported, &runtime.module_eval_state());
 
-    if !outcome.unhandled_rejections.is_empty() {
-        return Err(joined(
-            &format!(
-                "{} unhandled promise rejection(s)",
-                outcome.unhandled_rejections.len()
-            ),
-            &outcome.unhandled_rejections,
+    // Everything was printed the moment it happened, so this is only the exit
+    // status: repeating the messages would report each failure twice.
+    let count = reported.load(Ordering::SeqCst);
+    if count > 0 {
+        let plural = if count == 1 { "" } else { "s" };
+        return Err(format!(
+            "{count} unhandled failure{plural} — reported above"
         ));
     }
+    let _ = &outcome;
     Ok(())
-}
-
-/// A headline followed by one blank-line-separated message per failure.
-fn joined(headline: &str, failures: &[UncaughtError]) -> String {
-    let mut msg = format!("{headline}\n");
-    for (i, failure) in failures.iter().enumerate() {
-        if i > 0 {
-            msg.push('\n');
-        }
-        msg.push_str(&failure.to_string());
-    }
-    msg
 }
 
 /// The ceilings this run's agents are built with.
@@ -1557,6 +1578,36 @@ fn heap_limits(max_heap_bytes: Option<usize>) -> es_runtime_common::Limits {
     match max_heap_bytes {
         Some(bytes) => limits.with_heap_limit_bytes(bytes),
         None => limits.with_system_heap_limit(),
+    }
+}
+
+/// One failure the drive handed over, with the body kept separately so the
+/// entry module's own rejection can be recognised (see [`flush_failures`]).
+struct Failure {
+    text: String,
+    body: String,
+}
+
+/// Prints the buffered failures, dropping the one that *is* the entry module's
+/// evaluation failure — that one is reported once, by name, as an uncaught
+/// exception. Everything else is a failure the guest left unclaimed while it
+/// ran, and is printed at the point it happened rather than at exit, which for
+/// a program that never quiesces (a listening server) never came.
+fn flush_failures(
+    pending: &Arc<Mutex<Vec<Failure>>>,
+    reported: &Arc<AtomicI32>,
+    state: &ModuleEvalState,
+) {
+    let module_failure = match state {
+        ModuleEvalState::Failed(e) => Some(e.to_string()),
+        _ => None,
+    };
+    for failure in pending.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+        if module_failure.as_deref() == Some(failure.body.as_str()) {
+            continue;
+        }
+        eprintln!("{}", failure.text);
+        reported.fetch_add(1, Ordering::SeqCst);
     }
 }
 

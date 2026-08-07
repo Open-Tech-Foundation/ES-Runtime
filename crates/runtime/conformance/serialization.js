@@ -286,3 +286,19 @@ test("YAML block scalars chomp per the spec", async () => {
   assertEquals(a("a: |-\n  l1\n  l2\n"), "l1\nl2");
   assertEquals(a("a: |+\n  l1\n  l2\n\n"), "l1\nl2\n\n");
 });
+
+test("XML requires a root element", async () => {
+  const { XML } = await import("runtime:serialization");
+  // `""` parsed to `{}` and `"not xml at all"` came back as that same string,
+  // so anything at all parsed "successfully" and validating input before
+  // trusting it told you nothing.
+  for (const src of ["", "   ", "not xml at all", "<?xml version=\"1.0\"?>"]) {
+    assertThrows(() => XML.parse(src), "SyntaxError");
+    assertEquals(XML.validate(src), false, `validate ${JSON.stringify(src)}`);
+  }
+  // A self-closing root is still a root.
+  assertEquals(XML.validate("<r/>"), true);
+  // An empty element is the empty string, which is the shape this parser has
+  // always used for one — the point here is only that it *is* a root.
+  assertEquals(JSON.stringify(XML.parse("<r/>")), '{"r":""}');
+});

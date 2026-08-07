@@ -36,9 +36,9 @@ const cfg = resolve(here, "config", "app.json");
 | `sep` | `string` | Path segment separator for the host OS (`"/"` or `"\"`). | `sep; // "/" on POSIX` |
 | `delimiter` | `string` | Path list delimiter for the host OS (`":"` or `";"`). | `env.PATH.split(delimiter)` |
 | `isAbsolute(p)` | `(string) => boolean` | Whether `p` is an absolute path. | `isAbsolute("/etc/hosts") // true` |
-| `normalize(p)` | `(string) => string` | Collapses `.` / `..` and redundant separators. | `normalize("/a/./b/../c") // "/a/c"` |
+| `normalize(p)` | `(string) => string` | Collapses `.` / `..` and redundant separators; keeps a trailing separator. | `normalize("/a/./b/../c") // "/a/c"` |
 | `join(...segments)` | `(...string) => string` | Joins segments with the separator, then normalizes. | `join("src", "lib", "x.js") // "src/lib/x.js"` |
-| `resolve(...segments)` | `(...string) => string` | Resolves to an absolute path, anchoring at `cwd()` if no segment is absolute. | `resolve("data", "out.json")` |
+| `resolve(...segments)` | `(...string) => string` | Resolves to an absolute path, anchoring at `cwd()` if no segment is absolute; drops a trailing separator. | `resolve("data", "out.json")` |
 | `dirname(p)` | `(string) => string` | The directory portion of `p`. | `dirname("/var/log/app.log") // "/var/log"` |
 | `basename(p)` | `(string) => string` | The final segment of `p` (no suffix-stripping overload). | `basename("/var/log/app.log") // "app.log"` |
 | `extname(p)` | `(string) => string` | The extension of the final segment, including the dot (or empty). | `extname("archive.tar.gz") // ".gz"` |

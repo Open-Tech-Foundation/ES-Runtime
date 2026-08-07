@@ -26,6 +26,32 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Failures are reported when they happen, not at exit.** An unhandled
+  rejection or a throw out of a timer was collected and printed only once the
+  drive loop returned — and a listening server keeps that loop alive, so a
+  long-running program's failures were invisible for its whole life. They now
+  print at the point they occur, while the program carries on; the exit status
+  is unchanged, and the final line is only a count, since repeating the messages
+  would report each failure twice. The entry module's *own* top-level throw is
+  still reported once, by name, as an uncaught exception.
+
+- **`XML.parse` requires a root element.** `""` parsed to `{}` and
+  `"not xml at all"` came back as that same string, so anything at all parsed
+  "successfully" and `XML.validate` agreed — a caller checking input before
+  trusting it learned nothing. Both now reject a document with no element.
+
+- **`path.normalize` keeps a trailing separator.** `normalize("a/b/")` returned
+  `"a/b"`, dropping the one thing that says the path names a directory; it is
+  kept now, as it is everywhere else, and `join` keeps it too. `resolve` still
+  drops it (unless the result is the root) — it answers *which location*, and a
+  location is the same one however it is spelled.
+
+- **`runtime:system` no longer exposes its internals.** `Command` and
+  `ChildProcess` carried `_collect`, `_output`, `_readable`, `_writable`,
+  `_streamDone` and `_maybeRelease` as public prototype members. They are
+  private fields and methods now; the prototypes are exactly the documented
+  surface.
+
 - **A top-level throw is fatal even with a server running.** The entry module's
   failure was only checked *after* the drive loop returned, and a listener keeps
   that loop alive forever — so a program that threw at top level after starting

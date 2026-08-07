@@ -318,6 +318,29 @@ fn a_top_level_throw_is_reported_even_with_a_server_running() {
     assert!(err.contains("top-level failure while serving"), "{err}");
 }
 
+/// A failure in a program that never quiesces is reported when it happens.
+///
+/// Failures were collected and printed only when the drive returned, and a
+/// listening server keeps that loop alive — so a long-running program's
+/// failures were invisible for its whole life and surfaced at exit, if ever.
+#[test]
+fn an_unhandled_rejection_is_reported_while_the_server_is_still_running() {
+    let out = run_file("rejection-while-serving.mjs");
+    assert!(!out.status.success(), "the run must fail");
+    let s = stdout(&out);
+    let err = stderr(&out);
+    assert!(err.contains("error: unhandled promise rejection"), "{err}");
+    assert!(err.contains("TypeError: failed while serving"), "{err}");
+    // The server kept running afterwards — the report is not the end of the
+    // program, it is news delivered during it.
+    assert!(s.contains("MARK_BEFORE") && s.contains("MARK_AFTER"), "{s}");
+    // …and the exit status still reflects it, without repeating the message.
+    assert!(
+        err.contains("1 unhandled failure — reported above"),
+        "{err}"
+    );
+}
+
 #[test]
 fn tells_a_handler_which_peer_a_request_came_from() {
     // A real accept() under the real binary: the address a handler is given has
@@ -751,7 +774,15 @@ fn runtime_path_exposes_modern_surface() {
              o('parse',JSON.stringify(p.parse('/a/b/c.txt')));\
              o('resolveAbs',p.resolve('/x','y','z'));\
              o('fromFileURL',p.fromFileURL('file:///a/b%20c.txt'));\
-             o('toFileURL',p.toFileURL('/a/b c.txt').href);",
+             o('toFileURL',p.toFileURL('/a/b c.txt').href);\
+             o('keepSlash',p.normalize('a/b/'));\
+             o('noSlash',p.normalize('a/b'));\
+             o('dotSlash',p.normalize('./'));\
+             o('dot',p.normalize('.'));\
+             o('upSlash',p.normalize('a/b/../'));\
+             o('joinSlash',p.join('a','b/'));\
+             o('resolveSlash',p.resolve('/a','b/'));\
+             o('resolveRoot',p.resolve('/'));",
         ))
         .output()
         .expect("spawn esrun");
@@ -760,7 +791,8 @@ fn runtime_path_exposes_modern_surface() {
     for expected in [
         "sep=/",
         "delimiter=:",
-        "join=a/c/d",
+        // A trailing separator is kept: it says "this names a directory".
+        "join=a/c/d/\n",
         "normalize=/a/c",
         "isAbs=true,false",
         "dirname=/a/b",
@@ -771,6 +803,17 @@ fn runtime_path_exposes_modern_surface() {
         "resolveAbs=/x/y/z",
         "fromFileURL=/a/b c.txt",
         "toFileURL=file:///a/b%20c.txt",
+        // normalize and join keep a trailing separator; resolve drops it,
+        // because it answers "which location is this" and a location is the
+        // same one however it was spelled. The root is itself a separator.
+        "keepSlash=a/b/\n",
+        "noSlash=a/b\n",
+        "dotSlash=./\n",
+        "dot=.\n",
+        "upSlash=a/\n",
+        "joinSlash=a/b/\n",
+        "resolveSlash=/a/b\n",
+        "resolveRoot=/\n",
     ] {
         assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
     }
@@ -1217,12 +1260,19 @@ fn unhandled_rejection_reports_stack_trace() {
         .expect("spawn esrun");
     assert!(!out.status.success(), "should exit non-zero");
     let stderr = stderr(&out);
+    // Printed where it happened, not collected for the end — the summary that
+    // follows is only the exit status, since repeating the message would report
+    // one failure twice.
     assert!(
-        stderr.contains("error: 1 unhandled promise rejection(s)"),
+        stderr.contains("error: unhandled promise rejection"),
         "{stderr}"
     );
     assert!(stderr.contains("TypeError: async boom"), "{stderr}");
     assert!(stderr.contains("at file://"), "{stderr}");
+    assert!(
+        stderr.contains("1 unhandled failure — reported above"),
+        "{stderr}"
+    );
 }
 
 #[test]

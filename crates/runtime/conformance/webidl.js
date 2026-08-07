@@ -228,3 +228,12 @@ test("runtime internals are not enumerable on the global object", () => {
   assertEquals(typeof globalThis.__structuredSerialize, "function");
   assertEquals(structuredClone({ a: 1 }).a, 1);
 });
+
+test("runtime:system exposes no implementation details on its prototypes", async () => {
+  const { Command, ChildProcess } = await import("runtime:system");
+  // `_collect`, `_readable`, `_streamDone` and friends were public members of
+  // the documented API surface.
+  const own = (o) => Object.getOwnPropertyNames(o).filter((k) => k !== "constructor");
+  assertEquals(own(Command.prototype).sort().join(","), "output,spawn");
+  assertEquals(own(ChildProcess.prototype).sort().join(","), "kill,status,stderr,stdin,stdout");
+});

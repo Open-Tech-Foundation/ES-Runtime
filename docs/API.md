@@ -1198,9 +1198,9 @@ const cfg = resolve(here, "config", "app.json");
 | `sep`                   | `string`                      | Path segment separator for the host OS (`"/"` or `"\\"`).                    |
 | `delimiter`             | `string`                      | Path list delimiter for the host OS (`":"` or `";"`).                       |
 | `isAbsolute(p)`         | `(string) => boolean`         | Whether `p` is an absolute path.                                            |
-| `normalize(p)`          | `(string) => string`          | Collapses `.`/`..` and redundant separators.                                |
+| `normalize(p)`          | `(string) => string`          | Collapses `.`/`..` and redundant separators. A trailing separator is **kept** — it says the path names a directory. |
 | `join(...segments)`     | `(...string) => string`       | Joins segments with the separator, then normalizes.                         |
-| `resolve(...segments)`  | `(...string) => string`       | Resolves to an absolute path, anchoring at `cwd()` if no segment is absolute.|
+| `resolve(...segments)`  | `(...string) => string`       | Resolves to an absolute path, anchoring at `cwd()` if no segment is absolute. Drops a trailing separator (unless the result is the root): it answers *which location*, and a location is the same one however it is spelled. |
 | `dirname(p)`            | `(string) => string`          | The directory portion of `p`.                                               |
 | `basename(p)`           | `(string) => string`          | The final segment of `p` (no suffix-stripping overload).                    |
 | `extname(p)`            | `(string) => string`          | The extension of the final segment, including the dot (or `""`).            |

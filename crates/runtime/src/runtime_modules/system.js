@@ -182,29 +182,44 @@ function concat(chunks, total) {
 
 // ---- the running child -----------------------------------------------------
 
+// `Command.spawn` claims the child's stdin when it is feeding a body in. A
+// module-scoped symbol rather than a public name: the two classes need one
+// word between them, and everything else about a ChildProcess is private.
+const TAKE_STDIN = Symbol("takeStdin");
+
 // A spawned process. Its streams are the web ones: `stdout`/`stderr` are pulled
 // from the host chunk by chunk (real backpressure — a child that outruns its
 // reader is stopped by a full pipe, not by buffering), `stdin` is a
 // WritableStream whose close() is the child's EOF.
 class ChildProcess {
+  #id;
+  #killSignal;
+  #exited;
+  #released;
+  #status;
+  #modes;
+  #openStreams;
+  #streams;
+  #stdinTaken;
+
   constructor(id, pid, options) {
-    this._id = id;
+    this.#id = id;
     this.pid = pid;
-    this._killSignal = options.killSignal;
+    this.#killSignal = options.killSignal;
     // Released to the host once the child has exited *and* nothing can still be
     // read from it. Releasing earlier would kill a live child; never releasing
     // would keep its pipes for the lifetime of the process.
-    this._exited = false;
-    this._released = false;
-    this._status = null;
-    this._modes = { stdin: options.stdin, stdout: options.stdout, stderr: options.stderr };
+    this.#exited = false;
+    this.#released = false;
+    this.#status = null;
+    this.#modes = { stdin: options.stdin, stdout: options.stdout, stderr: options.stderr };
     // Every piped output channel must finish before the child is released, even
     // one nobody ever reads — releasing it would throw away output the guest
     // can still ask for. (Node's `exit`-before-`close` is exactly this bug.)
-    this._openStreams = [options.stdout, options.stderr].filter((m) => m === "piped").length;
-    this._streams = { stdin: null, stdout: null, stderr: null };
+    this.#openStreams = [options.stdout, options.stderr].filter((m) => m === "piped").length;
+    this.#streams = { stdin: null, stdout: null, stderr: null };
     // Set when a body given as `stdin` has taken the writable over.
-    this._stdinTaken = false;
+    this.#stdinTaken = false;
   }
 
   // The streams are built on first use, not at spawn. A ReadableStream starts
@@ -212,23 +227,23 @@ class ChildProcess {
   // would keep the whole program alive waiting for output from a child the
   // caller never intended to read.
   get stdin() {
-    if (this._modes.stdin !== "piped" || this._stdinTaken) return null;
-    this._streams.stdin ??= this._writable();
-    return this._streams.stdin;
+    if (this.#modes.stdin !== "piped" || this.#stdinTaken) return null;
+    this.#streams.stdin ??= this.#writable();
+    return this.#streams.stdin;
   }
 
   get stdout() {
-    return this._output("stdout");
+    return this.#output("stdout");
   }
 
   get stderr() {
-    return this._output("stderr");
+    return this.#output("stderr");
   }
 
-  _output(which) {
-    if (this._modes[which] !== "piped") return null;
-    this._streams[which] ??= this._readable(which);
-    return this._streams[which];
+  #output(which) {
+    if (this.#modes[which] !== "piped") return null;
+    this.#streams[which] ??= this.#readable(which);
+    return this.#streams[which];
   }
 
   // Resolves when the child exits. Reading it is what keeps the program alive
@@ -236,14 +251,14 @@ class ChildProcess {
   // ticking. A child nobody waits on holds nothing open — spawn it, ignore it,
   // and the program can still exit (it is killed on the way out).
   get status() {
-    if (this._status === null) {
-      this._status = ops.system_wait(this._id).then((status) => {
-        this._exited = true;
-        this._maybeRelease();
+    if (this.#status === null) {
+      this.#status = ops.system_wait(this.#id).then((status) => {
+        this.#exited = true;
+        this.#maybeRelease();
         return status;
       });
     }
-    return this._status;
+    return this.#status;
   }
 
   // Sends `signal` (default SIGTERM). Signalling a child that has already
@@ -251,52 +266,58 @@ class ChildProcess {
   //
   // Only this child is signalled. A child that spawned its own children does
   // not pass it on, so grandchildren can outlive a kill.
-  kill(signal = this._killSignal) {
-    return ops.system_kill(this._id, signal);
+  kill(signal = this.#killSignal) {
+    return ops.system_kill(this.#id, signal);
   }
 
-  _readable(which) {
+  #readable(which) {
     const self = this;
     return new ReadableStream({
       async pull(controller) {
-        const chunk = await ops.system_read(self._id, which);
+        const chunk = await ops.system_read(self.#id, which);
         if (chunk === null) {
           controller.close();
-          self._streamDone();
+          self.#streamDone();
         } else {
           controller.enqueue(chunk);
         }
       },
       cancel() {
-        self._streamDone();
+        self.#streamDone();
       },
     });
   }
 
-  _writable() {
+  #writable() {
     const self = this;
     return new WritableStream({
       async write(chunk) {
-        await ops.system_write(self._id, toBytes(chunk));
+        await ops.system_write(self.#id, toBytes(chunk));
       },
       close() {
-        return ops.system_stdin_close(self._id);
+        return ops.system_stdin_close(self.#id);
       },
       abort() {
-        return ops.system_stdin_close(self._id);
+        return ops.system_stdin_close(self.#id);
       },
     });
   }
 
-  _streamDone() {
-    this._openStreams -= 1;
-    this._maybeRelease();
+  #streamDone() {
+    this.#openStreams -= 1;
+    this.#maybeRelease();
   }
 
-  _maybeRelease() {
-    if (this._released || !this._exited || this._openStreams > 0) return;
-    this._released = true;
-    ops.system_close(this._id);
+  // See TAKE_STDIN: `Command.spawn` is writing the body it was given, so the
+  // caller's `stdin` is spent.
+  [TAKE_STDIN]() {
+    this.#stdinTaken = true;
+  }
+
+  #maybeRelease() {
+    if (this.#released || !this.#exited || this.#openStreams > 0) return;
+    this.#released = true;
+    ops.system_close(this.#id);
   }
 
 }
@@ -315,24 +336,36 @@ if (typeof Symbol.asyncDispose === "symbol") {
 // ---- the command -----------------------------------------------------------
 
 class Command {
+  #program;
+  #args;
+  #cwd;
+  #env;
+  #input;
+  #stdin;
+  #stdout;
+  #stderr;
+  #killSignal;
+  #maxBuffer;
+  #signal;
+
   constructor(program, options = {}) {
     if (options === null || typeof options !== "object") {
       throw new TypeError("command options must be an object");
     }
-    this._program = checkProgram(program);
-    this._args = checkArgs(options.args);
-    this._cwd = checkCwd(options.cwd);
-    this._env = checkEnv(options.env, options.inheritEnv === true);
+    this.#program = checkProgram(program);
+    this.#args = checkArgs(options.args);
+    this.#cwd = checkCwd(options.cwd);
+    this.#env = checkEnv(options.env, options.inheritEnv === true);
     // stdin also accepts a body; keep it aside and pipe it in after spawning.
     // A mode name wins over the body reading, so the three mode strings are not
     // usable as literal input — pass those as bytes if you really mean them.
-    this._input = isMode(options.stdin) || !isInput(options.stdin) ? null : options.stdin;
-    this._stdin = this._input ? "piped" : checkStdio("stdin", options.stdin, "null");
-    this._stdout = checkStdio("stdout", options.stdout, "piped");
-    this._stderr = checkStdio("stderr", options.stderr, "piped");
-    this._killSignal = options.killSignal ?? "SIGTERM";
-    this._maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
-    this._signal = abortSignal(options.signal, options.timeout);
+    this.#input = isMode(options.stdin) || !isInput(options.stdin) ? null : options.stdin;
+    this.#stdin = this.#input ? "piped" : checkStdio("stdin", options.stdin, "null");
+    this.#stdout = checkStdio("stdout", options.stdout, "piped");
+    this.#stderr = checkStdio("stderr", options.stderr, "piped");
+    this.#killSignal = options.killSignal ?? "SIGTERM";
+    this.#maxBuffer = options.maxBuffer ?? DEFAULT_MAX_BUFFER;
+    this.#signal = abortSignal(options.signal, options.timeout);
   }
 
   // Starts the child and resolves once it is running. Async — unlike Deno's
@@ -340,30 +373,30 @@ class Command {
   // program, permission denied) belongs to this call, not to a stream or a
   // status settled later.
   async spawn() {
-    this._signal?.throwIfAborted();
+    this.#signal?.throwIfAborted();
     const { id, pid } = await ops.system_spawn({
-      program: this._program,
-      args: this._args,
-      cwd: this._cwd,
-      env: this._env,
-      stdin: this._stdin,
-      stdout: this._stdout,
-      stderr: this._stderr,
+      program: this.#program,
+      args: this.#args,
+      cwd: this.#cwd,
+      env: this.#env,
+      stdin: this.#stdin,
+      stdout: this.#stdout,
+      stderr: this.#stderr,
     });
     const child = new ChildProcess(id, pid, {
-      killSignal: this._killSignal,
-      stdin: this._stdin,
-      stdout: this._stdout,
-      stderr: this._stderr,
+      killSignal: this.#killSignal,
+      stdin: this.#stdin,
+      stdout: this.#stdout,
+      stderr: this.#stderr,
     });
-    if (this._signal) watchAbort(this._signal, child);
-    if (this._input) {
+    if (this.#signal) watchAbort(this.#signal, child);
+    if (this.#input) {
       // Feed the given body in, then close stdin. Detached: a child that stops
       // reading (a `head`, a failed filter) breaks the pipe, and that must not
       // reject in the caller's face.
       const sink = child.stdin;
-      child._stdinTaken = true; // ours to write; the caller's `stdin` is spent
-      inputStream(this._input)
+      child[TAKE_STDIN](); // ours to write; the caller's `stdin` is spent
+      inputStream(this.#input)
         .pipeTo(sink)
         .catch(() => {});
     }
@@ -375,10 +408,10 @@ class Command {
   // its pipe cannot deadlock against a parent that is waiting for it.
   async output() {
     const child = await this.spawn();
-    const abort = this._signal;
+    const abort = this.#signal;
     const [stdout, stderr, status] = await Promise.all([
-      this._collect(child, child.stdout),
-      this._collect(child, child.stderr),
+      this.#collect(child, child.stdout),
+      this.#collect(child, child.stderr),
       child.status,
     ]);
     // An abort races the child's own exit; if it fired, the reason is what the
@@ -387,7 +420,7 @@ class Command {
     return { success: status.success, code: status.code, signal: status.signal, stdout, stderr };
   }
 
-  async _collect(child, stream) {
+  async #collect(child, stream) {
     if (stream === null) return new Uint8Array(0);
     const reader = stream.getReader();
     const chunks = [];
@@ -397,13 +430,13 @@ class Command {
       if (done) break;
       chunks.push(value);
       total += value.byteLength;
-      if (total > this._maxBuffer) {
+      if (total > this.#maxBuffer) {
         // Stop the source of the flood, then say so. Leaving the child running
         // would keep filling a pipe nobody drains.
-        await child.kill(this._killSignal).catch(() => {});
+        await child.kill(this.#killSignal).catch(() => {});
         await reader.cancel().catch(() => {});
         throw fail(
-          `the child produced more than maxBuffer (${this._maxBuffer} bytes) of output`,
+          `the child produced more than maxBuffer (${this.#maxBuffer} bytes) of output`,
           "ERR_MAX_BUFFER",
         );
       }

@@ -68,7 +68,20 @@ function normalize(p) {
   const { root, rest, abs } = split(p);
   const body = collapse(rest, abs).join(sep);
   const result = root + body;
-  return result.length === 0 ? "." : result;
+  // `"./"` normalizes to itself, not to `"."` — the slash is the whole
+  // difference between the two spellings and both are legal.
+  if (result.length === 0) return endsWithSep(p) ? "." + sep : ".";
+  // A trailing separator is meaningful — it says "this names a directory" — and
+  // every other implementation keeps it, so `normalize("a/b/")` was the one
+  // place a path changed meaning on the way through. Only ever *re*-added: a
+  // path that did not end in a separator does not gain one, and a result that
+  // is just the root (`/`, or `.` above) already ends in one.
+  if (endsWithSep(p) && !endsWithSep(result)) return result + sep;
+  return result;
+}
+
+function endsWithSep(p) {
+  return p.endsWith(sep) || (sep !== "/" && p.endsWith("/"));
 }
 
 function join(...segments) {
@@ -89,7 +102,19 @@ function resolve(...segments) {
     abs = isAbsolute(s);
   }
   if (!abs) resolved = resolved.length ? cwd() + sep + resolved : cwd();
-  return normalize(resolved);
+  // `resolve` drops a trailing separator, where `normalize` and `join` keep it:
+  // it answers "which location is this", and a location is the same one however
+  // it was spelled. The root is the exception — it *is* a separator.
+  const result = normalize(resolved);
+  if (endsWithSep(result) && result.length > root(result).length) {
+    return result.slice(0, -sep.length);
+  }
+  return result;
+}
+
+// The leading root of an already-normalized path (`"/"`, `"C:\\"`, or `""`).
+function root(p) {
+  return split(p).root;
 }
 
 function dirname(p) {
