@@ -1177,7 +1177,12 @@ exit(); // defaults to 0
 Modern, platform-aware path utilities. Pure computation — it performs no I/O.
 The host platform and working directory come from
 [`runtime:process`](#runtimeprocess), so separators and `resolve()` follow the
-real OS; that is why it carries `Env` (\*importing it evaluates `runtime:process`).
+real OS.
+
+**Capability:** none to import, and none for the pure string functions. `Env` is
+needed only to read the working directory — so `resolve()` requires it when no
+segment is absolute (and `relative()`/`toFileURL()` inherit that, since they
+resolve first). `resolve("/abs", "b")` needs nothing.
 
 This is intentionally free of legacy baggage: one platform-correct surface (no
 `posix`/`win32` dual namespaces, no overloaded signatures), plus first-class

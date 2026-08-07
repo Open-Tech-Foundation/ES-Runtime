@@ -74,6 +74,17 @@ the actor drops the inbound channel. The next receive resolves to nothing, which
 the prelude turns into an **abnormal close (1006)**. A peer that closes without a
 status code becomes **1005**, per the specification.
 
+**When *we* close**, the initiator is told what it asked for. The peer echoes the
+code and the host then tears the socket down, so the pump sees the same "stream
+ended with no frame" it sees for a broken connection — and reporting 1006 there
+made every ordinary `close(4001, "bye")` read as a dropped connection to its own
+handler, while the peer had correctly received 4001. The two cases are now
+distinguished by whether a close was requested: a requested one reports that
+code with `wasClean: true` (1005 when no code was given, matching what the peer
+sees), and an end nobody asked for is still 1006 with an `error` before it. 1006
+must never mark a clean shutdown — reconnect logic keyed on the code took the
+failure branch every time.
+
 ## `wss:`
 
 TLS reuses the same stack as `runtime:net`: rustls with the `aws-lc-rs` provider
@@ -173,7 +184,10 @@ server. It answers `408` before closing, and its ~90s comes from a 60s
 Deno does not bound this at all, on the same hyper stack we use. Its `serve`
 options carry `tcpBacklog` and `reusePort` but no connection cap, and Bun's
 carry `maxRequestBodySize` but likewise no cap; passing `maxConnections` to
-either is silently ignored, which is what the "no cap" result records.
+either is silently ignored, which is what the "no cap" result records. (We carry
+[`reusePort`](/docs/internals/http) too, on `runtime:http` `serve()` and
+`runtime:net` `listen()` — the contrast here is the connection cap, not the
+socket option.)
 
 The row worth reading is the second one. Node has a cap — `server.maxConnections`
 — and reaching it **resets** the next connection immediately. Ours holds it: the

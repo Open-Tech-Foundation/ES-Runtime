@@ -1,0 +1,125 @@
+---
+title: "Internals: WebCrypto"
+description: Where crypto.subtle's work actually happens, how key usages are enforced and in what order, and the conversions that make every hash work on every curve.
+---
+
+# Internals: WebCrypto
+
+What `crypto.subtle` does below the API: which code performs the operation, what
+a `CryptoKey` is on this side of the boundary, and why two failures that look
+alike report differently.
+
+This page explains behaviour rather than listing algorithms — for the supported
+set, see the [Web APIs reference](/docs/globals).
+
+## The split
+
+Every primitive runs in Rust, in vetted [RustCrypto](https://github.com/RustCrypto)
+crates. The JavaScript layer is surface and bookkeeping: it normalizes
+algorithms, enforces the rules below, holds key material, and assembles JWK.
+Nothing cryptographic is implemented in the prelude.
+
+Key material crosses the boundary in standard serializations rather than as an
+opaque handle — **private keys as PKCS#8 DER, public keys as SEC1 uncompressed
+points or SPKI**. JWK is assembled on the JavaScript side from the raw
+coordinates those expose, which is why `jwk` is available for algorithms whose
+Rust crate has no JWK support of its own.
+
+**Randomness comes from the injected `Entropy` provider, never from ambient
+`OsRng`.** Key generation and hedged signing both draw from it. This matters
+beyond tidiness: P-521's deterministic signing path in its crate reaches for
+`OsRng` directly, so it is deliberately not used — an embedder that supplied a
+deterministic entropy source would otherwise find one curve quietly ignoring it.
+
+## Key usages are enforced, and the order of checks is visible
+
+`key.usages` is the record every operation is checked against, so it is enforced
+at both ends. `importKey` and `generateKey` refuse a usage the algorithm does not
+register, and refuse a secret or private key created with no usages at all
+(`SyntaxError`) — keeping a usage an algorithm cannot honour would make the
+record meaningless. Operations then refuse a key whose usages do not include
+them (`InvalidAccessError`).
+
+**The algorithm is normalized before the key is looked at**, which is the
+standard's order and decides which error you get:
+
+```js
+// AES-KW registers no encrypt operation at all →
+crypto.subtle.encrypt({ name: "AES-KW" }, key, data);   // NotSupportedError
+
+// AES-GCM does, but this key may not perform it →
+crypto.subtle.encrypt({ name: "AES-GCM", iv }, decryptOnlyKey, data); // InvalidAccessError
+```
+
+The distinction is worth keeping: the first says the operation does not exist for
+that algorithm, the second says you may not do it with that key.
+
+**A delegating operation is gated on its own usage, not on the one it calls.**
+`deriveKey` derives bits internally and `wrapKey` encrypts internally, but they
+check `deriveKey` and `wrapKey`:
+
+| Call | Checked | Not checked |
+| --- | --- | --- |
+| `deriveKey` | `deriveKey` | `deriveBits` |
+| `wrapKey` | `wrapKey` | `encrypt` |
+| `unwrapKey` | `unwrapKey` | `decrypt` |
+
+A key granted only `deriveKey` therefore works, and a key granted only
+`deriveBits` cannot mint a key through the other door. Checking the inner
+operation instead would make the narrow grant useless and the broad one
+equivalent.
+
+`extractable` is enforced on export, and `wrapKey` honours it too — wrapping is
+an export, and the flag governs exports.
+
+## ECDSA takes any hash on any curve
+
+`algorithm.hash` is honoured rather than fixed per curve, so P-256 with SHA-512
+and P-521 with SHA-256 are both ordinary. Two things make that work.
+
+The digest is computed here, with the runtime's own SHA-2, and the *prehash* is
+handed to the curve. The curve crates' built-in signer is bound to one hash
+each, so using it would fix the pairing.
+
+**A digest narrower than the curve's field is zero-padded on the left.** SEC1's
+`bits2int` takes the leftmost `min(bitlen(hash), bitlen(n))` bits, so a short
+digest is used whole — numerically identical to that digest padded. The backend
+will not do the padding: it rejects any input under *half* the field width,
+which made P-521 with SHA-256 (32 bytes against a 66-byte field) and P-384 with
+SHA-1 fail outright while the same pairing worked in every browser. Wider
+digests are left alone, since truncating from the left is what the standard asks
+for and the backend already does it.
+
+Signatures are the fixed-width `r ‖ s` form, and cross-verify with other
+implementations in both directions.
+
+## Two RustCrypto generations, on purpose
+
+The dependency tree carries `aes-gcm` on one `cipher` generation and the
+hashing/KDF crates on a newer `digest` one, plus the elliptic-curve crates on an
+older `digest` again. This is deliberate and recorded in the workspace manifest:
+the unifying releases are still pre-release, and floating onto a release
+candidate for a cryptographic primitive is a worse trade than carrying a
+duplicate. The duplicates are warn-level and allowed explicitly rather than by
+accident.
+
+## What it costs
+
+`crypto.subtle` needs **no capability**. It reads no files, opens no sockets and
+has no ambient state; the only host resource it touches is the entropy provider,
+which is what a `Math.random` equivalent would need anyway.
+
+Everything runs on the isolate's thread. A 4096-bit RSA key generation is a
+pause, not a background job — there is no thread pool behind these ops, so a
+program that needs one should generate keys before it starts serving.
+
+**Masking is not confidentiality.** A `Secret` from
+[`runtime:process`](/api/process) redacts in logs; a `CryptoKey`'s material is
+held in a module-private slot. Neither defends against hostile guest code in the
+same isolate, which can call `unmask` or `exportKey` like any other code. They
+defend against *accidents* — a key in a log line, a token in a stack trace.
+
+## See also
+
+- [Web APIs reference](/docs/globals) — the supported algorithm set
+- [Security model](/docs/security) — what the capability boundary does and does not cover

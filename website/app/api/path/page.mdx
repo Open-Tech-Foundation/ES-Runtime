@@ -11,8 +11,11 @@ Modern, platform-aware path utilities. Pure computation — no I/O. The host
 platform and working directory come from `runtime:process`, so separators and
 `resolve()` follow the real OS.
 
-<Callout type="info" title="Capability: Env">
-  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
+<Callout type="info" title="Capability: Env — only to read the working directory">
+  Importing needs nothing, and neither do the pure string functions. `resolve()`
+  needs `Env` when no segment is absolute; `relative()` and `toFileURL()`
+  inherit that, since they resolve first. Exposed as an ES module under the
+  `runtime:` scheme. Status: **Available**.
 </Callout>
 
 One platform-correct surface — no `posix`/`win32` dual namespaces and no

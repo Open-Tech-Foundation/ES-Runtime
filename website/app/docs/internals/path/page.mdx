@@ -1,0 +1,110 @@
+---
+title: "Internals: paths"
+description: Why runtime:path has one surface instead of two, what a trailing separator means to each function, and where the platform comes from.
+---
+
+# Internals: paths
+
+`runtime:path` is pure computation — it opens nothing and touches no disk. What
+it does have is a set of deliberate omissions, and one rule about separators that
+differs between functions on purpose.
+
+For signatures, see the [`runtime:path` reference](/api/path).
+
+## One surface, not two
+
+Node ships `path`, `path.posix` and `path.win32`, plus overloaded signatures on
+top. This module has one namespace whose behaviour follows the **host** platform,
+and no overloads.
+
+The cost is real and worth naming: code that must produce Windows separators
+while running on Linux cannot ask this module for them. The benefit is that
+there is no way to write a path bug by reaching for the wrong namespace, and no
+call whose meaning changes with an argument count.
+
+That is also why `basename` takes no suffix argument. `parse(p).name` is the
+exact equivalent:
+
+```js
+import { basename, parse } from "runtime:path";
+
+basename("/var/log/app.log");        // "app.log"
+parse("/var/log/app.log").name;      // "app"   ← Node's basename(p, ".log")
+```
+
+**The platform comes from [`runtime:process`](/api/process)**, so `sep`,
+`delimiter` and `resolve()`'s anchor follow the real OS rather than a
+compile-time guess.
+
+That import does *not* make the module capability-gated. Importing it needs
+nothing, and neither do `dirname`, `basename`, `extname`, `parse`, `isAbsolute`,
+`normalize` or `join` — the platform is read through an ungated op. The one
+thing that needs `Env` is **anchoring at the working directory**, so `resolve()`
+throws `NotAllowedError` under `--deny-env` only when no segment is absolute:
+
+```js
+resolve("/abs", "b");   // fine under --deny-env — nothing to anchor
+resolve("a");           // NotAllowedError — has to read cwd()
+relative("a", "b");     // likewise: it resolves both first
+toFileURL("rel.txt");   // likewise
+```
+
+## A trailing separator is information
+
+`a/b/` and `a/b` are not the same string, and the difference says whether the
+path names a directory. The functions disagree about it deliberately:
+
+| | Trailing separator |
+| --- | --- |
+| `normalize` | **kept** |
+| `join` | **kept** (it normalizes) |
+| `resolve` | **dropped**, unless the result is the root |
+
+`normalize` and `join` are string operations: they tidy a path without changing
+what it says, so dropping the separator would change its meaning on the way
+through. `resolve` answers a different question — *which location is this* — and
+a location is the same one however it was spelled, so it returns the canonical
+form. The root is the exception because it *is* a separator.
+
+```js
+normalize("a/b/");        // "a/b/"
+normalize("./");          // "./"     — the slash is the whole difference from "."
+join("a", "b/");          // "a/b/"
+resolve("/a", "b/");      // "/a/b"
+resolve("/");             // "/"
+```
+
+## `file:` URLs are first class
+
+The pairing that replaces `__dirname` is here rather than in a global:
+
+```js
+import { dirname, fromFileURL } from "runtime:path";
+
+const here = dirname(fromFileURL(import.meta.url));
+```
+
+`fromFileURL` accepts a string or a `URL` and percent-decodes; `toFileURL`
+resolves to absolute first and returns a **`URL` object**, not a string, so it
+composes with `new URL(rel, base)` without a re-parse.
+
+On Windows both `/` and `\` separate on input, a drive letter is kept verbatim
+through `toFileURL` while every other segment is percent-encoded, and
+`fromFileURL` strips the leading slash that a `file:///C:/…` URL carries.
+
+## What it costs
+
+Nothing, in the sense that matters: no I/O, no capability except the `Env` that
+reading the working directory needs, and no allocation beyond the strings it
+returns.
+
+The limit is the flip side of purity — **none of these functions check that
+anything exists.** `resolve` will happily anchor a path at a directory that is
+not there, and `normalize` will collapse `..` through a segment that never
+existed. That is the same contract Node's has, and it is what makes the module
+safe to call before a capability check rather than after.
+
+## See also
+
+- [`runtime:path` reference](/api/path) — signatures and examples
+- [Internals: the filesystem](/docs/internals/filesystem) — where these paths are then confined

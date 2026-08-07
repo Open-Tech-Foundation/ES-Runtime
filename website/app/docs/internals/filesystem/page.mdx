@@ -1,0 +1,102 @@
+---
+title: "Internals: the filesystem"
+description: How runtime:fs confines every path — the root jail, why it re-resolves on each call, what the scope lists narrow, and why the root itself is not a target.
+---
+
+# Internals: the filesystem
+
+How a path a guest writes becomes a file the host opens, what the jail actually
+checks, and the cases where the answer is "refused" rather than a file.
+
+This page explains behaviour rather than listing signatures — for those, see the
+[`runtime:fs` reference](/api/fs).
+
+## Every path is resolved, then confined
+
+A path arrives as a string, a `file:` URL or a `file()` handle. It is resolved
+against the runtime's base directory, and its **real** location — symlinks
+followed, `.` and `..` collapsed — is checked to be inside the canonicalized
+project root. A path that escapes is refused with `ERR_JAIL_ESCAPE`.
+
+For a path that does not exist yet, the deepest existing ancestor is
+canonicalized and checked, and the remaining components are reattached. Those
+components are literal: a `..` that cannot be resolved because nothing is there
+yet is rejected rather than assumed harmless, so a not-yet-created path cannot
+climb out through a directory that does not exist.
+
+**This is re-done on every call, never cached.** A path validated once can
+become an escape later — the filesystem is mutable, and replacing a directory
+with a symlink between two calls is the entire attack. Caching the resolved path
+would turn one check into a permanent grant.
+
+**`--allow-read` / `--allow-write` are applied after canonicalization, never
+before.** A symlink is a name for a file somewhere else, so judging the name the
+guest wrote would let `--allow-read=./data` admit `./data/link-to-etc/passwd` —
+the hole the jail exists to close, reopened one level in. The lists narrow the
+jail; they never widen it, so a path outside the root stays unreachable whatever
+a list says.
+
+## The root is not a target
+
+Reading the root is ordinary — `stat(".")`, `readDir(".")`, `realPath(".")` all
+work, and so does writing an entry *inside* it. Two things are refused:
+
+**An empty path.** `Path::join("")` is the path itself, so an empty argument
+resolved to the root and the operation ran against it — `remove("", { recursive:
+true })` deleted the entire project directory. No operation intends an empty
+path, and Node's `fs` rejects it too, so it fails with `ERR_INVALID_PATH`.
+
+**A mutation whose resolved target is the root**, however it is spelled — `.`,
+`./`, `data/..`, or the root's own absolute path. Removing, renaming, truncating
+or `chmod`ing the root destroys the sandbox the program is running in, and is
+never a coherent request from inside it.
+
+The guard is on the *resolved target*, which is what keeps it from catching the
+ordinary cases: a new entry in the root resolves to `root/<name>`, not to `root`,
+so `makeTempDir()` — which defaults to the base directory — still works.
+
+## Temporary entries stay inside
+
+`makeTempDir` and `makeTempFile` default to the **base directory, not the OS
+temp directory**. The OS temp directory is outside the root, so writing there
+would be the one filesystem call that escapes the jail.
+
+The name comes from the host's temp-file machinery rather than being composed by
+the caller: a guessable name in a shared directory is a symlink-attack
+invitation, and that is not something each call site should have to re-derive.
+Nothing is cleaned up automatically — what you create, you remove.
+
+## Two doors, one filesystem
+
+`runtime:fs` is asynchronous; `runtime:wasi` is synchronous, because
+WASI's syscalls are. They are separate implementations of the same confinement:
+the same root jail, the same scope lists, the same refusals. A WASI guest is not
+a way around `--allow-read`, and a policy that differed between the two would be
+a bug wearing a feature's clothes.
+
+## Capabilities
+
+Reads need `FileRead`, mutations need `FileWrite`. **`copy` needs both**: it
+reads one path and writes another, and gating it on the write alone would let a
+guest with no read access duplicate a file it cannot see into somewhere it can
+reach by another route.
+
+The capability is checked before the jail, so a denied run learns nothing about
+the layout of a filesystem it may not read.
+
+## What it costs
+
+All operations are asynchronous — there are no sync variants, and no callbacks.
+A write resolves only once the bytes are flushed, not when they are handed to
+the host: `await write(p, data)` followed by `read(p)` is ordinary code, and
+resolving early would make that return a truncated file.
+
+Failures carry a stable `code` (`ERR_NOT_FOUND`, `ERR_ALREADY_EXISTS`,
+`ERR_JAIL_ESCAPE`, `ERR_INVALID_PATH`, …), which is the contract to branch on;
+messages are prose and may be reworded.
+
+## See also
+
+- [`runtime:fs` reference](/api/fs) — signatures, options and error codes
+- [`runtime:path` internals](/docs/internals/path) — the path computation that precedes all of this
+- [Security model](/docs/security) — capabilities and the denial flags

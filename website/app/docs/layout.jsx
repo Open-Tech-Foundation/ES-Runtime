@@ -75,6 +75,10 @@ const NAV = [
       { title: "The fetch client", path: "/docs/internals/fetch" },
       { title: "WebSockets", path: "/docs/internals/websockets" },
       { title: "Workers", path: "/docs/internals/workers" },
+      { title: "The filesystem", path: "/docs/internals/filesystem" },
+      { title: "Paths", path: "/docs/internals/path" },
+      { title: "Serialization", path: "/docs/internals/serialization" },
+      { title: "WebCrypto", path: "/docs/internals/crypto" },
     ],
   },
   {

@@ -1,0 +1,146 @@
+---
+title: "Internals: serialization"
+description: How runtime:serialization moves structured data — the JSON pivot and where it does not work, what each format keeps, and what it refuses.
+---
+
+# Internals: serialization
+
+What happens between a `parse()` call and the object you get back, why the
+formats disagree about what survives a round trip, and which conversions are
+deliberate rather than incidental.
+
+This page explains behaviour rather than listing signatures — for those, see the
+[`runtime:serialization` reference](/api/serialization).
+
+## Everything crosses as JSON, except where it cannot
+
+A parser running in Rust has to get its result into the isolate. The obvious
+route is to build the value tree directly through the FFI boundary, one
+allocation per node. The route actually taken is to **serialize to a JSON string
+and let the guest's `JSON.parse` build the graph**: that turns thousands of small
+crossings into one string, and hands the tree-building to a path V8 has already
+tuned rather than to ours.
+
+That pivot decides most of what follows, because JSON is narrower than the
+formats being parsed. Two places pay for it explicitly:
+
+**YAML and TOML build values directly instead.** JSON has no `Infinity` and no
+`NaN`, so a transcode would quietly turn `.inf` and `.nan` into `null` — a
+document that said "unbounded" arriving as "absent". Both parsers therefore
+construct the runtime's values themselves and non-finite floats survive as real
+numbers. TOML also gains from this: its datetimes become RFC 3339 strings rather
+than leaking the `toml` crate's internal round-trip sentinel.
+
+**MessagePack cannot use the pivot at all for binary.** JSON has no byte string,
+so the `bin` family — the reason to reach for a binary format — has nowhere to
+go. Rather than give up the fast path for every document, the encoded form is
+walked first by an exact structural scan that allocates nothing and reads no
+payload; only a document that actually carries `bin` or `ext` pays for a value
+tree. The scan is structural rather than a byte search on purpose: a `0xc4` byte
+*inside a string payload* is not a `bin` marker, and treating it as one would
+push every document containing arbitrary text onto the slow path.
+
+## What each format keeps
+
+Numbers are IEEE-754 doubles once they are in the isolate, so an integer past
+2<sup>53</sup> loses precision on the way in regardless of the format that
+carried it. That is JavaScript's limit, not the parser's.
+
+### MessagePack
+
+The type mapping is the part worth knowing, because two entries are conversions
+rather than round trips:
+
+| JavaScript | Wire | Comes back as |
+| --- | --- | --- |
+| `Uint8Array`, any typed-array view, `ArrayBuffer` | `bin` | `Uint8Array` |
+| `Map` | map, keys stringified | plain object |
+| `Set` | array | `Array` |
+| `Date` | `str` (ISO 8601) | **`string`, not a `Date`** |
+| function, symbol, `BigInt` | — | **throws `TypeError`** |
+| — | `ext` | `Uint8Array` of the payload |
+
+`Map`, `Set` and `ArrayBuffer` are converted because they reach the host as
+*empty objects* — they carry no own enumerable properties, so without the
+conversion every entry is silently dropped and `{}` goes out.
+
+**Unrepresentable values throw rather than encoding as `nil`.** A function or a
+`BigInt` has no MessagePack form, and writing `nil` for it is total data loss in
+a format chosen for fidelity, reported nowhere. The refusal names the value at
+the call site instead.
+
+**An `ext` value decodes to its payload bytes.** No JavaScript type corresponds
+to a MessagePack extension, and inventing a wrapper object would make it
+indistinguishable from real data the document contained.
+
+**Nesting is bounded.** The input is guest-supplied and both the scan and the
+decoder recurse, so a document deeper than 256 levels is refused rather than
+exhausting the stack. The same bound applies on the way out, which is also what
+stops a cyclic object from encoding forever.
+
+### XML
+
+Elements become object keys; attributes are prefixed `@`; an element's own text
+is `$text`; a name that repeats becomes an array. An empty element is the empty
+string:
+
+```js
+XML.parse('<r a="1">text</r>');        // { r: { "@a": "1", $text: "text" } }
+XML.parse("<r><i>1</i><i>2</i></r>");  // { r: { i: [{ $text: "1" }, { $text: "2" }] } }
+XML.parse("<r><e/></r>");              // { r: { e: "" } }
+```
+
+**A document must be well formed, and `validate` agrees with `parse`.** Reaching
+the end of the input with elements still open is an error, and so is a document
+with no element at all. Both used to pass: `"<r>"` parsed to `{ r: {} }` and
+`"not xml"` came back as that same string, so anything at all parsed
+"successfully" — and `validate` said `true`, because it only surfaced errors the
+reader raised and a truncated document raises none. It now tracks depth itself.
+
+Nesting is bounded at 256 levels, matching libxml2's default, for the same
+reason MessagePack's is.
+
+### YAML
+
+**Block-scalar chomping is the specification's, in all three modes** — this is
+worth stating plainly because it reads like a bug when tested carelessly:
+
+```yaml
+a: |          # clip (default): one trailing newline, if the source has one
+a: |-         # strip: none
+a: |+         # keep: every one
+```
+
+Clip preserves a *final line break that exists*. A block scalar that ends at
+end-of-file with no newline after it has none to preserve, so `"l1\nl2"` is the
+correct answer there — not a dropped newline.
+
+### JSONL
+
+Streams only: `JSONL.DecoderStream` and `JSONL.EncoderStream`, both
+`TransformStream`s. There is no `parse`/`stringify` pair, because a JSON Lines
+document is a sequence — the shape it is usually read in is a stream, and the
+whole-file case is `text.split("\n").map(JSON.parse)` without a helper.
+
+### Protobuf
+
+Pure JavaScript and reflective: `.proto` source is compiled at runtime rather
+than generated ahead of time. proto3 and editions 2023/2024 only —
+proto2-specific constructs are rejected rather than half-supported. 64-bit
+integer fields arrive as `BigInt`, `bytes` as `Uint8Array`, enums as their
+value-name string.
+
+## What it costs
+
+The module needs **no capability**: it is pure computation over values the guest
+already holds, and reads nothing. That is also its limit — nothing here opens a
+file. Parsing a document on disk is `runtime:fs` first, under its own grant.
+
+The text parsers are Rust; Protobuf is JavaScript in the prelude bundle. Both
+run on the isolate's thread, so a very large document is a pause, not a
+background job.
+
+## See also
+
+- [`runtime:serialization` reference](/api/serialization) — signatures and options
+- [Internals: the fetch client](/docs/internals/fetch) — for bodies arriving over the network
