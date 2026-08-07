@@ -1559,6 +1559,7 @@ fn timeout_message(timeout: Option<Duration>) -> String {
 #[cfg(test)]
 mod tests {
     use super::TYPES;
+    use es_runtime_common::Capability;
 
     /// `esrun types` must ship definitions for *every* `runtime:` module.
     ///
@@ -1590,6 +1591,61 @@ mod tests {
             checked += 1;
         }
         assert!(checked >= 8, "only found {checked} module definitions");
+    }
+
+    /// The TypeScript `PermissionName` union is the last hand-written copy of
+    /// the denial vocabulary — Rust owns it, and the two JS readers now ask the
+    /// host for it — so this is where it can silently fall behind. An editor
+    /// would then reject a name the runtime accepts, or accept one it does not.
+    #[test]
+    fn the_permission_union_matches_the_capabilities() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../types/runtime-process.d.ts"
+        ))
+        .expect("read runtime-process.d.ts");
+        let union = source
+            .split_once("export type PermissionName =")
+            .expect("PermissionName union")
+            .1
+            .split_once(';')
+            .expect("union terminator")
+            .0;
+        let listed: Vec<&str> = union
+            .split('|')
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .map(|part| part.trim_matches('"'))
+            .collect();
+        let expected: Vec<&str> = Capability::HOST_FACING
+            .iter()
+            .filter_map(|capability| capability.flag_name())
+            .collect();
+        assert_eq!(
+            listed, expected,
+            "types/runtime-process.d.ts is out of date"
+        );
+    }
+
+    /// Every non-standard `WorkerOptions` member has to be described where an
+    /// editor will find it. `memory` shipped without types once already.
+    #[test]
+    fn worker_options_are_typed() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../types/globals.d.ts"
+        ))
+        .expect("read globals.d.ts");
+        for member in ["permissions?:", "env?:", "memory?:"] {
+            assert!(
+                source.contains(member),
+                "types/globals.d.ts does not declare WorkerOptions {member}"
+            );
+        }
+        assert!(
+            source.contains(r#""inherit" | readonly import("runtime:process").PermissionName[]"#),
+            "permissions should be typed as \"inherit\" or the shared name union"
+        );
     }
 
     /// `index.d.ts` is what the published npm package loads, so a file missing

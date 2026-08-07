@@ -93,6 +93,47 @@ namespace) is unstable and may change between minor releases until the API freez
   thing that distinguishes running out of memory from a watchdog, a
   `process.exit()` or a `terminate()`.
 
+- **`new Worker(url, { permissions: "inherit" })`** — the parent's whole set, in
+  one word, spelled the way `env` already spells it.
+
+  Omitting `permissions` still grants **nothing**, which is the difference from
+  `env` and is deliberate: passing data is not granting authority, since a
+  parent can only hand over values it could already read, whereas a capability
+  it did not name is one it did not mean to give. `"inherit"` is a ceiling, not
+  an escape — the host still intersects it with the spawning agent's own set, so
+  an inheriting worker under `--deny-net` is denied net too.
+
+- **`new Worker(url, { permissions: ["nett"] })` silently granted nothing.** An
+  unrecognised name was skipped. Fail-closed, and therefore quiet: the worker
+  took the degraded path forever and the denial surfaced three layers from the
+  typo. A non-array value (`permissions: "net"`) was ignored outright.
+
+  Both now throw a `TypeError` from the constructor, where the other malformed
+  options already throw:
+
+  ```
+  unknown Worker permission "nett" — expected one of: read, write, imports,
+  net, listen, env, run, signals, workers
+  ```
+
+  This is the rule `runtime:process` `permissions.has()` has always followed;
+  the constructor was the one place not following it. Deno accepts an unknown
+  name in `deno: { permissions }` silently. (`esrun`'s own `--deny-<name>` flags
+  already rejected typos with the same list.)
+
+  A new ungated `permission_names` op serves the authoritative vocabulary
+  (`Capability::HOST_FACING`) to both JS readers, so `runtime:process` drops the
+  hand-transcribed copy it carried.
+
+- **TypeScript coverage for the worker options.** `permissions` was typed
+  `readonly string[]`, so an editor caught no typo either; it is now
+  `"inherit" | readonly PermissionName[]`, sharing the union `runtime:process`
+  already exports. `memory` was missing from `types/` entirely — added, with the
+  narrowing rule and `ERR_WORKER_OUT_OF_MEMORY` documented. Two tests keep the
+  definitions honest: the `PermissionName` union is checked against
+  `Capability::HOST_FACING`, and every non-standard `WorkerOptions` member must
+  be declared.
+
 - **A denied import now says which import, and where the grant is made.** The
   refusal was `capability denied: FileSystem (permission "imports")` — an
   internal capability, a permission the author may never have mentioned, and no

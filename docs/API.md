@@ -430,7 +430,7 @@ and the same set Deno exposes in a module worker.
 | --- | --- | --- |
 | `type` | standard | `"module"` only; `"classic"` throws (see below) |
 | `name` | standard | The worker's `self.name` |
-| `permissions` | **ours** | Capability names to grant — see [Capabilities](#capabilities-1) |
+| `permissions` | **ours** | `"inherit"` or capability names to grant — see [Capabilities](#capabilities-1) |
 | `env` | **ours** | `"inherit"` or an object — see [Environment](#environment) |
 | `memory` | **ours** | Heap ceiling in **megabytes** — see [Memory](#memory) |
 | `credentials` | — | Not supported: it governs how a *classic* script is fetched over HTTP, and a module here comes from a file |
@@ -455,7 +455,32 @@ A worker starts with **nothing** and is granted capabilities explicitly, by the
 
 ```js
 new Worker(url, { permissions: ["net", "read"] })
+new Worker(url, { permissions: "inherit" })      // everything the parent holds
 ```
+
+| `permissions` | The worker gets |
+| --- | --- |
+| omitted | nothing |
+| an array | exactly those, still bounded by the parent's set |
+| `"inherit"` | everything the parent holds |
+
+Omitting it is **not** `"inherit"` — unlike `env`, where omitting and
+`"inherit"` are the same thing. Passing data is not granting authority: a parent
+can only hand over values it could already read, whereas a capability the parent
+did not name is one it did not mean to give.
+
+An unknown name **throws** rather than being skipped:
+
+```js
+new Worker(url, { permissions: ["nett"] })
+// TypeError: unknown Worker permission "nett" — expected one of: read, write,
+// imports, net, listen, env, run, signals, workers
+```
+
+A dropped typo fails closed, which sounds harmless right up until the worker
+takes the degraded path forever and the denial surfaces three layers away. This
+is the rule `permissions.has()` already follows for the same reason. Deno
+accepts an unknown name in `deno: { permissions }` silently.
 
 It can never be granted what its parent lacks, so no chain of spawns widens the
 original grant. Spawning at all requires `workers` (`--deny-workers` refuses

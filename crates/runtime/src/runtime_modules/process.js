@@ -229,20 +229,12 @@ function offSignal(name, handler) {
 // The backing op is ungated, so this answers even under --deny-all — which is
 // the policy under which a program most needs to ask.
 
-// The denial vocabulary, identical to the --deny-<name> flag suffixes. The
-// authoritative list is Rust-side (Capability::HOST_FACING); this copy exists
-// only to reject typos in has() rather than answering them.
-const PERMISSIONS = Object.freeze([
-  "read",
-  "write",
-  "imports",
-  "net",
-  "listen",
-  "env",
-  "run",
-  "signals",
-  "workers",
-]);
+// The denial vocabulary, identical to the --deny-<name> flag suffixes, read
+// from the host rather than transcribed: the authoritative list is Rust-side
+// (Capability::HOST_FACING), and a copy here would be a second place to forget
+// when a capability is added. Used only to reject typos in has() rather than
+// answering them.
+const PERMISSIONS = Object.freeze(ops.permission_names());
 
 const permissions = Object.freeze({
   /** The names this process may not use — `[]` when nothing is denied. */

@@ -151,6 +151,48 @@
     });
   }
 
+  // The denial vocabulary, from the host rather than transcribed here — the
+  // same list `--deny-<name>` and `permissions.has()` take. Read once: it is
+  // fixed for the build.
+  const PERMISSION_NAMES = Object.freeze(__ops.permission_names());
+
+  // `new Worker(url, { permissions })`: what the worker may do.
+  //
+  //   omitted    nothing. A worker starts confined and is granted explicitly
+  //   [ … ]      exactly these, still bounded by what this agent holds
+  //   "inherit"  everything this agent holds
+  //
+  // An unknown name **throws** rather than being skipped. Dropping it silently
+  // fails closed, which sounds harmless right up until the worker takes the
+  // degraded path forever and the denial surfaces three layers from the typo —
+  // the same reason `permissions.has()` refuses to answer `false` for a name it
+  // does not know.
+  //
+  // `"inherit"` expands to the whole vocabulary rather than being a flag of its
+  // own: the host intersects whatever is asked for with this agent's own set,
+  // so asking for everything *is* asking for the parent's set, and there is no
+  // second path through which a spawn could widen anything.
+  function workerPermissions(value) {
+    if (value === undefined || value === null) return [];
+    if (value === "inherit") return [...PERMISSION_NAMES];
+    if (!Array.isArray(value)) {
+      throw new TypeError(
+        'Worker option "permissions" must be "inherit" or an array of permission ' +
+          `names, not ${JSON.stringify(value)}`,
+      );
+    }
+    return value.map((entry) => {
+      const name = String(entry);
+      if (!PERMISSION_NAMES.includes(name)) {
+        throw new TypeError(
+          `unknown Worker permission ${JSON.stringify(name)} — expected one of: ` +
+            PERMISSION_NAMES.join(", "),
+        );
+      }
+      return name;
+    });
+  }
+
   // `new Worker(url, { memory })`: the worker's heap ceiling, **in megabytes**
   // — the unit Node's `resourceLimits.maxOldGenerationSizeMb` uses, and the one
   // a deployment writes anyway.
@@ -234,18 +276,16 @@
       // worker that *fails to start* reports asynchronously, through `onerror`.
       const env = workerEnv(opts.env);
       const memory = workerMemory(opts.memory);
+      const permissions = workerPermissions(opts.permissions);
 
       Object.defineProperty(this, "onmessage", handlerSlot(this, "message"));
       Object.defineProperty(this, "onmessageerror", handlerSlot(this, "messageerror"));
       Object.defineProperty(this, "onerror", handlerSlot(this, "error"));
 
-      this.#ready = this.#start(String(url), opts, env, memory);
+      this.#ready = this.#start(String(url), opts, env, memory, permissions);
     }
 
-    async #start(url, opts, env, memory) {
-      const permissions = Array.isArray(opts.permissions)
-        ? opts.permissions.map(String)
-        : [];
+    async #start(url, opts, env, memory, permissions) {
       const name = opts.name === undefined ? "" : String(opts.name);
 
       try {

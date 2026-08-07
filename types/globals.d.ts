@@ -7,14 +7,17 @@
 
 interface WorkerOptions {
   /**
-   * Capabilities to grant the worker, by the same names `--deny-<name>` and
-   * `runtime:process` `permissions` use: `"read"`, `"write"`, `"imports"`,
-   * `"net"`, `"listen"`, `"env"`, `"run"`, `"signals"`, `"workers"`.
+   * Capabilities to grant the worker.
    *
-   * A worker starts with **none**, and can never be granted what the agent
-   * spawning it does not itself hold — so no chain of spawns widens the
-   * original grant. Omitting this yields a worker that can compute and message,
-   * and reach nothing.
+   * - omitted — **none**. A worker starts confined: it can compute and message,
+   *   and reach nothing.
+   * - an array — exactly these.
+   * - `"inherit"` — everything the spawning agent holds.
+   *
+   * A worker can never be granted what the agent spawning it does not itself
+   * hold, so no chain of spawns widens the original grant — `"inherit"` is a
+   * ceiling, not an escape. An unknown name throws rather than being skipped: a
+   * dropped typo would leave the worker taking the degraded path forever.
    *
    * Non-standard, and necessarily so: the HTML `Worker` has no notion of a
    * capability, and a deny-by-default runtime has to say somewhere what a
@@ -24,7 +27,25 @@ interface WorkerOptions {
    * new Worker(new URL("./w.js", import.meta.url), { permissions: ["net"] });
    * ```
    */
-  permissions?: readonly string[];
+  permissions?: "inherit" | readonly import("runtime:process").PermissionName[];
+
+  /**
+   * The worker's heap ceiling, in **megabytes** — the unit Node's
+   * `resourceLimits.maxOldGenerationSizeMb` uses.
+   *
+   * Omitted, the worker takes the ceiling of the agent that started it (set by
+   * `--max-heap=<mb>`, and by default sized from the container's memory limit
+   * or the host's memory). Named, it may only **lower** that; asking for more
+   * throws.
+   *
+   * Reaching it ends that worker and no other: the parent's `error` fires with
+   * `e.error.name === "ERR_WORKER_OUT_OF_MEMORY"`.
+   *
+   * ```ts
+   * new Worker(url, { memory: 64 });
+   * ```
+   */
+  memory?: number;
 
   /**
    * The environment the worker's `runtime:process` `env` reports.

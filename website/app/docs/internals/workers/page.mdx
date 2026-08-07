@@ -19,7 +19,7 @@ the HTML Standard, in the direction Deno and Bun took.
 | --- | --- | --- |
 | `type` | standard | `"module"` only; `"classic"` throws |
 | `name` | standard | the worker's `self.name` |
-| `permissions` | **ours** | capability names to grant, bounded by the spawning agent's own set |
+| `permissions` | **ours** | `"inherit"`, or capability names to grant, bounded by the spawning agent's own set |
 | `env` | **ours** | `"inherit"` or an object of variables |
 | `memory` | **ours** | heap ceiling in megabytes, bounded by the spawning agent's own |
 | `credentials` | — | unsupported: it governs how a *classic* script is fetched over HTTP |
@@ -86,7 +86,15 @@ above by its parent's set:
 
 ```js
 new Worker(url, { permissions: ["net"] })
+new Worker(url, { permissions: "inherit" })   // everything the parent holds
 ```
+
+Omitting it is **not** `"inherit"` — unlike `env`, where omitting and
+`"inherit"` mean the same thing. Passing data is not granting authority: a
+parent can only hand over values it could already read, whereas a capability it
+did not name is one it did not mean to give. An unknown name throws rather than
+being skipped, since a dropped typo leaves the worker on the degraded path with
+the denial surfacing three layers away.
 
 No chain of spawns widens the original grant. This is stricter than Deno, which
 clones the parent's permissions unmodified — under `esrun`, where the parent

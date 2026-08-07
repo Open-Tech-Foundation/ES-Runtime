@@ -136,6 +136,23 @@ pub(crate) fn install(
         ))
     }))?;
 
+    // The denial vocabulary itself, so the JS side can reject a typo'd name
+    // against the *authoritative* list rather than a copy of it. Two places need
+    // it — `permissions.has()` and `new Worker(url, { permissions })` — and a
+    // third transcription of nine strings is a drift waiting to happen.
+    //
+    // Ungated for the same reason as the denial list above: it reveals only the
+    // shape of the vocabulary, which is in `--help`.
+    engine.register_op(OpDecl::sync("permission_names", move |_args| {
+        Ok(Value::Array(
+            Capability::HOST_FACING
+                .iter()
+                .filter_map(|capability| capability.flag_name())
+                .map(|name| Value::String(name.to_string()))
+                .collect(),
+        ))
+    }))?;
+
     // Ungated (D38): stopping is the guest's own control flow, not authority over
     // the host — code that can run can always stop running, and the exit code is
     // the one thing it may already say on the way out. Node and Deno gate it no

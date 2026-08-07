@@ -781,6 +781,89 @@ fn a_worker_granted_imports_can_import_dynamically() {
 }
 
 #[test]
+fn an_unknown_permission_name_throws_rather_than_being_dropped() {
+    // Dropping it fails closed, which sounds harmless until the worker takes
+    // the degraded path forever and the denial surfaces three layers from the
+    // typo. `permissions.has()` already refuses to answer `false` for a name it
+    // does not know, for exactly this reason; the constructor now agrees.
+    //
+    // Deno accepts `deno: { permissions: { nett: true } }` silently.
+    let out = run(
+        "badperm",
+        r#"postMessage("should never run");"#,
+        r#"
+        for (const value of [["nett"], "net", 7]) {
+          try {
+            new Worker(new URL("WORKER_URL", import.meta.url), { permissions: value });
+          } catch (e) {
+            console.log(e.constructor.name + ":", e.message);
+          }
+        }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(
+        out.contains(
+            r#"TypeError: unknown Worker permission "nett" — expected one of: read, write, imports, net, listen, env, run, signals, workers"#
+        ),
+        "stdout: {out}"
+    );
+    // A bare string is the likelier slip, and was ignored outright.
+    assert!(
+        out.contains(r#"TypeError: Worker option "permissions" must be "inherit" or an array of permission names, not "net""#),
+        "stdout: {out}"
+    );
+    assert!(out.contains(r#"names, not 7"#), "stdout: {out}");
+}
+
+#[test]
+fn permissions_inherit_gives_the_parents_set_and_no_more() {
+    // `"inherit"` mirrors `env`'s spelling, but only as a *value*: omitting the
+    // option still grants nothing, which is the whole of D48. And it is a
+    // ceiling rather than an escape — under `--deny-net` an inheriting worker
+    // is denied net too, because the host intersects whatever was asked for
+    // with the spawning agent's own set.
+    let out = run(
+        "inherit",
+        r#"
+        import { permissions } from "runtime:process";
+        postMessage(permissions.denied.join(","));
+        "#,
+        r#"
+        for (const value of [undefined, "inherit", ["net"]]) {
+          const options = value === undefined ? {} : { permissions: value };
+          const w = new Worker(new URL("WORKER_URL", import.meta.url), options);
+          await new Promise((done) => {
+            w.onmessage = (e) => {
+              console.log(JSON.stringify(value ?? "omitted") + " -> [" + e.data + "]");
+              w.terminate();
+              done();
+            };
+            w.onerror = (e) => { console.log("err:", e.message); e.preventDefault(); done(); };
+          });
+        }
+        "#,
+        &["--deny-net"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    // Omitted: everything denied, unchanged.
+    assert!(
+        out.contains(r#""omitted" -> [read,write,imports,net,listen,env,run,signals,workers]"#),
+        "stdout: {out}"
+    );
+    // Inherit: exactly what the parent lacks, and nothing more.
+    assert!(out.contains(r#""inherit" -> [net]"#), "stdout: {out}");
+    // Asking for what the parent does not hold still yields nothing.
+    assert!(
+        out.contains(r#"["net"] -> [read,write,imports,net,listen,env,run,signals,workers]"#),
+        "stdout: {out}"
+    );
+}
+
+#[test]
 fn deny_workers_refuses_the_spawn() {
     let out = run(
         "denied",
