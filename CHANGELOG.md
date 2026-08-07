@@ -93,6 +93,28 @@ namespace) is unstable and may change between minor releases until the API freez
   thing that distinguishes running out of memory from a watchdog, a
   `process.exit()` or a `terminate()`.
 
+- **A refused spawn now names the flag that fixes it.** Starting a worker takes
+  `imports` as well as `workers` — the parent reads the worker's entry module,
+  and reading a module is what `imports` grants — so `--deny-all
+  --allow-workers` was refused with `capability denied: FileSystem (permission
+  "imports")`: an internal capability and a permission the author never
+  mentioned, with nothing connecting either to the `new Worker()` that failed.
+
+  ```
+  cannot start a worker from ./w.mjs: reading its module needs the "imports"
+  permission — add --allow-imports (capability denied: FileSystem)
+  ```
+
+  Context only — the capability gate in the host is still the whole enforcement,
+  and `e.error.name` (`NotAllowedError`) and `e.error.code`
+  (`ERR_CAPABILITY_DENIED`) are untouched, so anything branching on the refusal
+  is unaffected. Node requires `--allow-fs-read` alongside `--allow-worker` for
+  the same reason and answers `ERR_ACCESS_DENIED`; Deno requires `--allow-read`
+  and names the flag, which is the behaviour copied here.
+
+  `DECISIONS.md` D49 claimed `esrun --deny-all --allow-workers app.js` worked.
+  It never has; the record now carries the command that does.
+
 - **A worker's failure now arrives in pieces, not as one formatted string.** The
   parent's `error` event carried the whole stack in `message`, with `filename`,
   `lineno`, `colno` and `error` all left at their empty defaults — so the only

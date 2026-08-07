@@ -653,6 +653,59 @@ fn a_bad_memory_option_throws_from_the_constructor() {
 }
 
 #[test]
+fn granting_only_workers_says_what_else_is_needed() {
+    // Starting a worker means reading its entry module, so it takes `imports`
+    // as well — Node wants `--allow-fs-read` alongside `--allow-worker` for the
+    // same reason, and Deno wants `--allow-read`. Deno is the one that says
+    // which flag fixes it, and a refusal naming a permission the author never
+    // mentioned is otherwise a dead end.
+    let out = run(
+        "twogrants",
+        r#"postMessage("should never run");"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onerror = (e) => {
+          console.log("refused:", e.message);
+          console.log("code:", e.error.name);
+          e.preventDefault();
+        };
+        "#,
+        &["--deny-all", "--allow-workers"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(
+        out.contains(r#"reading its module needs the "imports" permission — add --allow-imports"#),
+        "stdout: {out}"
+    );
+    // Context only: the refusal is still the host's, unchanged where a program
+    // might branch on it.
+    assert!(
+        out.contains("(capability denied: FileSystem)"),
+        "stdout: {out}"
+    );
+    assert!(out.contains("code: NotAllowedError"), "stdout: {out}");
+}
+
+#[test]
+fn workers_and_imports_together_can_spawn() {
+    // The other half of the same claim, and the command DECISIONS.md D49 should
+    // have carried from the start.
+    let out = run(
+        "twogrants-ok",
+        r#"postMessage("worker ran");"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        w.onerror = (e) => { console.log("refused:", e.message); e.preventDefault(); };
+        "#,
+        &["--deny-all", "--allow-workers", "--allow-imports"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "worker ran");
+}
+
+#[test]
 fn deny_workers_refuses_the_spawn() {
     let out = run(
         "denied",

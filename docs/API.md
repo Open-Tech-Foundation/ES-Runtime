@@ -459,7 +459,11 @@ new Worker(url, { permissions: ["net", "read"] })
 
 It can never be granted what its parent lacks, so no chain of spawns widens the
 original grant. Spawning at all requires `workers` (`--deny-workers` refuses
-it). A worker's own `import`s still load — under the parent's authority to read
+it) **and `imports`**, because starting a worker means reading its entry module
+and reading a module is what `imports` grants — so `--deny-all --allow-workers`
+alone is refused, and the refusal says which flag to add. Node needs
+`--allow-fs-read` alongside `--allow-worker` for the same reason; Deno needs
+`--allow-read`. A worker's own `import`s still load — under the parent's authority to read
 them, resolved before any of the worker's code runs — so a worker granted
 nothing is not limited to a single file.
 

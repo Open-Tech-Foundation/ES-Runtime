@@ -73,6 +73,37 @@
     };
   }
 
+  // A spawn that never got off the ground, worded for whoever wrote the
+  // `new Worker()`.
+  //
+  // Only one refusal needs the help, and it is the one people hit first:
+  // starting a worker means reading its entry module, and reading a module
+  // needs `imports` — so `--deny-all --allow-workers` alone is refused, naming
+  // a permission the author never mentioned. Node and Deno both require a file
+  // read here too; Deno is the one that says which flag fixes it, and this is
+  // that sentence.
+  //
+  // Context only. The capability gate in the host is the whole enforcement and
+  // has already refused by the time this runs — nothing here decides anything,
+  // and the error's `name` and `code` are left exactly as they arrived so
+  // programmatic handling is unaffected.
+  function startupFailure(error, url) {
+    const failure = describe(error);
+    if (error?.code !== "ERR_CAPABILITY_DENIED") return failure;
+    const permission = /permission "([^"]+)"/.exec(failure.message)?.[1];
+    if (permission === undefined) return failure;
+    // The permission is named once, in the sentence that says what to do about
+    // it; what the original adds is the capability behind it, so the trailing
+    // repeat of the name comes off.
+    const denial = failure.message.replace(/ \(permission "[^"]+"\)$/, "");
+    return {
+      ...failure,
+      message:
+        `cannot start a worker from ${url}: reading its module needs the ` +
+        `"${permission}" permission — add --allow-${permission} (${denial})`,
+    };
+  }
+
   function rebuildError(failure) {
     const Class = Object.hasOwn(ERROR_CLASSES, failure.name)
       ? ERROR_CLASSES[failure.name]
@@ -238,7 +269,7 @@
         // here has no one to catch it and would surface as an unhandled
         // rejection on top of the `error` event — reporting one failure twice,
         // the second time as something the guest cannot act on.
-        queueMicrotask(() => this.#fail(describe(e)));
+        queueMicrotask(() => this.#fail(startupFailure(e, url)));
         this.#terminated = true;
         this.#pending = [];
         return null;
