@@ -108,6 +108,11 @@ declare module "runtime:websocket" {
    * Prefer this to a `send()` loop for chat-style fan-out: it marshals the
    * payload once for the whole room, enqueues to every connection concurrently
    * (so one slow peer cannot stall the rest), and coalesces the writes.
+   *
+   * A **closed** connection is skipped — keeping one in the room's set until its
+   * close handler removes it is ordinary. An element that is not a connection at
+   * all throws a `TypeError`, checked across the whole iterable before anything
+   * is sent, so a bad element fails the call rather than half-delivering it.
    */
   export function broadcast(
     connections: Iterable<WebSocketConnection>,

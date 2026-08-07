@@ -4531,6 +4531,12 @@ mod tests {
         /// prelude sent is the thing under test for the server options — the
         /// bind itself is the provider's business.
         served: std::sync::Mutex<Vec<es_runtime_providers::WsServeOptions>>,
+        /// Connection ids `accept` still has to hand out before reporting the
+        /// server closed. Lets a test get real `WebSocketConnection` objects,
+        /// which is what `broadcast` takes.
+        pending_accepts: std::sync::Mutex<std::collections::VecDeque<u64>>,
+        /// The id lists `broadcast` was called with, in order.
+        broadcasts: std::sync::Mutex<Vec<Vec<u64>>>,
     }
     impl MockWs {
         fn new(frames: Vec<es_runtime_providers::WsIncoming>, protocol: &str) -> Self {
@@ -4538,7 +4544,16 @@ mod tests {
                 inbound: std::sync::Mutex::new(frames.into()),
                 protocol: protocol.to_string(),
                 served: std::sync::Mutex::new(Vec::new()),
+                pending_accepts: std::sync::Mutex::new(std::collections::VecDeque::new()),
+                broadcasts: std::sync::Mutex::new(Vec::new()),
             }
+        }
+
+        /// Queues `n` connections for `accept` to yield before it reports the
+        /// server closed.
+        fn accepting(self, n: u64) -> Self {
+            *self.pending_accepts.lock().unwrap() = (1..=n).collect();
+            self
         }
     }
     impl es_runtime_providers::WebSocketProvider for MockWs {
@@ -4574,11 +4589,12 @@ mod tests {
         }
         fn broadcast(
             &self,
-            _ids: Vec<u64>,
+            ids: Vec<u64>,
             _message: es_runtime_providers::WsMessage,
         ) -> es_runtime_providers::BoxFuture<
             std::result::Result<(), es_runtime_providers::ProviderError>,
         > {
+            self.broadcasts.lock().unwrap().push(ids);
             Box::pin(async { Ok(()) })
         }
         fn recv(
@@ -4634,7 +4650,19 @@ mod tests {
                 es_runtime_providers::ProviderError,
             >,
         > {
-            Box::pin(async { Ok(None) })
+            let next = self.pending_accepts.lock().unwrap().pop_front();
+            let protocol = self.protocol.clone();
+            Box::pin(async move {
+                Ok(next.map(|id| {
+                    (
+                        id,
+                        es_runtime_providers::WebSocketInfo {
+                            protocol,
+                            extensions: String::new(),
+                        },
+                    )
+                }))
+            })
         }
         fn close_server(
             &self,
@@ -4922,6 +4950,77 @@ mod tests {
         assert_eq!(
             served[1].timeouts.handshake, None,
             "an explicit null must disable the timeout, not fall back to the default",
+        );
+    }
+
+    /// `broadcast` skipped anything it did not recognize, so
+    /// `broadcast([...room, undefined], msg)` delivered to the rest and said
+    /// nothing, and a list that was entirely the wrong type broadcast to nobody
+    /// and still returned normally — the failure mode where a chat room goes
+    /// quiet and every call looks like it worked.
+    ///
+    /// The connection id is set in the constructor and never removed, so its
+    /// absence is a brand check rather than a liveness one: a *closed*
+    /// connection still has one and is still passed to the host, which owns the
+    /// live socket table. Only something that was never a connection throws.
+    #[test]
+    fn ws_broadcast_refuses_an_element_that_is_not_a_connection() {
+        let _g = v8_guard();
+        let ws = Arc::new(MockWs::new(vec![], "").accepting(2));
+        let mut rt = runtime_with_ws(ws.clone());
+        run_module(
+            &mut rt,
+            "import { serve, broadcast } from 'runtime:websocket'; \
+             const s = serve({ port: 4001 }); \
+             const conns = []; \
+             for await (const c of s) conns.push(c); \
+             const names = []; \
+             for (const bad of [null, undefined, {}, 42, 'conn']) { \
+               try { broadcast([...conns, bad], 'x'); names.push('no throw'); } \
+               catch (e) { names.push(e.constructor.name); } \
+             } \
+             globalThis.result = conns.length + ':' + names.join(',');",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(
+            rt.eval("globalThis.result").unwrap(),
+            Value::String("2:TypeError,TypeError,TypeError,TypeError,TypeError".into()),
+        );
+        assert!(
+            ws.broadcasts.lock().unwrap().is_empty(),
+            "a bad element must fail the whole call, not half-deliver it",
+        );
+    }
+
+    /// The other half: the check must not cost valid connections their
+    /// broadcast, which is the regression the brand test could have introduced.
+    #[test]
+    fn ws_broadcast_still_reaches_every_valid_connection() {
+        let _g = v8_guard();
+        let ws = Arc::new(MockWs::new(vec![], "").accepting(3));
+        let mut rt = runtime_with_ws(ws.clone());
+        run_module(
+            &mut rt,
+            "import { serve, broadcast } from 'runtime:websocket'; \
+             const s = serve({ port: 4001 }); \
+             const conns = []; \
+             for await (const c of s) conns.push(c); \
+             broadcast(conns, 'hello'); \
+             broadcast([], 'to nobody'); \
+             globalThis.result = conns.length;",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(3.0));
+        let sent = ws.broadcasts.lock().unwrap();
+        assert_eq!(
+            sent.len(),
+            1,
+            "an empty list is a no-op, not a host crossing: {sent:?}"
+        );
+        assert_eq!(
+            sent[0].len(),
+            3,
+            "every accepted connection must be sent to"
         );
     }
 

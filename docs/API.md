@@ -1738,7 +1738,7 @@ for await (const ws of server) {
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
 | `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
-| `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). |
+| `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). A closed connection is skipped; an element that is not a connection is a `TypeError`, checked before anything is sent. |
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |

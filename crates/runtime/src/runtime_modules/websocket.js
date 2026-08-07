@@ -213,12 +213,34 @@ function serve(options = {}) {
 // Send one message to many connections in a single host crossing — the batched
 // form of calling `.send()` in a loop (one payload marshal, concurrent enqueue,
 // no head-of-line blocking on a slow peer). `connections` is any iterable of
-// accepted server connections; non-connections and closed ones are skipped.
+// accepted server connections.
+//
+// A **closed** connection is still passed through: the host holds the live
+// socket table and drops ids that are no longer in it, which is the only place
+// the question can be answered without a race. Keeping a closed connection in
+// the room's set until its close handler removes it is ordinary, so that must
+// not be an error.
+//
+// Anything that is not a connection at all is a different matter, and used to
+// be skipped just as quietly: `broadcast([...room, undefined], msg)` sent to the
+// rest and said nothing, and a room that had somehow filled with the wrong type
+// broadcast to nobody and still returned normally. `CONN_ID` is set in the
+// constructor and never removed, so its absence means precisely "this was never
+// a connection" — a brand check, not a liveness one — and that is a caller bug
+// worth a TypeError. Every element is checked before anything is sent, so a bad
+// one fails the whole call rather than half-delivering it.
 function broadcast(connections, data) {
   const ids = [];
+  let index = 0;
   for (const conn of connections) {
     const id = CONN_ID.get(conn);
-    if (id !== undefined) ids.push(id);
+    if (id === undefined) {
+      throw new TypeError(
+        `broadcast(): connections[${index}] is not a WebSocket connection`,
+      );
+    }
+    ids.push(id);
+    index += 1;
   }
   if (ids.length === 0) return;
   Promise.resolve(ops.ws_broadcast(ids, toBytesOrString(data))).catch(() => {});

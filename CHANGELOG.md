@@ -29,6 +29,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`broadcast` refuses an element that is not a connection.** It skipped
+  anything it did not recognize, so `broadcast([...room, undefined], msg)`
+  delivered to the rest and said nothing, and a list that had somehow filled with
+  the wrong type broadcast to nobody and still returned normally — a chat room
+  going quiet with every call looking like it worked. A connection's id is set
+  when it is constructed and never removed, so its absence is a brand check
+  rather than a liveness one: a **closed** connection still carries one and is
+  still handed to the host, which owns the live socket table and is the only
+  place that question can be answered without a race. Only something that was
+  never a connection throws, and the whole iterable is checked before anything is
+  sent, so a bad element fails the call rather than half-delivering it.
+
 - **A body stream chunk that is not bytes is a `TypeError`.** Draining a body
   sized each chunk by `.length` and never checked its type. A string chunk was
   accepted and `Uint8Array.set` coerced every character to `NaN`, so
