@@ -110,6 +110,9 @@ pub enum ErrorCode {
     /// The path argument names no valid target: it is empty, or it is the root
     /// jail itself and the operation would mutate it.
     InvalidPath,
+    /// Source and destination name the same file, for an operation that would
+    /// have to read one while truncating the other.
+    SameFile,
     /// The peer refused the connection.
     ConnectionRefused,
     /// The connection was reset or aborted by the peer.
@@ -146,6 +149,7 @@ impl ErrorCode {
             ErrorCode::DirectoryNotEmpty => "ERR_DIRECTORY_NOT_EMPTY",
             ErrorCode::JailEscape => "ERR_JAIL_ESCAPE",
             ErrorCode::InvalidPath => "ERR_INVALID_PATH",
+            ErrorCode::SameFile => "ERR_SAME_FILE",
             ErrorCode::ConnectionRefused => "ERR_CONNECTION_REFUSED",
             ErrorCode::ConnectionReset => "ERR_CONNECTION_RESET",
             ErrorCode::TimedOut => "ERR_TIMED_OUT",

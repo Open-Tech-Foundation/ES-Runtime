@@ -1250,7 +1250,7 @@ Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 | `mkdir(path, opts?)`  | `(path, { recursive? }) => Promise<void>`       | Creates a directory; `recursive` creates parents.                           |
 | `remove(path, opts?)` | `(path, { recursive? }) => Promise<void>`       | Removes a file or (with `recursive`) a directory tree.                      |
 | `rename(from, to)`    | `(path, path) => Promise<void>`                 | Renames/moves an entry (both jailed).                                       |
-| `copy(from, to)`      | `(path, path) => Promise<number>`               | Copies a file, overwriting `to`; resolves to bytes copied. Needs **both** `FileRead` and `FileWrite`. |
+| `copy(from, to)`      | `(path, path) => Promise<number>`               | Copies a file, overwriting `to`; resolves to bytes copied. Needs **both** `FileRead` and `FileWrite`. `ERR_SAME_FILE` if `from` and `to` are the same file. |
 | `realPath(path)`      | `(path) => Promise<string>`                     | The canonical location — symlinks followed, `.`/`..` removed. `ERR_NOT_FOUND` if missing, `ERR_JAIL_ESCAPE` if it resolves outside the jail. `FileRead`. |
 | `readLink(path)`      | `(path) => Promise<string>`                     | The stored target of a symlink, verbatim (may be relative, may dangle). `FileRead`. |
 | `truncate(path, len?)`| `(path, number) => Promise<void>`               | Sets the file's length exactly, zero-filling if it grows.                   |
@@ -2080,6 +2080,7 @@ try {
 | `ERR_DIRECTORY_NOT_EMPTY` | The directory is not empty. |
 | `ERR_JAIL_ESCAPE` | The real (canonicalized) path escapes the filesystem root jail. |
 | `ERR_INVALID_PATH` | The path names no valid target: it is empty, or it is the root jail itself and the operation would mutate it. |
+| `ERR_SAME_FILE` | Source and destination name the same file, for an operation that would have to read one while truncating the other. |
 | `ERR_CONNECTION_REFUSED` | The peer refused the connection. |
 | `ERR_CONNECTION_RESET` | The connection was reset/aborted by the peer. |
 | `ERR_TIMED_OUT` | The operation timed out. |

@@ -124,6 +124,9 @@ declare module "runtime:fs" {
    * `FileRead` and `FileWrite` — it reads one path and writes another, and
    * gating it on the write alone would let a caller duplicate a file it cannot
    * read into somewhere it can reach another way.
+   *
+   * Rejects with `ERR_SAME_FILE` if `from` and `to` are the same file
+   * (including two hardlinks to one inode), which would otherwise truncate it.
    */
   export function copy(from: PathLike, to: PathLike): Promise<number>;
 

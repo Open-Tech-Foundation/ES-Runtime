@@ -287,6 +287,36 @@ fn other(p: &str, e: std::io::Error) -> ProviderError {
     ProviderError::from_io(p, &e)
 }
 
+/// Whether two already-jailed paths name the same file on disk.
+///
+/// Equal paths are the obvious case, and `jailed` has canonicalized both, so
+/// `a.txt` and `./a.txt` compare equal here. Identity is not path equality
+/// though: two hardlinks to one inode have different names and truncating
+/// either destroys the other, so on Unix the device/inode pair decides. A path
+/// that cannot be stat'd (the destination usually does not exist yet) is not the
+/// same file as anything, and the copy proceeds normally.
+#[cfg(unix)]
+async fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    if a == b {
+        return true;
+    }
+    // Follows symlinks deliberately: a copy reads and writes through them, so a
+    // link and its target are the same file for this purpose.
+    let (Ok(ma), Ok(mb)) = (tokio::fs::metadata(a).await, tokio::fs::metadata(b).await) else {
+        return false;
+    };
+    ma.dev() == mb.dev() && ma.ino() == mb.ino()
+}
+
+/// Windows exposes no stable inode through `std`, so canonical-path equality is
+/// the whole check there and a hardlinked destination still takes the truncating
+/// path.
+#[cfg(not(unix))]
+async fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b
+}
+
 fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
     md.modified()
         .ok()?
@@ -478,6 +508,20 @@ impl FileSystem for SystemFileSystem {
         let to_r = self.jailed(&to, Access::Write);
         Box::pin(async move {
             let (a, b) = (from_r?, to_r?);
+            // `fs::copy` opens the destination truncating *before* it reads the
+            // source, so copying a file onto itself emptied it and reported 0
+            // bytes copied — a silent wipe of the very file being backed up.
+            // Deno refuses the same call; Node/libuv treats it as a no-op. It is
+            // refused here: nothing was copied, so there is no honest byte count
+            // to resolve with, and the call is almost certainly a caller bug.
+            if same_file(&a, &b).await {
+                return Err(ProviderError::Coded {
+                    code: ErrorCode::SameFile,
+                    message: format!(
+                        "Source and destination paths refer to the same file: copy '{from}' -> '{to}'"
+                    ),
+                });
+            }
             tokio::fs::copy(&a, &b).await.map_err(|e| other(&from, e))
         })
     }
@@ -896,6 +940,56 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+    }
+
+    /// `fs::copy` truncates the destination before reading the source, so a file
+    /// copied onto itself came back empty and the call reported success with 0
+    /// bytes — the backup wiped the original.
+    #[tokio::test]
+    async fn copying_a_file_onto_itself_is_refused_rather_than_emptying_it() {
+        let (root, fs) = jail("copy-self");
+        std::fs::write(root.join("a.txt"), b"hello world").unwrap();
+
+        let err = fs.copy("a.txt".into(), "a.txt".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::SameFile), "{err}");
+        assert_eq!(
+            std::fs::read(root.join("a.txt")).unwrap(),
+            b"hello world",
+            "the file must be untouched",
+        );
+
+        // Same file reached by a different spelling — `jailed` canonicalizes, so
+        // this is the equal-paths case rather than the inode one.
+        let err = fs.copy("a.txt".into(), "./a.txt".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::SameFile), "{err}");
+        assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"hello world");
+    }
+
+    /// Two hardlinks to one inode have different paths, so path equality alone
+    /// would let the copy through — and truncating either empties both.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn copying_between_hardlinks_to_one_inode_is_refused() {
+        let (root, fs) = jail("copy-hardlink");
+        std::fs::write(root.join("a.txt"), b"hello world").unwrap();
+        std::fs::hard_link(root.join("a.txt"), root.join("b.txt")).unwrap();
+
+        let err = fs.copy("a.txt".into(), "b.txt".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::SameFile), "{err}");
+        assert_eq!(std::fs::read(root.join("a.txt")).unwrap(), b"hello world");
+    }
+
+    /// The guard must not cost ordinary copies their overwrite behaviour: two
+    /// distinct files that merely hold the same bytes are not the same file.
+    #[tokio::test]
+    async fn copy_still_overwrites_a_distinct_destination() {
+        let (root, fs) = jail("copy-overwrite");
+        std::fs::write(root.join("src.txt"), b"new").unwrap();
+        std::fs::write(root.join("dst.txt"), b"old contents").unwrap();
+
+        let n = fs.copy("src.txt".into(), "dst.txt".into()).await.unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(std::fs::read(root.join("dst.txt")).unwrap(), b"new");
     }
 
     #[tokio::test]

@@ -55,6 +55,14 @@ The guard is on the *resolved target*, which is what keeps it from catching the
 ordinary cases: a new entry in the root resolves to `root/<name>`, not to `root`,
 so `makeTempDir()` — which defaults to the base directory — still works.
 
+**A copy onto the file being copied.** `fs::copy` opens the destination
+truncating before it reads the source, so `copy(p, p)` emptied the file and
+reported success with 0 bytes copied. Path equality is not enough to catch it —
+two hardlinks to one inode have different names and truncating either destroys
+the other — so identity is decided by device/inode on Unix, and the call fails
+with `ERR_SAME_FILE`. Deno refuses the same call; Node treats it as a no-op,
+which is safe but reports success for what is almost certainly a caller bug.
+
 ## Temporary entries stay inside
 
 `makeTempDir` and `makeTempFile` default to the **base directory, not the OS
@@ -92,7 +100,7 @@ the host: `await write(p, data)` followed by `read(p)` is ordinary code, and
 resolving early would make that return a truncated file.
 
 Failures carry a stable `code` (`ERR_NOT_FOUND`, `ERR_ALREADY_EXISTS`,
-`ERR_JAIL_ESCAPE`, `ERR_INVALID_PATH`, …), which is the contract to branch on;
+`ERR_JAIL_ESCAPE`, `ERR_INVALID_PATH`, `ERR_SAME_FILE`, …), which is the contract to branch on;
 messages are prose and may be reworded.
 
 ## See also

@@ -24,7 +24,21 @@ namespace) is unstable and may change between minor releases until the API freez
 - `ERR_INVALID_PATH` — a path argument that names no valid target: it is empty,
   or it is the filesystem root jail itself and the operation would mutate it.
 
+- `ERR_SAME_FILE` — source and destination name the same file, for an operation
+  that would have to read one while truncating the other.
+
 ### Fixed
+
+- **`copy(p, p)` no longer empties the file.** `fs::copy` opens the destination
+  truncating *before* it reads the source, so copying a file onto itself wiped it
+  and reported success with `0` bytes copied — the backup destroying the original,
+  with nothing thrown to notice it by. Copying between two hardlinks to one inode
+  did the same, and path equality alone would not have caught it. `copy` now
+  refuses when source and destination are the same file, by device/inode on Unix
+  and by canonical path elsewhere, with `ERR_SAME_FILE`. Deno refuses the same
+  call; Node treats it as a no-op, which is safe but reports success for what is
+  almost certainly a caller bug. Copies between distinct files are unchanged and
+  still overwrite the destination.
 
 - **A circular or deeply nested argument no longer kills the process.** Every op
   argument is marshaled across the V8 boundary by a recursive descent that ran on

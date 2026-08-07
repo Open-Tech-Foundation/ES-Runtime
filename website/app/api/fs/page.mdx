@@ -39,7 +39,7 @@ import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "r
 | `mkdir(path, options?)` | `(path, { recursive? }) => Promise<void>` | Creates a directory; `recursive` creates missing parents. | `await mkdir("./logs/2026", { recursive: true })` |
 | `remove(path, options?)` | `(path, { recursive? }) => Promise<void>` | Removes a file or (with `recursive`) a directory tree. | `await remove("./tmp", { recursive: true })` |
 | `rename(from, to)` | `(from, to) => Promise<void>` | Renames or moves an entry (both jailed). | `await rename("./draft.md", "./final.md")` |
-| `copy(from, to)` | `(from, to) => Promise<number>` | Copies a file, overwriting the destination; resolves to bytes copied. Needs **both** FileRead and FileWrite. | `await copy("./a.txt", "./b.txt")` |
+| `copy(from, to)` | `(from, to) => Promise<number>` | Copies a file, overwriting the destination; resolves to bytes copied. Needs **both** FileRead and FileWrite. `ERR_SAME_FILE` if `from` and `to` are the same file. | `await copy("./a.txt", "./b.txt")` |
 | `realPath(path)` | `(path) => Promise<string>` | Canonical location — symlinks followed, `.`/`..` removed. Throws if missing or outside the jail. | `await realPath("./a/../b")` |
 | `readLink(path)` | `(path) => Promise<string>` | The stored symlink target, verbatim (may be relative or dangling). | `await readLink("./link")` |
 | `truncate(path, len?)` | `(path, len) => Promise<void>` | Sets the file's length exactly, zero-filling if it grows. | `await truncate("./log", 0)` |
@@ -88,3 +88,4 @@ try {
 | `DOMException` | name `"NotAllowedError"` — the FileRead or FileWrite capability is not granted. |
 | `Error` | A filesystem failure surfaced by the OS (not found, permission denied, etc.). |
 | `ERR_INVALID_PATH` | The path is empty, or a mutation targets the root jail itself (`.`, `./`, `data/..`). Reads of the root are fine. |
+| `ERR_SAME_FILE` | `copy()`'s source and destination are the same file, including two hardlinks to one inode. |

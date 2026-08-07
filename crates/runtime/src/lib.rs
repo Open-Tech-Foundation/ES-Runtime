@@ -1990,6 +1990,17 @@ mod tests {
             std::result::Result<u64, es_runtime_providers::ProviderError>,
         > {
             let mut files = self.files.lock().unwrap();
+            // Copy-and-insert would make this a harmless no-op, but the contract
+            // the system filesystem enforces is a refusal (there it is a wipe),
+            // and the conformance suite runs against this double.
+            if from == to && files.contains_key(&from) {
+                return Self::ready(Err(es_runtime_providers::ProviderError::Coded {
+                    code: es_runtime_common::ErrorCode::SameFile,
+                    message: format!(
+                        "Source and destination paths refer to the same file: copy '{from}' -> '{to}'"
+                    ),
+                }));
+            }
             match files.get(&from).cloned() {
                 Some(bytes) => {
                     let n = bytes.len() as u64;
@@ -2117,6 +2128,32 @@ mod tests {
             "try { await __ops.fs_copy('/a', '/b'); return 'no throw'; } catch (e) { return e.code; }",
         );
         assert_eq!(out, Value::String("ERR_NOT_FOUND".into()));
+    }
+
+    /// Copying a file onto itself has to be refused rather than performed: on the
+    /// real filesystem the destination is truncated before the source is read, so
+    /// it emptied the file and reported `0` bytes copied.
+    #[test]
+    fn copying_a_file_onto_itself_is_refused() {
+        let _g = v8_guard();
+        let mut rt = runtime_with_memory_fs();
+        rt.set_capabilities(
+            CapabilitySet::none()
+                .with(Capability::FileRead)
+                .with(Capability::FileWrite),
+        );
+        let out = eval_async(
+            &mut rt,
+            "await __ops.fs_write('/a', new TextEncoder().encode('payload')); \
+             try { await __ops.fs_copy('/a', '/a'); return 'no throw'; } catch (e) { return e.code; }",
+        );
+        assert_eq!(out, Value::String("ERR_SAME_FILE".into()));
+
+        let survived = eval_async(
+            &mut rt,
+            "return new TextDecoder().decode(await __ops.fs_read('/a'));",
+        );
+        assert_eq!(survived, Value::String("payload".into()));
     }
 
     /// The read-side and write-side additions land on the gate that matches what
