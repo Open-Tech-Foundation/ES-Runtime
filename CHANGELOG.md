@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-07
+
 ### Added
 
 - **A Web Platform Tests subset for workers** (`wpt/`), running the upstream
