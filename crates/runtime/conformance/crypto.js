@@ -267,3 +267,135 @@ test("an OKP key cannot be imported under the wrong curve", async () => {
   }
   assertEquals(jwkName, "DataError");
 });
+
+// ---- Key usages ------------------------------------------------------------
+//
+// `key.usages` is the authority record every operation is checked against, so
+// it is enforced at both ends: nothing outside the algorithm's registration can
+// be recorded, and nothing recorded can be exceeded.
+
+test("an operation the key's usages do not allow is an InvalidAccessError", async () => {
+  const enc = new TextEncoder();
+  const verifyOnly = await crypto.subtle.importKey(
+    "raw", enc.encode("k"), { name: "HMAC", hash: "SHA-256" }, true, ["verify"],
+  );
+  await assertRejects(() => crypto.subtle.sign("HMAC", verifyOnly, enc.encode("m")), "InvalidAccessError");
+
+  const signOnly = await crypto.subtle.importKey(
+    "raw", enc.encode("k"), { name: "HMAC", hash: "SHA-256" }, true, ["sign"],
+  );
+  await assertRejects(
+    () => crypto.subtle.verify("HMAC", signOnly, new Uint8Array(32), enc.encode("m")),
+    "InvalidAccessError",
+  );
+
+  const decryptOnly = await crypto.subtle.importKey("raw", new Uint8Array(32), "AES-GCM", true, ["decrypt"]);
+  await assertRejects(
+    () => crypto.subtle.encrypt({ name: "AES-GCM", iv: new Uint8Array(12) }, decryptOnly, enc.encode("m")),
+    "InvalidAccessError",
+  );
+
+  const deriveKeyOnly = await crypto.subtle.importKey("raw", enc.encode("ikm"), "HKDF", false, ["deriveKey"]);
+  await assertRejects(
+    () => crypto.subtle.deriveBits(
+      { name: "HKDF", salt: new Uint8Array(0), info: new Uint8Array(0), hash: "SHA-256" },
+      deriveKeyOnly, 256,
+    ),
+    "InvalidAccessError",
+  );
+});
+
+test("deriveKey and deriveBits are gated on their own usage, not each other's", async () => {
+  const enc = new TextEncoder();
+  // Only `deriveKey`: deriving a key must work even though it derives bits
+  // internally. Only `deriveBits`: it must not be a back door to minting keys.
+  const keyOnly = await crypto.subtle.importKey("raw", enc.encode("ikm"), "HKDF", false, ["deriveKey"]);
+  const params = { name: "HKDF", salt: new Uint8Array(0), info: new Uint8Array(0), hash: "SHA-256" };
+  const derived = await crypto.subtle.deriveKey(
+    params, keyOnly, { name: "AES-GCM", length: 256 }, true, ["encrypt"],
+  );
+  assertEquals(derived.algorithm.name, "AES-GCM");
+
+  const bitsOnly = await crypto.subtle.importKey("raw", enc.encode("ikm"), "HKDF", false, ["deriveBits"]);
+  await assertRejects(
+    () => crypto.subtle.deriveKey(params, bitsOnly, { name: "AES-GCM", length: 256 }, true, ["encrypt"]),
+    "InvalidAccessError",
+  );
+});
+
+test("wrapKey uses the wrapping key's wrap usage, not encrypt", async () => {
+  // Wrapping is encryption underneath, but the usage checked is `wrapKey` — a
+  // key granted only that must still wrap.
+  const wrapper = await crypto.subtle.importKey(
+    "raw", new Uint8Array(32), "AES-GCM", true, ["wrapKey", "unwrapKey"],
+  );
+  const target = await crypto.subtle.importKey("raw", new Uint8Array(16), "AES-GCM", true, ["encrypt"]);
+  const iv = new Uint8Array(12);
+  const wrapped = await crypto.subtle.wrapKey("raw", target, wrapper, { name: "AES-GCM", iv });
+  const back = await crypto.subtle.unwrapKey(
+    "raw", wrapped, wrapper, { name: "AES-GCM", iv }, { name: "AES-GCM" }, true, ["encrypt"],
+  );
+  assertEquals((await crypto.subtle.exportKey("raw", back)).byteLength, 16);
+});
+
+test("importKey and generateKey reject usages the algorithm does not register", async () => {
+  const enc = new TextEncoder();
+  await assertRejects(
+    () => crypto.subtle.importKey("raw", new Uint8Array(32), "AES-GCM", true, ["sign"]),
+    "SyntaxError",
+  );
+  await assertRejects(
+    () => crypto.subtle.importKey("raw", enc.encode("k"), { name: "HMAC", hash: "SHA-256" }, true, ["encrypt"]),
+    "SyntaxError",
+  );
+  await assertRejects(
+    () => crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["encrypt"]),
+    "SyntaxError",
+  );
+});
+
+test("a secret or private key must be created with at least one usage", async () => {
+  await assertRejects(
+    () => crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, true, []),
+    "SyntaxError",
+  );
+  await assertRejects(
+    () => crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, []),
+    "SyntaxError",
+  );
+});
+
+test("an algorithm that registers no such operation is NotSupportedError, not a usage denial", async () => {
+  // The standard normalizes the algorithm before it looks at the key, so this
+  // must not surface as InvalidAccessError just because the key lacks `encrypt`.
+  const kw = await crypto.subtle.importKey("raw", new Uint8Array(32), "AES-KW", true, ["wrapKey"]);
+  await assertRejects(
+    () => crypto.subtle.encrypt({ name: "AES-KW" }, kw, new Uint8Array(16)),
+    "NotSupportedError",
+  );
+});
+
+// ---- ECDSA hash/curve matrix ----------------------------------------------
+
+test("ECDSA signs and verifies with any hash on any curve", async () => {
+  // A digest narrower than the curve's field is used whole, zero-padded on the
+  // left (SEC1 bits2int). The backend refuses to pad below half the field
+  // width, so P-521/SHA-256 and P-384/SHA-1 failed outright until the prehash
+  // was padded here — both are ordinary combinations every browser accepts.
+  const enc = new TextEncoder();
+  const widths = { "P-256": 64, "P-384": 96, "P-521": 132 };
+  for (const curve of ["P-256", "P-384", "P-521"]) {
+    for (const hash of ["SHA-1", "SHA-256", "SHA-384", "SHA-512"]) {
+      const kp = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: curve }, true, ["sign", "verify"]);
+      const msg = enc.encode(`${curve}/${hash}`);
+      const sig = await crypto.subtle.sign({ name: "ECDSA", hash }, kp.privateKey, msg);
+      assertEquals(sig.byteLength, widths[curve]);
+      assertEquals(await crypto.subtle.verify({ name: "ECDSA", hash }, kp.publicKey, sig, msg), true);
+      // …and it is a real signature, not one that verifies against anything.
+      assertEquals(
+        await crypto.subtle.verify({ name: "ECDSA", hash }, kp.publicKey, sig, enc.encode("other")),
+        false,
+      );
+    }
+  }
+});

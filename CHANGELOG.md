@@ -15,6 +15,35 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **WebCrypto key usages are enforced.** `sign`, `verify`, `encrypt`, `decrypt`,
+  `deriveBits` and `deriveKey` ignored `key.usages` entirely: a key imported for
+  `["verify"]` would sign, an encrypt-only key would decrypt. They now throw
+  `InvalidAccessError`, as the standard requires. `importKey`/`generateKey`
+  likewise reject usages the algorithm does not register, and a secret or
+  private key created with no usages at all, with `SyntaxError` — recording a
+  usage an algorithm cannot honour made `key.usages` meaningless as the
+  authority record every later operation is checked against.
+
+  Two things deliberately do *not* change: `deriveKey` is gated on `deriveKey`
+  rather than on the `deriveBits` it uses internally (and `wrapKey` on `wrapKey`
+  rather than `encrypt`), so a narrowly-granted key still works; and an
+  algorithm that registers no such operation — `encrypt` on AES-KW — remains
+  `NotSupportedError`, because the standard normalizes the algorithm before it
+  looks at the key.
+
+- **ECDSA works with every hash on every curve.** A digest narrower than the
+  curve's field made signing fail outright with `OperationError`: P-521 with
+  SHA-256, P-384 with SHA-1, P-521 with SHA-1. The backend refuses to widen a
+  prehash under half the field width, so the padding SEC1's bits2int implies is
+  now done before the call. Signatures cross-verify with other implementations
+  in both directions; wider digests are untouched.
+
+- **`setTimeout` no longer hangs the process on an over-range delay.** A delay
+  past the 32-bit signed millisecond ceiling was scheduled verbatim, so
+  `setTimeout(fn, 2 ** 40)` armed a timer no program outlives — and a pending
+  timer is pending work, so the process never exited. Over-range delays now
+  clamp to 1 ms, as Node and browsers both do.
+
 - **`runtime:fs` no longer treats the root jail as a target.** `Path::join("")`
   is the path itself, so an empty path argument silently *became* the jail root
   and the operation ran against it: `remove("", { recursive: true })` deleted the

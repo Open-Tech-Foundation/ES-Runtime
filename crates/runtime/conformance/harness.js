@@ -48,4 +48,13 @@ globalThis.assertThrows = (fn, name) => {
   if (!threw) throw new Error("expected a throw, but none occurred");
   if (name && threw.name !== name) throw new Error(`expected ${name}, got ${threw.name}`);
 };
+// The async counterpart of `assertThrows`. `fn` may reject *or* throw
+// synchronously — a promise-returning API is allowed to do either, and a test
+// should not have to care which.
+globalThis.assertRejects = async (fn, name) => {
+  let threw = null;
+  try { await fn(); } catch (e) { threw = e; }
+  if (!threw) throw new Error("expected a rejection, but none occurred");
+  if (name && threw.name !== name) throw new Error(`expected ${name}, got ${threw.name}: ${threw.message}`);
+};
 globalThis.__await_all = () => Promise.all(__pending);

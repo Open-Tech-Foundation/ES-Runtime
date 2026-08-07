@@ -168,6 +168,29 @@ macro_rules! curve_impl {
                     .to_vec())
             }
 
+            /// Left-pads a digest narrower than the curve's field to field
+            /// width, so every `algorithm.hash` works on every curve.
+            ///
+            /// SEC1's bits2int takes the leftmost `min(bitlen(hash),
+            /// bitlen(n))` bits, so a digest narrower than the field is used
+            /// whole — numerically identical to that digest zero-padded on the
+            /// left. RustCrypto's `bits2field` will not do that padding: it
+            /// rejects any input under *half* the field width, which is why
+            /// P-521 with SHA-256 (32 < 33) and P-384 with SHA-1 (20 < 24)
+            /// failed outright with "ECDSA signing failed" while the same pair
+            /// works in every browser. Wider digests are left alone —
+            /// `bits2field` truncates those from the left, which is the
+            /// behaviour the standard asks for.
+            fn field_padded(prehash: &[u8]) -> Vec<u8> {
+                let width = curve::FieldBytes::default().len();
+                if prehash.len() >= width {
+                    return prehash.to_vec();
+                }
+                let mut out = vec![0u8; width];
+                out[width - prehash.len()..].copy_from_slice(prehash);
+                out
+            }
+
             /// ECDSA sign over a prehashed message → fixed-width `r || s`.
             ///
             /// Signs with the nonce randomness drawn from the injected
@@ -188,7 +211,7 @@ macro_rules! curve_impl {
                     failed: false,
                 };
                 let sig: Signature = signing
-                    .sign_prehash_with_rng(&mut rng, prehash)
+                    .sign_prehash_with_rng(&mut rng, &field_padded(prehash))
                     .map_err(|_| operation_error("ECDSA signing failed"))?;
                 if rng.failed {
                     return Err(operation_error("entropy provider failed during signing"));
@@ -208,7 +231,7 @@ macro_rules! curve_impl {
                 let Ok(sig) = Signature::from_slice(signature) else {
                     return Ok(false);
                 };
-                Ok(vk.verify_prehash(prehash, &sig).is_ok())
+                Ok(vk.verify_prehash(&field_padded(prehash), &sig).is_ok())
             }
 
             /// ECDH: raw shared secret (the agreed X coordinate, field-width).

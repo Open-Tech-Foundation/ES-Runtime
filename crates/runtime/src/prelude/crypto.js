@@ -66,6 +66,129 @@
   // Field byte length (and so the JWK coordinate width) per named curve.
   const EC_FIELD = { "P-256": 32, "P-384": 48, "P-521": 66 };
 
+  // Which usages each algorithm recognises, per its WebCrypto registration —
+  // the set `importKey`/`generateKey` validate against. A usage outside it is a
+  // `SyntaxError` and not a silently-kept string, because `key.usages` is what
+  // every later operation is checked against: accepting `["sign"]` on an AES
+  // key would record an authority the algorithm has no way to honour.
+  //
+  // Split into public/private halves for the asymmetric algorithms, since a key
+  // pair's two halves carry different usages (ECDSA signs with the private key
+  // and verifies with the public one).
+  const KEY_USAGES = {
+    HMAC: { secret: ["sign", "verify"] },
+    "AES-GCM": { secret: ["encrypt", "decrypt", "wrapKey", "unwrapKey"] },
+    "AES-CBC": { secret: ["encrypt", "decrypt", "wrapKey", "unwrapKey"] },
+    "AES-CTR": { secret: ["encrypt", "decrypt", "wrapKey", "unwrapKey"] },
+    "AES-KW": { secret: ["wrapKey", "unwrapKey"] },
+    HKDF: { secret: ["deriveKey", "deriveBits"] },
+    PBKDF2: { secret: ["deriveKey", "deriveBits"] },
+    ECDSA: { public: ["verify"], private: ["sign"] },
+    ECDH: { public: [], private: ["deriveKey", "deriveBits"] },
+    Ed25519: { public: ["verify"], private: ["sign"] },
+    X25519: { public: [], private: ["deriveKey", "deriveBits"] },
+    "RSASSA-PKCS1-v1_5": { public: ["verify"], private: ["sign"] },
+    "RSA-PSS": { public: ["verify"], private: ["sign"] },
+    "RSA-OAEP": {
+      public: ["encrypt", "wrapKey"],
+      private: ["decrypt", "unwrapKey"],
+    },
+  };
+
+  /// The usages `algorithmName` recognises for a key of `keyType`, or `null`
+  /// when the algorithm is not one this runtime registers.
+  function allowedUsages(algorithmName, keyType) {
+    const entry = KEY_USAGES[algorithmName];
+    if (!entry) return null;
+    return entry[keyType] ?? entry.secret ?? null;
+  }
+
+  // Rejects usages the algorithm does not recognise. `SyntaxError` is what the
+  // standard specifies here — it is a malformed argument, not a denied one.
+  function checkUsages(algorithmName, keyType, usages) {
+    const allowed = allowedUsages(algorithmName, keyType);
+    if (allowed === null) return usages;
+    const bad = usages.filter((u) => !allowed.includes(u));
+    if (bad.length > 0) {
+      throw new DOMException(
+        `${algorithmName} keys do not support the usage${bad.length > 1 ? "s" : ""} ` +
+          `${bad.map((u) => JSON.stringify(u)).join(", ")}` +
+          `${allowed.length > 0 ? ` (supported: ${allowed.join(", ")})` : " (this key type carries no usages)"}`,
+        "SyntaxError",
+      );
+    }
+    return usages;
+  }
+
+  // A key that can do nothing is almost always a mistake at the call site, and
+  // the standard makes it an error for exactly the key types where a usage is
+  // the whole point: secret and private keys. A public key legitimately has
+  // none (an ECDH public key is only ever an argument to a derivation).
+  function requireNonEmptyUsages(algorithmName, keyType, usages) {
+    if (usages.length === 0 && (keyType === "secret" || keyType === "private")) {
+      throw new DOMException(
+        `${algorithmName}: a ${keyType} key must be created with at least one usage`,
+        "SyntaxError",
+      );
+    }
+    return usages;
+  }
+
+  // The standard normalizes the algorithm for the requested operation *before*
+  // it looks at the key, so an algorithm that registers no such operation is a
+  // `NotSupportedError` and never a usage denial: `encrypt({name: "AES-KW"})`
+  // is "AES-KW does not encrypt", not "this key may not encrypt".
+  function requireOperation(algorithmName, operation) {
+    const entry = KEY_USAGES[algorithmName];
+    if (!entry) return;
+    const registered = [
+      ...(entry.secret ?? []),
+      ...(entry.public ?? []),
+      ...(entry.private ?? []),
+    ];
+    if (!registered.includes(operation)) {
+      throw new DOMException(
+        `${algorithmName} does not support ${operation}`,
+        "NotSupportedError",
+      );
+    }
+  }
+
+  // `generateKey` validates before it has a key to inspect, and a key *pair*
+  // splits the requested usages between its halves — so the request is judged
+  // against everything the algorithm recognises, either half included.
+  function checkRequestedUsages(algorithmName, usages) {
+    const entry = KEY_USAGES[algorithmName];
+    if (!entry) return usages;
+    const allowed = [
+      ...(entry.secret ?? []),
+      ...(entry.public ?? []),
+      ...(entry.private ?? []),
+    ];
+    const bad = usages.filter((u) => !allowed.includes(u));
+    if (bad.length > 0) {
+      throw new DOMException(
+        `${algorithmName} keys do not support the usage${bad.length > 1 ? "s" : ""} ` +
+          `${bad.map((u) => JSON.stringify(u)).join(", ")} (supported: ${allowed.join(", ")})`,
+        "SyntaxError",
+      );
+    }
+    return usages;
+  }
+
+  // Both checks, for the one-key paths (`importKey`, symmetric `generateKey`).
+  function validateUsages(algorithmName, keyType, usages) {
+    const list = normalizeUsageList(usages);
+    checkUsages(algorithmName, keyType, list);
+    requireNonEmptyUsages(algorithmName, keyType, list);
+    return list;
+  }
+
+  function normalizeUsageList(usages) {
+    if (usages === undefined || usages === null) return [];
+    return Array.from(usages, (u) => String(u));
+  }
+
   function toBytes(data) {
     if (data instanceof Uint8Array) return data;
     if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -384,6 +507,33 @@
     },
 
     async generateKey(algorithm, extractable, usages) {
+      // Checked before generating: a usage this algorithm has no meaning for is
+      // a malformed call, and saying so beats handing back a key whose `usages`
+      // silently lost it.
+      checkRequestedUsages(normalizeAlgorithm(algorithm).name, normalizeUsageList(usages));
+      const result = await generateKeyInner(algorithm, extractable, usages);
+      if (result instanceof CryptoKey) {
+        requireNonEmptyUsages(result.algorithm.name, result.type, normalizeUsageList(result.usages));
+      } else {
+        // A pair splits the requested usages between its halves; the private
+        // half having none left means none of them applied to it.
+        requireNonEmptyUsages(
+          result.privateKey.algorithm.name,
+          "private",
+          normalizeUsageList(result.privateKey.usages),
+        );
+      }
+      return result;
+    },
+
+    async importKey(format, keyData, algorithm, extractable, usages) {
+      const key = await importKeyInner(format, keyData, algorithm, extractable, usages);
+      validateUsages(key.algorithm.name, key.type, key.usages);
+      return key;
+    },
+  };
+
+  async function generateKeyInner(algorithm, extractable, usages) {
       const algo = normalizeAlgorithm(algorithm);
       if (algo.name === "HMAC") {
         const hash = hashName(algo.hash);
@@ -453,9 +603,9 @@
         };
       }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
-    },
+  }
 
-    async importKey(format, keyData, algorithm, extractable, usages) {
+  async function importKeyInner(format, keyData, algorithm, extractable, usages) {
       const algo = normalizeAlgorithm(algorithm);
       if (OKP_ALGS.has(algo.name)) {
         return importOkpKey(format, keyData, algo, extractable, usages);
@@ -497,7 +647,9 @@
         return new CryptoKey("secret", false, { name: algo.name }, usages, material);
       }
       throw new DOMException(`unsupported algorithm: ${algo.name}`, "NotSupportedError");
-    },
+  }
+
+  Object.assign(subtle, {
 
     async exportKey(format, key) {
       if (OKP_ALGS.has(key.algorithm.name)) {
@@ -521,6 +673,8 @@
 
     async sign(algorithm, key, data) {
       const algo = normalizeAlgorithm(algorithm);
+      requireOperation(normalizeAlgorithm(algorithm).name, "sign");
+      requireUsage(key, "sign");
       if (algo.name === "Ed25519") {
         // No hash to choose and no nonce to source: Ed25519 fixes SHA-512 and
         // derives its nonce from the key and message (RFC 8032).
@@ -549,6 +703,8 @@
 
     async verify(algorithm, key, signature, data) {
       const algo = normalizeAlgorithm(algorithm);
+      requireOperation(normalizeAlgorithm(algorithm).name, "verify");
+      requireUsage(key, "verify");
       if (algo.name === "Ed25519") {
         return ops.ed25519_verify(key[KEY], toBytes(signature), toBytes(data));
       }
@@ -585,6 +741,19 @@
     },
 
     async encrypt(algorithm, key, data) {
+      requireOperation(normalizeAlgorithm(algorithm).name, "encrypt");
+      requireUsage(key, "encrypt");
+      return encryptUnchecked(algorithm, key, data);
+    },
+
+    async decrypt(algorithm, key, data) {
+      requireOperation(normalizeAlgorithm(algorithm).name, "decrypt");
+      requireUsage(key, "decrypt");
+      return decryptUnchecked(algorithm, key, data);
+    },
+  });
+
+  async function encryptUnchecked(algorithm, key, data) {
       const algo = normalizeAlgorithm(algorithm);
       switch (algo.name) {
         case "AES-GCM": {
@@ -604,9 +773,9 @@
         }
       }
       throw new DOMException(`unsupported encrypt algorithm: ${algo.name}`, "NotSupportedError");
-    },
+  }
 
-    async decrypt(algorithm, key, data) {
+  async function decryptUnchecked(algorithm, key, data) {
       const algo = normalizeAlgorithm(algorithm);
       switch (algo.name) {
         case "AES-GCM": {
@@ -627,9 +796,26 @@
         }
       }
       throw new DOMException(`unsupported decrypt algorithm: ${algo.name}`, "NotSupportedError");
+  }
+
+  Object.assign(subtle, {
+    async deriveBits(algorithm, baseKey, length) {
+      requireOperation(normalizeAlgorithm(algorithm).name, "deriveBits");
+      requireUsage(baseKey, "deriveBits");
+      return deriveBitsUnchecked(algorithm, baseKey, length);
     },
 
-    async deriveBits(algorithm, baseKey, length) {
+    async deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages) {
+      // `deriveKey` is gated on its own usage, not on `deriveBits`: a key
+      // granted only `deriveKey` must still work, and one granted only
+      // `deriveBits` must not be able to mint a key through this door.
+      requireOperation(normalizeAlgorithm(algorithm).name, "deriveKey");
+      requireUsage(baseKey, "deriveKey");
+      return deriveKeyFrom(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages);
+    },
+  });
+
+  async function deriveBitsUnchecked(algorithm, baseKey, length) {
       const algo = normalizeAlgorithm(algorithm);
       if (algo.name === "X25519") {
         // The shared secret is the full 32-byte X coordinate; a null length
@@ -682,9 +868,9 @@
         );
       }
       throw new DOMException(`unsupported derive algorithm: ${algo.name}`, "NotSupportedError");
-    },
+  }
 
-    async deriveKey(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages) {
+  async function deriveKeyFrom(algorithm, baseKey, derivedKeyAlgorithm, extractable, usages) {
       const dka = normalizeAlgorithm(derivedKeyAlgorithm);
       let bits;
       if (AES_ALGS.has(dka.name)) {
@@ -697,10 +883,11 @@
       } else {
         throw new DOMException(`cannot derive ${dka.name} keys`, "NotSupportedError");
       }
-      const derived = await subtle.deriveBits(algorithm, baseKey, bits);
+      const derived = await deriveBitsUnchecked(algorithm, baseKey, bits);
       return subtle.importKey("raw", derived, dka, extractable, usages);
-    },
+  }
 
+  Object.assign(subtle, {
     // ---- Key wrapping ------------------------------------------------------
     //
     // Wrapping is export-then-encrypt and unwrapping is decrypt-then-import,
@@ -720,7 +907,7 @@
       if (algo.name === AES_KW) {
         return asArrayBuffer(ops.subtle_aes_kw_wrap(wrappingKey[KEY], bytes));
       }
-      return subtle.encrypt(algo, wrappingKey, bytes);
+      return encryptUnchecked(algo, wrappingKey, bytes);
     },
 
     async unwrapKey(
@@ -737,7 +924,7 @@
       const bytes =
         algo.name === AES_KW
           ? ops.subtle_aes_kw_unwrap(unwrappingKey[KEY], toBytes(wrappedKey))
-          : new Uint8Array(await subtle.decrypt(algo, unwrappingKey, toBytes(wrappedKey)));
+          : new Uint8Array(await decryptUnchecked(algo, unwrappingKey, toBytes(wrappedKey)));
       const keyData = format === "jwk" ? bytesToJwk(bytes) : bytes;
       return subtle.importKey(
         format,
@@ -747,7 +934,7 @@
         keyUsages,
       );
     },
-  };
+  });
 
   // ---- Octet JWK (symmetric keys) ------------------------------------------
   //

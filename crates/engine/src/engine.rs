@@ -1003,6 +1003,35 @@ mod tests {
         assert_eq!(result, Value::Number(2.0));
     }
 
+    /// A delay past the 32-bit signed millisecond ceiling is an overflow, not a
+    /// wait: it used to be scheduled verbatim, so `setTimeout(fn, 2 ** 40)`
+    /// pinned the loop open and the process never exited. Asserted on the
+    /// scheduled delay rather than by waiting, so a regression fails fast
+    /// instead of hanging the suite.
+    #[test]
+    fn an_overlong_timer_delay_clamps_instead_of_hanging_the_loop() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .eval(
+                "setTimeout(() => {}, 2 ** 40); \
+                 setTimeout(() => {}, 2147483648); \
+                 setTimeout(() => {}, 2147483647); \
+                 setTimeout(() => {}, 1000); \
+                 setTimeout(() => {}, Infinity); \
+                 setTimeout(() => {}, NaN); \
+                 setTimeout(() => {}, -5);",
+            )
+            .expect("eval");
+        let delays: Vec<u64> = engine.take_new_timers().iter().map(|t| t.1).collect();
+        assert_eq!(
+            delays,
+            vec![1, 1, 2_147_483_647, 1000, 0, 0, 0],
+            "over-range delays clamp to 1ms and the ceiling itself is kept; \
+             Infinity/NaN/negative are not delays at all and fire next turn",
+        );
+    }
+
     #[test]
     fn marshals_primitive_kinds() {
         let _v8 = crate::v8_test_guard();

@@ -822,10 +822,19 @@ fn timer_set_inner(
     }
     let callback: v8::Local<v8::Function> = callback.try_into().expect("checked is_function");
     let delay = args.get(1).number_value(scope).unwrap_or(0.0);
-    let delay_ms = if delay.is_finite() && delay > 0.0 {
-        delay as u64
-    } else {
+    // A delay past the 32-bit signed millisecond ceiling is an overflow, not a
+    // wait: every timer API underneath (and `setTimeout`'s own history) carries
+    // it in an `i32`. Browsers and Node both clamp it to "next turn" rather than
+    // arming a timer no program outlives — Node warns and uses 1 ms. Without
+    // this, `setTimeout(fn, 2 ** 40)` pins the loop open forever and the process
+    // never exits, because a pending timer is pending work.
+    const MAX_DELAY_MS: f64 = 2_147_483_647.0;
+    let delay_ms = if !delay.is_finite() || delay <= 0.0 {
         0
+    } else if delay > MAX_DELAY_MS {
+        1
+    } else {
+        delay as u64
     };
     let repeat = args.data().boolean_value(scope);
     // Everything after `delay` is forwarded to the callback on each firing.
