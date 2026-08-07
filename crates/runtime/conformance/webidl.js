@@ -200,3 +200,31 @@ test("the messaging interfaces are branded and exposed", () => {
   assertEquals(tagOf(bc), "[object BroadcastChannel]");
   bc.close();
 });
+
+test("runtime internals are not enumerable on the global object", () => {
+  // `Object.keys(globalThis)` and `for (const k in globalThis)` listed
+  // `__wasm_pending`, `__structuredSerialize` and friends beside `fetch` and
+  // `console` — non-standard surface for any code that walks the globals.
+  const internals = [
+    "__ops",
+    "__internal",
+    "__wasm_pending",
+    "__wasm_module",
+    "__structuredSerialize",
+    "__structuredDeserialize",
+    "__responseTrailers",
+    "__serverRequest",
+    "__make_import_meta_resolve",
+    "__dispatch_error_event",
+    "__dispatch_unhandled_rejection",
+    "__dispatch_rejection_handled",
+    "__structuredWriteHostObject",
+    "__structuredReadHostObject",
+  ];
+  const keys = new Set(Object.keys(globalThis));
+  const leaked = internals.filter((n) => keys.has(n));
+  assertEquals(leaked.length, 0, `enumerable internals: ${leaked.join(" ")}`);
+  // They are still present and still work — this is presentation, not removal.
+  assertEquals(typeof globalThis.__structuredSerialize, "function");
+  assertEquals(structuredClone({ a: 1 }).a, 1);
+});

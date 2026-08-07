@@ -1350,7 +1350,12 @@ socket, else `null`.
 `accept()`, `close()`.
 
 **Errors** — socket failures (bad options, connect/TLS/I/O errors) surface as a
-`TypeError` whose message is prefixed `"SocketError: "` (WinterTC `SocketError`).
+`TypeError` whose message is prefixed `"SocketError: "` (WinterTC `SocketError`),
+including a bind failure reaching `Listener.addr`. The **port** is validated at
+the call: it must be an integer in `0`–`65535`, and `connect` additionally
+rejects `0` — a port that is not a port used to be coerced to `0`, so a typo
+connected somewhere else rather than failing. `listen({ port: 0 })` remains the
+way to ask for an ephemeral port.
 
 One failure reaches **every** surface of the socket it belongs to: a refused
 connect rejects `opened`, the streams, `close()` and a later `startTls()` alike,

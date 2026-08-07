@@ -40,6 +40,19 @@ function hostPort(host, port) {
   return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
+// A TCP port, validated. `Number("nope")` is NaN and `Number(-1)` is -1, and
+// both used to be handed to the host, where they became port 0 — so a typo'd
+// port silently connected somewhere else (or bound an ephemeral port) instead
+// of saying so. `connect` needs a real port; `listen` treats 0 as "pick one",
+// which is the documented way to get an ephemeral port.
+function validPort(value, { allowZero }) {
+  const port = value === undefined || value === "" ? 0 : Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535 || (port === 0 && !allowZero)) {
+    throw socketError(`invalid port: ${String(value)}`);
+  }
+  return port;
+}
+
 // Accepts "host:port" or { hostname | host, port }.
 function parseAddress(address) {
   if (address && typeof address === "object") {
@@ -156,7 +169,9 @@ class Socket {
 
 // WinterTC connect(): returns a Socket immediately; .opened settles on connect.
 function connect(address, options = {}) {
-  const { hostname, port } = parseAddress(address);
+  const parsed = parseAddress(address);
+  const hostname = parsed.hostname;
+  const port = validPort(parsed.port, { allowZero: false });
   const mode = options.secureTransport ?? "off";
   if (mode !== "off" && mode !== "on" && mode !== "starttls") {
     throw socketError(`invalid secureTransport: ${mode}`);
@@ -208,7 +223,7 @@ class Listener {
 
 function listen(options = {}) {
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
-  const port = Number(options.port) || 0;
+  const port = validPort(options.port, { allowZero: true });
   // secureTransport: "on" terminates TLS — every accepted Socket is encrypted.
   // It needs a cert + key (PEM string or bytes); alpn advertises protocols, the
   // negotiated one comes back as the accepted Socket's SocketInfo.alpn.
@@ -225,7 +240,12 @@ function listen(options = {}) {
     cert = toBytes(options.cert);
     key = toBytes(options.key);
   }
-  const ready = ops.net_listen(hostname, port, cert, key, alpn);
+  // Wrapped like `Socket._conn`: a bind failure (a denied address, a port in
+  // use, a privileged port) is a socket failure and carries the documented
+  // `TypeError: SocketError: …` shape, rather than the raw host `Error` that
+  // made `listen` report differently from `connect` for the same class of
+  // problem.
+  const ready = socketOp(ops.net_listen(hostname, port, cert, key, alpn));
   return new Listener(ready);
 }
 

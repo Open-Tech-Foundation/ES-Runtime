@@ -92,6 +92,12 @@ function seeded(target, fill) {
     // Without this, an `Object.freeze(env)` before any read would lock an empty
     // target and the later seeding would silently fail.
     preventExtensions: (t) => (seed(), Reflect.preventExtensions(t)),
+    // `Object.isFrozen`/`isSealed` ask this *first*, and an untrapped
+    // `isExtensible` forwards to a target that has not been seeded yet — so it
+    // reported the empty, still-extensible array and `Object.isFrozen(args)`
+    // came back false for a value the docs call frozen (and which is frozen,
+    // the moment anything reads it).
+    isExtensible: (t) => (seed(), Reflect.isExtensible(t)),
   });
 }
 

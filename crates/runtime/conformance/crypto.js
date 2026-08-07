@@ -56,10 +56,6 @@ test("subtle PBKDF2 deriveBits matches RFC 6070", async () => {
   assertEquals(hex(bits), "0c60c80f961f0e71f3a9b524af6012062fe037a6");
 });
 
-test("getRandomValues rejects Float32Array", () => {
-  assertThrows(() => crypto.getRandomValues(new Float32Array(4)), "TypeError");
-});
-
 
 test("subtle.digest SHA-1 and SHA-512 match known vectors", async () => {
   const enc = new TextEncoder();
@@ -398,4 +394,15 @@ test("ECDSA signs and verifies with any hash on any curve", async () => {
       );
     }
   }
+});
+
+test("getRandomValues rejects a non-integer view with TypeMismatchError", () => {
+  // The wrong *kind* of typed array, which the standard reports as a
+  // DOMException rather than the bare TypeError a non-view gets.
+  assertThrows(() => crypto.getRandomValues(new Float32Array(4)), "TypeMismatchError");
+  assertThrows(() => crypto.getRandomValues(new Float64Array(4)), "TypeMismatchError");
+  // Not a view at all: still a plain TypeError.
+  assertThrows(() => crypto.getRandomValues([1, 2, 3]), "TypeError");
+  // …and the integer views still work.
+  assertEquals(crypto.getRandomValues(new Uint8Array(4)).length, 4);
 });

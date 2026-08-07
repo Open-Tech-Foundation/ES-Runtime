@@ -87,6 +87,35 @@
     }
   }
 
+  // The hooks above cannot be locked, for the reasons given — but nothing about
+  // the engine's reinstall requires them to be *enumerable*, and they were.
+  // `Object.keys(globalThis)` and `for (const k in globalThis)` listed
+  // `__wasm_pending`, `__structuredSerialize` and the rest alongside `fetch` and
+  // `console`, which is both non-standard surface and a way for ordinary guest
+  // code that walks the global object to trip over runtime internals.
+  //
+  // Only the attribute changes. The property stays writable and configurable,
+  // so the engine's per-isolate reinstall — a plain assignment, which updates
+  // an existing writable data property's value and leaves its attributes alone
+  // — keeps working exactly as before.
+  //
+  // This is presentation, not protection: a guest that assigns to one of these
+  // still breaks its own `structuredClone`. That is self-harm, not escalation —
+  // the op table and the capability set live in Rust, so no amount of tampering
+  // here reaches authority (see the note at the top of this file).
+  for (const name of [
+    "__wasm_pending",
+    "__wasm_module",
+    "__structuredSerialize",
+    "__structuredDeserialize",
+    "__responseTrailers",
+  ]) {
+    const d = Object.getOwnPropertyDescriptor(globalThis, name);
+    if (d !== undefined && d.enumerable && d.configurable) {
+      Object.defineProperty(globalThis, name, { enumerable: false });
+    }
+  }
+
   // Freeze the runtime's plain namespace objects so their methods can't be
   // swapped out from under code that reaches them by reference. `crypto` and
   // `performance` are interface instances whose members live on their

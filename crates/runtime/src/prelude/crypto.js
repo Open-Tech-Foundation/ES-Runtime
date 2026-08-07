@@ -21,8 +21,18 @@
   ];
 
   function getRandomValues(view) {
-    if (!ArrayBuffer.isView(view) || !INTEGER_VIEWS.some((T) => view instanceof T)) {
+    if (!ArrayBuffer.isView(view)) {
       throw new TypeError("getRandomValues expects an integer TypedArray");
+    }
+    // A float or bigint-free view is the *wrong kind* of typed array rather
+    // than the wrong kind of argument, which the standard reports as
+    // `TypeMismatchError` — code that branches on the DOMException name saw a
+    // bare TypeError instead.
+    if (!INTEGER_VIEWS.some((T) => view instanceof T)) {
+      throw new DOMException(
+        "getRandomValues expects an integer TypedArray",
+        "TypeMismatchError",
+      );
     }
     if (view.byteLength > 65536) {
       throw new DOMException("requested too many random bytes", "QuotaExceededError");

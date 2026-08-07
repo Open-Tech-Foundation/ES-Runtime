@@ -161,3 +161,27 @@ test("fetching a revoked object URL fails", async () => {
   }
   assertEquals(name, "TypeError");
 });
+
+test("FormData turns a Blob value into a File named \"blob\"", () => {
+  // XHR's "create an entry" step. Storing the Blob as-is left
+  // `fd.get(k) instanceof File` false and `.name` undefined, so the ordinary
+  // way to pick out the file parts — `if (v instanceof File)` — skipped them,
+  // while the multipart body had already written `filename="blob"`.
+  const fd = new FormData();
+  fd.append("a", new Blob(["x"], { type: "text/plain" }));
+  fd.set("b", new Blob(["y"]));
+  for (const key of ["a", "b"]) {
+    const v = fd.get(key);
+    assert(v instanceof File, `${key} must be a File`);
+    assertEquals(v.name, "blob");
+  }
+  assertEquals(fd.get("a").type, "text/plain");
+  // An explicit filename still wins…
+  const named = new FormData();
+  named.append("c", new Blob(["z"]), "given.txt");
+  assertEquals(named.get("c").name, "given.txt");
+  // …and a real File keeps its own name.
+  const kept = new FormData();
+  kept.append("d", new File(["w"], "mine.txt"));
+  assertEquals(kept.get("d").name, "mine.txt");
+});

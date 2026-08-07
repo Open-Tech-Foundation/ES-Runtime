@@ -228,6 +228,35 @@ fn a_websocket_close_reports_the_same_code_at_both_ends() {
     }
 }
 
+/// `runtime:net` port validation and failure shape, and `runtime:process`
+/// `args` reporting as the frozen value the docs describe.
+#[test]
+fn net_validates_ports_and_reports_binds_as_socket_errors() {
+    let out = run_file("net-validation.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        // A port that is not a port used to silently become 0.
+        "negative:TypeError:SocketError: invalid port",
+        "missing:TypeError:SocketError: invalid port",
+        "nan:TypeError:SocketError: invalid port",
+        "toobig:TypeError:SocketError: invalid port",
+        "zero-connect:TypeError:SocketError: invalid port",
+        // …but `listen(0)` is the documented ephemeral-port request.
+        "listen-zero:true",
+        // A bind failure carries the same SocketError shape a connect does.
+        "privileged:TypeError:true",
+        // `Object.isFrozen` asks [[IsExtensible]] first, which used to bypass
+        // the lazy seeding and report the empty, still-extensible array.
+        "args-frozen:true",
+        "args-array:true",
+        "args-push:threw",
+        "NET_VALIDATION_OK",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
 #[test]
 fn tells_a_handler_which_peer_a_request_came_from() {
     // A real accept() under the real binary: the address a handler is given has

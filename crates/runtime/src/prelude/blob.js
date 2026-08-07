@@ -161,8 +161,25 @@
 
   function toEntryValue(value, filename) {
     if (value instanceof Blob) {
-      if (filename !== undefined && !(value instanceof File)) {
-        return new File([value[BYTES]()], String(filename), { type: value.type });
+      // Creating an entry turns a plain `Blob` into a `File` — always, not only
+      // when a filename was supplied. The default name is the literal "blob"
+      // (XHR's "create an entry" step). Storing the `Blob` as-is left
+      // `fd.get(k) instanceof File` false and `.name` undefined, so the
+      // ordinary way to pick the file parts out of a form —
+      // `for (const [k, v] of fd) if (v instanceof File)` — skipped them. The
+      // multipart serialization already wrote `filename="blob"`, so the wire
+      // and the object disagreed about what the entry was.
+      if (!(value instanceof File)) {
+        return new File([value[BYTES]()], filename === undefined ? "blob" : String(filename), {
+          type: value.type,
+        });
+      }
+      // An actual `File` keeps its own name unless one is given here.
+      if (filename !== undefined) {
+        return new File([value[BYTES]()], String(filename), {
+          type: value.type,
+          lastModified: value.lastModified,
+        });
       }
       return value;
     }

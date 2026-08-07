@@ -15,6 +15,41 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`FormData` stores a `Blob` value as a `File`.** Creating an entry converts
+  a plain `Blob` to a `File` named `"blob"` (the standard's "create an entry"
+  step), which it was only doing when an explicit filename was passed. Without
+  it `fd.get(k) instanceof File` was false and `.name` undefined, so the usual
+  way to pick the file parts out of a form skipped them — while the multipart
+  body had already written `filename="blob"`, so the wire and the object
+  disagreed about what the entry was.
+
+- **`crypto.getRandomValues` reports a non-integer view as `TypeMismatchError`.**
+  A `Float32Array` is the wrong *kind* of typed array, which the standard
+  reports as that `DOMException`; it was a bare `TypeError`, indistinguishable
+  from passing something that is not a view at all (which still is one).
+
+- **`runtime:net` validates ports, and reports a bind like a connect.** A port
+  that is not a port — negative, `NaN`, out of range, or missing — was coerced
+  to `0`, so a typo'd port silently connected somewhere else instead of saying
+  so. It is now a `SocketError` at the call. A bind failure reaching
+  `Listener.addr` also carries the documented `TypeError: SocketError: …` shape
+  rather than the raw host `Error`, so `listen` and `connect` no longer report
+  the same class of problem two different ways. `listen({ port: 0 })` still
+  means "pick an ephemeral port".
+
+- **Runtime internals are no longer enumerable on `globalThis`.**
+  `Object.keys(globalThis)` and `for…in` listed `__wasm_pending`,
+  `__structuredSerialize`, `__wasm_module`, `__structuredDeserialize` and
+  `__responseTrailers` beside `fetch` and `console`. They stay writable — the
+  engine reinstalls them per isolate, and locking them would break snapshot
+  restore — so this is presentation, not protection; authority lives in the
+  Rust op table either way.
+
+- **`process.args` reports as frozen.** It is frozen once seeded, but
+  `Object.isFrozen` asks `[[IsExtensible]]` first, which had no proxy trap and
+  so answered from the unseeded, still-empty array — making the documented
+  "**Frozen**" read as false.
+
 - **A WebSocket close reports the code the caller asked for.** A client calling
   `close(4001, "bye")` was told `1006` / `wasClean: false` by its own `close`
   handler, while the peer correctly received 4001 and the reason. 1006 means
