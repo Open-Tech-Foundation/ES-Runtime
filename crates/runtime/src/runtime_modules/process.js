@@ -90,7 +90,19 @@ function seeded(target, fill, onWrite) {
     getOwnPropertyDescriptor: (t, k) => (
       seed(), Reflect.getOwnPropertyDescriptor(t, k)
     ),
-    defineProperty: (t, k, d) => (seed(), Reflect.defineProperty(t, k, d)),
+    // `Object.defineProperty(env, k, { value })` is a write that never reaches
+    // the `set` trap, so without this it was the one way to leave a raw
+    // non-string in `env` (Node coerces here too).
+    defineProperty: (t, k, d) => (
+      seed(),
+      Reflect.defineProperty(
+        t,
+        k,
+        onWrite !== undefined && d !== undefined && "value" in d
+          ? { ...d, value: onWrite(k, d.value) }
+          : d,
+      )
+    ),
     // Without this, an `Object.freeze(env)` before any read would lock an empty
     // target and the later seeding would silently fail.
     preventExtensions: (t) => (seed(), Reflect.preventExtensions(t)),
@@ -115,20 +127,37 @@ const env = seeded({}, (target) => {
   for (const [key, value] of provided ?? ops.process_env()) {
     // Masked by the same key convention either way. A parent that unwrapped a
     // Secret to pass it on does not thereby unmask it for the worker.
-    target[key] = maskIfSecret(key, value);
+    target[key] = toEnvValue(key, value);
   }
-}, maskIfSecret);
+}, toEnvValue);
 
-// The masking rule, applied to the host snapshot *and* to anything written
-// later. A key assigned at runtime — `env.MY_API_KEY = "…"`, which is how a
-// program threads a value it just fetched down to a child — was stored raw, so
-// the same name that arrives masked from the environment stayed a plain string
-// when the program set it, and leaked in a log line or a `JSON.stringify` like
-// any other. A value that is *already* a Secret is left alone rather than
-// wrapped twice.
-function maskIfSecret(key, value) {
+// What actually gets stored for an assignment to `env`, applied to the host
+// snapshot *and* to anything written later.
+//
+// The value is coerced to a string, because an environment is a string-to-string
+// map and nothing else can ever reach a child process. Storing `env.PORT = 8080`
+// verbatim left a *number* in a map that claims to be the environment:
+// `typeof env.PORT` was "number", and handing that whole object to
+// `new Command(cmd, { env })` threw "must be a string" for a value the program
+// had every reason to think it had set correctly. Node and Deno both coerce
+// (`String(value)`, so `undefined` becomes "undefined" and a symbol throws, as
+// it does anywhere else); this now matches them.
+//
+// Masking is applied by the same key convention. A key assigned at runtime —
+// `env.MY_API_KEY = "…"`, which is how a program threads a value it just
+// fetched down to a child — was stored raw, so the same name that arrives masked
+// from the environment stayed a plain string when the program set it, and leaked
+// in a log line or a `JSON.stringify` like any other. A value that is *already*
+// a Secret is left alone rather than wrapped twice — and not coerced either,
+// which would stringify the wrapper instead of what it holds.
+function toEnvValue(key, value) {
   if (value instanceof Secret) return value;
-  return SECRET_KEY.test(String(key)) ? new Secret(value) : value;
+  // Template coercion, not `String(value)`: the two agree on everything except a
+  // symbol, which `String` renders as "Symbol(x)" and this rejects — the same
+  // TypeError Node and Deno raise, rather than storing a description of the
+  // symbol as though it were the value.
+  const string = `${value}`;
+  return SECRET_KEY.test(String(key)) ? new Secret(string) : string;
 }
 
 // `args`: the program arguments after the runtime binary and the script/-e code.

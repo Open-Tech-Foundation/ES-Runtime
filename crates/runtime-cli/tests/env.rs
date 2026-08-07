@@ -234,3 +234,87 @@ console.log("double=" + unmask(env.OTHER_TOKEN));
         assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
     }
 }
+
+/// `env` is a string-to-string map — the only thing an OS environment can hold,
+/// and the only thing a child process can receive. Assigning a non-string left
+/// the raw value in place: `typeof env.PORT` came back "number", and passing the
+/// object on as `new Command(cmd, { env })` then threw "must be a string" for a
+/// value the program had every reason to believe it had set. Node and Deno both
+/// coerce with string semantics, including rejecting a symbol.
+#[test]
+fn env_values_are_coerced_to_strings_on_assignment() {
+    let app = write(
+        "env-coercion.mjs",
+        r#"
+import { env, unmask, Secret } from "runtime:process";
+const show = (k) => console.log(k + "=" + JSON.stringify(env[k]) + ":" + typeof env[k]);
+
+env.NUM = 8080;      show("NUM");
+env.BOOL = true;     show("BOOL");
+env.NUL = null;      show("NUL");
+env.UNDEF = undefined; show("UNDEF");
+env.OBJ = { a: 1 };  show("OBJ");
+env.STR = "plain";   show("STR");
+
+// A write that bypasses the `set` trap must coerce too.
+Object.defineProperty(env, "DEFINED", {
+  value: 42, writable: true, enumerable: true, configurable: true,
+});
+show("DEFINED");
+
+// A symbol has no string value to store; Node and Deno throw here.
+try { env.SYM = Symbol("x"); console.log("sym=no throw"); }
+catch (e) { console.log("sym=" + e.constructor.name); }
+
+// Masking still applies, and wraps the *coerced* value rather than the raw one.
+env.MY_API_KEY = 8080;
+console.log("secret=" + String(env.MY_API_KEY));
+console.log("secretWrapped=" + (env.MY_API_KEY instanceof Secret));
+console.log("secretUnmasked=" + JSON.stringify(unmask(env.MY_API_KEY)));
+"#,
+    );
+    let out = esrun().arg(&app).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "NUM=\"8080\":string",
+        "BOOL=\"true\":string",
+        "NUL=\"null\":string",
+        "UNDEF=\"undefined\":string",
+        "OBJ=\"[object Object]\":string",
+        "STR=\"plain\":string",
+        "DEFINED=\"42\":string",
+        "sym=TypeError",
+        "secret=[redacted]",
+        "secretWrapped=true",
+        "secretUnmasked=\"8080\"",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
+/// The point of the coercion: a value assigned to `env` can be handed straight
+/// to a child, which used to be impossible for anything but a string.
+#[test]
+fn a_coerced_env_value_reaches_a_child_process() {
+    let app = write(
+        "env-coercion-child.mjs",
+        r#"
+import { env } from "runtime:process";
+import { Command } from "runtime:system";
+env.PORT = 8080;
+const out = await new Command("sh", {
+  args: ["-c", "echo PORT=[$PORT]"],
+  env: { PORT: env.PORT },
+}).output();
+console.log(new TextDecoder().decode(out.stdout).trim());
+"#,
+    );
+    let out = esrun().arg(&app).output().expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("PORT=[8080]"),
+        "the child did not receive the coerced value:\n{}",
+        stdout(&out)
+    );
+}

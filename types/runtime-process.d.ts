@@ -19,6 +19,10 @@ declare module "runtime:process" {
    * snapshot taken when the module is evaluated. Reads, writes, and deletes work
    * in-process; they do not propagate to the host process or to child processes.
    *
+   * Assigned values are coerced to strings, since an environment holds nothing
+   * else — `env.PORT = 8080` stores `"8080"`. A symbol has no string value and
+   * throws, as it does in Node and Deno.
+   *
    * Values for secret-bearing keys (e.g. `*_KEY`, `*_TOKEN`, `*_SECRET`,
    * `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are {@link Secret} wrappers; pass
    * them through {@link unmask} to read the value.

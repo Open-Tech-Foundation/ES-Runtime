@@ -28,7 +28,7 @@ import process from "runtime:process";
 
 | Export | Type | Description |
 | --- | --- | --- |
-| `env` | `Record<string, string \| Secret>` | Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes. Secret-keyed values are `Secret` wrappers (see below). |
+| `env` | `Record<string, string \| Secret>` | Environment variables as a mutable in-process object, seeded from a host snapshot taken when the module is evaluated (plus any `--env-file` values). Reads, writes, and deletes work in-process; they do not propagate to the host or to child processes. Assigned values are coerced to strings (`env.PORT = 8080` stores `"8080"`; a symbol throws). Secret-keyed values are `Secret` wrappers (see below). |
 | `args` | `readonly string[]` | Program arguments after the runtime binary and the script (or `-e` snippet). Frozen. Excludes the executable and script path. |
 | `platform` | `string` | Host operating system — the OS-native std value (`"linux" \| "macos" \| "windows"`). |
 | `arch` | `string` | Host CPU architecture — the OS-native std value (`"x86_64" \| "aarch64" \| "arm"`). |

@@ -29,6 +29,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`env` values are coerced to strings.** An environment is a string-to-string
+  map, and a string is the only thing a child process can receive — but an
+  assignment stored whatever it was given, so `env.PORT = 8080` left a *number*
+  in it. `typeof env.PORT` was `"number"`, and handing the object on as
+  `new Command(cmd, { env })` then threw "must be a string" for a value the
+  program had every reason to think it had set correctly. Assignment now coerces
+  (`"8080"`), including through `Object.defineProperty`, which bypassed the write
+  path entirely. A symbol has no string value and throws, exactly as in Node and
+  Deno. Secret-keyed values wrap the coerced string, so masking is unaffected.
+
 - **Protobuf `encode` accepts the field names the `.proto` declares.** It read
   only the lowerCamelCase JSON name, so a message written with the field names as
   they appear in the schema — `{ user_name: "ada" }` for `string user_name = 1` —
