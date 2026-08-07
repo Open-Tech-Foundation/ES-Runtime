@@ -93,6 +93,19 @@ namespace) is unstable and may change between minor releases until the API freez
   thing that distinguishes running out of memory from a watchdog, a
   `process.exit()` or a `terminate()`.
 
+- **A curated `conformance/workers.js`** — 12 tests for the `Worker`
+  constructor's contract and the surface a `Worker` object has. The suite is the
+  pre-1.0 signal and had no worker file at all; it is now 343 assertions across
+  24 files.
+
+- **A fake `WorkerHost` in the runtime's own tests.** The worker seam could only
+  be exercised end-to-end, which costs an OS thread and a V8 isolate per case
+  and can observe nothing but what a worker prints. Five tests now assert what
+  the runtime *asks the host to do* — the narrowed `WorkerSpec`, the order
+  messages reach it, that `"inherit"` is bounded by the parent, that a reported
+  failure reaches `onerror` with its class rebuilt — which is also what an
+  embedder's own `WorkerHost` will be called with.
+
 - **`worker.queued` and `self.queued`** — how many messages have been posted and
   not yet taken, in each direction.
 
@@ -308,6 +321,16 @@ namespace) is unstable and may change between minor releases until the API freez
   ancestor that had not attached an `onerror`.
 
 ### Fixed
+
+- **A WPT run wasted 50 seconds on four dead files.** Two
+  `webmessaging/message-channels/worker*.any.js` files build their worker from a
+  `blob:` URL and set no `onerror`, so the failure reached nothing and each mode
+  waited out its ten-second deadline — reported as "no result before the
+  deadline" when the cause was known and permanent. They are excluded in
+  `scope.js` now, with the distinction spelled out: a test *of* blob:/data:
+  worker URLs stays a counted failure, but one whose subject is `MessagePort`
+  and that merely builds a fixture that way cannot run here at all. A full run
+  is ~11s instead of ~51s, with the same 560/570.
 
 - **`postMessage` could throw, and take the whole agent with it.** `Worker`'s
   `postMessage` and a worker's own were registered as **async** ops, so every

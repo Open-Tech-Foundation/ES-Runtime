@@ -38,6 +38,12 @@ through host-registered, capability-gated ops.
 4. **The FFI / `unsafe` surface.** All V8 interaction and all `unsafe` is
    confined to `engine` (`#![forbid(unsafe_op_in_unsafe_fn)]` workspace-wide;
    `runtime`/`common`/`providers` are `#![forbid(unsafe_code)]`).
+5. **The agent boundary (worker → parent).** A worker is a second isolate with
+   its own `CapabilitySet`, derived from its parent's and never wider (D48).
+   Nothing crosses but structured-clone bytes over the `WorkerHost` seam — no
+   shared heap, no shared globals, no shared module map. The one deliberate
+   exception is `SharedArrayBuffer`, which *is* shared memory by definition and
+   is therefore a channel no capability check can see.
 
 ## 3. Attack surface & defenses
 
@@ -52,6 +58,12 @@ through host-registered, capability-gated ops.
 | | Forging / replacing `globalThis.__ops` | Binding locked (`harden.js`); dispatch + op-id validation in Rust | ☑ tested |
 | Marshaling (`Value`) | Malformed/edge-case values from JS | Defensive marshaling; primitives + copied bytes only | ☑ |
 | | A host op handler **panics** | `catch_unwind` around op/timer/reject callbacks → JS exception, not an unwind across V8 | ☑ tested (assumes `panic = "unwind"`) |
+| Workers | A worker granted more than its parent holds | `child_capabilities` intersects the request with the spawning agent's set; `"inherit"` is that set, not a bypass | ☑ tested |
+| | A worker escaping a tightened heap ceiling by spawning | Limits derive from the parent's; `{ memory }` may only lower | ☑ tested |
+| | A typo'd permission name silently granting nothing | Unknown name throws from the constructor | ☑ tested |
+| | A nested worker outliving the parent that could reach it | `terminate()` takes the subtree; so does a worker ending on its own | ☑ tested |
+| | One agent's failure taking down unrelated agents | A failure ends its own worker and is reported to the parent; an unclaimed `error` on a `Worker` goes to the console rather than escalating | ☑ tested |
+| | Unbounded inter-agent queues | Not bounded — advisory `worker.queued` only, as in Node/Deno/Bun | ◐ |
 | Providers | A provider returns an error (e.g. entropy fails) | Typed `ProviderError` → JS exception; no partial effect | ☑ |
 | | A provider **panics** | Contained as a host-op panic (above), unless `panic = "abort"` | ◐ |
 | V8 / FFI | Use-after-free of handles/scopes | Pinned-scope API; handles never outlive their scope; isolate `!Send` | ☑ by construction |

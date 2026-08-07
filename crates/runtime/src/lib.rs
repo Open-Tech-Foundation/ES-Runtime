@@ -2327,6 +2327,276 @@ mod tests {
         }
     }
 
+    use es_runtime_providers::{WorkerIncoming, WorkerSpec};
+
+    /// A [`WorkerHost`] that starts no threads and runs no isolates.
+    ///
+    /// The end-to-end worker tests drive the real host through `esrun`, which
+    /// costs an OS thread and a V8 isolate per case and can only observe what a
+    /// worker prints. This sees the other side: exactly what the runtime asks
+    /// the host to do, in order, with nothing in between. It is also the only
+    /// way to assert what an embedder's own `WorkerHost` will be called with.
+    #[derive(Default)]
+    struct TestWorkerHost {
+        /// Every call, in order — `spawn`, `post`, `terminate`.
+        calls: Arc<std::sync::Mutex<Vec<String>>>,
+        /// What each worker's `recv` hands back, oldest first. Drained, so a
+        /// worker with nothing left reports `Closed` and is done.
+        inbox: Arc<std::sync::Mutex<Vec<WorkerIncoming>>>,
+        /// The `WorkerSpec` of the most recent spawn, so a test can assert what
+        /// the runtime narrowed before asking for an agent.
+        last: Arc<std::sync::Mutex<Option<WorkerSpec>>>,
+    }
+
+    impl TestWorkerHost {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().expect("calls").clone()
+        }
+
+        fn queue(&self, event: WorkerIncoming) {
+            self.inbox.lock().expect("inbox").push(event);
+        }
+
+        fn last_spec(&self) -> WorkerSpec {
+            self.last
+                .lock()
+                .expect("last")
+                .clone()
+                .expect("a worker was spawned")
+        }
+    }
+
+    impl WorkerHost for TestWorkerHost {
+        fn spawn(
+            &self,
+            spec: WorkerSpec,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<u64, es_runtime_providers::ProviderError>,
+        > {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("spawn {}", spec.specifier));
+            *self.last.lock().expect("last") = Some(spec);
+            Box::pin(std::future::ready(Ok(1)))
+        }
+
+        fn post(
+            &self,
+            id: u64,
+            message: Vec<u8>,
+        ) -> std::result::Result<(), es_runtime_providers::ProviderError> {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("post {id} ({} bytes)", message.len()));
+            Ok(())
+        }
+
+        fn queued(&self, _id: u64) -> usize {
+            0
+        }
+
+        fn recv(
+            &self,
+            _id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<Option<WorkerIncoming>, es_runtime_providers::ProviderError>,
+        > {
+            let next = {
+                let mut inbox = self.inbox.lock().expect("inbox");
+                if inbox.is_empty() {
+                    None
+                } else {
+                    Some(inbox.remove(0))
+                }
+            };
+            Box::pin(std::future::ready(Ok(next)))
+        }
+
+        fn terminate(
+            &self,
+            id: u64,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            self.calls
+                .lock()
+                .expect("calls")
+                .push(format!("terminate {id}"));
+            Box::pin(std::future::ready(Ok(())))
+        }
+    }
+
+    /// A runtime that can start workers, holding every capability so the tests
+    /// below are about the worker seam rather than about a denial.
+    fn runtime_with_workers(host: Arc<TestWorkerHost>) -> Runtime {
+        let mut rt = Runtime::new(
+            Box::new(V8Engine::new(es_runtime_common::Limits::default()).expect("engine")),
+            HostProviders::new(
+                Arc::new(FixedClock {
+                    monotonic: 0,
+                    wall: 0,
+                }),
+                Arc::new(TestConsole::default()),
+                Arc::new(MockNet::stub()),
+                Arc::new(TestEntropy::new()),
+            )
+            .with_workers(host),
+        )
+        .expect("runtime");
+        rt.set_capabilities(CapabilitySet::all());
+        rt
+    }
+
+    /// Loads `main` as the entry module with a worker script available at
+    /// `./w.mjs`, then drives the loop far enough for the spawn and the first
+    /// receives to settle.
+    ///
+    /// The loader has to be installed the way a real program installs one —
+    /// through a module load — because reading a worker's entry goes through
+    /// it, and a runtime with no loader refuses to start a worker at all.
+    fn drive_worker_main(rt: &mut Runtime, main: &str) {
+        block_on(rt.load_module_source(
+            "file:///app/main.mjs",
+            main,
+            MapLoader::new(&[("./w.mjs", "// the worker's own body never runs here")]),
+        ))
+        .expect("load main");
+        for _ in 0..16 {
+            rt.tick(0);
+        }
+    }
+
+    /// What the runtime actually asks a host to start — the narrowing every
+    /// other worker test can only observe indirectly, asserted at the seam.
+    #[test]
+    fn a_spawn_hands_the_host_a_narrowed_spec() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        let mut rt = runtime_with_workers(host.clone());
+        drive_worker_main(
+            &mut rt,
+            "globalThis.__w = new Worker('./w.mjs', \
+               { name: 'jobs', permissions: ['net'], memory: 64 });",
+        );
+
+        let spec = host.last_spec();
+        assert_eq!(spec.name, "jobs");
+        assert_eq!(spec.specifier, "file:///app/w.mjs");
+        // Exactly what was asked for, and the ungated ones that ride along.
+        assert!(spec.capabilities.contains(Capability::Net));
+        assert!(!spec.capabilities.contains(Capability::FileWrite));
+        assert!(!spec.capabilities.contains(Capability::Worker));
+        // Loading the child's graph is the *parent's* authority, and only that.
+        assert!(spec.load_capabilities.contains(Capability::FileSystem));
+        assert!(!spec.load_capabilities.contains(Capability::Net));
+        // `{ memory: 64 }` in megabytes, lowered from this agent's own ceiling.
+        assert_eq!(spec.limits.heap_limit_bytes, Some(64 * 1024 * 1024));
+        // A worker owns its thread, so `Atomics.wait` is legal there.
+        assert!(spec.limits.can_block);
+    }
+
+    /// `permissions: "inherit"` is a ceiling, not an escape: the host is asked
+    /// for what this agent holds and no more.
+    #[test]
+    fn inherited_permissions_are_bounded_by_the_parents_own() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        let mut rt = runtime_with_workers(host.clone());
+        let mut narrowed = CapabilitySet::all();
+        narrowed.revoke(Capability::Net);
+        rt.set_capabilities(narrowed);
+        drive_worker_main(
+            &mut rt,
+            "globalThis.__w = new Worker('./w.mjs', { permissions: 'inherit' });",
+        );
+
+        let spec = host.last_spec();
+        assert!(spec.capabilities.contains(Capability::FileRead));
+        assert!(
+            !spec.capabilities.contains(Capability::Net),
+            "a worker cannot inherit what its parent does not hold"
+        );
+    }
+
+    /// Messages queued before the spawn resolves reach the host in the order
+    /// they were posted — the regression this seam exists to pin down, since
+    /// end-to-end it can only be observed by what the worker prints.
+    #[test]
+    fn queued_messages_reach_the_host_in_order() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        let mut rt = runtime_with_workers(host.clone());
+        drive_worker_main(
+            &mut rt,
+            "globalThis.__w = new Worker('./w.mjs'); \
+             for (let i = 0; i < 3; i++) __w.postMessage(new Uint8Array(i + 1));",
+        );
+
+        let calls = host.calls();
+        assert_eq!(calls[0], "spawn file:///app/w.mjs", "{calls:?}");
+        // Byte lengths stand in for identity: growing means the order held.
+        let posts: Vec<&String> = calls.iter().filter(|c| c.starts_with("post")).collect();
+        assert_eq!(posts.len(), 3, "{calls:?}");
+        assert!(posts[0] < posts[1] && posts[1] < posts[2], "{posts:?}");
+    }
+
+    /// A failure the host reports reaches the parent's `onerror` with its class
+    /// rebuilt — the whole point of describing a failure rather than formatting
+    /// it, checked without a second isolate to throw in.
+    #[test]
+    fn a_hosts_error_reaches_onerror_with_its_class() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        host.queue(WorkerIncoming::Error {
+            error: UncaughtError::new(
+                "RangeError",
+                "out of range",
+                "RangeError: out of range\n    at inner (file:///w.mjs:2:9)",
+            ),
+        });
+        let mut rt = runtime_with_workers(host.clone());
+        drive_worker_main(
+            &mut rt,
+            "globalThis.__seen = null; \
+             globalThis.__w = new Worker('./w.mjs'); \
+             __w.onerror = (e) => { \
+               __seen = [e.error.name, e.message, e.filename, e.lineno, e.colno, \
+                         e.error instanceof RangeError].join('|'); \
+               e.preventDefault(); \
+             };",
+        );
+
+        assert_eq!(
+            rt.eval("globalThis.__seen").unwrap(),
+            Value::String("RangeError|out of range|file:///w.mjs|2|9|true".into())
+        );
+    }
+
+    /// `terminate()` reaches the host, and stops the runtime asking for more.
+    #[test]
+    fn terminate_reaches_the_host_and_ends_the_pump() {
+        let _g = v8_guard();
+        let host = Arc::new(TestWorkerHost::default());
+        let mut rt = runtime_with_workers(host.clone());
+        drive_worker_main(&mut rt, "globalThis.__w = new Worker('./w.mjs');");
+        rt.eval("__w.terminate(); __w.postMessage('dropped');").unwrap();
+        for _ in 0..8 {
+            rt.tick(0);
+        }
+
+        let calls = host.calls();
+        assert!(calls.contains(&"terminate 1".to_string()), "{calls:?}");
+        // Nothing is posted after a terminate, even though the host would
+        // happily have taken it.
+        let after = calls.iter().position(|c| c == "terminate 1").expect("terminate");
+        assert!(
+            !calls[after..].iter().any(|c| c.starts_with("post")),
+            "{calls:?}"
+        );
+    }
+
     fn test_providers() -> HostProviders {
         HostProviders::new(
             Arc::new(FixedClock {

@@ -586,22 +586,6 @@
       "without start()": "PASS"
     }
   },
-  "webmessaging/message-channels/worker-post-after-close.any.js:main": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
-  "webmessaging/message-channels/worker-post-after-close.any.js:worker": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
-  "webmessaging/message-channels/worker.any.js:main": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
-  "webmessaging/message-channels/worker.any.js:worker": {
-    "harness": "TIMEOUT",
-    "subtests": {}
-  },
   "workers/Worker-base64.any.js:worker": {
     "harness": "OK",
     "subtests": {
@@ -816,7 +800,7 @@
     }
   },
   "workers/modules/dedicated-worker-import.any.js:main": {
-    "harness": "ERROR",
+    "harness": "OK",
     "subtests": {
       "Static import.": "PASS",
       "Static import (cross-origin).": "SKIP",
@@ -830,7 +814,7 @@
     }
   },
   "workers/modules/dedicated-worker-import.any.js:worker": {
-    "harness": "ERROR",
+    "harness": "OK",
     "subtests": {
       "Static import.": "PASS",
       "Static import (cross-origin).": "SKIP",

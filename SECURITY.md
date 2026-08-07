@@ -192,6 +192,55 @@ Spawning is the one grant that **ends the sandbox**, and it is treated as such
 **Not covered:** killing a process *tree*. `kill()` signals the direct child
 only, so a child that spawns its own children can leave grandchildren running.
 
+## Workers (`Capability::Worker`)
+
+A worker is a second agent: its own thread, its own V8 isolate, no shared heap.
+Starting one is capability-gated, and everything it receives **narrows** from
+the agent that started it (DECISIONS D48/D49):
+
+- **A worker starts with nothing.** `new Worker(url)` grants no capability at
+  all; each is named at the spawn — `{ permissions: ["net"] }` — and can never
+  exceed what the spawning agent holds. `{ permissions: "inherit" }` asks for
+  that agent's whole set and is still bounded by it. Nesting re-applies the rule
+  at every level, so no chain of spawns widens the original grant. This is
+  stricter than Deno, which clones the parent's permissions unmodified.
+- **Two grants are needed to spawn at all**, not one: `workers`, and `imports`
+  to read the worker's entry module. `--deny-all --allow-workers` alone is
+  refused. Node requires `--allow-fs-read` alongside `--allow-worker` for the
+  same reason; Deno requires `--allow-read`.
+- **The entry module is read under the parent's authority, before the worker
+  exists**, and the capability set narrows to the worker's own before a line of
+  it runs. That is safe for one specific reason: **instantiation runs no guest
+  code**. Dynamic `import()` inside a worker is a different matter — it picks
+  its specifier at runtime, so it reads *and executes* a file chosen while the
+  worker runs, and needs `imports` granted at the spawn.
+- **An unknown permission name throws** rather than being skipped. Dropping it
+  fails closed, which is quiet in the worst way: the worker takes the degraded
+  path forever and the denial surfaces far from the typo.
+- **The environment is attenuated, not inherited.** `{ env: { … } }` passes
+  precisely those variables and needs no `env` capability, because a parent can
+  only pass values it could already read. Node's `SHARE_ENV` has no equivalent
+  here: a shared, mutable environment is an undeclared side channel between
+  agents, and `postMessage` is the declared one.
+- **Memory is bounded per agent.** A worker inherits the heap ceiling of the
+  agent that started it (`--max-heap=<mb>`, by default sized from the container
+  limit or host memory) and `{ memory: 64 }` may only lower it. Reaching it ends
+  that worker alone, reported to the parent as `ERR_WORKER_OUT_OF_MEMORY`.
+- **`terminate()` is real.** It interrupts the isolate, so it stops a worker
+  spinning in a synchronous loop or parked in `Atomics.wait`, and it takes that
+  worker's own workers with it — a nested worker left running would be
+  unreachable and would still hold the process open.
+- **Process control is not delegated.** `onSignal` is refused inside a worker,
+  and `exit()` there ends that worker without setting the process's exit code.
+
+**Not covered:** CPU time per worker — the execution watchdog (`--timeout`) is
+per process, not per agent. Message queues between agents are unbounded, so a
+producer that outruns its worker grows memory; `worker.queued` is the signal to
+pace against, and it is advisory. `SharedArrayBuffer` is genuinely shared
+memory: two agents holding one are not isolated from each other's writes, which
+is what makes `Atomics` work and what makes it a channel a capability check
+cannot see.
+
 ## Environment files & secret masking
 
 `.env` support (DECISIONS D30) is built so that **what the guest can read from

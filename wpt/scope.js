@@ -18,6 +18,11 @@
 // `DedicatedWorkerGlobalScope` (Deno exposes all four in a module worker),
 // `EventSource`, `FileReader`, `data:`/`blob:` worker URLs, and growable
 // `SharedArrayBuffer`.
+//
+// One nuance on that last pair: a test *of* blob:/data: worker URLs is a
+// counted failure, as above. A test whose subject is something else entirely
+// and that merely builds its fixture from a blob URL is excluded below — it
+// cannot run here for a reason that has nothing to do with what it asserts.
 
 // Interfaces that belong to a rendering engine, a document, or browser-local
 // storage. None of these exist in Deno's workers either.
@@ -63,6 +68,21 @@ export const FILES = [
   {
     match: /^workers\/nested_worker_importScripts\.worker\.js$/,
     reason: "importScripts: module-only runtime (SPEC §8, D48)",
+  },
+  {
+    // These do not *test* blob: workers — their subject is `MessagePort`. A
+    // blob URL is just how they build a worker to test it with, and none of them sets `onerror`, so the failure reaches nothing and
+    // the file waits out its deadline: five runs, ten seconds each, reported as
+    // "no result before the deadline" when the cause is known and permanent.
+    //
+    // That is the distinction the note at the top of this file draws. A test
+    // *of* blob:/data: worker URLs stays a counted failure — it is a judgment
+    // call, and hiding it would flatter the number. A test that merely needs
+    // one to build a fixture cannot run here at all, which is what an exclusion
+    // is for.
+    match: /^webmessaging\/message-channels\/worker(-post-after-close)?\.any\.js$/,
+    reason:
+      "builds its worker from a blob: URL: a worker's script must name a file, so blob: and data: are refused there (docs/scope)",
   },
   {
     match: /^workers\/nested_worker_sync_xhr\.worker\.js$/,

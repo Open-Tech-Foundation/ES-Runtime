@@ -112,7 +112,7 @@ against it: a subtest that used to pass and now does not fails the run; one that
 starts passing is reported so the record can be updated in the same commit as the
 fix. Re-record with `--update-expectations`.
 
-## The 10 subtests that stay failing
+## The 10 subtests that stay failing, and the one timeout
 
 All ten are in `workers/modules/dedicated-worker-import.any.js`, and both of the
 reasons are deliberate rather than unfinished:
@@ -142,6 +142,14 @@ reasons are deliberate rather than unfinished:
   can never pass here. (They used to be reported as a missing npm package, since
   an unsubstituted URL fails to parse as one and fell through to the
   `node_modules` walk. Now they say what they are.)
+
+One `TIMEOUT` also remains, and stays on purpose:
+`webmessaging/MessageEvent-trusted.any.js:main` builds its worker from a `blob:`
+URL and sets no `onerror`, so the failure reaches nothing and the file waits out
+its deadline. Its **worker** mode passes, so excluding the file would hide real
+coverage — ten seconds is the honest price. The two `message-channels/worker*`
+files had the same shape in *both* modes, contributed nothing, and are excluded
+in `scope.js`; that took a full run from ~51s to ~11s.
 
 ## Runtime bugs this runner found
 
