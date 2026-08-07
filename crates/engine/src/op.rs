@@ -22,6 +22,7 @@ use std::task::{Context, Poll, Waker};
 
 use es_runtime_common::{
     Capability, CapabilitySet, Error as CommonError, ErrorCode, ExceptionClass, IntoException,
+    UncaughtError,
 };
 
 use crate::convert::{build_exception, marshal, throw, value_to_js};
@@ -243,8 +244,8 @@ pub(crate) struct OpState {
     /// a `rejectionhandled` dispatch on the next drain.
     rejections_handled: Vec<v8::Global<v8::Promise>>,
     /// Exceptions that escaped a host-invoked callback (a timer) and that no
-    /// `error` listener claimed, formatted for the embedder to report.
-    uncaught_errors: Vec<String>,
+    /// `error` listener claimed, described for the embedder to report.
+    uncaught_errors: Vec<UncaughtError>,
     /// Upper bound on concurrently pending async ops (DECISIONS.md D7 / SPEC §4).
     /// Dispatching a new async op past this throws, so adversarial JS can't pile
     /// up unbounded host work. `usize::MAX` until set from the engine's limits.
@@ -1040,12 +1041,12 @@ fn report_uncaught(
     if handled == Some(true) {
         return;
     }
-    let message = crate::convert::format_exception(scope, error);
-    state_rc.borrow_mut().uncaught_errors.push(message);
+    let described = crate::convert::exception_details(scope, error);
+    state_rc.borrow_mut().uncaught_errors.push(described);
 }
 
 /// Fires `unhandledrejection` for each rejection that is still unclaimed, then
-/// drains and stringifies the ones no listener took responsibility for.
+/// drains and describes the ones no listener took responsibility for.
 ///
 /// A listener calling `preventDefault()` is the spec's way for guest code to say
 /// "this rejection is mine, do not report it" — so a prevented rejection is
@@ -1056,7 +1057,7 @@ pub(crate) fn take_unhandled_rejections(
     isolate: &mut v8::OwnedIsolate,
     context: &v8::Global<v8::Context>,
     op_state: &Rc<RefCell<OpState>>,
-) -> Vec<String> {
+) -> Vec<UncaughtError> {
     let (rejections, handled) = {
         let mut state = op_state.borrow_mut();
         let rejections: Vec<(i32, Rejection)> = state.unhandled_rejections.drain().collect();
@@ -1089,14 +1090,14 @@ pub(crate) fn take_unhandled_rejections(
             continue;
         }
         op_state.borrow_mut().reported_rejections.insert(*key);
-        reported.push(crate::convert::format_exception(scope, value));
+        reported.push(crate::convert::exception_details(scope, value));
     }
     reported
 }
 
 /// Drains exceptions that escaped a host-invoked callback and were not claimed
 /// by an `error` listener.
-pub(crate) fn take_uncaught_errors(op_state: &Rc<RefCell<OpState>>) -> Vec<String> {
+pub(crate) fn take_uncaught_errors(op_state: &Rc<RefCell<OpState>>) -> Vec<UncaughtError> {
     std::mem::take(&mut op_state.borrow_mut().uncaught_errors)
 }
 

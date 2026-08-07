@@ -392,7 +392,7 @@ const worker = new Worker(new URL("./worker.js", import.meta.url), {
   env: { API_BASE: "https://example.test" }, // see Environment below
 });
 worker.onmessage = (e) => console.log(e.data);
-worker.onerror = (e) => { console.error(e.message); e.preventDefault(); };
+worker.onerror = (e) => { console.error(e.error); e.preventDefault(); }; // see Failure
 worker.postMessage({ job: 42 });
 
 // worker.js
@@ -513,6 +513,38 @@ synchronous loop or parked in `Atomics.wait`.
 not set the code the process exits with. `onSignal` is refused inside a worker:
 a signal is delivered to the process, and watching one suppresses the default
 action, so that belongs to the agent that owns the process.
+
+### Failure
+
+An uncaught exception or unhandled rejection inside a worker fires `error` on
+the parent's `Worker` **the tick it happens**, and ends the worker — so an
+`error` means "this one is gone", which is the fact a pool restarting on failure
+needs. The worker takes responsibility instead by claiming the failure in its
+own handler, which is then neither reported nor fatal:
+
+```js
+self.addEventListener("error", (e) => {
+  postMessage({ failed: currentJob, reason: e.message });
+  e.preventDefault();          // absorbed; this worker keeps its next job
+});
+```
+
+The event the parent gets carries the failure in pieces:
+
+| | |
+| --- | --- |
+| `e.message` | the message alone — no class prefix, no stack |
+| `e.filename`, `e.lineno`, `e.colno` | the throw site; empty and `0` when unknown |
+| `e.error` | an `Error` with the worker's `name`, `message` and `stack` |
+
+`e.error` is rebuilt rather than moved — the failure crossed a thread — so it is
+the class it was thrown as for the standard classes, and an `Error` carrying the
+right `name` for anything else. That is the discriminator that survives regardless:
+a `DOMException` is told apart by `"AbortError"`, not by its constructor.
+
+A worker that merely *hears* about a child's failure has not failed itself, so an
+unclaimed `error` on a `Worker` goes to the console rather than escalating —
+otherwise one leaf failure would take down every ancestor without an `onerror`.
 
 ### What crosses
 

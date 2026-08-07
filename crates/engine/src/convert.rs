@@ -276,13 +276,45 @@ fn exception_stack(
         .then(|| stack_val.to_rust_string_lossy(scope))
 }
 
-/// Formats an exception value (e.g. from an unhandled promise rejection) by
-/// extracting its `.stack` property if available, otherwise stringifying it.
-pub(crate) fn format_exception(
+/// Reads a string property of an object, or `""` if it has none.
+fn string_property(
+    scope: &mut v8::PinScope<'_, '_>,
+    object: v8::Local<v8::Object>,
+    name: &str,
+) -> String {
+    let Some(key) = v8::String::new(scope, name) else {
+        return String::new();
+    };
+    match object.get(scope, key.into()) {
+        Some(value) if value.is_string() => value.to_rust_string_lossy(scope),
+        _ => String::new(),
+    }
+}
+
+/// Describes an exception value the way a supervisor needs it: its class, its
+/// message and its stack kept apart. The location comes with the stack — see
+/// [`UncaughtError::new`](es_runtime_common::UncaughtError::new).
+pub(crate) fn exception_details(
     scope: &mut v8::PinScope<'_, '_>,
     exception: v8::Local<v8::Value>,
-) -> String {
-    exception_stack(scope, exception).unwrap_or_else(|| js_to_string(scope, exception))
+) -> es_runtime_common::UncaughtError {
+    let stack = exception_stack(scope, exception).unwrap_or_default();
+    let (name, message) = match v8::Local::<v8::Object>::try_from(exception) {
+        Ok(object) => (
+            string_property(scope, object, "name"),
+            string_property(scope, object, "message"),
+        ),
+        Err(_) => (String::new(), String::new()),
+    };
+    // `throw "nope"`, or `throw {}` — no message property to read, so the value
+    // itself is the description.
+    let message = if message.is_empty() {
+        js_to_string(scope, exception)
+    } else {
+        message
+    };
+
+    es_runtime_common::UncaughtError::new(name, message, stack)
 }
 
 /// Coerces any V8 value to a Rust `String` via JS `String(value)` semantics.

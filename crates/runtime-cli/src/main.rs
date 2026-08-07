@@ -36,7 +36,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::time::Duration;
 
-use es_runtime::{HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, Process, Runtime};
+use es_runtime::{
+    HostProviders, InterruptHandle, ModuleEvalState, ModuleLoader, Process, Runtime, UncaughtError,
+};
 use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::Driver;
 use es_runtime_default_providers::{
@@ -1493,13 +1495,13 @@ async fn run() -> Result<(), String> {
 }
 
 /// A headline followed by one blank-line-separated message per failure.
-fn joined(headline: &str, messages: &[String]) -> String {
+fn joined(headline: &str, failures: &[UncaughtError]) -> String {
     let mut msg = format!("{headline}\n");
-    for (i, message) in messages.iter().enumerate() {
+    for (i, failure) in failures.iter().enumerate() {
         if i > 0 {
             msg.push('\n');
         }
-        msg.push_str(message);
+        msg.push_str(&failure.to_string());
     }
     msg
 }

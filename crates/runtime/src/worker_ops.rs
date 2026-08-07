@@ -18,7 +18,9 @@
 
 use std::sync::Arc;
 
-use es_runtime_common::{Capability, CapabilitySet, ErrorCode, ExceptionClass, IntoException};
+use es_runtime_common::{
+    Capability, CapabilitySet, ErrorCode, ExceptionClass, IntoException, UncaughtError,
+};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{ProviderError, WorkerHost, WorkerIncoming, WorkerScope, WorkerSpec};
 
@@ -178,9 +180,7 @@ fn install_parent(
                 // queue is drained.
                 None => Value::Null,
                 Some(WorkerIncoming::Message(bytes)) => envelope("message", Value::Bytes(bytes)),
-                Some(WorkerIncoming::Error { message }) => {
-                    envelope("error", Value::String(message))
-                }
+                Some(WorkerIncoming::Error { error }) => envelope("error", failure(error)),
                 Some(WorkerIncoming::Closed) => envelope("close", Value::Undefined),
             })
         })
@@ -308,8 +308,8 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
         Ok(Value::Undefined)
     }))?;
 
-    // `worker_self_fail(message)`: a failure this worker's own listeners did not
-    // claim. Reported to the parent and fatal to this agent — see
+    // `worker_self_fail(name, message, stack)`: a failure this worker's own
+    // listeners did not claim. Reported to the parent and fatal to this agent — see
     // `WorkerScope::report_error`.
     //
     // The prelude calls it for the one route the host cannot see: an exception
@@ -321,12 +321,15 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
     // drive loop reads the flag it sets as soon as this tick ends.
     let s = scope;
     engine.register_op(OpDecl::sync("worker_self_fail", move |args| {
-        let message = arg_str(&args, 0);
+        // Taken apart on the JS side, where the failing value still is one: an
+        // `Error` crossing an op boundary would arrive as a plain object with
+        // no `stack`, so the pieces travel instead of the object.
+        let error = UncaughtError::new(arg_str(&args, 0), arg_str(&args, 1), arg_str(&args, 2));
         // Not an error when there is no scope: on the agent driving the process
         // the prelude never installs the hook that calls this, and an embedder
         // without workers has no parent for a report to reach.
         if let Some(scope) = s.as_ref() {
-            scope.report_error(message);
+            scope.report_error(error);
         }
         Ok(Value::Undefined)
     }))?;
@@ -525,6 +528,19 @@ fn envelope_id(id: u64, data: Value) -> Value {
     Value::Object(vec![
         ("id".to_string(), Value::Number(id as f64)),
         ("data".to_string(), data),
+    ])
+}
+
+/// The `data` half of an `error` envelope: a failure in the pieces the
+/// prelude rebuilds an `ErrorEvent` — and a real `Error` — out of.
+fn failure(error: UncaughtError) -> Value {
+    Value::Object(vec![
+        ("name".to_string(), Value::String(error.name)),
+        ("message".to_string(), Value::String(error.message)),
+        ("stack".to_string(), Value::String(error.stack)),
+        ("filename".to_string(), Value::String(error.filename)),
+        ("lineno".to_string(), Value::Number(f64::from(error.lineno))),
+        ("colno".to_string(), Value::Number(f64::from(error.colno))),
     ])
 }
 

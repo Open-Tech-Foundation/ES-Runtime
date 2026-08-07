@@ -35,6 +35,42 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **A worker's failure now arrives in pieces, not as one formatted string.** The
+  parent's `error` event carried the whole stack in `message`, with `filename`,
+  `lineno`, `colno` and `error` all left at their empty defaults — so the only
+  way back to *which* error had failed was substring matching, which is the one
+  thing a supervisor needs before it decides whether to retry.
+
+  ```js
+  worker.onerror = (e) => {
+    e.message                     // "out of range"     (was: the whole stack)
+    e.filename                    // "file:///app/job.js"
+    e.lineno; e.colno             // 2; 34
+    e.error instanceof RangeError // true — with the worker's own .stack
+  };
+  ```
+
+  The failure crosses a thread boundary, so `e.error` is necessarily a rebuilt
+  object; it is rebuilt as the class it was thrown as when that class is a
+  standard one, and otherwise as an `Error` carrying the right `name` — which is
+  the discriminator that survives anyway, since a `DOMException` is told apart by
+  `"AbortError"` rather than by its constructor.
+
+  Node reconstructs the error but has no location fields at all (its
+  `worker.on("error")` hands over an `Error`, not an `ErrorEvent`); Deno fills
+  the location fields but leaves `e.error` null; Bun leaves both empty. This
+  fills both.
+
+  A rejection reason is no longer re-worded as `"unhandled rejection: …"` on the
+  way, for the same reason: `e.error.name === "RangeError"` says more than the
+  prefix did.
+
+  For embedders: `TickStatus.unhandled_rejections`, `TickStatus.uncaught_errors`,
+  `DriveOutcome`, `DriveFailure`, `ModuleEvalState::Failed` and
+  `WorkerScope::report_error` all carry the new `es_runtime_common::UncaughtError`
+  instead of a `String`. Its `Display` renders exactly what the `String` did, so
+  code that only prints a failure needs a `.to_string()` and nothing more.
+
 - **A worker that fails now says so at once, and stops.** An uncaught error or
   unhandled rejection inside a *running* worker was collected into the drive's
   outcome and reported only when the worker ended — so a parent that terminated

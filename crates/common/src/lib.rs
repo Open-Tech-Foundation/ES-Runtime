@@ -11,6 +11,8 @@
 //!   embedder (ARCHITECTURE.md §7; DECISIONS.md D7).
 //! - [`config`] — resource-[`Limits`] primitives the runtime enforces.
 //! - [`telemetry`] — `tracing` setup for binaries and tests (ARCHITECTURE.md §8).
+//! - [`uncaught`] — an [`UncaughtError`], the description of a JS failure that
+//!   escaped every handler and reached the host.
 
 // `unsafe` is confined to `engine` (ARCHITECTURE.md §7). `common` carries none.
 #![forbid(unsafe_code)]
@@ -19,7 +21,9 @@ pub mod capability;
 pub mod config;
 pub mod error;
 pub mod telemetry;
+pub mod uncaught;
 
 pub use capability::{Capability, CapabilitySet};
 pub use config::Limits;
 pub use error::{Error, ErrorCode, ExceptionClass, IntoException, Result};
+pub use uncaught::UncaughtError;

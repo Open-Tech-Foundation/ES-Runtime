@@ -20,7 +20,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use es_runtime_common::{ErrorCode, ExceptionClass, IntoException};
+use es_runtime_common::{ErrorCode, ExceptionClass, IntoException, UncaughtError};
 
 /// A heap-allocated, `Send` future returned by async provider methods.
 ///
@@ -1215,8 +1215,9 @@ pub enum WorkerIncoming {
     /// The worker failed: an uncaught exception, or a module that would not
     /// load. Surfaces on the parent's `Worker` as an `error` event.
     Error {
-        /// A human-readable description, already formatted.
-        message: String,
+        /// What failed, kept in pieces — class, message, stack, location — so
+        /// the parent's `error` event can offer the same to a supervisor.
+        error: UncaughtError,
     },
     /// The worker ended — `close()`, or its entry module reaching quiescence.
     Closed,
@@ -1407,7 +1408,7 @@ pub trait WorkerScope: Send + Sync {
     /// A worker that *takes* responsibility never reaches here: an `error` or
     /// `unhandledrejection` listener calling `preventDefault()` claims the
     /// failure, and a claimed failure is neither reported nor fatal.
-    fn report_error(&self, message: String);
+    fn report_error(&self, error: UncaughtError);
 }
 
 /// A body crossing the [`HttpServerProvider`] seam, in either direction.

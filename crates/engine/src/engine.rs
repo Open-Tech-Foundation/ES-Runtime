@@ -5,7 +5,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use es_runtime_common::{CapabilitySet, ExceptionClass, Limits};
+use es_runtime_common::{CapabilitySet, ExceptionClass, Limits, UncaughtError};
 
 use crate::convert::{describe_exception, marshal};
 use crate::error::{Error, Result};
@@ -252,13 +252,13 @@ pub trait Engine {
     /// Whether timer `id` is still active (not cleared).
     fn timer_is_active(&self, id: TimerId) -> bool;
 
-    /// Drains promise rejections that went unhandled since the last call, as
-    /// their stringified messages (ARCHITECTURE.md §5).
+    /// Drains promise rejections that went unhandled since the last call, each
+    /// described as an [`UncaughtError`] (ARCHITECTURE.md §5).
     ///
     /// Each is first offered to the guest as an `unhandledrejection` event; one
     /// a listener claims with `preventDefault()` is the guest's responsibility
     /// and is **not** returned here.
-    fn take_unhandled_rejections(&mut self) -> Vec<String>;
+    fn take_unhandled_rejections(&mut self) -> Vec<UncaughtError>;
 
     /// Drains exceptions that escaped a callback the host invoked — today, a
     /// timer callback — and that no `error` listener claimed.
@@ -266,7 +266,7 @@ pub trait Engine {
     /// There is no caller left to propagate such a throw to, so it would
     /// otherwise vanish. The embedder decides what to do with it (`esrun`
     /// reports it and exits non-zero).
-    fn take_uncaught_errors(&mut self) -> Vec<String>;
+    fn take_uncaught_errors(&mut self) -> Vec<UncaughtError>;
 
     /// Returns a thread-safe handle for interrupting this engine's execution
     /// (e.g. from a watchdog thread). See [`InterruptHandle`].
@@ -832,11 +832,11 @@ impl Engine for V8Engine {
         self.op_state.borrow().timer_is_active(id)
     }
 
-    fn take_unhandled_rejections(&mut self) -> Vec<String> {
+    fn take_unhandled_rejections(&mut self) -> Vec<UncaughtError> {
         crate::op::take_unhandled_rejections(&mut self.isolate, &self.context, &self.op_state)
     }
 
-    fn take_uncaught_errors(&mut self) -> Vec<String> {
+    fn take_uncaught_errors(&mut self) -> Vec<UncaughtError> {
         crate::op::take_uncaught_errors(&self.op_state)
     }
 
@@ -1266,7 +1266,9 @@ mod tests {
             .expect("instantiate");
         engine.evaluate_module(id).expect("evaluate");
         match settle_module(&mut engine) {
-            ModuleEvalState::Failed(message) => assert!(message.contains("boom"), "{message}"),
+            ModuleEvalState::Failed(error) => {
+                assert!(error.to_string().contains("boom"), "{error}");
+            }
             other => panic!("expected Failed, got {other:?}"),
         }
     }

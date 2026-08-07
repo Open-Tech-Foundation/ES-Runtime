@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use es_runtime::{ModuleLoader, Runtime};
+use es_runtime_common::UncaughtError;
 
 use crate::DriveFailure;
 use es_runtime_providers::{
@@ -121,8 +122,8 @@ impl WorkerScope for ThreadScope {
         self.closing.notify_waiters();
     }
 
-    fn report_error(&self, message: String) {
-        let _ = self.to_parent.send(WorkerIncoming::Error { message });
+    fn report_error(&self, error: UncaughtError) {
+        let _ = self.to_parent.send(WorkerIncoming::Error { error });
         // Ending the agent is half the contract — see the trait's docs. The
         // drive loop reads the flag after the current tick, so nothing further
         // of the worker's runs, and the `Closed` its thread sends on the way
@@ -434,7 +435,7 @@ async fn terminate_all(workers: &[Arc<Live>]) {
     }
 }
 
-/// Words one failure the driver surfaced and hands it to the agent's own
+/// Hands one failure the driver surfaced to the agent's own
 /// [`WorkerScope::report_error`], which is where the policy lives.
 ///
 /// The two routes a failure can take into here are the two the guest cannot
@@ -442,12 +443,17 @@ async fn terminate_all(workers: &[Arc<Live>]) {
 /// rejection nothing claimed. The third route — an exception thrown by an event
 /// listener — is caught by `dispatchEvent` and reported from the prelude, which
 /// calls `worker_self_fail` and lands in the same place.
+///
+/// Both arms pass the failure through unchanged. A rejection reason is not
+/// re-worded as "unhandled rejection: …" on the way: the parent is usually a
+/// supervisor, and prefixing the message would have buried the one thing it
+/// reads — an `error.name` of `RangeError` says far more than the prose did.
 fn fail_agent(scope: &ThreadScope, failure: DriveFailure) {
-    let message = match failure {
-        DriveFailure::UncaughtError(message) => message,
-        DriveFailure::UnhandledRejection(message) => format!("unhandled rejection: {message}"),
-    };
-    scope.report_error(message);
+    match failure {
+        DriveFailure::UncaughtError(error) | DriveFailure::UnhandledRejection(error) => {
+            scope.report_error(error);
+        }
+    }
 }
 
 /// The worker thread's body: build the runtime, load under the parent's
@@ -461,8 +467,8 @@ fn run_worker(
     closed: &Arc<AtomicBool>,
     registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
 ) {
-    let report = |message: String| {
-        let _ = to_parent.send(WorkerIncoming::Error { message });
+    let report = |error: UncaughtError| {
+        let _ = to_parent.send(WorkerIncoming::Error { error });
     };
 
     // A single-threaded tokio runtime: this agent's own reactor, so its timers
@@ -473,7 +479,9 @@ fn run_worker(
     {
         Ok(rt) => rt,
         Err(err) => {
-            report(format!("worker runtime could not start: {err}"));
+            report(UncaughtError::from_message(format!(
+                "worker runtime could not start: {err}"
+            )));
             let _ = to_parent.send(WorkerIncoming::Closed);
             return;
         }
@@ -482,7 +490,9 @@ fn run_worker(
     let (mut runtime, loader) = match factory.build(&spec, scope.clone()) {
         Ok(built) => built,
         Err(err) => {
-            report(format!("worker could not be created: {err}"));
+            report(UncaughtError::from_message(format!(
+                "worker could not be created: {err}"
+            )));
             let _ = to_parent.send(WorkerIncoming::Closed);
             return;
         }
@@ -510,10 +520,10 @@ fn run_worker(
 
         let entry = match entry {
             Ok(entry) => entry,
-            Err(err) => return Err(format!("{err}")),
+            Err(err) => return Err(UncaughtError::from_message(err.to_string())),
         };
         if let Err(err) = runtime.begin_evaluation(entry) {
-            return Err(format!("{err}"));
+            return Err(UncaughtError::from_message(err.to_string()));
         }
 
         let clock: Arc<dyn es_runtime_providers::Clock> = Arc::new(crate::SystemClock::new());
@@ -534,14 +544,14 @@ fn run_worker(
                 rt.module_eval_state() == es_runtime::ModuleEvalState::Pending
             })
             .await;
-        if let es_runtime::ModuleEvalState::Failed(message) = runtime.module_eval_state() {
-            return Err(message);
+        if let es_runtime::ModuleEvalState::Failed(error) = runtime.module_eval_state() {
+            return Err(error);
         }
-        for message in started.uncaught_errors {
-            fail_agent(&scope, DriveFailure::UncaughtError(message));
+        for error in started.uncaught_errors {
+            fail_agent(&scope, DriveFailure::UncaughtError(error));
         }
-        for message in started.unhandled_rejections {
-            fail_agent(&scope, DriveFailure::UnhandledRejection(message));
+        for error in started.unhandled_rejections {
+            fail_agent(&scope, DriveFailure::UnhandledRejection(error));
         }
 
         // Settled cleanly; carry on for as long as the worker has work — but
@@ -564,8 +574,8 @@ fn run_worker(
         Ok(())
     });
 
-    if let Err(message) = outcome {
-        report(message);
+    if let Err(error) = outcome {
+        report(error);
     }
 
     closed.store(true, Ordering::SeqCst);

@@ -51,7 +51,7 @@ use crate::timer::TimerQueue;
 
 // One-stop public surface for embedders: the engine abstraction + impl, the op
 // types, values, capabilities, and the provider traits — all reachable here.
-pub use es_runtime_common::{Capability, CapabilitySet};
+pub use es_runtime_common::{Capability, CapabilitySet, UncaughtError};
 pub use es_runtime_engine::{
     AsyncOp, Engine, InterruptHandle, ModuleEvalState, ModuleId, OpDecl, OpError, OpResult,
     V8Engine, Value,
@@ -108,14 +108,13 @@ pub struct TickStatus {
     pub timers_fired: usize,
     /// Async ops whose promises were settled this tick.
     pub async_ops_settled: usize,
-    /// Messages of promise rejections that went unhandled this tick — those the
-    /// guest did not claim with `preventDefault()` on an `unhandledrejection`
-    /// listener.
-    pub unhandled_rejections: Vec<String>,
-    /// Messages of exceptions that escaped a timer callback this tick and that
-    /// no `error` listener claimed. A timer throw has no caller to propagate to,
-    /// so this is the only place it surfaces.
-    pub uncaught_errors: Vec<String>,
+    /// Promise rejections that went unhandled this tick — those the guest did
+    /// not claim with `preventDefault()` on an `unhandledrejection` listener.
+    pub unhandled_rejections: Vec<UncaughtError>,
+    /// Exceptions that escaped a timer callback this tick and that no `error`
+    /// listener claimed. A timer throw has no caller to propagate to, so this is
+    /// the only place it surfaces.
+    pub uncaught_errors: Vec<UncaughtError>,
     /// Whether any async op or timer remains after this tick.
     pub has_pending_work: bool,
     /// The earliest pending timer deadline (embedder ms), if any — a hint for
@@ -2299,7 +2298,9 @@ mod tests {
             status.uncaught_errors
         );
         assert!(
-            status.uncaught_errors[0].contains("from a timer"),
+            status.uncaught_errors[0]
+                .to_string()
+                .contains("from a timer"),
             "{}",
             status.uncaught_errors[0]
         );
@@ -2701,7 +2702,7 @@ mod tests {
             status
                 .unhandled_rejections
                 .iter()
-                .any(|m| m.contains("boom")),
+                .any(|error| error.to_string().contains("boom")),
             "got {:?}",
             status.unhandled_rejections
         );
@@ -5594,7 +5595,7 @@ mod tests {
             .expect("load module graph");
             for _ in 0..500 {
                 let status = rt.tick(0);
-                unhandled.extend(status.unhandled_rejections);
+                unhandled.extend(status.unhandled_rejections.iter().map(ToString::to_string));
                 rt.process_dynamic_imports()
                     .await
                     .expect("process dynamic imports");
@@ -5752,7 +5753,9 @@ mod tests {
         let mut rt = runtime();
         let loader = MapLoader::new(&[]);
         match run_module(&mut rt, "throw new Error('nope');", loader.clone()) {
-            ModuleEvalState::Failed(message) => assert!(message.contains("nope"), "{message}"),
+            ModuleEvalState::Failed(error) => {
+                assert!(error.to_string().contains("nope"), "{error}");
+            }
             other => panic!("expected Failed, got {other:?}"),
         }
     }
@@ -6019,7 +6022,9 @@ mod tests {
             "import './a.mjs'; globalThis.reached = true;",
             loader.clone(),
         ) {
-            ModuleEvalState::Failed(message) => assert!(message.contains("dep boom"), "{message}"),
+            ModuleEvalState::Failed(error) => {
+                assert!(error.to_string().contains("dep boom"), "{error}");
+            }
             other => panic!("expected Failed, got {other:?}"),
         }
         // The dependent's body must not have run.

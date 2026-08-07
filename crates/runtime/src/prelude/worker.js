@@ -35,6 +35,56 @@
     return __internal.transfer.serializeMessage(message, list);
   }
 
+  // ---- failures -------------------------------------------------------------
+  //
+  // A worker's failure crosses a thread boundary in pieces, so the `error` its
+  // parent sees is necessarily a new object rather than the one that was
+  // thrown. Rebuilding it is worth the trouble anyway: the parent of a worker
+  // is usually a supervisor, and a supervisor branches on the error's class
+  // before it does anything else with it — `err instanceof RangeError` decides
+  // "never retry", where a formatted string decided nothing.
+  //
+  // Only the standard classes can be restored: a class the worker declared for
+  // itself does not exist in this realm. Those become an `Error` carrying the
+  // right `name`, which is the discriminator that survives anyway — a
+  // `DOMException` is told apart by `"AbortError"`, not by its constructor.
+  const ERROR_CLASSES = {
+    Error,
+    EvalError,
+    RangeError,
+    ReferenceError,
+    SyntaxError,
+    TypeError,
+    URIError,
+  };
+
+  // A live JS error, in the same shape one that crossed a thread arrives in —
+  // so both routes into `#fail` are one path. `error` rides along here because
+  // this one never left the realm: there is no need to rebuild what is already
+  // the object that was thrown.
+  function describe(error) {
+    const isObject = error !== null && typeof error === "object";
+    return {
+      name: isObject && error.name !== undefined ? String(error.name) : "",
+      message:
+        isObject && error.message !== undefined ? String(error.message) : String(error),
+      stack: isObject && typeof error.stack === "string" ? error.stack : "",
+      error,
+    };
+  }
+
+  function rebuildError(failure) {
+    const Class = Object.hasOwn(ERROR_CLASSES, failure.name)
+      ? ERROR_CLASSES[failure.name]
+      : Error;
+    const error = new Class(failure.message);
+    if (failure.name && failure.name !== error.name) error.name = failure.name;
+    // The worker's stack, not the pump's: the frames that matter are the ones
+    // in the agent that failed, and this realm's are noise.
+    if (failure.stack) error.stack = failure.stack;
+    return error;
+  }
+
   // `new Worker(url, { env })`: what the worker's `runtime:process` `env`
   // reports.
   //
@@ -160,7 +210,7 @@
         // here has no one to catch it and would surface as an unhandled
         // rejection on top of the `error` event — reporting one failure twice,
         // the second time as something the guest cannot act on.
-        queueMicrotask(() => this.#fail(e && e.message ? e.message : String(e)));
+        queueMicrotask(() => this.#fail(describe(e)));
         this.#terminated = true;
         this.#pending = [];
         return null;
@@ -217,13 +267,19 @@
       }
     }
 
-    #fail(message) {
+    #fail(failure) {
       // Cancelable, because `preventDefault()` is how a parent says it has
       // taken responsibility — the same contract as `unhandledrejection` and
       // the global `error` event. Without it the report below would go out even
       // for a failure the guest handled.
       const event = new ErrorEvent("error", {
-        message: String(message),
+        message: failure.message,
+        filename: failure.filename,
+        lineno: failure.lineno,
+        colno: failure.colno,
+        // `error` when the failure never left this realm (a spawn that was
+        // refused); rebuilt when it crossed a thread and could not.
+        error: failure.error ?? rebuildError(failure),
         cancelable: true,
       });
       const claimed = !this.dispatchEvent(event);
@@ -238,7 +294,11 @@
         // restarts the child. Escalating would mean a single leaf failure took
         // down every ancestor that had not attached an `onerror`, which is a
         // blast radius nobody asked for.
-        globalThis.console.error(String(message));
+        //
+        // The stack when there is one: it opens with the same `name: message`
+        // the event carried, and the frames below say where in the worker to
+        // look.
+        globalThis.console.error(failure.stack || failure.message);
       }
     }
 
@@ -449,15 +509,14 @@
     // dispatch, and hands it to `reportError`. A throw inside `onmessage` — the
     // way a worker most commonly fails — takes exactly that path.
     //
-    // The stack, where there is one: it opens with the same
-    // `TypeError: message` line the parent shows, and the frames below it say
-    // where in the worker to look.
+    // Taken apart here rather than passed across: an `Error` handed to an op
+    // arrives as a marshaled plain object with no `stack` and no class, so what
+    // travels is the pieces the parent rebuilds one from. The host reads the
+    // location out of the stack, the same way it does for a failure it saw
+    // itself.
     __internal.failure.unclaimed = (error) => {
-      __ops.worker_self_fail(
-        error && typeof error === "object" && error.stack
-          ? String(error.stack)
-          : String(error),
-      );
+      const failure = describe(error);
+      __ops.worker_self_fail(failure.name, failure.message, failure.stack);
       return true;
     };
 

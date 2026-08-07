@@ -18,6 +18,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use es_runtime_common::UncaughtError;
+
 use crate::convert::{describe_exception, js_to_string};
 use crate::error::{Error, Result};
 
@@ -34,8 +36,11 @@ pub enum ModuleEvalState {
     Pending,
     /// The module graph evaluated to completion.
     Completed,
-    /// Evaluation threw / rejected; carries the stringified reason.
-    Failed(String),
+    /// Evaluation threw / rejected; carries the reason it rejected with,
+    /// described rather than formatted — an entry module that throws is how a
+    /// worker most often fails, and its parent wants the class and the location
+    /// as much as the text.
+    Failed(UncaughtError),
 }
 
 /// One import a module requests: the specifier plus the `type` import attribute
@@ -396,7 +401,7 @@ pub(crate) fn evaluate(
 }
 
 /// Inspects the most recent evaluation promise: pending, completed, or failed
-/// (with the rejection stringified). [`ModuleEvalState::Pending`] when nothing
+/// (with the rejection described). [`ModuleEvalState::Pending`] when nothing
 /// has been evaluated yet.
 pub(crate) fn eval_state(
     isolate: &mut v8::OwnedIsolate,
@@ -417,7 +422,7 @@ pub(crate) fn eval_state(
         v8::PromiseState::Fulfilled => ModuleEvalState::Completed,
         v8::PromiseState::Rejected => {
             let reason = promise.result(scope);
-            ModuleEvalState::Failed(crate::convert::format_exception(scope, reason))
+            ModuleEvalState::Failed(crate::convert::exception_details(scope, reason))
         }
     }
 }

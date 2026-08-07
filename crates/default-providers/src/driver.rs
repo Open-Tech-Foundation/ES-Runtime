@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::task::Wake;
 
 use es_runtime::Runtime;
+use es_runtime_common::UncaughtError;
 use es_runtime_providers::{Clock, Timers};
 use tokio::sync::Notify;
 
@@ -52,9 +53,9 @@ pub struct Driver {
 #[non_exhaustive]
 pub enum DriveFailure {
     /// An exception that escaped a host-invoked callback.
-    UncaughtError(String),
+    UncaughtError(UncaughtError),
     /// A promise rejection no listener took responsibility for.
-    UnhandledRejection(String),
+    UnhandledRejection(UncaughtError),
 }
 
 /// What a drive to quiescence surfaced that the guest did not take
@@ -67,10 +68,10 @@ pub enum DriveFailure {
 #[non_exhaustive]
 pub struct DriveOutcome {
     /// Promise rejections that reached quiescence with no handler.
-    pub unhandled_rejections: Vec<String>,
+    pub unhandled_rejections: Vec<UncaughtError>,
     /// Exceptions that escaped a timer callback. These have no caller to
     /// propagate to, so without this they would be lost.
-    pub uncaught_errors: Vec<String>,
+    pub uncaught_errors: Vec<UncaughtError>,
 }
 
 impl DriveOutcome {
@@ -157,11 +158,11 @@ impl Driver {
                 // Handed over now, while the agent that produced them is still
                 // running and whoever is watching can still act.
                 Some(sink) => {
-                    for message in status.uncaught_errors {
-                        sink(DriveFailure::UncaughtError(message));
+                    for error in status.uncaught_errors {
+                        sink(DriveFailure::UncaughtError(error));
                     }
-                    for message in status.unhandled_rejections {
-                        sink(DriveFailure::UnhandledRejection(message));
+                    for error in status.unhandled_rejections {
+                        sink(DriveFailure::UnhandledRejection(error));
                     }
                 }
                 None => {
@@ -191,7 +192,9 @@ impl Driver {
                 Err(err) => {
                     outcome
                         .unhandled_rejections
-                        .push(format!("dynamic import failed: {err}"));
+                        .push(UncaughtError::from_message(format!(
+                            "dynamic import failed: {err}"
+                        )));
                     break;
                 }
             };

@@ -170,6 +170,60 @@ fn a_worker_that_throws_reaches_the_parents_onerror() {
 }
 
 #[test]
+fn a_worker_failure_carries_its_class_message_and_location() {
+    // What a supervisor reads before it decides anything: which error, what it
+    // said, and where. The failure crosses a thread boundary in pieces, so the
+    // `error` here is necessarily a rebuilt object — but it is rebuilt as the
+    // class it was thrown as, with the worker's own stack, and the location
+    // fields are filled the way `filename`/`lineno`/`colno` always promised.
+    //
+    // The peers each give half of this: Node hands over a real reconstructed
+    // `Error` but no location fields at all (its `worker.on("error")` passes an
+    // `Error`, not an `ErrorEvent`); Deno fills the location fields but leaves
+    // `e.error` null; Bun leaves both empty and puts the whole formatted stack
+    // in `message`.
+    let out = run(
+        "located",
+        r#"
+        function inner() { throw new RangeError("out of range"); }
+        self.onmessage = () => inner();
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onerror = (e) => {
+          console.log(JSON.stringify({
+            message: e.message,
+            base: e.filename.split("/").pop(),
+            lineno: e.lineno,
+            colno: e.colno,
+            name: e.error.name,
+            isRange: e.error instanceof RangeError,
+            topFrame: e.error.stack.split("\n")[1].trim().startsWith("at inner"),
+          }));
+          e.preventDefault();
+          w.terminate();
+        };
+        w.postMessage("go");
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    // Column 34 is the `new RangeError` in the worker source above; line 2 is
+    // the `function inner()` line, since the source starts with a newline.
+    assert!(
+        out.contains(
+            r#"{"message":"out of range","base":"located-worker.mjs","lineno":2,"colno":34,"#
+        ),
+        "stdout: {out}"
+    );
+    assert!(
+        out.contains(r#""name":"RangeError","isRange":true,"topFrame":true}"#),
+        "stdout: {out}"
+    );
+}
+
+#[test]
 fn an_error_in_a_running_worker_reaches_the_parent_at_once_and_ends_it() {
     // The failure that matters to a supervisor: not a worker that fails to
     // start, but one that has been serving and throws on a job. It used to be
@@ -193,7 +247,8 @@ fn an_error_in_a_running_worker_reaches_the_parent_at_once_and_ends_it() {
         const seen = [];
         w.onmessage = (e) => seen.push(e.data);
         w.onerror = (e) => {
-          console.log("error:", e.message.split("\n")[0]);
+          console.log("error:", e.error.name, "|", e.message);
+          console.log("instanceof:", e.error instanceof TypeError);
           e.preventDefault();
         };
         w.postMessage("first");
@@ -209,10 +264,13 @@ fn an_error_in_a_running_worker_reaches_the_parent_at_once_and_ends_it() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let out = stdout(&out);
     assert!(
-        out.contains("error: TypeError: job failed"),
+        out.contains("error: TypeError | job failed"),
         "the parent should hear about it while the worker is still the one \
          running the job; stdout: {out}"
     );
+    // Rebuilt as the class it was thrown as, so a supervisor can branch on it
+    // rather than match a substring.
+    assert!(out.contains("instanceof: true"), "stdout: {out}");
     // Ended by the error, so the message posted afterwards was never handled —
     // which is what makes an `error` on the parent mean "this worker is gone".
     assert!(
@@ -235,7 +293,10 @@ fn an_unhandled_rejection_in_a_running_worker_reaches_the_parent_at_once() {
         r#"
         const w = new Worker(new URL("WORKER_URL", import.meta.url));
         w.onmessage = (e) => console.log("still serving:", e.data);
-        w.onerror = (e) => { console.log("error:", e.message); e.preventDefault(); };
+        w.onerror = (e) => {
+          console.log("error:", e.error.name, "|", e.message);
+          e.preventDefault();
+        };
         w.postMessage("go");
         setTimeout(() => w.postMessage("are you there"), 300);
         setTimeout(() => { console.log("done"); w.terminate(); }, 600);
@@ -244,8 +305,10 @@ fn an_unhandled_rejection_in_a_running_worker_reaches_the_parent_at_once() {
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let out = stdout(&out);
+    // The reason arrives as itself, not re-worded: a rejection whose reason is
+    // a `RangeError` is a `RangeError` on the parent's side too.
     assert!(
-        out.contains("unhandled rejection: RangeError: nobody caught me"),
+        out.contains("error: RangeError | nobody caught me"),
         "stdout: {out}"
     );
     assert!(!out.contains("still serving"), "stdout: {out}");
