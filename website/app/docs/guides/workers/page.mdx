@@ -1,0 +1,287 @@
+---
+title: Workers
+description: Run JavaScript on a second thread — its own isolate, its own capabilities, its own memory ceiling — and supervise it when it fails.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Workers
+
+A worker is a second **agent**: its own OS thread, its own V8 isolate, no shared
+heap. Nothing crosses between them but structured-clone bytes, which is what
+makes two agents genuinely independent — one can be terminated, run out of
+memory, or throw, without touching the other.
+
+The interface is the HTML [dedicated
+worker](https://html.spec.whatwg.org/multipage/workers.html), plus what a server
+runtime needs and a browser has no reason to: capabilities, a memory ceiling, a
+queue depth, and `unref()`.
+
+```js
+// main.js
+const w = new Worker(new URL("./worker.js", import.meta.url), {
+  name: "resize",
+  permissions: ["net"],
+  memory: 128,
+});
+w.onmessage = (e) => console.log(e.data);
+w.postMessage({ job: 42 });
+
+// worker.js
+self.onmessage = (e) => postMessage(`${self.name} did ${e.data.job}`);
+```
+
+<Callout type="note" title="Which agent am I on?">
+  There is no `isMainThread`. A worker is recognised by the shape of its global:
+  inside one, `self instanceof DedicatedWorkerGlobalScope`. HTML, Deno and Bun
+  all distinguish the two this way; `isMainThread` is a Node-ism from a design
+  with no worker global scope at all.
+</Callout>
+
+## Starting one
+
+A relative string resolves against the **entry** module, which is rarely what
+you mean once files move. Write the exact form:
+
+```js
+new Worker(new URL("./worker.js", import.meta.url));
+```
+
+Two capabilities are needed to start a worker at all: `workers`, and `imports`
+to read its entry module. So `--deny-all --allow-workers` alone is refused —
+and says so:
+
+```
+cannot start a worker from ./worker.js: reading its module needs the
+"imports" permission — add --allow-imports (capability denied: FileSystem)
+```
+
+Node needs `--allow-fs-read` alongside `--allow-worker` for the same reason;
+Deno needs `--allow-read`.
+
+## What it may do
+
+A worker starts with **nothing** and is granted explicitly:
+
+| `permissions` | The worker gets |
+| --- | --- |
+| omitted | nothing |
+| `["net", "read"]` | exactly those |
+| `"inherit"` | everything the spawning agent holds |
+
+It can never be granted what its parent lacks, so `"inherit"` is a ceiling
+rather than an escape — under `--deny-net`, an inheriting worker is denied net
+too. Nesting re-applies the rule at every level.
+
+An unknown name throws rather than being skipped:
+
+```js
+new Worker(url, { permissions: ["nett"] });
+// TypeError: unknown Worker permission "nett" — expected one of: read, write,
+// imports, net, listen, env, run, signals, workers
+```
+
+Dropping it would fail *closed*, which sounds harmless until the worker takes
+the degraded path forever and the denial surfaces three layers from the typo.
+
+<Callout type="warning" title="Static and dynamic imports are not the same">
+  A worker's **static** graph is resolved by its parent before the worker
+  exists — literal specifiers, in source the parent already read, instantiated
+  with no guest code running. So `import "./dep.js"` works in a worker granted
+  nothing.
+
+  `import()` picks its specifier while the worker runs, so it reads *and
+  executes* a file chosen at runtime on the worker's own authority. It needs
+  `imports` granted at the spawn.
+</Callout>
+
+## Passing data in
+
+`postMessage` uses structured clone, so `Map`, `Set`, `Date`, `RegExp`,
+`BigInt`, typed arrays, `Blob` and cyclic graphs all survive. This is not JSON.
+
+Large payloads should be **transferred** rather than copied:
+
+```js
+const buf = new Uint8Array(64 * 1024 * 1024);
+w.postMessage(buf, [buf.buffer]);   // sender detaches; no copy
+```
+
+| Type | On transfer |
+| --- | --- |
+| `ArrayBuffer` | Sender detaches; receiver holds the data |
+| `MessagePort` | Moves to the receiver, with anything already queued |
+| `ReadableStream` / `WritableStream` | Original locks; chunks flow across, with backpressure |
+| `SharedArrayBuffer` | Not transferred — *shared*, as one allocation in both agents |
+
+Environment is attenuated rather than inherited — a parent hands over precisely
+the variables it names, and needs no extra permission to do so, because it could
+already read them:
+
+```js
+new Worker(url, { env: { DATABASE_URL: unmask(env.DATABASE_URL) } });
+```
+
+## When it fails
+
+An uncaught exception or unhandled rejection fires `error` on the parent **the
+tick it happens**, and ends the worker. Both halves matter: a worker holding a
+receive pump open never finishes on its own, so waiting for it to end would mean
+the report arrived long after anything could act on it — and a failure that
+escaped every handler its author wrote leaves the agent in a state nobody can
+vouch for.
+
+So `error` means *this one is gone*, which is the single fact a supervisor
+needs:
+
+```js
+w.onerror = (e) => {
+  e.error instanceof RangeError   // true — rebuilt as the class it was thrown as
+  e.error.name                    // "RangeError"
+  e.error.stack                   // the worker's own stack
+  e.message                       // "out of range"
+  e.filename, e.lineno, e.colno   // where
+  e.preventDefault();             // claimed; not also written to the console
+  restart();
+};
+```
+
+A worker can take responsibility for its own failure instead, in which case it
+is neither reported nor fatal:
+
+```js
+self.addEventListener("error", (e) => {
+  postMessage({ failed: currentJob, reason: e.message });
+  e.preventDefault();          // absorbed; this worker keeps its next job
+});
+```
+
+## Bounding it
+
+Each worker's isolate has its own heap ceiling:
+
+```js
+new Worker(url, { memory: 128 });   // megabytes
+```
+
+Omitted, it takes the ceiling of the agent that started it (`--max-heap=<mb>`,
+by default sized from the container's memory limit, else host memory). Named, it
+may only **lower** that. Reaching it ends that worker and no other:
+
+```js
+w.onerror = (e) => {
+  e.error.name;   // "ERR_WORKER_OUT_OF_MEMORY"
+  e.message;      // "worker terminated: it reached its 128MB memory limit"
+};
+```
+
+`terminate()` interrupts the isolate, so it stops a worker spinning in a
+synchronous loop or parked in `Atomics.wait` — and takes that worker's own
+workers with it.
+
+<Callout type="note" title="What is not bounded">
+  CPU time is per process, not per agent: `--timeout` stops everything. And the
+  message queues between agents are unbounded — see below.
+</Callout>
+
+## Keeping up: `queued` and `unref`
+
+`postMessage` never refuses a message and never throws for queue depth. So a
+producer that outruns its worker grows memory, and `queued` is what it can pace
+against:
+
+```js
+for (const job of jobs) {
+  w.postMessage(job);
+  if (w.queued > 1000) await drain();     // your choice, not the runtime's
+}
+```
+
+`w.queued` is what has been posted and not yet taken; `self.queued` inside a
+worker is the mirror, for results the parent has not taken. Both are advisory,
+like a socket's `bufferedAmount`.
+
+A live worker keeps the process alive, which is right until a pool holds four
+idle ones waiting for the next job:
+
+```js
+w.unref();   // still running, still delivering; no longer a reason to stay up
+w.ref();     // back to keeping the process alive
+```
+
+## A worker pool
+
+Everything above, put together — bounded memory per worker, one job at a time,
+and a failed worker replaced rather than mourned:
+
+```js
+class Pool {
+  #idle = [];
+  #queue = [];
+
+  constructor(url, size = navigator.hardwareConcurrency) {
+    this.url = url;
+    for (let i = 0; i < size; i++) this.#idle.push(this.#hire());
+  }
+
+  #hire() {
+    const w = new Worker(this.url, { permissions: ["net"], memory: 128 });
+    w.unref();                       // an idle pool must not hold the process open
+    w.onmessage = (e) => {
+      w.job?.resolve(e.data);
+      w.job = null;
+      this.#release(w);
+    };
+    w.onerror = (e) => {
+      e.preventDefault();
+      // The worker is already gone — `error` means exactly that — so the job it
+      // was holding is failed and a fresh agent takes its place in the rotation.
+      w.job?.reject(e.error);
+      w.job = null;
+      this.#release(this.#hire());
+    };
+    return w;
+  }
+
+  #release(w) {
+    const next = this.#queue.shift();
+    if (next) return this.#run(w, next);
+    w.unref();                       // idle again: stop holding the process open
+    this.#idle.push(w);
+  }
+
+  #run(w, job) {
+    w.job = job;
+    w.ref();                         // busy: now it is a reason to stay up
+    w.postMessage(job.payload);
+  }
+
+  run(payload) {
+    return new Promise((resolve, reject) => {
+      const job = { payload, resolve, reject };
+      const w = this.#idle.pop();
+      if (w) this.#run(w, job);
+      else this.#queue.push(job);
+    });
+  }
+}
+```
+
+Two details that are easy to get wrong:
+
+- **One job per worker at a time.** V8's termination is isolate-wide, so
+  cancelling a single task means ending the agent it runs on. A worker holding
+  two jobs cannot lose one of them.
+- **`error` is terminal, so replace rather than reuse.** The worker is already
+  ended by the time the event arrives; putting it back in the rotation would
+  queue jobs for an agent that is gone.
+- **`ref` and `unref` have to be balanced.** A worker left referenced while idle
+  keeps the process alive after the last job finishes — the program simply never
+  exits, with nothing to show for it.
+
+## Reference
+
+- [Web APIs — Worker](/docs/globals#workers) — the full option and event surface
+- [Internals: Workers](/docs/internals/workers) — one thread, one isolate, and
+  what actually crosses the boundary
+- [Security model](/docs/security) — where a worker sits in the capability chain
