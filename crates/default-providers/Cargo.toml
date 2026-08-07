@@ -38,6 +38,7 @@ url.workspace = true
 # already in the tree via tempfile, so no new crate in the graph.
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
+socket2 = { workspace = true }
 
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime.

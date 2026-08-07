@@ -356,13 +356,16 @@ async function handleRequest(entry, handler) {
 // The handle returned by serve(): `addr` resolves to the bound address,
 // `finished` resolves when the accept loop ends, `stop()` shuts it down.
 class Server {
-  constructor(hostname, port, tls, timeouts, maxConnections, handler) {
-    let resolveAddr, rejectAddr, resolveFinished;
+  constructor(hostname, port, tls, timeouts, maxConnections, reusePort, handler) {
+    let resolveAddr, rejectAddr, resolveFinished, rejectFinished;
     this.addr = new Promise((res, rej) => {
       resolveAddr = res;
       rejectAddr = rej;
     });
-    this.finished = new Promise((res) => (resolveFinished = res));
+    this.finished = new Promise((res, rej) => {
+      resolveFinished = res;
+      rejectFinished = rej;
+    });
     this._id = null;
     this._stopped = false;
 
@@ -379,12 +382,31 @@ class Server {
               tls.key,
               ...timeouts,
               maxConnections,
+              reusePort,
               ...tls.alpn,
             )
-          : await ops.http_serve(hostname, port, null, null, ...timeouts, maxConnections);
+          : await ops.http_serve(
+              hostname,
+              port,
+              null,
+              null,
+              ...timeouts,
+              maxConnections,
+              reusePort,
+            );
       } catch (e) {
+        // A server that never bound has not "finished" — resolving `finished`
+        // here made a failed bind indistinguishable from a clean shutdown, so
+        // `await server.finished` returned normally and the program carried on
+        // as though it had served. Both promises reject with the same error.
         rejectAddr(e);
-        resolveFinished();
+        rejectFinished(e);
+        // `finished` is marked handled so one failure is reported once: `addr`
+        // is the promise that answers "did it bind", so that is the one left
+        // for the unhandled-rejection path when nobody is watching. A program
+        // that *does* await `finished` still sees the rejection — this only
+        // suppresses the duplicate report, not the error.
+        this.finished.catch(() => {});
         return;
       }
       this._id = info.id;
@@ -426,6 +448,20 @@ class Server {
 
 // serve(handler) | serve(options, handler). Returns a Server immediately; the
 // accept loop starts in the background.
+// `SO_REUSEPORT`: let several processes bind this same port and have the kernel
+// balance connections across them — how a server is run across cores without a
+// front proxy, and how one is replaced without dropping connections. Unix-only;
+// the host refuses it elsewhere rather than binding exclusively and leaving the
+// caller to find out when a second process cannot start.
+function parseReusePort(options) {
+  const value = options.reusePort;
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new TypeError(`serve: reusePort must be a boolean, got ${typeof value}`);
+  }
+  return value;
+}
+
 function serve(options, handler) {
   if (typeof options === "function") {
     handler = options;
@@ -443,6 +479,7 @@ function serve(options, handler) {
     parseTls(options),
     parseTimeouts(options),
     parseMaxConnections(options),
+    parseReusePort(options),
     handler,
   );
 }

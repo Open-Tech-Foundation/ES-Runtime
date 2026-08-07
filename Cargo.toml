@@ -70,6 +70,12 @@ serde_json = "1.0.150"
 # Chosen over `libc` because `default-providers` forbids `unsafe`. Already in the
 # tree transitively (tempfile), so it adds no crate to the graph.
 rustix = { version = "1.1.4", default-features = false }
+# Socket options that must be set *before* bind — `SO_REUSEPORT`, which is how
+# several processes share one listening port and let the kernel balance across
+# them. `TcpListener::bind` gives no hook for that, so the listener is built by
+# hand when it is asked for. Already in the tree (tokio/hyper depend on it), so
+# it adds no crate to the graph. Confined to `default-providers`.
+socket2 = "0.6.5"
 # Cross-OS path canonicalization (DECISIONS.md D25): strips the Windows `\\?\`
 # verbatim prefix that breaks file: URL conversion. Confined to
 # `default-providers`; already present transitively, so no new crate.

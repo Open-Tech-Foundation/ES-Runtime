@@ -1456,7 +1456,18 @@ async fn run() -> Result<(), String> {
     // callbacks, which yield to the executor (where a blocking watchdog can't
     // preempt them).
     let driver = Driver::new(clock, timers);
-    let drive = driver.run_to_completion(&mut runtime);
+    // Stopped as soon as the entry module's evaluation *fails*, rather than at
+    // quiescence. A program whose top-level code threw has already failed, and
+    // anything it started before throwing — a server holding a listener is the
+    // ordinary case — keeps the loop alive forever, so waiting for the drive to
+    // return meant the exception was never reported and the process never
+    // exited. It ran on, serving, with the error discarded.
+    //
+    // Reported below by the existing `ModuleEvalState::Failed` check, which
+    // until now could only be reached by programs that happened to quiesce.
+    let drive = driver.drive_while(&mut runtime, |rt| {
+        !matches!(rt.module_eval_state(), ModuleEvalState::Failed(_))
+    });
     let outcome = match config.timeout {
         Some(deadline) => match tokio::time::timeout(deadline, drive).await {
             Ok(outcome) => outcome,

@@ -28,6 +28,7 @@ mod esm_resolve;
 mod first_byte;
 mod host_allowlist;
 mod import_policy;
+mod listener;
 mod modules;
 mod net;
 mod node_modules;

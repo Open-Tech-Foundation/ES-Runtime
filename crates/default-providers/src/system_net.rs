@@ -24,7 +24,7 @@ use es_runtime_providers::{
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
@@ -535,9 +535,9 @@ impl NetProvider for SystemNet {
                     &opts.cert, &opts.key, &opts.alpn,
                 )?)
             };
-            let listener = TcpListener::bind((host.as_str(), port))
-                .await
-                .map_err(|e| io_err(format!("listen {host}:{port}"), e))?;
+            // Shared with `runtime:http`, so the two bind on identical terms —
+            // including `SO_REUSEPORT` when it was asked for.
+            let listener = crate::listener::bind(host.as_str(), port, opts.reuse_port).await?;
             let local = listener.local_addr().ok();
             let (tx, rx) = mpsc::channel::<(Accepted, SocketAddr)>(8);
             // One task owns the sole `tx` so `close_listener` aborting it drops the
@@ -783,6 +783,7 @@ impl NetProvider for SystemNet {
 mod tests {
     use super::*;
     use crate::HostAllowlist;
+    use tokio::net::TcpListener;
     // The production paths build their server-side TLS through `crate::tls`;
     // these tests stand up their own peer, so they need the types directly.
     use tokio_rustls::TlsAcceptor;
@@ -1044,6 +1045,7 @@ mod tests {
                     cert: cert_pem,
                     key: key_pem,
                     alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+                    reuse_port: false,
                 },
             )
             .await
@@ -1094,6 +1096,7 @@ mod tests {
                     key: b"-----BEGIN PRIVATE KEY-----\nnonsense\n-----END PRIVATE KEY-----\n"
                         .to_vec(),
                     alpn: vec![],
+                    reuse_port: false,
                 },
             )
             .await;
@@ -1199,6 +1202,7 @@ mod tests {
 mod cancel_safety_tests {
     use super::*;
     use std::time::Duration;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn an_abandoned_read_leaves_the_socket_readable() {
@@ -1284,6 +1288,7 @@ mod tracing_tests {
                     cert: ck.cert.pem().into_bytes(),
                     key: ck.signing_key.serialize_pem().into_bytes(),
                     alpn: vec![],
+                    reuse_port: false,
                 },
             )
             .await

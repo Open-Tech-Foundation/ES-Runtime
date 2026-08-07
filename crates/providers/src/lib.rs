@@ -929,6 +929,16 @@ pub struct ListenOptions {
     pub key: Vec<u8>,
     /// ALPN protocols to advertise, in preference order (empty ⇒ none).
     pub alpn: Vec<String>,
+    /// Allow several processes to bind this same address, letting the kernel
+    /// balance new connections across them (`SO_REUSEPORT`).
+    ///
+    /// How a server is run across cores without a front proxy, and how one is
+    /// replaced without dropping connections: the replacement binds alongside
+    /// the old process before it exits. Unix-only — Windows has no equivalent
+    /// (its `SO_REUSEADDR` lets an *unrelated* process take a bound port, which
+    /// is a different and unsafe thing), so an implementation should refuse
+    /// rather than bind exclusively and leave the caller to discover it.
+    pub reuse_port: bool,
 }
 
 /// Raw TCP sockets backing `runtime:net` (SPEC §12, the WinterTC `connect()`
@@ -1543,6 +1553,16 @@ pub struct HttpServeOptions {
     /// descriptor and a task per refused connection does not bound anything
     /// under the flood it exists for.
     pub max_connections: Option<usize>,
+    /// Allow several processes to bind this same address, letting the kernel
+    /// balance new connections across them (`SO_REUSEPORT`).
+    ///
+    /// How a server is run across cores without a front proxy, and how one is
+    /// replaced without dropping connections: the replacement binds alongside
+    /// the old process before it exits. Unix-only — Windows has no equivalent
+    /// (its `SO_REUSEADDR` lets an *unrelated* process take a bound port, which
+    /// is a different and unsafe thing), so an implementation should refuse
+    /// rather than bind exclusively and leave the caller to discover it.
+    pub reuse_port: bool,
 }
 
 /// When an [`HttpServerProvider`] should give up on a connection.

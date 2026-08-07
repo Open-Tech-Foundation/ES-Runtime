@@ -116,6 +116,8 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
                 cert: arg_bytes(&args, 2),
                 key: arg_bytes(&args, 3),
                 alpn: arg_str_vec(&args, 4),
+                // `SO_REUSEPORT`: several processes sharing one listening port.
+                reuse_port: matches!(args.get(5), Some(Value::Bool(true))),
             };
             Box::pin(async move {
                 let (id, info) = require(&n)?

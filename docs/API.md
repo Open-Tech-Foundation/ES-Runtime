@@ -1333,7 +1333,7 @@ const tlsServer = listen({
 | Export                       | Type                                  | Description                                                        |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
 | `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
-| `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn? }) => Listener` | Bind a listening socket. `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols. `NetListen`. |
+| `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn?, reusePort? }) => Listener` | Bind a listening socket. `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols; `reusePort` shares the port with other processes (see below). `NetListen`. |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
 `closed: Promise<void>`, `close(reason?)`, `upgraded`, and `startTls(): Socket`
@@ -1402,7 +1402,7 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.
@@ -1604,6 +1604,29 @@ Two consequences worth knowing before you tune them:
   default on Linux.
 
 #### How many connections at once
+
+#### Sharing a port across processes
+
+`reusePort: true` binds with `SO_REUSEPORT`, so several **processes** can listen
+on the same address and the kernel balances new connections across them. It is
+how a server is run across cores without a front proxy, and how one is replaced
+without dropping connections — the replacement binds alongside the outgoing
+process before it exits.
+
+```js
+// Each of N processes runs this; every one must set the flag.
+serve({ port: 8080, reusePort: true }, handler);
+```
+
+Every sharer has to set it: a plain bind on a port already held is still
+`ERR_ADDRESS_IN_USE`, which is what makes the flag meaningful rather than a
+no-op. **Unix only** — Windows has no equivalent (`SO_REUSEADDR` there lets an
+*unrelated* process take a bound port, a hijacking primitive rather than a
+load-balancing one), so asking for it on Windows is an error rather than a
+silent exclusive bind that fails the moment you scale.
+
+The same option is on [`runtime:net`](#runtimenet) `listen()`, and the two bind
+on identical terms.
 
 `maxConnections` caps how many connections the server holds at once. Unlimited
 by default:

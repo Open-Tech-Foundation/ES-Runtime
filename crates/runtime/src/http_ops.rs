@@ -120,9 +120,12 @@ pub(crate) fn install(
                 .and_then(Value::as_number)
                 .filter(|n| *n >= 1.0 && n.is_finite())
                 .map(|n| n as usize);
+            // `SO_REUSEPORT`: several processes sharing one listening port.
+            // Ahead of the ALPN tail, which must stay last.
+            let reuse_port = matches!(args.get(8), Some(Value::Bool(true)));
             let alpn: Vec<String> = args
                 .iter()
-                .skip(8)
+                .skip(9)
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect();
             Box::pin(async move {
@@ -150,6 +153,7 @@ pub(crate) fn install(
                     tls,
                     timeouts,
                     max_connections,
+                    reuse_port,
                 };
                 let (id, info) = require(&h)?.serve(options).await.map_err(map_err)?;
                 Ok(server_value(id, &info))

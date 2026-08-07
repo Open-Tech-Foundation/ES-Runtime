@@ -10,10 +10,37 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`reusePort` on `runtime:http` `serve()` and `runtime:net` `listen()`.**
+  Binds with `SO_REUSEPORT`, so several *processes* can listen on one address
+  and the kernel balances new connections across them — how a server runs across
+  cores without a front proxy, and how one is replaced without dropping
+  connections. Every sharer must set it; a plain bind on a held port is still
+  `ERR_ADDRESS_IN_USE`, which is what keeps the flag meaningful. **Unix only** —
+  Windows has no equivalent (its `SO_REUSEADDR` lets an *unrelated* process take
+  a bound port, a hijacking primitive rather than a load-balancing one), so
+  asking for it there is an error rather than a silent exclusive bind that fails
+  the moment you scale.
+
 - `ERR_INVALID_PATH` — a path argument that names no valid target: it is empty,
   or it is the filesystem root jail itself and the operation would mutate it.
 
 ### Fixed
+
+- **A top-level throw is fatal even with a server running.** The entry module's
+  failure was only checked *after* the drive loop returned, and a listener keeps
+  that loop alive forever — so a program that threw at top level after starting
+  a server had its exception discarded entirely and ran on, serving, with
+  nothing reported and no exit. It now stops the drive as soon as the module's
+  evaluation fails, exactly as it does without a server.
+
+- **A failed bind no longer looks like a clean shutdown.** `serve()` rejected
+  `addr` but *resolved* `finished`, so a server that never bound was
+  indistinguishable from one that ran and stopped: `await server.finished`
+  returned normally. Both promises now reject with the same error, and only
+  `addr` is left for the unhandled-rejection path so one failure is reported
+  once. The error is also classified — `ERR_ADDRESS_IN_USE` and friends, with a
+  `listen host:port: …` message — where it used to be an uncoded
+  `provider error: …` string with nothing stable to branch on.
 
 - **`XML.parse` rejects a truncated document.** Reaching the end of the input
   with elements still open ended the parse quietly, so `"<r>"` produced

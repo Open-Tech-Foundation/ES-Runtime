@@ -48,7 +48,6 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
-use tokio::net::TcpListener;
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
 use tracing::Instrument;
@@ -230,10 +229,6 @@ impl SystemHttpServer {
     pub async fn wait_for_idle(&self, grace: std::time::Duration) -> bool {
         self.live.wait_idle(grace).await
     }
-}
-
-fn err(e: impl ToString) -> ProviderError {
-    ProviderError::Other(e.to_string())
 }
 
 fn info_of(local: Option<SocketAddr>) -> SocketInfo {
@@ -561,9 +556,13 @@ impl HttpServerProvider for SystemHttpServer {
                 Some(tls) => Some(crate::tls::server_acceptor(&tls.cert, &tls.key, &tls.alpn)?),
                 None => None,
             };
-            let listener = TcpListener::bind((options.host.as_str(), options.port))
-                .await
-                .map_err(err)?;
+            // The shared bind: classified errors (a bind failure is the one a
+            // caller most often branches on, and it used to arrive as an
+            // uncoded "provider error: …" with no `ERR_ADDRESS_IN_USE` to
+            // test), and `SO_REUSEPORT` when it was asked for.
+            let listener =
+                crate::listener::bind(options.host.as_str(), options.port, options.reuse_port)
+                    .await?;
             let local = listener.local_addr().ok();
             let authority = local.map(|a| a.to_string()).unwrap_or_default();
             // The scheme the guest sees in `request.url`. A TLS listener serves
@@ -880,6 +879,7 @@ mod tests {
                 tls: None,
                 timeouts: HttpTimeouts::default(),
                 max_connections: Some(max),
+                reuse_port: false,
             })
             .await
             .unwrap();
@@ -900,6 +900,7 @@ mod tests {
                 tls,
                 timeouts,
                 max_connections: None,
+                reuse_port: false,
             })
             .await
             .unwrap();
@@ -1024,6 +1025,7 @@ mod tests {
                 tls: None,
                 timeouts: HttpTimeouts::default(),
                 max_connections: None,
+                reuse_port: false,
             })
             .await
             .err()
@@ -1038,6 +1040,7 @@ mod tests {
                 tls: None,
                 timeouts: HttpTimeouts::default(),
                 max_connections: None,
+                reuse_port: false,
             })
             .await
             .expect("the allowed address binds");
@@ -1144,6 +1147,7 @@ mod tls_tests {
                 tls: Some(tls_options(b"not a certificate".to_vec(), key_pem)),
                 timeouts: HttpTimeouts::default(),
                 max_connections: None,
+                reuse_port: false,
             })
             .await;
         assert!(result.is_err(), "an unparseable cert must not bind");

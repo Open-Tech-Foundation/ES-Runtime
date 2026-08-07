@@ -245,7 +245,17 @@ function listen(options = {}) {
   // `TypeError: SocketError: …` shape, rather than the raw host `Error` that
   // made `listen` report differently from `connect` for the same class of
   // problem.
-  const ready = socketOp(ops.net_listen(hostname, port, cert, key, alpn));
+  // `SO_REUSEPORT`: let several processes bind this same port and have the
+  // kernel balance connections across them — how a server is run across cores
+  // without a front proxy, and how one is replaced without dropping
+  // connections. Unix-only; the host refuses it elsewhere rather than binding
+  // exclusively and leaving the caller to find out when a second process
+  // cannot start.
+  const reusePort = options.reusePort ?? false;
+  if (typeof reusePort !== "boolean") {
+    throw socketError(`reusePort must be a boolean, got ${typeof reusePort}`);
+  }
+  const ready = socketOp(ops.net_listen(hostname, port, cert, key, alpn, reusePort));
   return new Listener(ready);
 }
 

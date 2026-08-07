@@ -94,6 +94,22 @@ declare module "runtime:http" {
      * reach ~408KB, so the connection count is a memory multiplier.
      */
     maxConnections?: number | null;
+
+    /**
+     * Bind with `SO_REUSEPORT`, so several **processes** can listen on this
+     * same address and the kernel balances new connections across them.
+     *
+     * How a server is run across cores without a front proxy, and how one is
+     * replaced without dropping connections: the replacement binds alongside
+     * the outgoing process before it exits. Every sharer must set it — a plain
+     * bind on a port already held is still `ERR_ADDRESS_IN_USE`.
+     *
+     * **Unix only.** Windows has no equivalent, so asking for it there is an
+     * error rather than a silent exclusive bind.
+     *
+     * @defaultValue `false`
+     */
+    reusePort?: boolean;
   }
 
   /**

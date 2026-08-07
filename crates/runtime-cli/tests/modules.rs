@@ -257,6 +257,67 @@ fn net_validates_ports_and_reports_binds_as_socket_errors() {
     }
 }
 
+/// `SO_REUSEPORT` through both doors: several listeners share one port, which
+/// is how a server runs across cores without a front proxy and how one is
+/// replaced without dropping connections.
+#[cfg(unix)]
+#[test]
+fn several_listeners_can_share_a_port_with_reuse_port() {
+    let out = run_file("reuse-port.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "http-shared:true",
+        "http-answered:true",
+        // Without the option the same bind is still refused — so the option is
+        // doing the work rather than the port having been free.
+        "http-exclusive:ERR_ADDRESS_IN_USE",
+        "net-shared:true",
+        "net-exclusive:ERR_ADDRESS_IN_USE",
+        // A non-boolean is a mistake at the call, not a silently ignored option.
+        "http-bad-option:TypeError",
+        "net-bad-option:TypeError",
+        "REUSE_PORT_OK",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
+/// What a failed bind tells the program. `finished` used to *resolve*, so a
+/// server that never bound was indistinguishable from one that ran and shut
+/// down cleanly, and the error was an uncoded string with nothing to branch on.
+#[test]
+fn a_failed_bind_rejects_both_addr_and_finished_with_a_coded_error() {
+    let out = run_file("serve-bind-failure.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "addr:ERR_ADDRESS_IN_USE:true",
+        "finished:ERR_ADDRESS_IN_USE",
+        // The port's real owner is unaffected…
+        "held-still-serving:held",
+        // …and a clean shutdown still resolves `finished`, so rejecting is not
+        // the new default for every server.
+        "clean-finished:resolved",
+        "BIND_FAILURE_OK",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
+/// A top-level throw is fatal even when the program has already started a
+/// server. The failure was only checked after the drive loop returned, and a
+/// listener keeps that loop alive forever — so the exception was discarded and
+/// the process ran on, serving, with nothing reported.
+#[test]
+fn a_top_level_throw_is_reported_even_with_a_server_running() {
+    let out = run_file("throw-with-server.mjs");
+    assert!(!out.status.success(), "the process must fail");
+    let err = stderr(&out);
+    assert!(err.contains("uncaught exception"), "{err}");
+    assert!(err.contains("top-level failure while serving"), "{err}");
+}
+
 #[test]
 fn tells_a_handler_which_peer_a_request_came_from() {
     // A real accept() under the real binary: the address a handler is given has
