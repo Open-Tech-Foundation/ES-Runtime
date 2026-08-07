@@ -1249,7 +1249,29 @@ pub trait WorkerHost: Send + Sync {
 
     /// Delivers one structured-clone payload to worker `id`. Ordered with
     /// respect to other `post` calls on the same id.
-    fn post(&self, id: u64, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+    ///
+    /// Synchronous, like [`PortHub::post`] and for the same reason: a queue
+    /// push has nothing to wait for, and `postMessage` is synchronous in the
+    /// specification. Making it a future was not merely redundant — every send
+    /// held an async-op slot, so ~1150 posts in one turn exhausted the agent's
+    /// `max_pending_ops` and made *every* async op fail, `terminate()`
+    /// included. Only [`recv`](Self::recv) waits, because waiting is what it is
+    /// for.
+    ///
+    /// A message to a worker that has already ended is dropped rather than
+    /// refused: the specification gives `postMessage` no delivery guarantee,
+    /// and racing a `close()` is ordinary rather than a fault in the sender.
+    fn post(&self, id: u64, message: Vec<u8>) -> Result<(), ProviderError>;
+
+    /// How many messages have been handed to [`post`](Self::post) for `id` and
+    /// not yet taken by that worker.
+    ///
+    /// Advisory, and the only backpressure signal there is: nothing here ever
+    /// refuses a message — HTML does not permit `postMessage` to fail for queue
+    /// depth, and Node, Deno and Bun all queue without limit — so a producer
+    /// that outruns its worker grows memory unless it chooses to pace itself.
+    /// This is what it paces against, the way a socket's `bufferedAmount` works.
+    fn queued(&self, id: u64) -> usize;
 
     /// Awaits the next event from worker `id`. Resolves to `None` once the
     /// worker is gone and its queue is drained, which ends the parent's pump.
@@ -1370,8 +1392,14 @@ pub trait WorkerScope: Send + Sync {
     /// the agent that is running it.
     fn url(&self) -> String;
 
-    /// Sends one structured-clone payload to the parent agent.
-    fn post(&self, message: Vec<u8>) -> BoxFuture<Result<(), ProviderError>>;
+    /// Sends one structured-clone payload to the parent agent. Synchronous,
+    /// for the reason [`WorkerHost::post`] gives.
+    fn post(&self, message: Vec<u8>) -> Result<(), ProviderError>;
+
+    /// How many messages this worker has sent to its parent and the parent has
+    /// not yet taken — see [`WorkerHost::queued`], which is the same number
+    /// read from the other side of a different queue.
+    fn queued(&self) -> usize;
 
     /// Awaits the next payload from the parent. `None` once the parent is gone.
     fn recv(&self) -> BoxFuture<Result<Option<Vec<u8>>, ProviderError>>;

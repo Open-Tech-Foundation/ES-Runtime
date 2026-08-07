@@ -96,6 +96,35 @@ interface Worker {
    * matters after an `unref()`.
    */
   ref(): void;
+
+  /**
+   * How many messages have been posted to this worker and not yet taken by it.
+   *
+   * The only backpressure signal there is: `postMessage` never refuses a
+   * message — HTML does not permit it to fail for queue depth, and Node, Deno
+   * and Bun all queue without limit — so a producer that outruns its worker
+   * grows memory unless it chooses to pace itself. This is what it paces
+   * against, the way a socket's `bufferedAmount` works.
+   *
+   * ```ts
+   * for (const job of jobs) {
+   *   w.postMessage(job);
+   *   if (w.queued > 1000) await drain();
+   * }
+   * ```
+   *
+   * Non-standard. No other runtime exposes this.
+   */
+  readonly queued: number;
+}
+
+interface DedicatedWorkerGlobalScope {
+  /**
+   * How many messages this worker has sent to its parent and the parent has
+   * not yet taken — the mirror of {@link Worker.queued}, for a worker
+   * producing results faster than its parent consumes them.
+   */
+  readonly queued: number;
 }
 
 interface Navigator {

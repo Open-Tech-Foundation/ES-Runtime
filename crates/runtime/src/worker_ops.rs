@@ -166,15 +166,29 @@ fn install_parent(
         .requires(Capability::Worker),
     )?;
 
+    // Sync, like `port_post` and unlike what this used to be. A queue push has
+    // nothing to await, and making it a future was not merely redundant: every
+    // send held an async-op slot, so a burst of about 1150 `postMessage` calls
+    // in one turn exhausted `max_pending_ops` and made *every* async op in the
+    // agent throw — `terminate()` included. Posting 2000 jobs in a loop is the
+    // ordinary way to use a job queue, and HTML does not permit `postMessage`
+    // to fail for queue depth at all.
     let host = workers.clone();
-    engine.register_op(OpDecl::r#async("worker_post", move |args| {
-        let host = host.clone();
+    engine.register_op(OpDecl::sync("worker_post", move |args| {
         let id = arg_u64(&args, 0);
         let message = arg_bytes(&args, 1);
-        Box::pin(async move {
-            require(&host)?.post(id, message).await.map_err(map_err)?;
-            Ok(Value::Undefined)
-        })
+        require(&host)?.post(id, message).map_err(map_err)?;
+        Ok(Value::Undefined)
+    }))?;
+
+    // `worker_queued(id)`: how deep this worker's inbox is. The only
+    // backpressure signal there is — nothing refuses a message, so a producer
+    // that outruns its worker has to choose to pace itself, and this is what it
+    // paces against.
+    let host = workers.clone();
+    engine.register_op(OpDecl::sync("worker_queued", move |args| {
+        let id = arg_u64(&args, 0);
+        Ok(Value::Number(require(&host)?.queued(id) as f64))
     }))?;
 
     // `worker_ref(delta)`: Node's handle ref-counting. A referenced `Worker` is
@@ -349,14 +363,17 @@ fn install_scope(engine: &mut dyn Engine, scope: Option<Arc<dyn WorkerScope>>) -
         })
     }))?;
 
+    // Sync, for the reason `worker_post` gives.
     let s = scope.clone();
-    engine.register_op(OpDecl::r#async("worker_self_post", move |args| {
-        let s = s.clone();
+    engine.register_op(OpDecl::sync("worker_self_post", move |args| {
         let message = arg_bytes(&args, 0);
-        Box::pin(async move {
-            require_scope(&s)?.post(message).await.map_err(map_err)?;
-            Ok(Value::Undefined)
-        })
+        require_scope(&s)?.post(message).map_err(map_err)?;
+        Ok(Value::Undefined)
+    }))?;
+
+    let s = scope.clone();
+    engine.register_op(OpDecl::sync("worker_self_queued", move |_args| {
+        Ok(Value::Number(require_scope(&s)?.queued() as f64))
     }))?;
 
     let s = scope.clone();

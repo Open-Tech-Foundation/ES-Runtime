@@ -451,6 +451,31 @@
       this.#setReferenced(true);
     }
 
+    /**
+     * How many messages have been posted to this worker and not yet taken by
+     * it.
+     *
+     * The only backpressure signal there is: `postMessage` never refuses a
+     * message — HTML does not permit it to fail for queue depth, and Node, Deno
+     * and Bun all queue without limit — so a producer that outruns its worker
+     * grows memory unless it chooses to pace itself. This is what it paces
+     * against, the way a socket's `bufferedAmount` works.
+     *
+     * ```js
+     * for (const job of jobs) {
+     *   w.postMessage(job);
+     *   if (w.queued > 1000) await drain();
+     * }
+     * ```
+     *
+     * Messages queued before the worker has started count too: they are held
+     * here rather than in the host, but they are just as much backlog.
+     */
+    get queued() {
+      if (this.#id === null) return this.#pending.length;
+      return this.#terminated ? 0 : __ops.worker_queued(this.#id);
+    }
+
     postMessage(message, options) {
       const bytes = serialize(message, options);
       if (this.#terminated) return;
@@ -603,6 +628,14 @@
       }
       postMessage(message, options) {
         __ops.worker_self_post(serialize(message, options));
+      }
+      /**
+       * How many messages this worker has sent to its parent and the parent has
+       * not yet taken — the mirror of `worker.queued`, for a worker producing
+       * results faster than its parent consumes them.
+       */
+      get queued() {
+        return __ops.worker_self_queued();
       }
       close() {
         __ops.worker_self_close();

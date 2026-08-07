@@ -949,6 +949,104 @@ fn unref_is_idempotent_and_survives_termination() {
 }
 
 #[test]
+fn a_burst_of_messages_does_not_break_the_agent() {
+    // `postMessage` used to be an async op, so every send held one of the
+    // agent's 1024 async-op slots and a burst of about 1150 threw
+    // `RangeError: too many concurrent async operations` — after which *every*
+    // async op failed, `terminate()` included. Posting 2000 jobs in a loop is
+    // the ordinary way to use a job queue, and HTML does not permit
+    // `postMessage` to fail for queue depth at all.
+    let out = run(
+        "burst",
+        r#"self.onmessage = () => {};"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        await new Promise((r) => setTimeout(r, 300));   // past the pre-spawn buffer
+        let n = 0;
+        try {
+          for (; n < 5000; n++) w.postMessage(n);
+          console.log("posted", n);
+        } catch (e) {
+          console.log("threw after", n, ":", e.message);
+        }
+        w.terminate();
+        console.log("terminated cleanly");
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(out.contains("posted 5000"), "stdout: {out}");
+    assert!(out.contains("terminated cleanly"), "stdout: {out}");
+}
+
+#[test]
+fn a_worker_reports_how_deep_its_inbox_is() {
+    // The only backpressure signal there is: nothing refuses a message, so a
+    // producer that outruns its worker has to choose to pace itself, and this
+    // is what it paces against.
+    let out = run(
+        "queued",
+        r#"
+        self.onmessage = () => {
+          const until = Date.now() + 2;
+          while (Date.now() < until) {}
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        // Before the spawn resolves the backlog is held in the Worker itself,
+        // and counts just the same.
+        for (let i = 0; i < 5; i++) w.postMessage(i);
+        console.log("pre-spawn:", w.queued);
+        await new Promise((r) => setTimeout(r, 300));
+        for (let i = 0; i < 2000; i++) w.postMessage(i);
+        console.log("after a burst:", w.queued > 1000);
+        await new Promise((r) => setTimeout(r, 500));
+        console.log("draining:", w.queued < 2000);
+        w.terminate();
+        console.log("after terminate:", w.queued);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let out = stdout(&out);
+    assert!(out.contains("pre-spawn: 5"), "stdout: {out}");
+    assert!(out.contains("after a burst: true"), "stdout: {out}");
+    assert!(out.contains("draining: true"), "stdout: {out}");
+    assert!(out.contains("after terminate: 0"), "stdout: {out}");
+}
+
+#[test]
+fn a_worker_sees_its_own_backlog_to_the_parent() {
+    // The mirror, for a worker producing results faster than its parent takes
+    // them. The parent here never reads, so the depth only goes up.
+    let out = run(
+        "queued-self",
+        r#"
+        self.onmessage = () => {
+          for (let i = 0; i < 500; i++) postMessage(i);
+          postMessage("queued:" + (self.queued > 100));
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onmessage = (e) => {
+          if (typeof e.data === "string") { console.log(e.data); w.terminate(); }
+        };
+        w.postMessage("go");
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("queued:true"),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn deny_workers_refuses_the_spawn() {
     let out = run(
         "denied",

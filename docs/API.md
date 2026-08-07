@@ -626,6 +626,25 @@ A worker that merely *hears* about a child's failure has not failed itself, so a
 unclaimed `error` on a `Worker` goes to the console rather than escalating —
 otherwise one leaf failure would take down every ancestor without an `onerror`.
 
+### Backpressure
+
+`postMessage` never refuses a message and never throws for queue depth — HTML
+does not permit it to, and Node, Deno and Bun all queue without limit. So a
+producer that outruns its worker grows memory, and `queued` is what it can pace
+against:
+
+```js
+for (const job of jobs) {
+  w.postMessage(job);
+  if (w.queued > 1000) await drain();     // your choice, not the runtime's
+}
+```
+
+`queued` is the number posted and not yet taken. Inside a worker, `self.queued`
+is the mirror — results sent to the parent that the parent has not taken yet.
+Both are advisory, like a socket's `bufferedAmount`. No other runtime exposes
+either.
+
 ### What crosses
 
 `postMessage` uses the structured clone algorithm, so `Map`, `Set`, `Date`,

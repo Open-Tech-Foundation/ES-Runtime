@@ -193,6 +193,30 @@ above.
 `terminate()` interrupts the isolate, so it stops a worker spinning in a
 synchronous loop or parked in `Atomics.wait`.
 
+## Backpressure
+
+`postMessage` never refuses a message. HTML does not permit it to fail for queue
+depth, and Node, Deno and Bun all queue without limit — so a producer that
+outruns its worker grows memory, and the only thing that can stop it is the
+producer.
+
+```js
+for (const job of jobs) {
+  w.postMessage(job);
+  if (w.queued > 1000) await drain();   // your choice, not the runtime's
+}
+```
+
+`queued` is the number posted and not yet taken; `self.queued` inside a worker
+is the mirror, for results the parent has not taken yet. Advisory, like a
+socket's `bufferedAmount`. No other runtime exposes either.
+
+The send itself is synchronous all the way down — a queue push has nothing to
+wait for, which is also what `MessagePort` always did. It was briefly an async
+op here, and that was worse than redundant: every send held one of the agent's
+async-op slots, so a burst of about 1150 exhausted them and made *every* async
+op in the agent throw.
+
 ## Transfers
 
 | Type | On transfer |

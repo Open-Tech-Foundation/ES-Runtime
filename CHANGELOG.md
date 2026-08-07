@@ -93,6 +93,23 @@ namespace) is unstable and may change between minor releases until the API freez
   thing that distinguishes running out of memory from a watchdog, a
   `process.exit()` or a `terminate()`.
 
+- **`worker.queued` and `self.queued`** — how many messages have been posted and
+  not yet taken, in each direction.
+
+  The only backpressure signal there is, and deliberately advisory: nothing
+  refuses a message, so a producer that outruns its worker has to choose to pace
+  itself.
+
+  ```js
+  for (const job of jobs) {
+    w.postMessage(job);
+    if (w.queued > 1000) await drain();
+  }
+  ```
+
+  No other runtime exposes this — Node, Deno and Bun all queue without limit and
+  give you nothing to look at.
+
 - **`worker.unref()` and `worker.ref()`** — Node's handle ref-counting, which
   Bun also has and Deno does not.
 
@@ -291,6 +308,27 @@ namespace) is unstable and may change between minor releases until the API freez
   ancestor that had not attached an `onerror`.
 
 ### Fixed
+
+- **`postMessage` could throw, and take the whole agent with it.** `Worker`'s
+  `postMessage` and a worker's own were registered as **async** ops, so every
+  send held one of the agent's `max_pending_ops` slots. A burst of about 1150 in
+  one turn — posting 2000 jobs in a loop, say — threw
+  `RangeError: too many concurrent async operations`, and from then on *every*
+  async op in that agent failed: `terminate()`, `fetch`, a timer, an fs read.
+  One noisy producer broke everything.
+
+  ```js
+  await new Promise((r) => setTimeout(r, 300));
+  for (let n = 0; ; n++) w.postMessage(n);
+  // before: threw after 1150 posts; w.terminate() then threw too
+  // after:  5000 posts, then a clean terminate
+  ```
+
+  A queue push has nothing to wait for, so both are now synchronous ops over
+  synchronous `WorkerHost::post` / `WorkerScope::post` — which is what
+  `PortHub::post` and `MessagePort.postMessage` always were, and why they never
+  had this. HTML does not permit `postMessage` to fail for queue depth, and no
+  other runtime does.
 
 - **A parent worker's child list grew forever.** `Live::children` was appended on
   every spawn and never pruned, so a supervisor that starts one worker per job
