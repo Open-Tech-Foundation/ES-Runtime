@@ -33,7 +33,65 @@ namespace) is unstable and may change between minor releases until the API freez
   `wpt/README.md`, and one of them (a terminated worker orphaning its own
   workers) means a full run does not exit on its own.
 
+- **`--max-heap=<mb>`, and a heap that is no longer fixed at 256 MiB.** Every
+  `esrun` agent was capped at the embeddable library default regardless of the
+  machine — about a sixteenth of what Node (4288 MiB) and Deno (4192 MiB) give
+  the same script on a 16 GiB host, with no flag to raise it.
+
+  `esrun` now sizes the heap from the machine, as they do, and reads the
+  **cgroup** limit before physical memory. Node and Deno both read physical
+  memory here, which is why deploying either one means hardcoding
+  `--max-old-space-size`: in a 2 GiB container on a 64 GiB host they size for
+  64 GiB and get OOM-killed where a garbage collection would have done.
+
+  ```
+  esrun --max-heap=512 app.js    # pin it
+  esrun app.js                   # container limit, else host memory
+  ```
+
+  The embeddable library is unchanged and deliberately so: `Limits::default()`
+  is still a fixed 256 MiB, because a library that is one part of somebody
+  else's process must not decide how much of it to take. `Limits::heap_limit_bytes`
+  is now `Option<usize>`, with `None` meaning "size it from the host"
+  (`Limits::with_system_heap_limit()`).
+
+- **`new Worker(url, { memory })`** — a per-worker heap ceiling, in megabytes,
+  as Node's `resourceLimits.maxOldGenerationSizeMb` is. Deno and Bun have no
+  per-worker limit at all, so a runaway job there takes the whole process.
+
+  ```js
+  new Worker(url, { memory: 64 });
+  ```
+
+  Exceeding it ends that worker and no other, and the parent hears why:
+
+  ```js
+  w.onerror = (e) => {
+    e.error.name  // "ERR_WORKER_OUT_OF_MEMORY"
+    e.message     // "worker terminated: it reached its 64MB memory limit"
+  };
+  ```
+
 ### Changed
+
+- **A worker's limits now derive from its parent's instead of being fresh.**
+  `worker_limits()` built a `Limits::default()` per worker, so an embedder that
+  had tightened its own runtime — say a 32 MiB heap — handed out 256 MiB agents
+  to anything holding `workers`: the ceiling was escaped simply by doing the
+  work in a worker. A worker now inherits the ceiling of the agent that started
+  it, and `{ memory }` may only lower it, which is the rule `permissions` and
+  `env` already followed. `Runtime::limits()` exposes what an agent was built
+  with.
+
+- **A worker that ran out of memory said "engine internal error".** V8 refuses
+  to begin evaluating once an isolate is terminating, but its own terminating
+  flag has usually cleared by the time it says so, so the heap-guard kill fell
+  through to `Error::Internal("module evaluation failed to start")` — and a
+  worker that hit the ceiling *after* startup looked to its parent like one that
+  had simply finished. `Engine::heap_limit_exceeded()` (and
+  `Runtime::heap_limit_exceeded()`) report the guard's latch, which is the only
+  thing that distinguishes running out of memory from a watchdog, a
+  `process.exit()` or a `terminate()`.
 
 - **A worker's failure now arrives in pieces, not as one formatted string.** The
   parent's `error` event carried the whole stack in `message`, with `filename`,

@@ -560,6 +560,25 @@ impl Runtime {
         Ok(runtime)
     }
 
+    /// The isolate ceilings this runtime was built with — see
+    /// [`Limits`](es_runtime_common::Limits).
+    #[must_use]
+    pub fn limits(&self) -> es_runtime_common::Limits {
+        self.engine.limits()
+    }
+
+    /// Whether this agent was terminated by its heap guard rather than by a
+    /// `process.exit()`, a watchdog or a `terminate()`.
+    ///
+    /// The four are indistinguishable from outside — execution simply stops —
+    /// and only this one means "it asked for more memory than it was allowed",
+    /// which is the difference between a job worth retrying and one that will
+    /// fail the same way every time.
+    #[must_use]
+    pub fn heap_limit_exceeded(&self) -> bool {
+        self.engine.heap_limit_exceeded()
+    }
+
     /// Registers a host op, callable from JS as `globalThis.__ops.<name>`.
     pub fn register_op(&mut self, op: OpDecl) -> Result<()> {
         self.engine.register_op(op)?;

@@ -120,6 +120,26 @@
     });
   }
 
+  // `new Worker(url, { memory })`: the worker's heap ceiling, **in megabytes**
+  // — the unit Node's `resourceLimits.maxOldGenerationSizeMb` uses, and the one
+  // a deployment writes anyway.
+  //
+  // Omitted means "as much as this agent has". It only ever narrows: a worker
+  // that could raise its own ceiling above its parent's would make the parent's
+  // no limit at all, the same reason `permissions` cannot widen. The host
+  // enforces that, since only it knows what this agent's ceiling actually is.
+  function workerMemory(value) {
+    if (value === undefined || value === null) return 0;
+    const mb = Number(value);
+    if (!Number.isInteger(mb) || mb <= 0) {
+      throw new TypeError(
+        'Worker option "memory" must be a positive whole number of megabytes, ' +
+          `not ${JSON.stringify(value)}`,
+      );
+    }
+    return mb;
+  }
+
   // Every event the platform delivers is trusted; one a script builds and
   // dispatches itself is not.
   const fired = (event) => event[__internal.trustEvent]();
@@ -182,15 +202,16 @@
       // argument, and a bad argument throws from the call that made it. Only a
       // worker that *fails to start* reports asynchronously, through `onerror`.
       const env = workerEnv(opts.env);
+      const memory = workerMemory(opts.memory);
 
       Object.defineProperty(this, "onmessage", handlerSlot(this, "message"));
       Object.defineProperty(this, "onmessageerror", handlerSlot(this, "messageerror"));
       Object.defineProperty(this, "onerror", handlerSlot(this, "error"));
 
-      this.#ready = this.#start(String(url), opts, env);
+      this.#ready = this.#start(String(url), opts, env, memory);
     }
 
-    async #start(url, opts, env) {
+    async #start(url, opts, env, memory) {
       const permissions = Array.isArray(opts.permissions)
         ? opts.permissions.map(String)
         : [];
@@ -199,7 +220,14 @@
       try {
         const absolute = new URL(url, __ops.worker_base()).href;
         const { specifier, source } = await __ops.worker_read_entry(absolute);
-        this.#id = await __ops.worker_spawn(specifier, source, name, permissions, env);
+        this.#id = await __ops.worker_spawn(
+          specifier,
+          source,
+          name,
+          permissions,
+          env,
+          memory,
+        );
       } catch (e) {
         // A worker that cannot start reports through `onerror`, asynchronously
         // — `new Worker()` is not allowed to throw for a script that fails to

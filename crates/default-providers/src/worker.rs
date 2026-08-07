@@ -435,6 +435,38 @@ async fn terminate_all(workers: &[Arc<Live>]) {
     }
 }
 
+/// A worker whose isolate hit its heap ceiling, worded so the parent can see
+/// both what happened and the number it happened against.
+///
+/// Named like Node's `ERR_WORKER_OUT_OF_MEMORY` so the two are recognisably the
+/// same condition; unlike Node's, the limit itself is in the message, because
+/// the whole point of a per-worker ceiling is that it differs per worker.
+fn out_of_memory(runtime: &Runtime) -> UncaughtError {
+    let limit = runtime.limits().heap_limit_bytes;
+    let ceiling = match limit {
+        Some(bytes) => format!("{}MB", bytes / (1024 * 1024)),
+        None => "the host's".to_string(),
+    };
+    UncaughtError::new(
+        "ERR_WORKER_OUT_OF_MEMORY",
+        format!("worker terminated: it reached its {ceiling} memory limit"),
+        String::new(),
+    )
+}
+
+/// Words a host-side failure, upgrading it to an out-of-memory report when that
+/// is what actually stopped the agent.
+///
+/// Worth the check because the two are indistinguishable in the error itself: a
+/// V8 that refuses to start evaluating gives the same "could not start" either
+/// way, and only the heap guard's latch says which it was.
+fn describe(runtime: &Runtime, message: String) -> UncaughtError {
+    if runtime.heap_limit_exceeded() {
+        return out_of_memory(runtime);
+    }
+    UncaughtError::from_message(message)
+}
+
 /// Hands one failure the driver surfaced to the agent's own
 /// [`WorkerScope::report_error`], which is where the policy lives.
 ///
@@ -520,10 +552,10 @@ fn run_worker(
 
         let entry = match entry {
             Ok(entry) => entry,
-            Err(err) => return Err(UncaughtError::from_message(err.to_string())),
+            Err(err) => return Err(describe(&runtime, err.to_string())),
         };
         if let Err(err) = runtime.begin_evaluation(entry) {
-            return Err(UncaughtError::from_message(err.to_string()));
+            return Err(describe(&runtime, err.to_string()));
         }
 
         let clock: Arc<dyn es_runtime_providers::Clock> = Arc::new(crate::SystemClock::new());
@@ -546,6 +578,9 @@ fn run_worker(
             .await;
         if let es_runtime::ModuleEvalState::Failed(error) = runtime.module_eval_state() {
             return Err(error);
+        }
+        if runtime.heap_limit_exceeded() {
+            return Err(out_of_memory(&runtime));
         }
         for error in started.uncaught_errors {
             fail_agent(&scope, DriveFailure::UncaughtError(error));
@@ -571,6 +606,14 @@ fn run_worker(
             .reporting_failures_to(move |failure| fail_agent(&sink_scope, failure))
             .drive_while(&mut runtime, |_| !closing.load(Ordering::SeqCst))
             .await;
+        // Running out of memory stops an agent without going through any of the
+        // failure paths above: V8 terminates the isolate, the drive loop sees
+        // `terminated` and returns, and the worker would otherwise look to its
+        // parent like one that had simply finished. It is the one ending a
+        // supervisor must not mistake for a clean one.
+        if runtime.heap_limit_exceeded() {
+            return Err(out_of_memory(&runtime));
+        }
         Ok(())
     });
 

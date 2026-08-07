@@ -432,11 +432,13 @@ and the same set Deno exposes in a module worker.
 | `name` | standard | The worker's `self.name` |
 | `permissions` | **ours** | Capability names to grant — see [Capabilities](#capabilities-1) |
 | `env` | **ours** | `"inherit"` or an object — see [Environment](#environment) |
+| `memory` | **ours** | Heap ceiling in **megabytes** — see [Memory](#memory) |
 | `credentials` | — | Not supported: it governs how a *classic* script is fetched over HTTP, and a module here comes from a file |
 
-Two of the five are non-standard, and necessarily so: HTML has no notion of a
-capability, and a worker that could read the whole environment because its
-parent could would make deny-by-default stop at the first `new Worker`.
+Three of the six are non-standard, and necessarily so: HTML has no notion of a
+capability, a worker that could read the whole environment because its parent
+could would make deny-by-default stop at the first `new Worker`, and a browser
+has no per-agent memory budget to divide because it is not the process.
 
 **Module workers only.** `type: "classic"` throws a `TypeError`. This runtime
 evaluates every input as a module, so there is no classic-script path for a
@@ -501,6 +503,29 @@ undeclared side channel between agents, and there is a declared one —
 `postMessage`. For the same reason a parent's own `env.X = …` is not visible to
 its workers: each agent's `env` is seeded from the host snapshot, not from the
 parent's object.
+
+### Memory
+
+Each worker gets its own isolate, so each has its own heap ceiling:
+
+```js
+new Worker(url, { memory: 64 })   // megabytes, as Node's maxOldGenerationSizeMb is
+```
+
+Omitted, it takes the ceiling of the agent that started it. Named, it may only
+**lower** that — a worker able to raise its own would leave the parent's meaning
+nothing, since anything holding `workers` could step over it by doing the work in
+a worker. Exceeding it ends that worker and no other: the parent's `error` fires
+with `e.error.name === "ERR_WORKER_OUT_OF_MEMORY"` and a message naming the limit.
+
+The ceiling every agent starts from is `--max-heap=<mb>`, and by default it is
+sized from the machine — the container's memory limit when there is one, else the
+host's memory. Node and Deno both read physical memory here and miss the cgroup,
+which is why deploying either means hardcoding `--max-old-space-size` in a
+Dockerfile.
+
+Deno and Bun have no per-worker memory limit at all, so a runaway job there takes
+the whole process with it.
 
 ### Lifetime
 

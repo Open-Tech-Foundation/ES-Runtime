@@ -38,6 +38,7 @@ mod module;
 pub mod op;
 mod serialize;
 pub mod snapshot;
+mod sysmem;
 mod value;
 
 pub use engine::{Engine, InterruptHandle, V8Engine, WasmModuleInfo};

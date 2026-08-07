@@ -75,6 +75,10 @@ USAGE:
                                 lists of packages and paths)
     esrun -t=<ms>, --timeout=<ms>
                                 Stop execution after <ms> ms (watchdog, SPEC §4)
+    esrun --max-heap=<mb>       Heap ceiling in megabytes, for this agent and as
+                                the ceiling its workers inherit. Default: sized
+                                from the container's memory limit, or the host's
+                                memory when there is none
     esrun --env-file=<path>     Load env vars from a .env file
     esrun --env-override        Let --env-file values override the OS environment
     esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
@@ -484,6 +488,9 @@ struct Config {
     /// How long in-flight HTTP requests get to finish after an interrupt, via
     /// `--shutdown-grace` (see [`DEFAULT_SHUTDOWN_GRACE`]).
     shutdown_grace: Duration,
+    /// The heap ceiling in bytes, via `--max-heap=<mb>`; `None` sizes it from
+    /// the host. See [`heap_limits`].
+    max_heap_bytes: Option<usize>,
     /// User arguments after the script/`-e` code, exposed as `runtime:process`
     /// `args` (the runtime binary and the script/code are excluded).
     args: Vec<String>,
@@ -902,6 +909,7 @@ fn parse_args() -> Result<Config, String> {
     let mut import_policy: Option<String> = None;
     let mut env_override = false;
     let mut shutdown_grace = DEFAULT_SHUTDOWN_GRACE;
+    let mut max_heap_bytes = None;
     let mut permissions = Permissions::default();
     // The flag the previous argument was, so a bare word following it can be
     // diagnosed as an attempted value rather than silently becoming the script.
@@ -976,6 +984,16 @@ fn parse_args() -> Result<Config, String> {
                 reject_value(flag, value)?;
                 env_override = true;
             }
+            "--max-heap" => {
+                let mb = require_value(flag, value)?;
+                let mb: usize = mb.parse().map_err(|_| {
+                    format!("invalid {flag} value: {mb} (expected whole megabytes)")
+                })?;
+                if mb == 0 {
+                    return Err(format!("{flag}=0 would leave no heap at all"));
+                }
+                max_heap_bytes = Some(mb * 1024 * 1024);
+            }
             "--shutdown-grace" => {
                 let ms = require_value(flag, value)?;
                 let ms: u64 = ms
@@ -1009,6 +1027,7 @@ fn parse_args() -> Result<Config, String> {
                     import_policy,
                     env_override,
                     shutdown_grace,
+                    max_heap_bytes,
                     args: rest,
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
@@ -1048,6 +1067,7 @@ fn parse_args() -> Result<Config, String> {
                     import_policy,
                     env_override,
                     shutdown_grace,
+                    max_heap_bytes,
                     args: rest,
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
@@ -1072,6 +1092,7 @@ fn is_esrun_flag(flag: &str) -> bool {
             | "--import-policy"
             | "--env-override"
             | "--shutdown-grace"
+            | "--max-heap"
             | "-e"
             | "--eval"
             | "--deny-all"
@@ -1222,6 +1243,9 @@ async fn run() -> Result<(), String> {
     // (D38): the capability bit opens the door, the provider decides what is
     // behind it. Unlisted variables are absent rather than unreadable, so the
     // guest cannot even enumerate the names of the host's secrets.
+    // Read before `config` is taken apart below, and used for every agent this
+    // process builds: the main one here, and each worker through `spec.limits`.
+    let max_heap_bytes = config.max_heap_bytes;
     let mut system_process =
         SystemProcess::new(config.args).with_env(env_overlay, config.env_override);
     if let Some(names) = config.scopes.get(&Capability::Env) {
@@ -1368,7 +1392,8 @@ async fn run() -> Result<(), String> {
     // Restore the prelude from the snapshot baked in at build time (build.rs)
     // instead of compiling + evaluating it — the bulk of construction cost.
     let mut runtime =
-        Runtime::with_snapshot(SNAPSHOT.to_vec(), providers).map_err(|e| e.to_string())?;
+        Runtime::with_snapshot_and_limits(SNAPSHOT, heap_limits(max_heap_bytes), providers)
+            .map_err(|e| e.to_string())?;
     // A local script is trusted by default: the full capability set (incl.
     // FileSystem, which module loading requires). `--deny-all` / `--deny-<name>`
     // narrow it (D38); the entry file has already been read by this point, so a
@@ -1504,6 +1529,24 @@ fn joined(headline: &str, failures: &[UncaughtError]) -> String {
         msg.push_str(&failure.to_string());
     }
     msg
+}
+
+/// The ceilings this run's agents are built with.
+///
+/// `esrun` is not the embeddable library: it *is* the process, so it takes the
+/// machine's answer rather than the library's conservative 256 MiB — which on a
+/// 16 GiB host is a sixteenth of what Node and Deno would give the same script,
+/// and does not move when the host does. `--max-heap=<mb>` pins it instead.
+///
+/// It applies to workers as well, because a worker derives its limits from the
+/// agent that started it: one number bounds the process, however many agents it
+/// ends up with.
+fn heap_limits(max_heap_bytes: Option<usize>) -> es_runtime_common::Limits {
+    let limits = es_runtime_common::Limits::default();
+    match max_heap_bytes {
+        Some(bytes) => limits.with_heap_limit_bytes(bytes),
+        None => limits.with_system_heap_limit(),
+    }
 }
 
 fn timeout_message(timeout: Option<Duration>) -> String {

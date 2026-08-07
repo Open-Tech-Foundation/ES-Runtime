@@ -16,9 +16,18 @@ use crate::error::{Error, Result};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Limits {
-    /// Maximum V8 heap size in bytes. On approach the engine terminates the
-    /// isolate gracefully rather than letting the host OOM (ARCHITECTURE.md §7).
-    pub heap_limit_bytes: usize,
+    /// Maximum V8 heap size in bytes, or `None` to size it from the machine.
+    ///
+    /// On approach the engine terminates the isolate gracefully rather than
+    /// letting the host OOM (ARCHITECTURE.md §7) — `None` moves that ceiling,
+    /// it does not remove it.
+    ///
+    /// `Some` is the embeddable default: a library that is one part of somebody
+    /// else's process must not decide how much of it to take. `None` is for a
+    /// runtime that *is* the process — `esrun` — where a fixed 256 MiB on a
+    /// 64 GiB host is an arbitrary ceiling nobody asked for, and where Node and
+    /// Deno both size the heap from the machine.
+    pub heap_limit_bytes: Option<usize>,
 
     /// Maximum synchronous JS call-stack depth before a guard trips.
     pub max_stack_depth: u32,
@@ -55,7 +64,15 @@ impl Limits {
     /// `#[non_exhaustive]` struct stays constructible from downstream crates.
     #[must_use]
     pub fn with_heap_limit_bytes(mut self, bytes: usize) -> Self {
-        self.heap_limit_bytes = bytes;
+        self.heap_limit_bytes = Some(bytes);
+        self
+    }
+
+    /// Returns these limits with the heap ceiling sized from the host instead of
+    /// fixed — see [`heap_limit_bytes`](Self::heap_limit_bytes).
+    #[must_use]
+    pub fn with_system_heap_limit(mut self) -> Self {
+        self.heap_limit_bytes = None;
         self
     }
 
@@ -85,7 +102,7 @@ impl Limits {
     /// Validates the limits, rejecting values that would defeat enforcement
     /// (e.g. a zero heap cap). Returns [`Error::Config`] on the first problem.
     pub fn validate(&self) -> Result<()> {
-        if self.heap_limit_bytes == 0 {
+        if self.heap_limit_bytes == Some(0) {
             return Err(Error::Config("heap_limit_bytes must be non-zero".into()));
         }
         if self.max_stack_depth == 0 {
@@ -101,7 +118,7 @@ impl Limits {
 impl Default for Limits {
     fn default() -> Self {
         Limits {
-            heap_limit_bytes: Limits::DEFAULT_HEAP_LIMIT_BYTES,
+            heap_limit_bytes: Some(Limits::DEFAULT_HEAP_LIMIT_BYTES),
             max_stack_depth: Limits::DEFAULT_MAX_STACK_DEPTH,
             max_pending_ops: Limits::DEFAULT_MAX_PENDING_OPS,
             // The default agent is the one driving the loop. See `can_block`.
@@ -122,7 +139,7 @@ mod tests {
     #[test]
     fn zero_heap_limit_is_rejected() {
         let limits = Limits {
-            heap_limit_bytes: 0,
+            heap_limit_bytes: Some(0),
             ..Limits::default()
         };
         let err = limits.validate().unwrap_err();

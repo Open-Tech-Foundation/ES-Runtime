@@ -142,6 +142,33 @@ impl InterruptHandle {
     }
 }
 
+/// Applies a [`Limits`]' heap ceiling to `params`, returning them alongside the
+/// ceiling that actually took effect.
+///
+/// A fixed ceiling is installed as given. `None` asks V8 for the sizing it does
+/// for itself, from the memory this process may use — which is Node's and
+/// Deno's default behaviour, and lands near 4 GiB on a 16 GiB host rather than
+/// at the embeddable 256 MiB.
+///
+/// The ceiling is returned rather than re-derived because the guard needs the
+/// real number: with `None`, V8 chose it, and reading it back off the configured
+/// constraints is the only way to know what it chose. Should V8 answer nothing
+/// usable, the fixed default stands in — a guard on a wrong ceiling is worse
+/// than a conservative one.
+fn sized_params(limits: &Limits, params: v8::CreateParams) -> (v8::CreateParams, usize) {
+    let Some(bytes) = limits.heap_limit_bytes else {
+        let params = params.heap_limits_from_system_memory(crate::sysmem::available_bytes(), 0);
+        let chosen = params.max_old_generation_size_in_bytes();
+        let ceiling = if chosen == 0 {
+            Limits::DEFAULT_HEAP_LIMIT_BYTES
+        } else {
+            chosen
+        };
+        return (params, ceiling);
+    };
+    (params.heap_limits(0, bytes), bytes)
+}
+
 /// Data for the near-heap-limit callback. Kept behind a stable (boxed) address
 /// for the isolate's lifetime so the raw `*mut c_void` we hand V8 stays valid.
 struct HeapGuard {
@@ -268,6 +295,23 @@ pub trait Engine {
     /// reports it and exits non-zero).
     fn take_uncaught_errors(&mut self) -> Vec<UncaughtError>;
 
+    /// The ceilings this isolate was built with.
+    ///
+    /// Read by an agent that is about to start another: a worker's limits are
+    /// derived from its parent's, so that a tightened ceiling is inherited
+    /// rather than escaped by spawning.
+    fn limits(&self) -> Limits;
+
+    /// Whether this isolate was terminated by its heap guard — it reached the
+    /// ceiling in [`Limits::heap_limit_bytes`] and was stopped rather than being
+    /// allowed to OOM the host.
+    ///
+    /// Sticky, and the only way to tell this apart from any other termination:
+    /// a watchdog interrupt, a `process.exit()` and running out of memory all
+    /// look identical from outside, and an agent's supervisor needs to know
+    /// which of them ended it.
+    fn heap_limit_exceeded(&self) -> bool;
+
     /// Returns a thread-safe handle for interrupting this engine's execution
     /// (e.g. from a watchdog thread). See [`InterruptHandle`].
     fn interrupt_handle(&self) -> InterruptHandle;
@@ -363,11 +407,16 @@ pub struct V8Engine {
     /// caller must register ops in the **same order** used to build the snapshot
     /// so op ids line up (DECISIONS.md D8).
     ops_baked: bool,
+    /// The ceilings this isolate was built with, as the caller wrote them —
+    /// so an agent that starts another can derive that one's from its own
+    /// rather than reaching for a fresh default (see [`Engine::limits`]).
+    limits: Limits,
     /// Thread-safe interrupt handle, cloned for [`InterruptHandle`] and used by
     /// `eval` to detect a watchdog/heap termination.
     interrupt: v8::IsolateHandle,
-    /// Set by the near-heap-limit callback; lets `eval` label a termination as a
-    /// heap-limit hit vs a watchdog interrupt.
+    /// Set by the near-heap-limit callback; lets a termination be labelled a
+    /// heap-limit hit rather than a watchdog interrupt. Sticky: an isolate does
+    /// not come back from one, and more than one caller asks.
     heap_tripped: Arc<AtomicBool>,
     /// Latch behind [`InterruptHandle::is_terminating`] — see the field on that
     /// type for why V8's own flag is not enough.
@@ -396,15 +445,9 @@ impl V8Engine {
         limits.validate()?;
         crate::ensure_v8_initialized();
 
-        let params = v8::CreateParams::default().heap_limits(0, limits.heap_limit_bytes);
+        let (params, ceiling) = sized_params(&limits, v8::CreateParams::default());
         let isolate = v8::Isolate::new(params);
-        Self::wire(
-            isolate,
-            false,
-            Some(limits.heap_limit_bytes),
-            limits.max_pending_ops as usize,
-            limits.can_block,
-        )
+        Self::wire(isolate, false, limits, Some(ceiling))
     }
 
     /// Restores an engine from a startup snapshot built by
@@ -450,18 +493,14 @@ impl V8Engine {
 
         // The blob may embed our native callbacks by external-reference index;
         // the same canonical list used at build must be supplied here (D8).
-        let params = v8::CreateParams::default()
-            .heap_limits(0, limits.heap_limit_bytes)
-            .external_references(crate::op::external_references())
-            .snapshot_blob(snapshot.into());
+        let (params, ceiling) = sized_params(
+            &limits,
+            v8::CreateParams::default()
+                .external_references(crate::op::external_references())
+                .snapshot_blob(snapshot.into()),
+        );
         let isolate = v8::Isolate::new(params);
-        Self::wire(
-            isolate,
-            ops_baked,
-            Some(limits.heap_limit_bytes),
-            limits.max_pending_ops as usize,
-            limits.can_block,
-        )
+        Self::wire(isolate, ops_baked, limits, Some(ceiling))
     }
 
     /// Builds a V8 startup-snapshot blob with the prelude and op shells baked in
@@ -490,7 +529,9 @@ impl V8Engine {
         // The builder isolate runs only the prelude, never guest code, and the
         // flag is isolate configuration rather than heap state — so it is not
         // serialized and each restored isolate sets its own in `restore`.
-        let mut engine = Self::wire(creator, false, None, limits.max_pending_ops as usize, false)?;
+        // No guard and never blocking: a snapshot builder runs only the prelude,
+        // and its isolate exists to be serialized rather than to run guest code.
+        let mut engine = Self::wire(creator, false, limits.with_can_block(false), None)?;
         configure(&mut engine)?;
         engine.into_snapshot_blob()
     }
@@ -527,10 +568,11 @@ impl V8Engine {
     fn wire(
         mut isolate: v8::OwnedIsolate,
         ops_baked: bool,
+        limits: Limits,
         heap_limit: Option<usize>,
-        max_pending_ops: usize,
-        can_block: bool,
     ) -> Result<Self> {
+        let max_pending_ops = limits.max_pending_ops as usize;
+        let can_block = limits.can_block;
         // Microtasks run only at our explicit checkpoint, never implicitly when
         // a JS call returns — the embedder owns when reactions fire (D4).
         isolate.set_microtasks_policy(v8::MicrotasksPolicy::Explicit);
@@ -614,6 +656,7 @@ impl V8Engine {
             op_state,
             modules,
             ops_baked,
+            limits,
             interrupt,
             heap_tripped,
             terminate_requested,
@@ -688,7 +731,7 @@ impl Engine for V8Engine {
                 // Clear the terminating state so the isolate can be dropped (or,
                 // in principle, reused) cleanly, and label the cause.
                 self.isolate.cancel_terminate_execution();
-                let reason = if self.heap_tripped.swap(false, Ordering::SeqCst) {
+                let reason = if self.heap_tripped.load(Ordering::SeqCst) {
                     "heap limit exceeded"
                 } else {
                     "execution terminated"
@@ -840,6 +883,14 @@ impl Engine for V8Engine {
         crate::op::take_uncaught_errors(&self.op_state)
     }
 
+    fn limits(&self) -> Limits {
+        self.limits
+    }
+
+    fn heap_limit_exceeded(&self) -> bool {
+        self.heap_tripped.load(Ordering::SeqCst)
+    }
+
     fn interrupt_handle(&self) -> InterruptHandle {
         InterruptHandle {
             isolate: self.interrupt.clone(),
@@ -882,13 +933,23 @@ impl Engine for V8Engine {
     }
 
     fn evaluate_module(&mut self, id: ModuleId) -> Result<()> {
-        crate::module::evaluate(
+        let started = crate::module::evaluate(
             &mut self.isolate,
             &self.context,
             &self.modules,
             &self.interrupt,
             id,
-        )
+        );
+        // V8 refuses to start evaluation once the isolate is terminating, but
+        // by the time it says so its own terminating flag has often cleared —
+        // `module::evaluate` then has nothing left to blame and reports an
+        // internal error. The latch is what still knows.
+        if started.is_err() && self.heap_limit_exceeded() {
+            return Err(Error::Terminated {
+                reason: "heap limit exceeded".into(),
+            });
+        }
+        started
     }
 
     fn module_eval_state(&mut self) -> ModuleEvalState {

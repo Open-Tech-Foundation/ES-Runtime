@@ -92,7 +92,7 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 
 ## 4. Resource limits & security guarantees
 
-- ☑ Per-isolate **heap limit** → near-limit guard terminates execution before the host OOMs (Phase 9: `add_near_heap_limit_callback` → `Error::Terminated`).
+- ☑ Per-isolate **heap limit** → near-limit guard terminates execution before the host OOMs (Phase 9: `add_near_heap_limit_callback` → `Error::Terminated`). `Limits::heap_limit_bytes` is `Some(256 MiB)` for the embeddable library and `None` — sized from the container's memory limit, else the host's — for `esrun`, where `--max-heap=<mb>` pins it. A worker's ceiling derives from its parent's and `new Worker(url, { memory })` may only lower it.
 - ☑ **Execution-time watchdog** → a runaway script is terminated via a thread-safe `InterruptHandle`; surfaces as `Error::Terminated`, never a hang (Phase 9). CPU-cycle accounting (vs wall-clock) is not separately implemented.
 - ☑ **Stack-depth** guard → V8-native; unbounded recursion is a catchable `RangeError`, not UB or a hang (Phase 9 test).
 - ☑ **Bounded pending-op** concurrency → `max_pending_ops`; the over-limit async dispatch throws `RangeError` (Phase 9).

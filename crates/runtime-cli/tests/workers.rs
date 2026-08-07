@@ -539,6 +539,120 @@ fn a_worker_cannot_be_granted_what_its_parent_lacks() {
 }
 
 #[test]
+fn a_worker_is_held_to_the_memory_it_was_given() {
+    // Node is the only peer with a per-worker memory ceiling at all
+    // (`resourceLimits.maxOldGenerationSizeMb`); Deno and Bun have none, so a
+    // runaway job takes the whole process with it. Here it takes one agent, and
+    // the parent is told which agent and against what limit.
+    let out = run(
+        "hungry",
+        r#"
+        self.onmessage = () => {
+          const held = [];
+          for (;;) held.push(new Array(100000).fill(held.length));
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), { memory: 64 });
+        w.onerror = (e) => {
+          console.log("failed:", e.error.name, "|", e.message);
+          e.preventDefault();
+          w.terminate();
+        };
+        w.postMessage("go");
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "failed: ERR_WORKER_OUT_OF_MEMORY | worker terminated: it reached its 64MB memory limit"
+        ),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn a_worker_cannot_be_given_more_memory_than_its_parent_has() {
+    // The same rule `permissions` follows: a spawn narrows, never widens. A
+    // ceiling a child could raise would not be one, since anything holding
+    // `workers` could step over it by starting an agent to do the work in.
+    let out = run(
+        "greedy",
+        r#"postMessage("should never run");"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), { memory: 4096 });
+        w.onerror = (e) => { console.log("refused:", e.message); e.preventDefault(); };
+        "#,
+        &["--max-heap=256"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "a worker cannot be given more memory than the agent starting it: \
+             asked for 4096MB, this agent's own limit is 256MB"
+        ),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn a_worker_inherits_the_ceiling_the_process_was_given() {
+    // The point of `--max-heap`: one number bounds the process however many
+    // agents it grows. Before this, a worker took a fixed 256 MiB regardless —
+    // so a tightened runtime was escaped simply by doing the work in a worker.
+    let out = run(
+        "inheriting",
+        r#"
+        self.onmessage = () => {
+          const held = [];
+          for (;;) held.push(new Array(100000).fill(held.length));
+        };
+        "#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.onerror = (e) => { console.log("failed:", e.message); e.preventDefault(); w.terminate(); };
+        w.postMessage("go");
+        "#,
+        &["--max-heap=64"],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("it reached its 64MB memory limit"),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn a_bad_memory_option_throws_from_the_constructor() {
+    // A malformed option is a bad argument, so it belongs to the call that made
+    // it — not to `onerror`, which is for a worker that failed to *start*.
+    let out = run(
+        "badmem",
+        r#"postMessage("should never run");"#,
+        r#"
+        try {
+          new Worker(new URL("WORKER_URL", import.meta.url), { memory: "64MB" });
+        } catch (e) {
+          console.log(e.constructor.name + ":", e.message);
+        }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            r#"TypeError: Worker option "memory" must be a positive whole number of megabytes"#
+        ),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn deny_workers_refuses_the_spawn() {
     let out = run(
         "denied",

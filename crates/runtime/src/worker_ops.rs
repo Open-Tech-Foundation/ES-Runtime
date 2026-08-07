@@ -121,6 +121,9 @@ fn install_parent(
     workers: Option<Arc<dyn WorkerHost>>,
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
 ) -> Result<()> {
+    // This agent's own ceilings, read once: they are fixed for the isolate's
+    // life, and every worker it starts derives from them.
+    let parent_limits = engine.limits();
     let host = workers.clone();
     engine.register_op(
         OpDecl::r#async("worker_spawn", move |args| {
@@ -133,6 +136,9 @@ fn install_parent(
             // if you were granted it". A list of pairs is one the parent built
             // out of values it already held.
             let env = arg_pairs(&args, 4);
+            // Megabytes, as Node's `maxOldGenerationSizeMb` is; 0 when the
+            // spawn named no ceiling of its own.
+            let memory_mb = arg_u64(&args, 5);
             // Read *now*, on the calling thread, rather than inside the future:
             // this is the spawning agent's own grant, and it is the ceiling on
             // what the child can be given.
@@ -149,7 +155,7 @@ fn install_parent(
                     // the parent had, and used, to read the entry source above),
                     // then narrowed before a line of the worker runs.
                     load_capabilities: load_capabilities(parent),
-                    limits: worker_limits(),
+                    limits: worker_limits(parent_limits, memory_mb)?,
                 };
                 let id = require(&host)?.spawn(spec).await.map_err(map_err)?;
                 Ok(Value::Number(id as f64))
@@ -249,14 +255,45 @@ fn load_capabilities(parent: CapabilitySet) -> CapabilitySet {
     set
 }
 
-/// A worker agent's isolate limits.
-fn worker_limits() -> es_runtime_common::Limits {
-    es_runtime_common::Limits::default()
-        // A worker owns its thread, so parking it in `Atomics.wait` is what the
-        // call is for — unlike on the agent driving the loop, where it is a
-        // hang. This is the ECMAScript agent record's [[CanBlock]], and the
-        // same split HTML makes between window and worker agents.
-        .with_can_block(true)
+/// A worker agent's isolate limits: its parent's, narrowed by what the spawn
+/// asked for.
+///
+/// **Derived, never fresh.** Everything else a worker receives narrows from its
+/// parent — capabilities, the environment — and a ceiling that did not would be
+/// escaped by spawning: an embedder that built its runtime with a 32 MiB heap
+/// would be handing out 256 MiB agents to anything holding `workers`.
+///
+/// `memory_mb` is the `{ memory }` spawn option in megabytes, or 0 for "as much
+/// as the parent". It may only *lower* the ceiling, for the same reason:
+/// `permissions` cannot widen either, and a limit a child could raise is not a
+/// limit. A parent sized from the host has no fixed number to compare against,
+/// so any request there is honoured — it is a narrowing by construction.
+fn worker_limits(
+    parent: es_runtime_common::Limits,
+    memory_mb: u64,
+) -> std::result::Result<es_runtime_common::Limits, OpError> {
+    // A worker owns its thread, so parking it in `Atomics.wait` is what the call
+    // is for — unlike on the agent driving the loop, where it is a hang. This is
+    // the ECMAScript agent record's [[CanBlock]], and the same split HTML makes
+    // between window and worker agents.
+    let limits = parent.with_can_block(true);
+    if memory_mb == 0 {
+        return Ok(limits);
+    }
+    let requested = (memory_mb as usize).saturating_mul(1024 * 1024);
+    if let Some(ceiling) = parent.heap_limit_bytes
+        && requested > ceiling
+    {
+        return Err(OpError::new(
+            ExceptionClass::TypeError,
+            format!(
+                "a worker cannot be given more memory than the agent starting it: \
+                 asked for {memory_mb}MB, this agent's own limit is {}MB",
+                ceiling / (1024 * 1024)
+            ),
+        ));
+    }
+    Ok(limits.with_heap_limit_bytes(requested))
 }
 
 // ---- the worker's half ------------------------------------------------------
@@ -622,4 +659,56 @@ fn require_scope(
 
 fn map_err(e: ProviderError) -> OpError {
     OpError::new(e.exception_class(), e.exception_message()).with_code_opt(e.code())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use es_runtime_common::Limits;
+
+    const MB: usize = 1024 * 1024;
+
+    /// The bug this replaced: a worker took a fresh `Limits::default()`, so an
+    /// embedder that had tightened its own runtime handed out 256 MiB agents to
+    /// anything holding `workers`.
+    #[test]
+    fn a_worker_inherits_its_parents_ceiling() {
+        let parent = Limits::default().with_heap_limit_bytes(32 * MB);
+        let child = worker_limits(parent, 0).expect("no request to refuse");
+        assert_eq!(child.heap_limit_bytes, Some(32 * MB));
+    }
+
+    /// A worker owns its thread, so `Atomics.wait` parks only itself. That is
+    /// the one field a worker does *not* inherit.
+    #[test]
+    fn a_worker_may_block_even_though_its_parent_may_not() {
+        let parent = Limits::default();
+        assert!(!parent.can_block);
+        assert!(worker_limits(parent, 0).expect("no request").can_block);
+    }
+
+    #[test]
+    fn a_smaller_request_is_honoured() {
+        let parent = Limits::default().with_heap_limit_bytes(256 * MB);
+        let child = worker_limits(parent, 64).expect("64MB is under 256MB");
+        assert_eq!(child.heap_limit_bytes, Some(64 * MB));
+    }
+
+    /// Narrowing only — the rule `permissions` already follows.
+    #[test]
+    fn a_larger_request_is_refused() {
+        let parent = Limits::default().with_heap_limit_bytes(64 * MB);
+        let err = worker_limits(parent, 256).expect_err("256MB is over 64MB");
+        assert!(err.to_string().contains("asked for 256MB"), "{err}");
+        assert!(err.to_string().contains("is 64MB"), "{err}");
+    }
+
+    /// A parent sized from the host has no fixed number to compare against, so
+    /// naming one is a narrowing by construction rather than a widening.
+    #[test]
+    fn any_request_narrows_a_host_sized_parent() {
+        let parent = Limits::default().with_system_heap_limit();
+        let child = worker_limits(parent, 512).expect("nothing to exceed");
+        assert_eq!(child.heap_limit_bytes, Some(512 * MB));
+    }
 }
