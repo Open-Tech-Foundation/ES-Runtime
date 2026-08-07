@@ -140,7 +140,7 @@ other agents — a worker is a second isolate on its own thread. See
 
 | Global | Notes |
 | --- | --- |
-| `Worker` | module workers only; starts with no capabilities, granted per spawn |
+| `Worker` | module workers only; starts with no capabilities, granted per spawn; `{ memory }` caps its heap |
 | `MessageChannel` / `MessagePort` | a port buffers until `start()`; assigning `onmessage` starts it |
 | `BroadcastChannel` | reaches every open channel of the same name except itself, in creation order |
 

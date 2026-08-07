@@ -35,7 +35,9 @@ makes the trade-offs explicit.
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
 | Capability sandbox (deny by default) | <Partial /> | <Partial /> | <No /> | <Yes /> |
 | Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
-| Workers / multi-thread | <No /> | <Yes /> | <Yes /> | <Yes /> |
+| Workers / multi-thread | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Per-worker memory limit | <Yes /> | <Yes /> | <No /> | <No /> |
+| Per-worker capabilities | <Yes /> | <No /> | <No /> | <Partial /> |
 | FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |

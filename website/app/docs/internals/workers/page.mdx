@@ -21,13 +21,20 @@ the HTML Standard, in the direction Deno and Bun took.
 | `name` | standard | the worker's `self.name` |
 | `permissions` | **ours** | capability names to grant, bounded by the spawning agent's own set |
 | `env` | **ours** | `"inherit"` or an object of variables |
+| `memory` | **ours** | heap ceiling in megabytes, bounded by the spawning agent's own |
 | `credentials` | — | unsupported: it governs how a *classic* script is fetched over HTTP |
 
-Two of the five are non-standard, and necessarily so. HTML has no notion of a
-capability, and a worker that could read the whole environment because its
-parent could would make deny-by-default stop at the first `new Worker`. Deno
-reaches the same conclusion and spells it `deno: { permissions }` — still behind
-`--unstable-worker-options`; here it is part of the constructor.
+Three of the six are non-standard, and necessarily so. HTML has no notion of a
+capability; a worker that could read the whole environment because its parent
+could would make deny-by-default stop at the first `new Worker`; and a browser
+has no per-agent memory budget to divide, because it is not the process. Deno
+reaches the same conclusion on capabilities and spells it `deno: { permissions }`
+— still behind `--unstable-worker-options`; here it is part of the constructor.
+
+All three narrow and none widen. A worker is granted a subset of what its parent
+holds, given values its parent could already read, and held to a ceiling no
+higher than its parent's — otherwise anything holding `workers` would step over
+each of them by doing the work in a worker.
 
 ## One thread, one isolate, and a provider between
 
@@ -183,11 +190,54 @@ roughly 0.2% of the cost and at 8 MiB roughly 10%. Removing it would mean giving
 every provider signature that carries bytes a container able to own a V8 backing
 store, which is not a trade worth making at these numbers.
 
+## Failure
+
+An uncaught exception or unhandled rejection fires `error` on the parent's
+`Worker` **the tick it happens**, and ends the worker. Both halves are the
+contract: a worker holding a receive pump open never finishes on its own, so
+waiting for it to end would mean the report arrived long after anything could
+act on it — and a failure that escaped every handler its author wrote leaves the
+agent in a state nobody can vouch for, so a supervisor gets one clean transition
+to restart on rather than an agent left in the rotation.
+
+The event carries the failure in pieces — `message` alone, `filename`/`lineno`/
+`colno`, and an `error` rebuilt as the class it was thrown as:
+
+```js
+w.onerror = (e) => {
+  e.error instanceof RangeError   // true, with the worker's own .stack
+  e.error.name                    // "RangeError"
+  e.filename, e.lineno, e.colno   // where
+};
+```
+
+`e.error` is necessarily a new object: the failure crossed a thread. Standard
+classes are restored; anything else becomes an `Error` carrying the right
+`name`, which is the discriminator that survives regardless — a `DOMException`
+is told apart by `"AbortError"`, not by its constructor.
+
+A worker takes responsibility for its own failure by calling `preventDefault()`
+in its own `error` or `unhandledrejection` listener; a claimed failure is
+neither reported nor fatal. And a worker that merely *hears* about a child's
+failure has not failed itself, so an unclaimed `error` on a `Worker` goes to the
+console rather than escalating — without that, one leaf failure would take down
+every ancestor without an `onerror`.
+
 ## Limits
 
-Each worker's isolate carries the standard heap ceiling, and the reference host
-caps concurrently live workers (64 by default) — a worker costs a thread and an
-isolate, so an unbounded `new Worker()` loop is a way to exhaust both.
+Each worker's isolate carries its own heap ceiling: its parent's, or lower if
+the spawn named one. Reaching it ends that worker and no other, with
+`e.error.name === "ERR_WORKER_OUT_OF_MEMORY"` naming the limit. Node is the only
+other runtime with a per-worker ceiling (`resourceLimits.maxOldGenerationSizeMb`);
+in Deno and Bun a runaway job takes the whole process with it.
+
+The ceiling every agent starts from is `--max-heap=<mb>`, and by default it is
+sized from the machine — the container's memory limit when there is one, else
+the host's memory.
+
+The reference host also caps concurrently live workers (64 by default) — a
+worker costs a thread and an isolate, so an unbounded `new Worker()` loop is a
+way to exhaust both.
 
 A `blob:` URL minted on one agent does **not** resolve on another: the
 object-URL store is per-isolate, where the spec scopes it to the agent cluster.

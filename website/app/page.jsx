@@ -48,7 +48,6 @@ const scopeItems = [
   "Test runner",
   "Watch mode",
   "FFI",
-  "Workers",
   "Native addons",
 ];
 

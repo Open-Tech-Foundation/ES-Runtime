@@ -24,6 +24,8 @@ esrun --import-policy=<file>
                             JSON policy for what may be loaded
 esrun -t=<ms>, --timeout=<ms>
                             Stop execution after <ms> ms (watchdog)
+esrun --max-heap=<mb>       Heap ceiling in megabytes, for this agent and as the
+                            ceiling its workers inherit (default: from the host)
 esrun --env-file=<path>     Load env vars from a .env file
 esrun --env-override        Let --env-file values override the OS environment
 esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
@@ -61,6 +63,7 @@ script that genuinely wants a flag esrun also knows.
 | `<file>` | Path to a JavaScript ES module to run. Resolved as a local file (relative/absolute path or `file:` URL). |
 | `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
 | `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
+| `--max-heap=<mb>` | Heap ceiling in megabytes for this agent, and the ceiling the workers it starts inherit. Default: the container's memory limit when there is one, else the host's memory. See [Memory](#memory). |
 | `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
 | `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`. Cannot be combined with `--deny-all`. |
 | `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
@@ -299,6 +302,29 @@ tidiness: ignoring one leaves a run wider than the command line claims.
   list, readable as [`args` from runtime:process](/api/process). The runtime
   binary and the script path are excluded.
 </Callout>
+
+## Memory
+
+The heap ceiling is sized from the machine — the **cgroup** limit when there is
+one, else the host's memory. Node and Deno both read physical memory here, which
+is why deploying either means hardcoding `--max-old-space-size`: in a 2 GiB
+container on a 64 GiB host they size for 64 GiB and get OOM-killed where a
+garbage collection would have done.
+
+```bash
+esrun app.js                   # container limit, else host memory
+esrun --max-heap=512 app.js    # pin it
+```
+
+| | |
+| --- | --- |
+| Applies to | this agent, and as the ceiling every worker it starts inherits |
+| A worker may | lower it with `new Worker(url, { memory: 64 })` — never raise it |
+| Reaching it | ends that agent; a worker's parent gets `ERR_WORKER_OUT_OF_MEMORY` |
+
+The embeddable library is different on purpose: it keeps a fixed 256 MiB, since
+a library that is one part of somebody else's process should not decide how much
+of it to take. See [Embedding](/docs/embed).
 
 ## Graceful shutdown
 
