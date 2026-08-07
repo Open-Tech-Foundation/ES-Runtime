@@ -93,6 +93,7 @@
     #bufferedAmount = 0;
     #id = null;
     #closeRequested = null; // { code, reason } if close() ran while CONNECTING
+    #closeSent = null; // { code, reason } once we have asked to close
     #handlers = { open: null, message: null, error: null, close: null };
 
     constructor(url, protocols) {
@@ -223,6 +224,7 @@
         return;
       }
       this.#readyState = CLOSING;
+      this.#closeSent = { code: c, reason: reasonStr };
       Promise.resolve(ops.ws_close(this.#id, c, reasonStr)).catch(() => {});
     }
 
@@ -241,6 +243,7 @@
       if (this.#closeRequested) {
         // close() ran during CONNECTING — start the handshake, fire no `open`.
         const { code, reason } = this.#closeRequested;
+        this.#closeSent = { code, reason };
         Promise.resolve(ops.ws_close(this.#id, code, reason)).catch(() => {});
         this.#pump();
         return;
@@ -258,7 +261,7 @@
           if (this.#id === null || this.#readyState === CLOSED) return;
           const frame = await ops.ws_recv(this.#id);
           if (frame === null) {
-            this.#abnormalClose();
+            this.#endOfStream();
             return;
           }
           if (frame.type === "close") {
@@ -289,6 +292,30 @@
       } catch {
         this.#abnormalClose();
       }
+    }
+
+    // The stream ended without a close frame reaching the pump. If *we* asked
+    // to close, the handshake did complete — the peer echoed our code (it is
+    // required to) and the host tore the socket down afterwards, so there is
+    // nothing left to read. Reporting 1006 there made every ordinary
+    // `close(4001, "bye")` look like a dropped connection to its own handler,
+    // while the peer saw the real code; 1006 must never mark a clean close, and
+    // reconnect logic keyed on the code took the wrong branch every time.
+    //
+    // An end of stream we did *not* ask for is still abnormal.
+    #endOfStream() {
+      if (this.#readyState === CLOSED) return;
+      if (this.#closeSent === null) {
+        this.#abnormalClose();
+        return;
+      }
+      this.#readyState = CLOSED;
+      const { code, reason } = this.#closeSent;
+      this.dispatchEvent(
+        // No code supplied to `close()` means no status was sent, which is
+        // what 1005 reports — the same value the peer observes.
+        new CloseEvent("close", { wasClean: true, code: code ?? 1005, reason }),
+      );
     }
 
     // Connection dropped without a clean handshake (or the handshake failed):

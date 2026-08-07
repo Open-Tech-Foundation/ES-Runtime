@@ -15,6 +15,33 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A WebSocket close reports the code the caller asked for.** A client calling
+  `close(4001, "bye")` was told `1006` / `wasClean: false` by its own `close`
+  handler, while the peer correctly received 4001 and the reason. 1006 means
+  "connection dropped without a close frame" and must never mark a clean
+  shutdown, so reconnect logic keyed on the code took the failure branch on
+  every ordinary close. The end of the stream after a close *we* asked for is
+  now reported as that close (1005 when no code was supplied, matching what the
+  peer sees); an end of stream nobody asked for is still 1006 with an `error`
+  before it.
+
+- **A `runtime:http` handler that returns a non-`Response` is a 500.** It was
+  coerced with `String(value)` and sent as a **200**, so `return { ok: true }`
+  shipped the body `[object Object]` as a successful response — the documented
+  behaviour has always been a 500. Both this and a thrown handler now also
+  *report* the reason (to stderr, via the usual error path) instead of failing
+  silently; the response itself stays a bare `Internal Server Error`, since a
+  handler's mistake is not the client's business.
+
+- **`fetch` rejects network failures with `TypeError`.** Connection refused, an
+  unsupported scheme, a DNS failure and a redirect loop all rejected with a
+  plain `Error`, so `catch (e) { if (e instanceof TypeError) … }` — the
+  documented way to tell a transport failure from a programming mistake — never
+  matched, while `redirect: "error"` on the same call did. The stable `code`
+  (`ERR_TOO_MANY_REDIRECTS` and friends) survives the change. Aborts
+  (`AbortError`/`TimeoutError`) and capability denials (`NotAllowedError`) are
+  deliberately *not* network errors and keep their own types.
+
 - **MessagePack carries binary data again.** `encode` wrote `nil` for a
   `Uint8Array` and `decode` returned a plain `Array` of numbers for a `bin`
   value, so binary — the reason to choose the format — was destroyed in both

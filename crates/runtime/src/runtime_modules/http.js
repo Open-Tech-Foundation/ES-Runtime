@@ -240,6 +240,19 @@ function connectionInfo(host, port) {
 // structured tuple from http_next_request: [requestId, method, url, hasBody,
 // headers, peerHost, peerPort] (headers as [name, value] pairs) — no
 // per-request JSON parse.
+// Names what a handler returned, for the 500's report. Deliberately a shape,
+// not the value: a handler's return can hold anything, including secrets.
+function describeReturn(v) {
+  if (v === null) return "null";
+  if (v === undefined) return "undefined";
+  const t = typeof v;
+  if (t === "object") {
+    const name = v.constructor?.name;
+    return !name || name === "Object" ? "a plain object" : `a ${name}`;
+  }
+  return `a ${t}`;
+}
+
 async function handleRequest(entry, handler) {
   const requestId = entry[0];
   const method = entry[1];
@@ -268,9 +281,22 @@ async function handleRequest(entry, handler) {
       connectionInfo(peerHost, peerPort),
     );
     if (!(response instanceof Response)) {
-      response = new Response(response == null ? "" : String(response));
+      // A handler that returns something else has a bug, and coercing it with
+      // `String(value)` shipped that bug as a 200: `return { ok: true }` went
+      // out as the body "[object Object]", successfully. It is a 500, and the
+      // reason is reported so it is not invisible — the response itself says
+      // nothing, since a handler's mistake is not the client's business.
+      reportError(
+        new TypeError(
+          `runtime:http handler returned ${describeReturn(response)} instead of a Response`,
+        ),
+      );
+      response = new Response("Internal Server Error", { status: 500 });
     }
-  } catch {
+  } catch (e) {
+    // Same reasoning: a thrown handler is a 500 to the client and a reported
+    // error to the developer, rather than a silent one.
+    reportError(e);
     response = new Response("Internal Server Error", { status: 500 });
   }
 

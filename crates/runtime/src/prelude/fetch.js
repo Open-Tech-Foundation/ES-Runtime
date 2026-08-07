@@ -216,6 +216,27 @@
     return { bytes: encoder.encode(String(input)), type: "text/plain;charset=UTF-8" };
   }
 
+  // Fetch has one failure mode for "the request did not complete" — a *network
+  // error* — and the standard requires it to reject with a `TypeError`. That is
+  // the whole basis of the documented way to tell a transport failure from a
+  // programming mistake: `catch (e) { if (e instanceof TypeError) … }`. The
+  // host ops raise a plain `Error`, so connection-refused, an unsupported
+  // scheme and a redirect loop all failed that test while `redirect: "error"`
+  // passed it — the same operation reporting two different ways.
+  //
+  // Two kinds of failure are deliberately *not* network errors and pass through
+  // as themselves: an abort (`AbortError`/`TimeoutError`) and a capability
+  // denial (`NotAllowedError`). Neither says anything about the network, and
+  // flattening them into `TypeError` would lose the distinction callers act on.
+  function asNetworkError(e, url) {
+    if (e instanceof DOMException || e instanceof TypeError) return e;
+    const wrapped = new TypeError(`Failed to fetch ${url}: ${(e && e.message) || e}`, { cause: e });
+    // Host failures carry a stable `code` (ERR_TOO_MANY_REDIRECTS &c.); it is
+    // the contract guests branch on, so it survives the rewrap.
+    if (e && e.code !== undefined) wrapped.code = e.code;
+    return wrapped;
+  }
+
   // The body half of `clone()` — and of `new Request(otherRequest)`, which the
   // Fetch standard defines in the same terms ("create a proxy for inputBody").
   // Returns a fresh state for the copy, mutating `state` where the two must
@@ -865,6 +886,8 @@
     let meta;
     try {
       meta = await Promise.race([fetchPromise, abortPromise]);
+    } catch (e) {
+      throw asNetworkError(e, request.url);
     } finally {
       signal.removeEventListener("abort", onAbort);
     }

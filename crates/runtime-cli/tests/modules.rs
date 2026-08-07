@@ -141,6 +141,93 @@ fn disconnects_stalled_clients_and_leaves_working_ones_alone() {
     assert!(stdout.contains("TIMEOUTS_OK"), "{stdout}");
 }
 
+/// `serve`'s documented failure contract, against the real server: a thrown
+/// handler *and* a non-Response return are both a 500. The second used to be
+/// coerced with `String(value)` and sent as a 200, so `return { ok: true }`
+/// shipped "[object Object]" as a successful response.
+#[test]
+fn a_handler_that_throws_or_returns_a_non_response_is_a_500() {
+    let out = run_file("http-handler-contract.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for path in [
+        "/throw",
+        "/reject",
+        "/string",
+        "/object",
+        "/null",
+        "/undefined",
+    ] {
+        assert!(
+            s.contains(&format!("{path} status:500 body:\"Internal Server Error\"")),
+            "{path} should be a 500 in:\n{s}",
+        );
+    }
+    // A real Response is untouched.
+    assert!(s.contains("/ok status:200 body:\"fine\""), "{s}");
+    // The client learns nothing about the handler's mistake…
+    assert!(s.contains("leak:false"), "{s}");
+    // …but the developer does, on stderr.
+    let err = stderr(&out);
+    assert!(
+        err.contains("handler blew up"),
+        "the thrown error is reported: {err}"
+    );
+    assert!(
+        err.contains("instead of a Response"),
+        "the non-Response return is reported: {err}",
+    );
+    assert!(s.contains("HANDLER_CONTRACT_OK"), "{s}");
+}
+
+/// Fetch network errors reject with `TypeError`, which is how a caller tells a
+/// transport failure from a programming one. Aborts and capability denials are
+/// not network errors and keep their own types.
+#[test]
+fn fetch_reports_network_failures_as_type_errors() {
+    let out = run_file("fetch-network-errors.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "refused:TypeError:TypeError:ERR_CONNECTION_REFUSED",
+        "badscheme:TypeError:TypeError:",
+        "dns:TypeError:TypeError:",
+        // The stable `code` survives the rewrap — guests branch on it.
+        "loop:TypeError:TypeError:ERR_TOO_MANY_REDIRECTS",
+        "redirect-error-mode:TypeError:TypeError:",
+        "relative:TypeError:TypeError:",
+        // Not network errors.
+        "aborted:DOMException:AbortError:",
+        "timeout:DOMException:TimeoutError:",
+        "ok:200",
+        "NETWORK_ERRORS_OK",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
+/// The initiator of a WebSocket close must be told what it asked for. A client
+/// calling `close(4001, "bye")` used to report 1006 / `wasClean: false` to its
+/// own handler while the peer received 4001 — and 1006 means "dropped without a
+/// close frame", so every clean shutdown read as a failure to reconnect logic.
+#[test]
+fn a_websocket_close_reports_the_same_code_at_both_ends() {
+    let out = run_file("websocket-close-codes.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    for expected in [
+        "custom client:4001/bye/true server:4001/bye/true",
+        "normal client:1000//true server:1000//true",
+        // No code supplied means no status was sent, which is what 1005 reports.
+        "nocode client:1005//true server:1005//true",
+        // …and a close the peer initiates is passed through unchanged.
+        "server-initiated client:4002/server-said-so/true",
+        "WS_CLOSE_OK",
+    ] {
+        assert!(s.contains(expected), "missing {expected:?} in:\n{s}");
+    }
+}
+
 #[test]
 fn tells_a_handler_which_peer_a_request_came_from() {
     // A real accept() under the real binary: the address a handler is given has
