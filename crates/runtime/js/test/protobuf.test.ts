@@ -288,3 +288,64 @@ test("CLOSED repeated (packed) enum keeps known members, preserves unknown", () 
   // re-encoding emits the known members (packed) plus the retained unknown 7.
   expect(open.decode("t.M", closed.encode("t.M", decoded)).es).toEqual(["B", "A", 7]);
 });
+
+test("encode accepts proto field names as well as their JSON names", () => {
+  const s = new Schema(`syntax="proto3"; message M { string user_name = 1; int32 age_years = 2; }`);
+  // `user_name` is the spelling in the .proto, and the one the proto3-JSON
+  // mapping requires parsers to accept. It used to match no field at all, so
+  // this encoded to an empty buffer and lost the whole message in silence.
+  const expected = [0x0a, 0x03, 0x61, 0x64, 0x61, 0x10, 0x24];
+  expect([...s.encode("M", { user_name: "ada", age_years: 36 })]).toEqual(expected);
+  expect([...s.encode("M", { userName: "ada", ageYears: 36 })]).toEqual(expected);
+  expect([...s.encode("M", { user_name: "ada", ageYears: 36 })]).toEqual(expected);
+});
+
+test("encode accepts either spelling in nested, repeated and map fields", () => {
+  const s = new Schema(`
+    syntax = "proto3";
+    message Inner { string deep_field = 1; }
+    message M {
+      repeated string tag_list = 1;
+      map<string, int32> score_map = 2;
+      Inner inner_msg = 3;
+    }
+  `);
+  const snake = s.encode("M", {
+    tag_list: ["a"], score_map: { x: 1 }, inner_msg: { deep_field: "z" },
+  });
+  const camel = s.encode("M", {
+    tagList: ["a"], scoreMap: { x: 1 }, innerMsg: { deepField: "z" },
+  });
+  expect([...snake]).toEqual([...camel]);
+  expect(s.decode("M", snake)).toEqual({
+    tagList: ["a"], scoreMap: { x: 1 }, innerMsg: { deepField: "z" },
+  });
+});
+
+test("encode rejects a key matching no field instead of dropping it", () => {
+  const s = new Schema(`syntax="proto3"; message Inner { string deep_field = 1; } message M { string user_name = 1; Inner inner_msg = 2; }`);
+  // A typo silently produced a short buffer, which is the failure mode that
+  // makes a wrong field name impossible to notice until the far end.
+  expect(() => s.encode("M", { usr_name: "ada" })).toThrow(/unknown field "usr_name" in M/);
+  expect(() => s.encode("M", { inner_msg: { deep_fld: "z" } })).toThrow(/unknown field "deep_fld" in Inner/);
+  // The opt-out skips them, and still encodes the fields it did recognize.
+  expect([...s.encode("M", { usr_name: "x", user_name: "ada" }, { ignoreUnknownFields: true })])
+    .toEqual([0x0a, 0x03, 0x61, 0x64, 0x61]);
+});
+
+test("encode rejects a field given under both of its names", () => {
+  const s = new Schema(`syntax="proto3"; message M { string user_name = 1; }`);
+  expect(() => s.encode("M", { user_name: "a", userName: "b" }))
+    .toThrow(/given twice/);
+});
+
+test("a decoded message re-encodes cleanly despite the unknown-field check", () => {
+  // `decode` returns JSON names plus a symbol-keyed store of preserved unknown
+  // fields; the symbol must not read as an unknown *key* on the way back out.
+  const full = new Schema(`syntax="proto3"; message M { string user_name = 1; int32 age_years = 2; }`);
+  const old = new Schema(`syntax="proto3"; message M { string user_name = 1; }`);
+  const bytes = full.encode("M", { user_name: "ada", age_years: 36 });
+
+  expect([...full.encode("M", full.decode("M", bytes))]).toEqual([...bytes]);
+  expect([...old.encode("M", old.decode("M", bytes))]).toEqual([...bytes]);
+});

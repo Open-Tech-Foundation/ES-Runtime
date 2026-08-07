@@ -29,6 +29,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **Protobuf `encode` accepts the field names the `.proto` declares.** It read
+  only the lowerCamelCase JSON name, so a message written with the field names as
+  they appear in the schema — `{ user_name: "ada" }` for `string user_name = 1` —
+  matched nothing and encoded to a **0-byte buffer**, losing the whole message
+  without an error. The proto3-JSON mapping requires both spellings to be
+  accepted, and this package's own `fromJson` and `decodeStream` already did;
+  `encode` was the outlier. Supplying both spellings of one field is rejected, as
+  the mapping also requires. A key matching **no** field now throws rather than
+  being dropped, so a typo can no longer encode to a short buffer in silence —
+  pass `{ ignoreUnknownFields: true }` to `encode`/`encodeDelimited` for the old
+  lenient behaviour. Decoded messages still re-encode unchanged, preserved
+  unknown wire fields included.
+
 - **`copy(p, p)` no longer empties the file.** `fs::copy` opens the destination
   truncating *before* it reads the source, so copying a file onto itself wiped it
   and reported success with `0` bytes copied — the backup destroying the original,

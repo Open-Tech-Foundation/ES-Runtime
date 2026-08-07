@@ -4,7 +4,7 @@
 import { type ParsedFile, parseProto } from "./parser.js";
 import { type Registry, link } from "./link.js";
 import { decode } from "./decode.js";
-import { encode } from "./encode.js";
+import { type EncodeOptions, encode } from "./encode.js";
 import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.js";
 import { type StreamSource, decodeDelimitedStream, decodeStream } from "./stream.js";
 import { parseDescriptorSet } from "./descriptor_set.js";
@@ -59,20 +59,25 @@ export class Schema {
     return decode(m, new Reader(bytes));
   }
 
-  /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
-  encode(messageName: string, value: Record<string, unknown>): Uint8Array {
+  /** Encodes `value` as binary protobuf for the fully-qualified `messageName`.
+   *
+   *  Field names may be spelled either way — `user_name` as it appears in the
+   *  `.proto`, or the lowerCamelCase `userName` that `decode` produces. A key
+   *  matching no field is an error, so a typo cannot silently encode to a short
+   *  buffer; pass `{ ignoreUnknownFields: true }` to skip such keys instead. */
+  encode(messageName: string, value: Record<string, unknown>, options: EncodeOptions = {}): Uint8Array {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     const w = new Writer();
-    encode(m, value, w);
+    encode(m, value, w, options);
     return w.finish();
   }
 
   /** Encodes `value` as a single length-delimited message — a varint length
    *  prefix followed by the encoded bytes (the `writeDelimitedTo` framing).
    *  Concatenate the results to write a stream of messages. */
-  encodeDelimited(messageName: string, value: Record<string, unknown>): Uint8Array {
-    const body = this.encode(messageName, value);
+  encodeDelimited(messageName: string, value: Record<string, unknown>, options: EncodeOptions = {}): Uint8Array {
+    const body = this.encode(messageName, value, options);
     const w = new Writer();
     w.uint32(body.length);
     w.raw(body);

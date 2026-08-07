@@ -137,6 +137,15 @@ declare module "runtime:serialization" {
     entry?: string;
   }
 
+  export interface ProtobufEncodeOptions {
+    /**
+     * Accept and skip object keys that match no field, instead of throwing.
+     * Off by default, so a misspelled field name cannot quietly encode to a
+     * short buffer.
+     */
+    ignoreUnknownFields?: boolean;
+  }
+
     /**
      * A canonical proto3-JSON value: 64-bit integers and `bytes` are strings
      * (base64 for `bytes`), enums are their value-name string, and the
@@ -182,15 +191,31 @@ declare module "runtime:serialization" {
       /** Decodes binary protobuf for the fully-qualified `messageName`. */
       decode(messageName: string, bytes: Uint8Array): Record<string, unknown>;
 
-      /** Encodes `value` as binary protobuf for the fully-qualified `messageName`. */
-      encode(messageName: string, value: Record<string, unknown>): Uint8Array;
+      /**
+       * Encodes `value` as binary protobuf for the fully-qualified `messageName`.
+       *
+       * Field names may be spelled either way — `user_name` as it appears in the
+       * `.proto`, or the lowerCamelCase `userName` that `decode` produces.
+       * Supplying both spellings of one field is an error. A key matching no
+       * field throws, so a typo cannot silently encode to a short buffer; pass
+       * `{ ignoreUnknownFields: true }` to skip such keys instead.
+       */
+      encode(
+        messageName: string,
+        value: Record<string, unknown>,
+        options?: ProtobufEncodeOptions,
+      ): Uint8Array;
 
       /**
        * Encodes `value` as a single length-delimited message — a varint length
        * prefix followed by the encoded bytes (the `writeDelimitedTo` framing).
        * Concatenate results to write a stream of messages.
        */
-      encodeDelimited(messageName: string, value: Record<string, unknown>): Uint8Array;
+      encodeDelimited(
+        messageName: string,
+        value: Record<string, unknown>,
+        options?: ProtobufEncodeOptions,
+      ): Uint8Array;
 
       /**
        * Converts a decoded value (the `decode` shape) to its canonical

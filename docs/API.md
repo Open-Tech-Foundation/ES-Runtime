@@ -1848,7 +1848,7 @@ For Protobuf, schemas are compiled from `.proto` source at runtime:
 | `new Protobuf.Schema(proto, opts?)` | Compiles a `.proto` source string (or a `{ filename: source }` map for multi-file schemas with `import`s; the `google/protobuf/*` well-known types resolve automatically). |
 | `Protobuf.Schema.fromDescriptorSet(bytes)` | Builds a `Schema` from a compiled `FileDescriptorSet` (`protoc --descriptor_set_out`, ideally with `--include_imports`) instead of `.proto` source. |
 | `schema.decode(messageName, bytes)` | Decodes a `Uint8Array` for the fully-qualified `messageName`. |
-| `schema.encode(messageName, value)` | Encodes a JavaScript object into a `Uint8Array`. |
+| `schema.encode(messageName, value, options?)` | Encodes a JavaScript object into a `Uint8Array`. Field names may be `snake_case` (as in the `.proto`) or `camelCase`; a key matching no field throws unless `options.ignoreUnknownFields` is set. |
 | `schema.encodeDelimited(messageName, value)` | Encodes one length-delimited message (varint length prefix + bytes — the `writeDelimitedTo` framing). |
 | `schema.decodeDelimited(messageName, source)` | Async generator over a length-delimited stream of messages from a chunked byte `source` (`ReadableStream`, async/sync iterable, or `Uint8Array`). |
 | `schema.toJson(messageName, value)` | Converts a decoded value to its canonical proto3-JSON representation. |

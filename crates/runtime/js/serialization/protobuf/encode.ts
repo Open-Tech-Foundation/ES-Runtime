@@ -45,18 +45,18 @@ function wireFor(type: FieldType): number {
 }
 
 /** Writes one value (tag + payload) for a non-repeated field. */
-function writeField(w: Writer, field: Field, v: unknown): void {
+function writeField(w: Writer, field: Field, v: unknown, opts?: EncodeOptions): void {
   const type = field.type;
   if (type.kind === "message") {
     if (field.delimited) {
       // Group encoding: start-group tag, fields inline, matching end-group tag.
       w.tag(field.number, WIRE_SGROUP);
-      encode(type.message, v as Record<string, unknown>, w);
+      encode(type.message, v as Record<string, unknown>, w, opts);
       w.tag(field.number, WIRE_EGROUP);
       return;
     }
     const child = new Writer();
-    encode(type.message, v as Record<string, unknown>, child);
+    encode(type.message, v as Record<string, unknown>, child, opts);
     w.lenDelimited(field.number, child);
     return;
   }
@@ -96,9 +96,50 @@ function mapKeyTyped(t: ScalarType, k: string): unknown {
   }
 }
 
-export function encode(message: MessageType, value: Record<string, unknown>, w: Writer): void {
+export interface EncodeOptions {
+  /** Accept and ignore object keys that match no field, instead of throwing. */
+  ignoreUnknownFields?: boolean;
+}
+
+/**
+ * Reads the value for `field`, accepting either spelling of its name.
+ *
+ * The proto3-JSON mapping requires parsers to accept both the original proto
+ * field name and the lowerCamelCase `jsonName` — which is also what this
+ * package's own `fromJson` and `decodeStream` already do. Reading `jsonName`
+ * alone meant a message written with the field names as they appear in the
+ * `.proto` (`user_name`) matched nothing and encoded to an empty buffer.
+ *
+ * Supplying both spellings at once is rejected rather than resolved, as the JSON
+ * mapping requires: the two could carry different values, and silently picking
+ * one is how the original bug behaved.
+ */
+function read(field: Field, value: Record<string, unknown>, seen: Set<string>): unknown {
+  const byJson = Object.hasOwn(value, field.jsonName);
+  const byProto = field.name !== field.jsonName && Object.hasOwn(value, field.name);
+  if (byJson && byProto) {
+    throw new Error(
+      `protobuf: field "${field.name}" given twice, as "${field.jsonName}" and "${field.name}"`,
+    );
+  }
+  if (byJson) seen.add(field.jsonName);
+  if (byProto) seen.add(field.name);
+  return byProto ? value[field.name] : value[field.jsonName];
+}
+
+export function encode(
+  message: MessageType,
+  value: Record<string, unknown>,
+  w: Writer,
+  opts?: EncodeOptions,
+): void {
+  // Which input keys a field claimed, so the leftovers can be reported. A key
+  // that matches nothing used to be dropped in silence, so a single typo
+  // produced a short or empty buffer with no indication anything was lost.
+  const seen = new Set<string>();
+
   for (const field of message.fields) {
-    const v = value[field.jsonName];
+    const v = read(field, value, seen);
 
     if (field.map) {
       if (v == null) continue;
@@ -106,7 +147,7 @@ export function encode(message: MessageType, value: Record<string, unknown>, w: 
       for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
         const entry = new Writer();
         writeField(entry, field.map.key, mapKeyTyped(keyType.scalar, k));
-        writeField(entry, field.map.value, val);
+        writeField(entry, field.map.value, val, opts);
         w.lenDelimited(field.number, entry);
       }
       continue;
@@ -126,7 +167,7 @@ export function encode(message: MessageType, value: Record<string, unknown>, w: 
         w.uint32(child.length);
         w.raw(child.finish());
       } else {
-        for (const e of v) writeField(w, field, e);
+        for (const e of v) writeField(w, field, e, opts);
       }
       continue;
     }
@@ -134,7 +175,18 @@ export function encode(message: MessageType, value: Record<string, unknown>, w: 
     // singular
     if (v === undefined || v === null) continue;
     if (!field.explicitPresence && isDefault(field.type, v)) continue;
-    writeField(w, field, v);
+    writeField(w, field, v, opts);
+  }
+
+  if (!opts?.ignoreUnknownFields) {
+    // `UNKNOWN` is a symbol, so the preserved-unknown-fields key a decoded
+    // message carries is not an own *string* key and never lands here — a
+    // decode/encode round-trip stays clean.
+    for (const k of Object.keys(value)) {
+      if (!seen.has(k)) {
+        throw new Error(`protobuf: unknown field "${k}" in ${message.fullName}`);
+      }
+    }
   }
 
   // re-emit preserved unknown fields

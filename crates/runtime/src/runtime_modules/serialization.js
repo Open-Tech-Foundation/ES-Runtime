@@ -1479,17 +1479,17 @@ function wireFor(type) {
       return 0;
   }
 }
-function writeField(w, field, v) {
+function writeField(w, field, v, opts) {
   const type = field.type;
   if (type.kind === "message") {
     if (field.delimited) {
       w.tag(field.number, WIRE_SGROUP);
-      encode(type.message, v, w);
+      encode(type.message, v, w, opts);
       w.tag(field.number, WIRE_EGROUP);
       return;
     }
     const child = new Writer;
-    encode(type.message, v, child);
+    encode(type.message, v, child, opts);
     w.lenDelimited(field.number, child);
     return;
   }
@@ -1542,9 +1542,22 @@ function mapKeyTyped(t, k) {
       return Number(k);
   }
 }
-function encode(message, value, w) {
+function read(field, value, seen) {
+  const byJson = Object.hasOwn(value, field.jsonName);
+  const byProto = field.name !== field.jsonName && Object.hasOwn(value, field.name);
+  if (byJson && byProto) {
+    throw new Error(`protobuf: field "${field.name}" given twice, as "${field.jsonName}" and "${field.name}"`);
+  }
+  if (byJson)
+    seen.add(field.jsonName);
+  if (byProto)
+    seen.add(field.name);
+  return byProto ? value[field.name] : value[field.jsonName];
+}
+function encode(message, value, w, opts) {
+  const seen = new Set;
   for (const field of message.fields) {
-    const v = value[field.jsonName];
+    const v = read(field, value, seen);
     if (field.map) {
       if (v == null)
         continue;
@@ -1552,7 +1565,7 @@ function encode(message, value, w) {
       for (const [k, val] of Object.entries(v)) {
         const entry = new Writer;
         writeField(entry, field.map.key, mapKeyTyped(keyType.scalar, k));
-        writeField(entry, field.map.value, val);
+        writeField(entry, field.map.value, val, opts);
         w.lenDelimited(field.number, entry);
       }
       continue;
@@ -1575,7 +1588,7 @@ function encode(message, value, w) {
         w.raw(child.finish());
       } else {
         for (const e of v)
-          writeField(w, field, e);
+          writeField(w, field, e, opts);
       }
       continue;
     }
@@ -1583,7 +1596,14 @@ function encode(message, value, w) {
       continue;
     if (!field.explicitPresence && isDefault(field.type, v))
       continue;
-    writeField(w, field, v);
+    writeField(w, field, v, opts);
+  }
+  if (!opts?.ignoreUnknownFields) {
+    for (const k of Object.keys(value)) {
+      if (!seen.has(k)) {
+        throw new Error(`protobuf: unknown field "${k}" in ${message.fullName}`);
+      }
+    }
   }
   const unknown = value[UNKNOWN];
   if (unknown)
@@ -2718,16 +2738,16 @@ class Schema {
       throw new Error(`protobuf: unknown message "${messageName}"`);
     return decode(m, new Reader(bytes));
   }
-  encode(messageName, value) {
+  encode(messageName, value, options = {}) {
     const m = this.registry.messages.get(messageName);
     if (!m)
       throw new Error(`protobuf: unknown message "${messageName}"`);
     const w = new Writer;
-    encode(m, value, w);
+    encode(m, value, w, options);
     return w.finish();
   }
-  encodeDelimited(messageName, value) {
-    const body = this.encode(messageName, value);
+  encodeDelimited(messageName, value, options = {}) {
+    const body = this.encode(messageName, value, options);
     const w = new Writer;
     w.uint32(body.length);
     w.raw(body);
