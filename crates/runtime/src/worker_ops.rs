@@ -33,10 +33,11 @@ pub(crate) fn install(
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
     loader: crate::module_ops::LoaderSlot,
     entry: crate::EntrySlot,
+    worker_refs: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<()> {
     install_entry_reader(engine, loader)?;
     install_base(engine, entry)?;
-    install_parent(engine, workers, capabilities)?;
+    install_parent(engine, workers, capabilities, worker_refs)?;
     install_scope(engine, scope)
 }
 
@@ -120,6 +121,7 @@ fn install_parent(
     engine: &mut dyn Engine,
     workers: Option<Arc<dyn WorkerHost>>,
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
+    worker_refs: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<()> {
     // This agent's own ceilings, read once: they are fixed for the isolate's
     // life, and every worker it starts derives from them.
@@ -175,22 +177,55 @@ fn install_parent(
         })
     }))?;
 
+    // `worker_ref(delta)`: Node's handle ref-counting. A referenced `Worker` is
+    // a reason for this agent's loop to keep running; `unref()` says it is not.
+    //
+    // A counter rather than the receive's own keep-alive, because the receive
+    // cannot be taken back: an idle worker's `worker_recv` is already in flight,
+    // so flipping *its* flag would only take effect on the next message — and
+    // for an idle worker in a pool, there is no next message. This is asked
+    // afresh every time the loop wonders whether to stop.
+    //
+    // Saturating both ways: a forged or unbalanced call from guest code must not
+    // wrap it. The worst it can do is keep this agent alive, never end it while
+    // work is outstanding.
+    let refs = worker_refs;
+    engine.register_op(OpDecl::sync("worker_ref", move |args| {
+        let delta = args.first().and_then(Value::as_number).unwrap_or(0.0);
+        let current = refs.get();
+        refs.set(if delta > 0.0 {
+            current.saturating_add(1)
+        } else if delta < 0.0 {
+            current.saturating_sub(1)
+        } else {
+            current
+        });
+        Ok(Value::Undefined)
+    }))?;
+
     let host = workers.clone();
-    engine.register_op(OpDecl::r#async("worker_recv", move |args| {
-        let host = host.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
-            let event = require(&host)?.recv(id).await.map_err(map_err)?;
-            Ok(match event {
-                // `null` ends the prelude's pump: the worker is gone and its
-                // queue is drained.
-                None => Value::Null,
-                Some(WorkerIncoming::Message(bytes)) => envelope("message", Value::Bytes(bytes)),
-                Some(WorkerIncoming::Error { error }) => envelope("error", failure(error)),
-                Some(WorkerIncoming::Closed) => envelope("close", Value::Undefined),
+    engine.register_op(
+        OpDecl::r#async("worker_recv", move |args| {
+            let host = host.clone();
+            let id = arg_u64(&args, 0);
+            Box::pin(async move {
+                let event = require(&host)?.recv(id).await.map_err(map_err)?;
+                Ok(match event {
+                    // `null` ends the prelude's pump: the worker is gone and its
+                    // queue is drained.
+                    None => Value::Null,
+                    Some(WorkerIncoming::Message(bytes)) => {
+                        envelope("message", Value::Bytes(bytes))
+                    }
+                    Some(WorkerIncoming::Error { error }) => envelope("error", failure(error)),
+                    Some(WorkerIncoming::Closed) => envelope("close", Value::Undefined),
+                })
             })
         })
-    }))?;
+        // The receive is not what keeps the loop alive — `worker_ref` is. See
+        // there for why the two had to be separated.
+        .unref(),
+    )?;
 
     let host = workers;
     engine.register_op(OpDecl::r#async("worker_terminate", move |args| {

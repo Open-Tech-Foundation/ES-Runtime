@@ -93,6 +93,24 @@ namespace) is unstable and may change between minor releases until the API freez
   thing that distinguishes running out of memory from a watchdog, a
   `process.exit()` or a `terminate()`.
 
+- **`worker.unref()` and `worker.ref()`** — Node's handle ref-counting, which
+  Bun also has and Deno does not.
+
+  A live worker is a reason for the process to keep running, which is right
+  until a pool holds four idle ones waiting for the next job — then it is the
+  reason the process never exits.
+
+  ```js
+  const w = new Worker(url);
+  w.unref();   // still running, still delivering; no longer a reason to stay up
+  w.ref();     // back to keeping the process alive
+  ```
+
+  The claim is a count the agent holds rather than the pending receive's own
+  keep-alive flag. The receive cannot be taken back: an idle worker's is already
+  in flight, so flipping its flag would only take effect on the next message,
+  and for an idle worker there is no next message.
+
 - **`new Worker(url, { permissions: "inherit" })`** — the parent's whole set, in
   one word, spelled the way `env` already spells it.
 
@@ -273,6 +291,24 @@ namespace) is unstable and may change between minor releases until the API freez
   ancestor that had not attached an `onerror`.
 
 ### Fixed
+
+- **A parent worker's child list grew forever.** `Live::children` was appended on
+  every spawn and never pruned, so a supervisor that starts one worker per job
+  held an id for every job it had ever run — 8 bytes each, for the life of the
+  process — and walked all of them on each `terminate()`. Retiring a worker now
+  unhooks it from its parent as well as removing it from the registry.
+
+  Never a correctness bug: ids only count up, so a stale entry could not name a
+  later worker. That is what made it a leak rather than a fault, and what let it
+  go unnoticed. `default-providers`'s worker host had no unit tests at all; it
+  now has four, covering exactly this bookkeeping.
+
+- **`WorkerHost::has_live_workers` and `WorkerHost::shutdown` are gone.** Nothing
+  ever called either, and the trait's own documentation was wrong about one of
+  them: "the embedder's loop reads this to decide whether the process still has
+  work" — it does not, and never did. What keeps a process alive for a live
+  worker is the outstanding receive (now the reference count above). Embedders
+  implementing `WorkerHost` had to write both for nothing.
 
 - **`Worker.postMessage()` could deliver messages out of order.** A dedicated
   worker's port is entangled when the constructor returns, so HTML has no window

@@ -864,6 +864,91 @@ fn permissions_inherit_gives_the_parents_set_and_no_more() {
 }
 
 #[test]
+fn an_unreferenced_worker_does_not_hold_the_process_open() {
+    // A live worker is a reason for the process to stay up, which is right
+    // until a pool holds four idle ones waiting for the next job — then it is
+    // the reason the process never exits. Node and Bun both have `unref()`;
+    // Deno has neither.
+    //
+    // The worker is *not* terminated here: it is still running and still
+    // receiving. Only the claim on the process's lifetime is given up.
+    let out = run(
+        "unref",
+        r#"self.onmessage = (e) => postMessage("echo " + e.data);"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.unref();
+        console.log("idle and unreferenced");
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "idle and unreferenced");
+}
+
+#[test]
+fn an_unreferenced_worker_still_delivers() {
+    // The distinction that makes `unref` useful rather than a synonym for
+    // `terminate`: the worker is fully alive, and picks the job up the moment
+    // there is one.
+    let out = run(
+        "unref-live",
+        r#"self.onmessage = (e) => postMessage("echo " + e.data);"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.unref();
+        w.onmessage = (e) => { console.log(e.data); w.terminate(); };
+        w.postMessage("job");
+        // Real pending work, so the loop is still turning when the reply lands.
+        setTimeout(() => {}, 300);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "echo job");
+}
+
+#[test]
+fn ref_puts_a_worker_back_in_the_way_of_exiting() {
+    let out = run(
+        "reref",
+        r#"self.onmessage = (e) => postMessage("echo " + e.data);"#,
+        r#"
+        const w = new Worker(new URL("WORKER_URL", import.meta.url));
+        w.unref();
+        w.ref();
+        setTimeout(() => { console.log("still here"); w.terminate(); }, 300);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "still here");
+}
+
+#[test]
+fn unref_is_idempotent_and_survives_termination() {
+    // The counter is one number for the whole agent, so an unbalanced call
+    // would either strand the process or let it exit with work outstanding.
+    // Every one of these is a no-op after the first.
+    let out = run(
+        "unref-balance",
+        r#"self.onmessage = (e) => postMessage("echo " + e.data);"#,
+        r#"
+        const a = new Worker(new URL("WORKER_URL", import.meta.url));
+        const b = new Worker(new URL("WORKER_URL", import.meta.url));
+        a.unref(); a.unref(); a.unref();
+        b.terminate();
+        b.unref();
+        a.ref();
+        setTimeout(() => { console.log("balanced"); a.terminate(); }, 300);
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "balanced");
+}
+
+#[test]
 fn deny_workers_refuses_the_spawn() {
     let out = run(
         "denied",

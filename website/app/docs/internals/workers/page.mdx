@@ -151,6 +151,27 @@ action, so a worker taking `SIGTERM` would be deciding — from a thread the
 program may not know is running — whether the process declines to die. `exit()`
 inside a worker ends that worker without setting the process's exit code.
 
+## Referencing
+
+A live worker is a reason for the process to keep running — right up until a
+pool holds four idle ones waiting for the next job, at which point it is the
+reason the process never exits. `unref()` gives up the claim without ending
+anything:
+
+```js
+const w = new Worker(url);
+w.unref();   // still running, still delivering; no longer a reason to stay up
+w.ref();     // back to keeping the process alive
+```
+
+The claim is a count the agent holds, not the pending receive. The receive
+cannot be taken back — an idle worker's is already in flight, so flipping its
+keep-alive would only take effect on the next message, and for an idle worker
+there is no next message. The count is asked afresh every time the loop wonders
+whether to stop.
+
+Node and Bun both have `unref()`; Deno has neither.
+
 ## What keeps the process alive
 
 | Still running | Keeps the process alive? |

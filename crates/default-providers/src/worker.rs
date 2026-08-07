@@ -151,7 +151,16 @@ struct Live {
     /// The workers this one started. HTML terminates a worker's own workers
     /// along with it, and ids are otherwise flat, so this is the only record of
     /// who belongs to whom.
+    ///
+    /// Pruned as each child retires — see [`retire`]. Left to grow it was a slow
+    /// leak in exactly the shape a job queue has: a supervisor that starts one
+    /// worker per job holds an id for every job it has ever run, and walks all
+    /// of them on each `terminate`.
     children: std::sync::Mutex<Vec<u64>>,
+    /// The worker that started this one, so retiring it can unhook it from that
+    /// worker's `children`. `None` for a worker the driver agent started — the
+    /// root has no entry in the registry.
+    parent: Option<u64>,
 }
 
 /// A [`WorkerHost`] that runs each agent on its own OS thread.
@@ -205,15 +214,6 @@ impl WorkerHost for ThreadWorkerHost {
         let (to_parent, parent_inbox) = mpsc::unbounded_channel::<WorkerIncoming>();
         let closed = Arc::new(AtomicBool::new(false));
 
-        let live = Arc::new(Live {
-            to_worker: Mutex::new(Some(to_worker)),
-            from_worker: Mutex::new(parent_inbox),
-            interrupt: Mutex::new(None),
-            closed: closed.clone(),
-            join: std::sync::Mutex::new(None),
-            children: std::sync::Mutex::new(Vec::new()),
-        });
-
         // Whoever is on this thread is the agent doing the spawning; absent
         // means the driver agent, which is nobody's child.
         let parent = self
@@ -221,6 +221,16 @@ impl WorkerHost for ThreadWorkerHost {
             .lock()
             .ok()
             .and_then(|threads| threads.get(&std::thread::current().id()).copied());
+
+        let live = Arc::new(Live {
+            to_worker: Mutex::new(Some(to_worker)),
+            from_worker: Mutex::new(parent_inbox),
+            interrupt: Mutex::new(None),
+            closed: closed.clone(),
+            join: std::sync::Mutex::new(None),
+            children: std::sync::Mutex::new(Vec::new()),
+            parent,
+        });
 
         let id = {
             let Ok(mut workers) = self.registry.lock() else {
@@ -292,9 +302,8 @@ impl WorkerHost for ThreadWorkerHost {
                 Box::pin(async move { Ok(id) })
             }
             Err(err) => {
-                if let Ok(mut workers) = self.registry.lock() {
-                    workers.remove(&id);
-                }
+                // Registered a moment ago, so undo both halves of that.
+                retire(&self.registry, id);
                 Box::pin(async move { Err(ProviderError::from_io("worker thread", &err)) })
             }
         }
@@ -330,9 +339,7 @@ impl WorkerHost for ThreadWorkerHost {
             // embedder's loop reads to decide the process still has work —
             // would never go quiet.
             if matches!(event, Some(WorkerIncoming::Closed) | None) {
-                if let Ok(mut workers) = registry.lock() {
-                    workers.remove(&id);
-                }
+                retire(&registry, id);
                 let join = live.join.lock().ok().and_then(|mut slot| slot.take());
                 if let Some(join) = join {
                     // Already finishing, but joining still blocks; keep it off
@@ -356,18 +363,39 @@ impl WorkerHost for ThreadWorkerHost {
             Ok(())
         })
     }
+}
 
-    fn has_live_workers(&self) -> bool {
-        self.registry.lock().is_ok_and(|w| !w.is_empty())
-    }
+/// Retires one worker: out of the registry, and out of its parent's child list.
+///
+/// Both halves, always. Leaving the id behind in `children` cost nothing per
+/// worker and everything over time — a supervisor that starts one worker per
+/// job never terminates, so nothing ever pruned it, and the vec grew for the
+/// life of the process while every `terminate` walked the dead entries.
+///
+/// The stale ids were never *wrong*: `next_id` only counts up, so one can never
+/// name a later worker. That is what made this a leak rather than a bug, and
+/// what let it go unnoticed.
+fn retire(registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>, id: u64) {
+    let Ok(mut workers) = registry.lock() else {
+        return;
+    };
+    let Some(live) = workers.remove(&id) else {
+        return;
+    };
+    unhook(&workers, &live, id);
+}
 
-    fn shutdown(&self) -> BoxFuture<()> {
-        let all: Vec<Arc<Live>> = self
-            .registry
-            .lock()
-            .map(|mut w| w.drain().map(|(_, live)| live).collect())
-            .unwrap_or_default();
-        Box::pin(async move { terminate_all(&all).await })
+/// Removes `id` from its parent's child list, if it had a parent and that
+/// parent is still around. Expects the registry lock to be held — the same
+/// order `take_subtree` uses, so the two can never deadlock against each other.
+fn unhook(workers: &HashMap<u64, Arc<Live>>, live: &Live, id: u64) {
+    let Some(parent) = live.parent else {
+        return;
+    };
+    if let Some(parent) = workers.get(&parent)
+        && let Ok(mut children) = parent.children.lock()
+    {
+        children.retain(|&child| child != id);
     }
 }
 
@@ -388,6 +416,12 @@ fn take_subtree(registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>, id: u64) -
         };
         if let Ok(children) = live.children.lock() {
             pending.extend(children.iter().copied());
+        }
+        // Only the root needs unhooking: every deeper one's parent is being
+        // removed in this same walk, so its child list is about to be dropped
+        // whole. The root's parent is the one that survives.
+        if next == id {
+            unhook(&workers, &live, next);
         }
         taken.push(live);
     }
@@ -717,5 +751,111 @@ impl es_runtime_providers::Process for WorkerProcess {
     }
     fn requested_exit_code(&self) -> Option<i32> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `Live` with nothing attached: these tests are about the registry's
+    /// bookkeeping, not about running an agent, and building one for real would
+    /// mean a thread and a V8 isolate per case.
+    fn live(parent: Option<u64>) -> Arc<Live> {
+        let (to_worker, _worker_inbox) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (_to_parent, parent_inbox) = mpsc::unbounded_channel::<WorkerIncoming>();
+        Arc::new(Live {
+            to_worker: Mutex::new(Some(to_worker)),
+            from_worker: Mutex::new(parent_inbox),
+            interrupt: Mutex::new(None),
+            closed: Arc::new(AtomicBool::new(false)),
+            join: std::sync::Mutex::new(None),
+            children: std::sync::Mutex::new(Vec::new()),
+            parent,
+        })
+    }
+
+    /// Registers `child` under `parent`, the way `spawn` does.
+    fn register(
+        registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>,
+        id: u64,
+        parent: Option<u64>,
+    ) {
+        let mut workers = registry.lock().expect("registry");
+        workers.insert(id, live(parent));
+        if let Some(parent) = parent
+            && let Some(parent) = workers.get(&parent)
+        {
+            parent.children.lock().expect("children").push(id);
+        }
+    }
+
+    fn children_of(registry: &std::sync::Mutex<HashMap<u64, Arc<Live>>>, id: u64) -> Vec<u64> {
+        registry
+            .lock()
+            .expect("registry")
+            .get(&id)
+            .map(|live| live.children.lock().expect("children").clone())
+            .unwrap_or_default()
+    }
+
+    /// The leak this was: a supervisor that starts one worker per job and never
+    /// terminates kept an id for every job it had ever run, and walked all of
+    /// them on each `terminate`.
+    #[test]
+    fn a_retired_worker_leaves_its_parents_child_list() {
+        let registry = std::sync::Mutex::new(HashMap::new());
+        register(&registry, 1, None);
+        for id in 2..=200 {
+            register(&registry, id, Some(1));
+            retire(&registry, id);
+        }
+        assert!(
+            children_of(&registry, 1).is_empty(),
+            "200 finished workers left {} ids behind",
+            children_of(&registry, 1).len()
+        );
+        assert_eq!(registry.lock().expect("registry").len(), 1);
+    }
+
+    /// Terminating a subtree unhooks its root for the same reason — the parent
+    /// it hung from is still around.
+    #[test]
+    fn taking_a_subtree_unhooks_its_root() {
+        let registry = std::sync::Mutex::new(HashMap::new());
+        register(&registry, 1, None);
+        register(&registry, 2, Some(1));
+        register(&registry, 3, Some(2));
+        register(&registry, 4, Some(1));
+
+        let taken = take_subtree(&registry, 2);
+        assert_eq!(taken.len(), 2, "the worker and its own child");
+        assert_eq!(children_of(&registry, 1), vec![4]);
+    }
+
+    /// Retiring a worker whose parent has already gone is a no-op rather than a
+    /// panic: a parent's own end takes its children with it, so the two orders
+    /// both happen.
+    #[test]
+    fn retiring_an_orphan_is_harmless() {
+        let registry = std::sync::Mutex::new(HashMap::new());
+        register(&registry, 1, None);
+        register(&registry, 2, Some(1));
+        registry.lock().expect("registry").remove(&1);
+        retire(&registry, 2);
+        assert!(registry.lock().expect("registry").is_empty());
+    }
+
+    /// Ids only ever count up, so a stale entry could never name a later
+    /// worker. That is what made the leak a leak rather than a bug — and what
+    /// let it go unnoticed.
+    #[test]
+    fn ids_are_never_reused() {
+        let host = ThreadWorkerHost::new(Arc::new(|_: &WorkerSpec, _: Arc<dyn WorkerScope>| {
+            unreachable!("no worker is started here")
+        }));
+        let first = host.next_id.fetch_add(1, Ordering::SeqCst);
+        let second = host.next_id.fetch_add(1, Ordering::SeqCst);
+        assert!(second > first);
     }
 }

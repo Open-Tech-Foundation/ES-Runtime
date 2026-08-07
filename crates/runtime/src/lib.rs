@@ -446,6 +446,19 @@ pub struct Runtime {
     /// it — and shared with the `module_resolve_sync` op, which serves
     /// `import.meta.resolve` and is registered long before a loader exists (D41).
     module_loader: Rc<RefCell<Option<Arc<dyn ModuleLoader>>>>,
+    /// How many `Worker` objects are currently *referenced* — Node's handle
+    /// ref-counting, and the reason `worker.unref()` can mean anything.
+    ///
+    /// A live worker is a reason for the loop to keep running, and the pending
+    /// `worker_recv` used to be what said so. That could not be undone: an idle
+    /// worker's receive is already in flight, so an `unref()` would not take
+    /// effect until a message arrived — and for an idle pooled worker, none
+    /// ever does. The receive no longer keeps the loop alive on its own, and
+    /// this counter does, so the answer changes the moment it is asked to.
+    ///
+    /// [`Cell`], not the engine: this is the runtime's own notion of pending
+    /// work, and the ops that move it are registered here.
+    worker_refs: Rc<Cell<u32>>,
     /// Whether this agent is a worker — it was given a [`WorkerScope`] to reach
     /// its parent through.
     ///
@@ -483,6 +496,7 @@ impl Runtime {
             module_map: HashMap::new(),
             entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
+            worker_refs: Rc::new(Cell::new(0)),
             is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
@@ -491,12 +505,14 @@ impl Runtime {
         let capabilities = runtime.capabilities.clone();
         let loader_slot = runtime.module_loader.clone();
         let entry_slot = runtime.entry_specifier.clone();
+        let worker_refs = runtime.worker_refs.clone();
         builtins::install(
             runtime.engine.as_mut(),
             &providers,
             capabilities,
             loader_slot,
             entry_slot,
+            worker_refs,
         )?;
         runtime.engine.eval(&prelude::source())?;
         runtime.engine.eval(&prelude::post_snapshot_source())?;
@@ -526,11 +542,19 @@ impl Runtime {
                 let capabilities = Rc::new(Cell::new(CapabilitySet::none()));
                 let loader_slot = Rc::new(RefCell::new(None));
                 let entry_slot = Rc::new(RefCell::new(None));
-                builtins::install(engine, providers, capabilities, loader_slot, entry_slot)
-                    .map_err(|e| match e {
-                        Error::Engine(e) => e,
-                        other => es_runtime_engine::Error::Internal(other.to_string()),
-                    })?;
+                let worker_refs = Rc::new(Cell::new(0));
+                builtins::install(
+                    engine,
+                    providers,
+                    capabilities,
+                    loader_slot,
+                    entry_slot,
+                    worker_refs,
+                )
+                .map_err(|e| match e {
+                    Error::Engine(e) => e,
+                    other => es_runtime_engine::Error::Internal(other.to_string()),
+                })?;
                 engine.eval(&prelude::source())?;
                 Ok(())
             },
@@ -574,6 +598,7 @@ impl Runtime {
             module_map: HashMap::new(),
             entry_specifier: Rc::new(RefCell::new(None)),
             module_loader: Rc::new(RefCell::new(None)),
+            worker_refs: Rc::new(Cell::new(0)),
             is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
         };
@@ -582,12 +607,14 @@ impl Runtime {
         let capabilities = runtime.capabilities.clone();
         let loader_slot = runtime.module_loader.clone();
         let entry_slot = runtime.entry_specifier.clone();
+        let worker_refs = runtime.worker_refs.clone();
         builtins::install(
             runtime.engine.as_mut(),
             &providers,
             capabilities,
             loader_slot,
             entry_slot,
+            worker_refs,
         )?;
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
@@ -1093,6 +1120,7 @@ impl Runtime {
             || self.module_eval_pending
             || self.engine.has_pending_dynamic_imports()
             || self.engine.has_pending_wasm()
+            || self.worker_refs.get() > 0
     }
 
     /// Moves newly created engine timers into the schedule, anchored at `now_ms`,

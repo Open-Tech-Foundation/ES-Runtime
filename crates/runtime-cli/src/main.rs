@@ -1636,7 +1636,13 @@ mod tests {
             "/../../types/globals.d.ts"
         ))
         .expect("read globals.d.ts");
-        for member in ["permissions?:", "env?:", "memory?:"] {
+        for member in [
+            "permissions?:",
+            "env?:",
+            "memory?:",
+            "unref(): void",
+            "ref(): void",
+        ] {
             assert!(
                 source.contains(member),
                 "types/globals.d.ts does not declare WorkerOptions {member}"

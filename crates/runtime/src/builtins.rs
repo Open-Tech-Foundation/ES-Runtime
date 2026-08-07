@@ -27,6 +27,7 @@ pub(crate) fn install(
     capabilities: Rc<Cell<CapabilitySet>>,
     module_loader: crate::module_ops::LoaderSlot,
     entry_specifier: crate::EntrySlot,
+    worker_refs: Rc<Cell<u32>>,
 ) -> Result<()> {
     install_console(engine, providers.console())?;
     install_performance(engine, providers.clock())?;
@@ -88,6 +89,7 @@ pub(crate) fn install(
         capabilities,
         module_loader,
         entry_specifier,
+        worker_refs,
     )?;
     // BroadcastChannel's cross-agent delivery. Ungated; absent hub means the
     // prelude keeps agent-local delivery.

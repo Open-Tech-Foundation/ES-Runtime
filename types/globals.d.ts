@@ -74,6 +74,30 @@ interface WorkerOptions {
   env?: "inherit" | Record<string, string>;
 }
 
+interface Worker {
+  /**
+   * Stop this worker from keeping the process alive.
+   *
+   * It carries on running and still delivers messages — the only thing given
+   * up is being a reason not to exit. For a pool, idle workers waiting for the
+   * next job would otherwise hold the process open forever.
+   *
+   * Non-standard; Node and Bun both have it, Deno has neither.
+   *
+   * ```ts
+   * const w = new Worker(url);
+   * w.unref();          // still works; no longer holds the process open
+   * ```
+   */
+  unref(): void;
+
+  /**
+   * Undoes {@link Worker.unref}. A worker starts referenced, so this only
+   * matters after an `unref()`.
+   */
+  ref(): void;
+}
+
 interface Navigator {
   /**
    * How many workers can usefully run at once. Reported by the host through

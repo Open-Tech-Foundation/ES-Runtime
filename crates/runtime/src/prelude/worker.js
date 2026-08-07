@@ -250,6 +250,12 @@
     #id = null;
     #ready;
     #terminated = false;
+    // Whether this worker is a reason for the process to stay up. `true` from
+    // the moment it starts, as in Node; `unref()` gives that up. Tracked here
+    // rather than counted host-side per call so the count can never drift: the
+    // host holds one number, and this flag is what says whether *this* worker
+    // is one of them.
+    #referenced = false;
     // Messages posted before the spawn resolves are queued, not dropped:
     // `new Worker(u); w.postMessage(x)` is the ordinary way to write this, and
     // the spec has no window in which that message is lost.
@@ -277,6 +283,11 @@
       const env = workerEnv(opts.env);
       const memory = workerMemory(opts.memory);
       const permissions = workerPermissions(opts.permissions);
+
+      // Referenced from the moment it exists, as in Node: a worker is a reason
+      // for the process to stay up until it ends or is told otherwise. Released
+      // exactly once, wherever this worker stops being live.
+      this.#setReferenced(true);
 
       Object.defineProperty(this, "onmessage", handlerSlot(this, "message"));
       Object.defineProperty(this, "onmessageerror", handlerSlot(this, "messageerror"));
@@ -311,6 +322,7 @@
         // the second time as something the guest cannot act on.
         queueMicrotask(() => this.#fail(startupFailure(e, url)));
         this.#terminated = true;
+        this.#setReferenced(false);
         this.#pending = [];
         return null;
       }
@@ -336,6 +348,17 @@
     // at a time, riding the ordinary tick contract, so a `Worker` adds no loop
     // of its own (the same shape as the WebSocket pump, D29).
     async #pump() {
+      // Every way out of this loop is the worker ceasing to be live — drained,
+      // closed, terminated, or the receive itself failing — so releasing here
+      // covers all four in one place rather than four.
+      try {
+        await this.#receive();
+      } finally {
+        this.#setReferenced(false);
+      }
+    }
+
+    async #receive() {
       for (;;) {
         if (this.#terminated || this.#id === null) return;
         let event;
@@ -401,6 +424,33 @@
       }
     }
 
+    // The one place the host counter moves, so a double `unref()` or an
+    // `unref()` after termination cannot unbalance it.
+    #setReferenced(on) {
+      if (this.#referenced === on) return;
+      this.#referenced = on;
+      __ops.worker_ref(on ? 1 : -1);
+    }
+
+    /**
+     * Stop this worker from keeping the process alive. It carries on running
+     * and still delivers messages — the only thing given up is being a reason
+     * not to exit.
+     *
+     * For a pool: idle workers waiting for the next job would otherwise hold
+     * the process open forever, which is exactly the shape `unref` exists for.
+     * Node and Bun both have this; Deno has neither.
+     */
+    unref() {
+      this.#setReferenced(false);
+    }
+
+    /** Undoes {@link unref}. A worker starts referenced, so this only matters
+     * after an `unref()`. */
+    ref() {
+      this.#setReferenced(true);
+    }
+
     postMessage(message, options) {
       const bytes = serialize(message, options);
       if (this.#terminated) return;
@@ -413,6 +463,7 @@
 
     terminate() {
       this.#terminated = true;
+      this.#setReferenced(false);
       this.#pending = [];
       // Idempotent, and safe before the spawn has resolved: the `then` runs
       // once there is an id to terminate.

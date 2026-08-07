@@ -1262,17 +1262,6 @@ pub trait WorkerHost: Send + Sync {
     /// `Atomics.wait`: an implementation is expected to interrupt the agent,
     /// not merely ask it to stop.
     fn terminate(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
-
-    /// Whether any spawned worker is still alive.
-    ///
-    /// The embedder's loop reads this to decide whether the process still has
-    /// work: a live worker keeps it running, as it does in Node and Deno, even
-    /// when the main module has reached quiescence.
-    fn has_live_workers(&self) -> bool;
-
-    /// Terminates every live worker and waits for their threads to finish.
-    /// Called during graceful shutdown, after which no agent is running.
-    fn shutdown(&self) -> BoxFuture<()>;
 }
 
 /// The queues behind `MessagePort`, so that a port can be **transferred** to

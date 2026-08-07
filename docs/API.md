@@ -574,6 +574,18 @@ the whole process with it.
 
 A live worker keeps the process running, as in Node and Deno. It ends when it
 calls `close()`, when its work finishes, or when the parent calls `terminate()`.
+
+`unref()` gives up that claim without ending anything:
+
+```js
+const w = new Worker(url);
+w.unref();          // still running, still delivering; no longer a reason to stay up
+w.ref();            // back to keeping the process alive
+```
+
+Which is what a pool needs: four idle workers waiting for the next job would
+otherwise be four reasons the process never exits. Node and Bun both have this;
+Deno has neither.
 `terminate()` interrupts the isolate, so it stops a worker spinning in a
 synchronous loop or parked in `Atomics.wait`.
 
