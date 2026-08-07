@@ -1,0 +1,163 @@
+---
+title: runtime:wasi
+description: WASI preview 1 — run a wasm32-wasip1 module with arguments, environment and directories you hand it explicitly.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:wasi
+
+**WASI preview 1** (`wasi_snapshot_preview1`) — enough of the ABI to run what
+the `wasm32-wasip1` toolchains emit: arguments, environment, clocks,
+randomness, stdio, process exit, and the filesystem.
+
+<Callout type="note" title="Capability: none to construct">
+  A `WASI` instance has no ambient authority — arguments, environment and
+  directories come from the constructor and nowhere else, so building one grants
+  nothing. The host operations it reaches are gated as usual: file calls need
+  `FileRead` / `FileWrite`. Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import { WASI } from "runtime:wasi";
+
+// Or the default aggregate:
+import wasi from "runtime:wasi";
+```
+
+## Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `WASI` | `class` | A preview-1 instance: `new WASI(options?)`. |
+| `default` | `object` | An aggregate of the named exports. |
+
+## new WASI(options?)
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `args` | `string[]` | `[]` | The guest's `argv`. Conventionally `args[0]` is the program name. |
+| `env` | `Record<string, string>` | `{}` | The guest's environment, as `KEY=value` pairs. |
+| `preopens` | `Record<string, string>` | `{}` | Guest path → host path. The **only** files the guest can reach. |
+| `version` | `"preview1"` | `"preview1"` | Anything else is a `TypeError`, rather than being accepted and ignored. |
+
+| Method | Type | Description |
+| --- | --- | --- |
+| `getImportObject()` | `() => object` | The `wasi_snapshot_preview1` import object to instantiate with. |
+| `start(instance)` | `(Instance) => number` | Runs a **command** module's `_start`; returns the exit status. Throws if the module exports no `_start`. |
+| `initialize(instance)` | `(Instance) => void` | Runs a **reactor** module's `_initialize` if it exports one, leaving the instance live for you to drive. |
+
+`start` returns `0` when `_start` returns normally, or the code passed to
+`proc_exit`. A genuine fault still throws. Buffered stdio is flushed on every
+one of those paths.
+
+```js
+import { WASI } from "runtime:wasi";
+import { file } from "runtime:fs";
+
+const wasi = new WASI({
+  args: ["prog", "--flag"],
+  env: { LOG: "debug" },
+  preopens: { "/sandbox": "./data" },   // guest path → host path
+});
+
+const { instance } = await WebAssembly.instantiate(
+  await file("./prog.wasm").bytes(),
+  wasi.getImportObject(),
+);
+const status = wasi.start(instance);
+```
+
+## No ambient authority
+
+Unlike Node's `node:wasi`, **arguments and environment come only from the
+constructor.** There is no path by which a wasm module reads the host's real
+environment through this API, which is why constructing a `WASI` needs no
+capability and inherits nothing.
+
+Forward the real environment explicitly if you want it — via the `Env`-gated
+[`runtime:process`](/api/process) — so the grant is visible at the call site:
+
+```js
+import { env } from "runtime:process";
+new WASI({ env: { PATH: env.PATH } });
+```
+
+## Filesystem
+
+A guest sees only what `preopens` maps in — WASI's own model, and the reason its
+file calls are all relative to a directory fd. Reaching a file passes **three**
+independent checks:
+
+| Check | Enforced by | Failure |
+| --- | --- | --- |
+| The preopen maps the path, and it does not climb out of it | `runtime:wasi` | `ENOTCAPABLE` |
+| `FileRead` / `FileWrite` is granted | the host op | `ENOTCAPABLE` |
+| The resolved path is inside the [root jail](/docs/internals/filesystem) | the provider | `ENOTCAPABLE` |
+
+Preopens are isolated from each other: `../` out of `/a` cannot reach `/b`, even
+though both are granted. Preopens occupy the lowest fds from `3` upward in
+insertion order, which is what a guest's libc walks at startup.
+
+<Callout type="warn" title="A WASI guest is not a way around --allow-read">
+  `runtime:wasi` and [`runtime:fs`](/api/fs) are two doors onto one filesystem,
+  under the same root jail and the same `--allow-read` / `--allow-write` scope
+  lists.
+</Callout>
+
+## Implemented
+
+`path_open`, `fd_read`, `fd_write`, `fd_seek`, `fd_tell`, `fd_close`,
+`fd_fdstat_get`, `fd_filestat_get`, `path_filestat_get`, `fd_readdir`,
+`fd_prestat_get`, `fd_prestat_dir_name`, `path_create_directory`,
+`path_unlink_file`, `path_remove_directory`, `path_rename`, plus `args_*`,
+`environ_*`, `clock_*`, `random_get`, `proc_exit` and `sched_yield`.
+
+**Reporting `ENOTCAPABLE`:** `fd_pread` / `fd_pwrite`, `fd_allocate`,
+`fd_renumber`, `path_link`, `path_symlink`, `path_readlink`, the
+`*_set_times` / `set_size` calls, and the sockets.
+
+**Reporting `ENOSYS`:** `poll_oneoff`.
+
+Every import is *present* regardless of whether it is implemented — a missing
+import is a `LinkError` at instantiation, which would break a program that
+merely links a symbol without calling it. The two errnos say different things on
+purpose: `ENOTCAPABLE` is "this instance was not given that authority",
+`ENOSYS` is "the runtime does not implement this at all".
+
+## Stdio
+
+Stdout and stderr are **line-buffered through the console sink**, with any
+unterminated trailing write flushed when the program finishes — so a guest's
+output interleaves with `console.log` and reaches an embedder's console
+provider, rather than a raw file descriptor. **Stdin reads as an immediate
+end-of-file.**
+
+## Errors
+
+| Error | When |
+| --- | --- |
+| `TypeError` | `version` is not `"preview1"`; `args` is not an array; `start()` on a module with no `_start`. |
+| errno return | Every syscall failure. WASI reports through the return value, not by throwing — see the tables above. |
+
+## Not provided
+
+| Absent | Why |
+| --- | --- |
+| Preview 2 / the component model | Preview 1 is what the `wasm32-wasip1` toolchains emit today. |
+| `poll_oneoff` | Preview 1's event loop, over a runtime whose loop belongs to the isolate — a design question, not a stub. |
+| Sockets | A WASI instance's authority is what its constructor was handed; a socket API that ignored that would be a hole in the model. |
+| Stdin input | No source is wired; reads report a clean end-of-file rather than an error. |
+
+<Callout type="note" title="Synchronous by nature">
+  WASI's syscalls return values, not promises, so they run on the isolate's
+  thread through blocking host operations. A module that reads a large file
+  blocks the loop while it does. Embedders wire this up with
+  `HostProviders::with_sync_file_system`; without one, every file call reports
+  `ENOTCAPABLE`.
+</Callout>
+
+For the reasoning behind these choices, see
+[Internals: WASI](/docs/internals/wasi).

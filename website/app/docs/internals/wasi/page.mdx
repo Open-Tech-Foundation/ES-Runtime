@@ -10,9 +10,8 @@ JavaScript, over the same host providers everything else uses. This page is
 about where a wasm module's authority comes from, what the syscalls do underneath,
 and which parts are deliberately refused.
 
-`runtime:wasi` is the one standard module with no reference page of its own yet,
-so this page carries the constructor's shape as well as the reasoning. The
-[module index](/api) lists it alongside the rest.
+This page explains behaviour rather than listing signatures — for those, see the
+[`runtime:wasi` reference](/api/wasi).
 
 ## A WASI instance has no ambient authority
 
@@ -38,27 +37,6 @@ Node's own documentation is careful to say its threat model "does not provide
 secure sandboxing" and that WASI capabilities there "do not form a security
 model". Here the sandbox is the runtime's own: a module reaches exactly as far
 as the imports you hand it, and no further.
-
-## The surface
-
-| | |
-| --- | --- |
-| `new WASI({ args?, env?, preopens?, version? })` | `version` must be `"preview1"`; anything else is a `TypeError`. |
-| `wasi.getImportObject()` | The `wasi_snapshot_preview1` object to instantiate with. |
-| `wasi.start(instance)` | Runs a **command** module's `_start`; returns the exit status. |
-| `wasi.initialize(instance)` | Runs a **reactor** module's `_initialize` if it exports one, leaving the instance live. |
-
-```js
-import { WASI } from "runtime:wasi";
-import { file } from "runtime:fs";
-
-const wasi = new WASI({ args: ["prog"], preopens: { "/sandbox": "./data" } });
-const { instance } = await WebAssembly.instantiate(
-  await file("./prog.wasm").bytes(),
-  wasi.getImportObject(),
-);
-const status = wasi.start(instance);
-```
 
 ## The filesystem is preopens, then the same jail as everything else
 
