@@ -23,6 +23,9 @@ import {
 } from "runtime:serialization";
 ```
 
+Every `build`/`encode` throws `TypeError` on a circular value and `RangeError`
+past 256 levels of nesting.
+
 ## JSONL (JSON Lines)
 
 Stream-based parsing and serializing of JSON Lines data. JSONL is heavily

@@ -40,7 +40,12 @@ export const YAML = {
 // converted to a shape that survives, and the rest are refused by the encoder.
 //
 // Only containers are walked, and only on the encode path.
-function toEncodable(value: unknown, depth = 0): unknown {
+//
+// `seen` is the path from the root, not every value walked, so a container
+// reachable twice by different routes is still converted twice — only a genuine
+// cycle is refused. Without the check a cycle bottomed out on the depth cap
+// instead, reporting "nests too deeply" for a document that is not deep at all.
+function toEncodable(value: unknown, depth = 0, seen: object[] = []): unknown {
   if (depth > 256) throw new RangeError("MessagePack: value nests too deeply to encode");
   if (value === null || typeof value !== "object") return value;
   if (value instanceof Uint8Array) return value;
@@ -50,16 +55,18 @@ function toEncodable(value: unknown, depth = 0): unknown {
     return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
   }
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (value instanceof Date) return value.toISOString();
+  if (seen.includes(value)) throw new TypeError("Converting circular structure to a host value");
+  seen = [...seen, value];
   if (value instanceof Map) {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of value) out[String(k)] = toEncodable(v, depth + 1);
+    for (const [k, v] of value) out[String(k)] = toEncodable(v, depth + 1, seen);
     return out;
   }
-  if (value instanceof Set) return [...value].map((v) => toEncodable(v, depth + 1));
-  if (Array.isArray(value)) return value.map((v) => toEncodable(v, depth + 1));
-  if (value instanceof Date) return value.toISOString();
+  if (value instanceof Set) return [...value].map((v) => toEncodable(v, depth + 1, seen));
+  if (Array.isArray(value)) return value.map((v) => toEncodable(v, depth + 1, seen));
   const out: Record<string, unknown> = {};
-  for (const k of Object.keys(value)) out[k] = toEncodable((value as Record<string, unknown>)[k], depth + 1);
+  for (const k of Object.keys(value)) out[k] = toEncodable((value as Record<string, unknown>)[k], depth + 1, seen);
   return out;
 }
 

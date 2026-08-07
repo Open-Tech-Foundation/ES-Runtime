@@ -26,6 +26,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A circular or deeply nested argument no longer kills the process.** Every op
+  argument is marshaled across the V8 boundary by a recursive descent that ran on
+  the native stack with no bound, so `o.self = o` — or a literal nested a few
+  thousand deep — exhausted that stack and V8 aborted the whole isolate (`Check
+  failed: isolate_->IsOnCentralStack()`). Nothing was catchable and the process
+  died, which made `XML.build`, `YAML.build` and `TOML.build` a one-line kill
+  switch for any program that built one from untrusted input. The descent now
+  refuses a cycle with a `TypeError` and nesting past 256 levels with a
+  `RangeError`, both ordinary catchable exceptions. Only the path from the root is
+  tracked, so a value reachable twice by different routes is still marshaled twice
+  rather than being mistaken for a cycle.
+
 - **Secret masking applies to values the program assigns.** `env.MY_API_KEY =
   "…"` — how a program threads a value it just fetched down to a child — stored
   the string raw, so a key that arrives masked from the host environment stayed

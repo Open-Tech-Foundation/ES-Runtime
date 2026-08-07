@@ -2803,7 +2803,7 @@ var YAML = {
   parse: (yaml) => yaml_parse(yaml),
   build: (obj) => yaml_build(obj)
 };
-function toEncodable(value, depth = 0) {
+function toEncodable(value, depth = 0, seen = []) {
   if (depth > 256)
     throw new RangeError("MessagePack: value nests too deeply to encode");
   if (value === null || typeof value !== "object")
@@ -2816,21 +2816,24 @@ function toEncodable(value, depth = 0) {
   }
   if (value instanceof ArrayBuffer)
     return new Uint8Array(value);
+  if (value instanceof Date)
+    return value.toISOString();
+  if (seen.includes(value))
+    throw new TypeError("Converting circular structure to a host value");
+  seen = [...seen, value];
   if (value instanceof Map) {
     const out2 = {};
     for (const [k, v] of value)
-      out2[String(k)] = toEncodable(v, depth + 1);
+      out2[String(k)] = toEncodable(v, depth + 1, seen);
     return out2;
   }
   if (value instanceof Set)
-    return [...value].map((v) => toEncodable(v, depth + 1));
+    return [...value].map((v) => toEncodable(v, depth + 1, seen));
   if (Array.isArray(value))
-    return value.map((v) => toEncodable(v, depth + 1));
-  if (value instanceof Date)
-    return value.toISOString();
+    return value.map((v) => toEncodable(v, depth + 1, seen));
   const out = {};
   for (const k of Object.keys(value))
-    out[k] = toEncodable(value[k], depth + 1);
+    out[k] = toEncodable(value[k], depth + 1, seen);
   return out;
 }
 var MessagePack = {

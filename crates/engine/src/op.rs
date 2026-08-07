@@ -380,7 +380,16 @@ fn op_dispatch_inner(
     let argc = args.length();
     let mut argv = Vec::with_capacity(argc.max(0) as usize);
     for i in 0..argc {
-        argv.push(marshal(scope, args.get(i)));
+        // A cyclic or overly deep argument is refused here rather than being
+        // descended into: the descent runs on the native stack, and overflowing
+        // it aborts the isolate instead of throwing.
+        match marshal(scope, args.get(i)) {
+            Ok(value) => argv.push(value),
+            Err(err) => {
+                throw(scope, &err);
+                return;
+            }
+        }
     }
 
     let mut state = state_rc.borrow_mut();

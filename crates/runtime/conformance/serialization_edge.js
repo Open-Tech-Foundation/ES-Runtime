@@ -154,3 +154,36 @@ test("jsonl encoder produces ndjson", async () => {
   await drain;
   assertEquals(s, '{"a":1}\n{"b":2}\n');
 });
+
+// Marshaling an argument across the op boundary descends on the native stack, so
+// a cycle or a deep enough literal used to abort the whole process instead of
+// throwing. Every builder that takes an object shares that boundary.
+test("builders refuse circular and overdeep values instead of crashing", async () => {
+  const { XML, YAML, TOML, MessagePack } = await import("runtime:serialization");
+
+  const cyclic = { a: 1 };
+  cyclic.self = cyclic;
+  assertThrows(() => XML.build({ root: cyclic }), "TypeError");
+  assertThrows(() => YAML.build(cyclic), "TypeError");
+  assertThrows(() => TOML.build(cyclic), "TypeError");
+  // MessagePack converts on the JS side before the op, so it needs its own
+  // check; it used to bottom out on the depth cap and blame nesting instead.
+  assertThrows(() => MessagePack.encode(cyclic), "TypeError");
+
+  // A cycle reached through an array is the same hazard, different container.
+  const arr = [1];
+  arr.push(arr);
+  assertThrows(() => YAML.build({ arr }), "TypeError");
+
+  // Deep without ever repeating a container: the depth cap, not cycle detection.
+  let deep = {};
+  for (let i = 0; i < 5000; i++) deep = { n: deep };
+  assertThrows(() => YAML.build(deep), "RangeError");
+
+  // One object reachable by two paths is not a cycle and must still build.
+  const shared = { v: 42 };
+  peq(YAML.parse(YAML.build({ x: shared, y: shared })), { x: { v: 42 }, y: { v: 42 } },
+    "a value shared between siblings still builds");
+  peq(MessagePack.decode(MessagePack.encode({ x: shared, y: shared })),
+    { x: { v: 42 }, y: { v: 42 } }, "the same holds through MessagePack");
+});

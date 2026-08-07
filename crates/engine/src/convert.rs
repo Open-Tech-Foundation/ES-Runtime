@@ -7,24 +7,56 @@
 
 use es_runtime_common::{ExceptionClass, IntoException};
 
+use crate::op::OpError;
 use crate::value::Value;
+
+/// Maximum array/object nesting [`marshal`] will descend into.
+///
+/// Marshaling recurses on the native stack, so an unbounded descent is a
+/// process-level hazard rather than a guest-level one: V8 aborts the whole
+/// isolate (`Check failed: isolate_->IsOnCentralStack()`) rather than throwing,
+/// so a guest could kill the runtime by passing a deep enough literal to any op
+/// at all. The cap keeps the descent inside the stack V8 hands the callback.
+///
+/// It also bounds every recursive consumer downstream — `serde_json::Value`
+/// construction, the msgpack writer, and `Value`'s own recursive `Drop` — none
+/// of which could survive a tree deeper than this either. Matches the msgpack
+/// reader/writer's own limit, which is the tightest of them.
+const MAX_MARSHAL_DEPTH: usize = 256;
 
 /// Marshals a V8 value into a [`Value`].
 ///
 /// Phase 1/2 handle the JS primitives; any other value is coerced to its
 /// `String(value)` form as [`Value::Other`] (see the D3a leak note in
 /// DECISIONS.md — structured marshaling is later).
-pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>) -> Value {
+///
+/// Fails rather than overflowing the stack on a cyclic or excessively deep
+/// value; see [`MAX_MARSHAL_DEPTH`].
+pub(crate) fn marshal<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<Value, OpError> {
+    marshal_inner(scope, value, &mut Vec::new())
+}
+
+/// The recursive body of [`marshal`]. `ancestors` holds the containers currently
+/// being descended through — the path from the root to `value`, not every value
+/// seen — so a repeat is a genuine cycle and its length is the current depth.
+fn marshal_inner<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    ancestors: &mut Vec<v8::Local<'s, v8::Value>>,
+) -> Result<Value, OpError> {
     if value.is_undefined() {
-        Value::Undefined
+        Ok(Value::Undefined)
     } else if value.is_null() {
-        Value::Null
+        Ok(Value::Null)
     } else if value.is_boolean() {
-        Value::Bool(value.boolean_value(scope))
+        Ok(Value::Bool(value.boolean_value(scope)))
     } else if value.is_number() {
-        Value::Number(value.number_value(scope).unwrap_or(f64::NAN))
+        Ok(Value::Number(value.number_value(scope).unwrap_or(f64::NAN)))
     } else if value.is_string() {
-        Value::String(js_to_string(scope, value))
+        Ok(Value::String(js_to_string(scope, value)))
     } else if value.is_array_buffer_view() {
         // Uint8Array and other typed-array/DataView views — copied out
         // (interim; zero-copy is Phase 8). Bare ArrayBuffers are wrapped as a
@@ -60,8 +92,9 @@ pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>)
         // writing into the `len` bytes of capacity reserved just above, so
         // `written <= len` and every byte below it is initialized.
         unsafe { buf.set_len(written) };
-        Value::Bytes(buf)
+        Ok(Value::Bytes(buf))
     } else if value.is_array() {
+        enter(value, ancestors)?;
         let array = v8::Local::<v8::Array>::try_from(value).expect("checked array");
         let len = array.length();
         let mut items = Vec::with_capacity(len as usize);
@@ -69,10 +102,12 @@ pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>)
             let item = array
                 .get_index(scope, i)
                 .unwrap_or_else(|| v8::undefined(scope).into());
-            items.push(marshal(scope, item));
+            items.push(marshal_inner(scope, item, ancestors)?);
         }
-        Value::Array(items)
+        ancestors.pop();
+        Ok(Value::Array(items))
     } else if value.is_object() && !value.is_function() && !value.is_promise() {
+        enter(value, ancestors)?;
         let obj = v8::Local::<v8::Object>::try_from(value).expect("checked object");
         let prop_names = obj
             .get_own_property_names(scope, v8::GetPropertyNamesArgs::default())
@@ -86,12 +121,42 @@ pub(crate) fn marshal(scope: &v8::PinScope<'_, '_>, value: v8::Local<v8::Value>)
             let val = obj
                 .get(scope, key)
                 .unwrap_or_else(|| v8::undefined(scope).into());
-            map.push((js_to_string(scope, key), marshal(scope, val)));
+            map.push((
+                js_to_string(scope, key),
+                marshal_inner(scope, val, ancestors)?,
+            ));
         }
-        Value::Object(map)
+        ancestors.pop();
+        Ok(Value::Object(map))
     } else {
-        Value::Other(js_to_string(scope, value))
+        Ok(Value::Other(js_to_string(scope, value)))
     }
+}
+
+/// Pushes a container onto the descent path, refusing one that is already on it
+/// (a cycle) or that would nest past [`MAX_MARSHAL_DEPTH`].
+///
+/// The scan is over ancestors only, so it costs at most `MAX_MARSHAL_DEPTH`
+/// strict-equality checks per container and is independent of how many values
+/// the tree holds in total.
+fn enter<'s>(
+    value: v8::Local<'s, v8::Value>,
+    ancestors: &mut Vec<v8::Local<'s, v8::Value>>,
+) -> Result<(), OpError> {
+    // Strict equality on two objects is reference identity, which is exactly the
+    // "same container again" test a cycle needs.
+    if ancestors.iter().any(|seen| seen.strict_equals(value)) {
+        return Err(OpError::type_error(
+            "Converting circular structure to a host value",
+        ));
+    }
+    if ancestors.len() >= MAX_MARSHAL_DEPTH {
+        return Err(OpError::range_error(format!(
+            "Value nests deeper than {MAX_MARSHAL_DEPTH} levels"
+        )));
+    }
+    ancestors.push(value);
+    Ok(())
 }
 
 /// Marshals a [`Value`] into a V8 value for return to JS. Consumes the value so

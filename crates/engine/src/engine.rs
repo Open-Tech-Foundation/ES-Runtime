@@ -701,7 +701,12 @@ impl Engine for V8Engine {
                     if interrupt.is_execution_terminating() {
                         Outcome::Terminated
                     } else if let Some(result) = run {
-                        Outcome::Ok(marshal(scope, result))
+                        // The script itself succeeded; only rendering its result
+                        // as a host value can fail (cyclic or too deep).
+                        match marshal(scope, result) {
+                            Ok(value) => Outcome::Ok(value),
+                            Err(err) => Outcome::Execution(err.to_string()),
+                        }
                     } else {
                         Outcome::Execution(describe_exception(scope, "execution failed"))
                     }
@@ -1118,6 +1123,93 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ok, Value::Bool(true));
+    }
+
+    /// Marshaling an op argument descends on the native stack, so a cycle used
+    /// to recurse until V8 aborted the process outright (`Check failed:
+    /// isolate_->IsOnCentralStack()`) — any op taking an object was a one-line
+    /// guest kill switch. It has to be a catchable JS error instead.
+    #[test]
+    fn a_cyclic_op_argument_throws_instead_of_aborting_the_isolate() {
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .register_op(OpDecl::sync("echo", |mut args| Ok(args.remove(0))))
+            .unwrap();
+        let caught = engine
+            .eval(
+                "const o = { a: 1 }; o.self = o; \
+                 try { __ops.echo(o); 'no throw' } catch (e) { e.constructor.name }",
+            )
+            .unwrap();
+        assert_eq!(caught, Value::String("TypeError".into()));
+
+        // A cycle through an array is the same hazard by a different container.
+        let caught = engine
+            .eval(
+                "const a = [1]; a.push(a); \
+                 try { __ops.echo({ a }); 'no throw' } catch (e) { e.constructor.name }",
+            )
+            .unwrap();
+        assert_eq!(caught, Value::String("TypeError".into()));
+    }
+
+    /// Nesting deep enough to exhaust the stack aborts the same way a cycle does
+    /// without ever repeating a container, so the depth cap is a separate guard
+    /// rather than a consequence of cycle detection.
+    #[test]
+    fn an_overdeep_op_argument_throws_instead_of_aborting_the_isolate() {
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .register_op(OpDecl::sync("echo", |mut args| Ok(args.remove(0))))
+            .unwrap();
+        let caught = engine
+            .eval(
+                "let d = {}; for (let i = 0; i < 100000; i++) d = { n: d }; \
+                 try { __ops.echo(d); 'no throw' } catch (e) { e.constructor.name }",
+            )
+            .unwrap();
+        assert_eq!(caught, Value::String("RangeError".into()));
+    }
+
+    /// The cycle check tracks the path from the root, not every value seen, so
+    /// one object reachable twice by different routes is still marshaled twice.
+    /// A global visited-set would have called this a cycle and rejected the
+    /// ordinary shape of a config object with a shared sub-object.
+    #[test]
+    fn a_value_shared_between_siblings_is_not_mistaken_for_a_cycle() {
+        use crate::OpDecl;
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        engine
+            .register_op(OpDecl::sync("echo", |mut args| Ok(args.remove(0))))
+            .unwrap();
+        let ok = engine
+            .eval(
+                "const shared = { v: 42 }; \
+                 const r = __ops.echo({ x: shared, y: shared }); \
+                 r.x.v === 42 && r.y.v === 42",
+            )
+            .unwrap();
+        assert_eq!(ok, Value::Bool(true));
+    }
+
+    /// `eval` marshals the completion value through the same descent, so a
+    /// script *returning* a cycle was an abort even with no op involved.
+    #[test]
+    fn a_cyclic_eval_result_is_an_error_rather_than_an_abort() {
+        let _v8 = crate::v8_test_guard();
+        let mut engine = engine();
+        let err = engine
+            .eval("const o = {}; o.self = o; o")
+            .expect_err("a cyclic completion value cannot be marshaled");
+        assert!(
+            err.to_string().contains("circular"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

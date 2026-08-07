@@ -58,9 +58,12 @@ changes.
 
 ## The object graph never crosses the op boundary
 
-An op handler receives a marshaled `Value` — a closed enum. A `Map`, a cycle or
-a class instance arriving that way would be flattened to its `String(value)`
-coercion, so `postMessage(anything)` cannot be an op that takes the message.
+An op handler receives a marshaled `Value` — a closed enum. A `Map` or a class
+instance arriving that way would be flattened to its `String(value)` coercion,
+and a cycle is refused outright (marshaling descends on the native stack, so it
+tracks the path from the root and throws rather than recursing until V8 aborts
+the isolate). Either way `postMessage(anything)` cannot be an op that takes the
+message.
 
 Instead the graph is serialized **on the JS side**, before the op:
 
