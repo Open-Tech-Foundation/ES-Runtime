@@ -25,6 +25,15 @@ namespace) is unstable and may change between minor releases until the API freez
   `ERR_FOREIGN_HANDLE` if not. `ws_broadcast` checks every id in the fan-out,
   not just the first (D50).
 
+- **Documented what an `--allow-net` name entry bounds.** The check runs before
+  resolution, which the docs said; what they did not say is the consequence. A
+  name entry permits a connection to wherever that name resolves, chosen by
+  whoever controls the zone and chosen again on every reconnect — including a
+  loopback or cloud-metadata address. Write an IP entry where the machine is
+  what matters; an IP entry is never satisfied by a name. Behaviour is
+  unchanged: checking after resolution instead would have to refuse the private
+  addresses that `--allow-net=db.internal:5432` exists to reach.
+
 - **An import-policy path entry now governs a `node_modules` tree.** A module
   inside `node_modules` was judged as the package it belongs to *instead of* as
   a path, so every path entry pointing into one was silently inert:

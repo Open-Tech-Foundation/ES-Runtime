@@ -877,7 +877,9 @@ carries a port: `[::1]:8080`. Matching is exact and never widens:
 `--allow-net=example.com` does not admit `api.example.com`, and there are no
 wildcards. Hosts are judged **as written, before resolution** — an IP entry
 never silently admits a name that resolves to it, and DNS is not part of the
-policy.
+policy. A name entry therefore bounds the *name*: whoever controls the zone
+chooses which address answers it, and chooses again on every connection. Where
+the machine is what matters — a host outside your control — write the address.
 
 `net` and `listen` keep separate lists: reaching out and being reachable are
 separate capabilities, and an address allowed for one says nothing about the

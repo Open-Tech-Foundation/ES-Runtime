@@ -112,7 +112,10 @@ name a file outside it; unlisted signals cannot be watched and are hidden from
 `signals()`.
 
 Matching is exact: `example.com` does not admit `api.example.com`, there are no
-wildcards, and hosts are judged as written rather than resolved. A refusal is
+wildcards, and hosts are judged as written rather than resolved. A name entry
+therefore bounds the name, not the machine — whoever controls the zone picks the
+address, on every connection — so where the machine is what matters, write the
+address. An IP entry is never satisfied by a name that resolves to it. A refusal is
 `ERR_PERMISSION_DENIED`, a scoped denial distinct from the
 `ERR_CAPABILITY_DENIED` a missing capability gives. A scoped grant still reports
 `permissions.has("net") === true`: the capability opens the door, the list is

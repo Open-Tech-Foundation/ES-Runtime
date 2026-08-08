@@ -110,6 +110,20 @@ there are no wildcards. Hosts are judged **as written, before resolution**, so a
 IP entry never silently admits a name that resolves to it, and DNS is not part of
 your policy.
 
+<Callout type="warning" title="A name entry bounds the name, not the machine">
+  `--allow-net=api.vendor.example` permits a connection to wherever that name
+  resolves — at the moment of the connection, on every connection. Whoever
+  controls the zone chooses the address, including `127.0.0.1` or a cloud
+  metadata endpoint, and each reconnect resolves again. So a name entry is a
+  statement about who you trust to answer for that name.
+
+  Where that matters — a host outside your control, or one an attacker could
+  make you look up — **write the address**: `--allow-net=203.0.113.7:443` is
+  checked against what the program actually dials, and a name never satisfies
+  it. Your own service names (`db.internal:5432`) are the ordinary case and need
+  nothing special; the zone is yours.
+</Callout>
+
 ## Reading a denial
 
 Four different refusals mean four different fixes. The error code tells you

@@ -180,8 +180,10 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 An **address** is a host (any port), a `host:port`, or a bare port (any
 interface). Bracket IPv6 that carries a port: `[::1]:8080`. Matching is exact —
 `example.com` does not admit `api.example.com`, and there are no wildcards — and
-hosts are judged as written, before resolution. `net` and `listen` keep separate
-lists: reaching out and being reachable are separate capabilities.
+hosts are judged as written, before resolution. A name entry bounds the name,
+not the machine — the zone's owner picks the address, on every connection — so
+write the address where that matters. `net` and `listen` keep separate lists:
+reaching out and being reachable are separate capabilities.
 
 A **path** is absolute or relative to the working directory — `./data` means
 what it means in the shell you typed it in, not what it means to the script — and

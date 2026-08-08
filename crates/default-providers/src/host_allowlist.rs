@@ -12,6 +12,18 @@
 //! subdomain is a different server, often a different operator, and a list that
 //! quietly covered them would grant more than it reads as. There are no
 //! wildcards for the same reason.
+//!
+//! **What a name entry does and does not bound.** The check runs before
+//! resolution, so a name is judged as a name: the entry decides *who may be
+//! asked*, and DNS decides *which address answers*. Whoever controls the zone
+//! therefore chooses the address a name entry permits — including a loopback or
+//! link-local one — and chooses it again on every reconnect. Checking after
+//! resolution instead would not close that: a name entry has no address to
+//! compare against, so the only rule it could add is "and not these ranges",
+//! which would refuse `db.internal:5432` — the shape this flag exists for.
+//! Bounding the *machine* is what an IP entry is for, and an IP entry is never
+//! satisfied by a name; the two say different things on purpose, and the CLI
+//! docs say which to reach for.
 
 use std::net::IpAddr;
 
@@ -241,6 +253,25 @@ mod tests {
         // Never a name for the address it might resolve to: the check runs
         // before resolution, and DNS is not part of the policy.
         assert!(!list(&["127.0.0.1"]).permits("localhost", 80));
+    }
+
+    #[test]
+    fn an_ip_entry_is_the_way_to_bound_the_machine() {
+        // The two kinds of entry answer different questions, and this is the
+        // pair that says so. A name entry permits the name whatever it resolves
+        // to — that is DNS's answer to give, and the zone's owner gives it. An
+        // IP entry permits the address and is never satisfied by a name, so a
+        // program that must reach one machine writes the machine.
+        let by_name = list(&["api.vendor.example:443"]);
+        assert!(by_name.permits("api.vendor.example", 443));
+        assert!(!by_name.permits("203.0.113.7", 443));
+
+        let by_address = list(&["203.0.113.7:443"]);
+        assert!(by_address.permits("203.0.113.7", 443));
+        assert!(!by_address.permits("api.vendor.example", 443));
+        // Including the names a rebind would aim at.
+        assert!(!by_address.permits("localhost", 443));
+        assert!(!by_name.permits("127.0.0.1", 443));
     }
 
     #[test]
