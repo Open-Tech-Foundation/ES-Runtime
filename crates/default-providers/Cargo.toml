@@ -23,6 +23,9 @@ hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 tempfile.workspace = true
+# The compat bridge between hyper's tokio IO and the futures-io the upgrade
+# seam speaks (D55).
+tokio-util = { workspace = true, features = ["compat"] }
 tokio-rustls.workspace = true
 tokio-tungstenite.workspace = true
 webpki-roots.workspace = true

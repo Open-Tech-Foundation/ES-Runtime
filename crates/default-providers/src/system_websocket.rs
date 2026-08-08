@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use es_runtime_providers::{
-    BoxFuture, ProviderError, SocketInfo, WebSocketInfo, WebSocketProvider, WsIncoming, WsMessage,
-    WsServeOptions,
+    BoxFuture, ProviderError, SocketInfo, UpgradedIo, WebSocketInfo, WebSocketProvider, WsIncoming,
+    WsMessage, WsServeOptions,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -43,6 +43,7 @@ use tracing::Instrument;
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
 use crate::peer_limit::{PeerLimit, PeerSlot};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 /// RFC 6455 §7.4.2's "Try Again Later" — the honest answer to a peer whose
 /// queue has run away: the server is not refusing the client, it is refusing to
@@ -536,6 +537,31 @@ impl WebSocketProvider for SystemWebSocket {
             });
             futures_util::future::join_all(sends).await;
             Ok(())
+        })
+    }
+
+    fn adopt(&self, io: UpgradedIo) -> BoxFuture<Result<u64, ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            // The handshake was answered by the HTTP server, so there is nothing
+            // to negotiate here — frames start at the first byte, in the
+            // **server** role (the side that does not mask).
+            //
+            // `compat` back the other way: the seam speaks futures-io and
+            // tungstenite speaks tokio's traits (D55).
+            let stream = WebSocketStream::from_raw_socket(
+                io.compat(),
+                tokio_tungstenite::tungstenite::protocol::Role::Server,
+                None,
+            )
+            .await;
+            let id = this.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+            // No server permit and no peer slot: an upgraded connection was
+            // already counted by the HTTP server that accepted it, and counting
+            // it twice would make one connection spend two budgets.
+            let slot = SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED));
+            this.conns.lock().unwrap().insert(id, slot);
+            Ok(id)
         })
     }
 

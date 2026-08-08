@@ -36,9 +36,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
+use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
     BoxFuture, HttpServeOptions, HttpServerBody, HttpServerProvider, HttpServerRequest,
-    HttpServerResponse, HttpTimeouts, ProviderError, SocketInfo,
+    HttpServerResponse, HttpTimeouts, ProviderError, SocketInfo, UpgradedIo,
 };
 use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -50,6 +51,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::task::AbortHandle;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
@@ -89,7 +91,24 @@ type Pending = (
     HttpServerRequest,
     oneshot::Sender<HttpServerResponse>,
     oneshot::Receiver<()>,
+    Option<PendingUpgrade>,
 );
+
+/// A request that asked to become a WebSocket: hyper's half of the takeover,
+/// and the `Sec-WebSocket-Accept` its `101` has to carry.
+///
+/// Both are captured when the request head is parsed, because both come from
+/// bytes that are gone by the time the guest answers — `on` needs the request
+/// still whole, and the key is a header the guest never sees.
+///
+/// They are then held in **two** maps, because they are consumed by different
+/// calls in an order neither controls: `upgrade` takes the handle, `respond`
+/// reads the key, and whichever runs first must not take the other's half with
+/// it.
+struct PendingUpgrade {
+    on: hyper::upgrade::OnUpgrade,
+    accept: String,
+}
 
 /// Per-server shutdown handle, kept in a side map that `next_request` never
 /// removes — so `close` can stop a server even while a `next_request` await has
@@ -156,6 +175,15 @@ pub struct SystemHttpServer {
     requests: Arc<Mutex<HashMap<u64, mpsc::Receiver<Pending>>>>,
     controls: Arc<Mutex<HashMap<u64, Control>>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<HttpServerResponse>>>>,
+    /// Upgrade handles waiting on their `101`, keyed by request id. Entered by
+    /// `next_requests`, taken by `upgrade`, and dropped by `respond` when the
+    /// guest answers with something else — which is how declining an upgrade
+    /// works, since there is nothing to decline explicitly.
+    upgrades: Arc<Mutex<HashMap<u64, hyper::upgrade::OnUpgrade>>>,
+    /// The `Sec-WebSocket-Accept` each of those requests needs on its `101`.
+    /// Separate from the handle above because `respond` and `upgrade` consume
+    /// their halves in an order neither of them controls.
+    accepts: Arc<Mutex<HashMap<u64, String>>>,
     /// Per-request "was the response delivered?" halves, read by
     /// [`request_disconnected`](HttpServerProvider::request_disconnected). An
     /// entry is taken by the first watcher; a request nobody watches has its
@@ -293,6 +321,39 @@ fn to_server_request(
         // the same one — they are one connection.
         remote_address: peer_host.to_owned(),
         remote_port: peer_port,
+    })
+}
+
+/// Hyper's half of a WebSocket takeover, if this request is asking for one.
+///
+/// The test is the handshake's own (RFC 6455 §4.2.1): a `GET` carrying
+/// `Upgrade: websocket`, `Connection: …upgrade…` and a `Sec-WebSocket-Key`.
+/// Anything short of that is an ordinary request, and taking `on` for it would
+/// hold a connection open waiting for a `101` that is never coming.
+fn take_upgrade(req: &mut Request<Incoming>) -> Option<PendingUpgrade> {
+    if req.method() != hyper::Method::GET {
+        return None;
+    }
+    let header = |name: hyper::header::HeaderName| {
+        req.headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    };
+    if !header(hyper::header::UPGRADE).is_some_and(|v| v.eq_ignore_ascii_case("websocket")) {
+        return None;
+    }
+    // Comma-separated, and `keep-alive, Upgrade` is ordinary from a browser.
+    if !header(hyper::header::CONNECTION).is_some_and(|v| {
+        v.split(',')
+            .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+    }) {
+        return None;
+    }
+    let key = header(hyper::header::SEC_WEBSOCKET_KEY)?;
+    Some(PendingUpgrade {
+        accept: tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes()),
+        on: hyper::upgrade::on(req),
     })
 }
 
@@ -493,6 +554,11 @@ async fn serve_connection<S>(
         let origin = origin.clone();
         let peer_host = peer_host.clone();
         async move {
+            // Taken before the request is consumed: `on` needs it whole, and
+            // the key is a header the guest never sees. `None` for anything that
+            // is not a WebSocket handshake, which is almost every request.
+            let mut req = req;
+            let upgrade = take_upgrade(&mut req);
             // A request naming something that is not an authority never reaches
             // the guest: there is no URL to hand it that is both faithful to
             // what was sent and safe to route on.
@@ -503,7 +569,7 @@ async fn serve_connection<S>(
             };
             let (rtx, rrx) = oneshot::channel();
             let (dtx, drx) = oneshot::channel();
-            if tx.send((server_req, rtx, drx)).await.is_err() {
+            if tx.send((server_req, rtx, drx, upgrade)).await.is_err() {
                 // Server closed: the request channel is gone.
                 return Ok::<_, Infallible>(status_only(StatusCode::SERVICE_UNAVAILABLE));
             }
@@ -564,7 +630,11 @@ async fn serve_connection<S>(
     // any hyper timer exists, so the deadline on it has to come from under the
     // socket — see [`FirstByteTimeout`](crate::first_byte).
     let io = FirstByteTimeout::new(io, timeouts.handshake);
-    let conn = builder.serve_connection(TokioIo::new(io), service);
+    // `with_upgrades`, not `serve_connection` alone: hyper resolves an
+    // `OnUpgrade` only on a connection polled this way, so without it a `101`
+    // goes out and the takeover never completes — the handshake succeeds and
+    // the socket then says nothing, forever (D55).
+    let conn = builder.serve_connection_with_upgrades(TokioIo::new(io), service);
     tokio::pin!(conn);
     // Race the connection against the drain signal. On shutdown,
     // `graceful_shutdown` stops reading new requests but still finishes the one
@@ -861,10 +931,16 @@ impl HttpServerProvider for SystemHttpServer {
             if !batch.is_empty() {
                 let mut pending = this.pending.lock().unwrap();
                 let mut delivered = this.delivered.lock().unwrap();
-                for (req, sender, disconnect) in batch {
+                let mut upgrades = this.upgrades.lock().unwrap();
+                let mut accepts = this.accepts.lock().unwrap();
+                for (req, sender, disconnect, upgrade) in batch {
                     let rid = this.id();
                     pending.insert(rid, sender);
                     delivered.insert(rid, disconnect);
+                    if let Some(upgrade) = upgrade {
+                        upgrades.insert(rid, upgrade.on);
+                        accepts.insert(rid, upgrade.accept);
+                    }
                     out.push((rid, req));
                 }
             }
@@ -879,7 +955,34 @@ impl HttpServerProvider for SystemHttpServer {
     ) -> BoxFuture<Result<(), ProviderError>> {
         let pending = self.pending.clone();
         let delivered = self.delivered.clone();
+        let upgrades = self.upgrades.clone();
+        let accepts = self.accepts.clone();
         Box::pin(async move {
+            let mut response = response;
+            // A `101` for a request that asked to be a WebSocket is a handshake
+            // answer, and the three headers that make it one are computed from a
+            // key the guest never sees. Added here rather than left to the
+            // guest: a SHA-1 nobody can get wrong is better than one everybody
+            // has to.
+            let accept = accepts.lock().unwrap().remove(&request_id);
+            if response.status == StatusCode::SWITCHING_PROTOCOLS.as_u16() {
+                if let Some(accept) = accept {
+                    response
+                        .headers
+                        .push(("upgrade".into(), "websocket".into()));
+                    response
+                        .headers
+                        .push(("connection".into(), "Upgrade".into()));
+                    response
+                        .headers
+                        .push(("sec-websocket-accept".into(), accept));
+                }
+            } else {
+                // Answered as an ordinary request: the takeover was declined,
+                // and the handle would otherwise sit here for the life of the
+                // server holding a connection nobody is going to claim.
+                upgrades.lock().unwrap().remove(&request_id);
+            }
             if let Some(sender) = pending.lock().unwrap().remove(&request_id) {
                 let _ = sender.send(response); // client may have gone away
             }
@@ -898,6 +1001,30 @@ impl HttpServerProvider for SystemHttpServer {
             // nothing.
             delivered.lock().unwrap().remove(&request_id);
             Ok(())
+        })
+    }
+
+    fn upgrade(&self, request_id: u64) -> BoxFuture<Result<UpgradedIo, ProviderError>> {
+        let upgrades = self.upgrades.clone();
+        Box::pin(async move {
+            let Some(on) = upgrades.lock().unwrap().remove(&request_id) else {
+                return Err(ProviderError::Coded {
+                    code: ErrorCode::NotFound,
+                    message: format!(
+                        "request {request_id} did not ask to be upgraded (no Upgrade: websocket, \
+                         Connection: Upgrade and Sec-WebSocket-Key on the way in)"
+                    ),
+                });
+            };
+            // Resolves once the `101` is on the wire, which is why a caller
+            // returns the response first and awaits this second.
+            let upgraded = on.await.map_err(|e| ProviderError::Coded {
+                code: ErrorCode::ConnectionReset,
+                message: format!("the connection was not upgraded: {e}"),
+            })?;
+            // hyper speaks tokio's IO traits and the seam speaks futures-io;
+            // `compat` is the one-line bridge between them (D55).
+            Ok(Box::new(TokioIo::new(upgraded).compat()) as UpgradedIo)
         })
     }
 

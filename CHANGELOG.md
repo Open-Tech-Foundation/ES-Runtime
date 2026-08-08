@@ -66,6 +66,32 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`upgradeWebSocket(request)` — one port for `https:` and `wss:`.**
+  `runtime:websocket` `serve()` binds a listener of its own, so a service that
+  already had an HTTP server needed a second port and a second certificate for
+  its sockets, and there was no TLS WebSocket server at all. Node, Deno and Bun
+  all upgrade on the HTTP server instead; this does too.
+
+  ```js
+  serve({ port: 443, secureTransport: "on", cert, key }, (request) => {
+    if (request.headers.get("upgrade") === "websocket") {
+      const { response, socket } = upgradeWebSocket(request);
+      socket.onmessage = (e) => socket.send(e.data);
+      return response;
+    }
+    return new Response("api");
+  });
+  ```
+
+  What comes back is an ordinary connection — `broadcast()` reaches it alongside
+  sockets from `serve()`, and `maxBufferedAmount` applies. The handshake headers
+  are the host's, since `Sec-WebSocket-Accept` is a digest of a key the handler
+  never sees. Returning anything but the `response` declines the upgrade.
+
+  **Over TLS the client must negotiate `http/1.1`** — browsers do for `wss:`.
+  WebSocket over HTTP/2 needs RFC 8441 extended CONNECT, which is still not
+  implemented. (D55.)
+
 - **WebSocket send backpressure: `connection.bufferedAmount` and
   `maxBufferedAmount`.** `send()` is fire-and-forget — the WebSocket API has no
   way to report a full buffer — so writing faster than a peer reads never

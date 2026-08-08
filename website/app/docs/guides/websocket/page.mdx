@@ -93,7 +93,34 @@ for await (const ws of server) {
 ```
 
 See the [WebSocket benchmarks](/docs/benchmarks#websocket) for fan-out
-throughput. A `wss:` server and pub/sub topics are on the roadmap.
+throughput. Pub/sub topics are on the roadmap; `wss:` works today by upgrading
+on an HTTPS server, below.
+
+### One port for your API and your sockets
+
+The `serve()` above binds a port of its own. If you already have an HTTP server,
+take the connection over instead — one port, one certificate, both protocols:
+
+```js
+import { serve } from "runtime:http";
+import { upgradeWebSocket, broadcast } from "runtime:websocket";
+
+const room = new Set();
+
+serve({ port: 443, secureTransport: "on", cert, key }, (request) => {
+  if (request.headers.get("upgrade") === "websocket") {
+    const { response, socket } = upgradeWebSocket(request);
+    room.add(socket);
+    socket.onmessage = (e) => broadcast(room, e.data);
+    socket.onclose = () => room.delete(socket);
+    return response;
+  }
+  return new Response("api");           // everything else is an ordinary request
+});
+```
+
+Return the `response` to accept, anything else to decline. What you get back is
+an ordinary connection, so `broadcast()` reaches it alongside any from `serve()`.
 
 ### Slow peers
 

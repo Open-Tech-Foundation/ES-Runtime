@@ -234,9 +234,32 @@ peer several messages behind on a large payload, or thousands behind on a small
 one. Client connections carry the same default — a slow server is the same
 problem from the other end.
 
+### Two ways in
+
+`serve()` binds a listener of its own and drives the handshake with tungstenite.
+The other way is an **upgrade** off the HTTP server (D55), which is how every
+peer runtime does it and the only way to get `wss:` today: TLS terminates on the
+HTTP listener, the request arrives as an ordinary one, and `upgradeWebSocket()`
+takes the connection over.
+
+That crosses two provider seams, so it is joined in the ops layer rather than at
+either one: `HttpServerProvider::upgrade` surrenders the connection as a
+`futures-io` stream and `WebSocketProvider::adopt` takes it, and neither has to
+know the other exists. The ordering is the protocol's — hyper resolves the
+takeover only *after* the `101` is written, so the guest returns the response
+first and the socket's id arrives second, which is why the connection is built
+over a promise.
+
+Two things the host does rather than the guest: the handshake headers
+(`Sec-WebSocket-Accept` is a digest of a key the handler never sees) and the
+accounting — an upgraded connection was already counted by the HTTP server that
+accepted it, so it takes no second connection slot and no second per-peer slot.
+
 ### Still missing
 
-No `wss:` — a TLS WebSocket server waits on RFC 8441 extended CONNECT.
+WebSocket over **HTTP/2** — RFC 8441 extended CONNECT. Over TLS this means a
+client must negotiate `http/1.1` to upgrade, which browsers do for `wss:` and a
+client forcing `h2` does not.
 
 
 A failed handshake logs at `debug` on the `runtime::websocket` target, inside a

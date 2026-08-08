@@ -993,8 +993,34 @@
   // produces the request's AbortSignal on first read of `.signal` — the
   // disconnect watch it starts costs a pending op, so a handler that never asks
   // never pays.
+  // Which host request a server-side Request came from. A WeakMap rather than a
+  // property on the Request: `runtime:websocket`'s upgradeWebSocket() needs the
+  // id to hand the connection over (D55), and nothing else should be able to
+  // read it off an object a handler was given.
+  const serverRequestIds = new WeakMap();
   Object.defineProperty(globalThis, "__serverRequest", {
-    value: (url, init, signalThunk) =>
-      new Request(url, { ...init, [TRUSTED_URL]: true, [LAZY_SIGNAL]: signalThunk }),
+    value: (url, init, signalThunk, requestId) => {
+      const request = new Request(url, {
+        ...init,
+        [TRUSTED_URL]: true,
+        [LAZY_SIGNAL]: signalThunk,
+      });
+      if (requestId !== undefined) serverRequestIds.set(request, requestId);
+      return request;
+    },
+  });
+  // `undefined` for anything that did not come from a server handler — a
+  // `fetch` Request, or one the guest built. The caller reads that as "there is
+  // no connection here to take over".
+  Object.defineProperty(globalThis, "__serverRequestId", {
+    value: (request) => serverRequestIds.get(request),
+  });
+  // The `101` a WebSocket upgrade answers with (D55). Fetch bounds a
+  // constructed Response to 200–599 — a informational status is something a
+  // server *emits*, not something a script builds — so this goes through the
+  // same internal door the runtime already uses for its own responses. The
+  // handshake headers are added by the host, which is where the key is.
+  Object.defineProperty(globalThis, "__upgradeResponse", {
+    value: () => new Response(null, { status: 101, [INTERNAL_RESPONSE]: true }),
   });
 })();

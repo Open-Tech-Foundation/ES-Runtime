@@ -178,6 +178,20 @@ pub enum ConsoleLevel {
 pub type ByteStream =
     Pin<Box<dyn futures_core::Stream<Item = Result<Vec<u8>, ProviderError>> + Send>>;
 
+/// A connection an HTTP request was upgraded off, handed from an
+/// [`HttpServerProvider`] to a [`WebSocketProvider`] (D55).
+///
+/// Spelled in `futures_io` rather than any runtime's own traits, so the two
+/// providers do not have to be built on the same one — and so this crate stays
+/// what it is, a description of seams. An implementation over tokio bridges with
+/// `tokio_util::compat`.
+pub trait UpgradedStream: futures_io::AsyncRead + futures_io::AsyncWrite + Send + Unpin {}
+
+impl<T> UpgradedStream for T where T: futures_io::AsyncRead + futures_io::AsyncWrite + Send + Unpin {}
+
+/// An upgraded connection, owned.
+pub type UpgradedIo = Box<dyn UpgradedStream>;
+
 /// An outbound HTTP request handed to a [`NetTransport`].
 pub struct HttpRequest {
     /// The HTTP method (`GET`, `POST`, …).
@@ -1194,6 +1208,25 @@ pub trait WebSocketProvider: Send + Sync {
     /// client `connect` id (one shared id space, like [`NetProvider`] sockets).
     fn accept(&self, id: u64) -> BoxFuture<Result<Option<(u64, WebSocketInfo)>, ProviderError>>;
 
+    /// Adopts a connection an HTTP server upgraded, returning the id it is
+    /// reachable by (D55) — the same id space `connect` and `accept` mint, so
+    /// an upgraded socket is a WebSocket like any other and `broadcast` reaches
+    /// it alongside them.
+    ///
+    /// `io` arrives with the handshake already answered, so this drives frames
+    /// from the first byte and must take the **server** role: it is not the
+    /// side that masks.
+    ///
+    /// The default refuses, which is correct for a provider that cannot take a
+    /// connection it did not open.
+    fn adopt(&self, io: UpgradedIo) -> BoxFuture<Result<u64, ProviderError>> {
+        drop(io);
+        Box::pin(std::future::ready(Err(ProviderError::Coded {
+            code: ErrorCode::ProviderUnavailable,
+            message: "this WebSocket provider cannot adopt an upgraded connection".into(),
+        })))
+    }
+
     /// Closes server `id` (idempotent); stops accepting new connections. Already
     /// accepted connections keep working until individually closed.
     fn close_server(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
@@ -1788,6 +1821,29 @@ pub trait HttpServerProvider: Send + Sync {
     fn request_disconnected(&self, request_id: u64) -> BoxFuture<bool> {
         let _ = request_id;
         Box::pin(std::future::ready(false))
+    }
+
+    /// Takes over the connection request `request_id` arrived on, once its
+    /// response has gone out, and hands back the raw stream (D55).
+    ///
+    /// This is the WebSocket upgrade seam, and the ordering is the protocol's:
+    /// the future resolves only **after** the guest has answered with `101`,
+    /// because the bytes before that are still an HTTP response. So a caller
+    /// starts this, returns the `101`, and awaits — it cannot await first.
+    ///
+    /// A provider that honours it should also complete the handshake it is
+    /// answering: a `101` for a request carrying `Sec-WebSocket-Key` needs
+    /// `Upgrade`, `Connection` and `Sec-WebSocket-Accept` on the way out, and
+    /// the guest has no business computing a SHA-1 to get them right.
+    ///
+    /// The default refuses, which is correct for a transport that cannot hand
+    /// its connection over.
+    fn upgrade(&self, request_id: u64) -> BoxFuture<Result<UpgradedIo, ProviderError>> {
+        let _ = request_id;
+        Box::pin(std::future::ready(Err(ProviderError::Coded {
+            code: ErrorCode::ProviderUnavailable,
+            message: "this HTTP server cannot upgrade a connection".into(),
+        })))
     }
 
     /// Closes server `id`: stops accepting and tears the listener down

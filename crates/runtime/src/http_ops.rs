@@ -70,6 +70,7 @@ fn trailer_pairs(items: Vec<Value>) -> Trailers {
 pub(crate) fn install(
     engine: &mut dyn Engine,
     http: Option<Arc<dyn HttpServerProvider>>,
+    requests: Handles,
 ) -> Result<()> {
     // Inbound request-body streams, keyed by request id: `http_next_request`
     // inserts, `http_body_read` pulls chunks, response completion drops leftovers.
@@ -97,7 +98,6 @@ pub(crate) fn install(
     // agent may name. A request is released when it is answered — an id past
     // that names a response already on the wire.
     let servers = Handles::new("HTTP server");
-    let requests = Handles::new("HTTP request");
 
     let h = http.clone();
     let owned = servers.clone();

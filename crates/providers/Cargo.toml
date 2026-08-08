@@ -11,6 +11,10 @@ authors.workspace = true
 [dependencies]
 es-runtime-common.workspace = true
 futures-core.workspace = true
+# The upgraded-stream seam (D55). `futures-io` is the runtime-agnostic spelling
+# of AsyncRead/AsyncWrite — a no_std-able trait crate — so an HTTP provider can
+# hand a WebSocket provider a stream without this crate learning about tokio.
+futures-io.workspace = true
 thiserror.workspace = true
 
 [lints]

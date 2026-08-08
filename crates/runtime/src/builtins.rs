@@ -71,10 +71,21 @@ pub(crate) fn install(
     crate::sync_fs_ops::install(engine, providers.sync_file_system())?;
     // runtime:net ops: connect (Net), listen (NetListen); read/write/accept by id.
     crate::net_ops::install(engine, providers.net_provider())?;
+    // The in-flight requests this agent has been handed (D50). Built here
+    // rather than inside `http_ops` because `ws_ops` needs the same registry:
+    // upgrading a request to a WebSocket is a use of that request, so it is
+    // checked against the agent that was given it (D55).
+    let requests = crate::handles::Handles::new("HTTP request");
     // runtime:http ops: serve (NetListen); next_request/body_read/respond by id.
-    crate::http_ops::install(engine, providers.http_server())?;
+    crate::http_ops::install(engine, providers.http_server(), requests.clone())?;
     // WebSocket global ops: connect (Net); send/recv/close by id (DECISIONS D29).
-    crate::ws_ops::install(engine, providers.web_socket())?;
+    // Also `ws_upgrade`, which joins the two server providers (D55).
+    crate::ws_ops::install(
+        engine,
+        providers.web_socket(),
+        providers.http_server(),
+        requests,
+    )?;
     // runtime:system ops: spawn (Run); read/write/wait/kill by child id.
     crate::system_ops::install(engine, providers.commands())?;
     crate::serialization_ops::install(engine)?;

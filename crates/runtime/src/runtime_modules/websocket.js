@@ -10,6 +10,12 @@
 // ws: only — a wss: server is a follow-up.
 
 const ops = globalThis.__ops;
+// Which host request a server-side Request came from — set by the prelude when
+// runtime:http builds one, and `undefined` for every other Request (D55).
+const requestIdOf = globalThis.__serverRequestId;
+// A 101 the guest cannot construct itself: Fetch bounds `new Response` to
+// 200-599, and an informational status is something a server emits.
+const upgradeResponse = globalThis.__upgradeResponse;
 const encoder = new TextEncoder();
 
 // Connection → host socket id, so broadcast() can batch without exposing the id.
@@ -33,10 +39,14 @@ class WebSocketConnection extends EventTarget {
   #bufferedAmount = 0;
   #handlers = { message: null, close: null, error: null };
 
+  // `id` is a number for a connection the host already has, or a promise for
+  // one still being handed over — an HTTP upgrade has no connection until its
+  // `101` is on the wire (D55). Held as a promise either way so there is one
+  // path, the same shape `runtime:net`'s Socket uses for a dialled connection.
   constructor(id) {
     super();
-    this.#id = id;
-    CONN_ID.set(this, id);
+    this.#id = Promise.resolve(id);
+    CONN_ID.set(this, this.#id);
     this.#pump();
   }
 
@@ -97,7 +107,8 @@ class WebSocketConnection extends EventTarget {
     const payload = toBytesOrString(data);
     const size = typeof payload === "string" ? encoder.encode(payload).length : payload.byteLength;
     this.#bufferedAmount += size;
-    Promise.resolve(ops.ws_send(this.#id, payload))
+    this.#id
+      .then((id) => ops.ws_send(id, payload))
       .catch(() => {})
       .finally(() => {
         this.#bufferedAmount -= size;
@@ -108,9 +119,9 @@ class WebSocketConnection extends EventTarget {
     if (this.#closed) return;
     this.#closed = true;
     const c = code === undefined ? null : code;
-    Promise.resolve(
-      ops.ws_close(this.#id, c, reason === undefined ? "" : String(reason)),
-    ).catch(() => {});
+    this.#id
+      .then((id) => ops.ws_close(id, c, reason === undefined ? "" : String(reason)))
+      .catch(() => {});
   }
 
   #setHandler(name, value) {
@@ -123,8 +134,12 @@ class WebSocketConnection extends EventTarget {
 
   async #pump() {
     try {
+      // A handover that never completed — the client vanished before the `101`
+      // reached it — throws here, and is the same abnormal close as a
+      // connection that dropped a moment later.
+      const id = await this.#id;
       for (;;) {
-        const frame = await ops.ws_recv(this.#id);
+        const frame = await ops.ws_recv(id);
         if (frame === null) {
           this.#finish(1006, "", false);
           return;
@@ -264,6 +279,41 @@ function count(options, name) {
   return value;
 }
 
+// Takes over the connection a server request arrived on, turning it into a
+// WebSocket (D55) — the shape Deno, Bun and Node all settle on, where a TLS
+// endpoint serves `https:` and `wss:` on one port with one certificate.
+//
+// Returns the 101 the handler must return and the socket it becomes. The order
+// is the protocol's: the response goes out first, and only then is there a
+// connection to drive — so the socket's id is a promise, exactly as a dialled
+// `Socket`'s is in runtime:net, and messages posted before it resolves queue.
+//
+// The handshake headers are the host's to add: `Sec-WebSocket-Accept` is a
+// SHA-1 of a key the guest never sees, and one nobody can get wrong beats one
+// everybody has to.
+function upgradeWebSocket(request) {
+  if (!(request instanceof Request)) {
+    throw new TypeError(
+      `upgradeWebSocket: expected a Request, got ${request === null ? "null" : typeof request}`,
+    );
+  }
+  const requestId = requestIdOf(request);
+  if (requestId === undefined) {
+    throw new TypeError(
+      "upgradeWebSocket: this Request did not come from a runtime:http handler, so there is " +
+        "no connection to take over",
+    );
+  }
+  // Started before the 101 is returned and settles after it: the host resolves
+  // this once the response is on the wire. Awaiting it here would deadlock on a
+  // response this function has not returned yet.
+  const connection = ops.ws_upgrade(requestId);
+  return {
+    response: upgradeResponse(),
+    socket: new WebSocketConnection(connection),
+  };
+}
+
 function serve(options = {}) {
   const hostname = options.hostname ?? options.host ?? "0.0.0.0";
   const port = Number(options.port) || 0;
@@ -317,8 +367,14 @@ function broadcast(connections, data) {
     index += 1;
   }
   if (ids.length === 0) return;
-  Promise.resolve(ops.ws_broadcast(ids, toBytesOrString(data))).catch(() => {});
+  // The brand check above is synchronous, so a bad element is still a TypeError
+  // at the call. The ids are not: one of these connections may still be
+  // completing an HTTP upgrade, and a room is not a reason to leave it out.
+  const payload = toBytesOrString(data);
+  Promise.all(ids)
+    .then((resolved) => ops.ws_broadcast(resolved, payload))
+    .catch(() => {});
 }
 
-export { serve, broadcast };
-export default { serve, broadcast };
+export { serve, broadcast, upgradeWebSocket };
+export default { serve, broadcast, upgradeWebSocket };

@@ -84,6 +84,7 @@ for await (const ws of server) {
 | Export | Type | Description |
 | --- | --- | --- |
 | `serve(options)` | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
+| `upgradeWebSocket(request)` | `(Request) => { response, socket }` | Turn a [`runtime:http`](/api/http) request into a WebSocket, so one port serves `https:` and `wss:`. Return `response` to accept, anything else to decline. NetListen is already held by the server. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). A closed connection is skipped; an element that is not a connection is a `TypeError`. |
 
 ### ServeOptions
@@ -118,6 +119,43 @@ so the count does not fall back down on its own. Over the cap a connection is
 descriptor, task or buffer, and is served the moment a slot frees. Unlimited by
 default, because the right number follows from your file-descriptor budget,
 which the runtime cannot read.
+
+### One port for `https:` and `wss:`
+
+`serve()` binds a WebSocket server on its own port. A service that already has an
+HTTP server does not need a second one — take the connection over instead, the
+way Node, Deno and Bun all do:
+
+```js
+import { serve } from "runtime:http";
+import { upgradeWebSocket, broadcast } from "runtime:websocket";
+
+const room = new Set();
+
+serve({ port: 443, secureTransport: "on", cert, key }, (request) => {
+  if (request.headers.get("upgrade") === "websocket") {
+    const { response, socket } = upgradeWebSocket(request);
+    room.add(socket);
+    socket.onmessage = (e) => broadcast(room, e.data);
+    socket.onclose = () => room.delete(socket);
+    return response;
+  }
+  return new Response("api");
+});
+```
+
+The `socket` is usable immediately; sends before the handover completes are
+queued. It is an ordinary connection — `broadcast()` reaches it alongside sockets
+from `serve()`, and `maxBufferedAmount` applies at its default. The handshake
+headers are the host's: `Sec-WebSocket-Accept` is a digest of a key your handler
+never sees. A `Request` that did not come from a handler is a `TypeError`.
+
+<Callout type="warning" title="Over TLS the client must negotiate http/1.1">
+  Browsers do this for `wss:`, so this is invisible in practice. WebSocket over
+  HTTP/2 needs RFC 8441 extended CONNECT, which is not implemented — a client
+  that forces `h2` gets whatever your handler returns for a non-upgrade request
+  rather than a `101`.
+</Callout>
 
 ### Backpressure
 

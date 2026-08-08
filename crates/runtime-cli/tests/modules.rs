@@ -93,6 +93,22 @@ fn streams_an_http_request_body_through_to_the_response() {
 }
 
 #[test]
+fn upgrades_a_websocket_on_the_http_server_that_is_serving_requests() {
+    // D55: one port, one certificate, both protocols — how every peer runtime
+    // does it, and what a deployment behind a single TLS endpoint needs. Also
+    // pins that an upgraded socket is an ordinary connection: `broadcast()`
+    // reaches it alongside the ones `runtime:websocket` `serve()` yields.
+    let out = run_file("http-websocket-upgrade.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("http 200 api:/hello"), "{stdout}");
+    assert!(stdout.contains("ws room:one"), "{stdout}");
+    assert!(stdout.contains("broadcast room:two|room:two"), "{stdout}");
+    // A Request the guest built has no connection behind it to take over.
+    assert!(stdout.contains("refused TypeError"), "{stdout}");
+}
+
+#[test]
 fn serves_http2_to_a_cleartext_client_that_opens_with_the_preface() {
     // A real `serve()` under the real binary, answering hand-written HTTP/2
     // frames over `runtime:net` — `fetch` would talk HTTP/1.1 to a cleartext

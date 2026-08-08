@@ -14,7 +14,8 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsMessage, WsServeOptions, WsTimeouts,
+    HttpServerProvider, ProviderError, SocketInfo, WebSocketProvider, WsIncoming, WsMessage,
+    WsServeOptions, WsTimeouts,
 };
 
 use crate::Result;
@@ -23,6 +24,8 @@ use crate::handles::Handles;
 pub(crate) fn install(
     engine: &mut dyn Engine,
     ws: Option<Arc<dyn WebSocketProvider>>,
+    http: Option<Arc<dyn HttpServerProvider>>,
+    requests: Handles,
 ) -> Result<()> {
     // This agent's connections (dialled or accepted) and its bound servers.
     let connections = Handles::new("WebSocket");
@@ -50,6 +53,42 @@ pub(crate) fn install(
         })
         .requires(Capability::Net),
     )?;
+
+    // The HTTP-upgrade path (D55): `runtime:websocket`'s `upgradeWebSocket`
+    // hands a request over to this module. Two providers, joined here rather
+    // than at either seam — the HTTP server surrenders the connection, the
+    // WebSocket provider adopts it, and neither has to know the other exists.
+    //
+    // No capability of its own: the request being upgraded arrived on a server
+    // the guest already bound under `NetListen`, and taking that same connection
+    // over reaches nothing new. What it does need is the *request* to be this
+    // agent's, which `http_ops` recorded when it handed the id out (D50).
+    let w = ws.clone();
+    let h = http.clone();
+    let owned = connections.clone();
+    let owned_requests = requests;
+    engine.register_op(OpDecl::r#async("ws_upgrade", move |args| {
+        let w = w.clone();
+        let h = h.clone();
+        let owned = owned.clone();
+        let owned_requests = owned_requests.clone();
+        let rid = arg_u64(&args, 0);
+        Box::pin(async move {
+            let rid = owned_requests.check(rid)?;
+            let http = h.clone().ok_or_else(|| {
+                OpError::new(
+                    ExceptionClass::Error,
+                    "HTTP serving is unavailable (no HttpServerProvider configured)",
+                )
+                .with_code(ErrorCode::ProviderUnavailable)
+            })?;
+            // Resolves once the guest's `101` is on the wire — so this op is
+            // started before the handler returns and settles after it.
+            let io = http.upgrade(rid).await.map_err(map_err)?;
+            let id = require(&w)?.adopt(io).await.map_err(map_err)?;
+            Ok(Value::Number(owned.own(id) as f64))
+        })
+    }))?;
 
     let w = ws.clone();
     let owned = connections.clone();

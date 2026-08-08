@@ -325,7 +325,7 @@ async function handleRequest(entry, handler) {
       });
     }
     response = await handler(
-      makeServerRequest(url, init, () => watchDisconnect(requestId)),
+      makeServerRequest(url, init, () => watchDisconnect(requestId), requestId),
       connectionInfo(peerHost, peerPort),
     );
     if (!(response instanceof Response)) {

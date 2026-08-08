@@ -1623,6 +1623,68 @@ fn a_worker_cannot_answer_a_request_its_parent_is_serving() {
 }
 
 #[test]
+fn a_worker_cannot_upgrade_a_request_its_parent_is_serving() {
+    // Upgrading is a *use* of a request, so it is checked against the agent the
+    // request was handed to (D50/D55). Without that, `ws_upgrade` would be a
+    // second way to take a connection its caller was never given — and a
+    // quieter one than answering it, since the parent's handler would simply
+    // never see the socket.
+    let out = run(
+        "steal-upgrade",
+        r#"
+        const said = [];
+        for (let id = 1; id <= 6; id++) {
+          try {
+            await globalThis.__ops.ws_upgrade(id);
+            said.push(`took ${id}`);
+          } catch (e) {
+            said.push(e.code);
+          }
+        }
+        postMessage(said.join(" "));
+        "#,
+        r#"
+        import { serve } from "runtime:http";
+        import { upgradeWebSocket } from "runtime:websocket";
+        const server = serve({ port: 0, hostname: "127.0.0.1" }, async (request) => {
+          if (request.headers.get("upgrade") === "websocket") {
+            const w = new Worker(new URL("WORKER_URL", import.meta.url), { permissions: [] });
+            console.log(await new Promise((r) => { w.onmessage = (e) => r(e.data); }));
+            w.terminate();
+            const { response, socket } = upgradeWebSocket(request);
+            socket.onmessage = (e) => socket.send(`mine:${e.data}`);
+            return response;
+          }
+          return new Response("api");
+        });
+        const { port } = await server.addr;
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/s`);
+        await new Promise((r) => (ws.onopen = r));
+        const said = await new Promise((r) => { ws.onmessage = (e) => r(e.data); ws.send("x"); });
+        console.log(said);
+        ws.close();
+        await server.stop();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        !said.contains("took"),
+        "a foreign request was upgraded: {said}"
+    );
+    // The parent's own upgrade still works — the check refused the worker, not
+    // the operation.
+    assert!(
+        said.ends_with(
+            "mine:x
+"
+        ),
+        "{said}"
+    );
+}
+
+#[test]
 fn a_worker_cannot_write_to_a_socket_its_parent_opened() {
     // `net` is granted here, so the worker holds the capability and still must
     // not reach the connection: the capability authorizes dialling, and the

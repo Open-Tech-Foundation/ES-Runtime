@@ -626,6 +626,49 @@ A worker that merely *hears* about a child's failure has not failed itself, so a
 unclaimed `error` on a `Worker` goes to the console rather than escalating —
 otherwise one leaf failure would take down every ancestor without an `onerror`.
 
+### One port for `https:` and `wss:`
+
+`serve()` above binds a WebSocket server on a port of its own, which is the
+simple case. A service that already has an HTTP server does not need a second
+port: `upgradeWebSocket(request)` takes over the connection a request arrived
+on, the way Node, Deno and Bun all do it.
+
+```js
+import { serve } from "runtime:http";
+import { upgradeWebSocket, broadcast } from "runtime:websocket";
+
+const room = new Set();
+
+serve({ port: 443, secureTransport: "on", cert, key }, (request) => {
+  if (request.headers.get("upgrade") === "websocket") {
+    const { response, socket } = upgradeWebSocket(request);
+    room.add(socket);
+    socket.onmessage = (e) => broadcast(room, e.data);
+    socket.onclose = () => room.delete(socket);
+    return response;
+  }
+  return new Response("api");
+});
+```
+
+Return the `response` to accept the upgrade; return anything else to decline it
+and answer the request normally. The `socket` is usable immediately — the
+handover completes once the `101` is on the wire, and sends before then are
+queued, exactly as they are on a socket that is still connecting.
+
+The connection is an ordinary one: the same `WebSocketConnection` `serve()`
+yields, so `broadcast()` reaches upgraded and dedicated-port sockets alike, and
+`maxBufferedAmount` applies at its default (8 MiB). The handshake headers are the
+host's — `Sec-WebSocket-Accept` is a digest of a key the handler never sees.
+
+`upgradeWebSocket` throws a `TypeError` for a `Request` that did not come from a
+`serve()` handler; there is no connection behind it to take over.
+
+> **Over TLS the client must negotiate `http/1.1`.** Browsers do this for `wss:`.
+> WebSocket over HTTP/2 requires RFC 8441 extended CONNECT, which this runtime
+> does not implement, so a client that forces `h2` receives whatever the handler
+> returns for a non-upgrade request rather than a `101`.
+
 ### Backpressure
 
 `postMessage` never refuses a message and never throws for queue depth — HTML
@@ -1798,7 +1841,8 @@ for await (const ws of server) {
 
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
-| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
+| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server on its own port; `port` 0 picks an ephemeral one. `NetListen`. |
+| `upgradeWebSocket(request)` | `(Request) => { response, socket }` | Turn a `runtime:http` request into a WebSocket, so one port serves `https:` and `wss:` together. No capability of its own — the port was already bound under `NetListen`. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). A closed connection is skipped; an element that is not a connection is a `TypeError`, checked before anything is sent. |
 
 | Option | Default | Description |

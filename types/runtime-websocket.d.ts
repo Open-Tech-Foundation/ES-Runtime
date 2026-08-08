@@ -1,4 +1,51 @@
 declare module "runtime:websocket" {
+  /** What {@link upgradeWebSocket} hands back. */
+  export interface WebSocketUpgrade {
+    /**
+     * The `101` your handler must return. Returning anything else declines the
+     * upgrade and answers the request normally.
+     */
+    readonly response: Response;
+    /**
+     * The connection the request becomes, once that `101` is on the wire.
+     * Usable immediately — sends before the handover completes are queued, as
+     * they are on a socket that is still connecting.
+     */
+    readonly socket: WebSocketConnection;
+  }
+
+  /**
+   * Takes over the connection a `runtime:http` request arrived on and turns it
+   * into a WebSocket — so one port and one certificate serve `https:` and
+   * `wss:` together.
+   *
+   * ```js
+   * import { serve } from "runtime:http";
+   * import { upgradeWebSocket } from "runtime:websocket";
+   *
+   * serve({ port: 443, secureTransport: "on", cert, key }, (request) => {
+   *   if (request.headers.get("upgrade") === "websocket") {
+   *     const { response, socket } = upgradeWebSocket(request);
+   *     socket.onmessage = (e) => socket.send(e.data);
+   *     return response;
+   *   }
+   *   return new Response("api");
+   * });
+   * ```
+   *
+   * The handshake headers are the host's to add — `Sec-WebSocket-Accept` is a
+   * digest of a key your handler never sees.
+   *
+   * Throws a `TypeError` if `request` did not come from a `serve()` handler:
+   * there is no connection behind it to take over.
+   *
+   * **Over TLS the client must negotiate `http/1.1`.** Browsers do for `wss:`.
+   * WebSocket over HTTP/2 needs RFC 8441 extended CONNECT, which this runtime
+   * does not implement, so a client that forces `h2` gets whatever your handler
+   * returns for a non-upgrade request.
+   */
+  export function upgradeWebSocket(request: Request): WebSocketUpgrade;
+
   /**
    * A server-side WebSocket connection: an already-open socket, so there is no
    * connecting handshake to observe. Otherwise the same surface as the global
