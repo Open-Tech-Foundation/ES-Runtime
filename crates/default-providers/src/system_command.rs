@@ -64,10 +64,12 @@ type Registry = Arc<Mutex<HashMap<u64, Slot>>>;
 struct Inner {
     children: Registry,
     next_id: AtomicU64,
-    /// Programs this provider will start. `None` ⇒ any. Matched against both
-    /// the name as written and the resolved file name, so an allowlist of
-    /// `["git"]` admits `git`, `/usr/bin/git`, and `git.exe` alike.
-    allow: Option<HashSet<String>>,
+    /// Programs this provider will start, as **real paths** — each entry
+    /// resolved once, the way a spawn resolves one. `None` ⇒ any. Membership is
+    /// therefore a question about a file rather than about a spelling: `["git"]`
+    /// admits `git` and `/usr/bin/git` because they are the same program, and
+    /// refuses `/tmp/git` because it is not.
+    allow: Option<HashSet<PathBuf>>,
     /// Cap on children alive at once. `None` ⇒ unlimited.
     max_children: Option<usize>,
 }
@@ -95,13 +97,22 @@ impl SystemCommands {
     /// Restricts spawning to `programs` — the policy seam for an embedder that
     /// must grant `Capability::Run` without granting a shell. A program outside
     /// the list fails to spawn, whatever the capability set says.
+    ///
+    /// Each entry is resolved to a real path here, once, by the same rules a
+    /// spawn uses: a bare name goes through `PATH`, a path is taken as written
+    /// and canonicalized. An entry that names no program admits nothing — a
+    /// policy naming something that is not installed cannot mean "allow
+    /// whatever appears under that name later".
     #[must_use]
     pub fn with_allowlist<I, S>(self, programs: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let allow = programs.into_iter().map(Into::into).collect();
+        let allow = programs
+            .into_iter()
+            .filter_map(|program| real_program(&program.into()))
+            .collect();
         SystemCommands::build(Some(allow), self.inner.max_children)
     }
 
@@ -114,7 +125,7 @@ impl SystemCommands {
 
     /// The builders each produce a fresh registry, so they are only meaningful
     /// before anything has been spawned — which is where policy belongs.
-    fn build(allow: Option<HashSet<String>>, max_children: Option<usize>) -> Self {
+    fn build(allow: Option<HashSet<PathBuf>>, max_children: Option<usize>) -> Self {
         SystemCommands {
             inner: Arc::new(Inner {
                 children: Arc::new(Mutex::new(HashMap::new())),
@@ -209,6 +220,13 @@ fn usable_with_extensions(candidate: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// The real path of `program`, resolved the way a spawn resolves one, for
+/// comparing a policy entry with what a spawn actually found. `None` if it names
+/// no program.
+fn real_program(program: &str) -> Option<PathBuf> {
+    std::fs::canonicalize(resolve_program(program, None).ok()?).ok()
 }
 
 /// `Some(path)` if this is a file that can actually be executed. On Unix that
@@ -427,11 +445,13 @@ impl CommandProvider for SystemCommands {
             let resolved = resolve_program(&spec.program, cwd.as_deref())?;
             reject_batch_files(&resolved)?;
             if let Some(allow) = &this.inner.allow {
-                let file_name = resolved
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default();
-                if !allow.contains(&spec.program) && !allow.contains(file_name) {
+                // Compared as a real path, never as a name. The basename of
+                // what a spawn resolved to says nothing about which program it
+                // is, so matching on it let `--allow-run=git` admit any file
+                // called `git` the guest could reach — including one it had
+                // just written itself, which turns the allowlist inside out.
+                let real = std::fs::canonicalize(&resolved).ok();
+                if !real.is_some_and(|real| allow.contains(&real)) {
                     return Err(coded(
                         ErrorCode::PermissionDenied,
                         &format!("{} is not an allowed program", spec.program),
@@ -747,6 +767,54 @@ mod tests {
         assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
         // The absolute path to an allowed program is still that program.
         assert!(commands.spawn(spec("/bin/echo", &["fine"])).await.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_program_that_merely_shares_a_name_is_not_the_allowed_one() {
+        // The allowlist named a program; a file the guest planted under the
+        // same basename is a different program, and matching on the basename
+        // was the whole allowlist handed back to whoever could write a file.
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let impostor = dir.path().join("echo");
+        std::fs::write(&impostor, "#!/bin/sh\necho pwned\n").unwrap();
+        std::fs::set_permissions(&impostor, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let commands = SystemCommands::new().with_allowlist(["echo"]);
+        let err = commands
+            .spawn(spec(impostor.to_str().unwrap(), &[]))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+
+        // …and naming the impostor's directory as the child's cwd does not
+        // reopen it: the program is resolved before the child is built.
+        let mut relative = spec("./echo", &[]);
+        relative.cwd = Some(dir.path().to_string_lossy().into_owned());
+        let err = commands.spawn(relative).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
+
+        // The real one still runs, by either spelling.
+        assert!(commands.spawn(spec("echo", &["fine"])).await.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_path_entry_admits_that_file_and_no_other() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tool = dir.path().join("tool");
+        std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let commands = SystemCommands::new().with_allowlist([tool.to_str().unwrap()]);
+        assert!(commands.spawn(spec(tool.to_str().unwrap(), &[])).await.is_ok());
+        // A bare `tool` on the host PATH — if there were one — is not this file.
+        let err = commands.spawn(spec("echo", &[])).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));
     }
 
     #[tokio::test]

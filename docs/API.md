@@ -864,8 +864,12 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 | `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
 | `--allow-signals=<names>` | watching those signals | refused, and absent from `signals()` |
 
-`--allow-run` matches the program as written and its resolved file name, so
-`--allow-run=git` admits `git`, `/usr/bin/git`, and `git.exe` alike.
+`--allow-run` matches on the **real path** a program resolves to, not on its
+name: each entry is resolved once (a bare name through `PATH`, a path as
+written) and a spawn is admitted only if it lands on the same file. So
+`--allow-run=git` admits `git` and `/usr/bin/git` — the same program by two
+spellings — and refuses `/tmp/git`, which is a different program that happens to
+share a name.
 
 **An address** is a host (any port), a `host:port`, or a bare port (any
 interface — usually what a `--allow-listen` wants). Bracket an IPv6 literal that

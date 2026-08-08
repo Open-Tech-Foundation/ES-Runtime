@@ -25,6 +25,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `ERR_FOREIGN_HANDLE` if not. `ws_broadcast` checks every id in the fan-out,
   not just the first (D50).
 
+- **`--allow-run` matches a program, not a name.** The check accepted a spawn
+  whose *basename* was on the list, so `--allow-run=git` admitted `/tmp/x/git` —
+  any file called `git` the guest could reach, including one it had just written
+  with `--allow-write`. Each entry is now resolved once to a real path (a bare
+  name through `PATH`, a path as written) and a spawn is admitted only if it
+  lands on the same file. `--allow-run=git` still admits `/usr/bin/git`; it no
+  longer admits a different program wearing the name.
+
 - **A `Host` header that is not an authority is refused with `400`.** The
   header was spliced into the absolute URL the handler routes on without being
   checked against the grammar, so `Host: h/admin?` turned `GET /public` into

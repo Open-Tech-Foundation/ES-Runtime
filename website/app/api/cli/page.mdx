@@ -189,8 +189,9 @@ covers its subtree, matched by component, so `./app` never admits
 `./app-secrets`. `read` and `write` are separate lists, and both govern
 `runtime:fs` and `runtime:wasi` alike.
 
-`--allow-run=git` matches the name as written and the resolved file, so `git`,
-`/usr/bin/git`, and `git.exe` are all the same program.
+`--allow-run=git` matches the real path the name resolves to, so `git`,
+`/usr/bin/git`, and `git.exe` are all the same program — and `/tmp/git`, a
+different program under the same name, is not.
 
 <Callout type="note" title="A path list is checked after canonicalization">
   `--allow-read=./data` refuses `./data/link-to-etc/passwd`: the check runs on
