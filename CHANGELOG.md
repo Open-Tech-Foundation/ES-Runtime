@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-08
+
 ### Security
 
 - **A host handle is usable only by the agent that created it.** Sockets,
