@@ -292,11 +292,12 @@ pub(crate) fn install(
             let rid = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u64;
             let status = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u16;
 
-            // Checked and given up in one step: a request is answered once, and
-            // an id offered a second time names a response already on the wire.
-            // The check happens here, in the synchronous half, so a refused id
-            // never reaches the registries below it.
-            let rid = match owned.check_and_release(rid) {
+            // Checked here, in the synchronous half, so a refused id never
+            // reaches the registries below it. Given up further down rather than
+            // in one step with the check: a *streamed* response may still be
+            // echoing the request body, so the rid outlives the respond that
+            // started it and is released with the body instead.
+            let rid = match owned.check(rid) {
                 Ok(rid) => rid,
                 Err(e) => return Box::pin(std::future::ready(Err(e))),
             };
@@ -324,9 +325,11 @@ pub(crate) fn install(
                 (None, None) => HttpServerBody::Empty,
             };
             // A buffered response is fully materialized, so nothing can still be
-            // reading the request body — drop it if the handler left it behind.
+            // reading the request body — drop it if the handler left it behind,
+            // and with it the request itself.
             if stream_id.is_none() {
                 req_bodies.borrow_mut().remove(&rid);
+                owned.release(rid);
             }
 
             let mut headers = Vec::new();
@@ -405,10 +408,12 @@ pub(crate) fn install(
         let resp_senders = resp_senders;
         let req_bodies = req_bodies;
         let resp_trailers_for_close = resp_trailers;
+        let owned_requests_for_close = requests.clone();
         engine.register_op(OpDecl::r#async("http_response_body_close", move |args| {
             let resp_senders = resp_senders.clone();
             let req_bodies = req_bodies.clone();
             let resp_rids = resp_rids.clone();
+            let owned_requests_for_close = owned_requests_for_close.clone();
             let resp_trailers = resp_trailers_for_close.clone();
             let id = arg_u64(&args, 0);
             let err = args.get(1).and_then(Value::as_str).map(str::to_string);
@@ -429,9 +434,12 @@ pub(crate) fn install(
                     let _ = tx.send(trailers);
                 }
                 // The response is over — drop the request's body stream too, if
-                // the handler never finished (or started) draining it.
+                // the handler never finished (or started) draining it, and give
+                // up the request id, which `http_respond` held onto for exactly
+                // this moment.
                 if let Some(rid) = resp_rids.borrow_mut().remove(&id) {
                     req_bodies.borrow_mut().remove(&rid);
+                    owned_requests_for_close.release(rid);
                 }
                 // Take the sender out (dropping the borrow before any await);
                 // letting it drop ends the response body cleanly at its next
@@ -466,6 +474,9 @@ pub(crate) fn install(
         }))?;
     }
 
+    // Checked, not released — see `net_ops`' note on `net_close_listener`: a
+    // server id is low-cardinality, and keeping it lets a `next_request` that
+    // races the stop end the way it always did.
     let owned = servers;
     engine.register_op(OpDecl::r#async("http_close", move |args| {
         let h = http.clone();
@@ -473,7 +484,7 @@ pub(crate) fn install(
         let id = arg_u64(&args, 0);
         Box::pin(async move {
             require(&h)?
-                .close(owned.check_and_release(id)?)
+                .close(owned.check(id)?)
                 .await
                 .map_err(map_err)?;
             Ok(Value::Undefined)

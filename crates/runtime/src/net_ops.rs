@@ -187,6 +187,12 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
         })
     }))?;
 
+    // Checked but **not** released: a program holds a handful of listeners, not
+    // one per unit of work, so retaining a closed one costs nothing measurable —
+    // and it keeps teardown graceful, since an `accept()` that races the close
+    // gets the provider's "this listener is done" rather than a refusal aimed at
+    // a different mistake. The high-cardinality handles (sockets, requests,
+    // children) are the ones that must give their ids back.
     let owned = listeners;
     engine.register_op(OpDecl::r#async("net_close_listener", move |args| {
         let n = net.clone();
@@ -194,7 +200,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
         let id = arg_u64(&args, 0);
         Box::pin(async move {
             require(&n)?
-                .close_listener(owned.check_and_release(id)?)
+                .close_listener(owned.check(id)?)
                 .await
                 .map_err(map_err)?;
             Ok(Value::Undefined)

@@ -21,6 +21,17 @@
 //! `Runtime`, so "this agent" is exactly the enclosing isolate and no sharing
 //! is possible — the `Rc` cannot leave the thread it was made on.
 //!
+//! **Releasing is a per-kind judgment, not a rule.** Giving an id back bounds
+//! the set, and nothing more: provider counters never reissue a number, so a
+//! retained id can never become another agent's. So a kind is released only
+//! where its end of life is *exact* — a request when its response is complete,
+//! a socket when `close()` runs, a child, an fd. Where it is not, the id is
+//! kept: a listener or HTTP server is one per program rather than one per unit
+//! of work, and a WebSocket outlives its own `close()`, because the drain must
+//! keep reading until the peer's answering frame arrives. Releasing there would
+//! turn an ordinary teardown into `ERR_FOREIGN_HANDLE`, which is a refusal
+//! aimed at a completely different mistake.
+//!
 //! **Not covered: `MessagePort`.** A port id is *meant* to move between agents:
 //! transferring one hands the id over inside the structured-clone bytes, which
 //! the host writes and reads from JS, so there is no host-side moment at which

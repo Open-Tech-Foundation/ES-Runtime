@@ -142,8 +142,15 @@ pub(crate) fn install(
         };
         let reason = arg_str(&args, 2);
         Box::pin(async move {
+            // Checked, not released. Closing a WebSocket does not end the id:
+            // the prelude's drain keeps calling `ws_recv` afterwards, because a
+            // local close is a *request* to close and `closed` settles on the
+            // peer's answering frame. There is no single op that means "this
+            // connection is over", and a connection is long-lived by design —
+            // so this kind is retained rather than released, unlike a request
+            // or a socket, whose ends are exact.
             require(&w)?
-                .close(owned.check_and_release(id)?, code, reason)
+                .close(owned.check(id)?, code, reason)
                 .await
                 .map_err(map_err)?;
             Ok(Value::Undefined)
@@ -218,7 +225,7 @@ pub(crate) fn install(
         let id = arg_u64(&args, 0);
         Box::pin(async move {
             require(&w)?
-                .close_server(owned.check_and_release(id)?)
+                .close_server(owned.check(id)?)
                 .await
                 .map_err(map_err)?;
             Ok(Value::Undefined)

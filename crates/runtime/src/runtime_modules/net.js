@@ -109,8 +109,7 @@ class Socket {
         if (chunk === null) {
           controller.close();
           if (!self._allowHalfOpen) {
-            await socketOp(ops.net_close(id)); // peer hung up — drop the whole socket
-            self._finish();
+            await self.close(); // peer hung up — drop the whole socket
           }
         } else {
           controller.enqueue(chunk);
@@ -126,8 +125,12 @@ class Socket {
         const { id } = await self._conn;
         await socketOp(ops.net_write(id, toBytes(chunk)));
       },
-      // Half-close: send FIN but keep reading the peer's reply.
+      // Half-close: send FIN but keep reading the peer's reply. Nothing to
+      // half-close once the whole socket has gone — the peer's FIN on a socket
+      // that disallows half-open closes it from under this stream, and the
+      // writable is ended afterwards either way.
       async close() {
+        if (self._closing) return;
         const { id } = await self._conn;
         await socketOp(ops.net_shutdown(id));
       },
@@ -146,10 +149,19 @@ class Socket {
 
   // WinterTC close(reason?): the optional reason is advisory — accepted for
   // signature compatibility; the transport just tears the connection down.
-  async close(_reason) {
-    const { id } = await this._conn;
-    await socketOp(ops.net_close(id));
-    this._finish();
+  //
+  // Closed once, however many ways it is reached: an explicit close(), the
+  // readable's cancel(), the writable's abort(), and read EOF on a socket that
+  // does not allow half-open all arrive here. The second one must not reach the
+  // host — the id is given back on the first, and naming it again is a request
+  // to act on a socket this agent no longer has.
+  close(_reason) {
+    this._closing ??= (async () => {
+      const { id } = await this._conn;
+      await socketOp(ops.net_close(id));
+      this._finish();
+    })();
+    return this._closing;
   }
 
   // WinterTC startTls(): upgrade a "starttls" socket to TLS, returning a new
@@ -202,14 +214,21 @@ class Listener {
   }
 
   async accept() {
+    // A closed listener accepts nothing — the answer the async iterator reads
+    // as "stop", rather than an error from a call that had no business being
+    // made.
+    if (this._closed) return null;
     const { id } = await this._ready;
     const s = await ops.net_accept(id);
     return s === null ? null : new Socket(Promise.resolve(s));
   }
 
-  async close() {
-    const { id } = await this._ready;
-    await ops.net_close_listener(id);
+  close() {
+    this._closed ??= (async () => {
+      const { id } = await this._ready;
+      await ops.net_close_listener(id);
+    })();
+    return this._closed;
   }
 
   async *[Symbol.asyncIterator]() {
