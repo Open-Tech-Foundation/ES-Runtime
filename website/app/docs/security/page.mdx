@@ -168,7 +168,9 @@ esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
 
 An entry beginning with `.` or `/` is a path covering its subtree; anything else
 is a package name — the split the loader already makes between a relative and a
-bare specifier. **Deny wins over allow.** Omitting `"allow"` permits everything
+bare specifier. A module matches if either kind names it, so
+`"deny": ["./node_modules/aws-sdk"]` works as written. **Deny wins over
+allow.** Omitting `"allow"` permits everything
 not denied; an empty `"allow": []` is an error rather than a run that can load
 nothing, and so is an unknown key — a misspelled `"allowed"` would otherwise read
 as protection that is not there.

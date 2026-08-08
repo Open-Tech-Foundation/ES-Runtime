@@ -249,8 +249,9 @@ esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
 
 An entry beginning with `.` or `/` is a path covering its subtree; anything else
 is a package name (`lodash`, `@scope/pkg`) — the split the loader already makes
-between a relative and a bare specifier, so there is no second grammar. **Deny
-wins over allow.** Omitting `"allow"` permits everything not denied, which is the
+between a relative and a bare specifier, so there is no second grammar. A module
+matches if either kind names it, so a path entry pointing inside `node_modules`
+governs what is there. **Deny wins over allow.** Omitting `"allow"` permits everything not denied, which is the
 shape for a policy that only excludes a few packages; an empty `"allow": []` is
 an error rather than a run that can load nothing, and so is an unknown key.
 

@@ -25,6 +25,13 @@ namespace) is unstable and may change between minor releases until the API freez
   `ERR_FOREIGN_HANDLE` if not. `ws_broadcast` checks every id in the fan-out,
   not just the first (D50).
 
+- **An import-policy path entry now governs a `node_modules` tree.** A module
+  inside `node_modules` was judged as the package it belongs to *instead of* as
+  a path, so every path entry pointing into one was silently inert:
+  `{"deny": ["./node_modules/aws-sdk"]}` denied nothing, parsed without
+  complaint, and read as a restriction. A module is now named by a rule if
+  either list names it.
+
 - **`--allow-run` matches a program, not a name.** The check accepted a spawn
   whose *basename* was on the list, so `--allow-run=git` admitted `/tmp/x/git` —
   any file called `git` the guest could reach, including one it had just written

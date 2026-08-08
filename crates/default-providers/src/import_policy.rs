@@ -17,7 +17,10 @@
 //! **Entries are read the way specifiers are.** An entry beginning with `.` or
 //! `/` is a path covering its subtree; anything else is a package name
 //! (`lodash`, `@scope/pkg`). That is the split the loader already makes between
-//! a bare and a relative specifier, so there is no second grammar to learn.
+//! a bare and a relative specifier, so there is no second grammar to learn. The
+//! two kinds are alternatives, not territories: a module is named by a rule if
+//! *either* list names it, so a path entry that happens to point inside a
+//! `node_modules` tree governs what is there like any other path entry.
 //!
 //! **Matching runs on the resolved, canonicalized module**, after the sandbox
 //! root has been enforced: judging the specifier would let
@@ -72,14 +75,22 @@ impl Rules {
         self.packages.is_empty() && self.paths.is_empty()
     }
 
-    /// Whether the module at `real` is named by these rules. A module inside a
-    /// `node_modules` tree is judged as the **package** it belongs to; anything
-    /// else is judged as a path.
+    /// Whether the module at `real` is named by these rules — by either list.
+    ///
+    /// A module inside a `node_modules` tree is *also* judged as the package it
+    /// belongs to, which is the only way a bare `"lodash"` can match a path. But
+    /// the path list still applies there: reading a `node_modules` module as a
+    /// package *instead of* a path made every path entry pointing into one
+    /// silently inert, so a `{"deny": ["./node_modules/aws-sdk"]}` denied
+    /// nothing at all and reported nothing to say so — a policy that reads as a
+    /// restriction and is not one.
     fn matches(&self, real: &Path) -> bool {
-        match package_of(real) {
-            Some(name) => self.packages.contains(&name),
-            None => self.paths.permits(real),
+        if let Some(name) = package_of(real)
+            && self.packages.contains(&name)
+        {
+            return true;
         }
+        self.paths.permits(real)
     }
 }
 
@@ -318,6 +329,33 @@ mod tests {
         let p = policy(r#"{ "allow": ["./src", "lodash"] }"#, &root);
         assert!(p.permits(&root.join("src/app.mjs")));
         assert!(p.permits(Path::new("/proj/node_modules/lodash/index.js")));
+    }
+
+    #[test]
+    fn a_path_entry_governs_a_node_modules_tree_like_any_other() {
+        // The rule that was silently inert: reading a `node_modules` module as
+        // a package *instead of* a path meant this denied nothing, and said so
+        // nowhere.
+        let root = temp_dir("nm-path");
+        std::fs::create_dir_all(root.join("node_modules/aws-sdk")).unwrap();
+        std::fs::create_dir_all(root.join("node_modules/express")).unwrap();
+        let p = policy(r#"{ "deny": ["./node_modules/aws-sdk"] }"#, &root);
+        assert!(!p.permits(&root.join("node_modules/aws-sdk/index.js")));
+        assert!(p.permits(&root.join("node_modules/express/index.js")));
+    }
+
+    #[test]
+    fn a_path_entry_can_allow_a_vendored_package() {
+        // The same rule read the other way: a package under a directory the
+        // policy allows loads, without having to name every package in it.
+        let root = temp_dir("nm-allow");
+        std::fs::create_dir_all(root.join("node_modules/left-pad")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let p = policy(r#"{ "allow": ["./src", "./node_modules/left-pad"] }"#, &root);
+        assert!(p.permits(&root.join("node_modules/left-pad/index.js")));
+        assert!(p.permits(&root.join("src/app.mjs")));
+        // And nothing outside either entry.
+        assert!(!p.permits(Path::new("/proj/node_modules/lodash/index.js")));
     }
 
     #[test]
