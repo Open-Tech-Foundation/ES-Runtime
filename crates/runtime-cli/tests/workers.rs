@@ -1532,3 +1532,143 @@ fn a_timeout_stops_a_worker_spinning_in_a_synchronous_loop() {
         stderr(&out)
     );
 }
+
+// Handle ownership (D50). The providers behind these ops are shared across every
+// agent in the process and hand out small sequential ids, so a worker granted
+// nothing can name its parent's resources by counting. What stops it is not the
+// capability check — the op that *uses* a handle deliberately has none — but the
+// record of which agent minted the id.
+
+#[test]
+fn a_worker_cannot_kill_a_child_process_it_did_not_spawn() {
+    let out = run(
+        "steal-child",
+        r#"
+        const said = [];
+        for (let id = 1; id <= 4; id++) {
+          try {
+            await globalThis.__ops.system_kill(id, "SIGKILL");
+            said.push(`killed ${id}`);
+          } catch (e) {
+            said.push(e.code);
+          }
+        }
+        postMessage(said.join(" "));
+        "#,
+        r#"
+        import { Command } from "runtime:system";
+        const child = await new Command("sleep", { args: ["10"] }).spawn();
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), { permissions: [] });
+        w.onmessage = async (e) => {
+          console.log(e.data);
+          // The child outlived the worker's attempt on every id it could name.
+          const alive = await Promise.race([
+            child.status.then(() => false),
+            new Promise((r) => setTimeout(() => r(true), 300)),
+          ]);
+          console.log(alive ? "alive" : "dead");
+          child.kill("SIGKILL");
+          w.terminate();
+        };
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE ERR_FOREIGN_HANDLE\nalive\n"
+    );
+}
+
+#[test]
+fn a_worker_cannot_answer_a_request_its_parent_is_serving() {
+    // The worker is started from inside the handler, so there is a live request
+    // id to guess for as long as it keeps looking.
+    let out = run(
+        "steal-request",
+        r#"
+        const said = [];
+        for (let id = 1; id <= 6; id++) {
+          try {
+            await globalThis.__ops.http_respond(id, 200, [], "hijacked", null);
+            said.push(`answered ${id}`);
+          } catch (e) {
+            said.push(e.code);
+          }
+        }
+        postMessage(said.join(" "));
+        "#,
+        r#"
+        import { serve } from "runtime:http";
+        const server = serve({ port: 0, hostname: "127.0.0.1" }, async () => {
+          const w = new Worker(new URL("WORKER_URL", import.meta.url), { permissions: [] });
+          console.log(await new Promise((r) => { w.onmessage = (e) => r(e.data); }));
+          w.terminate();
+          return new Response("mine");
+        });
+        const { port } = await server.addr;
+        const res = await fetch(`http://127.0.0.1:${port}/`);
+        console.log(res.status, await res.text());
+        await server.stop();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let said = stdout(&out);
+    assert!(
+        !said.contains("answered"),
+        "a foreign request id was honoured: {said}"
+    );
+    assert!(said.ends_with("200 mine\n"), "{said}");
+}
+
+#[test]
+fn a_worker_cannot_write_to_a_socket_its_parent_opened() {
+    // `net` is granted here, so the worker holds the capability and still must
+    // not reach the connection: the capability authorizes dialling, and the
+    // handle is what says *which* peer.
+    let out = run(
+        "steal-socket",
+        r#"
+        const said = [];
+        for (let id = 1; id <= 4; id++) {
+          try {
+            await globalThis.__ops.net_write(id, new TextEncoder().encode("hijacked"));
+            said.push(`wrote ${id}`);
+          } catch (e) {
+            said.push(e.code);
+          }
+        }
+        postMessage(said.join(" "));
+        "#,
+        r#"
+        import { listen, connect } from "runtime:net";
+        const server = listen({ port: 0, hostname: "127.0.0.1" });
+        const { port } = await server.addr;
+        const accepted = server.accept();
+        const client = connect({ port, hostname: "127.0.0.1" });
+        const peer = await accepted;
+
+        const w = new Worker(new URL("WORKER_URL", import.meta.url), {
+          permissions: ["net", "imports"],
+        });
+        console.log(await new Promise((r) => { w.onmessage = (e) => r(e.data); }));
+        w.terminate();
+
+        // Only what the owning agent sent is on the wire.
+        const writer = client.writable.getWriter();
+        await writer.write(new TextEncoder().encode("mine"));
+        await writer.close();
+        const reader = peer.readable.getReader();
+        const { value } = await reader.read();
+        console.log(new TextDecoder().decode(value));
+        peer.close();
+        server.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let said = stdout(&out);
+    assert!(!said.contains("wrote"), "a foreign socket accepted a write: {said}");
+    assert!(said.ends_with("mine\n"), "{said}");
+}

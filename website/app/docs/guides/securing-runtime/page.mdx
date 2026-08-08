@@ -112,7 +112,7 @@ your policy.
 
 ## Reading a denial
 
-Three different refusals mean three different fixes. The error code tells you
+Four different refusals mean four different fixes. The error code tells you
 which, and they are worth distinguishing in your alerting:
 
 | Code | Means | Fix |
@@ -120,6 +120,7 @@ which, and they are worth distinguishing in your alerting:
 | `ERR_CAPABILITY_DENIED` | The capability was never granted | Add `--allow-<name>` |
 | `ERR_PERMISSION_DENIED` | Granted, but not for *this* value | Add the value to that flag's list |
 | `ERR_JAIL_ESCAPE` | Outside the project root entirely | Not a flag — see below |
+| `ERR_FOREIGN_HANDLE` | Another agent's socket, process or request | Not a flag — pass data, not handles |
 
 What each looks like in practice:
 
@@ -128,6 +129,7 @@ NotAllowedError | ERR_CAPABILITY_DENIED | capability denied: Net (permission "ne
 Error           | ERR_PERMISSION_DENIED | example.com:443 is not an allowed address (fetch)
 Error           | ERR_PERMISSION_DENIED | /srv/app/secret.txt is not an allowed path (read)
 Error           | ERR_JAIL_ESCAPE       | path /etc/passwd escapes the filesystem root jail /srv/app
+NotAllowedError | ERR_FOREIGN_HANDLE    | socket 3 does not belong to this agent
 ```
 
 A denial is thrown **before** the effect, never partway through one: no packet

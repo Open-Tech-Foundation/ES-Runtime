@@ -2072,6 +2072,7 @@ try {
 | Code | Meaning |
 | --- | --- |
 | `ERR_CAPABILITY_DENIED` | A required capability was not granted (deny-by-default). |
+| `ERR_FOREIGN_HANDLE` | A socket, child process, server, file descriptor or request belonging to another agent. Handles are usable only by the agent that created them. |
 | `ERR_PROVIDER_UNAVAILABLE` | The backing provider for this API is not installed. |
 | `ERR_NOT_FOUND` | The path does not exist. |
 | `ERR_ALREADY_EXISTS` | The target already exists. |

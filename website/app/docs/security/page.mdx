@@ -45,6 +45,16 @@ with the `NotAllowedError` name.
 Importing a `runtime:` module never needs a capability. The gate is the op, so a
 built-in imports under any policy and only its operations throw.
 
+## Handles belong to one agent
+
+A capability authorizes *opening* a resource; the handle that comes back says
+*which* one. Sockets, listeners, child processes, file descriptors, HTTP servers
+and in-flight requests are usable only by the agent that created them — a
+[worker](/docs/internals/workers) naming its parent's handle is refused with
+`ERR_FOREIGN_HANDLE`, whether or not it holds the capability. `MessagePort` is
+the exception by design: a port is *meant* to be transferred, so its id is
+unguessable rather than owned.
+
 ## Denying capabilities in esrun
 
 Two modes, each with a single direction. They cannot be combined, so no flag

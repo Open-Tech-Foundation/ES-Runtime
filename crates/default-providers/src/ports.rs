@@ -4,9 +4,17 @@
 //! peer's inbox; the agent currently holding the port reads its own. Because
 //! the queues live here rather than in an isolate, transferring a port is just
 //! moving its id — the messages already in flight stay exactly where they were.
+//!
+//! That last property is also why port ids are **random** rather than counted.
+//! Every other host handle is confined to the agent that made it (D50,
+//! `es_runtime::handles`), but a port id is meant to travel: a transfer hands it
+//! over inside structured-clone bytes that the host neither writes nor reads, so
+//! there is no moment at which the receiving agent's claim could be recorded.
+//! Holding the id *is* the authority, so the id has to be unguessable — with a
+//! counter, an agent that was never given a port could read and write another
+//! agent's channel by trying 1, 2, 3.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use es_runtime_providers::{BoxFuture, PortHub, ProviderError};
@@ -26,7 +34,6 @@ struct Port {
 #[derive(Default)]
 pub struct ProcessPortHub {
     ports: Mutex<HashMap<u64, Port>>,
-    next_id: AtomicU64,
 }
 
 impl ProcessPortHub {
@@ -50,12 +57,38 @@ impl ProcessPortHub {
     }
 }
 
+/// A fresh unguessable port id, not already in `ports`.
+///
+/// 53 bits, not 64: the id crosses into the guest as a JS number, and anything
+/// wider would come back rounded and name a different port. 53 bits of CSPRNG
+/// output is far past what an in-process guess can search — and unlike a
+/// counter, knowing one port's id says nothing about any other's.
+fn mint(ports: &HashMap<u64, Port>) -> Result<u64, ProviderError> {
+    loop {
+        let mut bytes = [0u8; 8];
+        getrandom::fill(&mut bytes).map_err(|e| ProviderError::Entropy(e.to_string()))?;
+        let id = u64::from_le_bytes(bytes) & ((1 << 53) - 1);
+        // 0 is skipped so it can keep meaning "no port" on the JS side.
+        if id != 0 && !ports.contains_key(&id) {
+            return Ok(id);
+        }
+    }
+}
+
 impl PortHub for ProcessPortHub {
     fn create(&self) -> Result<(u64, u64), ProviderError> {
         match self.ports.lock() {
             Ok(mut ports) => {
-                let a = self.next_id.fetch_add(2, Ordering::SeqCst) + 1;
-                let b = a + 1;
+                let a = mint(&ports)?;
+                // `b` is minted against a map that does not yet hold `a`, so it
+                // is compared with it directly; the odds are astronomical and
+                // the cost of being wrong is a port that is its own peer.
+                let b = loop {
+                    let b = mint(&ports)?;
+                    if b != a {
+                        break b;
+                    }
+                };
                 self.make_port(a, b, &mut ports);
                 self.make_port(b, a, &mut ports);
                 Ok((a, b))
@@ -179,5 +212,25 @@ mod tests {
         hub.post(b, b"lost".to_vec()).unwrap();
         hub.close(b);
         assert_eq!(hub.recv(b).await.unwrap(), None);
+    }
+
+    #[test]
+    fn port_ids_are_unguessable_and_js_safe() {
+        // Holding a port id is the authority to use the port, so an agent that
+        // was never handed one must not be able to arrive at a live id by
+        // counting. Small numbers name nothing, and no two pairs are adjacent.
+        let hub = ProcessPortHub::new();
+        let mut seen = Vec::new();
+        for _ in 0..64 {
+            let (a, b) = hub.create().unwrap();
+            for id in [a, b] {
+                assert!(id > 1 << 24, "{id} is small enough to be searched");
+                // Survives the trip through a JS number.
+                assert_eq!(id as f64 as u64, id, "{id} does not round-trip");
+                assert!(!seen.contains(&id), "{id} was minted twice");
+                seen.push(id);
+            }
+            assert_ne!(a + 1, b, "the peer follows from the port");
+        }
     }
 }

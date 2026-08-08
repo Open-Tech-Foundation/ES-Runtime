@@ -8,6 +8,34 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Security
+
+- **A host handle is usable only by the agent that created it.** Sockets,
+  listeners, file descriptors, child processes, HTTP servers, in-flight
+  requests, WebSocket connections and workers are reached by an integer id. The
+  op that *acquires* one is capability-checked; the ops that use it were not, on
+  the reasoning that the id could only have come from a checked call. That stops
+  being true with more than one agent in the process: providers are shared, their
+  ids start at 1 and count up, and `globalThis.__ops` is reachable by design. So
+  `new Worker(url, { permissions: [] })` — an agent granted **nothing** — could
+  call `__ops.system_kill(1, "SIGKILL")` and kill its parent's child, or
+  `__ops.http_respond(2, …)` and answer a request its parent was serving,
+  sending its own body to the client. Every op that takes a handle now checks it
+  belongs to the calling agent, and refuses with `NotAllowedError` /
+  `ERR_FOREIGN_HANDLE` if not. `ws_broadcast` checks every id in the fan-out,
+  not just the first (D50).
+
+- **`MessagePort` ids are unguessable.** A port id is meant to be transferred,
+  so it cannot be owned by one agent the way the handles above are — holding the
+  id *is* the authority. They were sequential, so an agent that was never given a
+  port could read and write another agent's channel by trying 1, 2, 3. They now
+  come from the CSPRNG (D50).
+
+### Added
+
+- `ERR_FOREIGN_HANDLE` — a socket, child process, server, file descriptor or
+  request belonging to another agent.
+
 ## [0.19.0] - 2026-08-07
 
 ### Added

@@ -11,6 +11,12 @@
 //! to its root jail. A WASI guest therefore passes exactly the same two checks —
 //! the capability, then the jail — as any other file access. With no provider
 //! installed, every op fails cleanly and `runtime:wasi` reports `ENOTCAPABLE`.
+//!
+//! The descriptor ops carry a third check: the fd must be **this agent's**
+//! (D50, [`crate::handles`]). The provider is shared across agents and hands
+//! out small sequential numbers, so an fd is not evidence of anything on its
+//! own — and a handle opened under a wider path scope must not become readable
+//! from an agent with a narrower one just because it can count.
 
 use std::sync::Arc;
 
@@ -21,9 +27,13 @@ use es_runtime_providers::{
 };
 
 use crate::Result;
+use crate::handles::Handles;
 
 /// Registers the synchronous filesystem ops, capturing the (optional) provider.
 pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem>>) -> Result<()> {
+    // The descriptors this agent opened.
+    let fds = Handles::new("file descriptor");
+
     // Opening is split in two so each half carries the right gate — `requires`
     // takes a single capability, and a read-only open must not demand
     // `FileWrite`. Which one the guest calls is decided by the requested mode.
@@ -33,6 +43,7 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem
     // through the `FileWrite`-gated `sync_fs_write`, so a handle opened under one
     // capability cannot be used to do the other's work.
     let f = fs.clone();
+    let owned = fds.clone();
     engine.register_op(
         OpDecl::sync("sync_fs_open", move |args| {
             let fs = require(&f)?;
@@ -43,28 +54,30 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem
                 ));
             }
             let fd = fs.open(&arg_str(&args, 0), options).map_err(map_err)?;
-            Ok(Value::Number(f64::from(fd)))
+            Ok(Value::Number(owned.own(u64::from(fd)) as f64))
         })
         .requires(Capability::FileRead),
     )?;
 
     let f = fs.clone();
+    let owned = fds.clone();
     engine.register_op(
         OpDecl::sync("sync_fs_open_write", move |args| {
             let fs = require(&f)?;
             let fd = fs
                 .open(&arg_str(&args, 0), open_options(&args, 1))
                 .map_err(map_err)?;
-            Ok(Value::Number(f64::from(fd)))
+            Ok(Value::Number(owned.own(u64::from(fd)) as f64))
         })
         .requires(Capability::FileWrite),
     )?;
 
     let f = fs.clone();
+    let owned = fds.clone();
     engine.register_op(
         OpDecl::sync("sync_fs_read", move |args| {
             let fs = require(&f)?;
-            let fd = arg_u32(&args, 0);
+            let fd = owned_fd(&owned, &args)?;
             let len = arg_u32(&args, 1) as usize;
             let mut buf = vec![0u8; len];
             let n = fs.read(fd, &mut buf).map_err(map_err)?;
@@ -75,10 +88,11 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem
     )?;
 
     let f = fs.clone();
+    let owned = fds.clone();
     engine.register_op(
         OpDecl::sync("sync_fs_write", move |args| {
             let fs = require(&f)?;
-            let fd = arg_u32(&args, 0);
+            let fd = owned_fd(&owned, &args)?;
             let data = match args.get(1) {
                 Some(Value::Bytes(b)) => b.clone(),
                 _ => return Err(OpError::type_error("sync_fs_write expects bytes")),
@@ -90,10 +104,11 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem
     )?;
 
     let f = fs.clone();
+    let owned = fds.clone();
     engine.register_op(
         OpDecl::sync("sync_fs_seek", move |args| {
             let fs = require(&f)?;
-            let fd = arg_u32(&args, 0);
+            let fd = owned_fd(&owned, &args)?;
             let offset = args.get(1).and_then(Value::as_number).unwrap_or(0.0) as i64;
             let whence = match args.get(2).and_then(Value::as_number).unwrap_or(0.0) as u32 {
                 1 => SyncWhence::Current,
@@ -107,19 +122,25 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem
     )?;
 
     // Closing releases a handle the guest already holds; it grants nothing and
-    // touches no path, so it carries no capability of its own.
+    // touches no path, so it carries no capability of its own — only the
+    // ownership check, without which an agent could close descriptors belonging
+    // to another and have its reads start landing on a reissued fd.
     let f = fs.clone();
+    let owned = fds.clone();
     engine.register_op(OpDecl::sync("sync_fs_close", move |args| {
         let fs = require(&f)?;
-        fs.close(arg_u32(&args, 0)).map_err(map_err)?;
+        let fd = arg_u32(&args, 0);
+        owned.check_and_release(u64::from(fd))?;
+        fs.close(fd).map_err(map_err)?;
         Ok(Value::Undefined)
     }))?;
 
     let f = fs.clone();
+    let owned = fds;
     engine.register_op(
         OpDecl::sync("sync_fs_fstat", move |args| {
             let fs = require(&f)?;
-            let stat = fs.fstat(arg_u32(&args, 0)).map_err(map_err)?;
+            let stat = fs.fstat(owned_fd(&owned, &args)?).map_err(map_err)?;
             Ok(stat_value(&stat))
         })
         .requires(Capability::FileRead),
@@ -186,6 +207,13 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn SyncFileSystem
     )?;
 
     Ok(())
+}
+
+/// The descriptor at argument 0, if this agent opened it.
+fn owned_fd(owned: &Handles, args: &[Value]) -> std::result::Result<u32, OpError> {
+    let fd = arg_u32(args, 0);
+    owned.check(u64::from(fd))?;
+    Ok(fd)
 }
 
 fn require(

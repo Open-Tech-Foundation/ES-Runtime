@@ -126,10 +126,16 @@ fn install_parent(
     // This agent's own ceilings, read once: they are fixed for the isolate's
     // life, and every worker it starts derives from them.
     let parent_limits = engine.limits();
+    // The workers this agent started. The host is shared by every agent in the
+    // process and its ids are sequential, so without this a worker could post
+    // to — or terminate — a sibling it was never handed (D50).
+    let children = crate::handles::Handles::new("worker");
     let host = workers.clone();
+    let owned = children.clone();
     engine.register_op(
         OpDecl::r#async("worker_spawn", move |args| {
             let host = host.clone();
+            let owned = owned.clone();
             let specifier = arg_str(&args, 0);
             let source = arg_str(&args, 1);
             let name = arg_str(&args, 2);
@@ -160,7 +166,7 @@ fn install_parent(
                     limits: worker_limits(parent_limits, memory_mb)?,
                 };
                 let id = require(&host)?.spawn(spec).await.map_err(map_err)?;
-                Ok(Value::Number(id as f64))
+                Ok(Value::Number(owned.own(id) as f64))
             })
         })
         .requires(Capability::Worker),
@@ -174,8 +180,9 @@ fn install_parent(
     // ordinary way to use a job queue, and HTML does not permit `postMessage`
     // to fail for queue depth at all.
     let host = workers.clone();
+    let owned = children.clone();
     engine.register_op(OpDecl::sync("worker_post", move |args| {
-        let id = arg_u64(&args, 0);
+        let id = owned.check(arg_u64(&args, 0))?;
         let message = arg_bytes(&args, 1);
         require(&host)?.post(id, message).map_err(map_err)?;
         Ok(Value::Undefined)
@@ -186,8 +193,9 @@ fn install_parent(
     // that outruns its worker has to choose to pace itself, and this is what it
     // paces against.
     let host = workers.clone();
+    let owned = children.clone();
     engine.register_op(OpDecl::sync("worker_queued", move |args| {
-        let id = arg_u64(&args, 0);
+        let id = owned.check(arg_u64(&args, 0))?;
         Ok(Value::Number(require(&host)?.queued(id) as f64))
     }))?;
 
@@ -218,11 +226,14 @@ fn install_parent(
     }))?;
 
     let host = workers.clone();
+    let owned = children.clone();
     engine.register_op(
         OpDecl::r#async("worker_recv", move |args| {
             let host = host.clone();
+            let owned = owned.clone();
             let id = arg_u64(&args, 0);
             Box::pin(async move {
+                let id = owned.check(id)?;
                 let event = require(&host)?.recv(id).await.map_err(map_err)?;
                 Ok(match event {
                     // `null` ends the prelude's pump: the worker is gone and its
@@ -242,10 +253,16 @@ fn install_parent(
     )?;
 
     let host = workers;
+    let owned = children;
     engine.register_op(OpDecl::r#async("worker_terminate", move |args| {
         let host = host.clone();
+        let owned = owned.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
+            // Checked but not released: `terminate()` is idempotent, and the
+            // prelude's pump may still be draining what the worker already
+            // sent, which it addresses by the same id.
+            let id = owned.check(id)?;
             // Terminating a worker that is already gone is a no-op, not an
             // error — `terminate()` is idempotent by specification.
             if let Some(host) = host.as_ref() {
@@ -542,19 +559,28 @@ pub(crate) fn install_broadcast(
     // Sync, like `port_create` and for the same reason: `new BroadcastChannel()`
     // joins the channel as it is constructed, so there must be no window in
     // which a channel misses what the next line posts.
+    // The subscriptions this agent holds. The hub is process-wide — that is what
+    // makes a BroadcastChannel reach other agents — so the subscription id is
+    // the only thing distinguishing "my channel" from "yours" (D50).
+    let subscriptions = crate::handles::Handles::new("BroadcastChannel");
+
     let h = hub.clone();
+    let owned = subscriptions.clone();
     engine.register_op(OpDecl::sync("broadcast_subscribe", move |args| {
         let name = arg_str(&args, 0);
         let id = require_hub(&h)?.subscribe(name).map_err(map_err)?;
-        Ok(Value::Number(id as f64))
+        Ok(Value::Number(owned.own(id) as f64))
     }))?;
 
     let h = hub.clone();
+    let owned = subscriptions.clone();
     engine.register_op(OpDecl::r#async("broadcast_publish", move |args| {
         let h = h.clone();
+        let owned = owned.clone();
         let id = arg_u64(&args, 0);
         let message = arg_bytes(&args, 1);
         Box::pin(async move {
+            let id = owned.check(id)?;
             require_hub(&h)?
                 .publish(id, message)
                 .await
@@ -584,11 +610,16 @@ pub(crate) fn install_broadcast(
         .unref(),
     )?;
 
+    // `broadcast_recv_next` needs no check: it takes no id, and the hub answers
+    // it from the calling thread's own subscriptions.
     let h = hub;
+    let owned = subscriptions;
     engine.register_op(OpDecl::r#async("broadcast_close", move |args| {
         let h = h.clone();
+        let owned = owned.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
+            let id = owned.check_and_release(id)?;
             if let Some(hub) = h.as_ref() {
                 hub.close(id).await.map_err(map_err)?;
             }

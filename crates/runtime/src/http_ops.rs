@@ -2,10 +2,13 @@
 //! through the [`HttpServerProvider`]. `http_serve` is gated on
 //! `Capability::NetListen` (binding a listening socket, like `runtime:net`
 //! `listen`) — the security boundary is the op (D7). `http_next_request`,
-//! `http_body_read`, and `http_respond` operate by server/request id (the
-//! authorized `serve` produced the id), so they need no capability — like
-//! `fetch_body_read` and the `net_*` read/write ops. All ops are async unless
-//! noted.
+//! `http_body_read`, and `http_respond` operate by server/request id, so they
+//! need no capability of their own — but they do check that the id is **this
+//! agent's** (D50, [`crate::handles`]). The provider is shared across agents
+//! and mints ids from one counter, so without that check a worker holding no
+//! capability could answer its parent's in-flight requests: `http_respond(2,
+//! …)` reaching a real request is a response hijack, not a guess that fails.
+//! All ops are async unless noted.
 //!
 //! Bodies stream in both directions (mirroring the `fetch` ops):
 //!
@@ -44,6 +47,7 @@ use futures_channel::mpsc;
 use futures_util::{SinkExt, StreamExt};
 
 use crate::Result;
+use crate::handles::Handles;
 
 /// Bounded response-body channel capacity — same rationale as the `fetch`
 /// request-body buffer: the pump awaits each push, so at most this many chunks
@@ -88,7 +92,15 @@ pub(crate) fn install(
         Rc::new(RefCell::new(HashMap::new()));
     let resp_id_gen = Rc::new(Cell::new(1u64));
 
+    // The servers this agent bound, and the requests it has been handed. Both
+    // come from the shared provider's id space; these are the halves of it this
+    // agent may name. A request is released when it is answered — an id past
+    // that names a response already on the wire.
+    let servers = Handles::new("HTTP server");
+    let requests = Handles::new("HTTP request");
+
     let h = http.clone();
+    let owned = servers.clone();
     engine.register_op(
         // Args: [host, port, cert?, key?, handshakeMs?, headerReadMs?,
         // h2KeepAliveMs?, maxConnections?, alpn0, alpn1, …]. A cert *and* key (both non-empty)
@@ -99,6 +111,7 @@ pub(crate) fn install(
         // can keep taking the whole tail.
         OpDecl::r#async("http_serve", move |args| {
             let h = h.clone();
+            let owned = owned.clone();
             let host = arg_str(&args, 0);
             let port = arg_u16(&args, 1);
             let cert = arg_bytes(&args, 2);
@@ -156,7 +169,7 @@ pub(crate) fn install(
                     reuse_port,
                 };
                 let (id, info) = require(&h)?.serve(options).await.map_err(map_err)?;
-                Ok(server_value(id, &info))
+                Ok(server_value(owned.own(id), &info))
             })
         })
         .requires(Capability::NetListen),
@@ -169,11 +182,16 @@ pub(crate) fn install(
 
     let h = http.clone();
     let bodies_for_next = req_bodies.clone();
+    let owned_servers = servers.clone();
+    let owned_requests = requests.clone();
     engine.register_op(OpDecl::r#async("http_next_request", move |args| {
         let h = h.clone();
         let bodies = bodies_for_next.clone();
+        let owned_servers = owned_servers.clone();
+        let owned_requests = owned_requests.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
+            let id = owned_servers.check(id)?;
             let reqs = require(&h)?
                 .next_requests(id, MAX_BATCH)
                 .await
@@ -190,7 +208,7 @@ pub(crate) fn install(
                 if has_body {
                     bodies.borrow_mut().insert(rid, into_stream(req.body));
                 }
-                flat.push(Value::Number(rid as f64));
+                flat.push(Value::Number(owned_requests.own(rid) as f64));
                 flat.push(Value::String(req.method));
                 flat.push(Value::String(req.url));
                 flat.push(Value::Bool(has_body));
@@ -211,10 +229,13 @@ pub(crate) fn install(
     }))?;
 
     let bodies_for_read = req_bodies.clone();
+    let owned = requests.clone();
     engine.register_op(OpDecl::r#async("http_body_read", move |args| {
         let bodies = bodies_for_read.clone();
+        let owned = owned.clone();
         let rid = arg_u64(&args, 0);
         Box::pin(async move {
+            let rid = owned.check(rid)?;
             // Take the stream out so no RefCell borrow is held across the await.
             let stream = bodies.borrow_mut().remove(&rid);
             let Some(mut stream) = stream else {
@@ -263,12 +284,22 @@ pub(crate) fn install(
         let resp_receivers = resp_receivers;
         let resp_rids = resp_rids.clone();
         let resp_trailers = resp_trailers.clone();
+        let owned = requests.clone();
         engine.register_op(OpDecl::r#async("http_respond", move |args| {
             let h = h.clone();
             let resp_trailers_for_respond = resp_trailers.clone();
             let mut it = args.into_iter();
             let rid = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u64;
             let status = it.next().and_then(|v| v.as_number()).unwrap_or(0.0) as u16;
+
+            // Checked and given up in one step: a request is answered once, and
+            // an id offered a second time names a response already on the wire.
+            // The check happens here, in the synchronous half, so a refused id
+            // never reaches the registries below it.
+            let rid = match owned.check_and_release(rid) {
+                Ok(rid) => rid,
+                Err(e) => return Box::pin(std::future::ready(Err(e))),
+            };
 
             let buffered = match it.next() {
                 Some(Value::String(s)) => Some(s.into_bytes()),
@@ -423,18 +454,28 @@ pub(crate) fn install(
     // hold the driven loop open past the request it belongs to.
     {
         let h = http.clone();
+        let owned = requests;
         engine.register_op(OpDecl::r#async("http_request_disconnected", move |args| {
             let h = h.clone();
+            let owned = owned.clone();
             let rid = arg_u64(&args, 0);
-            Box::pin(async move { Ok(Value::Bool(require(&h)?.request_disconnected(rid).await)) })
+            Box::pin(async move {
+                let rid = owned.check(rid)?;
+                Ok(Value::Bool(require(&h)?.request_disconnected(rid).await))
+            })
         }))?;
     }
 
+    let owned = servers;
     engine.register_op(OpDecl::r#async("http_close", move |args| {
         let h = http.clone();
+        let owned = owned.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
-            require(&h)?.close(id).await.map_err(map_err)?;
+            require(&h)?
+                .close(owned.check_and_release(id)?)
+                .await
+                .map_err(map_err)?;
             Ok(Value::Undefined)
         })
     }))?;

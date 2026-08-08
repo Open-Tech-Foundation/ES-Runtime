@@ -77,6 +77,11 @@ impl OpError {
         self
     }
 
+    /// The stable code attached to this error, if it has one.
+    pub fn code(&self) -> Option<ErrorCode> {
+        self.code
+    }
+
     /// A `TypeError` — the usual class for a bad argument from JS.
     pub fn type_error(message: impl Into<String>) -> Self {
         OpError::new(ExceptionClass::TypeError, message)

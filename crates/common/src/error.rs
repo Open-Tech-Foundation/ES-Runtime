@@ -87,6 +87,11 @@ impl ExceptionClass {
 pub enum ErrorCode {
     /// A required capability was not granted (deny-by-default, D7).
     CapabilityDenied,
+    /// A host handle (socket, child process, server, request, …) that this
+    /// agent never obtained. Handle ids are minted by the capability-checked
+    /// call that creates the resource and are private to the agent that made
+    /// it; naming another agent's is refused rather than honoured (D50).
+    ForeignHandle,
     /// The backing provider for this API is not installed on the runtime.
     ProviderUnavailable,
     /// The operation was cancelled before completing.
@@ -138,6 +143,7 @@ impl ErrorCode {
     pub const fn as_str(self) -> &'static str {
         match self {
             ErrorCode::CapabilityDenied => "ERR_CAPABILITY_DENIED",
+            ErrorCode::ForeignHandle => "ERR_FOREIGN_HANDLE",
             ErrorCode::ProviderUnavailable => "ERR_PROVIDER_UNAVAILABLE",
             ErrorCode::Cancelled => "ERR_CANCELLED",
             ErrorCode::Entropy => "ERR_ENTROPY",
