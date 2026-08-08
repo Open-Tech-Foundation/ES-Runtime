@@ -137,6 +137,9 @@ namespace) is unstable and may change between minor releases until the API freez
   removes the bound. A body that runs out reaches the handler as its stream
   erroring with `ERR_TIMED_OUT`.
 
+- `ERR_FOREIGN_HANDLE` — a socket, child process, server, file descriptor or
+  request belonging to another agent.
+
 ### Changed
 
 - **An `--allow-read` / `--allow-write` path outside the root jail now adds that
@@ -152,11 +155,6 @@ namespace) is unstable and may change between minor releases until the API freez
   `--allow-read` does not make its subtree writable, and module resolution is
   untouched (the loader keeps its own root, so a granted path makes bytes
   readable, not code importable). (D54.)
-
-### Added
-
-- `ERR_FOREIGN_HANDLE` — a socket, child process, server, file descriptor or
-  request belonging to another agent.
 
 ## [0.19.0] - 2026-08-07
 
