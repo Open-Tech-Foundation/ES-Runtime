@@ -107,12 +107,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
-- **An `--allow-read` / `--allow-write` entry outside the root jail is now an
-  argument error.** It could never match — a path list narrows the jail and
-  cannot widen it — so it was a command line that read as a grant and was not
-  one, and only said so at the first read, as a jail escape. The `--help` text
-  suggested `--allow-read=./data,/etc/ssl/certs`, an example that could not
-  work; it now suggests two paths inside the project.
+- **An `--allow-read` / `--allow-write` path outside the root jail now adds that
+  subtree.** Serving HTTPS was impossible: the cert and key travel inline, so a
+  guest reads them itself with `runtime:fs` — which is jailed to the project
+  root, while certificates live in `/etc/letsencrypt`, where renewal writes them
+  and no project root reaches. The HTTPS examples in our own docs could not run.
+
+  Inside the jail a path list still narrows. Outside it, a path **adds** — and
+  only a path typed on the command line can, which is the deployment operator
+  naming a location, never guest code. The jail stays the boundary a program
+  cannot move: a path neither inside it nor named is still `ERR_JAIL_ESCAPE`,
+  `--allow-read` does not make its subtree writable, and module resolution is
+  untouched (the loader keeps its own root, so a granted path makes bytes
+  readable, not code importable). (D54.)
 
 ### Added
 

@@ -133,7 +133,7 @@ which, and they are worth distinguishing in your alerting:
 | --- | --- | --- |
 | `ERR_CAPABILITY_DENIED` | The capability was never granted | Add `--allow-<name>` |
 | `ERR_PERMISSION_DENIED` | Granted, but not for *this* value | Add the value to that flag's list |
-| `ERR_JAIL_ESCAPE` | Outside the project root entirely | Not a flag — see below |
+| `ERR_JAIL_ESCAPE` | Outside the project root, and not granted | Name it in `--allow-read`/`--allow-write` |
 | `ERR_FOREIGN_HANDLE` | Another agent's socket, process or request | Not a flag — pass data, not handles |
 
 What each looks like in practice:
@@ -158,13 +158,21 @@ with a non-zero exit status, like any other uncaught exception.
   command, and only the second is a one-word fix.
 </Callout>
 
-<Callout type="warning" title="A path list narrows the root jail — it cannot widen it">
-  Filesystem access is confined to the project root regardless of any flag. An
-  `--allow-read` entry pointing outside that root is **rejected as an argument
-  error**, because it could never match anything — a command line that reads as
-  a grant and is not one is worse than one that fails. No permission flag is the
-  fix for a jail escape: to reach a path outside the project, run from a
-  directory that contains both.
+<Callout type="note" title="A path list narrows the root jail, and one path outside it adds that subtree">
+  Inside the project root, a path list **narrows** what is reachable. An entry
+  *outside* it **adds** that subtree — how a server reads a TLS certificate from
+  `/etc/letsencrypt`, which no project root contains and no renewal would write
+  inside one:
+
+  ```sh
+  esrun --deny-all --allow-listen=443 \
+        --allow-read=/etc/letsencrypt/live/example.com \
+        server.js
+  ```
+
+  Only a path typed on the command line widens it — guest code never can, which
+  is what the jail is for. A path neither inside the project nor named is still
+  `ERR_JAIL_ESCAPE`, and `--allow-read` does not make its subtree writable.
 </Callout>
 
 ## Bound what may load

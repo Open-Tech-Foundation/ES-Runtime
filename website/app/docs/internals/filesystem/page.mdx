@@ -1,6 +1,6 @@
 ---
 title: "Internals: the filesystem"
-description: How runtime:fs confines every path — the root jail, why it re-resolves on each call, what the scope lists narrow, and why the root itself is not a target.
+description: How runtime:fs confines every path — the root jail, why it re-resolves on each call, what the scope lists narrow and add, and why a root itself is not a target.
 ---
 
 # Internals: the filesystem
@@ -32,9 +32,20 @@ would turn one check into a permanent grant.
 **`--allow-read` / `--allow-write` are applied after canonicalization, never
 before.** A symlink is a name for a file somewhere else, so judging the name the
 guest wrote would let `--allow-read=./data` admit `./data/link-to-etc/passwd` —
-the hole the jail exists to close, reopened one level in. The lists narrow the
-jail; they never widen it, so a path outside the root stays unreachable whatever
-a list says.
+the hole the jail exists to close, reopened one level in.
+
+**Inside the jail a list narrows; outside it, a named path is added.** The jail
+is the boundary a *guest* can never move — no path a program writes, no symlink
+it follows, no `..` it constructs. What the command line names is a different
+act by a different party: `--allow-read=/etc/letsencrypt/live/example.com` is the
+deployment operator saying that subtree is part of this run, which is the only
+way a server reaches a certificate the project root does not contain.
+
+Each access kind carries its own root set — the jail first, then whatever its own
+flag named outside it — so `--allow-read` on a directory does not make it
+writable, and a path in neither set is `ERR_JAIL_ESCAPE` as before. Module
+resolution is unaffected: the loader detects its own root and never consults these
+lists, so a granted path makes bytes readable, not code importable.
 
 ## The root is not a target
 

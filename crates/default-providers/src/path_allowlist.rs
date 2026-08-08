@@ -79,20 +79,20 @@ impl PathAllowlist {
         Ok(PathAllowlist { entries: parsed })
     }
 
-    /// The first entry that is not inside `root`, if there is one.
+    /// Entries that lie outside `root` — the subtrees this list *adds* to the
+    /// filesystem root jail rather than carving out of it (D54).
     ///
-    /// A path list narrows the filesystem root jail and can never widen it
-    /// (D25), so an entry outside the jail matches nothing and can only ever
-    /// fail — as a jail escape, naming a rule the user did not think they were
-    /// hitting. Reporting it is the same rule the rest of the argument parsing
-    /// follows: an unusable entry is an error, never a silently dropped one,
-    /// because a list that quietly lost a member leaves the run narrower than
-    /// it reads.
-    pub fn outside(&self, root: &Path) -> Option<&Path> {
+    /// The jail is the default boundary and guest code can never move it. A
+    /// path typed on the command line is the deployment operator saying "and
+    /// this one too", which is a different act by a different party: it is how
+    /// a server reaches a TLS certificate in `/etc/letsencrypt`, which no
+    /// project root contains and no renewal process would write inside one.
+    pub fn roots_outside(&self, root: &Path) -> Vec<PathBuf> {
         self.entries
             .iter()
-            .find(|entry| !entry.starts_with(root))
-            .map(PathBuf::as_path)
+            .filter(|entry| !entry.starts_with(root))
+            .cloned()
+            .collect()
     }
 
     /// Whether this list names nothing.

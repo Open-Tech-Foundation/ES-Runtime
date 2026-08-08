@@ -47,6 +47,11 @@ pub struct SystemSyncFileSystem {
     /// wearing a feature's clothes.
     allow_read: Option<Arc<PathAllowlist>>,
     allow_write: Option<Arc<PathAllowlist>>,
+    /// The roots each access kind may resolve under — the jail, plus anything
+    /// the command line named outside it (D54). Same lists as the async
+    /// filesystem's, for the same reason the allowlists are shared.
+    read_roots: Vec<PathBuf>,
+    write_roots: Vec<PathBuf>,
 }
 
 impl SystemSyncFileSystem {
@@ -57,6 +62,8 @@ impl SystemSyncFileSystem {
             path::canonicalize(root.as_ref()).unwrap_or_else(|_| root.as_ref().to_path_buf());
         SystemSyncFileSystem {
             base: base.as_ref().to_path_buf(),
+            read_roots: vec![root.clone()],
+            write_roots: vec![root.clone()],
             root,
             open: Mutex::new(HashMap::new()),
             next_fd: Mutex::new(1),
@@ -65,18 +72,29 @@ impl SystemSyncFileSystem {
         }
     }
 
-    /// Restricts reads to `allow` — `esrun --allow-read=<paths>` (D38).
+    /// Scopes reads to `allow` — `esrun --allow-read=<paths>` (D38). An entry
+    /// inside the jail narrows it; one outside adds that subtree (D54).
     #[must_use]
     pub fn with_read_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.read_roots = crate::system_fs::roots_with(&self.root, &allow);
         self.allow_read = Some(Arc::new(allow));
         self
     }
 
-    /// Restricts writes to `allow` — `esrun --allow-write=<paths>` (D38).
+    /// Scopes writes to `allow` — `esrun --allow-write=<paths>` (D38).
     #[must_use]
     pub fn with_write_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.write_roots = crate::system_fs::roots_with(&self.root, &allow);
         self.allow_write = Some(Arc::new(allow));
         self
+    }
+
+    /// The roots an access of this kind may resolve under.
+    fn roots(&self, access: Access) -> &[PathBuf] {
+        match access {
+            Access::Read => &self.read_roots,
+            Access::Write => &self.write_roots,
+        }
     }
 
     /// Applies the scope list to an already-resolved path — after
@@ -102,9 +120,12 @@ impl SystemSyncFileSystem {
         } else {
             self.base.join(raw)
         };
-        let resolved = confine(&abs, &self.root)?;
+        let resolved = confine(&abs, self.roots(access))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
-        self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
+        self.scoped(
+            reject_root_mutation(resolved, self.roots(access), access)?,
+            access,
+        )
     }
 
     /// Runs `f` against the handle for `fd`, holding the table lock for the call.

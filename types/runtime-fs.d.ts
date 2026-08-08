@@ -1,3 +1,10 @@
+/**
+ * Asynchronous filesystem access, confined to the **root jail** — the detected
+ * project root — plus any path the command line named outside it
+ * (`--allow-read=/etc/letsencrypt/...`). Guest code can never move that
+ * boundary; only a path typed at launch adds to it, and reading a path is not
+ * writing it. Anything else is `ERR_JAIL_ESCAPE`.
+ */
 declare module "runtime:fs" {
   /** A path: a string, a `file:` URL, or a {@link FsFile} handle. */
   export type PathLike = string | URL | FsFile;

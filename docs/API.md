@@ -920,10 +920,14 @@ command line means what it means in the shell you typed it in, not what it means
 to the script. An entry covers its subtree, matched by path component, so
 `--allow-read=./app` never admits `./app-secrets`. The check runs **after
 canonicalization**: `./data/link-to-etc/passwd` is refused however the link is
-arranged. A path list narrows the [root jail](#the-root-jail) and never widens
-it — an entry outside the project root is not a way out of it, so writing one is
-an **argument error** rather than an entry that quietly matches nothing, and
-reaching outside at runtime stays `ERR_JAIL_ESCAPE` rather than a scoped denial. `read` and `write` are
+arranged. Inside the [root jail](#the-root-jail) a path list **narrows**: only
+the named subtrees are reachable. An entry *outside* the jail **adds** that
+subtree, which is how a run reaches a TLS certificate under `/etc/letsencrypt` or
+a CA bundle in `/etc/ssl` — locations no project root contains. Only a path typed
+on the command line can do that; guest code can never move the boundary, and a
+path neither inside the jail nor named on the command line is still
+`ERR_JAIL_ESCAPE`. `read` and `write` are two grants: a read entry does not make
+its subtree writable. `read` and `write` are
 separate lists; the same lists govern `runtime:fs` and `runtime:wasi`.
 
 **A signal entry** is a signal name. Unlisted signals are also absent from
@@ -1020,7 +1024,6 @@ the script opts a script's own argument out of rule 2.
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the nine |
-| `--allow-read=/etc/ssl` | Outside the root jail, so it could never match |
 
 ---
 

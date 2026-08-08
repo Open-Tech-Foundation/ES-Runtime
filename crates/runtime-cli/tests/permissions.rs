@@ -823,22 +823,95 @@ fn a_symlink_cannot_walk_out_of_a_path_list() {
 }
 
 #[test]
-fn a_path_list_narrows_the_root_jail_and_never_widens_it() {
-    // A scope list is not a way to reach outside the project root (D25), and an
-    // entry that tries is refused at the door rather than left to match
-    // nothing: a command line that reads as a grant and is not one would only
-    // say so at the first read, as a rule the user did not think they were
-    // hitting.
+fn a_path_outside_the_jail_is_reachable_only_when_the_command_line_names_it() {
+    // D54: the jail is the default boundary, and an explicit path on the
+    // command line is the operator widening it. This is what lets a server read
+    // a TLS certificate under /etc, which no project root contains.
     let root = scoped_tree("scoped_jail");
+    let outside = temp("scoped_jail_outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    std::fs::write(outside.join("cert.pem"), "PEM").expect("write");
+    let outside = std::fs::canonicalize(&outside).expect("canonicalize");
+    let granted = outside.display().to_string();
+
+    let code = format!(
+        "import fs from 'runtime:fs'; \
+         console.log((await fs.file('{granted}/cert.pem').text()).trim()); \
+         try {{ await fs.file('/etc/hostname').text(); console.log('NO THROW'); }} \
+         catch (e) {{ console.log('refused', e.code); }}"
+    );
     let out = run_in(
         &root,
-        &["--deny-all", "--allow-read=/etc"],
-        "console.log('NO THROW');",
+        &["--deny-all", &format!("--allow-read={granted}")],
+        &code,
     );
-    assert!(!out.status.success(), "stdout: {}", stdout(&out));
-    let said = stderr(&out);
-    assert!(said.contains("outside the filesystem root jail"), "{said}");
-    assert!(said.contains("/etc"), "{said}");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    // The granted path reads; everything else outside the jail still does not.
+    assert_eq!(stdout(&out), "PEM\nrefused ERR_JAIL_ESCAPE\n");
+}
+
+#[test]
+fn a_granted_read_path_does_not_become_writable() {
+    // Two flags, two grants: reading a certificate must never imply the power
+    // to replace it.
+    let root = scoped_tree("scoped_jail_rw");
+    let outside = temp("scoped_jail_rw_outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    std::fs::write(outside.join("cert.pem"), "PEM").expect("write");
+    let granted = std::fs::canonicalize(&outside).expect("canonicalize");
+    let granted = granted.display().to_string();
+
+    let code = format!(
+        "import fs from 'runtime:fs'; \
+         try {{ await fs.write('{granted}/cert.pem', new Uint8Array([1])); \
+                console.log('NO THROW'); }} \
+         catch (e) {{ console.log('refused', e.code); }}"
+    );
+    let out = run_in(
+        &root,
+        &[
+            "--deny-all",
+            &format!("--allow-read={granted}"),
+            "--allow-write=./out",
+        ],
+        &code,
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "refused ERR_JAIL_ESCAPE\n");
+}
+
+#[test]
+fn a_granted_read_path_does_not_widen_module_resolution() {
+    // The loader detects its own root and never consults these lists, so a path
+    // grant makes bytes readable — not code importable. Otherwise
+    // `--allow-read` would quietly be a way to run anything on the disk.
+    let root = scoped_tree("scoped_jail_import");
+    let outside = temp("scoped_jail_import_outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("mkdir");
+    std::fs::write(outside.join("mod.mjs"), "export const v = 'imported';").expect("write");
+    let granted = std::fs::canonicalize(&outside).expect("canonicalize");
+    let granted = granted.display().to_string();
+
+    let code = format!(
+        "import fs from 'runtime:fs'; \
+         console.log((await fs.file('{granted}/mod.mjs').text()).length > 0); \
+         try {{ await import('{granted}/mod.mjs'); console.log('IMPORTED'); }} \
+         catch {{ console.log('import refused'); }}"
+    );
+    let out = run_in(
+        &root,
+        &[
+            "--deny-all",
+            "--allow-imports",
+            &format!("--allow-read={granted}"),
+        ],
+        &code,
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "true\nimport refused\n");
 }
 
 #[test]

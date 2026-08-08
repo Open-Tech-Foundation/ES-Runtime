@@ -54,11 +54,18 @@ pub struct SystemFileSystem {
     base: PathBuf,
     root: PathBuf,
     /// Paths reads may touch (`--allow-read=<paths>`). `None` ⇒ anywhere inside
-    /// the root jail, which is the grant's own outer bound.
+    /// the root jail.
     allow_read: Option<Arc<PathAllowlist>>,
     /// Paths writes may touch (`--allow-write=<paths>`). `None` ⇒ anywhere
     /// inside the root jail.
     allow_write: Option<Arc<PathAllowlist>>,
+    /// The roots a **read** may resolve under: the jail, then any path the
+    /// allowlist named outside it (D54). Precomputed rather than derived per
+    /// call — it changes only when the policy is built.
+    read_roots: Vec<PathBuf>,
+    /// The same for writes. Separate, because `--allow-read=/etc/certs` must
+    /// not make `/etc/certs` writable: the two flags are two grants.
+    write_roots: Vec<PathBuf>,
 }
 
 impl SystemFileSystem {
@@ -69,26 +76,45 @@ impl SystemFileSystem {
             path::canonicalize(root.as_ref()).unwrap_or_else(|_| root.as_ref().to_path_buf());
         SystemFileSystem {
             base: base.as_ref().to_path_buf(),
+            read_roots: vec![root.clone()],
+            write_roots: vec![root.clone()],
             root,
             allow_read: None,
             allow_write: None,
         }
     }
 
-    /// Restricts reads to `allow` — `esrun --allow-read=<paths>` (D38). Narrows
-    /// the root jail; it never widens it, so a path outside the root stays
-    /// unreachable whatever the list says.
+    /// Scopes reads to `allow` — `esrun --allow-read=<paths>` (D38).
+    ///
+    /// Inside the jail the list **narrows**: only the named subtrees are
+    /// readable. An entry *outside* the jail **adds** that subtree (D54), which
+    /// is how a server reaches a TLS certificate in `/etc/letsencrypt` — a
+    /// location no project root contains and no renewal writes inside one. Only
+    /// a path typed on the command line can do that; guest code cannot move the
+    /// boundary, which is what the jail is for.
     #[must_use]
     pub fn with_read_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.read_roots = roots_with(&self.root, &allow);
         self.allow_read = Some(Arc::new(allow));
         self
     }
 
-    /// Restricts writes to `allow` — `esrun --allow-write=<paths>` (D38).
+    /// Scopes writes to `allow` — `esrun --allow-write=<paths>` (D38). Same
+    /// reading as [`with_read_allowlist`](Self::with_read_allowlist), against
+    /// its own grant: reading a path never implies writing it.
     #[must_use]
     pub fn with_write_allowlist(mut self, allow: PathAllowlist) -> Self {
+        self.write_roots = roots_with(&self.root, &allow);
         self.allow_write = Some(Arc::new(allow));
         self
+    }
+
+    /// The roots an access of this kind may resolve under.
+    fn roots(&self, access: Access) -> &[PathBuf] {
+        match access {
+            Access::Read => &self.read_roots,
+            Access::Write => &self.write_roots,
+        }
     }
 
     /// The list for `access`, if one was set.
@@ -127,7 +153,7 @@ impl SystemFileSystem {
     /// escapes it.
     fn temp_base(&self, dir: &str, access: Access) -> Result<PathBuf, ProviderError> {
         if dir.is_empty() {
-            self.scoped(confine(&self.base.clone(), &self.root)?, access)
+            self.scoped(confine(&self.base.clone(), self.roots(access))?, access)
         } else {
             self.jailed(dir, access)
         }
@@ -153,14 +179,21 @@ impl SystemFileSystem {
             // No final component to hold back (a bare root); fall through.
             _ => {
                 return self.scoped(
-                    reject_root_mutation(confine(&abs, &self.root)?, &self.root, access)?,
+                    reject_root_mutation(
+                        confine(&abs, self.roots(access))?,
+                        self.roots(access),
+                        access,
+                    )?,
                     access,
                 );
             }
         };
-        let resolved = confine(&parent, &self.root)?.join(name);
+        let resolved = confine(&parent, self.roots(access))?.join(name);
         reject_trailing_slash_on_a_file(p, &resolved)?;
-        self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
+        self.scoped(
+            reject_root_mutation(resolved, self.roots(access), access)?,
+            access,
+        )
     }
 
     fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
@@ -170,10 +203,21 @@ impl SystemFileSystem {
         } else {
             self.base.join(raw)
         };
-        let resolved = confine(&abs, &self.root)?;
+        let resolved = confine(&abs, self.roots(access))?;
         reject_trailing_slash_on_a_file(p, &resolved)?;
-        self.scoped(reject_root_mutation(resolved, &self.root, access)?, access)
+        self.scoped(
+            reject_root_mutation(resolved, self.roots(access), access)?,
+            access,
+        )
     }
+}
+
+/// The jail plus whatever `allow` named outside it — the roots one access kind
+/// may resolve under, jail first so it is the one an error names.
+pub(crate) fn roots_with(root: &Path, allow: &PathAllowlist) -> Vec<PathBuf> {
+    let mut roots = vec![root.to_path_buf()];
+    roots.extend(allow.roots_outside(root));
+    roots
 }
 
 /// Rejects the empty path before it can be joined onto the base directory.
@@ -210,28 +254,48 @@ pub(crate) fn reject_empty(p: &str) -> Result<&Path, ProviderError> {
 /// `root/<name>`, not to `root`.
 pub(crate) fn reject_root_mutation(
     resolved: PathBuf,
-    root: &Path,
+    roots: &[PathBuf],
     access: Access,
 ) -> Result<PathBuf, ProviderError> {
-    if access == Access::Write && resolved == root {
+    // Every root, not just the jail: a directory the command line granted is a
+    // boundary of this run in exactly the same way, and removing it out from
+    // under the grant is the same self-destruction one level along.
+    if access == Access::Write && roots.contains(&resolved) {
         return Err(ProviderError::Coded {
             code: ErrorCode::InvalidPath,
             message: format!(
-                "refusing to modify the filesystem root jail {} itself (mutating the root would destroy the sandbox; name an entry inside it)",
-                root.display()
+                "refusing to modify the filesystem root {} itself (mutating a root would destroy the sandbox; name an entry inside it)",
+                resolved.display()
             ),
         });
     }
     Ok(resolved)
 }
 
-fn escape(p: &Path, root: &Path) -> ProviderError {
+/// Names the jail, and any extra root the command line added — a run with
+/// `--allow-read=/etc/certs` that still cannot reach a path should see why the
+/// grant it was given did not cover it.
+fn escape(p: &Path, roots: &[PathBuf]) -> ProviderError {
+    let jail = roots
+        .first()
+        .map(|r| r.display().to_string())
+        .unwrap_or_default();
+    let extra = match &roots[1..] {
+        [] => String::new(),
+        added => format!(
+            " (nor any granted path: {})",
+            added
+                .iter()
+                .map(|r| r.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
     ProviderError::Coded {
         code: ErrorCode::JailEscape,
         message: format!(
-            "path {} escapes the filesystem root jail {} (access outside the root is not permitted)",
+            "path {} escapes the filesystem root jail {jail}{extra} (access outside the root is not permitted)",
             p.display(),
-            root.display()
         ),
     }
 }
@@ -251,21 +315,26 @@ pub(crate) fn file_stat(md: &std::fs::Metadata) -> FileStat {
     }
 }
 
-pub(crate) fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError> {
+pub(crate) fn confine(abs: &Path, roots: &[PathBuf]) -> Result<PathBuf, ProviderError> {
     let mut existing = abs.to_path_buf();
     let mut tail: Vec<OsString> = Vec::new();
     loop {
         if let Ok(real) = path::canonicalize(&existing) {
-            if !path::within_root(&real, root) {
-                return Err(escape(abs, root));
-            }
+            // Any of them: `roots[0]` is the project jail and the rest are
+            // subtrees the command line added (D54). One `within_root` per root
+            // rather than a cleverer structure — the list is the jail plus a
+            // handful of explicitly typed paths, never more.
+            let Some(root) = roots.iter().find(|root| path::within_root(&real, root)) else {
+                return Err(escape(abs, roots));
+            };
             let mut out = real;
             for seg in tail.iter().rev() {
                 out.push(seg);
             }
-            // Belt and braces: the reattached path must still be under root.
+            // Belt and braces: the reattached path must still be under the root
+            // that admitted it.
             if !out.starts_with(root) {
-                return Err(escape(abs, root));
+                return Err(escape(abs, roots));
             }
             return Ok(out);
         }
@@ -278,9 +347,9 @@ pub(crate) fn confine(abs: &Path, root: &Path) -> Result<PathBuf, ProviderError>
                 existing = existing
                     .parent()
                     .map(Path::to_path_buf)
-                    .ok_or_else(|| escape(abs, root))?;
+                    .ok_or_else(|| escape(abs, roots))?;
             }
-            None => return Err(escape(abs, root)),
+            None => return Err(escape(abs, roots)),
         }
     }
 }
@@ -570,7 +639,7 @@ impl FileSystem for SystemFileSystem {
 
     fn real_path(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
         let resolved = self.jailed(&path, Access::Read);
-        let root = self.root.clone();
+        let roots = self.read_roots.clone();
         Box::pin(async move {
             let p = resolved?;
             // `jailed` already canonicalizes what exists, but a path whose tail
@@ -580,7 +649,7 @@ impl FileSystem for SystemFileSystem {
             let real = tokio::fs::canonicalize(&p)
                 .await
                 .map_err(|e| other(&path, e))?;
-            let real = confine(&real, &root)?;
+            let real = confine(&real, &roots)?;
             Ok(real.to_string_lossy().into_owned())
         })
     }
@@ -692,7 +761,7 @@ impl FileSystem for SystemFileSystem {
         opts: GlobScanOptions,
     ) -> BoxFuture<Result<Vec<String>, ProviderError>> {
         let resolved = self.jailed(&base, Access::Read);
-        let root = self.root.clone();
+        let roots = self.read_roots.clone();
         let allow_read = self.allow_read.clone();
         Box::pin(async move {
             let base_real = resolved?;
@@ -713,7 +782,7 @@ impl FileSystem for SystemFileSystem {
                             // A followed link may leave the jail, or stay inside
                             // it but leave the scope list — listing a name is a
                             // read either way.
-                            !path::within_root(&real, &root)
+                            !roots.iter().any(|root| path::within_root(&real, root))
                                 || allow_read.as_ref().is_some_and(|a| !a.permits(&real))
                         })
                         .unwrap_or(false)
@@ -902,14 +971,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_scope_list_narrows_the_jail_and_never_widens_it() {
-        // An entry outside the root is not a way out of it: the jail check runs
-        // first, and its refusal is the one reported.
+    async fn a_named_path_outside_the_jail_is_added_to_it() {
+        // D54: inside the jail a scope list narrows; outside it, a named path
+        // *adds* that subtree. This is how a server reads a TLS certificate the
+        // project root does not contain.
         let (root, _) = jail("scoped-outside");
-        let outside = root.parent().unwrap().to_path_buf();
+        let granted = root.parent().unwrap().join("granted-certs");
+        let _ = std::fs::remove_dir_all(&granted);
+        std::fs::create_dir_all(&granted).unwrap();
+        std::fs::write(granted.join("cert.pem"), b"PEM").unwrap();
+        let granted = std::fs::canonicalize(&granted).unwrap();
+
         let fs = SystemFileSystem::new(&root, &root)
-            .with_read_allowlist(PathAllowlist::parse([outside.to_string_lossy()], &root).unwrap());
-        let err = fs.read("../anything.txt".into()).await.unwrap_err();
+            .with_read_allowlist(PathAllowlist::parse([granted.to_string_lossy()], &root).unwrap());
+        let read = fs
+            .read(granted.join("cert.pem").to_string_lossy().into_owned())
+            .await
+            .unwrap();
+        assert_eq!(read, b"PEM");
+    }
+
+    #[tokio::test]
+    async fn only_the_named_path_is_added_and_only_for_its_own_access() {
+        // The boundary is still a boundary: a sibling of the granted directory
+        // is as unreachable as it ever was, and a *read* grant never makes its
+        // subtree writable.
+        let (root, _) = jail("scoped-outside-bounds");
+        let parent = root.parent().unwrap().to_path_buf();
+        let granted = parent.join("granted-only");
+        let _ = std::fs::remove_dir_all(&granted);
+        std::fs::create_dir_all(&granted).unwrap();
+        std::fs::write(granted.join("cert.pem"), b"PEM").unwrap();
+        std::fs::write(parent.join("sibling.txt"), b"nope").unwrap();
+        let granted = std::fs::canonicalize(&granted).unwrap();
+
+        let fs = SystemFileSystem::new(&root, &root)
+            .with_read_allowlist(PathAllowlist::parse([granted.to_string_lossy()], &root).unwrap());
+        // A sibling of the granted path was never named.
+        let err = fs
+            .read(
+                std::fs::canonicalize(parent.join("sibling.txt"))
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+
+        // And reading it is not writing it: two flags, two grants.
+        let err = fs
+            .write(
+                granted.join("cert.pem").to_string_lossy().into_owned(),
+                b"replaced".to_vec(),
+                false,
+            )
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
     }
 
