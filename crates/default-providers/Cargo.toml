@@ -41,8 +41,10 @@ rustix = { workspace = true, features = ["process"] }
 socket2 = { workspace = true }
 
 [dev-dependencies]
-# Test-only: the async test harness and a current-thread runtime.
-tokio = { workspace = true, features = ["rt", "time", "macros", "sync"] }
+# Test-only: the async test harness and a current-thread runtime. `test-util`
+# is the paused clock the body-deadline tests run on — the alternative is
+# sleeping through a 30s grace in real time, once per case.
+tokio = { workspace = true, features = ["rt", "time", "macros", "sync", "test-util"] }
 # Test-only: self-signed certs for the hermetic net-TLS round-trip test.
 rcgen.workspace = true
 # Test-only: a capture layer, so a test can assert on what the servers logged.

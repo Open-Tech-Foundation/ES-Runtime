@@ -342,6 +342,8 @@ served at once. Nothing here has to be turned on:
 | `timeouts.handshake` | `10000`ms | Accept → ready to carry requests |
 | `timeouts.headerRead` | `30000`ms | A request head arriving in full; on HTTP/1.1, the idle keep-alive limit too |
 | `timeouts.h2KeepAlive` | `20000`ms | PING probes on an idle HTTP/2 connection |
+| `timeouts.bodyRead` | `30000`ms | A request body arriving, before what `bodyMinRate` earns it |
+| `timeouts.bodyMinRate` | `1024` B/s | Bytes per second that extend `bodyRead` |
 | `maxConnections` | unlimited | How many connections are served at once |
 
 ```js
@@ -349,11 +351,18 @@ served at once. Nothing here has to be turned on:
 serve({ port: 8080, timeouts: { headerRead: 5000 }, maxConnections: 10_000 }, handler);
 ```
 
-They bound only connections that are **idle or stalled**. A request in flight, a
-body still arriving, and a response still streaming are never interrupted,
-however long they take — a live feed is unaffected by `headerRead` no matter how
-far past it runs. A connection over `maxConnections` is held rather than
-refused: it waits, and is served as soon as a slot frees.
+They bound only connections that are **idle or stalled**. A request in flight and
+a response still streaming are never interrupted, however long they take — a live
+feed is unaffected by `headerRead` no matter how far past it runs. A connection
+over `maxConnections` is held rather than refused: it waits, and is served as
+soon as a slot frees.
+
+A request **body** is bounded differently, because elapsed time cannot tell a
+large upload on a slow link from a peer dribbling a byte a minute. The deadline
+is **earned** — `bodyRead + received / bodyMinRate` — so an upload extends its
+own by uploading, and a dribbler does not send enough to extend it. At the
+defaults a 100 MiB upload has over a day; a byte-a-minute peer is closed at ~30s.
+The handler sees the body stream error with `ERR_TIMED_OUT`.
 
 <Callout type="info" title="How this behaves, and why">
   Why the HTTP/1.1 idle limit and the request-head limit are the same timer, why

@@ -53,6 +53,7 @@ use tokio::task::AbortHandle;
 use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
+use crate::body_deadline::{BodyDeadline, BodyLimit};
 use crate::checkout::Checkout;
 use crate::first_byte::FirstByteTimeout;
 
@@ -254,6 +255,7 @@ fn to_server_request(
     origin: &str,
     peer_host: &str,
     peer_port: u16,
+    body_limit: Option<BodyLimit>,
 ) -> Option<HttpServerRequest> {
     let method = req.method().to_string();
     // `origin` is "<scheme>://<bound address>", the fallback when a request
@@ -270,10 +272,16 @@ fn to_server_request(
     let body = if incoming.is_end_stream() {
         HttpServerBody::Empty
     } else {
-        HttpServerBody::Stream(Box::pin(incoming.into_data_stream().map(|item| {
-            item.map(|bytes| bytes.to_vec())
-                .map_err(|e| ProviderError::Other(e.to_string()))
-        })))
+        // Bounded here rather than around the whole connection: the head is
+        // already past `header_read`, and what is left to bound is a body that
+        // arrives too slowly to be one (`body_deadline`).
+        HttpServerBody::Stream(BodyDeadline::wrap(
+            Box::pin(incoming.into_data_stream().map(|item| {
+                item.map(|bytes| bytes.to_vec())
+                    .map_err(|e| ProviderError::Other(e.to_string()))
+            })),
+            body_limit,
+        ))
     };
     Some(HttpServerRequest {
         method,
@@ -472,6 +480,13 @@ async fn serve_connection<S>(
     // is a refcount bump.
     let peer_host: Arc<str> = Arc::from(peer.ip().to_string().as_str());
     let peer_port = peer.port();
+    // Read once per connection, applied per request: each body gets its own
+    // fresh allowance, because each is a separate thing the peer either sends
+    // or does not.
+    let body_limit = timeouts.body_read.map(|grace| BodyLimit {
+        grace,
+        min_rate: timeouts.body_min_rate,
+    });
     let service = service_fn(move |req: Request<Incoming>| {
         let tx = tx.clone();
         let origin = origin.clone();
@@ -480,7 +495,9 @@ async fn serve_connection<S>(
             // A request naming something that is not an authority never reaches
             // the guest: there is no URL to hand it that is both faithful to
             // what was sent and safe to route on.
-            let Some(server_req) = to_server_request(req, &origin, &peer_host, peer_port) else {
+            let Some(server_req) =
+                to_server_request(req, &origin, &peer_host, peer_port, body_limit)
+            else {
                 return Ok::<_, Infallible>(status_only(StatusCode::BAD_REQUEST));
             };
             let (rtx, rrx) = oneshot::channel();
@@ -2002,6 +2019,8 @@ mod timeout_tests {
         handshake: None,
         header_read: None,
         h2_keep_alive: None,
+        body_read: None,
+        body_min_rate: 0,
     };
 
     /// Reads until the peer closes, returning `false` if it has not within
@@ -2038,6 +2057,109 @@ mod timeout_tests {
             closed_within(&mut sock, GRACE).await,
             "a silent connection must not be held forever"
         );
+    }
+
+    /// The stall the head timeout cannot reach: a complete head, then a body
+    /// dribbled a byte at a time. `header_read` has already stopped, so before
+    /// the body deadline this held a connection, a task, a descriptor and the
+    /// handler awaiting the body for as long as the peer cared to keep going.
+    #[tokio::test]
+    async fn a_request_body_dribbled_a_byte_at_a_time_is_cut_off() {
+        // A grace short enough to test, and a rate a dribbler cannot beat.
+        let timeouts = HttpTimeouts {
+            body_read: Some(SHORT),
+            body_min_rate: 1024,
+            ..OFF
+        };
+        let (http, id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1000000\r\n\r\n")
+            .await
+            .unwrap();
+
+        // The handler side: take the request and read its body to the end.
+        let reqs = http.next_requests(id, 1).await.unwrap();
+        let (_, request) = reqs.into_iter().next().unwrap();
+        let HttpServerBody::Stream(mut body) = request.body else {
+            panic!("a Content-Length body should stream");
+        };
+
+        let dribbler = tokio::spawn(async move {
+            for _ in 0..1000 {
+                if sock.write_all(b"x").await.is_err() {
+                    return;
+                }
+                tokio::time::sleep(SHORT).await;
+            }
+        });
+
+        // Draining ends in a failure rather than running for the length of the
+        // declared body — which at this rate would be eleven days.
+        let outcome = tokio::time::timeout(GRACE, async {
+            while let Some(item) = body.next().await {
+                if item.is_err() {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .expect("the body deadline must fire well inside the grace");
+        assert!(outcome, "a dribbled body was read to completion");
+        dribbler.abort();
+    }
+
+    /// The other half, and the reason the deadline is earned rather than flat:
+    /// a body that keeps arriving is never interrupted, however long it takes
+    /// in total. Without this the fix above would just be a cap that breaks
+    /// uploads.
+    #[tokio::test]
+    async fn a_body_that_keeps_arriving_is_never_interrupted() {
+        // 8 KiB every 100ms is 80 KiB/s — far over the floor, and the whole
+        // body takes 800ms, four times the grace it started with.
+        let timeouts = HttpTimeouts {
+            body_read: Some(SHORT),
+            body_min_rate: 1024,
+            ..OFF
+        };
+        let (http, id, port) = bound_with_timeouts(None, timeouts).await;
+
+        let total = 8 * 1024 * 8;
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(
+            format!("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: {total}\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+
+        let reqs = http.next_requests(id, 1).await.unwrap();
+        let (_, request) = reqs.into_iter().next().unwrap();
+        let HttpServerBody::Stream(mut body) = request.body else {
+            panic!("a Content-Length body should stream");
+        };
+
+        let uploader = tokio::spawn(async move {
+            for _ in 0..8 {
+                sock.write_all(&[b'x'; 8 * 1024]).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            sock
+        });
+
+        let read = tokio::time::timeout(GRACE, async {
+            let mut got = 0usize;
+            while let Some(item) = body.next().await {
+                got += item
+                    .expect("a body arriving over the floor must not fail")
+                    .len();
+            }
+            got
+        })
+        .await
+        .expect("the upload should complete");
+        assert_eq!(read, total);
+        let _ = uploader.await;
     }
 
     /// The same stall one stage later: TLS, where rustls will wait for the
@@ -2156,6 +2278,7 @@ mod timeout_tests {
             header_read: Some(SHORT),
             handshake: Some(SHORT),
             h2_keep_alive: Some(SHORT),
+            ..OFF
         };
         let (http, id, port) = bound_with_timeouts(None, timeouts).await;
 

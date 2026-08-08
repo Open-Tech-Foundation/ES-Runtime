@@ -1593,8 +1593,11 @@ visible to a handler, and there is nothing to switch on:
 | `timeouts.handshake` | `10000`ms | From accept until the connection can carry requests: the TLS handshake, and the wait for the first byte the HTTP version is read from. A TLS connection passes both stages, so it may take up to twice this before it counts as established. |
 | `timeouts.headerRead` | `30000`ms | How long a request head may take to arrive in full — and on HTTP/1.1, the **idle keep-alive limit** too. |
 | `timeouts.h2KeepAlive` | `20000`ms | How often an idle HTTP/2 connection is probed with a PING, and how long the ACK may take. A dead peer is reclaimed within twice this. |
+| `timeouts.bodyRead` | `30000`ms | How long a request **body** may take, before the allowance `bodyMinRate` earns it. |
+| `timeouts.bodyMinRate` | `1024` B/s | Bytes per second that extend `bodyRead`. A floor to beat, not a rate to sustain; `0` earns nothing, making `bodyRead` a flat cap. |
 
-Each is a number of milliseconds; `null` disables it; omitting it keeps the
+Each is a number of milliseconds (`bodyMinRate` a number of bytes per second);
+`null` disables it; omitting it keeps the
 default. They are on by default because a timeout nobody configures protects
 nobody — without them, a peer that completes the TCP handshake and then says
 nothing holds a task and a descriptor for as long as it likes, at the cost of
@@ -1604,10 +1607,27 @@ one syscall to it.
 serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler);
 ```
 
-They bound only connections that are **idle or stalled**. A request in flight, a
-body still arriving, and a response still streaming are never interrupted,
-however long they take — a live feed or a slow download is unaffected by
-`headerRead` no matter how far past it runs.
+They bound only connections that are **idle or stalled**. A request in flight
+and a response still streaming are never interrupted, however long they take — a
+live feed or a slow download is unaffected by `headerRead` no matter how far past
+it runs.
+
+A request **body** is the one case elapsed time cannot judge. `headerRead` stops
+when the head is complete, so a peer that sends a well-formed head and then
+dribbles its body a byte at a time is past every other timer here — slowloris,
+one phase later. A flat cap cannot separate it from a 100 MiB upload on a slow
+link, since the two take the same length of time; what separates them is how much
+they send while taking it. So `bodyRead` is an allowance a body **earns**:
+
+```text
+deadline = bodyRead + received / bodyMinRate
+```
+
+At the defaults a 100 MiB upload has over a day to arrive, a 1 GiB one over a
+week, and a peer sending one byte a minute is closed at ~30s having earned about
+10 milliseconds. An upload extends its own deadline by uploading; a dribbler
+cannot. The failure reaches the handler as the body stream erroring with
+`ERR_TIMED_OUT`, naming what arrived and how slowly.
 
 Two consequences worth knowing before you tune them:
 

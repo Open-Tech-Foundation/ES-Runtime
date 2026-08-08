@@ -7338,8 +7338,56 @@ mod tests {
                 handshake: Some(std::time::Duration::from_secs(1)),
                 header_read: Some(std::time::Duration::from_secs(2)),
                 h2_keep_alive: Some(std::time::Duration::from_secs(3)),
+                ..es_runtime_providers::HttpTimeouts::default()
             }
         );
+    }
+
+    /// The body bound is two numbers that mean different things — a duration
+    /// and a rate — so both have to arrive as themselves.
+    #[test]
+    fn the_body_bound_crosses_as_a_grace_and_a_rate() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080, timeouts: { bodyRead: 5000, bodyMinRate: 4096 } }, \
+                             () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        assert_eq!(
+            options[0].timeouts.body_read,
+            Some(std::time::Duration::from_secs(5))
+        );
+        assert_eq!(options[0].timeouts.body_min_rate, 4096);
+    }
+
+    /// `0` is a rate, not a disabled timeout: it says a slow body earns no
+    /// extension, which turns the grace into a flat cap. Reading it as "unset"
+    /// would hand back the default allowance instead — the opposite of what
+    /// was asked for.
+    #[test]
+    fn a_zero_body_rate_is_a_rate_and_not_an_omission() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080, timeouts: { bodyMinRate: 0 } }, \
+                             () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let defaults = es_runtime_providers::HttpTimeouts::default();
+        let options = http.options.lock().unwrap();
+        assert_eq!(options[0].timeouts.body_min_rate, 0);
+        // And naming the rate alone leaves the grace where it was.
+        assert_eq!(options[0].timeouts.body_read, defaults.body_read);
     }
 
     /// `null` is off, and it has to survive the crossing as off rather than as
@@ -7362,6 +7410,24 @@ mod tests {
         assert_eq!(options[0].timeouts.handshake, None);
         assert_eq!(options[0].timeouts.header_read, None);
         assert_eq!(options[0].timeouts.h2_keep_alive, None);
+    }
+
+    /// The body bound is removed by `bodyRead: null`, the same spelling as the
+    /// rest — the rate has nothing to extend once there is no grace.
+    #[test]
+    fn a_null_body_read_removes_the_bound_entirely() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const s = serve({ port: 8080, timeouts: { bodyRead: null } }, \
+                             () => new Response('x')); \
+             globalThis.result = (await s.addr).port;",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(http.options.lock().unwrap()[0].timeouts.body_read, None);
     }
 
     /// One timeout named, the rest defaulted — the common case, and the one a
@@ -7387,6 +7453,8 @@ mod tests {
         );
         assert_eq!(options[0].timeouts.handshake, defaults.handshake);
         assert_eq!(options[0].timeouts.h2_keep_alive, defaults.h2_keep_alive);
+        assert_eq!(options[0].timeouts.body_read, defaults.body_read);
+        assert_eq!(options[0].timeouts.body_min_rate, defaults.body_min_rate);
     }
 
     /// Body of the single response the handler produced.
@@ -7522,7 +7590,8 @@ ${info.remoteAddr.port}`));",
         run_module(
             &mut rt,
             "import { serve } from 'runtime:http'; \
-             const bad = [['handshake', 'soon'], ['headerRead', -1], ['h2KeepAlive', NaN]]; \
+             const bad = [['handshake', 'soon'], ['headerRead', -1], ['h2KeepAlive', NaN], \
+                          ['bodyRead', 'later'], ['bodyMinRate', -1], ['bodyMinRate', 'fast']]; \
              const names = []; \
              for (const [key, value] of bad) { \
                try { serve({ port: 8080, timeouts: { [key]: value } }, () => new Response('x')); } \
@@ -7535,7 +7604,10 @@ ${info.remoteAddr.port}`));",
         );
         assert_eq!(
             rt.eval("globalThis.result").unwrap(),
-            Value::String("TypeError,RangeError,RangeError,TypeError".to_string())
+            Value::String(
+                "TypeError,RangeError,RangeError,TypeError,RangeError,TypeError,TypeError"
+                    .to_string()
+            )
         );
         assert!(
             http.options.lock().unwrap().is_empty(),

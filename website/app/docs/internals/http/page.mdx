@@ -82,17 +82,40 @@ dropped the mapping, a killed VM, an unplugged cable — keeps its connection an
 its share of the stream budget until the OS TCP keepalive notices, which is two
 hours by default on Linux.
 
+### The request body, which elapsed time cannot judge
+
+`headerRead` stops the moment the head is complete. A peer that sends a
+well-formed head and then dribbles its body one byte at a time is past every
+timer above it — slowloris, one phase later, against a clock that has already
+stopped.
+
+A flat cap cannot answer that. Over elapsed time alone a 100 MiB upload on a slow
+link and a dribbler are the same connection; any cap generous enough for the
+upload is generous enough for the attack. What separates them is not how long
+they take but how much they send while taking it. So the body's deadline is
+**earned**:
+
+```text
+deadline = timeouts.bodyRead + received / timeouts.bodyMinRate
+```
+
+At the defaults (30s, 1 KiB/s) a 100 MiB upload has over a day, a 1 GiB one over
+a week, and a peer sending a byte a minute is closed at ~30s having earned about
+10 milliseconds. The rate is a floor to beat, not one to sustain — a genuinely
+slow client only has to beat a hundredth of a dial-up modem. Apache's
+`mod_reqtimeout` uses the same shape, for the same reason; Node and nginx bound
+the body by idle time instead, which a dribbler resets with every byte.
+
 ### What is deliberately not bounded
 
-A request in flight, a body still arriving, and a response still streaming have
-no deadline, however long they take. A live feed, a slow query, and a large
-download are all indistinguishable from a stalled connection if you only look at
-elapsed time, so elapsed time is not what these timeouts look at.
+A request in flight and a response still streaming have no deadline, however long
+they take. A live feed, a slow query, and a large download are all
+indistinguishable from a stalled connection if you only look at elapsed time, so
+elapsed time is not what these timeouts look at.
 
-Also unbounded today: a slow request *body* (a one-byte-per-minute upload), and
-total request duration. Both are known gaps rather than decisions that came out
-the other way — a total cap would break SSE and long-polling, and there is no
-per-route override to escape it.
+Still unbounded today: total request duration. That is a decision rather than a
+gap — a total cap would break SSE and long-polling, and there is no per-route
+override to escape it.
 
 ## Every limit, in one place
 
@@ -101,6 +124,8 @@ per-route override to escape it.
 | `timeouts.handshake` | 10s | per connection | `serve({ timeouts })` |
 | `timeouts.headerRead` | 30s | per connection | `serve({ timeouts })` |
 | `timeouts.h2KeepAlive` | 20s | per connection | `serve({ timeouts })` |
+| `timeouts.bodyRead` | 30s + earned | per request | `serve({ timeouts })` |
+| `timeouts.bodyMinRate` | 1 KiB/s | per request | `serve({ timeouts })` |
 | `maxConnections` | unlimited | per server | `serve({ maxConnections })` |
 | HTTP/1.1 header fields | 100 | per request | fixed |
 | HTTP/1.1 read buffer | ~408KB | per connection | fixed |

@@ -1610,6 +1610,34 @@ pub struct HttpTimeouts {
     ///
     /// Default: 20s, so a dead peer is reclaimed within 40s.
     pub h2_keep_alive: Option<Duration>,
+    /// How long a request **body** may take, before the allowance that
+    /// [`body_min_rate`](Self::body_min_rate) earns it.
+    ///
+    /// [`header_read`](Self::header_read) bounds the head and nothing after it,
+    /// so a peer that sends a complete head and then dribbles its body a byte at
+    /// a time holds a connection, a task, a descriptor and the handler awaiting
+    /// it for as long as it likes. That is the same attack as slowloris, moved
+    /// one phase later, and the head timeout cannot answer it: the head arrived.
+    ///
+    /// A flat cap cannot answer it either — a large upload over a slow link is
+    /// indistinguishable from a dribbler by elapsed time alone, and any number
+    /// big enough for the upload is big enough for the attack. So the deadline
+    /// is **earned**: a body starts with this long and gains more by arriving
+    /// (see [`body_min_rate`](Self::body_min_rate)). An upload extends its own
+    /// deadline by uploading; a dribbler does not send enough to extend it.
+    ///
+    /// Default: 30s.
+    pub body_read: Option<Duration>,
+    /// Bytes per second that extend [`body_read`](Self::body_read) — the floor
+    /// a body must beat, not a rate it must sustain.
+    ///
+    /// The deadline is `start + body_read + received / body_min_rate`, so at the
+    /// default a 100 MiB upload has over a day to arrive and a peer sending one
+    /// byte a minute is closed at ~30s. `0` disables the allowance, making
+    /// `body_read` a flat cap on the whole body.
+    ///
+    /// Default: 1024 (1 KiB/s).
+    pub body_min_rate: u64,
 }
 
 impl Default for HttpTimeouts {
@@ -1618,6 +1646,8 @@ impl Default for HttpTimeouts {
             handshake: Some(Duration::from_secs(10)),
             header_read: Some(Duration::from_secs(30)),
             h2_keep_alive: Some(Duration::from_secs(20)),
+            body_read: Some(Duration::from_secs(30)),
+            body_min_rate: 1024,
         }
     }
 }

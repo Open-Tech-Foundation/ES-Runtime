@@ -51,16 +51,44 @@ function parseTls(options) {
 // — the numbers live in one place, on the Rust side, so the two cannot drift.
 // A guest that names `null` explicitly means "off", which crosses as 0.
 //
-// These bound only connections that are *idle or stalled*: a request in flight,
-// a body still arriving, and a response still streaming are never interrupted,
-// however long they take.
+// These bound only connections that are *idle or stalled*: a request in flight
+// and a response still streaming are never interrupted, however long they take.
+//
+// A request *body* is the one that cannot be judged on elapsed time alone — a
+// large upload over a slow link takes as long as an attacker dribbling a byte a
+// minute, and what separates them is how much they send while taking it. So
+// `bodyRead` is the allowance a body starts with and `bodyMinRate` (bytes per
+// second) is what arriving adds to it: an upload extends its own deadline,
+// a dribbler cannot. `bodyMinRate: 0` earns nothing, making `bodyRead` flat.
 function parseTimeouts(options) {
   const t = (options ?? {}).timeouts;
-  if (t === undefined || t === null) return [null, null, null];
+  if (t === undefined || t === null) return [null, null, null, null, null];
   if (typeof t !== "object") {
     throw new TypeError(`serve: timeouts must be an object, got ${typeof t}`);
   }
-  return [one(t, "handshake"), one(t, "headerRead"), one(t, "h2KeepAlive")];
+  return [
+    one(t, "handshake"),
+    one(t, "headerRead"),
+    one(t, "h2KeepAlive"),
+    one(t, "bodyRead"),
+    rate(t, "bodyMinRate"),
+  ];
+
+  // A rate rather than a duration: `null` is not "off" here — a body that earns
+  // nothing is what `0` says, and `bodyRead: null` is how the bound is removed.
+  function rate(o, name) {
+    const v = o[name];
+    if (v === undefined || v === null) return null; // host default
+    if (typeof v !== "number") {
+      throw new TypeError(`serve: timeouts.${name} must be a number of bytes per second`);
+    }
+    if (!Number.isFinite(v) || v < 0) {
+      throw new RangeError(
+        `serve: timeouts.${name} must be a finite, non-negative number of bytes per second`,
+      );
+    }
+    return v;
+  }
 
   function one(o, name) {
     const v = o[name];

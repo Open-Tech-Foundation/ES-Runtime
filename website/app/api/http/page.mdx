@@ -107,9 +107,16 @@ a body still arriving, and a response still streaming are never interrupted.
 | `handshake` | `10000` | Accept → ready to carry requests: the TLS handshake, and the wait for the first byte |
 | `headerRead` | `30000` | A request head arriving in full; on HTTP/1.1 also the idle keep-alive limit |
 | `h2KeepAlive` | `20000` | PING probes on an idle HTTP/2 connection; a dead peer goes within twice this |
+| `bodyRead` | `30000` | A request body arriving, before the allowance `bodyMinRate` earns it |
+| `bodyMinRate` | `1024` | Bytes per second that extend `bodyRead`; `0` makes it a flat cap |
 
-Each is a number of milliseconds. `null` disables one, omitting it keeps the
-default, and a non-number is a `TypeError` at the call rather than a bound port.
+Each is a number of milliseconds (`bodyMinRate`, bytes per second). `null`
+disables one, omitting it keeps the default, and a non-number is a `TypeError` at
+the call rather than a bound port.
+
+A body's deadline is `bodyRead + received / bodyMinRate`: an upload extends its
+own by arriving, a peer dribbling a byte a minute does not. It reaches the
+handler as the body stream erroring with `ERR_TIMED_OUT`.
 
 ```js
 serve({ port: 8080, timeouts: { headerRead: 5000, h2KeepAlive: null } }, handler);

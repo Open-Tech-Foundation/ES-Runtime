@@ -144,6 +144,28 @@ declare module "runtime:http" {
      * `20_000`.
      */
     h2KeepAlive?: number | null;
+    /**
+     * How long a request **body** may take, before the allowance
+     * {@link bodyMinRate} earns it. Defaults to `30_000`; `null` removes the
+     * bound.
+     *
+     * {@link headerRead} stops when the head is complete, so a peer that sends
+     * a well-formed head and then dribbles its body a byte at a time is past
+     * every other timer here. A flat cap cannot answer that — over elapsed time
+     * a large upload on a slow link looks the same — so the deadline is
+     * **earned**: a body starts with this and gains more by arriving.
+     */
+    bodyRead?: number | null;
+    /**
+     * Bytes per second that extend {@link bodyRead} — a floor to beat, not a
+     * rate to sustain. Defaults to `1024`.
+     *
+     * The deadline is `bodyRead + received / bodyMinRate`, so at the defaults a
+     * 100 MiB upload has over a day to arrive and a peer sending one byte a
+     * minute is closed at ~30s. `0` earns nothing, making {@link bodyRead} a
+     * flat cap on the whole body.
+     */
+    bodyMinRate?: number | null;
   }
 
   /** A running HTTP server. */

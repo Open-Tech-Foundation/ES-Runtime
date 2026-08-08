@@ -64,6 +64,20 @@ namespace) is unstable and may change between minor releases until the API freez
   port could read and write another agent's channel by trying 1, 2, 3. They now
   come from the CSPRNG (D50).
 
+### Added
+
+- **A bound on a slow request body** — `timeouts.bodyRead` (30s) and
+  `timeouts.bodyMinRate` (1024 B/s). `headerRead` stops when the head is
+  complete, so a peer that sent a well-formed head and then dribbled its body a
+  byte at a time was past every timer the server had: slowloris, one phase
+  later. A flat cap cannot answer it — over elapsed time a 100 MiB upload on a
+  slow link looks identical — so the deadline is **earned**:
+  `bodyRead + received / bodyMinRate`. At the defaults a 100 MiB upload has over
+  a day to arrive, a 1 GiB one over a week, and a byte-a-minute peer is closed
+  at ~30s. `bodyMinRate: 0` makes `bodyRead` a flat cap; `bodyRead: null`
+  removes the bound. A body that runs out reaches the handler as its stream
+  erroring with `ERR_TIMED_OUT`.
+
 ### Changed
 
 - **An `--allow-read` / `--allow-write` entry outside the root jail is now an

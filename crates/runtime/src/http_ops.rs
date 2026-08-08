@@ -103,7 +103,8 @@ pub(crate) fn install(
     let owned = servers.clone();
     engine.register_op(
         // Args: [host, port, cert?, key?, handshakeMs?, headerReadMs?,
-        // h2KeepAliveMs?, maxConnections?, alpn0, alpn1, …]. A cert *and* key (both non-empty)
+        // h2KeepAliveMs?, bodyReadMs?, bodyMinRate?, maxConnections?, reusePort?,
+        // alpn0, alpn1, …]. A cert *and* key (both non-empty)
         // turn on TLS termination; the cert/key travel inline because reading a
         // file is the filesystem's privilege, so serving HTTPS needs no grant
         // beyond NetListen. Each timeout is `null` for the provider default or
@@ -124,21 +125,31 @@ pub(crate) fn install(
                 handshake: arg_timeout(&args, 4, fallback.handshake),
                 header_read: arg_timeout(&args, 5, fallback.header_read),
                 h2_keep_alive: arg_timeout(&args, 6, fallback.h2_keep_alive),
+                body_read: arg_timeout(&args, 7, fallback.body_read),
+                // A rate, not a duration, so it reads its own way: absent means
+                // the provider's default, and any finite non-negative number is
+                // taken as given — `0` is the guest saying a slow body earns
+                // nothing, which makes `bodyRead` a flat cap.
+                body_min_rate: args
+                    .get(8)
+                    .and_then(Value::as_number)
+                    .filter(|n| *n >= 0.0 && n.is_finite())
+                    .map_or(fallback.body_min_rate, |n| n as u64),
             };
             // `null`/absent ⇒ no limit, which is the default: the right
             // number follows from a deployment's descriptor budget, and a cap
             // guessed here would throttle real traffic silently.
             let max_connections = args
-                .get(7)
+                .get(9)
                 .and_then(Value::as_number)
                 .filter(|n| *n >= 1.0 && n.is_finite())
                 .map(|n| n as usize);
             // `SO_REUSEPORT`: several processes sharing one listening port.
             // Ahead of the ALPN tail, which must stay last.
-            let reuse_port = matches!(args.get(8), Some(Value::Bool(true)));
+            let reuse_port = matches!(args.get(10), Some(Value::Bool(true)));
             let alpn: Vec<String> = args
                 .iter()
-                .skip(9)
+                .skip(11)
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect();
             Box::pin(async move {
