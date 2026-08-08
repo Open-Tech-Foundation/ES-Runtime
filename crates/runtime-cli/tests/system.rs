@@ -270,6 +270,31 @@ try {
 }
 
 #[test]
+fn signalling_a_reaped_child_is_the_no_op_it_promises() {
+    // `kill()` documents that signalling an exited child is a no-op, because
+    // the race is unavoidable for the caller. Draining both pipes *and*
+    // awaiting the status releases the host handle, and after that the signal
+    // was answered with ERR_FOREIGN_HANDLE — the right answer to naming another
+    // agent's child, the wrong one to naming your own after it finished.
+    let printed = run(
+        "reaped-kill.mjs",
+        "import { Command } from 'runtime:system'; \
+         const p = await new Command('echo', { args: ['hi'], stdout: 'piped', stderr: 'piped' }) \
+           .spawn(); \
+         for (const s of [p.stdout, p.stderr]) { \
+           const r = s.getReader(); \
+           for (;;) { const { done } = await r.read(); if (done) break; } \
+         } \
+         await p.status; \
+         try { await p.kill(); console.log('no-op'); } \
+         catch (e) { console.log('threw', e.code); } \
+         try { await p.stdin?.getWriter().close(); } catch (e) { console.log('stdin', e.code); } \
+         console.log('done');",
+    );
+    assert_eq!(printed, "no-op\ndone\n");
+}
+
+#[test]
 fn a_child_nobody_waits_on_does_not_hold_the_program_open() {
     // The liveness rule: awaiting `status` is what keeps the runtime ticking.
     // Spawn and ignore, and the program still exits — and the child does not

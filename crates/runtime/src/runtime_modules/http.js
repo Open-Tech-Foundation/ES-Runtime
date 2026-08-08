@@ -303,6 +303,10 @@ function describeReturn(v) {
 
 async function handleRequest(entry, handler) {
   const requestId = entry[0];
+  // Flipped once the response has been handed over, which is also when the
+  // host stops holding anything for this request. Shared with the body stream
+  // above, which outlives the handler whenever a handler keeps a reference.
+  const answered = { done: false };
   const method = entry[1];
   const url = entry[2];
   const hasBody = entry[3];
@@ -318,6 +322,11 @@ async function handleRequest(entry, handler) {
     if (hasBody && method !== "GET" && method !== "HEAD") {
       init.body = new ReadableStream({
         async pull(controller) {
+          // The host drops an undrained request body once the response is on
+          // its way, so from here the body is over — reading it is not an
+          // error, there is simply nothing more. Asking the host again would
+          // name a request this agent has already given up (D50).
+          if (answered.done) return controller.close();
           const chunk = await ops.http_body_read(requestId);
           if (chunk === null) controller.close();
           else controller.enqueue(chunk);
@@ -381,6 +390,12 @@ async function handleRequest(entry, handler) {
     }
   }
 
+  // A **buffered** response is complete, so the host gives the request up as it
+  // sends it — nothing can still read the body. A **streamed** one is different
+  // precisely because it may be echoing that body (`new Response(request.body)`),
+  // so the request lives until the pump ends. This mirrors where the host
+  // releases the id, and the two must agree or one of them is wrong.
+  if (stream === null) answered.done = true;
   const args = [requestId, parts.status, out, streamId, trailerArg];
   // HTTP/1.1 sends only the trailer fields named in a `Trailer` header, so add
   // one when the names are known and the handler did not declare them itself.
@@ -398,7 +413,10 @@ async function handleRequest(entry, handler) {
   // rejects), so there is no rejection to surface. For a streaming body the
   // status/headers go out now and the chunks flow behind them via the pump.
   ops.http_respond(...args);
-  if (stream) await pumpResponseBody(stream, streamId, trailers);
+  if (stream) {
+    await pumpResponseBody(stream, streamId, trailers);
+    answered.done = true;
+  }
 }
 
 // The handle returned by serve(): `addr` resolves to the bound address,

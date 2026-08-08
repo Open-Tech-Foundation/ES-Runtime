@@ -104,6 +104,7 @@ class Socket {
 
     this.readable = new ReadableStream({
       async pull(controller) {
+        if (self._consumed) return controller.close();
         const { id } = await self._conn;
         const chunk = await socketOp(ops.net_read(id));
         if (chunk === null) {
@@ -130,7 +131,7 @@ class Socket {
       // that disallows half-open closes it from under this stream, and the
       // writable is ended afterwards either way.
       async close() {
-        if (self._closing) return;
+        if (self._closing || self._consumed) return;
         const { id } = await self._conn;
         await socketOp(ops.net_shutdown(id));
       },
@@ -156,6 +157,9 @@ class Socket {
   // host — the id is given back on the first, and naming it again is a request
   // to act on a socket this agent no longer has.
   close(_reason) {
+    // A consumed socket has already handed its connection to the upgraded one,
+    // which is what closes it.
+    if (this._consumed) return Promise.resolve();
     this._closing ??= (async () => {
       const { id } = await this._conn;
       await socketOp(ops.net_close(id));
@@ -172,6 +176,12 @@ class Socket {
     }
     const { name, alpn } = this._upgrade;
     this._upgrade = null; // single-shot
+    // The upgrade retires this socket's id and mints another, so from here the
+    // original names nothing. Marked rather than left to fail: its own close()
+    // in a `finally` is ordinary code, and `ERR_FOREIGN_HANDLE` is the answer
+    // to naming another agent's socket, not to naming your own after it was
+    // consumed.
+    this._consumed = true;
     const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn));
     const upgraded = new Socket(info, { allowHalfOpen: this._allowHalfOpen });
     upgraded.upgraded = true;

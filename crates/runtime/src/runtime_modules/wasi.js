@@ -87,6 +87,11 @@ const FIRST_PREOPEN_FD = 3;
 function errnoFor(e) {
   const text = `${(e && e.message) || e}`.toLowerCase();
   if (e && e.code === "ERR_JAIL_ESCAPE") return ERRNO.NOTCAPABLE;
+  if (e && e.code === "ERR_CAPABILITY_DENIED") return ERRNO.NOTCAPABLE;
+  // A descriptor this agent may not name is a bad descriptor, which is what
+  // every WASI caller already handles. Matched by code rather than by message
+  // text, so the mapping does not depend on prose.
+  if (e && e.code === "ERR_FOREIGN_HANDLE") return ERRNO.BADF;
   if (e && e.code === "ERR_NOT_FOUND") return ERRNO.NOENT;
   if (text.includes("not found") || text.includes("no such file")) return ERRNO.NOENT;
   if (text.includes("already exists")) return ERRNO.EXIST;

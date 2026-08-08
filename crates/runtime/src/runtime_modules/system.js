@@ -267,6 +267,12 @@ class ChildProcess {
   // Only this child is signalled. A child that spawned its own children does
   // not pass it on, so grandchildren can outlive a kill.
   kill(signal = this.#killSignal) {
+    // Already exited *and* reaped: the handle has been given back, so there is
+    // nothing left to signal. This is the no-op the contract above promises —
+    // without the guard it became `ERR_FOREIGN_HANDLE`, which is the right
+    // answer to naming someone else's child and the wrong one to naming your
+    // own after it finished.
+    if (this.#released) return Promise.resolve();
     return ops.system_kill(this.#id, signal);
   }
 
@@ -294,10 +300,14 @@ class ChildProcess {
       async write(chunk) {
         await ops.system_write(self.#id, toBytes(chunk));
       },
+      // Closing the stdin of a child that has already been reaped is the same
+      // no-op as signalling one: its pipes went with it.
       close() {
+        if (self.#released) return undefined;
         return ops.system_stdin_close(self.#id);
       },
       abort() {
+        if (self.#released) return undefined;
         return ops.system_stdin_close(self.#id);
       },
     });

@@ -140,6 +140,25 @@ namespace) is unstable and may change between minor releases until the API freez
 - `ERR_FOREIGN_HANDLE` — a socket, child process, server, file descriptor or
   request belonging to another agent.
 
+### Fixed
+
+- **A handle you gave up is finished, not foreign.** Ownership checks (below)
+  made four ordinary sequences raise `ERR_FOREIGN_HANDLE` — the right answer to
+  naming *another* agent's handle, and the wrong one to naming your own after it
+  ended. Found by sweeping every op that takes a handle against every prelude
+  call path, rather than one at a time:
+
+  - `child.kill()` after the child exited **and** both its pipes were drained
+    threw, though `kill()` documents that signalling an exited child is a no-op.
+    Closing its `stdin` did too.
+  - Reading `request.body` after returning a buffered `Response` threw instead of
+    ending. The host drops an undrained body when the response goes out, so from
+    the guest's side it is simply over. (A *streamed* response still holds the
+    body open — `new Response(request.body)` is the echo case.)
+  - `socket.close()` on a socket already consumed by `startTls()` threw; the
+    upgrade retires the old id, so the original names nothing.
+  - `runtime:wasi` reported such a descriptor as `EIO` rather than `EBADF`.
+
 ### Changed
 
 - **An `--allow-read` / `--allow-write` path outside the root jail now adds that

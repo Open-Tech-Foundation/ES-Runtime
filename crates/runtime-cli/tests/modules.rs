@@ -93,6 +93,20 @@ fn streams_an_http_request_body_through_to_the_response() {
 }
 
 #[test]
+fn a_request_body_kept_past_the_response_ends_rather_than_erroring() {
+    // The host drops an undrained request body once the response is on its way,
+    // so from the guest's side the body is simply over. Reading it afterwards
+    // used to raise ERR_FOREIGN_HANDLE instead — the right answer to naming
+    // another agent's request, the wrong one to naming your own after it was
+    // answered.
+    let out = run_file("http-body-after-respond.mjs");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let stdout = stdout(&out);
+    assert!(stdout.contains("ENDED_CLEANLY"), "{stdout}");
+    assert!(!stdout.contains("THREW"), "{stdout}");
+}
+
+#[test]
 fn upgrades_a_websocket_on_the_http_server_that_is_serving_requests() {
     // D55: one port, one certificate, both protocols — how every peer runtime
     // does it, and what a deployment behind a single TLS endpoint needs. Also
