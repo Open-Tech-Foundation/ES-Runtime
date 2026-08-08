@@ -28,7 +28,7 @@ An HTTP/1.1 and HTTP/2 server: `serve((request) => response)`. The handler takes
 | Function | Type | Description | Example |
 | --- | --- | --- | --- |
 | `serve(handler)` | `(Handler) => Server` | Start a server on an ephemeral port (read it from `server.addr`). `handler` is `(request) => response`. | `serve((req) => new Response("hi"))` |
-| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
+| `serve(options, handler)` | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `hostname` defaults to `0.0.0.0`; `port 0` picks an ephemeral port. `secureTransport: "on"` terminates TLS (needs inline PEM `cert` + `key`; `alpn` defaults to `["h2", "http/1.1"]`). `timeouts` bounds connections that stall — see below. | `serve({ port: 443, secureTransport: "on", cert, key }, handler)` |
 
 ## Serve
 
@@ -147,6 +147,26 @@ serve({ port: 8080, maxConnections: 10_000 }, handler);
 A connection over the cap is **held, not refused**: the server stops accepting,
 so it waits in the kernel's backlog and is served as soon as a slot frees.
 Nothing is spent on it while it waits.
+
+`maxConnectionsPerIp` caps how many of those one **peer address** may hold.
+Without it, `maxConnections` says nothing about whose connections fill it — one
+peer opening every slot fills the server exactly as a thousand peers opening one
+each do.
+
+```js
+serve({ port: 8080, maxConnections: 10_000, maxConnectionsPerIp: 64 }, handler);
+```
+
+A connection over *this* one is **refused**, not held: an excess against the
+whole-server cap is legitimate traffic queueing for a slot, while an excess here
+is one client past its share, already accepted and holding a descriptor it
+decides when to release.
+
+<Callout type="warning" title="Behind a proxy, leave this off">
+  The count is per address, and every connection through a load balancer or NAT
+  gateway carries the same source — so a cap here caps the whole service. Use
+  the proxy's own per-client limits. That is why it is off by default.
+</Callout>
 
 The per-connection limits it multiplies against are fixed:
 

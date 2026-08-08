@@ -345,6 +345,7 @@ served at once. Nothing here has to be turned on:
 | `timeouts.bodyRead` | `30000`ms | A request body arriving, before what `bodyMinRate` earns it |
 | `timeouts.bodyMinRate` | `1024` B/s | Bytes per second that extend `bodyRead` |
 | `maxConnections` | unlimited | How many connections are served at once |
+| `maxConnectionsPerIp` | unlimited | How many one peer address may hold — over it, refused rather than held |
 
 ```js
 // Timeouts are milliseconds; `null` disables one; omit it to keep the default.
@@ -355,7 +356,10 @@ They bound only connections that are **idle or stalled**. A request in flight an
 a response still streaming are never interrupted, however long they take — a live
 feed is unaffected by `headerRead` no matter how far past it runs. A connection
 over `maxConnections` is held rather than refused: it waits, and is served as
-soon as a slot frees.
+soon as a slot frees. `maxConnectionsPerIp` is the half that says *whose*
+connections fill that budget — without it one peer can take every slot — and a
+connection over it is refused rather than held. Leave it off behind a proxy,
+where every connection carries the same source address.
 
 A request **body** is bounded differently, because elapsed time cannot tell a
 large upload on a slow link from a peer dribbling a byte a minute. The deadline

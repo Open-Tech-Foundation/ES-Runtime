@@ -42,6 +42,7 @@ use tracing::Instrument;
 
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
+use crate::peer_limit::{PeerLimit, PeerSlot};
 
 /// A close with no peer status code maps to 1005 ("no status received").
 const NO_STATUS_RCVD: u16 = 1005;
@@ -162,7 +163,11 @@ impl SystemWebSocket {
     /// opposite of what a WebSocket server needs — the connections it holds are
     /// the long-lived ones. `None` for a client `connect`, which no server's
     /// budget applies to.
-    fn spawn<S>(ws: WebSocketStream<S>, permit: Option<OwnedSemaphorePermit>) -> WsSlot
+    fn spawn<S>(
+        ws: WebSocketStream<S>,
+        permit: Option<OwnedSemaphorePermit>,
+        peer_slot: Option<PeerSlot>,
+    ) -> WsSlot
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
@@ -174,6 +179,7 @@ impl SystemWebSocket {
             // Released when this task ends, whichever way it ends — the peer's
             // close, a broken stream, the guest dropping the socket, or a panic.
             let _permit = permit;
+            let _peer_slot = peer_slot;
             loop {
                 tokio::select! {
                     msg = stream.next() => match msg {
@@ -327,10 +333,16 @@ impl WebSocketProvider for SystemWebSocket {
                     .await
                     .map_err(err)?;
                 let (stream, response) = client_async(request, tls).await.map_err(err)?;
-                (info_of(&response), SystemWebSocket::spawn(stream, None))
+                (
+                    info_of(&response),
+                    SystemWebSocket::spawn(stream, None, None),
+                )
             } else {
                 let (stream, response) = client_async(request, tcp).await.map_err(err)?;
-                (info_of(&response), SystemWebSocket::spawn(stream, None))
+                (
+                    info_of(&response),
+                    SystemWebSocket::spawn(stream, None, None),
+                )
             };
             this.conns.lock().unwrap().insert(id, slot);
             Ok((id, info))
@@ -451,6 +463,10 @@ impl WebSocketProvider for SystemWebSocket {
             let slots = options
                 .max_connections
                 .map(|max| Arc::new(Semaphore::new(max)));
+            // The other half of the cap: whose connections they are. Taken after
+            // `accept`, because that is when the peer is known, and a refusal
+            // closes rather than waits — see [`crate::peer_limit`].
+            let per_peer = PeerLimit::new(options.max_connections_per_ip);
             // Accept loop: each TCP connection's WS handshake runs in its own task
             // so a slow handshake never blocks the next accept; on success the
             // connection registers in the shared `conns` map and is queued for
@@ -496,6 +512,23 @@ impl WebSocketProvider for SystemWebSocket {
                     if tx.is_closed() {
                         break; // server closed (accept rx dropped)
                     }
+                    // Before the handshake, the task and the span: a refusal
+                    // here costs a close, and the descriptor comes straight
+                    // back.
+                    let peer_slot = match &per_peer {
+                        None => None,
+                        Some(per_peer) => match per_peer.take(peer.ip()) {
+                            Some(slot) => Some(slot),
+                            None => {
+                                tracing::debug!(
+                                    target: "runtime::websocket",
+                                    peer = %peer,
+                                    "refused: this address is at its connection limit",
+                                );
+                                continue;
+                            }
+                        },
+                    };
                     let _ = tcp.set_nodelay(true);
                     let tx = tx.clone();
                     let conns = conns.clone();
@@ -516,6 +549,7 @@ impl WebSocketProvider for SystemWebSocket {
                             // handshake — and, on success, handed to the actor
                             // task so it lives as long as the connection does.
                             let permit = permit;
+                            let peer_slot = peer_slot;
                             // A peer that opens a connection and never sends its
                             // upgrade request is the cheapest hold there is: one
                             // syscall to the peer, a task and a descriptor to us,
@@ -560,7 +594,7 @@ impl WebSocketProvider for SystemWebSocket {
                                 None => return,
                             };
                             let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
-                            let slot = SystemWebSocket::spawn(ws, permit);
+                            let slot = SystemWebSocket::spawn(ws, permit, peer_slot);
                             conns.lock().unwrap().insert(id, slot);
                             if tx.send((id, WebSocketInfo::default())).await.is_err() {
                                 conns.lock().unwrap().remove(&id); // server gone before accept
@@ -647,6 +681,7 @@ mod tests {
             port: 0,
             timeouts,
             max_connections,
+            max_connections_per_ip: None,
         })
         .await
         .unwrap()
@@ -1131,6 +1166,81 @@ mod bounds_tests {
             !closed_within(&mut sock, Duration::from_millis(700)).await,
             "with the timeout off, a silent connection must be left alone",
         );
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// A WebSocket connection is long-lived by design, so one peer holding
+    /// every slot is not something churn takes back — the whole-server cap
+    /// bounds what the deployment spends and says nothing about whose
+    /// connections they are. Here the flooder is held to its share.
+    ///
+    /// The refusal is a **close**, unlike the whole-server cap's hold: the
+    /// second connection's handshake fails rather than parking, which is
+    /// exactly the difference this policy is asserting.
+    #[tokio::test]
+    async fn one_peer_cannot_hold_every_slot() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys
+            .serve(WsServeOptions {
+                host: "127.0.0.1".to_string(),
+                port: 0,
+                timeouts: WsTimeouts::default(),
+                max_connections: Some(8),
+                max_connections_per_ip: Some(1),
+            })
+            .await
+            .unwrap();
+        let port = info.local_port;
+
+        let (first, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let accepted = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the peer's first connection is accepted")
+            .unwrap()
+            .expect("a connection");
+
+        // The second from the same address is refused: the server closes it
+        // before the handshake, so `connect` fails rather than parking.
+        let refused = tokio::time::timeout(
+            Duration::from_secs(10),
+            sys.connect(format!("ws://127.0.0.1:{port}/"), vec![]),
+        )
+        .await
+        .expect("a refused connection fails rather than hanging");
+        assert!(
+            refused.is_err(),
+            "a second connection from a capped peer was served"
+        );
+
+        // …and the peer's share comes back when its connection ends. Both ends
+        // are closed: the slot belongs to the *server's* actor task, which
+        // lives until its stream does.
+        let (accepted_id, _) = accepted;
+        sys.close(first, Some(1000), String::new()).await.unwrap();
+        sys.close(accepted_id, Some(1000), String::new())
+            .await
+            .unwrap();
+
+        // Retried rather than raced: the slot is returned when the actor task
+        // ends, which is a scheduling event, not something `close` awaits.
+        let reconnected = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if sys
+                    .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+                    .await
+                    .is_ok()
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(reconnected.is_ok(), "a returned share was not reusable");
+
         sys.close_server(server_id).await.unwrap();
     }
 

@@ -133,6 +133,7 @@ the reasoning behind each.
 | --- | --- | --- |
 | `timeouts.handshake` | 10s | From accept until the opening handshake completes |
 | `maxConnections` | unlimited | How many connections this server holds at once |
+| `maxConnectionsPerIp` | unlimited | How many one peer address may hold |
 | Accept queue | 64 | Accepted connections waiting for an `accept()` call |
 
 The handshake bound exists because RFC 6455's handshake is an HTTP request head,
@@ -195,9 +196,18 @@ connection stays open, costing this server nothing, and is served when a slot
 frees. A reset is easier to diagnose; a hold is the difference between a queue
 and a rejection, and it is what makes a cap safe to set conservatively.
 
+`maxConnectionsPerIp` is the half `maxConnections` cannot answer: whose
+connections fill the budget. It matters more here than on an HTTP server for the
+same reason the total does — a WebSocket connection is long-lived by design, so
+one peer's share is not something churn takes back. It is taken after `accept`,
+where the peer is known, and an excess is **refused** rather than held: the
+whole-server cap queues because its excess is legitimate traffic, while an excess
+here is one client past its share, already holding a descriptor. Off by default,
+and behind a proxy it should stay off — every connection would carry the same
+source address.
+
 ### Still missing
 
-No per-IP cap, so one peer can take every slot of a `maxConnections` budget.
 No `wss:` — a TLS WebSocket server waits on RFC 8441 extended CONNECT.
 
 And **no backpressure that a sender can feel.** A connection's command channel

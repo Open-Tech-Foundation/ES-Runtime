@@ -56,6 +56,7 @@ use crate::accept_backoff::AcceptBackoff;
 use crate::body_deadline::{BodyDeadline, BodyLimit};
 use crate::checkout::Checkout;
 use crate::first_byte::FirstByteTimeout;
+use crate::peer_limit::PeerLimit;
 
 /// The most header fields one HTTP/1.1 request head may carry.
 const MAX_HEADERS: usize = 100;
@@ -653,6 +654,10 @@ impl HttpServerProvider for SystemHttpServer {
             let slots = options
                 .max_connections
                 .map(|max| Arc::new(Semaphore::new(max)));
+            // The other half of the cap: whose connections they are. Taken
+            // *after* accept, because that is when the peer is known, and a
+            // refusal closes rather than waits — see [`crate::peer_limit`].
+            let per_peer = PeerLimit::new(options.max_connections_per_ip);
 
             let acceptor = tokio::spawn(async move {
                 // Errors from `accept` are retried, never fatal — see
@@ -689,6 +694,23 @@ impl HttpServerProvider for SystemHttpServer {
                             continue;
                         }
                     };
+                    // Before anything is spent on it: no nodelay, no span, no
+                    // task, no TLS handshake. Dropping the stream here sends the
+                    // close and returns the descriptor on the spot.
+                    let peer_slot = match &per_peer {
+                        None => None,
+                        Some(per_peer) => match per_peer.take(peer.ip()) {
+                            Some(slot) => Some(slot),
+                            None => {
+                                tracing::debug!(
+                                    target: "runtime::http",
+                                    peer = %peer,
+                                    "refused: this address is at its connection limit",
+                                );
+                                continue;
+                            }
+                        },
+                    };
                     let _ = stream.set_nodelay(true);
                     let tx = tx.clone();
                     let origin = origin.clone();
@@ -711,10 +733,11 @@ impl HttpServerProvider for SystemHttpServer {
                     );
                     tokio::spawn(
                         async move {
-                            // Moved in so the slot is released when this
+                            // Moved in so both slots are released when this
                             // connection is done, whichever way it ends —
                             // including a panic.
                             let _permit = permit;
+                            let _peer_slot = peer_slot;
                             match tls {
                                 // A failed handshake ends this connection only. It is
                                 // an ordinary event on a public port — a scanner, a
@@ -973,6 +996,7 @@ mod tests {
                 tls: None,
                 timeouts: HttpTimeouts::default(),
                 max_connections: Some(max),
+                max_connections_per_ip: None,
                 reuse_port: false,
             })
             .await
@@ -994,6 +1018,7 @@ mod tests {
                 tls,
                 timeouts,
                 max_connections: None,
+                max_connections_per_ip: None,
                 reuse_port: false,
             })
             .await
@@ -1154,6 +1179,7 @@ mod tests {
                 tls: None,
                 timeouts: HttpTimeouts::default(),
                 max_connections: None,
+                max_connections_per_ip: None,
                 reuse_port: false,
             })
             .await
@@ -1169,6 +1195,7 @@ mod tests {
                 tls: None,
                 timeouts: HttpTimeouts::default(),
                 max_connections: None,
+                max_connections_per_ip: None,
                 reuse_port: false,
             })
             .await
@@ -1276,6 +1303,7 @@ mod tls_tests {
                 tls: Some(tls_options(b"not a certificate".to_vec(), key_pem)),
                 timeouts: HttpTimeouts::default(),
                 max_connections: None,
+                max_connections_per_ip: None,
                 reuse_port: false,
             })
             .await;
@@ -2530,6 +2558,8 @@ mod connection_cap_tests {
     use super::tests::{bound_with_max, request_on_new_conn};
     use super::*;
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
 
     /// Long enough that a slow machine does not report a held-back connection
     /// as one that was never going to arrive.
@@ -2584,6 +2614,80 @@ mod connection_cap_tests {
             .expect("the held connection is served once a slot frees")
             .unwrap();
         assert_eq!(admitted.len(), 1);
+    }
+
+    /// A server bounded per peer address as well as in total.
+    async fn bound_with_per_ip(max: usize, per_ip: usize) -> (SystemHttpServer, u64, u16) {
+        let http = SystemHttpServer::new();
+        let (id, info) = http
+            .serve(HttpServeOptions {
+                host: "127.0.0.1".into(),
+                port: 0,
+                tls: None,
+                timeouts: HttpTimeouts::default(),
+                max_connections: Some(max),
+                max_connections_per_ip: Some(per_ip),
+                reuse_port: false,
+            })
+            .await
+            .unwrap();
+        (http, id, info.local_port)
+    }
+
+    /// The gap the whole-server cap leaves: one peer taking every slot fills it
+    /// exactly as a thousand peers taking one each do, and the server is then
+    /// full for everybody. Here the flooder is held to its own share and the
+    /// server keeps serving — which is the entire point, and is checked by
+    /// serving somebody else *while the flooder is still holding its slot*.
+    ///
+    /// Both peers are 127.0.0.1, so the flooder's connections past the cap are
+    /// the ones refused and the legitimate one is admitted only because a slot
+    /// was returned to it. That is the honest test of the accounting: this
+    /// cannot pass by the cap simply being ignored.
+    #[tokio::test]
+    async fn one_peer_cannot_take_every_slot() {
+        let (http, id, port) = bound_with_per_ip(8, 2).await;
+
+        // Two connections from this address fill its share and are served.
+        let _a = request_on_new_conn(port).await;
+        let _b = request_on_new_conn(port).await;
+        let mut served = 0;
+        while served < 2 {
+            served += tokio::time::timeout(GRACE, probe(&http, id))
+                .await
+                .expect("a peer's first connections are served")
+                .unwrap()
+                .len();
+        }
+
+        // A third from the same address is *refused* rather than held: the
+        // server closes it, so the write either fails or the read sees EOF.
+        // Either way nothing reaches the handler.
+        let mut third = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let held = probe(&http, id);
+        tokio::time::sleep(QUIET).await;
+        assert!(
+            !held.is_finished(),
+            "a connection over the per-peer cap must not be served"
+        );
+
+        // And the refusal is a close, not a wait — unlike the whole-server cap,
+        // where the connection sits in the backlog until a slot frees.
+        let closed = tokio::time::timeout(GRACE, async {
+            let mut buf = [0u8; 1];
+            loop {
+                let _ = third.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n").await;
+                match third.read(&mut buf).await {
+                    Ok(0) | Err(_) => return true,
+                    Ok(_) => continue,
+                }
+            }
+        })
+        .await
+        .expect("a refused connection is closed rather than held open");
+        assert!(closed);
+
+        held.abort();
     }
 
     /// The cap is a ceiling on connections held at once, not a total: a server

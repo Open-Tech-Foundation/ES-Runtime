@@ -1049,6 +1049,16 @@ pub struct WsServeOptions {
     /// descriptor and a task per refused connection does not bound anything
     /// under the flood it exists for.
     pub max_connections: Option<usize>,
+    /// The most connections **one peer address** may hold at once, or `None`
+    /// for no limit.
+    ///
+    /// The same policy as [`HttpServeOptions::max_connections_per_ip`], and it
+    /// matters more here for the same reason [`max_connections`](Self::max_connections)
+    /// does: a WebSocket connection is long-lived by design, so one peer's share
+    /// of the budget is not something churn takes back.
+    ///
+    /// A connection over this should be **refused**, not held.
+    pub max_connections_per_ip: Option<usize>,
 }
 
 /// When a [`WebSocketProvider`] server should give up on a connection.
@@ -1553,6 +1563,25 @@ pub struct HttpServeOptions {
     /// descriptor and a task per refused connection does not bound anything
     /// under the flood it exists for.
     pub max_connections: Option<usize>,
+    /// The most connections **one peer address** may hold at once, or `None`
+    /// for no limit.
+    ///
+    /// [`max_connections`](Self::max_connections) bounds what the deployment
+    /// spends and nothing else: one peer taking every slot reaches it exactly as
+    /// a thousand peers taking one each do, and the server is then full for
+    /// everybody. This is the half that says *whose* connections they are.
+    ///
+    /// Unlike the whole-server cap, an implementation should **refuse** a
+    /// connection over this rather than hold it. Holding is right there because
+    /// the excess is legitimate traffic waiting for a slot; here the excess is
+    /// by definition one client past its share, and a held connection is
+    /// already accepted — it costs a descriptor, and the peer decides when it
+    /// ends, which is the hold this exists to prevent.
+    ///
+    /// `None` by default, and deliberately: the count is per address, so
+    /// everything behind one NAT or one load balancer shares a budget. Only the
+    /// deployment knows what sits in front of it.
+    pub max_connections_per_ip: Option<usize>,
     /// Allow several processes to bind this same address, letting the kernel
     /// balance new connections across them (`SO_REUSEPORT`).
     ///

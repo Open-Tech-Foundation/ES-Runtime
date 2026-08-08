@@ -7550,6 +7550,34 @@ ${info.remoteAddr.port}`));",
         let options = http.options.lock().unwrap();
         assert_eq!(options[0].max_connections, None);
         assert_eq!(options[1].max_connections, Some(512));
+        // The per-peer half is separately off: a whole-server cap says nothing
+        // about whose connections fill it, and asking for one must not imply
+        // the other.
+        assert_eq!(options[0].max_connections_per_ip, None);
+        assert_eq!(options[1].max_connections_per_ip, None);
+    }
+
+    /// The two caps are independent numbers that answer different questions —
+    /// how much the deployment spends, and whose connections it spends it on.
+    #[test]
+    fn the_per_peer_cap_crosses_independently_of_the_whole_server_one() {
+        let _g = v8_guard();
+        let http = Arc::new(RecordingHttpServer::default());
+        let mut rt = http_runtime(http.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:http'; \
+             const a = serve({ port: 8080, maxConnectionsPerIp: 4 }, () => new Response('x')); \
+             const b = serve({ port: 8081, maxConnections: 512, maxConnectionsPerIp: 8 }, \
+                             () => new Response('x')); \
+             globalThis.result = (await a.addr).port + (await b.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let options = http.options.lock().unwrap();
+        assert_eq!(options[0].max_connections, None);
+        assert_eq!(options[0].max_connections_per_ip, Some(4));
+        assert_eq!(options[1].max_connections, Some(512));
+        assert_eq!(options[1].max_connections_per_ip, Some(8));
     }
 
     /// A cap of zero would serve nothing at all, and a fractional one is a
@@ -7566,13 +7594,19 @@ ${info.remoteAddr.port}`));",
              for (const bad of ['lots', 0, -1, 1.5]) { \
                try { serve({ port: 8080, maxConnections: bad }, () => new Response('x')); } \
                catch (e) { names.push(e.constructor.name); } \
+               try { serve({ port: 8080, maxConnectionsPerIp: bad }, () => new Response('x')); } \
+               catch (e) { names.push(e.constructor.name); } \
              } \
              globalThis.result = names.join(',');",
             MapLoader::new(&[]),
         );
         assert_eq!(
             rt.eval("globalThis.result").unwrap(),
-            Value::String("TypeError,RangeError,RangeError,RangeError".to_string())
+            Value::String(
+                "TypeError,TypeError,RangeError,RangeError,RangeError,RangeError,RangeError,\
+                 RangeError"
+                    .to_string()
+            )
         );
         assert!(
             http.options.lock().unwrap().is_empty(),

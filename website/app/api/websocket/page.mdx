@@ -83,7 +83,7 @@ for await (const ws of server) {
 
 | Export | Type | Description |
 | --- | --- | --- |
-| `serve(options)` | `({ hostname?, port, timeouts?, maxConnections? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
+| `serve(options)` | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). A closed connection is skipped; an element that is not a connection is a `TypeError`. |
 
 ### ServeOptions
@@ -94,6 +94,7 @@ for await (const ws of server) {
 | `port` | `0` | `0` picks an ephemeral port — read it back from `server.addr`. |
 | `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. |
 | `maxConnections` | unlimited | The most connections to hold at once; over the cap they wait rather than being refused. |
+| `maxConnectionsPerIp` | unlimited | The most one peer address may hold; over this they are **refused**. Leave off behind a proxy. |
 
 ```js
 const server = serve({
@@ -116,6 +117,13 @@ so the count does not fall back down on its own. Over the cap a connection is
 descriptor, task or buffer, and is served the moment a slot frees. Unlimited by
 default, because the right number follows from your file-descriptor budget,
 which the runtime cannot read.
+
+`maxConnectionsPerIp` is the half that says *whose* connections those are —
+without it one peer can take every slot, and the server is then full for
+everybody. Over this cap a connection is **refused** rather than held: the
+excess is one client past its share, and holding it is the hold the cap exists
+to prevent. Leave it off behind a proxy or a NAT, where every connection carries
+the same source address and a cap here would cap the whole service.
 
 Both options are spelled exactly as [`runtime:http`'s `serve()`](/api/http)
 spells them.

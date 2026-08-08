@@ -34,6 +34,7 @@ mod modules;
 mod net;
 mod node_modules;
 mod path_allowlist;
+mod peer_limit;
 mod ports;
 mod process;
 mod signals;

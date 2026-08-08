@@ -112,13 +112,31 @@ function parseTimeouts(options) {
 // the runtime can read, and a cap guessed for you would throttle real traffic
 // with no error anywhere to explain it.
 function parseMaxConnections(options) {
-  const value = (options ?? {}).maxConnections;
+  return count(options, "maxConnections");
+}
+
+// The most connections one *peer address* may hold at once. Absent means no
+// limit, and for a sharper reason than the whole-server cap: the count is per
+// address, so everything behind one NAT or one load balancer shares a budget —
+// with a proxy in front, every connection has the same source and any cap here
+// is a cap on the whole service. Only the deployment knows what sits in front
+// of it.
+//
+// A connection over this is *refused*, where one over `maxConnections` waits: an
+// excess there is legitimate traffic queueing for a slot, and an excess here is
+// one client past its share, which is the hold the cap exists to prevent.
+function parseMaxConnectionsPerIp(options) {
+  return count(options, "maxConnectionsPerIp");
+}
+
+function count(options, name) {
+  const value = (options ?? {})[name];
   if (value === undefined || value === null) return null;
   if (typeof value !== "number") {
-    throw new TypeError(`serve: maxConnections must be a number or null, got ${typeof value}`);
+    throw new TypeError(`serve: ${name} must be a number or null, got ${typeof value}`);
   }
   if (!Number.isInteger(value) || value < 1) {
-    throw new RangeError("serve: maxConnections must be an integer of at least 1");
+    throw new RangeError(`serve: ${name} must be an integer of at least 1`);
   }
   return value;
 }
@@ -386,7 +404,16 @@ async function handleRequest(entry, handler) {
 // The handle returned by serve(): `addr` resolves to the bound address,
 // `finished` resolves when the accept loop ends, `stop()` shuts it down.
 class Server {
-  constructor(hostname, port, tls, timeouts, maxConnections, reusePort, handler) {
+  constructor(
+    hostname,
+    port,
+    tls,
+    timeouts,
+    maxConnections,
+    maxConnectionsPerIp,
+    reusePort,
+    handler,
+  ) {
     let resolveAddr, rejectAddr, resolveFinished, rejectFinished;
     this.addr = new Promise((res, rej) => {
       resolveAddr = res;
@@ -403,7 +430,7 @@ class Server {
       let info;
       try {
         // The ALPN list takes the whole argument tail, so everything else —
-        // including the three timeouts — is passed positionally before it.
+        // including the timeouts — is passed positionally before it.
         info = tls
           ? await ops.http_serve(
               hostname,
@@ -412,6 +439,7 @@ class Server {
               tls.key,
               ...timeouts,
               maxConnections,
+              maxConnectionsPerIp,
               reusePort,
               ...tls.alpn,
             )
@@ -422,6 +450,7 @@ class Server {
               null,
               ...timeouts,
               maxConnections,
+              maxConnectionsPerIp,
               reusePort,
             );
       } catch (e) {
@@ -509,6 +538,7 @@ function serve(options, handler) {
     parseTls(options),
     parseTimeouts(options),
     parseMaxConnections(options),
+    parseMaxConnectionsPerIp(options),
     parseReusePort(options),
     handler,
   );

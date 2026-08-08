@@ -96,6 +96,27 @@ declare module "runtime:http" {
     maxConnections?: number | null;
 
     /**
+     * The most connections **one peer address** may hold at once. No limit by
+     * default.
+     *
+     * {@link maxConnections} bounds what the deployment spends and nothing
+     * else: one peer opening every slot fills the server exactly as a thousand
+     * peers opening one each do, and it is then full for everybody. This is the
+     * half that says *whose* connections they are.
+     *
+     * A connection over this is **refused**, where one over
+     * {@link maxConnections} waits — an excess there is legitimate traffic
+     * queueing for a slot, and an excess here is one client past its share.
+     *
+     * Off by default for a sharper reason than {@link maxConnections}: the
+     * count is per address, so everything behind one NAT or one load balancer
+     * shares a budget. **With a proxy in front, every connection has the same
+     * source address and any cap here caps the whole service** — leave it off
+     * and use the proxy's own limits.
+     */
+    maxConnectionsPerIp?: number | null;
+
+    /**
      * Bind with `SO_REUSEPORT`, so several **processes** can listen on this
      * same address and the kernel balances new connections across them.
      *

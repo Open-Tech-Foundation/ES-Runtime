@@ -1417,7 +1417,7 @@ await server.stop();
 | Export                            | Type                                          | Description                                                        |
 | --------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
 | `serve(handler)`                  | `(Handler) => Server`                         | Start a server on an ephemeral port. `NetListen`.                  |
-| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
+| `serve(options, handler)`         | `({ hostname?, port?, secureTransport?, cert?, key?, alpn?, timeouts?, maxConnections?, maxConnectionsPerIp?, reusePort? }, Handler) => Server` | Start a server bound to `options`. `NetListen`. |
 
 `Handler` is `(request: Request, info: ConnectionInfo) => Response | Promise<Response>`.
 The second argument is optional to take — a one-parameter handler is unaffected.
@@ -1687,6 +1687,30 @@ read. It is worth setting on a public port: an HTTP/1.1 connection's read buffer
 can reach ~408KB, so the connection count multiplies straight into memory. Node,
 Deno and Go leave this unlimited too.
 
+`maxConnectionsPerIp` caps how many of those connections **one peer address** may
+hold. Also unlimited by default:
+
+```js
+serve({ port: 8080, maxConnections: 10_000, maxConnectionsPerIp: 64 }, handler);
+```
+
+Without it, `maxConnections` bounds what the deployment spends and nothing else:
+one peer opening every slot fills the server exactly as a thousand peers opening
+one each do, and it is then full for everybody. This is the half that says
+*whose* connections they are.
+
+A connection over this is **refused**, not held — the opposite of the
+whole-server cap, and deliberately. There the excess is legitimate traffic
+queueing for a slot, and waiting costs nothing; here the excess is by definition
+one client past its share, and a held connection is already accepted, so it costs
+a descriptor and the peer decides when it ends. Closing returns both at once.
+
+> **Behind a proxy, leave this off.** The count is per address, and every
+> connection through a load balancer or a NAT gateway carries the same source —
+> so a cap here is a cap on the whole service. Use the proxy's own per-client
+> limits instead. This is why it is off by default, and why the number belongs to
+> whoever knows what sits in front of the server.
+
 The per-connection limits it multiplies against are fixed:
 
 | Limit | Value |
@@ -1771,13 +1795,14 @@ for await (const ws of server) {
 
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
-| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
+| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). A closed connection is skipped; an element that is not a connection is a `TypeError`, checked before anything is sent. |
 
 | Option | Default | Description |
 | ------ | ------- | ----------- |
 | `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. RFC 6455's handshake is an HTTP request head, so this is the slowloris bound on the same bytes. It never touches an **established** connection — a socket that has said nothing for a week is idle, not stalled. |
 | `maxConnections` | unlimited | The most connections to hold at once. A connection over the cap is **held, not refused**: it waits in the kernel backlog and is served once a slot frees. Worth setting on a public port — WebSocket connections are long-lived by design, so unlike an HTTP server's the count does not fall back down on its own. |
+| `maxConnectionsPerIp` | unlimited | The most connections **one peer address** may hold. Without it, `maxConnections` says nothing about whose connections fill it — one peer can take every slot. A connection over this is **refused**, not held. Leave it off behind a proxy or a NAT, where every connection shares one source address. |
 
 Both spellings match `runtime:http`'s `serve()`, and the numbers live only in the
 host — the prelude sends "unset", so there is one copy to keep true.

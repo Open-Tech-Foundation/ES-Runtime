@@ -103,8 +103,8 @@ pub(crate) fn install(
     let owned = servers.clone();
     engine.register_op(
         // Args: [host, port, cert?, key?, handshakeMs?, headerReadMs?,
-        // h2KeepAliveMs?, bodyReadMs?, bodyMinRate?, maxConnections?, reusePort?,
-        // alpn0, alpn1, …]. A cert *and* key (both non-empty)
+        // h2KeepAliveMs?, bodyReadMs?, bodyMinRate?, maxConnections?,
+        // maxConnectionsPerIp?, reusePort?, alpn0, alpn1, …]. A cert *and* key (both non-empty)
         // turn on TLS termination; the cert/key travel inline because reading a
         // file is the filesystem's privilege, so serving HTTPS needs no grant
         // beyond NetListen. Each timeout is `null` for the provider default or
@@ -144,12 +144,20 @@ pub(crate) fn install(
                 .and_then(Value::as_number)
                 .filter(|n| *n >= 1.0 && n.is_finite())
                 .map(|n| n as usize);
+            // Also `null`/absent ⇒ no limit, and for a sharper reason: the count
+            // is per address, so a deployment behind a proxy or a NAT would see
+            // all of its traffic as one peer. Only the deployment knows.
+            let max_connections_per_ip = args
+                .get(10)
+                .and_then(Value::as_number)
+                .filter(|n| *n >= 1.0 && n.is_finite())
+                .map(|n| n as usize);
             // `SO_REUSEPORT`: several processes sharing one listening port.
             // Ahead of the ALPN tail, which must stay last.
-            let reuse_port = matches!(args.get(10), Some(Value::Bool(true)));
+            let reuse_port = matches!(args.get(11), Some(Value::Bool(true)));
             let alpn: Vec<String> = args
                 .iter()
-                .skip(11)
+                .skip(12)
                 .filter_map(|v| v.as_str().map(str::to_string))
                 .collect();
             Box::pin(async move {
@@ -177,6 +185,7 @@ pub(crate) fn install(
                     tls,
                     timeouts,
                     max_connections,
+                    max_connections_per_ip,
                     reuse_port,
                 };
                 let (id, info) = require(&h)?.serve(options).await.map_err(map_err)?;

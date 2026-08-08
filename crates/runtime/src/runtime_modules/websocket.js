@@ -188,13 +188,31 @@ function parseHandshakeTimeout(options) {
 // connections churn, while WebSocket connections are long-lived by design, so
 // this is what decides whether the count has an upper bound at all.
 function parseMaxConnections(options) {
-  const value = (options ?? {}).maxConnections;
+  return count(options, "maxConnections");
+}
+
+// The most connections one *peer address* may hold at once. Absent means no
+// limit, and for a sharper reason: the count is per address, so everything
+// behind one NAT or one load balancer shares a budget — with a proxy in front,
+// every connection has the same source and any cap here caps the whole service.
+//
+// Without it, `maxConnections` bounds what the deployment spends and nothing
+// else: one peer opening every slot fills the server exactly as a thousand
+// peers opening one each do. A connection over this is *refused*, where one
+// over `maxConnections` waits — an excess there is legitimate traffic queueing
+// for a slot, and an excess here is one client past its share.
+function parseMaxConnectionsPerIp(options) {
+  return count(options, "maxConnectionsPerIp");
+}
+
+function count(options, name) {
+  const value = (options ?? {})[name];
   if (value === undefined || value === null) return null;
   if (typeof value !== "number") {
-    throw new TypeError(`serve: maxConnections must be a number or null, got ${typeof value}`);
+    throw new TypeError(`serve: ${name} must be a number or null, got ${typeof value}`);
   }
   if (!Number.isInteger(value) || value < 1) {
-    throw new RangeError("serve: maxConnections must be an integer of at least 1");
+    throw new RangeError(`serve: ${name} must be an integer of at least 1`);
   }
   return value;
 }
@@ -206,7 +224,8 @@ function serve(options = {}) {
   // rather than a server that is listening with the wrong policy.
   const handshake = parseHandshakeTimeout(options);
   const maxConnections = parseMaxConnections(options);
-  const ready = ops.ws_serve(hostname, port, handshake, maxConnections);
+  const maxConnectionsPerIp = parseMaxConnectionsPerIp(options);
+  const ready = ops.ws_serve(hostname, port, handshake, maxConnections, maxConnectionsPerIp);
   return new WebSocketServer(ready);
 }
 

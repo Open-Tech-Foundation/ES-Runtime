@@ -127,6 +127,7 @@ override to escape it.
 | `timeouts.bodyRead` | 30s + earned | per request | `serve({ timeouts })` |
 | `timeouts.bodyMinRate` | 1 KiB/s | per request | `serve({ timeouts })` |
 | `maxConnections` | unlimited | per server | `serve({ maxConnections })` |
+| `maxConnectionsPerIp` | unlimited | per peer address | `serve({ maxConnectionsPerIp })` |
 | HTTP/1.1 header fields | 100 | per request | fixed |
 | HTTP/1.1 read buffer | ~408KB | per connection | fixed |
 | HTTP/2 header list | 16KB | per request | fixed, advertised in `SETTINGS` |
@@ -286,8 +287,23 @@ const client = request.headers.get("x-forwarded-for")?.split(",")[0].trim()
 ```
 
 On HTTP/2 every request multiplexed onto one connection reports the same peer,
-because they are one connection. There is no per-IP connection cap yet — one
-peer can still take every slot of a `maxConnections` budget.
+because they are one connection.
+
+The peer address is also what `maxConnectionsPerIp` counts on. `maxConnections`
+alone bounds what the deployment spends and nothing else — one peer opening every
+slot fills the server exactly as a thousand peers opening one each do — so the
+per-peer cap is the half that says whose connections they are. It is taken
+*after* accept, because that is when the peer is known, and an excess is
+**refused** rather than held: the whole-server cap can afford to queue, since its
+excess is legitimate traffic waiting for a slot, while an excess here is one
+client past its share, already accepted and holding a descriptor it decides when
+to release. The counter is per address and drops the address entirely at zero, so
+a flood of one-shot connections cannot grow the table it is counted in.
+
+Both are off by default, and the per-peer one for a sharper reason: behind a load
+balancer or a NAT gateway every connection carries the same source address, so a
+cap there caps the whole service. Only the deployment knows what sits in front of
+it.
 
 ## What the server reports
 

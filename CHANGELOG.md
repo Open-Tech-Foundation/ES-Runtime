@@ -66,6 +66,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`maxConnectionsPerIp` on `runtime:http` and `runtime:websocket` `serve()`.**
+  `maxConnections` bounds what a deployment spends and nothing else: one peer
+  opening every slot filled the server exactly as a thousand peers opening one
+  each did, and it was then full for everybody. This is the half that says
+  *whose* connections they are — the gap D45 and D47 both recorded, now that
+  D44's peer address exists to build it on. A connection over it is **refused**
+  rather than held, unlike the whole-server cap: an excess there is legitimate
+  traffic queueing for a slot, and an excess here is one client past its share,
+  already accepted and holding a descriptor it decides when to release.
+  Unlimited by default — **behind a proxy or a NAT it should stay off**, since
+  every connection then carries the same source address and a cap would apply to
+  the whole service.
+
 - **A bound on a slow request body** — `timeouts.bodyRead` (30s) and
   `timeouts.bodyMinRate` (1024 B/s). `headerRead` stops when the head is
   complete, so a peer that sent a well-formed head and then dribbled its body a

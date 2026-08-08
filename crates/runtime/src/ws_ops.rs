@@ -181,6 +181,14 @@ pub(crate) fn install(
                 .and_then(Value::as_number)
                 .filter(|n| *n >= 1.0 && n.is_finite())
                 .map(|n| n as usize);
+            // Also `null`/absent ⇒ no limit, and for a sharper reason: the count
+            // is per address, so a deployment behind a proxy or a NAT would see
+            // all of its traffic as one peer.
+            let max_connections_per_ip = args
+                .get(4)
+                .and_then(Value::as_number)
+                .filter(|n| *n >= 1.0 && n.is_finite())
+                .map(|n| n as usize);
             Box::pin(async move {
                 let (id, info) = require(&w)?
                     .serve(WsServeOptions {
@@ -188,6 +196,7 @@ pub(crate) fn install(
                         port,
                         timeouts,
                         max_connections,
+                        max_connections_per_ip,
                     })
                     .await
                     .map_err(map_err)?;
