@@ -64,6 +64,15 @@ namespace) is unstable and may change between minor releases until the API freez
   port could read and write another agent's channel by trying 1, 2, 3. They now
   come from the CSPRNG (D50).
 
+### Changed
+
+- **An `--allow-read` / `--allow-write` entry outside the root jail is now an
+  argument error.** It could never match — a path list narrows the jail and
+  cannot widen it — so it was a command line that read as a grant and was not
+  one, and only said so at the first read, as a jail escape. The `--help` text
+  suggested `--allow-read=./data,/etc/ssl/certs`, an example that could not
+  work; it now suggests two paths inside the project.
+
 ### Added
 
 - `ERR_FOREIGN_HANDLE` — a socket, child process, server, file descriptor or

@@ -209,7 +209,10 @@ pub(crate) fn install(
             let id = owned_servers.check(id)?;
             match require(&w)?.accept(id).await.map_err(map_err)? {
                 Some((cid, info)) => Ok(Value::Object(vec![
-                    ("id".to_string(), Value::Number(owned_connections.own(cid) as f64)),
+                    (
+                        "id".to_string(),
+                        Value::Number(owned_connections.own(cid) as f64),
+                    ),
                     ("protocol".to_string(), Value::String(info.protocol)),
                     ("extensions".to_string(), Value::String(info.extensions)),
                 ])),

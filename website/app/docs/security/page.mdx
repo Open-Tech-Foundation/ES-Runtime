@@ -122,8 +122,8 @@ address. An IP entry is never satisfied by a name that resolves to it. A refusal
 what the provider withholds.
 
 A path list narrows the root jail below and never widens it: a path outside the
-project root stays unreachable, and says so as a jail escape rather than a
-scoped denial.
+project root stays unreachable, so naming one in the list is an argument error,
+and reaching one at runtime is a jail escape rather than a scoped denial.
 
 A value on a flag that could not enforce it would still be rejected rather than
 ignored — a run must never be narrower on the command line than it is in
@@ -140,6 +140,7 @@ reason. Each of these is an error, not a warning:
 | `esrun app.js --deny-net` | After the script it restricts nothing (`--` opts out) |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the nine |
+| `--allow-read=/etc/ssl` | Outside the root jail, so it could never match |
 | `--allow-workers=x` | `workers` is all-or-nothing; a worker's own grant is set at the spawn |
 
 A sandbox that silently isn't one is worse than no sandbox, so the parser never

@@ -521,8 +521,12 @@ fn scope_hint(cap: Capability) -> Option<&'static str> {
         Capability::Env => Some("variable names, e.g. --allow-env=HOME,PATH"),
         Capability::Net => Some("hosts, e.g. --allow-net=api.example.com,db.internal:5432"),
         Capability::NetListen => Some("bind addresses, e.g. --allow-listen=127.0.0.1:8080,8443"),
+        // Both examples are inside the project — a path list narrows the root
+        // jail and never widens it, so an example reaching outside it (the
+        // `/etc/ssl/certs` this used to suggest) is one that can only ever fail,
+        // and fail as a jail escape rather than as a bad flag.
         Capability::FileRead | Capability::FileWrite => {
-            Some("paths, e.g. --allow-read=./data,/etc/ssl/certs")
+            Some("paths, e.g. --allow-read=./data,./config")
         }
         Capability::Signals => Some("signal names, e.g. --allow-signals=SIGTERM,SIGINT"),
         _ => None,
@@ -1260,6 +1264,25 @@ async fn run() -> Result<(), String> {
     let flag_dir = std::env::current_dir().unwrap_or_else(|_| base_dir.clone());
     let allow_read = path_scope(&config.scopes, Capability::FileRead, &flag_dir)?;
     let allow_write = path_scope(&config.scopes, Capability::FileWrite, &flag_dir)?;
+    // An entry outside the jail is refused here rather than left to match
+    // nothing: the flag narrows the jail and cannot widen it, so such an entry
+    // is unusable, and an unusable entry is an argument error (D38) — the
+    // alternative is a command line that reads as a grant, is not one, and only
+    // says so much later as a jail escape.
+    for (flag, allow) in [("read", &allow_read), ("write", &allow_write)] {
+        if let Some(allow) = allow
+            && let Some(outside) = allow.outside(&fs_root)
+        {
+            return Err(format!(
+                "--allow-{flag}: {} is outside the filesystem root jail ({}), \
+                 so nothing there can ever be reached.\n\n\
+                 A path list narrows the jail and cannot widen it. Name a path \
+                 inside the project, or run from a directory that contains both.",
+                outside.display(),
+                fs_root.display(),
+            ));
+        }
+    }
     // Both filesystem views take the same lists: `runtime:fs` and `runtime:wasi`
     // are two doors onto one filesystem, and a policy that differed between
     // them would be a bug wearing a feature's clothes.

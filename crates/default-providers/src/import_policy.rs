@@ -351,7 +351,10 @@ mod tests {
         let root = temp_dir("nm-allow");
         std::fs::create_dir_all(root.join("node_modules/left-pad")).unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
-        let p = policy(r#"{ "allow": ["./src", "./node_modules/left-pad"] }"#, &root);
+        let p = policy(
+            r#"{ "allow": ["./src", "./node_modules/left-pad"] }"#,
+            &root,
+        );
         assert!(p.permits(&root.join("node_modules/left-pad/index.js")));
         assert!(p.permits(&root.join("src/app.mjs")));
         // And nothing outside either entry.

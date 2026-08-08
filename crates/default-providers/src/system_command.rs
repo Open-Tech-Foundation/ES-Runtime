@@ -811,7 +811,12 @@ mod tests {
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let commands = SystemCommands::new().with_allowlist([tool.to_str().unwrap()]);
-        assert!(commands.spawn(spec(tool.to_str().unwrap(), &[])).await.is_ok());
+        assert!(
+            commands
+                .spawn(spec(tool.to_str().unwrap(), &[]))
+                .await
+                .is_ok()
+        );
         // A bare `tool` on the host PATH — if there were one — is not this file.
         let err = commands.spawn(spec("echo", &[])).await.unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::PermissionDenied));

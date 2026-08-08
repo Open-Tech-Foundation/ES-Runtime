@@ -1669,6 +1669,9 @@ fn a_worker_cannot_write_to_a_socket_its_parent_opened() {
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let said = stdout(&out);
-    assert!(!said.contains("wrote"), "a foreign socket accepted a write: {said}");
+    assert!(
+        !said.contains("wrote"),
+        "a foreign socket accepted a write: {said}"
+    );
     assert!(said.ends_with("mine\n"), "{said}");
 }

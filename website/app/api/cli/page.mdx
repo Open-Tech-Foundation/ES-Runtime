@@ -199,8 +199,9 @@ different program under the same name, is not.
   `--allow-read=./data` refuses `./data/link-to-etc/passwd`: the check runs on
   the real path, so a symlink inside an allowed directory cannot name a file
   outside it. The list also narrows the [root jail](/docs/security) and never
-  widens it — a path outside the project root stays unreachable, and says so
-  with `ERR_JAIL_ESCAPE` rather than a scoped denial.
+  widens it — a path outside the project root stays unreachable, so naming one
+  in the list is an argument error rather than an entry that matches nothing.
+  Reaching it at runtime is `ERR_JAIL_ESCAPE`, not a scoped denial.
 </Callout>
 
 <Callout type="note" title="--allow-net covers every redirect hop">
@@ -291,6 +292,7 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 | `esrun app.js --deny-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the nine |
+| `--allow-read=/etc/ssl` | Outside the root jail, so it could never match |
 | `--allow-workers=x` | `workers` is all-or-nothing; the scope is set at the spawn |
 | `--timeout 500` | Same rule 1 — this is the parser's grammar, not a permission rule |
 

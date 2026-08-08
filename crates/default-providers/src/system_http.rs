@@ -304,7 +304,10 @@ fn request_url(req: &Request<Incoming>, scheme: &str, fallback: &str) -> Option<
     let named = match req.headers().get(hyper::header::HOST) {
         // A `Host` carrying bytes that are not text is not a host name.
         Some(value) => Some(value.to_str().ok()?),
-        None => req.uri().authority().map(hyper::http::uri::Authority::as_str),
+        None => req
+            .uri()
+            .authority()
+            .map(hyper::http::uri::Authority::as_str),
     }
     .filter(|named| !named.is_empty());
 

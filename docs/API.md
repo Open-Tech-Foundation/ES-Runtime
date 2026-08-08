@@ -921,8 +921,9 @@ to the script. An entry covers its subtree, matched by path component, so
 `--allow-read=./app` never admits `./app-secrets`. The check runs **after
 canonicalization**: `./data/link-to-etc/passwd` is refused however the link is
 arranged. A path list narrows the [root jail](#the-root-jail) and never widens
-it — an entry outside the project root is not a way out of it, and that refusal
-stays `ERR_JAIL_ESCAPE` rather than a scoped denial. `read` and `write` are
+it — an entry outside the project root is not a way out of it, so writing one is
+an **argument error** rather than an entry that quietly matches nothing, and
+reaching outside at runtime stays `ERR_JAIL_ESCAPE` rather than a scoped denial. `read` and `write` are
 separate lists; the same lists govern `runtime:fs` and `runtime:wasi`.
 
 **A signal entry** is a signal name. Unlisted signals are also absent from
@@ -1019,6 +1020,7 @@ the script opts a script's own argument out of rule 2.
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
 | `--allow-ffi` | Not one of the nine |
+| `--allow-read=/etc/ssl` | Outside the root jail, so it could never match |
 
 ---
 

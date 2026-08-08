@@ -79,6 +79,22 @@ impl PathAllowlist {
         Ok(PathAllowlist { entries: parsed })
     }
 
+    /// The first entry that is not inside `root`, if there is one.
+    ///
+    /// A path list narrows the filesystem root jail and can never widen it
+    /// (D25), so an entry outside the jail matches nothing and can only ever
+    /// fail — as a jail escape, naming a rule the user did not think they were
+    /// hitting. Reporting it is the same rule the rest of the argument parsing
+    /// follows: an unusable entry is an error, never a silently dropped one,
+    /// because a list that quietly lost a member leaves the run narrower than
+    /// it reads.
+    pub fn outside(&self, root: &Path) -> Option<&Path> {
+        self.entries
+            .iter()
+            .find(|entry| !entry.starts_with(root))
+            .map(PathBuf::as_path)
+    }
+
     /// Whether this list names nothing.
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()

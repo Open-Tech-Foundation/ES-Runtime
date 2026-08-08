@@ -824,19 +824,38 @@ fn a_symlink_cannot_walk_out_of_a_path_list() {
 
 #[test]
 fn a_path_list_narrows_the_root_jail_and_never_widens_it() {
-    // The jail (D25) is checked first and its refusal is the one reported: a
-    // scope list is not a way to reach outside the project root.
+    // A scope list is not a way to reach outside the project root (D25), and an
+    // entry that tries is refused at the door rather than left to match
+    // nothing: a command line that reads as a grant and is not one would only
+    // say so at the first read, as a rule the user did not think they were
+    // hitting.
     let root = scoped_tree("scoped_jail");
     let out = run_in(
         &root,
         &["--deny-all", "--allow-read=/etc"],
+        "console.log('NO THROW');",
+    );
+    assert!(!out.status.success(), "stdout: {}", stdout(&out));
+    let said = stderr(&out);
+    assert!(said.contains("outside the filesystem root jail"), "{said}");
+    assert!(said.contains("/etc"), "{said}");
+}
+
+#[test]
+fn a_path_inside_the_jail_is_still_the_ordinary_case() {
+    // The refusal above must not have cost the flag its job.
+    let root = scoped_tree("scoped_jail_ok");
+    let out = run_in(
+        &root,
+        &["--deny-all", "--allow-read=./data"],
         "import fs from 'runtime:fs'; \
-         try { await fs.file('/etc/hostname').text(); console.log('NO THROW'); } \
+         console.log((await fs.file('./data/ok.txt').text()).trim()); \
+         try { await fs.file('./secrets.env').text(); console.log('NO THROW'); } \
          catch (e) { console.log('refused', e.code); }",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stdout(&out).contains("refused ERR_JAIL_ESCAPE"),
+        stdout(&out).contains("refused ERR_PERMISSION_DENIED"),
         "{}",
         stdout(&out)
     );

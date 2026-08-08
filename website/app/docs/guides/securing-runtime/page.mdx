@@ -160,10 +160,11 @@ with a non-zero exit status, like any other uncaught exception.
 
 <Callout type="warning" title="A path list narrows the root jail — it cannot widen it">
   Filesystem access is confined to the project root regardless of any flag. An
-  `--allow-read` entry pointing outside that root is **not rejected**; it is
-  simply inert, and access still fails with `ERR_JAIL_ESCAPE`. So if you granted
-  a path and the run still cannot reach it, check whether it is inside the root
-  before adding more flags — no permission flag is the fix for a jail escape.
+  `--allow-read` entry pointing outside that root is **rejected as an argument
+  error**, because it could never match anything — a command line that reads as
+  a grant and is not one is worse than one that fails. No permission flag is the
+  fix for a jail escape: to reach a path outside the project, run from a
+  directory that contains both.
 </Callout>
 
 ## Bound what may load
