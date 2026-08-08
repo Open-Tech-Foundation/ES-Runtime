@@ -9,6 +9,24 @@ declare module "runtime:websocket" {
     binaryType: "blob" | "arraybuffer";
     /** Send a message to this peer. */
     send(data: string | ArrayBufferLike | ArrayBufferView | Blob): void;
+    /**
+     * Bytes handed to {@link send} that the host has not taken yet — the only
+     * way a sender can feel a peer that has stopped reading, since `send()` is
+     * fire-and-forget and never stalls.
+     *
+     * A number that keeps climbing is a peer to stop sending to. Past the
+     * server's `maxBufferedAmount` the host closes the connection with `1013`
+     * rather than hold more, so ignoring this costs the connection, not the
+     * process.
+     *
+     * ```js
+     * for await (const chunk of source) {
+     *   if (conn.bufferedAmount > 1 << 20) break; // this peer is behind
+     *   conn.send(chunk);
+     * }
+     * ```
+     */
+    readonly bufferedAmount: number;
     /** Close the connection with an optional code and reason. */
     close(code?: number, reason?: string): void;
 
@@ -97,6 +115,24 @@ declare module "runtime:websocket" {
      * and use the proxy's own limits.
      */
     maxConnectionsPerIp?: number | null;
+    /**
+     * The most bytes that may sit queued for one connection before it is closed
+     * with `1013` (Try Again Later). Defaults to `8_388_608` (8 MiB); `0`
+     * removes the bound.
+     *
+     * `send()` is fire-and-forget — the WebSocket API has no way to report a
+     * full buffer — so writing faster than a peer reads never stalls your code;
+     * the messages queue on the host instead, one pending send each. A peer that
+     * stops reading a fan-out is otherwise a memory leak with a network
+     * interface.
+     *
+     * Unlike the connection caps this is **on** by default, because the number
+     * does not depend on what the deployment knows: a queue that deep is already
+     * a peer several messages behind, and no application intends one. Read
+     * {@link WebSocketConnection.bufferedAmount} to pace sends and stay under
+     * it.
+     */
+    maxBufferedAmount?: number | null;
   }
 
   /**

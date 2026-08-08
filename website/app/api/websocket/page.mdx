@@ -83,7 +83,7 @@ for await (const ws of server) {
 
 | Export | Type | Description |
 | --- | --- | --- |
-| `serve(options)` | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
+| `serve(options)` | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). A closed connection is skipped; an element that is not a connection is a `TypeError`. |
 
 ### ServeOptions
@@ -95,6 +95,7 @@ for await (const ws of server) {
 | `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. |
 | `maxConnections` | unlimited | The most connections to hold at once; over the cap they wait rather than being refused. |
 | `maxConnectionsPerIp` | unlimited | The most one peer address may hold; over this they are **refused**. Leave off behind a proxy. |
+| `maxBufferedAmount` | `8 MiB` | Bytes that may sit queued for one connection before it is closed with `1013`. **On** by default; `0` removes it. |
 
 ```js
 const server = serve({
@@ -117,6 +118,29 @@ so the count does not fall back down on its own. Over the cap a connection is
 descriptor, task or buffer, and is served the moment a slot frees. Unlimited by
 default, because the right number follows from your file-descriptor budget,
 which the runtime cannot read.
+
+### Backpressure
+
+`send()` is fire-and-forget — the WebSocket API has no way to report a full
+buffer — so writing faster than a peer reads never stalls your code. The messages
+queue on the host instead, one pending send each.
+
+`connection.bufferedAmount` is what a sender can feel: bytes handed to `send()`
+that the host has not taken yet.
+
+```js
+for await (const chunk of source) {
+  if (conn.bufferedAmount > 1 << 20) break; // this peer is a megabyte behind
+  conn.send(chunk);
+}
+```
+
+`maxBufferedAmount` is what happens when nobody looks: past it the host closes
+that connection with `1013` (Try Again Later) rather than hold more, so one slow
+peer costs a connection instead of the process. It applies per connection,
+including the ones `broadcast()` fans out to. Unlike the connection caps it is
+**on** by default, because the number does not depend on what the deployment
+knows.
 
 `maxConnectionsPerIp` is the half that says *whose* connections those are —
 without it one peer can take every slot, and the server is then full for

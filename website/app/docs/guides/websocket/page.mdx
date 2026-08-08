@@ -94,3 +94,21 @@ for await (const ws of server) {
 
 See the [WebSocket benchmarks](/docs/benchmarks#websocket) for fan-out
 throughput. A `wss:` server and pub/sub topics are on the roadmap.
+
+### Slow peers
+
+`send()` never stalls — the WebSocket API has no way to report a full buffer, so
+writing faster than a peer reads queues on the host instead. `bufferedAmount` is
+how a sender notices:
+
+```js
+for await (const chunk of source) {
+  if (ws.bufferedAmount > 1 << 20) break;  // a megabyte behind: stop feeding it
+  ws.send(chunk);
+}
+```
+
+Ignoring it is bounded rather than fatal: past `maxBufferedAmount` (8 MiB by
+default) the host closes that connection with `1013`, so one peer that stopped
+reading costs a connection and not the process. That applies to `broadcast()`
+too — the peer that fell behind is the one closed for it.

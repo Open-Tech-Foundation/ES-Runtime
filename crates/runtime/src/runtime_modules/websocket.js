@@ -30,6 +30,7 @@ class WebSocketConnection extends EventTarget {
   #id;
   #closed = false;
   #binaryType = "blob";
+  #bufferedAmount = 0;
   #handlers = { message: null, close: null, error: null };
 
   constructor(id) {
@@ -37,6 +38,18 @@ class WebSocketConnection extends EventTarget {
     this.#id = id;
     CONN_ID.set(this, id);
     this.#pump();
+  }
+
+  // Bytes handed to send() that the host has not taken yet — the same meaning
+  // the WebSocket global's `bufferedAmount` carries, and the only way a sender
+  // can feel a peer that has stopped reading: send() is fire-and-forget, so
+  // writing faster than the peer reads never stalls this code, it queues.
+  //
+  // A queue that keeps growing is a peer to stop sending to. Past the server's
+  // `maxBufferedAmount` the host closes the connection with 1013 rather than
+  // hold more, so ignoring this costs the connection, not the process.
+  get bufferedAmount() {
+    return this.#bufferedAmount;
   }
 
   get binaryType() {
@@ -67,14 +80,28 @@ class WebSocketConnection extends EventTarget {
 
   send(data) {
     if (this.#closed) return;
+    // A Blob is read asynchronously, and its bytes count from the moment they
+    // are promised: the queue they will join is the thing being measured.
     if (data instanceof Blob) {
+      const size = data.size;
+      this.#bufferedAmount += size;
       data
         .arrayBuffer()
         .then((buf) => ops.ws_send(this.#id, new Uint8Array(buf)))
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          this.#bufferedAmount -= size;
+        });
       return;
     }
-    Promise.resolve(ops.ws_send(this.#id, toBytesOrString(data))).catch(() => {});
+    const payload = toBytesOrString(data);
+    const size = typeof payload === "string" ? encoder.encode(payload).length : payload.byteLength;
+    this.#bufferedAmount += size;
+    Promise.resolve(ops.ws_send(this.#id, payload))
+      .catch(() => {})
+      .finally(() => {
+        this.#bufferedAmount -= size;
+      });
   }
 
   close(code, reason) {
@@ -205,6 +232,26 @@ function parseMaxConnectionsPerIp(options) {
   return count(options, "maxConnectionsPerIp");
 }
 
+// The most bytes that may sit queued for one connection before the host closes
+// it with 1013 ("try again later"). Unlike the connection caps this is *on* by
+// default (8 MiB), because the number does not depend on what the deployment
+// knows: `send()` is fire-and-forget, so a peer that stops reading a fan-out
+// accumulates messages on the host side with nothing bounding the total, and a
+// queue that deep is already a peer several messages behind. `0` turns it off.
+function parseMaxBufferedAmount(options) {
+  const value = (options ?? {}).maxBufferedAmount;
+  if (value === undefined || value === null) return null; // host default
+  if (typeof value !== "number") {
+    throw new TypeError(
+      `serve: maxBufferedAmount must be a number of bytes or null, got ${typeof value}`,
+    );
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new RangeError("serve: maxBufferedAmount must be a non-negative integer of bytes");
+  }
+  return value;
+}
+
 function count(options, name) {
   const value = (options ?? {})[name];
   if (value === undefined || value === null) return null;
@@ -225,7 +272,15 @@ function serve(options = {}) {
   const handshake = parseHandshakeTimeout(options);
   const maxConnections = parseMaxConnections(options);
   const maxConnectionsPerIp = parseMaxConnectionsPerIp(options);
-  const ready = ops.ws_serve(hostname, port, handshake, maxConnections, maxConnectionsPerIp);
+  const maxBufferedAmount = parseMaxBufferedAmount(options);
+  const ready = ops.ws_serve(
+    hostname,
+    port,
+    handshake,
+    maxConnections,
+    maxConnectionsPerIp,
+    maxBufferedAmount,
+  );
   return new WebSocketServer(ready);
 }
 

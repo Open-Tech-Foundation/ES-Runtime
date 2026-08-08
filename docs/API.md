@@ -1795,7 +1795,7 @@ for await (const ws of server) {
 
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
-| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
+| `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server; `port` 0 picks an ephemeral port. `NetListen`. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). A closed connection is skipped; an element that is not a connection is a `TypeError`, checked before anything is sent. |
 
 | Option | Default | Description |
@@ -1803,9 +1803,35 @@ for await (const ws of server) {
 | `timeouts.handshake` | `10000` | Milliseconds from accept until the opening handshake completes; `null` disables. RFC 6455's handshake is an HTTP request head, so this is the slowloris bound on the same bytes. It never touches an **established** connection — a socket that has said nothing for a week is idle, not stalled. |
 | `maxConnections` | unlimited | The most connections to hold at once. A connection over the cap is **held, not refused**: it waits in the kernel backlog and is served once a slot frees. Worth setting on a public port — WebSocket connections are long-lived by design, so unlike an HTTP server's the count does not fall back down on its own. |
 | `maxConnectionsPerIp` | unlimited | The most connections **one peer address** may hold. Without it, `maxConnections` says nothing about whose connections fill it — one peer can take every slot. A connection over this is **refused**, not held. Leave it off behind a proxy or a NAT, where every connection shares one source address. |
+| `maxBufferedAmount` | `8388608` (8 MiB) | The most bytes that may sit queued for one connection before it is closed with `1013`. **On by default**, unlike the caps above: the number does not depend on what the deployment knows. `0` removes it. |
 
-Both spellings match `runtime:http`'s `serve()`, and the numbers live only in the
-host — the prelude sends "unset", so there is one copy to keep true.
+The connection spellings match `runtime:http`'s `serve()`, and the numbers live
+only in the host — the prelude sends "unset", so there is one copy to keep true.
+
+### Backpressure
+
+`send()` is fire-and-forget: the WebSocket API has no way to report a full
+buffer, so writing faster than a peer reads never stalls your code. The messages
+queue on the host instead, one pending send each — and a peer that has stopped
+reading a fan-out is then a memory leak with a network interface.
+
+Two things answer that. **`connection.bufferedAmount`** is the bytes handed to
+`send()` that the host has not taken yet, so a sender can feel the peer:
+
+```js
+for await (const chunk of source) {
+  if (conn.bufferedAmount > 1 << 20) break; // this peer is a megabyte behind
+  conn.send(chunk);
+}
+```
+
+And **`maxBufferedAmount`** is what happens when nobody looks: past it the host
+closes that connection with `1013` (Try Again Later) rather than hold more, so
+one slow peer costs a connection instead of the process. It applies per
+connection, including the ones `broadcast()` fans out to — a broadcast is a list
+of sends, and the one peer that has stopped reading is the one that is closed for
+it. Client connections opened with `new WebSocket(...)` carry the same default;
+a slow server is the same problem from the other end.
 
 **`WebSocketServer`** — async-iterable of server connections;
 `addr: Promise<{ hostname, port }>`, `accept(): Promise<conn | null>`,
@@ -1813,8 +1839,9 @@ host — the prelude sends "unset", so there is one copy to keep true.
 
 **connection** (each accepted socket) — already open: `send(data)`
 (`string`/`Blob`/`ArrayBuffer`/`ArrayBufferView`), `close(code?, reason?)`,
-`binaryType`, and `message`/`close` events (`on*` or `addEventListener`) — the
-same surface as the client `WebSocket`, minus the connecting handshake.
+`binaryType`, `bufferedAmount`, and `message`/`close` events (`on*` or
+`addEventListener`) — the same surface as the client `WebSocket`, minus the
+connecting handshake.
 
 For chat-style fan-out, prefer **`broadcast(connections, data)`** over a
 `.send()` loop: it makes one host crossing and one payload copy for the whole

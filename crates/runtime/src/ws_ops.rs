@@ -189,6 +189,16 @@ pub(crate) fn install(
                 .and_then(Value::as_number)
                 .filter(|n| *n >= 1.0 && n.is_finite())
                 .map(|n| n as usize);
+            // Unlike the caps above, absent means the provider's default rather
+            // than "no bound": a queue nobody bounds is a peer that can spend
+            // the host's memory, and the right number here does not depend on
+            // the deployment. `0` is the guest turning it off, the same
+            // spelling the timeouts use.
+            let max_buffered_amount = match args.get(5).and_then(Value::as_number) {
+                None => Some(WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT),
+                Some(n) if n <= 0.0 || !n.is_finite() => None,
+                Some(n) => Some(n as u64),
+            };
             Box::pin(async move {
                 let (id, info) = require(&w)?
                     .serve(WsServeOptions {
@@ -197,6 +207,7 @@ pub(crate) fn install(
                         timeouts,
                         max_connections,
                         max_connections_per_ip,
+                        max_buffered_amount,
                     })
                     .await
                     .map_err(map_err)?;

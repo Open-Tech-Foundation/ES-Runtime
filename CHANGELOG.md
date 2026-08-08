@@ -66,6 +66,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **WebSocket send backpressure: `connection.bufferedAmount` and
+  `maxBufferedAmount`.** `send()` is fire-and-forget — the WebSocket API has no
+  way to report a full buffer — so writing faster than a peer reads never
+  stalled the guest; the messages queued on the host, one pending send each,
+  bounded by nothing. A peer that stopped reading a fan-out was a memory leak
+  with a network interface, which is the gap D47 recorded. Server-side
+  connections now expose `bufferedAmount` (the client `WebSocket` always did),
+  so a sender can pace itself; and a connection whose queue passes
+  `maxBufferedAmount` is closed with `1013` (Try Again Later) rather than held.
+  **On by default at 8 MiB**, unlike the connection caps, because the number
+  does not depend on what the deployment knows; `0` removes it. It applies per
+  connection, including the ones `broadcast()` fans out to, and to client
+  connections — a slow server is the same problem from the other end.
+
 - **`maxConnectionsPerIp` on `runtime:http` and `runtime:websocket` `serve()`.**
   `maxConnections` bounds what a deployment spends and nothing else: one peer
   opening every slot filled the server exactly as a thousand peers opening one

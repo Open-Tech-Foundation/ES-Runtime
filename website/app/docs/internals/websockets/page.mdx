@@ -134,6 +134,7 @@ the reasoning behind each.
 | `timeouts.handshake` | 10s | From accept until the opening handshake completes |
 | `maxConnections` | unlimited | How many connections this server holds at once |
 | `maxConnectionsPerIp` | unlimited | How many one peer address may hold |
+| `maxBufferedAmount` | 8 MiB | Bytes queued for one connection before it is closed |
 | Accept queue | 64 | Accepted connections waiting for an `accept()` call |
 
 The handshake bound exists because RFC 6455's handshake is an HTTP request head,
@@ -206,17 +207,37 @@ here is one client past its share, already holding a descriptor. Off by default,
 and behind a proxy it should stay off — every connection would carry the same
 source address.
 
+### Backpressure, and what happens when nobody looks
+
+A connection's command channel holds 16 messages; past that the host-side send
+awaits a slot, but `send()` returns immediately either way — it is
+fire-and-forget by design, since the WebSocket API has no way to report a full
+buffer. So writing faster than a peer reads does not stall your code, it queues
+on the host, one pending send per message.
+
+`connection.bufferedAmount` is what that queue looks like from the guest: bytes
+handed to `send()` that the host has not taken yet. A sender on a fan-out should
+read it and pace itself — the runtime will not do it for you.
+
+`maxBufferedAmount` is what happens when it does not. The host counts queued
+bytes per connection, reserving before the message reaches the command channel
+(the *parked* sends are the thing being bounded, and counting only what the
+channel accepted would count none of them). Past the bound the connection is
+closed with `1013` — Try Again Later, which is exactly the situation — over a
+dedicated signal rather than a queued command, since the command channel is the
+thing that is full at that moment. So one peer that stops reading costs a
+connection instead of the process.
+
+It is **on** by default at 8 MiB, unlike the connection caps, because the number
+does not depend on anything the deployment knows: 8 MiB *undrained* is already a
+peer several messages behind on a large payload, or thousands behind on a small
+one. Client connections carry the same default — a slow server is the same
+problem from the other end.
+
 ### Still missing
 
 No `wss:` — a TLS WebSocket server waits on RFC 8441 extended CONNECT.
 
-And **no backpressure that a sender can feel.** A connection's command channel
-holds 16 messages; past that the host-side send awaits a slot, but `send()`
-returns immediately either way — it is fire-and-forget by design, since the
-WebSocket API has no way to report a full buffer. So writing faster than a peer
-reads does not stall your code, it accumulates pending host-side sends, one per
-message, with nothing bounding the total. A server fanning out to a peer on a
-slow link should pace itself; the runtime will not do it for you.
 
 A failed handshake logs at `debug` on the `runtime::websocket` target, inside a
 `debug` span carrying the peer, so it is attributable to one client:

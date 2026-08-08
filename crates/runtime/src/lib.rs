@@ -4925,6 +4925,35 @@ mod tests {
             es_runtime_providers::WsTimeouts::default()
         );
         assert_eq!(served[0].max_connections, None);
+        assert_eq!(served[0].max_connections_per_ip, None);
+        // The one bound that is *on* unless the guest turns it off — a queue
+        // nobody bounds is memory a peer can spend, and the right number here
+        // does not depend on anything the deployment knows.
+        assert_eq!(
+            served[0].max_buffered_amount,
+            Some(es_runtime_providers::WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT)
+        );
+    }
+
+    /// `0` is the guest turning the send-queue bound off, the same spelling the
+    /// timeouts use. Reading it as "unset" would hand back the default, which
+    /// is the opposite of what was asked.
+    #[test]
+    fn a_zero_buffer_bound_turns_it_off_rather_than_defaulting() {
+        let _g = v8_guard();
+        let ws = Arc::new(MockWs::new(vec![], ""));
+        let mut rt = runtime_with_ws(ws.clone());
+        run_module(
+            &mut rt,
+            "import { serve } from 'runtime:websocket'; \
+             const a = serve({ port: 4001, maxBufferedAmount: 0 }); \
+             const b = serve({ port: 4002, maxBufferedAmount: 1024 }); \
+             globalThis.result = (await a.addr).port + (await b.addr).port;",
+            MapLoader::new(&[]),
+        );
+        let served = ws.served.lock().unwrap();
+        assert_eq!(served[0].max_buffered_amount, None);
+        assert_eq!(served[1].max_buffered_amount, Some(1024));
     }
 
     /// The two knobs cross as they are written: milliseconds for the timeout,
@@ -5038,6 +5067,12 @@ mod tests {
              const names = []; \
              for (const bad of ['lots', 0, -1, 1.5]) { \
                try { serve({ port: 4001, maxConnections: bad }); } \
+               catch (e) { names.push(e.constructor.name); } \
+               try { serve({ port: 4001, maxConnectionsPerIp: bad }); } \
+               catch (e) { names.push(e.constructor.name); } \
+             } \
+             for (const bad of ['lots', -1, 1.5]) { \
+               try { serve({ port: 4001, maxBufferedAmount: bad }); } \
                catch (e) { names.push(e.constructor.name); } \
              } \
              for (const bad of ['soon', -1, Infinity]) { \

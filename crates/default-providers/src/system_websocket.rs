@@ -24,7 +24,7 @@ use es_runtime_providers::{
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
 use tokio_rustls::rustls::pki_types::ServerName;
@@ -44,6 +44,21 @@ use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
 use crate::peer_limit::{PeerLimit, PeerSlot};
 
+/// RFC 6455 §7.4.2's "Try Again Later" — the honest answer to a peer whose
+/// queue has run away: the server is not refusing the client, it is refusing to
+/// hold any more for it, and reconnecting is a reasonable thing to do next.
+const WS_TRY_AGAIN_LATER: u16 = 1013;
+
+/// The send-queue bound a client `connect` gets, since no server's options
+/// apply to one — a slow server is the same problem from the other end.
+///
+/// On by default, unlike the connection caps, because this number does not
+/// depend on anything the deployment knows: 8 MiB *undrained* is already a peer
+/// several messages behind on a large payload, or thousands behind on a small
+/// one, and the alternative to a bound is the host holding it until the process
+/// dies.
+const DEFAULT_MAX_BUFFERED: u64 = WsServeOptions::DEFAULT_MAX_BUFFERED_AMOUNT;
+
 /// A close with no peer status code maps to 1005 ("no status received").
 const NO_STATUS_RCVD: u16 = 1005;
 
@@ -59,6 +74,75 @@ enum Cmd {
 struct WsSlot {
     inbound_rx: Option<mpsc::Receiver<WsIncoming>>,
     cmd_tx: mpsc::Sender<Cmd>,
+    /// Bytes accepted by `send` and not yet written to the sink.
+    ///
+    /// `send()` is fire-and-forget by design — the WebSocket API has no way to
+    /// report a full buffer — so writing faster than a peer reads does not stall
+    /// the guest; it parks one host-side send per message. This is the count
+    /// that makes that visible, and the one [`max_buffered`](Self::max_buffered)
+    /// bounds.
+    buffered: Arc<AtomicU64>,
+    /// The most that may be outstanding before the connection is closed, or
+    /// `None` for no bound.
+    max_buffered: Option<u64>,
+    /// Rung when the bound is passed. A separate signal rather than a `Cmd`,
+    /// because the command channel is exactly what is full at that moment —
+    /// queueing the close behind the backlog it is meant to end would park with
+    /// everything else.
+    overflow: Arc<Notify>,
+}
+
+/// What [`WsSlot::queue`] decided about one outbound message.
+enum Queued {
+    /// Counted against the connection's queue; send it and, if that fails,
+    /// return `bytes` to `buffered`.
+    Accepted {
+        tx: mpsc::Sender<Cmd>,
+        bytes: u64,
+        buffered: Arc<AtomicU64>,
+    },
+    /// Past the bound. The connection is being closed; drop the message.
+    Overflowed,
+}
+
+impl WsSlot {
+    /// Counts `msg` against this connection's queue, or rings the overflow
+    /// signal if it would pass the bound.
+    ///
+    /// The reservation happens *before* the message is handed to the command
+    /// channel, because the parked send is the thing being bounded: past the
+    /// channel's 16 slots each `send()` leaves a pending future holding a
+    /// message, and counting only what the channel accepted would count none of
+    /// them.
+    fn queue(&self, msg: &Message) -> Queued {
+        let bytes = msg.len() as u64;
+        if let Some(max) = self.max_buffered {
+            // `fetch_update` rather than load-then-add: two concurrent sends
+            // that each read the same value below the bound would both be
+            // admitted, and the bound would be a suggestion.
+            let admitted =
+                self.buffered
+                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+                        (held.saturating_add(bytes) <= max).then(|| held + bytes)
+                    });
+            if admitted.is_err() {
+                // `notify_one`, not `notify_waiters`: the actor is only
+                // registered on this signal while it is parked in its `select!`,
+                // and the moment the queue overflows is exactly the moment it is
+                // busy draining. `notify_one` leaves a permit behind, so the
+                // next park sees it instead of missing it.
+                self.overflow.notify_one();
+                return Queued::Overflowed;
+            }
+        } else {
+            self.buffered.fetch_add(bytes, Ordering::Relaxed);
+        }
+        Queued::Accepted {
+            tx: self.cmd_tx.clone(),
+            bytes,
+            buffered: self.buffered.clone(),
+        }
+    }
 }
 
 /// A bound server's queue of accepted (connection id, info), drained by `accept`.
@@ -167,6 +251,7 @@ impl SystemWebSocket {
         ws: WebSocketStream<S>,
         permit: Option<OwnedSemaphorePermit>,
         peer_slot: Option<PeerSlot>,
+        max_buffered: Option<u64>,
     ) -> WsSlot
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -174,6 +259,10 @@ impl SystemWebSocket {
         let (mut sink, mut stream) = ws.split();
         let (inbound_tx, inbound_rx) = mpsc::channel::<WsIncoming>(16);
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Cmd>(16);
+        let buffered = Arc::new(AtomicU64::new(0));
+        let overflow = Arc::new(Notify::new());
+        let actor_buffered = buffered.clone();
+        let actor_overflow = overflow.clone();
 
         tokio::spawn(async move {
             // Released when this task ends, whichever way it ends — the peer's
@@ -182,6 +271,22 @@ impl SystemWebSocket {
             let _peer_slot = peer_slot;
             loop {
                 tokio::select! {
+                    // A peer so far behind that the queue for it passed the
+                    // bound. Answered with a close frame rather than a dropped
+                    // connection, so the peer and the guest both learn why:
+                    // 1013 is "try again later", which is exactly the situation.
+                    () = actor_overflow.notified() => {
+                        tracing::debug!(
+                            target: "runtime::websocket",
+                            buffered = actor_buffered.load(Ordering::Relaxed),
+                            "closing: the send queue for this peer passed its bound",
+                        );
+                        let _ = sink.send(Message::Close(Some(CloseFrame {
+                            code: CloseCode::from(WS_TRY_AGAIN_LATER),
+                            reason: "send queue overflowed".into(),
+                        }))).await;
+                        break;
+                    },
                     msg = stream.next() => match msg {
                         Some(Ok(Message::Text(t))) => {
                             if inbound_tx.send(WsIncoming::Text(t.as_str().to_string())).await.is_err() {
@@ -217,8 +322,13 @@ impl SystemWebSocket {
                         // single flush — one socket write for the whole batch
                         // instead of a flush per frame.
                         let mut closing = None;
+                        // Bytes this batch takes off the queue, returned to the
+                        // count once they have reached the transport — which is
+                        // the flush below, not the feed.
+                        let mut fed = 0u64;
                         match cmd {
                             Some(Cmd::Send(m)) => {
+                                fed += m.len() as u64;
                                 if sink.feed(m).await.is_err() { break; }
                             }
                             Some(Cmd::Close { code, reason }) => closing = Some((code, reason)),
@@ -229,6 +339,7 @@ impl SystemWebSocket {
                             loop {
                                 match cmd_rx.try_recv() {
                                     Ok(Cmd::Send(m)) => {
+                                        fed += m.len() as u64;
                                         if sink.feed(m).await.is_err() { broken = true; break; }
                                     }
                                     Ok(Cmd::Close { code, reason }) => {
@@ -240,6 +351,7 @@ impl SystemWebSocket {
                             }
                         }
                         if !broken && sink.flush().await.is_err() { broken = true; }
+                        actor_buffered.fetch_sub(fed, Ordering::Relaxed);
                         if let Some((code, reason)) = closing {
                             let frame = code.map(|c| CloseFrame {
                                 code: CloseCode::from(c),
@@ -257,6 +369,9 @@ impl SystemWebSocket {
         WsSlot {
             inbound_rx: Some(inbound_rx),
             cmd_tx,
+            buffered,
+            max_buffered,
+            overflow,
         }
     }
 }
@@ -335,13 +450,13 @@ impl WebSocketProvider for SystemWebSocket {
                 let (stream, response) = client_async(request, tls).await.map_err(err)?;
                 (
                     info_of(&response),
-                    SystemWebSocket::spawn(stream, None, None),
+                    SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED)),
                 )
             } else {
                 let (stream, response) = client_async(request, tcp).await.map_err(err)?;
                 (
                     info_of(&response),
-                    SystemWebSocket::spawn(stream, None, None),
+                    SystemWebSocket::spawn(stream, None, None, Some(DEFAULT_MAX_BUFFERED)),
                 )
             };
             this.conns.lock().unwrap().insert(id, slot);
@@ -353,13 +468,34 @@ impl WebSocketProvider for SystemWebSocket {
         let conns = self.conns.clone();
         Box::pin(async move {
             let msg = into_message(message);
-            let tx = conns.lock().unwrap().get(&id).map(|s| s.cmd_tx.clone());
-            match tx {
-                Some(tx) => tx
-                    .send(Cmd::Send(msg))
-                    .await
-                    .map_err(|_| err("WebSocket is closed")),
-                None => Err(err("WebSocket is closed")),
+            let queued = {
+                let guard = conns.lock().unwrap();
+                match guard.get(&id) {
+                    Some(slot) => slot.queue(&msg),
+                    None => return Err(err("WebSocket is closed")),
+                }
+            };
+            match queued {
+                // Over the bound: the connection is on its way out, so the
+                // message is dropped rather than queued behind the backlog that
+                // caused it. Reported as success — `send()` is fire-and-forget,
+                // and the guest learns what happened from the close event, not
+                // from a rejection it never awaited.
+                Queued::Overflowed => Ok(()),
+                Queued::Accepted {
+                    tx,
+                    bytes,
+                    buffered,
+                } => {
+                    match tx.send(Cmd::Send(msg)).await {
+                        Ok(()) => Ok(()),
+                        Err(_) => {
+                            // The actor is gone, so nothing will decrement this.
+                            buffered.fetch_sub(bytes, Ordering::Relaxed);
+                            Err(err("WebSocket is closed"))
+                        }
+                    }
+                }
             }
         })
     }
@@ -372,17 +508,31 @@ impl WebSocketProvider for SystemWebSocket {
             // Utf8Bytes), so each clone is O(1), and a slow connection awaits its
             // own channel without blocking the others (no head-of-line stall).
             let msg = into_message(message);
-            let txs: Vec<_> = {
+            // Each connection is admitted or refused on its own count: a fan-out
+            // is a list of sends, and the one peer that has stopped reading is
+            // the one that should be closed for it.
+            let queued: Vec<_> = {
                 let guard = conns.lock().unwrap();
                 ids.iter()
-                    .filter_map(|id| guard.get(id).map(|s| s.cmd_tx.clone()))
+                    .filter_map(|id| guard.get(id))
+                    .map(|slot| slot.queue(&msg))
                     .collect()
             };
-            let sends = txs.into_iter().map(|tx| {
-                let msg = msg.clone();
-                async move {
-                    let _ = tx.send(Cmd::Send(msg)).await; // dropped sockets are skipped
-                }
+            let sends = queued.into_iter().filter_map(|queued| match queued {
+                Queued::Overflowed => None,
+                Queued::Accepted {
+                    tx,
+                    bytes,
+                    buffered,
+                } => Some({
+                    let msg = msg.clone();
+                    async move {
+                        // Dropped sockets are skipped; their bytes are returned.
+                        if tx.send(Cmd::Send(msg)).await.is_err() {
+                            buffered.fetch_sub(bytes, Ordering::Relaxed);
+                        }
+                    }
+                }),
             });
             futures_util::future::join_all(sends).await;
             Ok(())
@@ -467,6 +617,7 @@ impl WebSocketProvider for SystemWebSocket {
             // `accept`, because that is when the peer is known, and a refusal
             // closes rather than waits — see [`crate::peer_limit`].
             let per_peer = PeerLimit::new(options.max_connections_per_ip);
+            let max_buffered = options.max_buffered_amount;
             // Accept loop: each TCP connection's WS handshake runs in its own task
             // so a slow handshake never blocks the next accept; on success the
             // connection registers in the shared `conns` map and is queued for
@@ -594,7 +745,7 @@ impl WebSocketProvider for SystemWebSocket {
                                 None => return,
                             };
                             let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
-                            let slot = SystemWebSocket::spawn(ws, permit, peer_slot);
+                            let slot = SystemWebSocket::spawn(ws, permit, peer_slot, max_buffered);
                             conns.lock().unwrap().insert(id, slot);
                             if tx.send((id, WebSocketInfo::default())).await.is_err() {
                                 conns.lock().unwrap().remove(&id); // server gone before accept
@@ -682,6 +833,7 @@ mod tests {
             timeouts,
             max_connections,
             max_connections_per_ip: None,
+            max_buffered_amount: Some(DEFAULT_MAX_BUFFERED),
         })
         .await
         .unwrap()
@@ -1169,6 +1321,117 @@ mod bounds_tests {
         sys.close_server(server_id).await.unwrap();
     }
 
+    /// The gap D47 recorded: `send()` is fire-and-forget, so writing faster
+    /// than a peer reads never stalls the guest — it queues on the host, one
+    /// pending send per message, bounded by nothing. A peer that stops reading
+    /// a fan-out was a memory leak with a network interface.
+    ///
+    /// The peer here reads nothing at all, so everything sent to it backs up
+    /// past the bound and the connection is closed rather than held.
+    #[tokio::test]
+    async fn a_peer_that_stops_reading_is_closed_rather_than_queued_for() {
+        let sys = SystemWebSocket::new();
+        // Small enough to reach with a handful of messages, and far past what
+        // the 16-slot command channel absorbs.
+        let (server_id, info) = sys
+            .serve(WsServeOptions {
+                host: "127.0.0.1".to_string(),
+                port: 0,
+                timeouts: WsTimeouts::default(),
+                max_connections: None,
+                max_connections_per_ip: None,
+                max_buffered_amount: Some(64 * 1024),
+            })
+            .await
+            .unwrap();
+        let port = info.local_port;
+
+        // A raw socket that completes the handshake and then never reads: the
+        // kernel's receive window fills, and everything after that is ours to
+        // hold. `sys.connect` would drain, which is the opposite of the case.
+        let (silent, _) = tokio_tungstenite::client_async(
+            format!("ws://127.0.0.1:{port}/"),
+            TcpStream::connect(("127.0.0.1", port)).await.unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let (id, _) = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the connection is accepted")
+            .unwrap()
+            .expect("a connection");
+
+        // 32 MiB in 64 KiB messages, *concurrently* — which is what a guest
+        // doing `for (…) conn.send(chunk)` produces, since `send()` is not
+        // awaited. Sending them one at a time would let the actor drain between
+        // each and the queue would never build, which is the healthy case the
+        // test below covers.
+        let payload = vec![0u8; 64 * 1024];
+        let sends = (0..512).map(|_| sys.send(id, WsMessage::Binary(payload.clone())));
+        futures_util::future::join_all(sends).await;
+
+        // The connection is gone: `recv` resolves rather than parking forever,
+        // which is what it would do for a healthy but quiet peer.
+        let ended = tokio::time::timeout(Duration::from_secs(10), sys.recv(id))
+            .await
+            .expect("an overflowing connection must be closed, not held");
+        assert!(
+            ended.is_err() || ended.unwrap().is_none(),
+            "the connection outlived its send queue"
+        );
+
+        drop(silent);
+        sys.close_server(server_id).await.unwrap();
+    }
+
+    /// The other half: a peer that keeps up is never closed, however much goes
+    /// through it. Without this the bound above would just be a message cap.
+    #[tokio::test]
+    async fn a_peer_that_keeps_reading_is_never_closed_for_the_bound() {
+        let sys = SystemWebSocket::new();
+        let (server_id, info) = sys
+            .serve(WsServeOptions {
+                host: "127.0.0.1".to_string(),
+                port: 0,
+                timeouts: WsTimeouts::default(),
+                max_connections: None,
+                max_connections_per_ip: None,
+                max_buffered_amount: Some(64 * 1024),
+            })
+            .await
+            .unwrap();
+        let port = info.local_port;
+
+        let (client, _) = sys
+            .connect(format!("ws://127.0.0.1:{port}/"), vec![])
+            .await
+            .unwrap();
+        let (id, _) = tokio::time::timeout(Duration::from_secs(10), sys.accept(server_id))
+            .await
+            .expect("the connection is accepted")
+            .unwrap()
+            .expect("a connection");
+
+        // 1 MiB — sixteen times the bound — through a peer that drains it.
+        let payload = vec![7u8; 16 * 1024];
+        for _ in 0..64 {
+            sys.send(id, WsMessage::Binary(payload.clone()))
+                .await
+                .expect("a drained connection accepts every send");
+            let got = tokio::time::timeout(Duration::from_secs(10), sys.recv(client))
+                .await
+                .expect("the peer keeps up")
+                .unwrap();
+            assert!(
+                matches!(got, Some(WsIncoming::Binary(b)) if b.len() == 16 * 1024),
+                "the peer read something other than the message"
+            );
+        }
+
+        sys.close_server(server_id).await.unwrap();
+    }
+
     /// A WebSocket connection is long-lived by design, so one peer holding
     /// every slot is not something churn takes back — the whole-server cap
     /// bounds what the deployment spends and says nothing about whose
@@ -1187,6 +1450,7 @@ mod bounds_tests {
                 timeouts: WsTimeouts::default(),
                 max_connections: Some(8),
                 max_connections_per_ip: Some(1),
+                max_buffered_amount: Some(DEFAULT_MAX_BUFFERED),
             })
             .await
             .unwrap();

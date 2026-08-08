@@ -1059,6 +1059,30 @@ pub struct WsServeOptions {
     ///
     /// A connection over this should be **refused**, not held.
     pub max_connections_per_ip: Option<usize>,
+    /// The most bytes that may sit queued for one connection before it is
+    /// closed, or `None` for no bound.
+    ///
+    /// `send()` is fire-and-forget by design — the WebSocket API has no way to
+    /// report a full buffer — so a guest writing faster than a peer reads is
+    /// never stalled by it; the messages accumulate on the host side instead,
+    /// one pending send each, bounded by nothing. A peer that stops reading a
+    /// fan-out is then a memory leak with a network interface.
+    ///
+    /// Unlike the connection caps this is **on** by default (8 MiB), because
+    /// the number does not depend on what the deployment knows: a queue that
+    /// deep is already a peer several messages behind, and no application
+    /// intends one. A connection past it is closed with `1013` (Try Again
+    /// Later), which is what the situation is.
+    pub max_buffered_amount: Option<u64>,
+}
+
+impl WsServeOptions {
+    /// The send-queue bound a connection gets when nothing names one: 8 MiB.
+    ///
+    /// Lives here rather than in the runtime or the prelude so there is one copy
+    /// of the number to keep true — the same arrangement [`WsTimeouts`]'
+    /// [`Default`] makes for the handshake bound.
+    pub const DEFAULT_MAX_BUFFERED_AMOUNT: u64 = 8 * 1024 * 1024;
 }
 
 /// When a [`WebSocketProvider`] server should give up on a connection.
