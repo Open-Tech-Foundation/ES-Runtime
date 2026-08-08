@@ -246,34 +246,21 @@ fn info_of(local: Option<SocketAddr>) -> SocketInfo {
 /// guest pulls (hyper feeds it while the connection task awaits the response).
 /// The absolute URL is reconstructed from the listener's scheme plus the request
 /// authority — the `Host` header, or on HTTP/2 the `:authority` pseudo-header
-/// hyper puts in the URI — falling back to the bound address.
+/// hyper puts in the URI — falling back to the bound address. `None` means the
+/// client named something that is not an authority, which the caller answers
+/// with `400` rather than passing on ([`request_url`]).
 fn to_server_request(
     req: Request<Incoming>,
     origin: &str,
     peer_host: &str,
     peer_port: u16,
-) -> HttpServerRequest {
+) -> Option<HttpServerRequest> {
     let method = req.method().to_string();
     // `origin` is "<scheme>://<bound address>", the fallback when a request
     // names no authority. The authority replaces only the host part — the scheme
     // is the listener's, and a client cannot talk this into claiming https:.
     let (scheme, authority) = origin.split_once("://").unwrap_or(("http", origin));
-    // HTTP/2 has no `Host` header: the client sends `:authority`, which hyper
-    // parses into the URI. Reading only the header would leave every h2 request
-    // reporting the bound address as its host.
-    let host = req
-        .headers()
-        .get(hyper::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .filter(|h| !h.is_empty())
-        .or_else(|| req.uri().authority().map(|a| a.as_str()))
-        .unwrap_or(authority);
-    let path = req
-        .uri()
-        .path_and_query()
-        .map(|p| p.as_str())
-        .unwrap_or("/");
-    let url = format!("{scheme}://{host}{path}");
+    let url = request_url(&req, scheme, authority)?;
     let headers = req
         .headers()
         .iter()
@@ -288,7 +275,7 @@ fn to_server_request(
                 .map_err(|e| ProviderError::Other(e.to_string()))
         })))
     };
-    HttpServerRequest {
+    Some(HttpServerRequest {
         method,
         url,
         headers,
@@ -297,7 +284,59 @@ fn to_server_request(
         // the same one — they are one connection.
         remote_address: peer_host.to_owned(),
         remote_port: peer_port,
+    })
+}
+
+/// The absolute URL for a request, or `None` if the authority it names is not
+/// one.
+///
+/// The authority is spliced into a string the guest routes on, so an unchecked
+/// one is a routing forgery rather than a cosmetic problem: `Host: h/admin?`
+/// turns `GET /public` into `http://h/admin?/public`, whose `pathname` is
+/// `/admin` — a request the client is not making, aimed at whatever the
+/// application decided `/admin` was worth protecting. hyper will not catch it,
+/// because to hyper `Host` is a header like any other; the grammar (RFC 9110
+/// §7.2, RFC 3986 §3.2) is this function's to enforce.
+fn request_url(req: &Request<Incoming>, scheme: &str, fallback: &str) -> Option<String> {
+    // HTTP/2 has no `Host` header: the client sends `:authority`, which hyper
+    // parses into the URI. Reading only the header would leave every h2 request
+    // reporting the bound address as its host.
+    let named = match req.headers().get(hyper::header::HOST) {
+        // A `Host` carrying bytes that are not text is not a host name.
+        Some(value) => Some(value.to_str().ok()?),
+        None => req.uri().authority().map(hyper::http::uri::Authority::as_str),
     }
+    .filter(|named| !named.is_empty());
+
+    let host = match named {
+        Some(named) => valid_authority(named)?,
+        // No authority named at all is not an error: HTTP/1.0 predates `Host`,
+        // and the bound address is the honest answer for such a request.
+        None => fallback.to_owned(),
+    };
+    let path = req
+        .uri()
+        .path_and_query()
+        .map(|p| p.as_str())
+        .unwrap_or("/");
+    Some(format!("{scheme}://{host}{path}"))
+}
+
+/// `authority` if it is exactly a host and an optional port.
+///
+/// Rebuilt from the parsed parts and compared, rather than trusted once it
+/// parses: `Authority` also accepts userinfo, and `Host: evil.com@real.host` is
+/// both illegal in a `Host` field and a URL whose *hostname* is `real.host` and
+/// whose visible prefix is `evil.com` — a phishing string in every log line the
+/// application writes.
+fn valid_authority(authority: &str) -> Option<String> {
+    let parsed = hyper::http::uri::Authority::try_from(authority).ok()?;
+    let host = parsed.host();
+    let rebuilt = match parsed.port_u16() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    };
+    (rebuilt == authority).then_some(rebuilt)
 }
 
 /// Builds the hyper response from the guest's [`HttpServerResponse`]. A buffered
@@ -435,7 +474,12 @@ async fn serve_connection<S>(
         let origin = origin.clone();
         let peer_host = peer_host.clone();
         async move {
-            let server_req = to_server_request(req, &origin, &peer_host, peer_port);
+            // A request naming something that is not an authority never reaches
+            // the guest: there is no URL to hand it that is both faithful to
+            // what was sent and safe to route on.
+            let Some(server_req) = to_server_request(req, &origin, &peer_host, peer_port) else {
+                return Ok::<_, Infallible>(status_only(StatusCode::BAD_REQUEST));
+            };
             let (rtx, rrx) = oneshot::channel();
             let (dtx, drx) = oneshot::channel();
             if tx.send((server_req, rtx, drx)).await.is_err() {
@@ -851,6 +895,36 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpStream;
 
+    #[test]
+    fn an_authority_is_a_host_and_a_port_and_nothing_else() {
+        for good in [
+            "example.com",
+            "example.com:8080",
+            "127.0.0.1:80",
+            "[::1]:8080",
+            "[::1]",
+            "sub.example.com.",
+        ] {
+            assert_eq!(valid_authority(good).as_deref(), Some(good), "{good}");
+        }
+        for bad in [
+            // The forgeries: everything after the host is a different request.
+            "example.com/admin",
+            "example.com/admin?x=1",
+            "example.com?x=1",
+            "example.com#f",
+            // Userinfo — illegal in `Host`, and the visible half of the URL.
+            "evil.com@real.host",
+            "evil.com@real.host:443",
+            // Not an authority at all.
+            "exa mple.com",
+            "example.com:notaport",
+            "",
+        ] {
+            assert_eq!(valid_authority(bad), None, "{bad} was accepted");
+        }
+    }
+
     /// Sends a bare `GET /` on a fresh connection and returns it, so a test can
     /// decide when (and whether) to hang up.
     pub(super) async fn request_on_new_conn(port: u16) -> TcpStream {
@@ -905,6 +979,41 @@ mod tests {
             .await
             .unwrap();
         (http, id, info.local_port)
+    }
+
+    /// The forgery end to end: a `Host` that smuggles a path is answered `400`
+    /// on the wire, and the request never becomes one the guest can be asked to
+    /// route. Before the check it arrived as `http://h/admin?/public`, which is
+    /// a request for `/admin` by every URL parser there is.
+    #[tokio::test]
+    async fn a_host_header_that_is_not_an_authority_is_refused_before_the_guest() {
+        use tokio::io::AsyncReadExt;
+
+        let (http, id, port) = bound().await;
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        sock.write_all(b"GET /public HTTP/1.1\r\nHost: h/admin?\r\nConnection: close\r\n\r\n")
+            .await
+            .unwrap();
+
+        let mut got = String::new();
+        sock.read_to_string(&mut got).await.unwrap();
+        assert!(got.starts_with("HTTP/1.1 400"), "{got}");
+
+        // And nothing was handed over: a legitimate request on a new connection
+        // is the *first* one the guest sees.
+        let mut ok = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        ok.write_all(b"GET /public HTTP/1.1\r\nHost: real.host:9\r\n\r\n")
+            .await
+            .unwrap();
+        let reqs = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            http.next_requests(id, 8),
+        )
+        .await
+        .expect("the server is still serving")
+        .unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].1.url, "http://real.host:9/public");
     }
 
     /// The accept loop must keep looping. It used to leave on the first error

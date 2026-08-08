@@ -214,6 +214,7 @@ serve(
 | | |
 | --- | --- |
 | `request.url` scheme | `https:` — from the listener, not a `Host` header |
+| `request.url` host | the client's `Host` / `:authority`, if it is a host and optional port — anything else is `400` |
 | `alpn` | defaults to `["h2", "http/1.1"]` — narrow it to pin a version |
 | Bad cert or key | fails `serve()`, not each handshake |
 | `"on"` without cert/key | `TypeError` |

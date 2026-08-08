@@ -25,6 +25,15 @@ namespace) is unstable and may change between minor releases until the API freez
   `ERR_FOREIGN_HANDLE` if not. `ws_broadcast` checks every id in the fan-out,
   not just the first (D50).
 
+- **A `Host` header that is not an authority is refused with `400`.** The
+  header was spliced into the absolute URL the handler routes on without being
+  checked against the grammar, so `Host: h/admin?` turned `GET /public` into
+  `http://h/admin?/public` — a request whose `new URL(request.url).pathname` is
+  `/admin`. A client could pick the path the application matched on. The
+  authority (the `Host` header, or `:authority` on HTTP/2) must now be a host
+  and an optional port; userinfo is refused too, since `Host:
+  evil.com@real.host` makes a URL whose visible prefix is not its hostname.
+
 - **`MessagePort` ids are unguessable.** A port id is meant to be transferred,
   so it cannot be owned by one agent the way the handles above are — holding the
   id *is* the authority. They were sequential, so an agent that was never given a

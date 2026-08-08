@@ -1469,7 +1469,11 @@ serve(
 ```
 
 `request.url` reports the `https:` scheme — that comes from the listener, so a
-client cannot talk a plain server into claiming it via a `Host` header. `alpn`
+client cannot talk a plain server into claiming it via a `Host` header. The host
+part *is* the client's `Host` (or `:authority` on HTTP/2), but only if it is one:
+a value that is not a bare host and optional port — one carrying a path, a query,
+or userinfo — is answered `400` and never reaches the handler, because such a
+value spliced into a URL changes the path the handler would route on. `alpn`
 defaults to `["h2", "http/1.1"]` — both versions this server speaks, h2 first
 because ALPN order is the server's preference.
 
