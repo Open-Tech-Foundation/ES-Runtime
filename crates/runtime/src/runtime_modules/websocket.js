@@ -36,6 +36,7 @@ class WebSocketConnection extends EventTarget {
   #id;
   #closed = false;
   #binaryType = "blob";
+  #protocol = "";
   #bufferedAmount = 0;
   #handlers = { message: null, close: null, error: null };
 
@@ -43,11 +44,19 @@ class WebSocketConnection extends EventTarget {
   // one still being handed over — an HTTP upgrade has no connection until its
   // `101` is on the wire (D55). Held as a promise either way so there is one
   // path, the same shape `runtime:net`'s Socket uses for a dialled connection.
-  constructor(id) {
+  constructor(id, protocol = "") {
     super();
     this.#id = Promise.resolve(id);
+    this.#protocol = protocol;
     CONN_ID.set(this, this.#id);
     this.#pump();
+  }
+
+  // The subprotocol this connection settled on, or "" if none was negotiated —
+  // the same property the client `WebSocket` carries, and the answer to "which
+  // dialect is this peer speaking" that a server needs before its first frame.
+  get protocol() {
+    return this.#protocol;
   }
 
   // Bytes handed to send() that the host has not taken yet — the same meaning
@@ -182,7 +191,9 @@ class WebSocketServer {
   async accept() {
     const { id } = await this._ready;
     const conn = await ops.ws_accept(id);
-    return conn === null ? null : new WebSocketConnection(conn.id);
+    // The negotiated subprotocol comes back with the connection and used to be
+    // dropped here, so a server could never tell which dialect it had agreed to.
+    return conn === null ? null : new WebSocketConnection(conn.id, conn.protocol);
   }
 
   async close() {
@@ -291,7 +302,7 @@ function count(options, name) {
 // The handshake headers are the host's to add: `Sec-WebSocket-Accept` is a
 // SHA-1 of a key the guest never sees, and one nobody can get wrong beats one
 // everybody has to.
-function upgradeWebSocket(request) {
+function upgradeWebSocket(request, options = {}) {
   if (!(request instanceof Request)) {
     throw new TypeError(
       `upgradeWebSocket: expected a Request, got ${request === null ? "null" : typeof request}`,
@@ -304,14 +315,45 @@ function upgradeWebSocket(request) {
         "no connection to take over",
     );
   }
+  const protocol = selectProtocol(request, options);
   // Started before the 101 is returned and settles after it: the host resolves
   // this once the response is on the wire. Awaiting it here would deadlock on a
   // response this function has not returned yet.
   const connection = ops.ws_upgrade(requestId);
+  // The accept header is the host's (it is a digest of a key the guest never
+  // sees); the subprotocol is the guest's, because only the application knows
+  // which of the offered dialects it speaks.
+  const headers = protocol ? { "sec-websocket-protocol": protocol } : undefined;
   return {
-    response: upgradeResponse(),
-    socket: new WebSocketConnection(connection),
+    response: upgradeResponse(headers),
+    socket: new WebSocketConnection(connection, protocol),
   };
+}
+
+// The subprotocol to answer with, checked against what the client offered.
+//
+// Naming one the client did not offer is refused here rather than sent: the
+// client would fail the handshake and drop the connection, which surfaces as a
+// socket that opened and immediately died — a long way from the line that chose
+// the wrong string.
+function selectProtocol(request, options) {
+  const wanted = (options ?? {}).protocol;
+  if (wanted === undefined || wanted === null) return "";
+  if (typeof wanted !== "string" || wanted === "") {
+    throw new TypeError("upgradeWebSocket: protocol must be a non-empty string");
+  }
+  const offered = (request.headers.get("sec-websocket-protocol") ?? "")
+    .split(",")
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (!offered.includes(wanted)) {
+    throw new TypeError(
+      offered.length === 0
+        ? `upgradeWebSocket: the client offered no subprotocol, so ${JSON.stringify(wanted)} cannot be selected`
+        : `upgradeWebSocket: the client offered ${offered.map((p) => JSON.stringify(p)).join(", ")}, not ${JSON.stringify(wanted)}`,
+    );
+  }
+  return wanted;
 }
 
 function serve(options = {}) {

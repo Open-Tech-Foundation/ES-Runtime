@@ -106,6 +106,11 @@ fn upgrades_a_websocket_on_the_http_server_that_is_serving_requests() {
     assert!(stdout.contains("broadcast room:two|room:two"), "{stdout}");
     // A Request the guest built has no connection behind it to take over.
     assert!(stdout.contains("refused TypeError"), "{stdout}");
+    // Subprotocol negotiation: the client is told what the server picked, and a
+    // protocol the client never offered is refused server-side rather than sent
+    // for the client to reject.
+    assert!(stdout.contains("refused-protocol"), "{stdout}");
+    assert!(stdout.contains("protocol chat.v2"), "{stdout}");
 }
 
 #[test]

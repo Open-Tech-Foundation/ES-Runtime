@@ -88,6 +88,12 @@ namespace) is unstable and may change between minor releases until the API freez
   are the host's, since `Sec-WebSocket-Accept` is a digest of a key the handler
   never sees. Returning anything but the `response` declines the upgrade.
 
+  Subprotocols are negotiated with `upgradeWebSocket(request, { protocol })`,
+  checked against what the client offered — naming another is a `TypeError`
+  rather than a handshake the client silently rejects. `connection.protocol`
+  reports the result, and now does so on `serve()`-accepted connections too:
+  the provider had always reported it and the prelude was dropping it.
+
   **Over TLS the client must negotiate `http/1.1`** — browsers do for `wss:`.
   WebSocket over HTTP/2 needs RFC 8441 extended CONNECT, which is still not
   implemented. (D55.)

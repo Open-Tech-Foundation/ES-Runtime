@@ -1021,6 +1021,7 @@
   // same internal door the runtime already uses for its own responses. The
   // handshake headers are added by the host, which is where the key is.
   Object.defineProperty(globalThis, "__upgradeResponse", {
-    value: () => new Response(null, { status: 101, [INTERNAL_RESPONSE]: true }),
+    value: (headers) =>
+      new Response(null, { status: 101, headers, [INTERNAL_RESPONSE]: true }),
   });
 })();

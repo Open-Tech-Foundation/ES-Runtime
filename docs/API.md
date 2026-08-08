@@ -664,6 +664,23 @@ host's — `Sec-WebSocket-Accept` is a digest of a key the handler never sees.
 `upgradeWebSocket` throws a `TypeError` for a `Request` that did not come from a
 `serve()` handler; there is no connection behind it to take over.
 
+**Subprotocols.** The client's offer is an ordinary header, so read it and answer
+with one of them:
+
+```js
+const offered = request.headers.get("sec-websocket-protocol") ?? "";
+const { response, socket } = upgradeWebSocket(request, {
+  protocol: offered.split(",").map((s) => s.trim()).includes("chat.v2") ? "chat.v2" : undefined,
+});
+socket.protocol; // "chat.v2"
+```
+
+Naming one the client did not offer is a `TypeError` here rather than a
+handshake the client rejects — the latter surfaces as a socket that opened and
+immediately died, a long way from the line that chose the wrong string.
+`socket.protocol` carries the result, on upgraded and `serve()`-accepted
+connections alike.
+
 > **Over TLS the client must negotiate `http/1.1`.** Browsers do this for `wss:`.
 > WebSocket over HTTP/2 requires RFC 8441 extended CONNECT, which this runtime
 > does not implement, so a client that forces `h2` receives whatever the handler
@@ -1842,7 +1859,7 @@ for await (const ws of server) {
 | Export            | Type                                   | Description                                                |
 | ----------------- | -------------------------------------- | ---------------------------------------------------------- |
 | `serve(options)`  | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server on its own port; `port` 0 picks an ephemeral one. `NetListen`. |
-| `upgradeWebSocket(request)` | `(Request) => { response, socket }` | Turn a `runtime:http` request into a WebSocket, so one port serves `https:` and `wss:` together. No capability of its own — the port was already bound under `NetListen`. |
+| `upgradeWebSocket(request, options?)` | `(Request, { protocol? }) => { response, socket }` | Turn a `runtime:http` request into a WebSocket, so one port serves `https:` and `wss:` together. No capability of its own — the port was already bound under `NetListen`. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing (the batched form of a `.send()` loop). A closed connection is skipped; an element that is not a connection is a `TypeError`, checked before anything is sent. |
 
 | Option | Default | Description |
@@ -1886,8 +1903,8 @@ a slow server is the same problem from the other end.
 
 **connection** (each accepted socket) — already open: `send(data)`
 (`string`/`Blob`/`ArrayBuffer`/`ArrayBufferView`), `close(code?, reason?)`,
-`binaryType`, `bufferedAmount`, and `message`/`close` events (`on*` or
-`addEventListener`) — the same surface as the client `WebSocket`, minus the
+`binaryType`, `bufferedAmount`, `protocol`, and `message`/`close` events (`on*`
+or `addEventListener`) — the same surface as the client `WebSocket`, minus the
 connecting handshake.
 
 For chat-style fan-out, prefer **`broadcast(connections, data)`** over a

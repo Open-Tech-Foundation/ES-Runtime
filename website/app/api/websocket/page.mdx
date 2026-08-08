@@ -84,7 +84,7 @@ for await (const ws of server) {
 | Export | Type | Description |
 | --- | --- | --- |
 | `serve(options)` | `({ hostname?, port, timeouts?, maxConnections?, maxConnectionsPerIp?, maxBufferedAmount? }) => WebSocketServer` | Bind a WebSocket server (`ws:` only). `port 0` picks an ephemeral port (read it from `server.addr`). NetListen. |
-| `upgradeWebSocket(request)` | `(Request) => { response, socket }` | Turn a [`runtime:http`](/api/http) request into a WebSocket, so one port serves `https:` and `wss:`. Return `response` to accept, anything else to decline. NetListen is already held by the server. |
+| `upgradeWebSocket(request, options?)` | `(Request, { protocol? }) => { response, socket }` | Turn a [`runtime:http`](/api/http) request into a WebSocket, so one port serves `https:` and `wss:`. Return `response` to accept, anything else to decline. NetListen is already held by the server. |
 | `broadcast(connections, data)` | `(Iterable<conn>, string \| BufferSource \| Blob) => void` | Send one message to many connections in a single host crossing — the batched form of a `.send()` loop (concurrent enqueue, coalesced writes, full delivery). A closed connection is skipped; an element that is not a connection is a `TypeError`. |
 
 ### ServeOptions
@@ -149,6 +149,14 @@ queued. It is an ordinary connection — `broadcast()` reaches it alongside sock
 from `serve()`, and `maxBufferedAmount` applies at its default. The handshake
 headers are the host's: `Sec-WebSocket-Accept` is a digest of a key your handler
 never sees. A `Request` that did not come from a handler is a `TypeError`.
+
+Answer a subprotocol by naming one the client offered — anything else is a
+`TypeError` here rather than a handshake the client silently rejects:
+
+```js
+const { response, socket } = upgradeWebSocket(request, { protocol: "chat.v2" });
+socket.protocol; // "chat.v2"
+```
 
 <Callout type="warning" title="Over TLS the client must negotiate http/1.1">
   Browsers do this for `wss:`, so this is invisible in practice. WebSocket over

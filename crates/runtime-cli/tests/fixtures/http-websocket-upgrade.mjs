@@ -5,7 +5,21 @@ import { upgradeWebSocket, broadcast } from "runtime:websocket";
 const room = new Set();
 const server = serve({ port: 0, hostname: "127.0.0.1" }, (request) => {
   if (request.headers.get("upgrade") === "websocket") {
-    const { response, socket } = upgradeWebSocket(request);
+    // Answer the client's second choice when it offers a list, and refuse one
+    // it never offered.
+    const offered = request.headers.get("sec-websocket-protocol") ?? "";
+    if (offered.includes("chat.v2")) {
+      try {
+        upgradeWebSocket(request, { protocol: "chat.v9" });
+        console.log("NO THROW protocol");
+      } catch {
+        console.log("refused-protocol");
+      }
+    }
+    const { response, socket } = upgradeWebSocket(
+      request,
+      offered.includes("chat.v2") ? { protocol: "chat.v2" } : {},
+    );
     room.add(socket);
     socket.onmessage = (e) => broadcast(room, `room:${e.data}`);
     socket.onclose = () => room.delete(socket);
@@ -43,6 +57,12 @@ try {
 } catch (e) {
   console.log("refused", e.constructor.name);
 }
+
+// Subprotocol negotiation, both directions.
+const c = new WebSocket(`ws://127.0.0.1:${port}/socket`, ["chat.v1", "chat.v2"]);
+await new Promise((r) => (c.onopen = r));
+console.log("protocol", c.protocol);
+c.close();
 
 a.close();
 b.close();

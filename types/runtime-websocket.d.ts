@@ -44,7 +44,18 @@ declare module "runtime:websocket" {
    * does not implement, so a client that forces `h2` gets whatever your handler
    * returns for a non-upgrade request.
    */
-  export function upgradeWebSocket(request: Request): WebSocketUpgrade;
+  export function upgradeWebSocket(
+    request: Request,
+    options?: {
+      /**
+       * The subprotocol to answer with. Must be one the client offered in
+       * `Sec-WebSocket-Protocol` — naming another is a `TypeError` here rather
+       * than a handshake the client rejects, which would surface as a socket
+       * that opened and immediately died.
+       */
+      protocol?: string;
+    },
+  ): WebSocketUpgrade;
 
   /**
    * A server-side WebSocket connection: an already-open socket, so there is no
@@ -54,6 +65,11 @@ declare module "runtime:websocket" {
   export interface WebSocketConnection {
     /** How binary messages are delivered. Defaults to `"blob"`. */
     binaryType: "blob" | "arraybuffer";
+    /**
+     * The subprotocol this connection settled on, or `""` if none was
+     * negotiated — the same property the client `WebSocket` carries.
+     */
+    readonly protocol: string;
     /** Send a message to this peer. */
     send(data: string | ArrayBufferLike | ArrayBufferView | Blob): void;
     /**

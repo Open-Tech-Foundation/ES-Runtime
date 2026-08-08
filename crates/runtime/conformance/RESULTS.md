@@ -14,10 +14,10 @@ a focused, gateable suite over the surface we actually ship, and it is meant to
 
 | | |
 | --- | --- |
-| Assertions passing | **310 / 310** (100%) |
+| Assertions passing | **373 / 373** (100%) |
 | Known deviations (`todo`) | **0** |
-| Files | 23 |
-| Last updated | 2026-07-31 |
+| Files | 24 |
+| Last updated | 2026-08-08 |
 
 A file states spec behaviour two ways. `test(...)` is behaviour the runtime
 **has** — it is counted above and gated as a non-regression floor. `todo(...)`
