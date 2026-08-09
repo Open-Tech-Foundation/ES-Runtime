@@ -57,6 +57,32 @@ const db = await connect("postgres://localhost/app", {
 });
 ```
 
+## One result set at a time
+
+A PostgreSQL connection is a single conversation, so a connection can have one
+open result set. Querying while another result is still streaming is **refused**
+with `ERR_DB_CONNECTION_BUSY` rather than queued:
+
+```js
+for await (const row of await db.query("SELECT * FROM big")) {
+  await db.query("SELECT 1");   // ERR_DB_CONNECTION_BUSY
+}
+```
+
+Queueing would deadlock rather than wait — the outer result only finishes when
+the loop does, and the loop is waiting on the queue. The refusal is immediate
+and says what to do instead: finish the result (`toArray()`, or let the
+`for await` end), or use a second connection.
+
+Two things this does **not** refuse. A result small enough to arrive in one
+batch never holds the connection at all, so the pattern above works for small
+queries. And concurrent statements with no open result set queue normally —
+an exchange in flight finishes on its own, so waiting for it is finite:
+
+```js
+await Promise.all([db.execute(a), db.execute(b)]);   // fine
+```
+
 ## Capabilities
 
 The driver needs **`Net`**, and nothing else — it is an ordinary outbound TCP

@@ -2395,6 +2395,7 @@ then the host's, then `ERR_DB_BACKEND`.
 | `ERR_DB_QUERY_FORM` | The query was handed in a form this backend does not take — SQL text to an engine that wants an AST, or the reverse. |
 | `ERR_DB_UNSUPPORTED` | The backend, scheme, option or parameter type is not supported. |
 | `ERR_DB_CLOSED` | The connection is closed. |
+| `ERR_DB_CONNECTION_BUSY` | The connection is already streaming a result set. Distinct from `ERR_DB_BUSY`, which is the database refusing — this is the client's own connection, and only the caller draining that result can free it. |
 | `ERR_DB_BACKEND` | The backend failed in a way with no portable name. Check `e.backendCode` and `e.message`. |
 | `ERR_ENTROPY` | The entropy source failed. |
 | `ERR_MAX_BUFFER` | A child process wrote more than `runtime:system` `output()`'s `maxBuffer`. |

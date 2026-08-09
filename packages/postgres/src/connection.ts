@@ -67,8 +67,29 @@ export class PgConnection extends BaseConnection {
   readonly parameters: Record<string, string> = {};
   /** The last `ReadyForQuery` status: `I` idle, `T` in a transaction, `E` failed. */
   status = "I";
-  /** One exchange at a time: a connection is a single conversation. */
-  #turn: Promise<unknown> = Promise.resolve();
+  /**
+   * One exchange at a time: a connection is a single conversation.
+   *
+   * The lock is held for the **whole** of an exchange, which for a query means
+   * until its last row has been read — not until the first batch arrives.
+   * Anything less lets a second query write its `Parse` onto the wire while the
+   * first result is still coming back, and then two readers take turns on one
+   * socket. That does not corrupt the stream so much as stop it: both sides
+   * wait for the other's message and neither arrives.
+   */
+  #lock: Promise<unknown> = Promise.resolve();
+  /**
+   * Set while a result set is open and unread.
+   *
+   * A second exchange started here cannot simply queue. An in-flight `execute`
+   * finishes on its own, so waiting for it takes as long as it takes; an open
+   * result set finishes only when the **caller** drains it, and a caller who is
+   * waiting on the queue never will. `for await (row of a) { await query(b) }`
+   * is the shape, it is an ordinary thing to write, and queueing turns it from
+   * a hang into a slower hang. So it is refused, by name, with the fix in the
+   * message.
+   */
+  #streaming = false;
 
   constructor() {
     super({ dialect: POSTGRES_DIALECT, backend: "postgres" });
@@ -144,16 +165,29 @@ export class PgConnection extends BaseConnection {
     return frames.message();
   }
 
-  /** Serializes exchanges: a connection can only hold one conversation. */
-  #serial<T>(work: () => Promise<T>): Promise<T> {
-    const result = this.#turn.then(work, work);
-    // The chain must survive a failed turn, or one error would poison every
-    // later query on this connection.
-    this.#turn = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+  /**
+   * Takes the connection for one exchange, returning the release.
+   *
+   * Every caller must release in a `finally`: a holder that throws without
+   * releasing would leave the chain waiting on a promise nobody settles, and
+   * the connection would be lost rather than merely broken.
+   */
+  async #acquire(): Promise<() => void> {
+    if (this.#streaming) {
+      throw new DbError(
+        "this connection is streaming a result set — finish it (await rows.toArray(), or let the for-await end), or run the second query on another connection",
+        { code: DbErrorCode.ConnectionBusy },
+      );
+    }
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = this.#lock;
+    this.#lock = held;
+    // A failed exchange must not poison the ones behind it.
+    await previous.catch(() => {});
+    return release;
   }
 
   async #authenticate(options: PgOptions): Promise<void> {
@@ -368,16 +402,27 @@ export class PgConnection extends BaseConnection {
     named: [string, unknown][];
   }): Promise<Rows> {
     this.#rejectNamed(q.named);
-    return this.#serial(async () => {
+    const release = await this.#acquire();
+    let held = true;
+    // Released exactly once, however this ends: an early return, a throw, or
+    // the result set finishing much later.
+    const releaseOnce = () => {
+      if (!held) return;
+      held = false;
+      this.#streaming = false;
+      release();
+    };
+
+    try {
       await this.#ask(q.text, q.positional);
       const described = await this.#describe();
       if (described === null) {
         // A statement with no result — `INSERT` without `RETURNING`, run
         // through `query()`. Finish it and hand back an empty result rather
         // than leaving the connection mid-exchange.
-        const batch = await this.#batch(0);
-        const shape = defineRowShape([]);
-        return new Rows(emptySource(batch), shape);
+        await this.#batch(0);
+        releaseOnce();
+        return new Rows(emptySource(), defineRowShape([]));
       }
       const columns = described.names.map((name, i) => ({
         name,
@@ -392,38 +437,56 @@ export class PgConnection extends BaseConnection {
       });
 
       let first: Batch | null = await this.#batch(columns.length);
-      let finished = first.done;
+      if (first.done) {
+        // The whole result arrived in one batch, so the exchange is over and
+        // the connection is free before the caller has read a single row.
+        releaseOnce();
+        return new Rows(oneBatch(first), shape);
+      }
+
+      // More to come: the lock stays held, and the result set owns it.
+      this.#streaming = true;
       const self = this;
       return new Rows(
         {
-          exhausted: first.done,
+          exhausted: false,
           async next(): Promise<Batch> {
             if (first !== null) {
               const batch = first;
               first = null;
               return batch;
             }
-            const batch = await self.#batch(columns.length);
-            finished = batch.done;
-            return batch;
+            try {
+              const batch = await self.#batch(columns.length);
+              if (batch.done) releaseOnce();
+              return batch;
+            } catch (e) {
+              releaseOnce();
+              throw e;
+            }
           },
           async close(): Promise<void> {
-            // A caller that stops early leaves the server mid-result. The rest
-            // has to be read off the wire before anything else can be asked,
-            // or the next query would read this one's rows. This is what
+            if (!held) return;
+            // A caller that stopped early left the server mid-result. The rest
+            // has to come off the wire before anything else can be asked, or
+            // the next query would read this one's rows. This is what
             // `release(clean)` will assert once there is a pool.
-            if (finished) return;
-            await self.#serial(async () => {
+            try {
               for (;;) {
                 const batch = await self.#batch(columns.length);
                 if (batch.done) return;
               }
-            });
+            } finally {
+              releaseOnce();
+            }
           },
         },
         shape,
       );
-    });
+    } catch (e) {
+      releaseOnce();
+      throw e;
+    }
   }
 
   protected async _execute(q: {
@@ -432,13 +495,15 @@ export class PgConnection extends BaseConnection {
     named: [string, unknown][];
   }): Promise<{ changes: number; lastInsertRowid: number | null }> {
     this.#rejectNamed(q.named);
-    return this.#serial(async () => {
+    const release = await this.#acquire();
+    try {
       await this.#ask(q.text, q.positional);
       await this.#describe();
-      const batch = await this.#batch(0);
-      void batch;
+      await this.#batch(0);
       return { changes: affectedRows(this.#lastTag), lastInsertRowid: null };
-    });
+    } finally {
+      release();
+    }
   }
 
   #rejectNamed(named: [string, unknown][]): void {
@@ -479,17 +544,25 @@ function join(frames: Uint8Array[], size: number): Uint8Array {
   return out;
 }
 
-function emptySource(batch: Batch) {
-  let pending: Batch | null = { ...batch, rows: 0, bytes: new Uint8Array(0), done: true };
+const NOTHING: Batch = { bytes: new Uint8Array(0), rows: 0, done: true };
+
+/** A finished result: one batch to hand over, then nothing, and no cursor. */
+function oneBatch(batch: Batch) {
+  let pending: Batch | null = batch;
   return {
     exhausted: true,
     async next(): Promise<Batch> {
-      const value = pending ?? { bytes: new Uint8Array(0), rows: 0, done: true };
+      const value = pending ?? NOTHING;
       pending = null;
       return value;
     },
     async close(): Promise<void> {},
   };
+}
+
+/** A statement that returned no result set at all. */
+function emptySource() {
+  return oneBatch(NOTHING);
 }
 
 /** `INSERT 0 3` / `UPDATE 2` / `SELECT 7` — the count is the last word. */

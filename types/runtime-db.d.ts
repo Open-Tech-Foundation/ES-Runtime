@@ -41,6 +41,7 @@ declare module "runtime:db" {
     readonly QueryForm: "ERR_DB_QUERY_FORM";
     readonly Unsupported: "ERR_DB_UNSUPPORTED";
     readonly Closed: "ERR_DB_CLOSED";
+    readonly ConnectionBusy: "ERR_DB_CONNECTION_BUSY";
     readonly Backend: "ERR_DB_BACKEND";
   };
 

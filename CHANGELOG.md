@@ -18,6 +18,12 @@ namespace) is unstable and may change between minor releases until the API freez
   `runBackendConformance()` suite the built-in `sqlite:` backend does, against a
   real PostgreSQL 18. Lives in `packages/postgres`, versioned separately.
 
+- **`ERR_DB_CONNECTION_BUSY`** joins the portable error codes: the connection is
+  already streaming a result set. Distinct from `ERR_DB_BUSY`, which is the
+  database refusing — this one is the client's own connection, and only the
+  caller draining that result can free it. Every wire protocol has the
+  constraint, which is why it is portable rather than one backend's problem.
+
 - **`runtime:db`** — databases, in two tiers (D56). The **application tier** is
   `connect()`, a `sql` tagged template that binds every interpolation as a
   parameter, and the `Connection` / `Rows` / transaction surface they return.

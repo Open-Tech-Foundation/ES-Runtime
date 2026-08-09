@@ -15,7 +15,7 @@ export PG_URL="${PG_URL:-postgres://postgres:esrun@127.0.0.1:5433/esrun_test?ssl
 [ -f "$here/../dist/index.js" ] || { echo "not built — bun run build" >&2; exit 1; }
 
 status=0
-for test in smoke conformance tls; do
+for test in smoke conformance tls concurrency; do
   printf '\n== %s ==\n' "$test"
   "$esrun" "$here/$test.mjs" || status=1
 done

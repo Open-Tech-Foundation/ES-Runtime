@@ -148,6 +148,15 @@ out and leaves the connection usable.
 A result small enough to fit one batch comes back **with the query itself**, so
 no cursor is opened and the whole query costs one crossing instead of three.
 
+<Callout type="warning" title="One open result set per connection">
+  A networked backend's connection is a single conversation. Querying while
+  another result is still streaming is refused with `ERR_DB_CONNECTION_BUSY`
+  rather than queued — queueing would deadlock, since the open result only
+  finishes when the caller drains it and the caller is waiting on the queue.
+  Finish the result, or use a second connection. (`sqlite:` has no such limit:
+  each query gets its own cursor.)
+</Callout>
+
 ## `Row`
 
 A **lazy view** over its batch, with one getter per column, so a query that
@@ -200,6 +209,7 @@ try {
 | `ERR_DB_QUERY_FORM` | The query was handed in a form this backend does not take. |
 | `ERR_DB_UNSUPPORTED` | The backend, scheme, option or parameter type is not supported. |
 | `ERR_DB_CLOSED` | The connection is closed. |
+| `ERR_DB_CONNECTION_BUSY` | The connection is already streaming a result set — only the caller draining it can free it. Distinct from `ERR_DB_BUSY`, which is the database refusing. |
 | `ERR_DB_BACKEND` | The backend failed in a way with no portable name — check `e.backendCode`. |
 
 ## The driver tier

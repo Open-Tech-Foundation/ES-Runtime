@@ -59,6 +59,13 @@ const DbErrorCode = Object.freeze({
   QueryForm: "ERR_DB_QUERY_FORM",
   Unsupported: "ERR_DB_UNSUPPORTED",
   Closed: "ERR_DB_CLOSED",
+  // The connection is mid-conversation and cannot take another. Distinct from
+  // `Busy`, which is the *database* refusing: this is the client's own
+  // connection already streaming a result that only the caller can finish, so
+  // waiting would deadlock rather than take a while. Every wire protocol has
+  // this constraint — a connection is one conversation — which is why it is a
+  // portable code rather than one backend's problem.
+  ConnectionBusy: "ERR_DB_CONNECTION_BUSY",
   // Nothing above fitted. Not a failure of the table: a database has far more
   // to say than a portable name can carry, and pretending otherwise would make
   // the classification untrustworthy where it does apply.
