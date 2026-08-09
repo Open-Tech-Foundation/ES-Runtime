@@ -1867,6 +1867,195 @@ pub trait Console: Send + Sync {
     fn write(&self, level: ConsoleLevel, message: &str);
 }
 
+/// A parameter bound to a statement — the value half of the binding.
+///
+/// Deliberately **not** [`es_runtime_engine::Value`]: this crate defines the
+/// seam and must not learn the engine's value model, and the set a database
+/// binds is smaller and differently shaped than the set JS marshals. The
+/// conversion happens once, in the runtime's op layer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DbValue {
+    /// SQL `NULL`.
+    Null,
+    /// A 64-bit signed integer. Wider than a JS number can hold exactly, which
+    /// is why the row encoding below carries integers as 8 bytes rather than as
+    /// a double: narrowing is the driver's decision to make, not the seam's.
+    Integer(i64),
+    /// A double.
+    Real(f64),
+    /// UTF-8 text.
+    Text(String),
+    /// An opaque byte string.
+    Blob(Vec<u8>),
+}
+
+/// The parameters of one statement execution.
+///
+/// Both forms are carried because both are asked for, and the alternative —
+/// translating names to positions above the seam — would mean parsing SQL in
+/// JS to find out where the names are. The backend already knows: it prepared
+/// the statement.
+#[derive(Clone, Debug, Default)]
+pub struct DbParams {
+    /// Parameters bound by 1-based position, in order.
+    pub positional: Vec<DbValue>,
+    /// Parameters bound by name, without the leading sigil (`:`, `@`, `$`).
+    pub named: Vec<(String, DbValue)>,
+}
+
+/// One column of a result set, described once per cursor rather than once per
+/// row — which is the whole reason a row batch can be a flat byte run.
+#[derive(Clone, Debug)]
+pub struct DbColumn {
+    /// The column's name as the backend reports it.
+    pub name: String,
+    /// The declared type from the schema, when the backend has one. SQLite's
+    /// types are declared on the *column* but carried by the *value*, so this
+    /// is advisory: it tells a driver what to expect, never what it got.
+    pub decl_type: Option<String>,
+}
+
+/// An open result set: its id, and what its rows will look like.
+#[derive(Clone, Debug)]
+pub struct DbCursor {
+    /// The cursor id, to be fetched from and closed.
+    pub id: u64,
+    /// The result columns, in order.
+    pub columns: Vec<DbColumn>,
+}
+
+/// A run of rows, encoded (see [`EmbeddedDb::fetch`]) and sized by bytes.
+pub struct RowBatch {
+    /// The encoded rows.
+    pub bytes: Vec<u8>,
+    /// How many rows `bytes` holds — so a driver can size its accessor array
+    /// without walking the buffer first.
+    pub rows: u32,
+    /// Whether the cursor is exhausted. A batch may be both non-empty and
+    /// final; `done` is not "empty".
+    pub done: bool,
+}
+
+/// What a non-query statement did.
+pub struct ExecuteResult {
+    /// Rows inserted, updated, or deleted by the statement.
+    pub changes: u64,
+    /// The rowid of the last successful insert on this connection, or `None`
+    /// when the statement inserted nothing.
+    pub last_insert_rowid: Option<i64>,
+}
+
+/// Options for [`EmbeddedDb::open`].
+#[derive(Clone, Debug, Default)]
+pub struct EmbeddedDbOptions {
+    /// Open without the ability to write. The capability check upstream is the
+    /// authority here; this is what the *engine* is told, so that a read-only
+    /// open cannot create the database, its journal, or its WAL.
+    pub read_only: bool,
+    /// The encryption key, hex-encoded. `None` ⇒ an unencrypted database.
+    ///
+    /// Hex rather than bytes because the engine's own option takes a string,
+    /// and a `Vec<u8>` here would only be re-encoded a layer later. The
+    /// consequence is that key material lives in ordinary allocations that are
+    /// not wiped; it is documented rather than hidden (D56).
+    pub hex_key: Option<String>,
+    /// The cipher name, when a key is given. `None` ⇒ the backend's default.
+    pub cipher: Option<String>,
+}
+
+/// An **embedded** database engine: one that runs in this process rather than
+/// over a socket (DECISIONS.md D56).
+///
+/// This is the only database seam below the op boundary, and it exists for the
+/// one case JS cannot serve: an engine with no wire protocol. Every networked
+/// backend — Postgres, MySQL, anything a third party writes — is built in JS on
+/// [`NetProvider`], and adding one must require no change here.
+///
+/// # The row encoding
+///
+/// [`fetch`](Self::fetch) returns rows as **one flat byte run**, never as a
+/// structured value tree: marshaling a tree is recursive and per-value, which
+/// is precisely the cost batching exists to avoid. The layout is Postgres's
+/// `DataRow` body, so that one decoder in JS serves this seam and the wire
+/// protocols alike:
+///
+/// ```text
+/// row    := i32 length          // of this row, counting these 4 bytes
+///           i16 column_count
+///           column*
+/// column := i32 length          // -1 for NULL, and then no bytes follow
+///           u8  tag             // present only for a dynamically typed backend
+///           u8[]                // the value, `length` bytes counting the tag
+/// ```
+///
+/// The `tag` is what a dynamically typed engine needs and a statically typed
+/// one does not: SQLite declares types on columns but stores them on values, so
+/// a column described as `INTEGER` can hand back text in one row and null in
+/// the next. Tags are `1` integer (8 bytes, big-endian), `2` real (an
+/// IEEE-754 double, big-endian), `3` text (UTF-8), `4` blob. A backend whose
+/// columns *do* determine their types omits the tag and says so in its
+/// descriptor, and the decoder skips the per-value branch entirely.
+///
+/// Integers cross as 8 bytes rather than as a double because `i64` does not fit
+/// a JS number, and rounding at the seam would lose the value before anyone
+/// could choose to keep it as a `BigInt`.
+///
+/// # Blocking
+///
+/// An embedded engine's work is CPU and disk, not a socket, so an
+/// implementation is expected to run it off the loop (via
+/// [`TaskSpawner`](TaskSpawner)) and resolve the returned future when it lands.
+/// The methods are async so that this is possible, not because the engine is.
+///
+/// # Authority
+///
+/// The trait takes paths as strings and does **no** checking of its own: the
+/// capability gate is the op, and path confinement belongs to the filesystem
+/// jail an implementation resolves through. An implementation that opens the
+/// path it was handed is a jail escape, since the engine also opens files
+/// nobody named — a WAL, a shared-memory index, a journal — alongside it.
+pub trait EmbeddedDb: Send + Sync {
+    /// Opens the database at `path`, resolving to a connection id.
+    fn open(&self, path: String, opts: EmbeddedDbOptions) -> BoxFuture<Result<u64, ProviderError>>;
+
+    /// Runs a row-returning statement, resolving to an open cursor.
+    ///
+    /// The rows are not read here: the statement is prepared, bound, and left
+    /// positioned, so that a large result set costs a batch of memory rather
+    /// than all of it.
+    fn query(
+        &self,
+        db: u64,
+        sql: String,
+        params: DbParams,
+    ) -> BoxFuture<Result<DbCursor, ProviderError>>;
+
+    /// Reads the next rows from `cursor`, stopping once the encoded batch
+    /// reaches `max_bytes`.
+    ///
+    /// Bounded by **bytes and not by row count**, so that a result set of wide
+    /// rows does not turn one fetch into a latency spike or an allocation the
+    /// caller never asked for. A row wider than `max_bytes` is still returned
+    /// whole — the bound shapes batches, it does not truncate values.
+    fn fetch(&self, cursor: u64, max_bytes: usize) -> BoxFuture<Result<RowBatch, ProviderError>>;
+
+    /// Closes `cursor` (idempotent). A cursor abandoned before exhaustion is
+    /// the normal case, not an error: a caller that stops reading is entitled
+    /// to stop reading.
+    fn close_cursor(&self, cursor: u64) -> BoxFuture<Result<(), ProviderError>>;
+
+    /// Runs a statement for its effect rather than its rows.
+    fn execute(
+        &self,
+        db: u64,
+        sql: String,
+        params: DbParams,
+    ) -> BoxFuture<Result<ExecuteResult, ProviderError>>;
+
+    /// Closes connection `db` and everything open on it (idempotent).
+    fn close(&self, db: u64) -> BoxFuture<Result<(), ProviderError>>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1898,5 +2087,70 @@ mod tests {
             ProviderError::Cancelled.exception_class(),
             ExceptionClass::NOT_ALLOWED
         );
+    }
+
+    // `EmbeddedDb` is consumed as `dyn` from the runtime's op layer, so its
+    // object safety is part of the contract rather than an accident of the
+    // current method set.
+    struct NoDb;
+    impl EmbeddedDb for NoDb {
+        fn open(
+            &self,
+            _path: String,
+            _opts: EmbeddedDbOptions,
+        ) -> BoxFuture<Result<u64, ProviderError>> {
+            Box::pin(async { Ok(1) })
+        }
+        fn query(
+            &self,
+            _db: u64,
+            _sql: String,
+            _params: DbParams,
+        ) -> BoxFuture<Result<DbCursor, ProviderError>> {
+            Box::pin(async {
+                Ok(DbCursor {
+                    id: 1,
+                    columns: Vec::new(),
+                })
+            })
+        }
+        fn fetch(
+            &self,
+            _cursor: u64,
+            _max_bytes: usize,
+        ) -> BoxFuture<Result<RowBatch, ProviderError>> {
+            Box::pin(async {
+                Ok(RowBatch {
+                    bytes: Vec::new(),
+                    rows: 0,
+                    done: true,
+                })
+            })
+        }
+        fn close_cursor(&self, _cursor: u64) -> BoxFuture<Result<(), ProviderError>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn execute(
+            &self,
+            _db: u64,
+            _sql: String,
+            _params: DbParams,
+        ) -> BoxFuture<Result<ExecuteResult, ProviderError>> {
+            Box::pin(async {
+                Ok(ExecuteResult {
+                    changes: 0,
+                    last_insert_rowid: None,
+                })
+            })
+        }
+        fn close(&self, _db: u64) -> BoxFuture<Result<(), ProviderError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[test]
+    fn embedded_db_is_object_safe() {
+        let db: &dyn EmbeddedDb = &NoDb;
+        let _ = db.close(1);
     }
 }

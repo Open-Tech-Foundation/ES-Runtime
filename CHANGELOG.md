@@ -8,6 +8,17 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`EmbeddedDb` provider trait** — the seam an in-process database engine
+  arrives through, and the only database seam below the op boundary (D56).
+  Networked backends are built in JS on `NetProvider`, so adding Postgres or
+  MySQL adds nothing here. Rows cross as one flat byte run in Postgres
+  `DataRow` layout rather than as a value tree, so a single decoder serves the
+  embedded engine and the wire protocols alike; batches are bounded by bytes
+  rather than row count. Embedder-facing only for now — `runtime:db` is not yet
+  exposed.
+
 ## [0.20.0] - 2026-08-08
 
 ### Security
