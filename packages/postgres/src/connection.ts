@@ -206,16 +206,43 @@ export class PgConnection extends BaseConnection {
     await this.#authenticate(options);
   }
 
+  /** Latches the first transport failure and tears the connection down. */
+  #die(cause: unknown): DbError {
+    if (this.#fatal === null) {
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      this.#fatal = new DbError(`the connection to the server was lost: ${detail}`, {
+        code: DbErrorCode.ConnectionLost,
+        cause,
+      });
+      // Nothing is streaming any more, whatever a result set believes, and the
+      // socket goes with it: a half-read connection is not a resource worth
+      // holding on to.
+      this.#streaming = false;
+      void this.#teardown();
+    }
+    return this.#fatal;
+  }
+
   async #send(bytes: Uint8Array): Promise<void> {
+    if (this.#fatal !== null) throw this.#fatal;
     const writer = this.#writer;
     if (writer === null) throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
-    await writer.write(bytes);
+    try {
+      await writer.write(bytes);
+    } catch (e) {
+      throw this.#die(e);
+    }
   }
 
   async #next(): Promise<{ tag: number; frame: Uint8Array }> {
+    if (this.#fatal !== null) throw this.#fatal;
     const frames = this.#frames;
     if (frames === null) throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
-    return frames.message();
+    try {
+      return await frames.message();
+    } catch (e) {
+      throw this.#die(e);
+    }
   }
 
   /**
@@ -226,6 +253,9 @@ export class PgConnection extends BaseConnection {
    * the connection would be lost rather than merely broken.
    */
   async #acquire(): Promise<() => void> {
+    // A dead connection answers immediately rather than queueing behind an
+    // exchange that will never finish.
+    if (this.#fatal !== null) throw this.#fatal;
     if (this.#streaming) {
       throw new DbError(
         "this connection is streaming a result set — finish it (await rows.toArray(), or let the for-await end), or run the second query on another connection",
@@ -317,6 +347,18 @@ export class PgConnection extends BaseConnection {
       }
     }
   }
+
+  /**
+   * The failure that ended this connection, latched.
+   *
+   * A transport error is not one operation's problem: once a message has been
+   * half-read off a socket, nothing later on that socket can be trusted to
+   * start on a boundary. So the first one is kept and every later call is
+   * answered with it, rather than each caller discovering a different symptom
+   * of the same dead connection — a hang, a length that makes no sense, a
+   * message tag nobody sent.
+   */
+  #fatal: DbError | null = null;
 
   #scram: ReturnType<typeof scram> | null = null;
   #processId = 0;
@@ -569,21 +611,29 @@ export class PgConnection extends BaseConnection {
   }
 
   protected async _close(): Promise<void> {
-    try {
-      await this.#send(msg.terminate());
-    } catch {
-      /* the peer may already be gone; the close below is what matters */
+    // A polite goodbye only makes sense on a connection that is still there.
+    if (this.#fatal === null && this.#writer !== null) {
+      try {
+        await this.#send(msg.terminate());
+      } catch {
+        /* the peer may already be gone; the teardown below is what matters */
+      }
     }
-    try {
-      this.#writer?.releaseLock();
-      await this.#frames?.cancel();
-      await this.#socket?.close();
-    } catch {
-      /* closing twice is not an error */
-    }
+    await this.#teardown();
+  }
+
+  async #teardown(): Promise<void> {
+    const [socket, frames, writer] = [this.#socket, this.#frames, this.#writer];
     this.#socket = null;
     this.#frames = null;
     this.#writer = null;
+    try {
+      writer?.releaseLock();
+      await frames?.cancel();
+      await socket?.close();
+    } catch {
+      /* closing twice is not an error */
+    }
   }
 }
 

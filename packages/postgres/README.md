@@ -108,6 +108,17 @@ server is still running, and abandoning a connection mid-statement leaves it
 unusable. The server cancels the statement, reports SQLSTATE `57014`
 (`ERR_DB_TIMEOUT`), and the connection stays usable.
 
+## When the connection dies
+
+A transport failure is latched. Once a message has been half-read off a socket,
+nothing later on it can be trusted to start on a message boundary — so the first
+failure is kept and every later call is answered with the same
+`ERR_DB_CONNECTION_LOST`, rather than each caller meeting a different symptom of
+one dead connection: a hang, a length that makes no sense, a message tag nobody
+sent.
+
+Closing a connection that has already died is not an error and does not hang.
+
 ## Capabilities
 
 The driver needs **`Net`**, and nothing else — it is an ordinary outbound TCP
