@@ -1,0 +1,193 @@
+---
+title: Databases
+description: Talk to a database from esrun — SQLite today, with a driver kit third parties build the rest on.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Databases
+
+[`runtime:db`](/api/db) connects to a database, runs queries, and streams the
+results. It ships with `sqlite:`; anything else is a driver, and the pieces
+those drivers are built from are exported alongside.
+
+```js
+import { connect, sql } from "runtime:db";
+
+const db = await connect("sqlite:./app.db");
+
+await db.execute(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE
+  )
+`);
+
+await db.execute(sql`INSERT INTO users (name, email) VALUES (${"Ada"}, ${"ada@example.com"})`);
+
+for await (const user of await db.query("SELECT id, name FROM users")) {
+  console.log(user.id, user.name);
+}
+
+await db.close();
+```
+
+<Callout type="info" title="Capability: FileRead / FileWrite">
+  A database file is a file, and is scoped like one — the same root jail and
+  `--allow-read` / `--allow-write` lists as [file handling](/docs/guides/file-handling).
+  `esrun --deny-all --allow-read=./data --allow-write=./data app.js` is enough to
+  open `sqlite:./data/app.db` for writing and nothing else. See
+  [Securing Runtime](/docs/guides/securing-runtime).
+</Callout>
+
+## Passing values
+
+Never build SQL by concatenation. Both of these bind values as parameters:
+
+```js
+// A tagged template — every ${…} becomes a parameter.
+await db.query(sql`SELECT * FROM users WHERE email = ${email}`);
+
+// Or placeholders, by position or by name.
+await db.query("SELECT * FROM users WHERE email = ?", [email]);
+await db.query("SELECT * FROM users WHERE email = :email", { email });
+```
+
+The template keeps the fragments and the values apart until the backend renders
+them, so there is no arrangement of it that puts a value into the text — and the
+same template works against a backend that spells placeholders `$1` instead
+of `?`.
+
+Fragments compose:
+
+```js
+const recent = sql`AND created_at > ${cutoff}`;
+const rows = await db.query(sql`SELECT * FROM posts WHERE author = ${id} ${recent}`);
+```
+
+## Reading results
+
+`query()` returns a result set that streams. Iterate it for a large table:
+
+```js
+for await (const row of await db.query("SELECT * FROM events")) {
+  process(row);
+}
+```
+
+…or collect it when the result is small:
+
+```js
+const users = await (await db.query("SELECT * FROM users")).toArray();
+const one = await (await db.query("SELECT * FROM users WHERE id = ?", [1])).first();
+```
+
+Rows arrive a batch at a time, so a table larger than memory costs one batch —
+and stopping early (`break`) closes the cursor and leaves the connection usable.
+
+<Callout type="warning" title="Materialize a row with toObject()">
+  A row is a lazy view over its batch, so a column you never read is never
+  decoded. That means `{ ...row }` does **not** copy the columns — it gives an
+  empty object. Use `row.toObject()`. `JSON.stringify(row)` works as you would
+  expect.
+</Callout>
+
+```js
+const row = await (await db.query("SELECT id, name FROM users")).first();
+row.name;              // "Ada"
+row.toObject();        // { id: 1, name: "Ada" }
+JSON.stringify(row);   // '{"id":1,"name":"Ada"}'
+{ ...row };            // {} — use toObject()
+```
+
+Large integers come back as a `bigint` only when a `number` would have lost the
+value, so an id of `9007199254740993` survives; blobs come back as
+`Uint8Array`.
+
+## Transactions
+
+```js
+await db.transaction(async (tx) => {
+  await tx.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", [amount, from]);
+  await tx.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", [amount, to]);
+});
+```
+
+Commits when the function returns, rolls back when it throws. Nested calls
+become savepoints, so a helper that opens a transaction works whether or not its
+caller already did:
+
+```js
+async function addUser(conn, name) {
+  return conn.transaction(async (tx) => tx.execute("INSERT INTO users (name) VALUES (?)", [name]));
+}
+
+await db.transaction(async (tx) => {
+  await addUser(tx, "Ada");   // a savepoint, not a second transaction
+  await addUser(tx, "Grace");
+});
+```
+
+## Handling failures
+
+Errors carry a portable code, so an application can branch on what happened
+without knowing which database said it:
+
+```js
+import { DbErrorCode } from "runtime:db";
+
+try {
+  await db.execute("INSERT INTO users (email) VALUES (?)", [email]);
+} catch (e) {
+  if (e.code === DbErrorCode.UniqueViolation) return { error: "that email is taken" };
+  throw e;
+}
+```
+
+A denied capability keeps its own code (`ERR_CAPABILITY_DENIED`) rather than
+being flattened into a database error, so the two stay distinguishable.
+
+## In-memory databases
+
+`sqlite::memory:` gives you a database that exists only in memory — ideal for
+tests, and for using SQL as a query language over data you already have:
+
+```js
+const db = await connect("sqlite::memory:");
+```
+
+It touches no filesystem, so it needs **no capability**: it works under
+`esrun --deny-all`. Each connection gets its own database.
+
+## Encryption
+
+```js
+const key = crypto.getRandomValues(new Uint8Array(32));
+const db = await connect("sqlite:./secret.db", { key });
+```
+
+<Callout type="warning" title="Experimental, and the key belongs in the options">
+  Encryption is experimental upstream. The key goes in the options object — a
+  key in the connection string ends up in logs, error messages and stack traces,
+  so `connect("sqlite:./app.db?key=…")` is refused rather than honoured quietly.
+</Callout>
+
+## Other databases
+
+`sqlite:` is the backend that ships. A Postgres or MySQL driver is ordinary
+JavaScript over [`runtime:net`](/docs/guides/networking) that registers its own
+scheme:
+
+```js
+import "some-postgres-driver";           // registers postgres:
+import { connect } from "runtime:db";
+
+const db = await connect("postgres://user@host/db");
+```
+
+Everything above — `sql`, streaming rows, transactions, the portable error
+codes — works the same against it, because drivers are built on the same
+exported pieces the built-in backend is. If you are writing one, see the
+[driver tier](/api/db#the-driver-tier) and run
+`runBackendConformance()` to check it behaves like the built-ins.

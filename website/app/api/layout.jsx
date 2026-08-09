@@ -13,6 +13,7 @@ const NAV = [
       { title: "runtime:process", path: "/api/process" },
       { title: "runtime:path", path: "/api/path" },
       { title: "runtime:fs", path: "/api/fs" },
+      { title: "runtime:db", path: "/api/db" },
       { title: "runtime:net", path: "/api/net" },
       { title: "runtime:http", path: "/api/http" },
       { title: "runtime:websocket", path: "/api/websocket" },

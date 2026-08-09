@@ -1,0 +1,150 @@
+---
+title: Databases
+description: Why runtime:db puts protocols in JavaScript and only an embedded engine in Rust, what the row encoding buys, and what it costs.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Databases
+
+`runtime:db` is built on one rule: **Rust owns transport and the embedded
+engine, JavaScript owns every protocol.** Adding a networked backend —
+Postgres, MySQL, Redis — must require no new runtime code at all. If a change
+would put a protocol codec below the op boundary, it is the wrong change.
+
+The reasoning and what was rejected live in
+[DECISIONS D56](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
+## Why a database driver can be JavaScript
+
+The usual objection is that a driver in JS must be slower than one in native
+code. That is true of a driver that crosses the boundary per message or per
+value, and it is the reason this one does not.
+
+The transport was already here. [`runtime:net`](/docs/internals/sockets) gives a
+driver a TLS socket, a mid-connection `startTls()` upgrade — which is exactly
+what a Postgres `SSLRequest` needs — and reads that arrive in 64 KiB batches
+rather than one per message. A wire-protocol driver needs nothing else from the
+host, which is why the Postgres path will add no Rust.
+
+## One row format, every backend
+
+Rows cross as **one byte buffer per batch**, in the layout Postgres already
+uses for `DataRow`: per column an `int32` length (`-1` for NULL) then the bytes,
+with the column descriptors sent once per cursor.
+
+Nothing is marshaled per value. A structured value tree would be recursive and
+per-value, which is precisely the cost batching exists to avoid — so the
+embedded engine is made to emit the wire's layout rather than the wire being
+translated into something else.
+
+The consequence is that the decoder is written **once**. The accessor class
+generated from a query's columns, the `DataView` reads, the lazy `TextDecoder`
+per column — that code serves SQLite today and a third-party MySQL driver
+tomorrow, and a driver author gets the fast path by transcoding into the layout
+rather than by writing a decoder.
+
+### Why rows are lazy, and what that costs
+
+Applications routinely select more columns than they read. A row decodes
+nothing on arrival: one pass over the batch records each column's span, and a
+column is decoded when it is asked for.
+
+The accessor is a **class generated per query with prototype getters** — not a
+`Proxy`, which deoptimizes every access through it, and not per-row property
+definition, which would put every row in dictionary mode. Every row of a query
+shares one hidden class, so the getters stay monomorphic and inlinable.
+
+<Callout type="warning" title="The cost: spreading a row does not copy it">
+  Prototype getters are not own properties, so `{ ...row }` yields an empty
+  object rather than the columns. `row.toObject()` is the explicit spelling.
+  This is the price of laziness, and it is documented rather than hidden — the
+  alternative was eager decoding for every column of every row.
+</Callout>
+
+The row's own state is kept in **private fields**, not properties. A row holds a
+reference to its whole batch, and anything reachable from the instance is
+reachable by a caller who spreads it — including symbol keys. Private fields are
+copied by nothing and enumerated by nothing, so the buffer cannot escape through
+a row by accident.
+
+Each batch owns a **fresh buffer**. Reusing one would silently corrupt any row a
+caller retained past its batch, which is the kind of bug that surfaces far from
+its cause; reuse may arrive later as an opt-in with documented invalidation, but
+never as the default.
+
+## Why pooling is JavaScript
+
+A connection pool below the op boundary is possible and was rejected, because it
+*adds* crossings to the hot path rather than removing them. A JS pool serves a
+cache hit in **zero** ops and a release in zero; a provider-side pool costs one
+async op for each, on a query whose whole cost is a write and a read.
+
+The deeper reason is that the pool's interesting decision is not "is a socket
+free" but **which connection already prepared this statement** — protocol state,
+which lives in JavaScript regardless. A native pool would be a second
+bookkeeping of a set the driver already keeps.
+
+## The embedded engine, and the jail
+
+`sqlite:` is the one backend that cannot be JavaScript, because it has no wire
+protocol to speak — it runs in this process. It is implemented by
+[Turso](https://github.com/tursodatabase/turso), which appears nowhere in the
+API: `sqlite:` names a file format and a SQL dialect, so the implementation can
+be replaced without the URL changing.
+
+**The engine does not get the filesystem. It gets a VFS.** An engine opens more
+files than it is handed — a write-ahead log, a shared-memory index — and
+checking only the path the caller named would put those outside the root jail
+and the `--allow-read` / `--allow-write` scopes: inside the right directory, but
+reached by a route nothing judged. So its I/O resolves **every** open through
+the same filesystem view that backs [`runtime:fs`](/docs/internals/filesystem),
+and no filename has to be guessed, because the engine has to ask.
+
+Two consequences fell out of that, both found by tests rather than by reading:
+
+- **The engine's scratch space is memory.** Some statements ask for a temp file
+  and take one from the OS temp directory, which is outside the jail by
+  construction — so the VFS refuses it and the statement fails. Temp storage is
+  configured to memory instead, the same answer `runtime:fs` gives by declining
+  to put its own temp files there. The cost is that work which would have
+  spilled to disk is bounded by memory.
+- **An in-memory database is chosen by the I/O, not by the path.** Handing the
+  engine a file-backed VFS with a `:memory:` path produces a *file called
+  `:memory:`* while the engine reports the database as in-memory. The dispatch
+  belongs to the embedder, and any future replacement inherits the same
+  obligation.
+
+Engine work is blocking — it drives its own I/O to completion — so every call
+runs off the event loop.
+
+## Capabilities
+
+`runtime:db` adds none. It reaches nowhere `runtime:fs` and `runtime:net` cannot
+already reach, so it composes existing authority rather than introducing any: a
+database file is scoped by `--allow-read` / `--allow-write`, and a networked
+backend by `--allow-net=db.internal:5432`, which says more than "may use a
+database" ever could.
+
+Opening is **two ops rather than one with a flag** — the read-only open is its
+own op and demands only `FileRead` — because a capability an op *might* need is
+not a gate.
+
+<Callout type="info" title="One operation needs nothing at all">
+  `sqlite::memory:` names no file, reads none and writes none, so a filesystem
+  grant would guard nothing that happens. It is a third op that **takes no
+  path**: an ungated op that accepted one would be a way to open any database on
+  disk without `FileRead`. What it costs is memory, which guest JavaScript can
+  already spend without asking. It works under `--deny-all`, exactly as an
+  in-process `Map` does.
+</Callout>
+
+## What is not here yet
+
+- **Networked backends.** Postgres is next, and will add no Rust.
+- **A connection pool**, which arrives with the first backend that needs one —
+  its `release(clean)` contract is what decides whether a connection is reused
+  or discarded, and getting that wrong leaks state between requests.
+- **Zero-copy at the op boundary.** Batches are copied across today; that is the
+  largest remaining native lever on throughput, and it is a runtime-wide change
+  rather than a database one.

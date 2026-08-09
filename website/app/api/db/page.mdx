@@ -1,0 +1,211 @@
+---
+title: runtime:db
+description: Databases in two tiers — connect, sql and streaming rows for applications, plus the registry, row decoder and conformance suite drivers are built on.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:db
+
+Databases, in two tiers. The **application tier** is `connect()` and what it
+returns. The **driver tier** is what a third party needs to add a backend of
+their own. Both are exported from `runtime:db`; the split is in the
+documentation, not the specifier.
+
+<Callout type="info" title="Capability: FileRead / FileWrite — none for sqlite::memory:">
+  Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
+  `runtime:db` adds no capability of its own: opening a database is a filesystem
+  access and is scoped as one, by the same root jail and `--allow-read` /
+  `--allow-write` lists that back [`runtime:fs`](/api/fs).
+</Callout>
+
+## Import
+
+```js
+import { connect, sql } from "runtime:db";
+```
+
+## `connect(url, options?)`
+
+Chooses a backend by the connection string's **scheme**.
+
+```js
+const db = await connect("sqlite:./app.db");
+const mem = await connect("sqlite::memory:");
+const enc = await connect("sqlite:./secret.db", { key });
+```
+
+| Option | Type | Meaning |
+| --- | --- | --- |
+| `key` | `string \| Uint8Array` | Encryption key, hex or bytes. |
+| `cipher` | `string` | Cipher name; defaults to the backend's. |
+| `readOnly` | `boolean` | Open without the ability to write. |
+
+<Callout type="warning" title="A key never goes in the URL">
+  A key in a connection string ends up in logs, in error messages and in stack
+  traces. `connect("sqlite:./app.db?key=…")` is **refused**, not honoured
+  quietly. Pass it in the options object.
+</Callout>
+
+`sqlite:` names a file format and a SQL dialect the way `postgres://` names a
+wire protocol — not a particular implementation, which may be replaced without
+the URL changing.
+
+`sqlite::memory:` opens a database that exists only in memory, and each
+connection gets its own. The named form (`:memory:name`), which in SQLite means
+*sharing* one, is refused rather than quietly not sharing.
+
+## `Connection`
+
+| Member | Returns |
+| --- | --- |
+| `query(q, params?)` | `Promise<Rows>` |
+| `execute(q, params?)` | `Promise<{ changes, lastInsertRowid }>` |
+| `transaction(fn)` | whatever `fn` returns |
+| `close()` | `Promise<void>` — also `Symbol.asyncDispose` |
+| `dialect`, `backend` | the backend's dialect and name |
+
+`q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
+(bound by position) or an object (bound by name).
+
+```js
+await db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["ada", 36]);
+await db.execute("INSERT INTO users (name) VALUES (:name)", { name: "grace" });
+```
+
+### `transaction(fn)`
+
+Commits when `fn` returns and rolls back when it throws. Nested calls become
+savepoints where the backend has them, so a helper that opens a transaction
+composes with a caller that already did instead of committing the outer one
+early. A rollback that itself fails never replaces the error that caused it.
+
+```js
+await db.transaction(async (tx) => {
+  await tx.execute("UPDATE accounts SET balance = balance - ? WHERE id = ?", [100, from]);
+  await tx.execute("UPDATE accounts SET balance = balance + ? WHERE id = ?", [100, to]);
+});
+```
+
+## `` sql`` ``
+
+Every interpolation becomes a parameter, never text. A nested fragment splices
+with its own values, so queries compose without either half knowing the other's
+placeholder numbering.
+
+```js
+const active = sql`AND status = ${"active"}`;
+await db.query(sql`SELECT * FROM users WHERE id > ${10} ${active}`);
+```
+
+Fragments and values stay apart until the backend renders them, so one template
+targets `$1`, `?` and `:name` backends unchanged — and there is no arrangement
+of it that puts a value into the text.
+
+## `Rows`
+
+Async-iterable, pulled one batch at a time — never the whole result, so a table
+larger than memory streams through at the cost of a batch.
+
+| Member | Meaning |
+| --- | --- |
+| `[Symbol.asyncIterator]` | Streams rows. |
+| `toArray()` | The whole result as an array. |
+| `first()` | The first row, or `null`. Closes the cursor. |
+| `columns` | `[{ name, declType }]`. |
+| `close()` | Closes the cursor early. |
+
+Stopping early — `break`, `return`, a `throw` — closes the cursor on the way
+out and leaves the connection usable.
+
+## `Row`
+
+A **lazy view** over its batch, with one getter per column, so a query that
+selects more columns than it reads pays only for the ones it touches. A 64-bit
+integer arrives as a `bigint` only where a `number` would have lost it; a blob
+arrives as a `Uint8Array`.
+
+<Callout type="warning" title="Spreading a row does not copy its columns">
+  The getters live on the prototype, so `{ ...row }` yields an **empty object**
+  (and leaks nothing internal either). `row.toObject()` is how a row is
+  materialized. `JSON.stringify(row)` works, and `row.values()` gives the
+  columns in query order.
+</Callout>
+
+## Errors
+
+A failure is a `DbError` whose `code` is layered: the driver's own
+classification first, then a stable host code, then `ERR_DB_BACKEND`. A denied
+capability stays `ERR_CAPABILITY_DENIED` and a jail escape stays
+`ERR_JAIL_ESCAPE` — an application testing for those should not have to know the
+call went through a database. The backend's own code, where it had one, stays on
+`e.backendCode`.
+
+```js
+import { DbErrorCode } from "runtime:db";
+
+try {
+  await db.execute("INSERT INTO users (email) VALUES (?)", [email]);
+} catch (e) {
+  if (e.code === DbErrorCode.UniqueViolation) return { taken: true };
+  throw e;
+}
+```
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_DB_UNIQUE_VIOLATION` | A unique constraint or primary key collided. |
+| `ERR_DB_FOREIGN_KEY_VIOLATION` | A foreign key constraint failed. |
+| `ERR_DB_NOT_NULL_VIOLATION` | A `NOT NULL` column was given null. |
+| `ERR_DB_CHECK_VIOLATION` | A `CHECK` constraint failed. |
+| `ERR_DB_DEADLOCK` | The transaction was chosen as a deadlock victim. |
+| `ERR_DB_SERIALIZATION_FAILURE` | The transaction could not be serialized; retry it. |
+| `ERR_DB_BUSY` | The database is locked by another writer. |
+| `ERR_DB_CONNECTION_LOST` | The connection went away mid-operation. |
+| `ERR_DB_AUTH_FAILED` | The server refused the credentials. |
+| `ERR_DB_TIMEOUT` | The database gave up on the statement. |
+| `ERR_DB_SYNTAX` | The backend could not parse the statement. |
+| `ERR_DB_UNDEFINED_TABLE` / `ERR_DB_UNDEFINED_COLUMN` | No such table / column. |
+| `ERR_DB_READ_ONLY` | A write against a read-only database. |
+| `ERR_DB_QUERY_FORM` | The query was handed in a form this backend does not take. |
+| `ERR_DB_UNSUPPORTED` | The backend, scheme, option or parameter type is not supported. |
+| `ERR_DB_CLOSED` | The connection is closed. |
+| `ERR_DB_BACKEND` | The backend failed in a way with no portable name — check `e.backendCode`. |
+
+## The driver tier
+
+For adding a backend or building an ORM.
+
+| Export | Purpose |
+| --- | --- |
+| `registerBackend(scheme, factory)` | Claim a scheme. Built-ins cannot be replaced; `otfdb:` is reserved. |
+| `backendSchemes()` | The registered schemes. |
+| `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`. |
+| `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports`. |
+| `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder every backend shares. |
+| `encodeParams` / `splitParams` | Parameter encoding. |
+| `ByteWriter` | A growable buffer with length-prefix back-fill. |
+| `mapError` / `asDbError` | Map a backend's vocabulary onto the portable codes. |
+| `runBackendConformance(open)` | The suite that proves a backend behaves like the built-ins. |
+
+```js
+import { registerBackend, BaseConnection, Dialect } from "runtime:db";
+
+const dialect = new Dialect({ name: "mydb", placeholder: (i) => `$${i}` });
+
+class MyConnection extends BaseConnection {
+  constructor(socket) {
+    super({ dialect, backend: "mydb" });
+    this.socket = socket;
+  }
+  async _query({ text, positional }) { /* … */ }
+  async _execute({ text, positional }) { /* … */ }
+  async _close() { /* … */ }
+}
+
+registerBackend("mydb", async (url, options) => new MyConnection(await open(url)));
+```
+
+Adding a networked backend needs **no new runtime code** — a driver is JS over
+[`runtime:net`](/api/net). See [Databases](/docs/db) for the guide and
+[Internals](/docs/internals/database) for why it is built this way.
