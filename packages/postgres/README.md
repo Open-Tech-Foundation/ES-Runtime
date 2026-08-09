@@ -93,6 +93,26 @@ Rows are discarded: it reports what each statement did, not what it returned.
 `executeScript` is on `PgConnection` rather than the portable `Connection`
 surface — reach it through this package's own `connect()`.
 
+## Notices and server parameters
+
+```js
+db.onNotice = (n) => console.warn(`${n.severity}: ${n.message}`);
+```
+
+Called for each `NOTICE`/`WARNING` the server sends — `RAISE NOTICE` in a
+function, a deprecation, a truncation. A notice is the server talking, not the
+statement failing, so it is never thrown. Unset, notices are **discarded rather
+than printed**: a driver that wrote to stderr on its own would be one you had to
+work around.
+
+`db.parameters` tracks the settings the server reports, and keeps tracking them
+— it is not a snapshot of the handshake:
+
+```js
+await db.execute("SET TIME ZONE 'Asia/Kolkata'");
+db.parameters.TimeZone;   // "Asia/Kolkata"
+```
+
 ## One result set at a time
 
 A PostgreSQL connection is a single conversation, so a connection can have one

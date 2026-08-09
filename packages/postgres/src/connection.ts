@@ -339,15 +339,9 @@ export class PgConnection extends BaseConnection {
             code: DbErrorCode.AuthFailed,
           });
         }
-        case B.ParameterStatus: {
-          this.parameters[fields.cstring()] = fields.cstring();
-          break;
-        }
         case B.BackendKeyData:
           this.#processId = fields.i32();
           this.#secretKey = fields.i32();
-          break;
-        case B.NoticeResponse:
           break;
         case B.ErrorResponse:
           throw serverError(readServerMessage(fields));
@@ -355,6 +349,7 @@ export class PgConnection extends BaseConnection {
           this.status = String.fromCharCode(fields.u8());
           return;
         default:
+          this.#observe(tag, fields);
           break;
       }
     }
@@ -435,10 +430,8 @@ export class PgConnection extends BaseConnection {
           await this.#drainToReady();
           throw serverError(error);
         }
-        case B.NoticeResponse:
-        case B.ParameterStatus:
-          break;
         default:
+          this.#observe(tag, fields);
           break;
       }
     }
@@ -479,6 +472,7 @@ export class PgConnection extends BaseConnection {
         case B.PortalSuspended:
           return { bytes: join(frames, size), rows, done: false };
         default:
+          this.#observe(tag, fields);
           break;
       }
       void columns;
@@ -500,6 +494,7 @@ export class PgConnection extends BaseConnection {
         // already unwinding from the first one.
         continue;
       }
+      this.#observe(tag, new Fields(frame));
     }
   }
 
@@ -671,12 +666,42 @@ export class PgConnection extends BaseConnection {
     }
   }
 
-  /** Messages that can arrive at any time and are not this exchange's answer. */
+  /**
+   * Messages that can arrive at any point and are nobody's answer.
+   *
+   * PostgreSQL may send these between any two messages of an exchange, so every
+   * read loop routes what it does not recognise here rather than dropping it.
+   * Ignoring them is what made `parameters` go stale after `SET TIME ZONE` and
+   * made `RAISE NOTICE` output vanish.
+   */
   #observe(tag: number, fields: Fields): void {
-    if (tag === B.ParameterStatus) {
-      this.parameters[fields.cstring()] = fields.cstring();
+    switch (tag) {
+      case B.ParameterStatus: {
+        // The server reports a GUC it thinks the client should track — the time
+        // zone, the encoding, `search_path`. It sends these unprompted whenever
+        // one changes, which is why they cannot only be read at the handshake.
+        this.parameters[fields.cstring()] = fields.cstring();
+        break;
+      }
+      case B.NoticeResponse: {
+        const notice = readServerMessage(fields);
+        // Same shape as an error and deliberately not thrown: a notice is the
+        // server talking, not the statement failing. Unhandled, it is dropped
+        // rather than logged — a driver that printed to stderr on its own would
+        // be a driver you had to work around.
+        this.onNotice?.(notice);
+        break;
+      }
+      default:
+        break;
     }
   }
+
+  /**
+   * Called for each `NOTICE`/`WARNING` the server sends — `RAISE NOTICE` in a
+   * function, a deprecation, a truncation. Unset, they are discarded.
+   */
+  onNotice: ((notice: ServerMessage) => void) | undefined;
 
   #rejectNamed(named: [string, unknown][]): void {
     if (named.length > 0) {
