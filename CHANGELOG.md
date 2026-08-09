@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-09
+
 ### Added
 
 - **`@opentf/esrun-postgres`** — the first ecosystem package, and the proof of
