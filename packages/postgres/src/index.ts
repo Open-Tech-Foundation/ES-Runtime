@@ -39,6 +39,21 @@ export function parseConnectionString(url: string, overrides: PgOptions = {}): P
   if (database !== "") options.database = database;
   if (parsed.username !== "") options.user = decodeURIComponent(parsed.username);
   if (parsed.password !== "") options.password = decodeURIComponent(parsed.password);
+  // libpq spells these in **seconds**, and every connection string in the wild
+  // follows it. The options object stays in milliseconds, which is what the
+  // rest of JavaScript means by a timeout — so the two spellings differ on
+  // purpose and are documented as differing, rather than one silently meaning
+  // the other.
+  const connectSeconds = parsed.searchParams.get("connect_timeout");
+  if (connectSeconds !== null && connectSeconds !== "") {
+    const seconds = Number(connectSeconds);
+    if (Number.isFinite(seconds) && seconds >= 0) options.connectTimeout = seconds * 1000;
+  }
+  const statementMs = parsed.searchParams.get("statement_timeout");
+  if (statementMs !== null && statementMs !== "") {
+    const ms = Number(statementMs);
+    if (Number.isFinite(ms) && ms >= 0) options.statementTimeout = ms;
+  }
   const sslmode = parsed.searchParams.get("sslmode");
   if (sslmode === "require" || sslmode === "prefer" || sslmode === "disable") {
     options.sslmode = sslmode;

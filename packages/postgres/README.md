@@ -83,6 +83,31 @@ an exchange in flight finishes on its own, so waiting for it is finite:
 await Promise.all([db.execute(a), db.execute(b)]);   // fine
 ```
 
+## Timeouts
+
+```js
+const db = await connect(url, {
+  connectTimeout: 10_000,    // ms — the connection *and* its handshake
+  statementTimeout: 30_000,  // ms — applied to every statement
+});
+```
+
+| Option | URL parameter | Default |
+| --- | --- | --- |
+| `connectTimeout` (ms) | `connect_timeout` (**seconds**, libpq's spelling) | 10 000 |
+| `statementTimeout` (ms) | `statement_timeout` (ms) | unset |
+
+`connectTimeout` is the one that matters most: a server which completes the TCP
+handshake and then says nothing is indistinguishable from a slow one, and
+without a deadline that wait never ends. A *refused* connection fails on its
+own; an accepted-and-ignored one does not.
+
+`statementTimeout` is sent as a startup parameter, so the **server** enforces
+it. A client-side timer cannot do this job — it would fire on a statement the
+server is still running, and abandoning a connection mid-statement leaves it
+unusable. The server cancels the statement, reports SQLSTATE `57014`
+(`ERR_DB_TIMEOUT`), and the connection stays usable.
+
 ## Capabilities
 
 The driver needs **`Net`**, and nothing else — it is an ordinary outbound TCP

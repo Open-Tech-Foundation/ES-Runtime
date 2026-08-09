@@ -49,8 +49,30 @@ export interface PgOptions {
   password?: string;
   database?: string;
   applicationName?: string;
-  /** `"require"` (default) upgrades to TLS; `"disable"` stays in plaintext. */
+  /** `"prefer"` (default) asks for TLS; `"require"` insists; `"disable"` never asks. */
   sslmode?: "require" | "prefer" | "disable";
+  /**
+   * How long to wait for the connection **and its handshake**, in
+   * milliseconds. Default 10 000; `0` waits forever.
+   *
+   * This is the bound that matters, because a server which completes the TCP
+   * handshake and then says nothing is indistinguishable from a slow one, and
+   * without a deadline the wait is unbounded. The URL spells it
+   * `connect_timeout` in **seconds**, which is libpq's spelling and what every
+   * connection string in the wild carries.
+   */
+  connectTimeout?: number;
+  /**
+   * `statement_timeout`, in milliseconds, applied to every statement on this
+   * connection. Default unset (no limit).
+   *
+   * Sent as a startup parameter, so the **server** enforces it. A client-side
+   * timer cannot: it would fire on a query the server is still working on, and
+   * abandoning a connection mid-statement leaves it unusable. The server
+   * cancels the statement and stays connected, which is the outcome worth
+   * having.
+   */
+  statementTimeout?: number;
 }
 
 interface Batch {
@@ -98,6 +120,33 @@ export class PgConnection extends BaseConnection {
   // -- lifecycle ------------------------------------------------------------
 
   async open(options: PgOptions): Promise<void> {
+    const budget = options.connectTimeout ?? 10_000;
+    if (budget <= 0) return this.#open(options);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new DbError(
+            `the connection to ${options.host ?? "localhost"}:${options.port ?? 5432} did not complete within ${budget}ms`,
+            { code: DbErrorCode.Timeout },
+          ),
+        );
+      }, budget);
+    });
+    try {
+      await Promise.race([this.#open(options), expired]);
+    } catch (e) {
+      // The socket may be half-open behind a rejected race, and a descriptor
+      // left dangling on a timeout is how a retry loop runs a process out of
+      // them.
+      await this._close().catch(() => {});
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async #open(options: PgOptions): Promise<void> {
     const host = options.host ?? "localhost";
     const port = options.port ?? 5432;
     const sslmode = options.sslmode ?? "prefer";
@@ -142,14 +191,18 @@ export class PgConnection extends BaseConnection {
     this.#frames = frames ?? new FrameReader(socket.readable);
     this.#writer = socket.writable.getWriter();
 
-    await this.#send(
-      msg.startup({
-        user: options.user ?? "postgres",
-        database: options.database ?? options.user ?? "postgres",
-        application_name: options.applicationName ?? "esrun",
-        client_encoding: "UTF8",
-      }),
-    );
+    const params: Record<string, string> = {
+      user: options.user ?? "postgres",
+      database: options.database ?? options.user ?? "postgres",
+      application_name: options.applicationName ?? "esrun",
+      client_encoding: "UTF8",
+    };
+    if (options.statementTimeout !== undefined && options.statementTimeout > 0) {
+      // A GUC in the startup packet: in force from the first statement, with no
+      // extra round trip and no window where it is not yet set.
+      params["statement_timeout"] = String(Math.trunc(options.statementTimeout));
+    }
+    await this.#send(msg.startup(params));
     await this.#authenticate(options);
   }
 
