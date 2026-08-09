@@ -204,7 +204,13 @@ it names the host and the port.
 | `bytea` | `Uint8Array` |
 | `json` `jsonb` | parsed |
 | `timestamptz` `timestamp` | `Date` |
+| arrays of the above | JS arrays, nested and null-aware |
 | everything else | `string` |
+
+An array of a type not in that list comes back as its raw literal
+(`{"(1,2)"}`), because the wire does not say a column is an array — a column of
+`int4[]` reports OID 1007 and nothing else — and guessing would corrupt a text
+column that happens to contain braces.
 
 Parameters bind by **position** — `$1`, `$2`, or the `sql` tag. PostgreSQL's
 wire protocol has no named parameters, and supporting `:name` would mean parsing

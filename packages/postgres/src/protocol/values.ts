@@ -47,43 +47,147 @@ function text(bytes: Uint8Array, _view: DataView, start: number, length: number)
   return DECODER.decode(bytes.subarray(start, start + length));
 }
 
-const decoders: Record<number, Decoder> = {
-  [OID.bool]: (bytes, _v, start) => bytes[start] === 0x74, // 't'
-  [OID.int2]: (b, v, s, l) => Number(text(b, v, s, l)),
-  [OID.int4]: (b, v, s, l) => Number(text(b, v, s, l)),
-  [OID.int8]: (b, v, s, l) => {
+/**
+ * Decoders written against **text**, not byte spans.
+ *
+ * Array elements arrive as substrings of the array literal rather than as spans
+ * of the row buffer, so the per-type knowledge has to be reachable from a
+ * string — otherwise every element would need its own encode/decode round trip
+ * to reuse it. The span decoders below are derived from these.
+ */
+const fromText: Record<number, (text: string) => unknown> = {
+  [OID.bool]: (t) => t === "t",
+  [OID.int2]: Number,
+  [OID.int4]: Number,
+  [OID.int8]: (t) => {
     // A bigint only where a number would lose the value: `row.id + 1` should
     // work for the ids people actually have, and stay exact for the ones they
     // do not.
-    const value = BigInt(text(b, v, s, l));
+    const value = BigInt(t);
     return value >= MIN_SAFE && value <= MAX_SAFE ? Number(value) : value;
   },
-  [OID.float4]: (b, v, s, l) => Number(text(b, v, s, l)),
-  [OID.float8]: (b, v, s, l) => Number(text(b, v, s, l)),
+  [OID.float4]: Number,
+  [OID.float8]: Number,
   // `numeric` stays a string. It is arbitrary precision by definition, and a
   // double is the one representation guaranteed to lose it — a column chosen
   // for exactness should not be rounded on the way out.
-  [OID.numeric]: text,
-  [OID.json]: (b, v, s, l) => JSON.parse(text(b, v, s, l)),
-  [OID.jsonb]: (b, v, s, l) => JSON.parse(text(b, v, s, l)),
-  [OID.timestamptz]: (b, v, s, l) => new Date(text(b, v, s, l)),
-  [OID.timestamp]: (b, v, s, l) => new Date(`${text(b, v, s, l)}Z`),
-  [OID.bytea]: (b, v, s, l) => {
-    const hex = text(b, v, s, l);
+  [OID.numeric]: (t) => t,
+  [OID.json]: JSON.parse,
+  [OID.jsonb]: JSON.parse,
+  [OID.timestamptz]: (t) => new Date(t),
+  [OID.timestamp]: (t) => new Date(`${t}Z`),
+  [OID.bytea]: (t) => {
     // `\x` hex is the modern output format; the legacy escape format is not
     // produced by any supported server version.
-    if (!hex.startsWith("\\x")) return ENCODER.encode(hex);
-    const out = new Uint8Array((hex.length - 2) / 2);
+    if (!t.startsWith("\\x")) return ENCODER.encode(t);
+    const out = new Uint8Array((t.length - 2) / 2);
     for (let i = 0; i < out.length; i++) {
-      out[i] = Number.parseInt(hex.substr(2 + i * 2, 2), 16);
+      out[i] = Number.parseInt(t.substr(2 + i * 2, 2), 16);
     }
     return out;
   },
 };
 
+/**
+ * Array type OIDs, mapped to the type of their elements.
+ *
+ * PostgreSQL gives every type an array type, and the wire says nothing about
+ * the relationship — a column of `int4[]` reports OID 1007 and that is all, with
+ * no hint that it is an array or of what. So the pairs are listed.
+ *
+ * An array of a type **not** listed comes back as its raw literal string
+ * (`"{\"(1,2)\"}"`), not as an array of strings: without knowing the column is
+ * an array there is nothing to tell it from a text column that happens to
+ * contain braces, and guessing would corrupt the latter. Learning the rest
+ * would mean querying `pg_type` at connect time, which is a round trip on every
+ * connection to serve the types almost nobody selects.
+ */
+const ARRAY_ELEMENT: Record<number, number> = {
+  199: OID.json,
+  1000: OID.bool,
+  1001: OID.bytea,
+  1005: OID.int2,
+  1007: OID.int4,
+  1009: OID.text,
+  1015: OID.varchar,
+  1016: OID.int8,
+  1021: OID.float4,
+  1022: OID.float8,
+  1115: OID.timestamp,
+  1182: OID.date,
+  1185: OID.timestamptz,
+  1231: OID.numeric,
+  2951: OID.uuid,
+  3807: OID.jsonb,
+};
+
+/**
+ * Parses PostgreSQL's array literal: `{1,2,3}`, `{"a,b",NULL}`, `{{1,2},{3,4}}`.
+ *
+ * Written out rather than reached for with a regular expression, because the
+ * format nests and quotes: an element may contain the delimiter, a brace, or a
+ * quote, and only tracking the quoting tells them apart. An **unquoted** `NULL`
+ * is the null element; a quoted `"NULL"` is the four-character string, and
+ * conflating them would turn data into absence.
+ */
+export function parseArray(literal: string, element: (text: string) => unknown): unknown[] {
+  let at = 0;
+  // A literal may carry an explicit dimension prefix (`[1:3]={…}`) when its
+  // lower bound is not 1. The bounds change no value, so they are skipped.
+  const equals = literal.indexOf("=");
+  if (literal.startsWith("[") && equals !== -1) at = equals + 1;
+
+  function parseList(): unknown[] {
+    at++; // past '{'
+    const out: unknown[] = [];
+    if (literal[at] === "}") {
+      at++;
+      return out;
+    }
+    for (;;) {
+      out.push(parseItem());
+      const ch = literal[at];
+      if (ch === ",") {
+        at++;
+        continue;
+      }
+      at++; // past '}'
+      return out;
+    }
+  }
+
+  function parseItem(): unknown {
+    if (literal[at] === "{") return parseList();
+    if (literal[at] === '"') {
+      at++;
+      let text = "";
+      while (at < literal.length && literal[at] !== '"') {
+        text += literal[at] === "\\" ? literal[++at] : literal[at];
+        at++;
+      }
+      at++; // past the closing quote
+      return element(text);
+    }
+    const start = at;
+    while (at < literal.length && literal[at] !== "," && literal[at] !== "}") at++;
+    const raw = literal.slice(start, at);
+    return raw === "NULL" ? null : element(raw);
+  }
+
+  return literal[at] === "{" ? parseList() : [];
+}
+
 /** The decoder for a column of type `oid`. */
 export function decoderFor(oid: number): Decoder {
-  return decoders[oid] ?? text;
+  const elementOid = ARRAY_ELEMENT[oid];
+  if (elementOid !== undefined) {
+    const element = fromText[elementOid] ?? ((t: string) => t);
+    return (b, v, s, l) => parseArray(text(b, v, s, l), element);
+  }
+  // `bool` is one byte and the answer is in it, so it skips the string.
+  if (oid === OID.bool) return (bytes, _v, start) => bytes[start] === 0x74;
+  const decode = fromText[oid];
+  return decode === undefined ? text : (b, v, s, l) => decode(text(b, v, s, l));
 }
 
 /** Encodes one parameter as its text representation, or `null` for SQL NULL. */
