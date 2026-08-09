@@ -41,9 +41,9 @@ use es_runtime_common::{Capability, CapabilitySet};
 use es_runtime_default_providers::{DriveFailure, Driver};
 use es_runtime_default_providers::{
     HostAllowlist, ImportPolicy, NodeModuleLoader, OsEntropy, PathAllowlist, ProcessBroadcastHub,
-    ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemFileSystem,
-    SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
-    SystemWebSocket, ThreadWorkerHost, TokioTimers, WorkerProcess, path,
+    ProcessPortHub, ReqwestTransport, SystemClock, SystemCommands, SystemEmbeddedDb,
+    SystemFileSystem, SystemHttpServer, SystemNet, SystemProcess, SystemSignals,
+    SystemSyncFileSystem, SystemWebSocket, ThreadWorkerHost, TokioTimers, WorkerProcess, path,
 };
 use es_runtime_providers::{Console, ConsoleLevel, ProviderError, Signal, WorkerScope, WorkerSpec};
 use url::Url;
@@ -1323,7 +1323,12 @@ async fn run() -> Result<(), String> {
     )
     .with_process(process.clone())
     .with_signals(signals.clone())
-    .with_file_system(file_system)
+    .with_file_system(file_system.clone())
+    // `runtime:db`'s embedded engine resolves through the *same* filesystem
+    // view, so a database is scoped by `--allow-read`/`--allow-write` exactly
+    // as a file is — and the write-ahead log the engine opens beside it is
+    // judged by the same list, rather than by nothing.
+    .with_embedded_db(Arc::new(SystemEmbeddedDb::new(file_system)))
     .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(system_net))
     .with_http_server(http_server.clone())

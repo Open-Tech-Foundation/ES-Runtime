@@ -1,0 +1,413 @@
+//! End-to-end tests for `runtime:db` (DECISIONS.md D56).
+//!
+//! These drive the real `esrun` binary, so each one exercises the whole path:
+//! the JS module, the parameter buffer, the op boundary and its capability
+//! gates, the jailed VFS, and the engine writing real files.
+
+use std::path::PathBuf;
+use std::process::{Command, Output};
+
+fn dir(name: &str) -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("db-{name}"));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("create temp dir");
+    path
+}
+
+fn esrun() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_esrun"))
+}
+
+fn stdout(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// Runs `source` in its own directory, so each test gets its own database and
+/// its own jail.
+fn run(name: &str, source: &str, flags: &[&str]) -> Output {
+    let base = dir(name);
+    let app = base.join("app.mjs");
+    std::fs::write(&app, source).expect("write module");
+    esrun()
+        .current_dir(&base)
+        .args(flags)
+        .arg("app.mjs")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn a_database_round_trips_every_value_kind() {
+    let out = run(
+        "values",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (i INTEGER, r REAL, s TEXT, b BLOB, n INTEGER)");
+        await db.execute("INSERT INTO t VALUES (?, ?, ?, ?, ?)",
+          [7, 1.5, "hi", new Uint8Array([1, 2]), null]);
+        const row = await (await db.query("SELECT i, r, s, b, n FROM t")).first();
+        console.log(row.i, row.r, row.s, [...row.b].join("-"), row.n);
+        console.log(JSON.stringify(row));
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let lines: Vec<_> = stdout(&out).lines().map(str::to_string).collect();
+    assert_eq!(lines[0], "7 1.5 hi 1-2 null");
+    // Columns are enumerable, so a row serializes without a conversion step.
+    assert_eq!(
+        lines[1],
+        r#"{"i":7,"r":1.5,"s":"hi","b":{"0":1,"1":2},"n":null}"#
+    );
+}
+
+/// A 64-bit id does not fit a JS number. It crosses as eight bytes in both
+/// directions and comes back as a bigint rather than as a rounded double —
+/// which is the whole reason parameters are a buffer and not a value array.
+#[test]
+fn an_integer_too_large_for_a_number_survives_the_round_trip() {
+    let out = run(
+        "bigint",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)");
+        await db.execute("INSERT INTO t VALUES (?)", [9007199254740993n]);
+        const row = await (await db.query("SELECT id FROM t")).first();
+        console.log(typeof row.id, row.id.toString());
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "bigint 9007199254740993");
+}
+
+#[test]
+fn the_sql_tag_binds_every_interpolation_as_a_parameter() {
+    let out = run(
+        "sql-tag",
+        r#"
+        import { connect, sql } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (name TEXT)");
+        // The classic injection: as a parameter it is a name, not syntax.
+        const hostile = "'); DROP TABLE t; --";
+        await db.execute(sql`INSERT INTO t VALUES (${hostile})`);
+        const row = await (await db.query(sql`SELECT name FROM t WHERE name = ${hostile}`)).first();
+        console.log(row.name === hostile, (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true 1");
+}
+
+#[test]
+fn parameters_bind_by_position_and_by_name() {
+    let out = run(
+        "params",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (a INTEGER, b TEXT)");
+        await db.execute("INSERT INTO t VALUES (:a, :b)", { a: 1, b: "one" });
+        await db.execute("INSERT INTO t VALUES (?, ?)", [2, "two"]);
+        for await (const row of await db.query("SELECT b FROM t ORDER BY a")) console.log(row.b);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "one\ntwo");
+}
+
+/// The result set is pulled a batch at a time, so a table far larger than a
+/// batch streams through at the cost of one — and stopping early is ordinary
+/// code, not an error.
+#[test]
+fn a_result_set_streams_and_can_be_abandoned() {
+    let out = run(
+        "streaming",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (a INTEGER, pad TEXT)");
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < 5000; i++) {
+            await tx.execute("INSERT INTO t VALUES (?, ?)", [i, "x".repeat(200)]);
+          }
+        });
+        let all = 0;
+        for await (const _ of await db.query("SELECT a, pad FROM t")) all++;
+        let some = 0;
+        for await (const _ of await db.query("SELECT a, pad FROM t")) { if (++some === 3) break; }
+        // The abandoned cursor is closed on the way out, so the connection is
+        // still usable for the next statement.
+        const after = await (await db.query("SELECT count(*) AS n FROM t")).first();
+        console.log(all, some, after.n);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "5000 3 5000");
+}
+
+#[test]
+fn a_transaction_commits_or_rolls_back_and_nests_by_savepoint() {
+    let out = run(
+        "transactions",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (a INTEGER)");
+        await db.transaction(async (tx) => { await tx.execute("INSERT INTO t VALUES (1)"); });
+        try {
+          await db.transaction(async (tx) => {
+            await tx.execute("INSERT INTO t VALUES (2)");
+            throw new Error("no");
+          });
+        } catch {}
+        // A nested transaction becomes a savepoint: the inner one rolls back
+        // without taking the outer one with it.
+        await db.transaction(async (tx) => {
+          await tx.execute("INSERT INTO t VALUES (3)");
+          try {
+            await tx.transaction(async (inner) => {
+              await inner.execute("INSERT INTO t VALUES (4)");
+              throw new Error("no");
+            });
+          } catch {}
+        });
+        const rows = await (await db.query("SELECT a FROM t ORDER BY a")).toArray();
+        console.log(rows.map((r) => r.a).join(","));
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "1,3");
+}
+
+/// A denied capability stays a denied capability. Classifying it as a database
+/// error would mean an application testing `ERR_CAPABILITY_DENIED` had to know
+/// that this particular call went through a database.
+#[test]
+fn opening_a_database_is_gated_like_a_file() {
+    let source = r#"
+        import { connect } from "runtime:db";
+        const report = async (label, fn) => {
+          try { await fn(); console.log(`${label}: ok`); }
+          catch (e) { console.log(`${label}: ${e.code}`); }
+        };
+        await report("write", async () => {
+          const db = await connect("sqlite:./app.db");
+          await db.execute("CREATE TABLE IF NOT EXISTS t (a INTEGER)");
+          await db.close();
+        });
+        await report("read", async () => {
+          const db = await connect("sqlite:./app.db", { readOnly: true });
+          await (await db.query("SELECT count(*) AS n FROM t")).first();
+          await db.close();
+        });
+    "#;
+
+    let granted = run("caps-granted", source, &[]);
+    assert!(granted.status.success(), "stderr: {}", stderr(&granted));
+    assert_eq!(stdout(&granted).trim(), "write: ok\nread: ok");
+
+    // The database exists now; a read-only grant may open it and may not write.
+    let base = dir("caps-read");
+    std::fs::write(base.join("app.mjs"), source).unwrap();
+    let seed = esrun().current_dir(&base).arg("app.mjs").output().unwrap();
+    assert!(seed.status.success(), "stderr: {}", stderr(&seed));
+    let read_only = esrun()
+        .current_dir(&base)
+        .args(["--deny-all", "--allow-read"])
+        .arg("app.mjs")
+        .output()
+        .unwrap();
+    assert_eq!(
+        stdout(&read_only).trim(),
+        "write: ERR_CAPABILITY_DENIED\nread: ok"
+    );
+
+    let nothing = esrun()
+        .current_dir(&base)
+        .arg("--deny-all")
+        .arg("app.mjs")
+        .output()
+        .unwrap();
+    assert_eq!(
+        stdout(&nothing).trim(),
+        "write: ERR_CAPABILITY_DENIED\nread: ERR_CAPABILITY_DENIED"
+    );
+}
+
+/// The jail is the same one `runtime:fs` uses, so a path outside it is refused
+/// for a database exactly as it is for a file — and it says *jail escape*
+/// rather than the blunter "capability denied", because the grant was held and
+/// the path was the problem.
+#[test]
+fn a_database_outside_the_scope_is_refused() {
+    let out = run(
+        "scope",
+        r#"
+        import { connect } from "runtime:db";
+        try {
+          await connect("sqlite:/etc/passwd.db");
+          console.log("opened");
+        } catch (e) {
+          console.log(e.code);
+        }
+        "#,
+        &["--deny-all", "--allow-read=.", "--allow-write=."],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ERR_JAIL_ESCAPE");
+}
+
+/// Keys in URLs end up in logs, error messages and stack traces. The refusal is
+/// the point: honouring it quietly is how a key gets into all three.
+#[test]
+fn a_key_in_the_connection_string_is_refused() {
+    let out = run(
+        "url-key",
+        r#"
+        import { connect, DbErrorCode } from "runtime:db";
+        try {
+          await connect("sqlite:./app.db?key=hunter2");
+        } catch (e) {
+          console.log(e.code === DbErrorCode.Unsupported, /options object/.test(e.message));
+        }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true true");
+}
+
+#[test]
+fn an_encrypted_database_needs_its_key() {
+    let out = run(
+        "encrypted",
+        r#"
+        import { connect } from "runtime:db";
+        const key = new Uint8Array(32).fill(7);
+        const db = await connect("sqlite:./secret.db", { key });
+        await db.execute("CREATE TABLE t (a INTEGER)");
+        await db.execute("INSERT INTO t VALUES (1)");
+        await db.close();
+
+        const again = await connect("sqlite:./secret.db", { key });
+        console.log("with key:", (await (await again.query("SELECT a FROM t")).first()).a);
+        await again.close();
+
+        try {
+          const plain = await connect("sqlite:./secret.db");
+          await (await plain.query("SELECT a FROM t")).first();
+          console.log("without key: opened");
+        } catch (e) {
+          console.log("without key:", e.code !== undefined);
+        }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "with key: 1\nwithout key: true");
+}
+
+#[test]
+fn a_backend_maps_its_errors_onto_the_portable_codes() {
+    let out = run(
+        "errors",
+        r#"
+        import { connect, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        await db.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT NOT NULL)");
+        await db.execute("INSERT INTO t VALUES (1, 'x')");
+        const code = async (sql) => {
+          try { await db.execute(sql); return "no error"; } catch (e) { return e.code; }
+        };
+        console.log(await code("INSERT INTO t VALUES (1, 'y')") === DbErrorCode.UniqueViolation);
+        console.log(await code("INSERT INTO t VALUES (2, NULL)") === DbErrorCode.NotNullViolation);
+        console.log(await code("SELECT * FROM nope") === DbErrorCode.UndefinedTable);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true\ntrue\ntrue");
+}
+
+/// The registry is the whole extension story: a third-party driver registers
+/// its own scheme, and `connect` then routes to it with no change here.
+#[test]
+fn a_third_party_backend_registers_its_own_scheme() {
+    let out = run(
+        "registry",
+        r#"
+        import { connect, registerBackend, BaseConnection, Dialect, backendSchemes } from "runtime:db";
+
+        const dialect = new Dialect({ name: "toy", placeholder: (i) => `$${i}` });
+        class ToyConnection extends BaseConnection {
+          constructor() { super({ dialect, backend: "toy" }); }
+          async _query({ text, positional }) { return { text, positional }; }
+          async _execute({ text }) { return { text }; }
+          async _close() {}
+        }
+        registerBackend("toy", async () => new ToyConnection());
+
+        const db = await connect("toy://anywhere");
+        // The dialect renders the placeholders, so one template targets any
+        // backend: this one numbers them, sqlite writes `?`.
+        const { text, positional } = await db.query(
+          (await import("runtime:db")).sql`SELECT ${1} , ${2}`,
+        );
+        console.log(text, positional.join(","));
+        console.log(backendSchemes().join(","));
+
+        for (const [scheme, why] of [["sqlite", "built-in"], ["otfdb", "reserved"]]) {
+          try { registerBackend(scheme, async () => {}); console.log(`${scheme}: allowed`); }
+          catch (e) { console.log(`${scheme}: refused (${why})`); }
+        }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "SELECT $1 , $2 1,2\nsqlite,toy\nsqlite: refused (built-in)\notfdb: refused (reserved)"
+    );
+}
+
+/// The AST form is in the contract from the first release, so an engine that
+/// never speaks SQL can be a first-class backend later. The backends that ship
+/// today refuse it by name rather than by a type error somewhere downstream.
+#[test]
+fn a_query_ast_is_refused_by_name() {
+    let out = run(
+        "ast",
+        r#"
+        import { connect, queryAst, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite:./app.db");
+        try {
+          await db.query(queryAst({ select: ["a"], from: "t" }));
+        } catch (e) {
+          console.log(e.code === DbErrorCode.QueryForm, /takes SQL text/.test(e.message));
+        }
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true true");
+}

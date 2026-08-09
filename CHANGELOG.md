@@ -10,6 +10,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:db`** — databases, in two tiers (D56). The **application tier** is
+  `connect()`, a `sql` tagged template that binds every interpolation as a
+  parameter, and the `Connection` / `Rows` / transaction surface they return.
+  The **driver tier** is what a third party needs to add a backend: a scheme
+  registry, the row-shape and batch decoder, the parameter encoder, `Dialect`,
+  the portable `DbErrorCode` table with `mapError`, and `BaseConnection` — from
+  which transactions, savepoints, and the abandoned-cursor discipline come for
+  free and, more to the point, come out the same across backends.
+
+  The first backend is `sqlite:`, which names a file format and a SQL dialect
+  the way `postgres://` names a wire protocol — implemented by `turso_core`,
+  which appears nowhere in the API and can be replaced without one. Result sets
+  stream a batch at a time, so a table larger than memory costs one batch;
+  stopping early closes the cursor. A 64-bit integer round-trips as a `bigint`
+  rather than rounding through a double. Encryption takes its key from the
+  options object, and a key passed in the connection string is refused rather
+  than quietly honoured. Networked backends are next and need no new Rust:
+  Postgres will be JS over `runtime:net`.
+
 - **`EmbeddedDb` provider trait** — the seam an in-process database engine
   arrives through, and the only database seam below the op boundary (D56).
   Networked backends are built in JS on `NetProvider`, so adding Postgres or

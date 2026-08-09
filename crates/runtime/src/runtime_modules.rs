@@ -12,10 +12,11 @@
 /// added to one and forgotten in the other is a test failure, not a gap in the
 /// "imports never need a capability" guarantee (D26/D38).
 #[cfg(test)]
-pub(crate) const NAMES: [&str; 9] = [
+pub(crate) const NAMES: [&str; 10] = [
     "runtime:process",
     "runtime:path",
     "runtime:fs",
+    "runtime:db",
     "runtime:net",
     "runtime:http",
     "runtime:websocket",
@@ -31,6 +32,7 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:process" => Some(include_str!("runtime_modules/process.js")),
         "runtime:path" => Some(include_str!("runtime_modules/path.js")),
         "runtime:fs" => Some(include_str!("runtime_modules/fs.js")),
+        "runtime:db" => Some(include_str!("runtime_modules/db.js")),
         "runtime:net" => Some(include_str!("runtime_modules/net.js")),
         "runtime:http" => Some(include_str!("runtime_modules/http.js")),
         "runtime:websocket" => Some(include_str!("runtime_modules/websocket.js")),
