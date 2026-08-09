@@ -36,3 +36,7 @@ wpt/upstream
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 bench/db/.scratch/
+
+# Built npm packages — produced by `bun run build`, published from CI.
+packages/*/dist/
+packages/*/node_modules/

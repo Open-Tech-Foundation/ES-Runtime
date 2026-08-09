@@ -52,6 +52,10 @@ declare module "runtime:db" {
    * `ERR_DB_BACKEND`. A denied capability stays a denied capability.
    */
   export class DbError extends Error {
+    constructor(
+      message: string,
+      options?: { code?: string; backendCode?: string; cause?: unknown },
+    );
     readonly code: string;
     /** The backend's own code, where it had one. */
     readonly backendCode?: string;
@@ -86,7 +90,22 @@ declare module "runtime:db" {
    * result: a table larger than memory streams through at the cost of a batch.
    * Stopping early closes the cursor.
    */
-  export interface Rows extends AsyncIterable<Row> {
+  /**
+   * Where a `Rows` gets its batches. A driver supplies one of these; the
+   * iteration, early-exit and close discipline come from `Rows` itself.
+   */
+  export interface RowSource {
+    /** The next batch. `done` ends the result. */
+    next(maxBytes: number): Promise<{ bytes: Uint8Array; rows: number; done: boolean }>;
+    /** Called once, however the iteration ended. */
+    close(): Promise<void>;
+    /** `true` when the backend finished the result without opening a cursor. */
+    exhausted?: boolean;
+  }
+
+  export class Rows implements AsyncIterable<Row> {
+    constructor(source: RowSource, shape: RowShape);
+    [Symbol.asyncIterator](): AsyncIterator<Row>;
     readonly columns: readonly Column[];
     /**
      * `true` when the backend finished this result without leaving a cursor
@@ -271,13 +290,20 @@ declare module "runtime:db" {
     finish(): Uint8Array;
   }
 
-  /** Decodes one column's span into a JS value. */
+  /**
+   * Decodes one column's span into a JS value.
+   *
+   * Returns `unknown` rather than {@link DbOutput}: a backend decides what its
+   * types become, and a driver that turns `timestamptz` into a `Date` or
+   * `jsonb` into an object is doing its job, not exceeding it. {@link DbOutput}
+   * describes what the built-in backend produces, not a ceiling.
+   */
   export type ColumnDecoder = (
     bytes: Uint8Array,
     view: DataView,
     start: number,
     length: number,
-  ) => DbOutput;
+  ) => unknown;
 
   /** The accessor class for one query's result shape. */
   export interface RowShape {

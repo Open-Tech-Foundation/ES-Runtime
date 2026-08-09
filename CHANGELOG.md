@@ -10,6 +10,14 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`@opentf/esrun-postgres`** — the first ecosystem package, and the proof of
+  D56's central claim: a PostgreSQL driver that is **entirely JavaScript over
+  `runtime:net`**, adding no native code to the runtime. SCRAM-SHA-256 over
+  WebCrypto, the extended query protocol, `SSLRequest`/`startTls` negotiation,
+  and SQLSTATE mapped onto the portable error codes. It passes the same
+  `runBackendConformance()` suite the built-in `sqlite:` backend does, against a
+  real PostgreSQL 18. Lives in `packages/postgres`, versioned separately.
+
 - **`runtime:db`** — databases, in two tiers (D56). The **application tier** is
   `connect()`, a `sql` tagged template that binds every interpolation as a
   parameter, and the `Connection` / `Rows` / transaction surface they return.
@@ -73,6 +81,15 @@ namespace) is unstable and may change between minor releases until the API freez
   its own. Ids are owned per agent (D50). Parameters cross as one tagged buffer
   rather than a value array, which is what lets a bigint bind as a 64-bit
   integer instead of rounding through a double.
+
+### Fixed
+
+- **`types/runtime-db.d.ts`**: `DbError` and `Rows` are declared constructible,
+  and `ColumnDecoder` returns `unknown` rather than the built-in backend's value
+  set. All three were found by writing a driver against the declarations rather
+  than by reading them — a backend that decodes `timestamptz` to a `Date` is
+  doing its job, and a driver has to be able to build the errors and results it
+  returns.
 
 ## [0.20.0] - 2026-08-08
 
