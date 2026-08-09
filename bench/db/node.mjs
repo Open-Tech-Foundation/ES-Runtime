@@ -16,6 +16,10 @@ if (workload === "open") {
   for (let i = 0; i < rows; i++) stmt.run(...w.row(i));
   db.exec("COMMIT");
   console.log(workload === "insert" ? db.prepare("SELECT count(*) AS n FROM items").get().n : "ok");
+} else if (workload === "insert_many") {
+  // No batch API: this runtime's SQLite binding is synchronous, so a prepared
+  // statement in a loop is already its fastest path — measured as `insert`.
+  console.log("n/a");
 } else if (workload === "scan_num") {
   let a = 0, b = 0, c = 0;
   for (const r of db.prepare(w.SCAN_NUM).iterate()) {

@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, DbColumn, DbCursor, DbParams, DbValue, EmbeddedDb, EmbeddedDbOptions, ExecuteResult,
+    BoxFuture, DbColumn, DbParams, DbResult, DbValue, EmbeddedDb, EmbeddedDbOptions, ExecuteResult,
     ProviderError, RowBatch,
 };
 use turso_core::types::Text;
@@ -291,13 +291,14 @@ impl EmbeddedDb for SystemEmbeddedDb {
         db: u64,
         sql: String,
         params: DbParams,
-    ) -> BoxFuture<Result<DbCursor, ProviderError>> {
+        max_bytes: usize,
+    ) -> BoxFuture<Result<DbResult, ProviderError>> {
         let entry = self.conn(db);
         let cursors = self.cursors.clone();
         let id = self.id();
         Box::pin(async move {
             let entry = entry?;
-            let (columns, cursor) = blocking(move || {
+            let (columns, mut cursor, first) = blocking(move || {
                 let stmt = prepare(&entry.conn, &sql, params)?;
                 let columns = (0..stmt.num_columns())
                     .map(|i| DbColumn {
@@ -310,21 +311,37 @@ impl EmbeddedDb for SystemEmbeddedDb {
                     })
                     .collect::<Vec<_>>();
                 let n = columns.len();
-                Ok((
-                    columns,
-                    CursorEntry {
-                        stmt,
-                        columns: n,
-                        done: false,
-                    },
-                ))
+                let mut cursor = CursorEntry {
+                    stmt,
+                    columns: n,
+                    done: false,
+                };
+                // Read the first batch here rather than making the caller ask
+                // for it. A query that fits in one batch is then finished
+                // before it returns, and costs one crossing instead of three.
+                let first = fill_batch(&mut cursor, max_bytes)?;
+                Ok((columns, cursor, first))
             })
             .await?;
+            if cursor.done {
+                // Nothing left to read, so nothing to hand out: no cursor id
+                // means no fetch and no close, and no way to leak either.
+                let _ = cursor.stmt.reset();
+                return Ok(DbResult {
+                    cursor: None,
+                    columns,
+                    first,
+                });
+            }
             cursors
                 .lock()
                 .unwrap()
                 .insert(id, Arc::new(Mutex::new(cursor)));
-            Ok(DbCursor { id, columns })
+            Ok(DbResult {
+                cursor: Some(id),
+                columns,
+                first,
+            })
         })
     }
 
@@ -332,51 +349,7 @@ impl EmbeddedDb for SystemEmbeddedDb {
         let entry = self.cursor(cursor);
         Box::pin(async move {
             let entry = entry?;
-            blocking(move || {
-                let mut cur = entry.lock().unwrap();
-                if cur.done {
-                    return Ok(RowBatch {
-                        bytes: Vec::new(),
-                        rows: 0,
-                        done: true,
-                    });
-                }
-                let columns = cur.columns;
-                let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
-                let mut rows = 0u32;
-                loop {
-                    match cur.stmt.step().map_err(engine_error)? {
-                        StepResult::Row => {
-                            let row = cur
-                                .stmt
-                                .row()
-                                .ok_or_else(|| other("the engine reported a row and had none"))?;
-                            encode_row(&mut bytes, row.get_values(), columns);
-                            rows += 1;
-                            // Checked *after* the row is written, so a row
-                            // wider than the budget still crosses whole: the
-                            // bound shapes batches, it does not truncate
-                            // values.
-                            if bytes.len() >= max_bytes {
-                                break;
-                            }
-                        }
-                        StepResult::Done => {
-                            cur.done = true;
-                            break;
-                        }
-                        StepResult::Busy => return Err(busy()),
-                        StepResult::Interrupt => {
-                            return Err(coded(ErrorCode::Cancelled, "the query was interrupted"));
-                        }
-                        // The engine is asking to be driven, not answering.
-                        StepResult::IO | StepResult::Yield => continue,
-                    }
-                }
-                let done = cur.done;
-                Ok(RowBatch { bytes, rows, done })
-            })
-            .await
+            blocking(move || fill_batch(&mut entry.lock().unwrap(), max_bytes)).await
         })
     }
 
@@ -407,26 +380,41 @@ impl EmbeddedDb for SystemEmbeddedDb {
             let entry = entry?;
             blocking(move || {
                 let mut stmt = prepare(&entry.conn, &sql, params)?;
-                loop {
-                    match stmt.step().map_err(engine_error)? {
-                        // A statement run for its effect may still produce
-                        // rows — `INSERT … RETURNING`, or a `SELECT` someone
-                        // ran through `execute`. Stepping past them is what
-                        // makes the effect happen; dropping them is what the
-                        // caller asked for by not asking for rows.
-                        StepResult::Row | StepResult::IO | StepResult::Yield => continue,
-                        StepResult::Done => break,
-                        StepResult::Busy => return Err(busy()),
-                        StepResult::Interrupt => {
-                            return Err(coded(
-                                ErrorCode::Cancelled,
-                                "the statement was interrupted",
-                            ));
-                        }
-                    }
-                }
+                run_to_completion(&mut stmt)?;
                 Ok(ExecuteResult {
                     changes: entry.conn.changes().max(0) as u64,
+                    last_insert_rowid: match entry.conn.last_insert_rowid() {
+                        0 => None,
+                        id => Some(id),
+                    },
+                })
+            })
+            .await
+        })
+    }
+
+    fn execute_many(
+        &self,
+        db: u64,
+        sql: String,
+        params: Vec<DbParams>,
+    ) -> BoxFuture<Result<ExecuteResult, ProviderError>> {
+        let entry = self.conn(db);
+        Box::pin(async move {
+            let entry = entry?;
+            blocking(move || {
+                let mut changes = 0u64;
+                // Prepared once, reset between sets. Preparing per set would
+                // put the parser back on the hot path this exists to clear.
+                let mut stmt = entry.conn.prepare(&sql).map_err(engine_error)?;
+                for set in params {
+                    stmt.reset().map_err(engine_error)?;
+                    bind(&mut stmt, set)?;
+                    run_to_completion(&mut stmt)?;
+                    changes += entry.conn.changes().max(0) as u64;
+                }
+                Ok(ExecuteResult {
+                    changes,
                     last_insert_rowid: match entry.conn.last_insert_rowid() {
                         0 => None,
                         id => Some(id),
@@ -511,6 +499,75 @@ fn confine_temp_storage(conn: &Arc<Connection>) {
     conn.set_temp_store(TempStore::Memory);
 }
 
+/// Reads rows from `cursor` until the encoded batch reaches `max_bytes` or the
+/// statement is done.
+///
+/// The bound is **bytes and not row count**, so a table of wide rows does not
+/// turn one read into a latency spike. It is checked *after* a row is written,
+/// so a row wider than the whole budget still crosses whole — the bound shapes
+/// batches, it does not truncate values.
+fn fill_batch(cursor: &mut CursorEntry, max_bytes: usize) -> Result<RowBatch, ProviderError> {
+    if cursor.done {
+        return Ok(RowBatch {
+            bytes: Vec::new(),
+            rows: 0,
+            done: true,
+        });
+    }
+    let columns = cursor.columns;
+    let mut bytes = Vec::with_capacity(max_bytes.min(64 * 1024));
+    let mut rows = 0u32;
+    loop {
+        match cursor.stmt.step().map_err(engine_error)? {
+            StepResult::Row => {
+                let row = cursor
+                    .stmt
+                    .row()
+                    .ok_or_else(|| other("the engine reported a row and had none"))?;
+                encode_row(&mut bytes, row.get_values(), columns);
+                rows += 1;
+                if bytes.len() >= max_bytes {
+                    break;
+                }
+            }
+            StepResult::Done => {
+                cursor.done = true;
+                break;
+            }
+            StepResult::Busy => return Err(busy()),
+            StepResult::Interrupt => {
+                return Err(coded(ErrorCode::Cancelled, "the query was interrupted"));
+            }
+            // The engine is asking to be driven, not answering.
+            StepResult::IO | StepResult::Yield => continue,
+        }
+    }
+    Ok(RowBatch {
+        bytes,
+        rows,
+        done: cursor.done,
+    })
+}
+
+/// Steps a statement to `Done`.
+///
+/// A statement run for its effect may still produce rows — `INSERT … RETURNING`,
+/// or a `SELECT` someone ran through `execute`. Stepping past them is what makes
+/// the effect happen; dropping them is what the caller asked for by not asking
+/// for rows.
+fn run_to_completion(stmt: &mut Statement) -> Result<(), ProviderError> {
+    loop {
+        match stmt.step().map_err(engine_error)? {
+            StepResult::Row | StepResult::IO | StepResult::Yield => continue,
+            StepResult::Done => return Ok(()),
+            StepResult::Busy => return Err(busy()),
+            StepResult::Interrupt => {
+                return Err(coded(ErrorCode::Cancelled, "the statement was interrupted"));
+            }
+        }
+    }
+}
+
 /// Prepares `sql` on `conn` and binds `params`.
 ///
 /// Named parameters are resolved by the engine rather than by rewriting the SQL
@@ -522,13 +579,19 @@ fn prepare(
     params: DbParams,
 ) -> Result<Statement, ProviderError> {
     let mut stmt = conn.prepare(sql).map_err(engine_error)?;
+    bind(&mut stmt, params)?;
+    Ok(stmt)
+}
+
+/// Binds one parameter set to an already-prepared statement.
+fn bind(stmt: &mut Statement, params: DbParams) -> Result<(), ProviderError> {
     for (i, value) in params.positional.into_iter().enumerate() {
         let index = NonZero::new(i + 1).expect("index is 1-based");
         stmt.bind_at(index, to_engine_value(value)?)
             .map_err(engine_error)?;
     }
     for (name, value) in params.named {
-        let index = named_index(&stmt, &name).ok_or_else(|| {
+        let index = named_index(stmt, &name).ok_or_else(|| {
             // Named rather than ignored: a misspelled parameter binds nothing
             // and the statement then runs against NULL, which is a wrong answer
             // rather than an error.
@@ -537,7 +600,7 @@ fn prepare(
         stmt.bind_at(index, to_engine_value(value)?)
             .map_err(engine_error)?;
     }
-    Ok(stmt)
+    Ok(())
 }
 
 /// Finds a named parameter's slot.
@@ -698,10 +761,23 @@ mod tests {
             .unwrap()
     }
 
-    /// Collects every batch of a cursor, returning (bytes, row count).
-    async fn drain(db: &SystemEmbeddedDb, cursor: u64, max_bytes: usize) -> (Vec<u8>, u32) {
-        let mut bytes = Vec::new();
-        let mut rows = 0;
+    /// Runs a query and collects the whole result — the batch that came back
+    /// with the query, plus whatever a cursor still holds.
+    async fn collect(
+        db: &SystemEmbeddedDb,
+        id: u64,
+        sql: &str,
+        max_bytes: usize,
+    ) -> (Vec<u8>, u32) {
+        let result = db
+            .query(id, sql.to_string(), DbParams::default(), max_bytes)
+            .await
+            .unwrap();
+        let mut bytes = result.first.bytes;
+        let mut rows = result.first.rows;
+        let Some(cursor) = result.cursor else {
+            return (bytes, rows);
+        };
         loop {
             let batch = db.fetch(cursor, max_bytes).await.unwrap();
             bytes.extend_from_slice(&batch.bytes);
@@ -787,23 +863,24 @@ mod tests {
         )
         .await;
 
-        let cursor = db
+        let result = db
             .query(
                 id,
                 "SELECT i, r, s, b, n FROM t".to_string(),
                 DbParams::default(),
+                64 * 1024,
             )
             .await
             .unwrap();
         assert_eq!(
-            cursor
+            result
                 .columns
                 .iter()
                 .map(|c| c.name.as_str())
                 .collect::<Vec<_>>(),
             ["i", "r", "s", "b", "n"]
         );
-        let (bytes, rows) = drain(&db, cursor.id, 64 * 1024).await;
+        let (bytes, rows) = (result.first.bytes, result.first.rows);
         assert_eq!(rows, 1);
 
         let mut expected = Vec::new();
@@ -839,25 +916,36 @@ mod tests {
             exec(&db, id, "INSERT INTO t VALUES (printf('%.*c', 100, 'x'))").await;
         }
 
-        let cursor = db
-            .query(id, "SELECT s FROM t".to_string(), DbParams::default())
+        let result = db
+            .query(id, "SELECT s FROM t".to_string(), DbParams::default(), 150)
             .await
             .unwrap();
-        let first = db.fetch(cursor.id, 150).await.unwrap();
-        assert_eq!(first.rows, 2, "a 150-byte budget holds two ~110-byte rows");
-        assert!(!first.done);
-        let (rest, more) = drain(&db, cursor.id, 150).await;
+        assert_eq!(
+            result.first.rows, 2,
+            "a 150-byte budget holds two ~110-byte rows"
+        );
+        assert!(!result.first.done);
+        let cursor = result
+            .cursor
+            .expect("an unfinished result keeps its cursor");
+        let mut more = 0;
+        loop {
+            let batch = db.fetch(cursor, 150).await.unwrap();
+            more += batch.rows;
+            if batch.done {
+                break;
+            }
+        }
         assert_eq!(more, 6);
-        assert!(!rest.is_empty());
 
         // A budget smaller than one row still yields that row, whole.
-        let cursor = db
-            .query(id, "SELECT s FROM t".to_string(), DbParams::default())
+        let one = db
+            .query(id, "SELECT s FROM t".to_string(), DbParams::default(), 1)
             .await
             .unwrap();
-        let one = db.fetch(cursor.id, 1).await.unwrap();
-        assert_eq!(one.rows, 1);
-        assert!(one.bytes.len() > 100);
+        assert_eq!(one.first.rows, 1);
+        assert!(one.first.bytes.len() > 100);
+        db.close_cursor(one.cursor.unwrap()).await.unwrap();
     }
 
     #[tokio::test]
@@ -876,7 +964,7 @@ mod tests {
         .await
         .unwrap();
 
-        let cursor = db
+        let result = db
             .query(
                 id,
                 "SELECT b FROM t WHERE a = ?".to_string(),
@@ -884,11 +972,12 @@ mod tests {
                     positional: vec![DbValue::Integer(42)],
                     named: Vec::new(),
                 },
+                4096,
             )
             .await
             .unwrap();
-        let (_bytes, rows) = drain(&db, cursor.id, 4096).await;
-        assert_eq!(rows, 1);
+        assert_eq!(result.first.rows, 1);
+        assert!(result.cursor.is_none());
     }
 
     /// A misspelled name binds nothing, and a statement run against an unbound
@@ -949,17 +1038,111 @@ mod tests {
         for _ in 0..50 {
             exec(&db, id, "INSERT INTO t VALUES (1)").await;
         }
-        let cursor = db
-            .query(id, "SELECT a FROM t".to_string(), DbParams::default())
+        let result = db
+            .query(id, "SELECT a FROM t".to_string(), DbParams::default(), 16)
             .await
             .unwrap();
-        let batch = db.fetch(cursor.id, 16).await.unwrap();
-        assert!(!batch.done);
-        db.close_cursor(cursor.id).await.unwrap();
+        assert!(!result.first.done);
+        let cursor = result
+            .cursor
+            .expect("an unfinished result keeps its cursor");
+        db.close_cursor(cursor).await.unwrap();
         // Idempotent, and a fetch afterwards is a closed-cursor error rather
         // than a step into a freed statement.
-        db.close_cursor(cursor.id).await.unwrap();
-        assert!(db.fetch(cursor.id, 16).await.is_err());
+        db.close_cursor(cursor).await.unwrap();
+        assert!(db.fetch(cursor, 16).await.is_err());
+    }
+
+    /// A result that fits one batch is finished by the query itself: no cursor
+    /// is handed out, so there is nothing to fetch and nothing to close. A
+    /// larger one leaves the cursor behind, as before.
+    #[tokio::test]
+    async fn a_small_result_leaves_no_cursor_to_close() {
+        let (_root, db) = engine("inline-batch");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER, pad TEXT)").await;
+        exec(&db, id, "INSERT INTO t VALUES (1, 'x')").await;
+
+        let small = db
+            .query(
+                id,
+                "SELECT a FROM t".to_string(),
+                DbParams::default(),
+                64 * 1024,
+            )
+            .await
+            .unwrap();
+        assert!(small.cursor.is_none(), "a one-row result minted a cursor");
+        assert_eq!(small.first.rows, 1);
+        assert!(small.first.done);
+
+        // The same query under a budget too small to finish keeps its cursor.
+        let large = db
+            .query(id, "SELECT a FROM t".to_string(), DbParams::default(), 1)
+            .await
+            .unwrap();
+        assert_eq!(large.first.rows, 1);
+        // One row filled the budget, so the statement was not stepped to the
+        // end and the cursor has to stay open to find out.
+        assert!(large.cursor.is_some());
+        db.close_cursor(large.cursor.unwrap()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn execute_many_runs_one_statement_over_many_parameter_sets() {
+        let (_root, db) = engine("execute-many");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER, b TEXT)").await;
+
+        let sets: Vec<DbParams> = (0..1000)
+            .map(|i| DbParams {
+                positional: vec![DbValue::Integer(i), DbValue::Text(format!("row-{i}"))],
+                named: Vec::new(),
+            })
+            .collect();
+        let result = db
+            .execute_many(id, "INSERT INTO t VALUES (?, ?)".to_string(), sets)
+            .await
+            .unwrap();
+        assert_eq!(result.changes, 1000);
+        assert!(result.last_insert_rowid.is_some());
+
+        let cursor = db
+            .query(
+                id,
+                "SELECT count(*) AS n, sum(a) AS s FROM t".to_string(),
+                DbParams::default(),
+                4096,
+            )
+            .await
+            .unwrap();
+        assert_eq!(cursor.first.rows, 1);
+        assert!(cursor.cursor.is_none());
+    }
+
+    /// A set that fails stops the batch — the statement is prepared once and
+    /// reused, so a bad bind must not leave the next set running against the
+    /// previous one's values.
+    #[tokio::test]
+    async fn a_failing_set_stops_the_batch() {
+        let (_root, db) = engine("execute-many-fail");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER PRIMARY KEY)").await;
+        let sets = vec![
+            DbParams {
+                positional: vec![DbValue::Integer(1)],
+                named: Vec::new(),
+            },
+            DbParams {
+                positional: vec![DbValue::Integer(1)],
+                named: Vec::new(),
+            },
+        ];
+        let err = db
+            .execute_many(id, "INSERT INTO t VALUES (?)".to_string(), sets)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("UNIQUE"), "got: {err}");
     }
 
     /// The engine asks for a scratch file for some statements, and takes it
@@ -1011,11 +1194,7 @@ mod tests {
             .unwrap();
         exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
         exec(&db, id, "INSERT INTO t VALUES (1)").await;
-        let cursor = db
-            .query(id, "SELECT a FROM t".to_string(), DbParams::default())
-            .await
-            .unwrap();
-        let (_bytes, rows) = drain(&db, cursor.id, 4096).await;
+        let (_bytes, rows) = collect(&db, id, "SELECT a FROM t", 4096).await;
         assert_eq!(rows, 1);
 
         let left: Vec<_> = std::fs::read_dir(&root)
@@ -1041,9 +1220,14 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            db.query(other, "SELECT a FROM t".to_string(), DbParams::default())
-                .await
-                .is_err()
+            db.query(
+                other,
+                "SELECT a FROM t".to_string(),
+                DbParams::default(),
+                4096
+            )
+            .await
+            .is_err()
         );
         db.close(id).await.unwrap();
         db.close(other).await.unwrap();
@@ -1085,11 +1269,7 @@ mod tests {
         db.close(id).await.unwrap();
 
         let reopened = db.open("secret.db".to_string(), with_key()).await.unwrap();
-        let cursor = db
-            .query(reopened, "SELECT a FROM t".to_string(), DbParams::default())
-            .await
-            .unwrap();
-        let (_bytes, rows) = drain(&db, cursor.id, 4096).await;
+        let (_bytes, rows) = collect(&db, reopened, "SELECT a FROM t", 4096).await;
         assert_eq!(rows, 1);
         db.close(reopened).await.unwrap();
 
@@ -1098,7 +1278,7 @@ mod tests {
         let failed = match plain {
             Err(_) => true,
             Ok(id) => db
-                .query(id, "SELECT a FROM t".to_string(), DbParams::default())
+                .query(id, "SELECT a FROM t".to_string(), DbParams::default(), 4096)
                 .await
                 .is_err(),
         };

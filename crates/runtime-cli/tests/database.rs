@@ -252,6 +252,99 @@ fn opening_a_database_is_gated_like_a_file() {
     );
 }
 
+/// A crossing costs about the same whatever it carries, so a loop that crosses
+/// once per row spends its time on the boundary rather than in the database.
+/// `executeMany` crosses once and prepares once.
+#[test]
+fn execute_many_crosses_once_and_is_all_or_nothing() {
+    let out = run(
+        "execute-many",
+        r#"
+        import { connect, sql, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite::memory:");
+        await db.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)");
+
+        const rows = [];
+        for (let i = 0; i < 5000; i++) rows.push([i, `row-${i}`]);
+        const result = await db.executeMany("INSERT INTO t VALUES (?, ?)", rows);
+        console.log("changes:", result.changes);
+        console.log("count:", (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
+
+        // All or nothing: the batch runs in its own transaction, so a set that
+        // fails part-way leaves none of it behind.
+        try {
+          await db.executeMany("INSERT INTO t VALUES (?, ?)", [[9998, "ok"], [1, "clash"]]);
+        } catch (e) {
+          console.log("clash:", e.code === DbErrorCode.UniqueViolation);
+        }
+        console.log("after:", (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
+
+        // Inside a transaction it joins that one rather than opening a second.
+        await db.transaction(async (tx) => {
+          await tx.executeMany("INSERT INTO t VALUES (?, ?)", [[10001, "a"], [10002, "b"]]);
+        });
+        console.log("joined:", (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
+
+        // A template with values describes one row, so it is refused rather
+        // than silently running the first row's values for every row.
+        try {
+          await db.executeMany(sql`INSERT INTO t VALUES (${1}, ${"x"})`, [[1, "x"]]);
+        } catch (e) {
+          console.log("template:", e.code === DbErrorCode.Unsupported);
+        }
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "changes: 5000
+count: 5000
+clash: true
+after: 5000
+joined: 5002
+template: true"
+    );
+}
+
+/// A result that fits one batch comes back with the query itself — no cursor is
+/// minted, so there is nothing to fetch and nothing to close. `exhausted` is
+/// how a caller (or a pool) can tell.
+#[test]
+fn a_small_result_costs_one_crossing() {
+    let out = run(
+        "one-crossing",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite::memory:");
+        await db.execute("CREATE TABLE t (a INTEGER, pad TEXT)");
+        const rows = [];
+        for (let i = 0; i < 4000; i++) rows.push([i, "x".repeat(200)]);
+        await db.executeMany("INSERT INTO t VALUES (?, ?)", rows);
+
+        const small = await db.query("SELECT a FROM t WHERE a = 1");
+        console.log("small exhausted:", small.exhausted);
+        console.log("small rows:", (await small.toArray()).length);
+
+        // Far more than one batch of 64 KiB, so this one keeps a cursor.
+        const big = await db.query("SELECT a, pad FROM t");
+        console.log("big exhausted:", big.exhausted);
+        console.log("big rows:", (await big.toArray()).length);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "small exhausted: true
+small rows: 1
+big exhausted: false
+big rows: 4000"
+    );
+}
+
 /// The suite a third-party driver runs to show it behaves like the built-ins.
 /// The built-ins run it too — a conformance suite the reference backend does
 /// not pass is a description of nothing.
@@ -283,7 +376,7 @@ fn the_built_in_backend_passes_its_own_conformance_suite() {
         assert!(out.status.success(), "{name} stderr: {}", stderr(&out));
         assert_eq!(
             stdout(&out).trim(),
-            "ok=true passed=13 skipped=0",
+            "ok=true passed=14 skipped=0",
             "{name} did not pass its own suite"
         );
     }

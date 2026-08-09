@@ -73,6 +73,41 @@ caller retained past its batch, which is the kind of bug that surfaces far from
 its cause; reuse may arrive later as an opt-in with documented invalidation, but
 never as the default.
 
+## What a crossing costs, and what follows from it
+
+An async op round-trip in this runtime costs about **17–22 µs** — measured, and
+in line with Node's own async I/O path (`fs.promises.stat` is 16.5 µs there,
+17.1 µs here). A synchronous op is 0.28 µs, so nearly all of it is the async
+completion, not the dispatch.
+
+That single number explains the whole design, and it is why `runtime:db` looks
+fast on some workloads and slow on others. `node:sqlite` and `bun:sqlite` are
+**synchronous** APIs: a statement costs a function call, around 2.5 µs. Every
+`runtime:` module here is async, so a statement costs a crossing. Anything that
+crosses once per row therefore loses, and anything that batches wins — which is
+not a tuning detail but the thing the API has to be shaped around.
+
+Three places it is shaped around that:
+
+- **Rows come back 64 KiB at a time.** Fifty thousand rows cross in about two
+  ops rather than fifty thousand, which is why scans and streaming beat Node
+  and Deno rather than losing to them.
+- **A small result comes back with its query.** A lookup by primary key would
+  otherwise be three crossings — ask, fetch, close. When the first batch
+  finishes the statement no cursor is minted, so there is nothing left to ask
+  for.
+- **`executeMany` crosses once for the whole batch.** Fifty thousand inserts
+  went from 1832 ms to 312 ms this way, and the remaining time is no longer the
+  boundary at all — it is encoding the sets and preparing the statement.
+
+<Callout type="warning" title="What is still on the list">
+  There is no prepared-statement cache, so a repeated query re-parses its SQL
+  every time — about 16 µs of a 65 µs point query, measured. And a batched
+  execute materializes its parameters three times (the caller's array, the
+  encoded buffer, the decoded sets), which is why its peak memory is well above
+  the per-statement loop's.
+</Callout>
+
 ## Why pooling is JavaScript
 
 A connection pool below the op boundary is possible and was rejected, because it

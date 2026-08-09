@@ -61,6 +61,7 @@ connection gets its own. The named form (`:memory:name`), which in SQLite means
 | --- | --- |
 | `query(q, params?)` | `Promise<Rows>` |
 | `execute(q, params?)` | `Promise<{ changes, lastInsertRowid }>` |
+| `executeMany(sql, rows)` | `Promise<{ changes, lastInsertRowid }>` |
 | `transaction(fn)` | whatever `fn` returns |
 | `close()` | `Promise<void>` — also `Symbol.asyncDispose` |
 | `dialect`, `backend` | the backend's dialect and name |
@@ -72,6 +73,31 @@ connection gets its own. The named form (`:memory:name`), which in SQLite means
 await db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["ada", 36]);
 await db.execute("INSERT INTO users (name) VALUES (:name)", { name: "grace" });
 ```
+
+### `executeMany(sql, rows)`
+
+One statement, many parameter sets, **one crossing** and one prepare.
+
+```js
+await db.executeMany("INSERT INTO users (name, email) VALUES (?, ?)", [
+  ["Ada", "ada@example.com"],
+  ["Grace", "grace@example.com"],
+]);
+```
+
+The reason to reach for it is arithmetic rather than taste: a crossing costs
+about the same whatever it carries, so a loop that crosses once per row spends
+its time on the boundary instead of in the database.
+
+<Callout type="info" title="It runs as one transaction">
+  Unless one is already open, in which case it joins that one. A batch that
+  half-applied would be a worse default than either alternative — and outside a
+  transaction each statement would be committed durably on its own, which is
+  the slow path this exists to avoid, arrived at by accident.
+</Callout>
+
+A `` sql`` `` template with values describes a single row, so it is refused
+here rather than silently running the first row's values for every row.
 
 ### `transaction(fn)`
 
@@ -113,10 +139,14 @@ larger than memory streams through at the cost of a batch.
 | `toArray()` | The whole result as an array. |
 | `first()` | The first row, or `null`. Closes the cursor. |
 | `columns` | `[{ name, declType }]`. |
+| `exhausted` | `true` when the rows came back with the query and no cursor was opened. |
 | `close()` | Closes the cursor early. |
 
 Stopping early — `break`, `return`, a `throw` — closes the cursor on the way
 out and leaves the connection usable.
+
+A result small enough to fit one batch comes back **with the query itself**, so
+no cursor is opened and the whole query costs one crossing instead of three.
 
 ## `Row`
 

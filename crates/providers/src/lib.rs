@@ -1915,13 +1915,22 @@ pub struct DbColumn {
     pub decl_type: Option<String>,
 }
 
-/// An open result set: its id, and what its rows will look like.
-#[derive(Clone, Debug)]
-pub struct DbCursor {
-    /// The cursor id, to be fetched from and closed.
-    pub id: u64,
+/// The answer to a row-returning statement: its shape, its first batch, and a
+/// cursor **only if there is more**.
+///
+/// The first batch rides along with the query because most queries are small:
+/// a lookup by primary key would otherwise cost three crossings — ask, fetch,
+/// close — for one row. When the statement is exhausted by that first batch
+/// there is no cursor to give out, so nothing is left to fetch or to close, and
+/// the whole query is one crossing.
+pub struct DbResult {
+    /// The cursor to read the rest from, or `None` when [`first`](Self::first)
+    /// was the whole answer. `None` means there is nothing to close either.
+    pub cursor: Option<u64>,
     /// The result columns, in order.
     pub columns: Vec<DbColumn>,
+    /// The rows already read, encoded as [`EmbeddedDb`] documents.
+    pub first: RowBatch,
 }
 
 /// A run of rows, encoded (see [`EmbeddedDb::fetch`]) and sized by bytes.
@@ -2029,17 +2038,20 @@ pub trait EmbeddedDb: Send + Sync {
     /// Opens the database at `path`, resolving to a connection id.
     fn open(&self, path: String, opts: EmbeddedDbOptions) -> BoxFuture<Result<u64, ProviderError>>;
 
-    /// Runs a row-returning statement, resolving to an open cursor.
+    /// Runs a row-returning statement, reading up to `max_bytes` of rows before
+    /// resolving.
     ///
-    /// The rows are not read here: the statement is prepared, bound, and left
-    /// positioned, so that a large result set costs a batch of memory rather
-    /// than all of it.
+    /// Never the whole result: a large one leaves a cursor behind and costs a
+    /// batch of memory rather than all of it. A small one is finished here, and
+    /// [`DbResult::cursor`] is `None` so that the caller has nothing left to
+    /// ask for.
     fn query(
         &self,
         db: u64,
         sql: String,
         params: DbParams,
-    ) -> BoxFuture<Result<DbCursor, ProviderError>>;
+        max_bytes: usize,
+    ) -> BoxFuture<Result<DbResult, ProviderError>>;
 
     /// Reads the next rows from `cursor`, stopping once the encoded batch
     /// reaches `max_bytes`.
@@ -2061,6 +2073,24 @@ pub trait EmbeddedDb: Send + Sync {
         db: u64,
         sql: String,
         params: DbParams,
+    ) -> BoxFuture<Result<ExecuteResult, ProviderError>>;
+
+    /// Runs one statement against many parameter sets, preparing it once.
+    ///
+    /// The reason this exists is arithmetic. A crossing costs about the same
+    /// whatever it carries, so a loop that crosses once per row spends all of
+    /// its time on the boundary and none in the engine — the same reason rows
+    /// come back in batches rather than one at a time. Fifty thousand inserts
+    /// are fifty thousand crossings this way, or one.
+    ///
+    /// Not implicitly transactional: what the batch means when a row in the
+    /// middle fails is the caller's to decide, and the caller is the one that
+    /// knows whether a transaction is already open.
+    fn execute_many(
+        &self,
+        db: u64,
+        sql: String,
+        params: Vec<DbParams>,
     ) -> BoxFuture<Result<ExecuteResult, ProviderError>>;
 
     /// Closes connection `db` and everything open on it (idempotent).
@@ -2117,11 +2147,17 @@ mod tests {
             _db: u64,
             _sql: String,
             _params: DbParams,
-        ) -> BoxFuture<Result<DbCursor, ProviderError>> {
+            _max_bytes: usize,
+        ) -> BoxFuture<Result<DbResult, ProviderError>> {
             Box::pin(async {
-                Ok(DbCursor {
-                    id: 1,
+                Ok(DbResult {
+                    cursor: None,
                     columns: Vec::new(),
+                    first: RowBatch {
+                        bytes: Vec::new(),
+                        rows: 0,
+                        done: true,
+                    },
                 })
             })
         }
@@ -2154,6 +2190,20 @@ mod tests {
                 })
             })
         }
+        fn execute_many(
+            &self,
+            _db: u64,
+            _sql: String,
+            _params: Vec<DbParams>,
+        ) -> BoxFuture<Result<ExecuteResult, ProviderError>> {
+            Box::pin(async {
+                Ok(ExecuteResult {
+                    changes: 0,
+                    last_insert_rowid: None,
+                })
+            })
+        }
+
         fn close(&self, _db: u64) -> BoxFuture<Result<(), ProviderError>> {
             Box::pin(async { Ok(()) })
         }

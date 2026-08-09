@@ -1411,6 +1411,11 @@ one, is refused rather than quietly not sharing.
 
 - `query(q, params?)` → `Rows`
 - `execute(q, params?)` → `{ changes, lastInsertRowid }`
+- `executeMany(sql, rows)` — one statement, many parameter sets, **one
+  crossing**. A crossing costs about the same whatever it carries, so a loop
+  that crosses per row spends its time on the boundary rather than in the
+  database. Runs as a single transaction unless one is already open, in which
+  case it joins it.
 - `transaction(fn)` — commits when `fn` returns, rolls back when it throws.
   Nested calls become savepoints where the backend has them, so a helper that
   opens a transaction composes with a caller that already did. A rollback that
@@ -1437,6 +1442,11 @@ Async-iterable, pulled one batch at a time — never the whole result, so a tabl
 larger than memory streams through at the cost of a batch. Stopping early
 (`break`, `return`, `throw`) closes the cursor and leaves the connection usable.
 Also `toArray()`, `first()` (`null` when empty), `close()`, and `columns`.
+
+A result small enough to fit one batch comes back **with the query itself** —
+no cursor is opened, so there is nothing to fetch and nothing to close, and the
+whole query costs one crossing rather than three. `rows.exhausted` reports which
+happened.
 
 ### `Row`
 

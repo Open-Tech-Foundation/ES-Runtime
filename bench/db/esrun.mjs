@@ -15,6 +15,16 @@ if (workload === "open") {
     for (let i = 0; i < w.ROWS; i++) await tx.execute(w.INSERT, w.row(i));
   });
   console.log((await (await db.query("SELECT count(*) AS n FROM items")).first()).n);
+} else if (workload === "insert_many") {
+  // The batched path: one crossing and one prepare for the whole run, against
+  // the per-statement loop above. Node and Bun have no equivalent — their
+  // SQLite APIs are synchronous, so a loop costs them a function call rather
+  // than a boundary.
+  await db.execute(w.SCHEMA);
+  const rows = [];
+  for (let i = 0; i < w.ROWS; i++) rows.push(w.row(i));
+  await db.executeMany(w.INSERT, rows);
+  console.log((await (await db.query("SELECT count(*) AS n FROM items")).first()).n);
 } else if (workload === "scan_num") {
   let a = 0, b = 0, c = 0;
   for await (const r of await db.query(w.SCAN_NUM)) {

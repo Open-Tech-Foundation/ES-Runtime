@@ -263,8 +263,7 @@ function writeValue(w, value) {
 // One buffer rather than an array of values, because the op boundary's value
 // type has no bigint: an i64 parameter would round through a double on the way
 // down, losing the value before the engine ever saw it.
-function encodeParams(positional = [], named = []) {
-  const w = new ByteWriter();
+function writeParams(w, positional, named) {
   w.i16(positional.length);
   for (const value of positional) writeValue(w, value);
   w.i16(named.length);
@@ -273,6 +272,20 @@ function encodeParams(positional = [], named = []) {
     w.i32(bytes.length).bytes(bytes);
     writeValue(w, value);
   }
+}
+
+function encodeParams(positional = [], named = []) {
+  const w = new ByteWriter();
+  writeParams(w, positional, named);
+  return w.finish();
+}
+
+/// Encodes many parameter sets for one statement — the payload of a batched
+/// execute. `sets` is `[[positional, named], …]`, as {@link splitParams} gives.
+function encodeParamSets(sets) {
+  const w = new ByteWriter(1024);
+  w.i32(sets.length);
+  for (const [positional, named] of sets) writeParams(w, positional, named);
   return w.finish();
 }
 
@@ -599,6 +612,13 @@ class Rows {
     this.columns = shape.columns;
   }
 
+  /// Whether the backend finished this result without leaving a cursor open.
+  /// A driver sets it by handing over a source that closes to nothing; it is
+  /// here so a pool can tell a connection that is idle from one that is not.
+  get exhausted() {
+    return this._source.exhausted === true;
+  }
+
   async *[Symbol.asyncIterator]() {
     try {
       while (!this._done) {
@@ -668,6 +688,43 @@ class BaseConnection {
   async execute(q, params) {
     this._open();
     return this._execute(normalizeQuery(q, params, this.dialect, this.backend));
+  }
+
+  /// Runs one statement against many parameter sets.
+  ///
+  ///     await db.executeMany("INSERT INTO t (a, b) VALUES (?, ?)", rows);
+  ///
+  /// The reason to reach for it is arithmetic rather than taste: a crossing
+  /// costs about the same whatever it carries, so a loop that crosses once per
+  /// row spends its time on the boundary instead of in the database. This
+  /// crosses once and prepares once.
+  ///
+  /// **It runs as one transaction** unless one is already open, in which case
+  /// it joins that one. A batch that half-applied would be a worse default than
+  /// either alternative, and outside a transaction each statement would be
+  /// durably committed on its own — which is the slow path this exists to
+  /// avoid, arrived at by accident.
+  async executeMany(q, rows) {
+    this._open();
+    if (!Array.isArray(rows)) {
+      throw dbError(
+        "executeMany takes an array of parameter sets",
+        DbErrorCode.Unsupported,
+      );
+    }
+    if (q instanceof Query && q.values.length > 0) {
+      // A template with values binds exactly one set, so accepting it here
+      // would silently run the first row's values for every row.
+      throw dbError(
+        "executeMany takes one statement and many parameter sets; a sql`` template with values describes a single row",
+        DbErrorCode.Unsupported,
+      );
+    }
+    if (rows.length === 0) return { changes: 0, lastInsertRowid: null };
+    const { text } = normalizeQuery(q, undefined, this.dialect, this.backend);
+    const sets = rows.map((row) => splitParams(row));
+    const run = () => this._executeMany(text, sets);
+    return this._depth > 0 ? run() : this.transaction(run);
   }
 
   /// Runs `fn` inside a transaction, committing when it returns and rolling
@@ -761,18 +818,33 @@ class SqliteConnection extends BaseConnection {
   }
 
   async _query({ text, positional, named }) {
-    let cursor;
+    let result;
     try {
-      cursor = await ops.db_query(this._id, text, encodeParams(positional, named));
+      result = await ops.db_query(
+        this._id,
+        text,
+        encodeParams(positional, named),
+        BATCH_BYTES,
+      );
     } catch (e) {
       throw sqliteError(e);
     }
-    const shape = defineRowShape(cursor.columns);
-    const id = cursor.id;
-    let closed = false;
+    const shape = defineRowShape(result.columns);
+    const id = result.cursor;
+    // The first batch came back with the query. When it was the whole answer
+    // there is no cursor: nothing to fetch, nothing to close, and the query
+    // cost one crossing rather than three.
+    let pending = { bytes: result.bytes, rows: result.rows, done: result.done };
+    let closed = id === null;
     return new Rows(
       {
+        exhausted: id === null,
         async next(maxBytes) {
+          if (pending !== null) {
+            const batch = pending;
+            pending = null;
+            return batch;
+          }
           try {
             return await ops.db_fetch(id, maxBytes);
           } catch (e) {
@@ -787,6 +859,14 @@ class SqliteConnection extends BaseConnection {
       },
       shape,
     );
+  }
+
+  async _executeMany(text, sets) {
+    try {
+      return await ops.db_execute_many(this._id, text, encodeParamSets(sets));
+    } catch (e) {
+      throw sqliteError(e);
+    }
   }
 
   async _execute({ text, positional, named }) {
@@ -1201,6 +1281,39 @@ const CONFORMANCE_CHECKS = [
     },
   ],
   [
+    "executeMany applies every set, and none of them when one fails",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER PRIMARY KEY, b TEXT");
+      try {
+        const p = (i) => db.dialect.placeholder(i);
+        const sql = `INSERT INTO ${CONFORMANCE_TABLE} VALUES (${p(1)}, ${p(2)})`;
+        const result = await db.executeMany(sql, [
+          [1, "one"],
+          [2, "two"],
+          [3, "three"],
+        ]);
+        assert(result.changes === 3, `reported ${result.changes} changes, expected 3`);
+
+        let threw = false;
+        try {
+          // The second set collides with a row that already exists.
+          await db.executeMany(sql, [[4, "four"], [1, "clash"]]);
+        } catch {
+          threw = true;
+        }
+        assert(threw, "a colliding set did not fail the batch");
+
+        const rows = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE} ORDER BY a`)).toArray();
+        assert(
+          rows.map((r) => r.a).join(",") === "1,2,3",
+          `a failed batch left ${JSON.stringify(rows.map((r) => r.a))} — it must apply none of it`,
+        );
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
     "a closed connection refuses work rather than hanging",
     async (open) => {
       const db = await fresh(open, "a INTEGER");
@@ -1292,6 +1405,7 @@ export {
   defineRowShape,
   decodeBatch,
   encodeParams,
+  encodeParamSets,
   splitParams,
   mapError,
   asDbError,

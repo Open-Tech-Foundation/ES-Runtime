@@ -105,6 +105,19 @@ Large integers come back as a `bigint` only when a `number` would have lost the
 value, so an id of `9007199254740993` survives; blobs come back as
 `Uint8Array`.
 
+## Inserting many rows
+
+```js
+const rows = users.map((u) => [u.name, u.email]);
+await db.executeMany("INSERT INTO users (name, email) VALUES (?, ?)", rows);
+```
+
+One statement, many parameter sets — crossed once and prepared once. A loop of
+`execute()` calls does the same work but pays a boundary crossing per row, and
+for a bulk load that is where nearly all of the time goes. It runs as a single
+transaction unless one is already open, so a batch either applies completely or
+not at all.
+
 ## Transactions
 
 ```js

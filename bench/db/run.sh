@@ -24,7 +24,7 @@ scratch="$here/.scratch"
 esrun_bin="${ESRUN:-$root/target/release/esrun}"
 
 REPS="${REPS:-3}"
-WORKLOADS="${WORKLOADS:-open insert scan_num scan_text point stream}"
+WORKLOADS="${WORKLOADS:-open insert insert_many scan_num scan_text point stream}"
 RUNTIMES="${RUNTIMES:-esrun node bun deno}"
 
 command -v python3 >/dev/null || { echo "python3 is required for the measurements" >&2; exit 1; }
@@ -84,6 +84,9 @@ for rt in $RUNTIMES; do
         echo "FAILED $rt/$workload: $(printf '%s' "$json" | field err)" >&2
         best_json=""; break
       fi
+      # A runtime that does not implement a workload says so rather than
+      # scoring zero for it.
+      if [ "$(printf '%s' "$json" | field out)" = "n/a" ]; then best_json=""; break; fi
       wall="$(printf '%s' "$json" | field wall_ms)"
       if [ -z "$best_wall" ] || awk "BEGIN{exit !($wall < $best_wall)}"; then
         best_wall="$wall"; best_json="$json"

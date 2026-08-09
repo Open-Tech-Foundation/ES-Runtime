@@ -37,7 +37,7 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    DbColumn, DbParams, DbValue, EmbeddedDb, EmbeddedDbOptions, ProviderError,
+    DbColumn, DbParams, DbValue, EmbeddedDb, EmbeddedDbOptions, ExecuteResult, ProviderError,
 };
 
 use crate::Result;
@@ -118,6 +118,11 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
         })
     }))?;
 
+    // The query carries its first batch back with it. A result that fits in one
+    // batch is finished here — no cursor is minted, so there is nothing to
+    // fetch and nothing to close, and a lookup by primary key costs one
+    // crossing instead of three. A crossing costs about the same whatever it
+    // carries, which is why this is worth the wider return value.
     let d = db.clone();
     let owned_conns = conns.clone();
     let owned_cursors = cursors.clone();
@@ -128,18 +133,25 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
         let id = arg_u64(&args, 0);
         let sql = arg_str(&args, 1);
         let params = decode_params(args.get(2).and_then(Value::as_bytes).unwrap_or(&[]));
+        let max_bytes = arg_u64(&args, 3) as usize;
         Box::pin(async move {
             let id = owned_conns.check(id)?;
-            let cursor = require(&d)?
-                .query(id, sql, params?)
+            let result = require(&d)?
+                .query(id, sql, params?, max_bytes)
                 .await
                 .map_err(map_err)?;
             Ok(Value::Object(vec![
                 (
-                    "id".to_string(),
-                    Value::Number(owned_cursors.own(cursor.id) as f64),
+                    "cursor".to_string(),
+                    match result.cursor {
+                        Some(cursor) => Value::Number(owned_cursors.own(cursor) as f64),
+                        None => Value::Null,
+                    },
                 ),
-                ("columns".to_string(), columns_value(&cursor.columns)),
+                ("columns".to_string(), columns_value(&result.columns)),
+                ("bytes".to_string(), Value::Bytes(result.first.bytes)),
+                ("rows".to_string(), Value::Number(result.first.rows as f64)),
+                ("done".to_string(), Value::Bool(result.first.done)),
             ]))
         })
     }))?;
@@ -176,16 +188,28 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
                 .execute(id, sql, params?)
                 .await
                 .map_err(map_err)?;
-            Ok(Value::Object(vec![
-                ("changes".to_string(), Value::Number(result.changes as f64)),
-                (
-                    "lastInsertRowid".to_string(),
-                    match result.last_insert_rowid {
-                        Some(id) => Value::Number(id as f64),
-                        None => Value::Null,
-                    },
-                ),
-            ]))
+            Ok(execute_value(result))
+        })
+    }))?;
+
+    // One statement, many parameter sets, one crossing. The loop that would
+    // otherwise cross per row spends all of its time on the boundary and none
+    // in the engine — the same arithmetic that puts rows in batches.
+    let d = db.clone();
+    let owned = conns.clone();
+    engine.register_op(OpDecl::r#async("db_execute_many", move |args| {
+        let d = d.clone();
+        let owned = owned.clone();
+        let id = arg_u64(&args, 0);
+        let sql = arg_str(&args, 1);
+        let sets = decode_param_sets(args.get(2).and_then(Value::as_bytes).unwrap_or(&[]));
+        Box::pin(async move {
+            let id = owned.check(id)?;
+            let result = require(&d)?
+                .execute_many(id, sql, sets?)
+                .await
+                .map_err(map_err)?;
+            Ok(execute_value(result))
         })
     }))?;
 
@@ -221,6 +245,41 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
     Ok(())
 }
 
+fn execute_value(result: ExecuteResult) -> Value {
+    Value::Object(vec![
+        ("changes".to_string(), Value::Number(result.changes as f64)),
+        (
+            "lastInsertRowid".to_string(),
+            match result.last_insert_rowid {
+                Some(id) => Value::Number(id as f64),
+                None => Value::Null,
+            },
+        ),
+    ])
+}
+
+/// Reads a run of parameter sets: a count, then each set in the single-set
+/// encoding. Bounded like the single-set reader, and for the same reason — the
+/// buffer is written by a module, but what it is built from is guest values.
+fn decode_param_sets(bytes: &[u8]) -> std::result::Result<Vec<DbParams>, OpError> {
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut r = Reader { bytes, at: 0 };
+    let count = r.i32()?;
+    if count < 0 {
+        return Err(malformed("the parameter-set count is negative"));
+    }
+    // Not pre-allocated from the count: the count is guest-supplied, and a
+    // claim of four billion sets should cost a short read rather than the
+    // memory it asked for.
+    let mut sets = Vec::new();
+    for _ in 0..count {
+        sets.push(r.params()?);
+    }
+    Ok(sets)
+}
+
 fn columns_value(columns: &[DbColumn]) -> Value {
     Value::Array(
         columns
@@ -250,21 +309,7 @@ fn decode_params(bytes: &[u8]) -> std::result::Result<DbParams, OpError> {
     if bytes.is_empty() {
         return Ok(DbParams::default());
     }
-    let mut r = Reader { bytes, at: 0 };
-    let positional_count = r.i16()? as usize;
-    let mut positional = Vec::with_capacity(positional_count.min(64));
-    for _ in 0..positional_count {
-        positional.push(r.value()?);
-    }
-    let named_count = r.i16()? as usize;
-    let mut named = Vec::with_capacity(named_count.min(64));
-    for _ in 0..named_count {
-        let len = r.i32()?;
-        let name = String::from_utf8(r.take(len.max(0) as usize)?.to_vec())
-            .map_err(|_| malformed("a parameter name is not UTF-8"))?;
-        named.push((name, r.value()?));
-    }
-    Ok(DbParams { positional, named })
+    Reader { bytes, at: 0 }.params()
 }
 
 struct Reader<'a> {
@@ -290,6 +335,23 @@ impl Reader<'_> {
 
     fn i32(&mut self) -> std::result::Result<i32, OpError> {
         Ok(i32::from_be_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
+    fn params(&mut self) -> std::result::Result<DbParams, OpError> {
+        let positional_count = self.i16()? as usize;
+        let mut positional = Vec::with_capacity(positional_count.min(64));
+        for _ in 0..positional_count {
+            positional.push(self.value()?);
+        }
+        let named_count = self.i16()? as usize;
+        let mut named = Vec::with_capacity(named_count.min(64));
+        for _ in 0..named_count {
+            let len = self.i32()?;
+            let name = String::from_utf8(self.take(len.max(0) as usize)?.to_vec())
+                .map_err(|_| malformed("a parameter name is not UTF-8"))?;
+            named.push((name, self.value()?));
+        }
+        Ok(DbParams { positional, named })
     }
 
     fn value(&mut self) -> std::result::Result<DbValue, OpError> {

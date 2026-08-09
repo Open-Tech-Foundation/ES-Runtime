@@ -41,6 +41,13 @@ namespace) is unstable and may change between minor releases until the API freez
   transactions and savepoints, the portable error codes, and the refusals. The
   built-in backend runs it too, against both a file and an in-memory database.
 
+  `executeMany(sql, rows)` runs one statement over many parameter sets in a
+  single boundary crossing, preparing it once — 50k inserts go from 1832 ms to
+  312 ms. It runs as one transaction unless one is already open. And a result
+  small enough to fit one batch now comes back **with the query itself**: no
+  cursor is opened, so a lookup by primary key costs one crossing instead of
+  three (`rows.exhausted` reports which happened).
+
 - **`EmbeddedDb` provider trait** — the seam an in-process database engine
   arrives through, and the only database seam below the op boundary (D56).
   Networked backends are built in JS on `NetProvider`, so adding Postgres or

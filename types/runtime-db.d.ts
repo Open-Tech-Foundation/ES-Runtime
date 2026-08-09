@@ -88,6 +88,12 @@ declare module "runtime:db" {
    */
   export interface Rows extends AsyncIterable<Row> {
     readonly columns: readonly Column[];
+    /**
+     * `true` when the backend finished this result without leaving a cursor
+     * open — the rows came back with the query itself, so there is nothing to
+     * fetch and nothing to close.
+     */
+    readonly exhausted: boolean;
     /** The whole result set as an array. */
     toArray(): Promise<Row[]>;
     /** The first row, or `null`. Closes the cursor without reading the rest. */
@@ -122,6 +128,12 @@ declare module "runtime:db" {
     readonly backend: string;
     query(q: Queryable, params?: DbParams): Promise<Rows>;
     execute(q: Queryable, params?: DbParams): Promise<ExecuteResult>;
+    /**
+     * Runs one statement against many parameter sets, crossing the boundary
+     * once and preparing once. Runs as a single transaction unless one is
+     * already open, in which case it joins that one.
+     */
+    executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
     /**
      * Runs `fn` in a transaction, committing when it returns and rolling back
      * when it throws. Nested calls become savepoints where the backend has
@@ -208,11 +220,16 @@ declare module "runtime:db" {
     readonly backend: string;
     query(q: Queryable, params?: DbParams): Promise<Rows>;
     execute(q: Queryable, params?: DbParams): Promise<ExecuteResult>;
+    executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
     transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
     close(): Promise<void>;
     [Symbol.asyncDispose](): Promise<void>;
     protected abstract _query(q: NormalizedQuery): Promise<Rows>;
     protected abstract _execute(q: NormalizedQuery): Promise<ExecuteResult>;
+    protected abstract _executeMany(
+      text: string,
+      sets: [DbInput[], [string, DbInput][]][],
+    ): Promise<ExecuteResult>;
     protected abstract _close(): Promise<void>;
   }
 
@@ -281,6 +298,11 @@ declare module "runtime:db" {
   export function encodeParams(
     positional?: readonly DbInput[],
     named?: readonly [string, DbInput][],
+  ): Uint8Array;
+
+  /** Encodes many parameter sets for one statement — a batched execute's payload. */
+  export function encodeParamSets(
+    sets: readonly [readonly DbInput[], readonly [string, DbInput][]][],
   ): Uint8Array;
 
   /** Splits a caller's parameters into positional and named. */
