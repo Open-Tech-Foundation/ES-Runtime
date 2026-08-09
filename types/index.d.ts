@@ -12,6 +12,7 @@
 /// <reference path="./runtime-process.d.ts" />
 /// <reference path="./runtime-path.d.ts" />
 /// <reference path="./runtime-fs.d.ts" />
+/// <reference path="./runtime-db.d.ts" />
 /// <reference path="./runtime-net.d.ts" />
 /// <reference path="./runtime-http.d.ts" />
 /// <reference path="./runtime-websocket.d.ts" />

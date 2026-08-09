@@ -19,6 +19,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:process`](#runtimeprocess)
 - [`runtime:path`](#runtimepath)
 - [`runtime:fs`](#runtimefs)
+- [`runtime:db`](#runtimedb)
 - [`runtime:net`](#runtimenet)
 - [`runtime:http`](#runtimehttp)
 - [`runtime:websocket`](#runtimewebsocket)
@@ -833,6 +834,7 @@ the required capability has been granted.
 | `runtime:process` | Available   | `Env` / `Signals` | [↓](#runtimeprocess)   |
 | `runtime:path`    | Available   | `Env`*     | [↓](#runtimepath)             |
 | `runtime:fs`      | Available   | `FileRead` / `FileWrite` | [↓](#runtimefs) |
+| `runtime:db`      | Available   | `FileRead` / `FileWrite` — **none** for `sqlite::memory:` | [↓](#runtimedb) |
 | `runtime:net`     | Available   | `Net` / `NetListen` | [↓](#runtimenet)     |
 | `runtime:http`    | Available   | `NetListen` | [↓](#runtimehttp)               |
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
@@ -1356,6 +1358,121 @@ as is writing entries *inside* it.
 `text()`, `json()`, `bytes()` (`Uint8Array`), `arrayBuffer()`, `stream()`
 (`ReadableStream`), `exists()`, `stat()`, `write(data)`, `delete()`, and the
 `path` it points at — the Blob read surface plus convenience writes/deletes.
+
+---
+
+## `runtime:db`
+
+Databases, in two tiers (DECISIONS D56). The **application tier** is `connect()`
+and what it returns. The **driver tier** is what a third party needs to add a
+backend of their own; both are exported from `runtime:db`, and the split is in
+this documentation rather than in the specifier.
+
+```js
+import { connect, sql } from "runtime:db";
+
+const db = await connect("sqlite:./app.db");
+await db.execute(sql`INSERT INTO users (name) VALUES (${name})`);
+for await (const row of await db.query("SELECT id, name FROM users")) {
+  console.log(row.id, row.name);
+}
+await db.close();
+```
+
+**Capabilities.** Opening a database is a filesystem access and is scoped as
+one: `FileRead` to read, `FileWrite` as well to write, confined by the same root
+jail and `--allow-read` / `--allow-write` lists that back `runtime:fs`. The one
+exception is `sqlite::memory:`, which needs **no capability at all** — it names
+no file and touches no filesystem, so a filesystem grant would guard nothing
+that happens, and what it costs is memory, which guest JS can already spend.
+`runtime:db` adds no capability of its own.
+
+### `connect(url, options?)`
+
+Chooses a backend by the connection string's **scheme**. `sqlite:` names a file
+format and a SQL dialect the way `postgres://` names a wire protocol — not a
+particular implementation, which may be replaced without the URL changing.
+
+| Option | Meaning |
+| --- | --- |
+| `key` | Encryption key: hex string or bytes. |
+| `cipher` | Cipher name; defaults to the backend's. |
+| `readOnly` | Open without the ability to write. |
+
+A key belongs in the **options object, never the connection string** — a key in
+a URL ends up in logs, error messages and stack traces, so one passed as a URL
+parameter is refused rather than quietly honoured.
+
+`sqlite::memory:` opens a database that exists only in memory; each connection
+gets its own. The named form (`:memory:name`), which in SQLite means *sharing*
+one, is refused rather than quietly not sharing.
+
+### `Connection`
+
+- `query(q, params?)` → `Rows`
+- `execute(q, params?)` → `{ changes, lastInsertRowid }`
+- `transaction(fn)` — commits when `fn` returns, rolls back when it throws.
+  Nested calls become savepoints where the backend has them, so a helper that
+  opens a transaction composes with a caller that already did. A rollback that
+  itself fails never replaces the error that caused it.
+- `close()`, and `Symbol.asyncDispose` for `await using`.
+
+`q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
+(bound by position) or an object (bound by name). The AST form is in the
+contract from the first release so that an engine which never speaks SQL can be
+a first-class backend later; the backends that ship today refuse it by name with
+`ERR_DB_QUERY_FORM`.
+
+### `` sql`` ``
+
+Every interpolation becomes a parameter, never text, and a nested `` sql`` ``
+fragment splices with its own values. The fragments and values are kept apart
+until the backend renders them, so one template targets `$1`, `?` and `:name`
+backends unchanged — and there is no arrangement of it that puts a value into
+the text.
+
+### `Rows`
+
+Async-iterable, pulled one batch at a time — never the whole result, so a table
+larger than memory streams through at the cost of a batch. Stopping early
+(`break`, `return`, `throw`) closes the cursor and leaves the connection usable.
+Also `toArray()`, `first()` (`null` when empty), `close()`, and `columns`.
+
+### `Row`
+
+A **lazy view** over its batch, with one getter per column, so a query that
+selects more columns than it reads pays only for the ones it touches. A 64-bit
+integer arrives as a `bigint` only where a `number` would have lost it; a blob
+arrives as a `Uint8Array`.
+
+Because the getters live on the prototype, **`{ ...row }` does not copy the
+columns** — it yields an empty object, and leaks nothing internal either. Use
+`row.toObject()`, which is how a row is materialized; `JSON.stringify(row)`
+works, and `row.values()` gives the columns in query order.
+
+### Errors
+
+Failures are a `DbError` whose `code` is layered: the driver's own
+classification first (`ERR_DB_UNIQUE_VIOLATION`, `ERR_DB_DEADLOCK`,
+`ERR_DB_BUSY`, …), then a stable host code, then `ERR_DB_BACKEND`. A denied
+capability stays `ERR_CAPABILITY_DENIED` and a jail escape stays
+`ERR_JAIL_ESCAPE` — an application testing for those should not have to know
+that the call went through a database. The backend's own code, where it had one,
+stays on `e.backendCode`.
+
+### The driver tier
+
+For building a backend or an ORM: `registerBackend(scheme, factory)` and
+`backendSchemes()`; `BaseConnection` (transactions, savepoints, the
+closed-connection check); `Dialect` (`placeholder`, `quoteIdent`, `supports`);
+`defineRowShape` and `decodeBatch` (the row decoder, shared by every backend);
+`encodeParams` / `splitParams`; `ByteWriter`; `mapError` / `asDbError`; and
+`runBackendConformance(open)`, the suite a driver runs to demonstrate it behaves
+like the built-ins. A built-in scheme cannot be replaced, and `otfdb:` is
+reserved.
+
+Adding a networked backend needs **no new runtime code**: a Postgres or MySQL
+driver is JS over [`runtime:net`](#runtimenet).
 
 ---
 
@@ -2241,6 +2358,33 @@ try {
 | `ERR_TLS` | TLS handshake or certificate verification failed. |
 | `ERR_TOO_MANY_REDIRECTS` | A redirect chain exceeded the Fetch specification's cap of 20. |
 | `ERR_CANCELLED` | The operation was cancelled. |
+
+`runtime:db` adds a portable classification on top, so an application can branch
+on what a database did without knowing which one said so. These sit on the same
+`code` property; the backend's own code, where it had one, stays on
+`e.backendCode`. A host code above (a denied capability, a jail escape) is
+**not** replaced by one of these — the driver's classification is tried first,
+then the host's, then `ERR_DB_BACKEND`.
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_DB_UNIQUE_VIOLATION` | A unique constraint or primary key collided. |
+| `ERR_DB_FOREIGN_KEY_VIOLATION` | A foreign key constraint failed. |
+| `ERR_DB_NOT_NULL_VIOLATION` | A `NOT NULL` column was given null. |
+| `ERR_DB_CHECK_VIOLATION` | A `CHECK` constraint failed. |
+| `ERR_DB_DEADLOCK` | The transaction was chosen as a deadlock victim. |
+| `ERR_DB_SERIALIZATION_FAILURE` | The transaction could not be serialized; retry it. |
+| `ERR_DB_BUSY` | The database is locked by another writer. |
+| `ERR_DB_CONNECTION_LOST` | The connection went away mid-operation. |
+| `ERR_DB_AUTH_FAILED` | The server refused the credentials. |
+| `ERR_DB_TIMEOUT` | The database gave up on the statement. |
+| `ERR_DB_SYNTAX` | The backend could not parse the statement. |
+| `ERR_DB_UNDEFINED_TABLE` / `ERR_DB_UNDEFINED_COLUMN` | No such table / column. |
+| `ERR_DB_READ_ONLY` | A write against a read-only database. |
+| `ERR_DB_QUERY_FORM` | The query was handed in a form this backend does not take — SQL text to an engine that wants an AST, or the reverse. |
+| `ERR_DB_UNSUPPORTED` | The backend, scheme, option or parameter type is not supported. |
+| `ERR_DB_CLOSED` | The connection is closed. |
+| `ERR_DB_BACKEND` | The backend failed in a way with no portable name. Check `e.backendCode` and `e.message`. |
 | `ERR_ENTROPY` | The entropy source failed. |
 | `ERR_MAX_BUFFER` | A child process wrote more than `runtime:system` `output()`'s `maxBuffer`. |
 | `ERR_IO` | An I/O failure with no finer classification. |
