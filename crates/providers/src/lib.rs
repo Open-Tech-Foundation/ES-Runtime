@@ -1963,6 +1963,15 @@ pub struct EmbeddedDbOptions {
     pub hex_key: Option<String>,
     /// The cipher name, when a key is given. `None` ⇒ the backend's default.
     pub cipher: Option<String>,
+    /// Open a database that exists only in memory, ignoring `path` entirely.
+    ///
+    /// A separate flag rather than a magic path, because the two are decided by
+    /// different things and confusing them is how a database meant to live in
+    /// memory ends up on disk. An implementation **must** take this as the whole
+    /// answer: it names no file, touches no filesystem, and needs no
+    /// authorization, so a path arriving alongside it is ignored rather than
+    /// opened. Each open is its own database — nothing is shared by name.
+    pub in_memory: bool,
 }
 
 /// An **embedded** database engine: one that runs in this process rather than

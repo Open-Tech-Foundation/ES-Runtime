@@ -29,6 +29,12 @@ namespace) is unstable and may change between minor releases until the API freez
   than quietly honoured. Networked backends are next and need no new Rust:
   Postgres will be JS over `runtime:net`.
 
+  `sqlite::memory:` opens a database that exists only in memory and **needs no
+  capability** — it names no file and touches no filesystem, so it is the one
+  open that works under `--deny-all`. Each connection gets its own; the named
+  form (`:memory:name`), which in SQLite means *sharing* one, is refused rather
+  than quietly not sharing.
+
 - **`EmbeddedDb` provider trait** — the seam an in-process database engine
   arrives through, and the only database seam below the op boundary (D56).
   Networked backends are built in JS on `NetProvider`, so adding Postgres or

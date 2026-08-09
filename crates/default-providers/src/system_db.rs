@@ -37,7 +37,7 @@ use es_runtime_providers::{
 use turso_core::types::Text;
 use turso_core::{
     Clock, Completion, Connection, Database, DatabaseOpts, EncryptionKey, EncryptionOpts, File, IO,
-    LimboError, MonotonicInstant, NonNan, Numeric, OpenFlags, OpenOptions, PlatformIO,
+    LimboError, MemoryIO, MonotonicInstant, NonNan, Numeric, OpenFlags, OpenOptions, PlatformIO,
     SqliteDialect, Statement, StepResult, Value as TursoValue, WallClockInstant,
 };
 
@@ -205,6 +205,9 @@ impl EmbeddedDb for SystemEmbeddedDb {
         let id = self.id();
         Box::pin(async move {
             let entry = blocking(move || {
+                if opts.in_memory {
+                    return open_in_memory(&opts);
+                }
                 let access = if opts.read_only {
                     Access::Read
                 } else {
@@ -442,6 +445,49 @@ impl EmbeddedDb for SystemEmbeddedDb {
             Ok(())
         })
     }
+}
+
+/// Opens a database that exists only in memory.
+///
+/// The engine's storage is decided by **which `IO` it is handed**, and by
+/// nothing else — `Database::open` uses the one it is given, and the path→IO
+/// mapping lives in a convenience constructor we cannot use because we supply
+/// our own VFS. So handing it the jailed VFS with a `:memory:` path produces a
+/// *file* called `:memory:`, while `is_in_memory_db()` cheerfully reports
+/// true. The dispatch is ours to make, and this is where it is made.
+///
+/// Nothing here touches the filesystem, so nothing here consults the jail.
+fn open_in_memory(opts: &EmbeddedDbOptions) -> Result<ConnEntry, ProviderError> {
+    let io: Arc<dyn IO> = Arc::new(MemoryIO::new());
+    let mut open = OpenOptions::new(Arc::new(SqliteDialect)).flags(OpenFlags::Create);
+    if let Some(hexkey) = opts.hex_key.clone() {
+        open = open
+            .encryption(EncryptionOpts {
+                cipher: opts
+                    .cipher
+                    .clone()
+                    .unwrap_or_else(|| "aes256gcm".to_string()),
+                hexkey,
+            })
+            .db_opts(DatabaseOpts::default().with_encryption(true));
+    }
+    // `:memory:` is still the path, because the engine reads it back through
+    // `is_in_memory_db()` and bypasses its connection registry on it — two
+    // behaviours that should agree with the storage rather than contradict it.
+    let db = Database::open(io.clone(), ":memory:", open).map_err(engine_error)?;
+    let conn = match &opts.hex_key {
+        Some(key) => db
+            .connect_with_encryption(Some(
+                EncryptionKey::from_hex_string(key).map_err(engine_error)?,
+            ))
+            .map_err(engine_error)?,
+        None => db.connect().map_err(engine_error)?,
+    };
+    Ok(ConnEntry {
+        conn,
+        _db: db,
+        _io: io,
+    })
 }
 
 /// Prepares `sql` on `conn` and binds `params`.
@@ -893,6 +939,86 @@ mod tests {
         // than a step into a freed statement.
         db.close_cursor(cursor.id).await.unwrap();
         assert!(db.fetch(cursor.id, 16).await.is_err());
+    }
+
+    /// The engine picks its storage from the `IO` it is handed and from nothing
+    /// else, so an in-memory database is one we hand `MemoryIO` — not one we
+    /// name `:memory:`. Handing it the jailed VFS with that path produces a
+    /// *file* called `:memory:` while `is_in_memory_db()` reports true, which
+    /// is what this test exists to keep from coming back.
+    #[tokio::test]
+    async fn an_in_memory_database_touches_no_filesystem() {
+        let (root, db) = engine("memory");
+        let id = db
+            .open(
+                String::new(),
+                EmbeddedDbOptions {
+                    in_memory: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
+        exec(&db, id, "INSERT INTO t VALUES (1)").await;
+        let cursor = db
+            .query(id, "SELECT a FROM t".to_string(), DbParams::default())
+            .await
+            .unwrap();
+        let (_bytes, rows) = drain(&db, cursor.id, 4096).await;
+        assert_eq!(rows, 1);
+
+        let left: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(
+            left.is_empty(),
+            "an in-memory database wrote files: {left:?}"
+        );
+
+        // Each open is its own database. Nothing is shared by name, which is
+        // why the named spelling is refused a layer up rather than silently
+        // handing back a second empty one.
+        let other = db
+            .open(
+                String::new(),
+                EmbeddedDbOptions {
+                    in_memory: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            db.query(other, "SELECT a FROM t".to_string(), DbParams::default())
+                .await
+                .is_err()
+        );
+        db.close(id).await.unwrap();
+        db.close(other).await.unwrap();
+    }
+
+    /// A path arriving beside `in_memory` is ignored, not opened. The op above
+    /// takes no path at all, so this is belt and braces — but the trait says
+    /// "ignored", and a provider that quietly honoured it would turn an ungated
+    /// op into a way to open any file.
+    #[tokio::test]
+    async fn an_in_memory_open_ignores_a_path_entirely() {
+        let (root, db) = engine("memory-path");
+        let id = db
+            .open(
+                "../../../etc/passwd".to_string(),
+                EmbeddedDbOptions {
+                    in_memory: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
+        db.close(id).await.unwrap();
+        assert!(std::fs::read_dir(&root).unwrap().next().is_none());
     }
 
     #[tokio::test]

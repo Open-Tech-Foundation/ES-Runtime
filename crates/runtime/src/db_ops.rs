@@ -15,6 +15,11 @@
 //! `runtime:fs` and `runtime:net` cannot already reach, and
 //! `--allow-read=./data` scopes a database exactly as it scopes a file.
 //!
+//! The one exception is the in-memory open, which needs no capability at all:
+//! it names no file and touches no filesystem, so a filesystem grant would
+//! guard nothing that happens. It takes no path either, which is what makes
+//! that safe rather than merely intended.
+//!
 //! Everything after the open — query, fetch, execute, close — carries an
 //! **ownership check** instead ([`crate::handles`], D50) and no capability: the
 //! open was authorized, and the ids are sequential across a shared provider, so
@@ -64,6 +69,7 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
                 read_only,
                 hex_key: (!hex_key.is_empty()).then_some(hex_key),
                 cipher: (!cipher.is_empty()).then_some(cipher),
+                in_memory: false,
             };
             Box::pin(async move {
                 let id = require(&d)?.open(path, opts).await.map_err(map_err)?;
@@ -76,6 +82,41 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
         }
         engine.register_op(op)?;
     }
+
+    // The third open, and the only one that needs no capability.
+    //
+    // An in-memory database names no file, reads none, and writes none, so
+    // `FileRead`/`FileWrite` would gate nothing that happens — a grant that
+    // guards an operation it has no relationship to teaches people to hand out
+    // grants. What it costs is memory, which guest JS can already spend without
+    // asking, so it is no new authority either.
+    //
+    // **It takes no path.** Not "ignores one" — takes none. An ungated op that
+    // accepted a path would be a way to open any database on disk without
+    // `FileRead`, and the distance between "ignores the argument" and "stops
+    // ignoring it after a refactor" is one careless edit. There is nothing here
+    // to get wrong.
+    let d = db.clone();
+    let owned = conns.clone();
+    engine.register_op(OpDecl::r#async("db_open_memory", move |args| {
+        let d = d.clone();
+        let owned = owned.clone();
+        let hex_key = arg_str(&args, 0);
+        let cipher = arg_str(&args, 1);
+        let opts = EmbeddedDbOptions {
+            read_only: false,
+            hex_key: (!hex_key.is_empty()).then_some(hex_key),
+            cipher: (!cipher.is_empty()).then_some(cipher),
+            in_memory: true,
+        };
+        Box::pin(async move {
+            let id = require(&d)?
+                .open(String::new(), opts)
+                .await
+                .map_err(map_err)?;
+            Ok(Value::Number(owned.own(id) as f64))
+        })
+    }))?;
 
     let d = db.clone();
     let owned_conns = conns.clone();

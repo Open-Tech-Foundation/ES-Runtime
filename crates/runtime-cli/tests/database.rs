@@ -252,6 +252,64 @@ fn opening_a_database_is_gated_like_a_file() {
     );
 }
 
+/// An in-memory database reaches no filesystem, so it needs no filesystem
+/// grant — it is the one open that works under `--deny-all`. Which is also the
+/// reason its op takes no path: an ungated op that accepted one would be a way
+/// to open any database on disk without `FileRead`.
+#[test]
+fn an_in_memory_database_needs_no_capability_and_leaves_no_files() {
+    let base = dir("memory");
+    std::fs::write(
+        base.join("app.mjs"),
+        r#"
+        import { connect, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite::memory:");
+        await db.execute("CREATE TABLE t (a INTEGER)");
+        await db.execute("INSERT INTO t VALUES (1)");
+        console.log("rows:", (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
+
+        // Each connection gets its own, so nothing is shared by name — which is
+        // why the named spelling is refused rather than quietly not sharing.
+        const other = await connect("sqlite::memory:");
+        try {
+          await other.query("SELECT a FROM t");
+          console.log("shared: yes");
+        } catch (e) {
+          console.log("independent:", e.code === DbErrorCode.UndefinedTable);
+        }
+        await db.close();
+        await other.close();
+
+        try {
+          await connect("sqlite::memory:named");
+        } catch (e) {
+          console.log("named:", e.code === DbErrorCode.Unsupported);
+        }
+        "#,
+    )
+    .unwrap();
+    let out = esrun()
+        .current_dir(&base)
+        .arg("--deny-all")
+        .arg("app.mjs")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "rows: 1\nindependent: true\nnamed: true"
+    );
+
+    // The engine picks its storage from the IO it is handed, not from the path,
+    // so getting this wrong writes a *file* called `:memory:` and reports the
+    // database as in-memory anyway. Nothing but the module should be here.
+    let left: Vec<_> = std::fs::read_dir(&base)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(left, ["app.mjs"], "an in-memory database wrote files");
+}
+
 /// The jail is the same one `runtime:fs` uses, so a path outside it is refused
 /// for a database exactly as it is for a file — and it says *jail escape*
 /// rather than the blunter "capability denied", because the grant was held and

@@ -805,13 +805,28 @@ async function connectSqlite(url, options) {
   if (path === "") {
     throw dbError("a sqlite: URL needs a path", DbErrorCode.Unsupported);
   }
+  // A named in-memory database (`:memory:app`) is SQLite's way of *sharing* one
+  // between connections. Nothing here shares — every open is its own database —
+  // so accepting the spelling would promise something it does not do. Refused
+  // by name instead.
+  if (path.startsWith(":memory:") && path !== ":memory:") {
+    throw dbError(
+      `named in-memory databases are not supported: ${path} — use sqlite::memory:, which gives each connection its own`,
+      DbErrorCode.Unsupported,
+    );
+  }
 
   const key = options.key === undefined ? "" : toHexKey(options.key);
   const cipher = options.cipher === undefined ? "" : String(options.cipher);
   try {
-    const id = options.readOnly
-      ? await ops.db_open_read_only(path, key, cipher)
-      : await ops.db_open(path, key, cipher);
+    // `sqlite::memory:` reaches no filesystem, so it goes through the op that
+    // asks for no filesystem grant.
+    const id =
+      path === ":memory:"
+        ? await ops.db_open_memory(key, cipher)
+        : options.readOnly
+          ? await ops.db_open_read_only(path, key, cipher)
+          : await ops.db_open(path, key, cipher);
     return new SqliteConnection(id);
   } catch (e) {
     throw sqliteError(e);
