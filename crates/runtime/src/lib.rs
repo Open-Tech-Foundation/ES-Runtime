@@ -19,6 +19,7 @@ mod builtins;
 mod compression_ops;
 mod crypto_ops;
 mod curve25519_ops;
+mod db_ops;
 mod ec_ops;
 mod encoding_ops;
 mod fetch_ops;
@@ -60,9 +61,9 @@ pub use es_runtime_engine::{
 };
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
-    ConsoleLevel, Entropy, FileSystem, HttpServerProvider, ModuleLoader, ModuleSource, NetProvider,
-    NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, WebSocketProvider, WorkerHost,
-    WorkerScope,
+    ConsoleLevel, EmbeddedDb, Entropy, FileSystem, HttpServerProvider, ModuleLoader, ModuleSource,
+    NetProvider, NetTransport, PortHub, Process, Signals, Stdio, SyncFileSystem, WebSocketProvider,
+    WorkerHost, WorkerScope,
 };
 
 /// Runtime-layer error (DECISIONS.md D12).
@@ -184,6 +185,7 @@ pub struct HostProviders {
     entropy: Arc<dyn Entropy>,
     process: Option<Arc<dyn Process>>,
     signals: Option<Arc<dyn Signals>>,
+    embedded_db: Option<Arc<dyn EmbeddedDb>>,
     file_system: Option<Arc<dyn FileSystem>>,
     sync_file_system: Option<Arc<dyn SyncFileSystem>>,
     net_provider: Option<Arc<dyn NetProvider>>,
@@ -214,6 +216,7 @@ impl HostProviders {
             entropy,
             process: None,
             signals: None,
+            embedded_db: None,
             file_system: None,
             sync_file_system: None,
             net_provider: None,
@@ -243,6 +246,18 @@ impl HostProviders {
     #[must_use]
     pub fn with_signals(mut self, signals: Arc<dyn Signals>) -> Self {
         self.signals = Some(signals);
+        self
+    }
+
+    /// Adds the [`EmbeddedDb`] backing `runtime:db`'s embedded schemes
+    /// (`sqlite:`). Opening is capability-gated on
+    /// [`FileRead`](es_runtime_common::Capability::FileRead), and additionally on
+    /// [`FileWrite`](es_runtime_common::Capability::FileWrite) unless the open is
+    /// read-only — a database is a file, and is scoped as one. Networked
+    /// backends need nothing here: they are JS over the [`NetProvider`].
+    #[must_use]
+    pub fn with_embedded_db(mut self, embedded_db: Arc<dyn EmbeddedDb>) -> Self {
+        self.embedded_db = Some(embedded_db);
         self
     }
 
@@ -355,6 +370,10 @@ impl HostProviders {
 
     fn signals(&self) -> Option<Arc<dyn Signals>> {
         self.signals.clone()
+    }
+
+    fn embedded_db(&self) -> Option<Arc<dyn EmbeddedDb>> {
+        self.embedded_db.clone()
     }
 
     fn file_system(&self) -> Option<Arc<dyn FileSystem>> {

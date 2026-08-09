@@ -24,6 +24,14 @@ namespace) is unstable and may change between minor releases until the API freez
   being asked, resolves through the same root jail and `--allow-read` /
   `--allow-write` scopes that back `runtime:fs`. Queries stream through a
   cursor, and each fetch runs off the event loop.
+- **Embedded-database ops** (`db_open`, `db_open_read_only`, `db_query`,
+  `db_fetch`, `db_execute`, `db_close_cursor`, `db_close`) and
+  `HostProviders::with_embedded_db`. Opening needs `FileRead`, and `FileWrite`
+  as well unless it is read-only — so a database is scoped by `--allow-read` /
+  `--allow-write` exactly as a file is, and `runtime:db` adds no capability of
+  its own. Ids are owned per agent (D50). Parameters cross as one tagged buffer
+  rather than a value array, which is what lets a bigint bind as a 64-bit
+  integer instead of rounding through a double.
 
 ## [0.20.0] - 2026-08-08
 

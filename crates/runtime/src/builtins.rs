@@ -65,6 +65,7 @@ pub(crate) fn install(
         providers.worker_scope().is_some(),
     )?;
     // runtime:fs ops, gated on FileRead / FileWrite, jailed by the provider.
+    crate::db_ops::install(engine, providers.embedded_db())?;
     crate::fs_ops::install(engine, providers.file_system())?;
     // Synchronous filesystem ops for `runtime:wasi` (WASI's syscalls cannot
     // await); same FileRead / FileWrite gates as the async ops above.
