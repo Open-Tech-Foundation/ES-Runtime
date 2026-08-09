@@ -26,6 +26,15 @@ declare module "runtime:net" {
     /** ALPN protocols to offer, in preference order. */
     alpn?: string[];
     /**
+     * Extra trust anchors, as PEM certificates (a string or bytes).
+     *
+     * **Added** to the built-in roots, never instead of them: naming a private
+     * certificate authority does not stop the program trusting the public ones,
+     * and it can only make verification accept more certificates — the hostname
+     * and chain checks still run. A server matching neither is still refused.
+     */
+    ca?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
+    /**
      * Keep the writable usable after the peer's FIN (read EOF) instead of tearing
      * the whole socket down. Defaults to `false` (WinterTC).
      */

@@ -18,6 +18,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `runBackendConformance()` suite the built-in `sqlite:` backend does, against a
   real PostgreSQL 18. Lives in `packages/postgres`, versioned separately.
 
+- **`runtime:net` `connect({ ca })`** — extra trust anchors as PEM, for a server
+  presenting a certificate from a private authority. **Added** to the built-in
+  roots rather than replacing them, so naming one does not quietly stop the
+  program trusting every public one, and it can only make verification accept
+  more certificates: the hostname and chain checks still run. Carried through
+  `startTls()` as well, which is what a `postgres://` connection needs. There is
+  no option to skip verification.
+
 - **`ERR_DB_CONNECTION_BUSY`** joins the portable error codes: the connection is
   already streaming a result set. Distinct from `ERR_DB_BUSY`, which is the
   database refusing — this one is the client's own connection, and only the

@@ -40,6 +40,11 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
                 secure: arg_bool(&args, 2),
                 sni: (!sni.is_empty()).then_some(sni),
                 alpn: arg_str_vec(&args, 4),
+                // Extra trust anchors (PEM). Passed inline by the guest like
+                // the server-side cert and key, so it needs no capability of
+                // its own — and it can only ever make verification accept
+                // *more* certificates, never skip it.
+                ca: arg_bytes(&args, 5),
             };
             Box::pin(async move {
                 let (id, info) = require(&n)?
@@ -64,10 +69,11 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
         let id = arg_u64(&args, 0);
         let server_name = arg_str(&args, 1);
         let alpn = arg_str_vec(&args, 2);
+        let ca = arg_bytes(&args, 3);
         Box::pin(async move {
             let id = owned.check(id)?;
             let (new_id, info) = require(&n)?
-                .start_tls(id, server_name, alpn)
+                .start_tls(id, server_name, alpn, ca)
                 .await
                 .map_err(map_err)?;
             owned.release(id);

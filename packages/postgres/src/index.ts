@@ -54,6 +54,11 @@ export function parseConnectionString(url: string, overrides: PgOptions = {}): P
     const ms = Number(statementMs);
     if (Number.isFinite(ms) && ms >= 0) options.statementTimeout = ms;
   }
+  // libpq's `sslrootcert` names a *file*; this takes the certificate itself,
+  // because reading a file is a capability a connection string should not
+  // exercise on the caller's behalf. Read it yourself and pass it in.
+  const rootCert = parsed.searchParams.get("sslrootcert");
+  if (rootCert !== null && rootCert !== "") options.sslRootCert = rootCert;
   const sslmode = parsed.searchParams.get("sslmode");
   if (sslmode === "require" || sslmode === "prefer" || sslmode === "disable") {
     options.sslmode = sslmode;

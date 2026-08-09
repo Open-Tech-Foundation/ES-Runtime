@@ -89,7 +89,7 @@ pub struct SystemNet {
     /// the whole root store, so this is shared across clones and reused for every
     /// connect with the same ALPN set; a `TlsConnector` is an `Arc` inside, so a
     /// cache hit is a refcount bump.
-    tls_connectors: Arc<Mutex<HashMap<Vec<String>, TlsConnector>>>,
+    tls_connectors: Arc<Mutex<HashMap<(Vec<String>, Vec<u8>), TlsConnector>>>,
     /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
     allow_connect: Option<Arc<crate::HostAllowlist>>,
     /// Addresses `listen` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
@@ -161,22 +161,46 @@ impl SystemNet {
     /// The `aws-lc-rs` provider is chosen explicitly because the process-default
     /// crypto provider is ambiguous (both ring and aws-lc-rs are linked, so
     /// `ClientConfig::builder()` would panic).
-    fn tls_connector(&self, alpn: &[String]) -> Result<TlsConnector, ProviderError> {
-        if let Some(connector) = self.tls_connectors.lock().unwrap().get(alpn) {
+    fn tls_connector(&self, alpn: &[String], ca: &[u8]) -> Result<TlsConnector, ProviderError> {
+        let key = (alpn.to_vec(), ca.to_vec());
+        if let Some(connector) = self.tls_connectors.lock().unwrap().get(&key) {
             return Ok(connector.clone());
         }
         let provider = Arc::new(aws_lc_rs::default_provider());
+        let roots = if ca.is_empty() {
+            self.tls_roots()
+        } else {
+            // Added to the defaults, never instead of them: a caller naming a
+            // private authority is saying "trust this as well", and a build
+            // that quietly stopped trusting the public roots would break every
+            // other host the same program talks to.
+            use tokio_rustls::rustls::pki_types::CertificateDer;
+            use tokio_rustls::rustls::pki_types::pem::PemObject;
+            let mut store = (*self.tls_roots()).clone();
+            let mut added = 0usize;
+            for cert in CertificateDer::pem_slice_iter(ca) {
+                store.add(cert.map_err(err)?).map_err(err)?;
+                added += 1;
+            }
+            if added == 0 {
+                return Err(ProviderError::Coded {
+                    code: ErrorCode::Tls,
+                    message: "the supplied CA contains no PEM certificate".to_string(),
+                });
+            }
+            Arc::new(store)
+        };
         let mut config = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
             .map_err(err)?
-            .with_root_certificates(self.tls_roots())
+            .with_root_certificates(roots)
             .with_no_client_auth();
         config.alpn_protocols = alpn.iter().map(|p| p.as_bytes().to_vec()).collect();
         let connector = TlsConnector::from(Arc::new(config));
         self.tls_connectors
             .lock()
             .unwrap()
-            .insert(alpn.to_vec(), connector.clone());
+            .insert(key, connector.clone());
         Ok(connector)
     }
 
@@ -421,7 +445,7 @@ impl NetProvider for SystemNet {
                 let server_name =
                     ServerName::try_from(name).map_err(|_| err("invalid TLS server name"))?;
                 let tls = this
-                    .tls_connector(&opts.alpn)?
+                    .tls_connector(&opts.alpn, &opts.ca)?
                     .connect(server_name, tcp)
                     .await
                     .map_err(tls_err)?;
@@ -712,6 +736,7 @@ impl NetProvider for SystemNet {
         id: u64,
         server_name: String,
         alpn: Vec<String>,
+        ca: Vec<u8>,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
@@ -759,7 +784,7 @@ impl NetProvider for SystemNet {
             let name =
                 ServerName::try_from(server_name).map_err(|_| err("invalid TLS server name"))?;
             let tls = this
-                .tls_connector(&alpn)?
+                .tls_connector(&alpn, &ca)?
                 .connect(name, stream)
                 .await
                 .map_err(err)?;
@@ -840,6 +865,7 @@ mod tests {
             secure: true,
             sni: Some("localhost".to_string()),
             alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+            ca: Vec::new(),
         };
         let (id, info) = net
             .connect("localhost".to_string(), port, opts)
@@ -854,6 +880,104 @@ mod tests {
 
         net.close(id).await.unwrap();
         server.await.unwrap();
+    }
+
+    /// A private certificate authority is *added* to the defaults, not swapped
+    /// for them — and without naming it the same server is still refused, which
+    /// is the half that proves the option grants trust rather than removing the
+    /// check.
+    #[tokio::test]
+    async fn a_named_ca_is_trusted_and_an_unnamed_one_is_not() {
+        let ck = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = ck.cert.der().clone();
+        let pem = ck.cert.pem();
+        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(ck.signing_key.serialize_der()));
+
+        let server_cfg =
+            ServerConfig::builder_with_provider(Arc::new(aws_lc_rs::default_provider()))
+                .with_safe_default_protocol_versions()
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert], key)
+                .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // Two connections: one that should complete, one that should not.
+        tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok((tcp, _)) = listener.accept().await else {
+                    return;
+                };
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let _ = acceptor.accept(tcp).await;
+                });
+            }
+        });
+
+        // The real default roots, not a test store — this is the deployment
+        // shape: the public authorities, plus one private one.
+        let net = SystemNet::new();
+        let with_ca = ConnectOptions {
+            secure: true,
+            sni: Some("localhost".to_string()),
+            alpn: Vec::new(),
+            ca: pem.into_bytes(),
+        };
+        let (id, _info) = net
+            .connect("localhost".to_string(), port, with_ca)
+            .await
+            .expect("a server signed by the named authority must be trusted");
+        net.close(id).await.unwrap();
+
+        let without_ca = ConnectOptions {
+            secure: true,
+            sni: Some("localhost".to_string()),
+            alpn: Vec::new(),
+            ca: Vec::new(),
+        };
+        assert!(
+            net.connect("localhost".to_string(), port, without_ca)
+                .await
+                .is_err(),
+            "the same server must be refused when its authority is not named"
+        );
+    }
+
+    /// A CA argument that parses to nothing is a mistake worth naming: silently
+    /// falling back to the default roots would make a typo look like it worked,
+    /// against a server the caller never meant to trust.
+    ///
+    /// The listener is real because the CA is parsed while the connector is
+    /// built, which happens *after* the TCP connect — so a closed port would
+    /// fail for the wrong reason and prove nothing.
+    #[tokio::test]
+    async fn a_ca_with_no_certificate_in_it_is_refused() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let net = SystemNet::new();
+        let result = net
+            .connect(
+                "localhost".to_string(),
+                port,
+                ConnectOptions {
+                    secure: true,
+                    sni: None,
+                    alpn: Vec::new(),
+                    ca: b"not a certificate".to_vec(),
+                },
+            )
+            .await;
+        assert!(
+            matches!(&result, Err(e) if e.to_string().contains("no PEM certificate")),
+            "expected the empty-CA refusal to name itself, got {:?}",
+            result.as_ref().err().map(ToString::to_string)
+        );
     }
 
     // A secure connect to a server that never speaks TLS must fail the handshake,
@@ -925,7 +1049,7 @@ mod tests {
         assert_eq!(net.read(id).await.unwrap().unwrap(), b"OK\n");
 
         let (tls_id, info) = net
-            .start_tls(id, "localhost".to_string(), vec!["h2".to_string()])
+            .start_tls(id, "localhost".to_string(), vec!["h2".to_string()], Vec::new())
             .await
             .unwrap();
         assert_eq!(info.alpn.as_deref(), Some("h2"));
@@ -935,7 +1059,7 @@ mod tests {
 
         // The upgraded (already-TLS) socket cannot be upgraded again.
         assert!(
-            net.start_tls(tls_id, "localhost".to_string(), vec![])
+            net.start_tls(tls_id, "localhost".to_string(), vec![], Vec::new())
                 .await
                 .is_err(),
             "a TLS socket has no reclaimable raw stream"
@@ -951,7 +1075,7 @@ mod tests {
     async fn start_tls_on_an_unknown_socket_errors() {
         let net = SystemNet::new();
         assert!(
-            net.start_tls(999, "localhost".to_string(), vec![])
+            net.start_tls(999, "localhost".to_string(), vec![], Vec::new())
                 .await
                 .is_err()
         );
@@ -1067,6 +1191,7 @@ mod tests {
             secure: true,
             sni: Some("localhost".to_string()),
             alpn: vec!["h2".to_string(), "http/1.1".to_string()],
+            ca: Vec::new(),
         };
         let (cid, cinfo) = net
             .connect("localhost".to_string(), port, opts)

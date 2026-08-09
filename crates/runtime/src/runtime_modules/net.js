@@ -174,7 +174,7 @@ class Socket {
     if (!this._upgrade) {
       throw socketError("startTls() requires secureTransport: 'starttls'");
     }
-    const { name, alpn } = this._upgrade;
+    const { name, alpn, ca } = this._upgrade;
     this._upgrade = null; // single-shot
     // The upgrade retires this socket's id and mints another, so from here the
     // original names nothing. Marked rather than left to fail: its own close()
@@ -182,7 +182,7 @@ class Socket {
     // to naming another agent's socket, not to naming your own after it was
     // consumed.
     this._consumed = true;
-    const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn));
+    const info = this._conn.then(({ id }) => ops.net_start_tls(id, name, alpn, ca));
     const upgraded = new Socket(info, { allowHalfOpen: this._allowHalfOpen });
     upgraded.upgraded = true;
     return upgraded;
@@ -203,10 +203,17 @@ function connect(address, options = {}) {
   // the negotiated one comes back as SocketInfo.alpn). Empty string == no SNI.
   const sni = options.sni == null ? "" : String(options.sni);
   const alpn = Array.isArray(options.alpn) ? options.alpn.map(String) : [];
-  const conn = ops.net_connect(hostname, port, tls, sni, alpn);
+  // `ca`: extra trust anchors, as PEM. Added to the built-in roots rather than
+  // replacing them, so naming a private authority does not quietly stop the
+  // program trusting every public one — and it can only make verification
+  // accept more certificates, never skip it. A private CA is the ordinary case
+  // for an internal database or service mesh, and without this there is no way
+  // to reach one at all.
+  const ca = options.ca == null ? EMPTY : toBytes(options.ca);
+  const conn = ops.net_connect(hostname, port, tls, sni, alpn, ca);
   // "starttls" opens plaintext now; record the server name (sni, default = host)
-  // + alpn a later startTls() will negotiate with.
-  const upgrade = mode === "starttls" ? { name: sni || hostname, alpn } : null;
+  // + alpn + ca a later startTls() will negotiate with.
+  const upgrade = mode === "starttls" ? { name: sni || hostname, alpn, ca } : null;
   return new Socket(conn, { upgrade, allowHalfOpen: options.allowHalfOpen === true });
 }
 

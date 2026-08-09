@@ -119,6 +119,31 @@ sent.
 
 Closing a connection that has already died is not an error and does not hang.
 
+## TLS and private certificate authorities
+
+`sslmode=prefer` (default) asks for TLS and continues without it if the server
+declines; `require` fails instead; `disable` never asks.
+
+An internal PostgreSQL usually presents a certificate from a **private**
+authority, which the public roots have never heard of. Name it:
+
+```js
+import { file } from "runtime:fs";
+
+const db = await connect(url, {
+  sslmode: "require",
+  sslRootCert: await file("/etc/ssl/internal-ca.crt").text(),
+});
+```
+
+The certificate is *added* to the public roots, never swapped for them, and the
+hostname and chain checks still run — a server matching neither is still
+refused. There is no option to skip verification.
+
+`sslrootcert` also works in the URL, but it takes the **certificate itself**,
+not a path as libpq does: reading a file is a capability, and a connection
+string should not exercise it on your behalf.
+
 ## Capabilities
 
 The driver needs **`Net`**, and nothing else — it is an ordinary outbound TCP

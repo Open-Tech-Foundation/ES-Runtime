@@ -73,6 +73,17 @@ export interface PgOptions {
    * having.
    */
   statementTimeout?: number;
+  /**
+   * A certificate authority to trust in addition to the public roots, as PEM.
+   *
+   * The case this exists for is the ordinary one: an internal PostgreSQL
+   * presenting a certificate from a private authority. Without it such a server
+   * cannot be reached at all, because the public roots have never heard of it.
+   * The URL spells it `sslrootcert`, matching libpq — though libpq takes a
+   * *path* there and this takes the certificate itself, since reading a file
+   * needs a capability a connection string should not silently exercise.
+   */
+  sslRootCert?: string | Uint8Array;
 }
 
 interface Batch {
@@ -152,9 +163,10 @@ export class PgConnection extends BaseConnection {
     const sslmode = options.sslmode ?? "prefer";
     const wantsTls = sslmode !== "disable";
 
+    const tlsOptions = options.sslRootCert === undefined ? {} : { ca: options.sslRootCert };
     let socket = netConnect(
       { hostname: host, port },
-      wantsTls ? { secureTransport: "starttls" } : {},
+      wantsTls ? { secureTransport: "starttls", ...tlsOptions } : {},
     );
     await socket.opened;
     let frames: FrameReader | null = null;

@@ -921,6 +921,15 @@ pub struct SocketInfo {
 pub struct ConnectOptions {
     /// Negotiate TLS (`secureTransport: "on"`). When false, plain TCP.
     pub secure: bool,
+    /// Additional trust anchors, as PEM certificates. Empty ⇒ the provider's
+    /// default roots.
+    ///
+    /// Not a way to trust *less*: these are added to the verification the
+    /// provider already does, so a private certificate authority becomes
+    /// usable without the hostname check or the chain check being skipped. A
+    /// server whose certificate matches neither these nor the defaults is still
+    /// refused.
+    pub ca: Vec<u8>,
     /// TLS Server Name Indication. `None` ⇒ use the connect host.
     pub sni: Option<String>,
     /// ALPN protocols to offer, in preference order (empty ⇒ none).
@@ -1005,8 +1014,8 @@ pub trait NetProvider: Send + Sync {
     fn close_listener(&self, id: u64) -> BoxFuture<Result<(), ProviderError>>;
 
     /// Upgrades plaintext socket `id` to TLS in place (the WinterTC
-    /// `startTls()`), using `server_name` for SNI + certificate verification and
-    /// offering `alpn`. Resolves to a **new** (socket id, info) for the encrypted
+    /// `startTls()`), using `server_name` for SNI + certificate verification,
+    /// offering `alpn`, and trusting `ca` in addition to the default roots. Resolves to a **new** (socket id, info) for the encrypted
     /// stream; the old id is consumed. Only valid for a socket opened with
     /// `secureTransport: "starttls"`. The default errors — a provider can support
     /// it only if it keeps the raw stream reclaimable until the upgrade.
@@ -1015,8 +1024,9 @@ pub trait NetProvider: Send + Sync {
         id: u64,
         server_name: String,
         alpn: Vec<String>,
+        ca: Vec<u8>,
     ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
-        let _ = (id, server_name, alpn);
+        let _ = (id, server_name, alpn, ca);
         Box::pin(async { Err(ProviderError::Other("startTls is not supported".into())) })
     }
 }
