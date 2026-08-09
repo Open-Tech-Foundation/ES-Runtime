@@ -727,6 +727,27 @@ class BaseConnection {
     return this._depth > 0 ? run() : this.transaction(run);
   }
 
+  /// The default batch: correct, and no faster than the loop it replaces.
+  ///
+  /// A driver overrides this with whatever its backend does in one round trip —
+  /// a prepared statement reused across sets here, pipelined `Bind`/`Execute`
+  /// messages on a wire protocol. Overriding is an **optimization**, not a
+  /// requirement, and that is the point: `executeMany` means the same thing on
+  /// every backend from the day the backend exists, so an ORM can call it
+  /// without asking which driver is loaded. Without a default it would be a
+  /// method that throws a `TypeError` naming a private method, on backends
+  /// chosen by nobody in particular.
+  async _executeMany(text, sets) {
+    let changes = 0;
+    let lastInsertRowid = null;
+    for (const [positional, named] of sets) {
+      const result = await this._execute({ text, positional, named });
+      changes += result.changes ?? 0;
+      if (result.lastInsertRowid != null) lastInsertRowid = result.lastInsertRowid;
+    }
+    return { changes, lastInsertRowid };
+  }
+
   /// Runs `fn` inside a transaction, committing when it returns and rolling
   /// back when it throws.
   ///

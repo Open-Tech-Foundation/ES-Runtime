@@ -210,7 +210,7 @@ For adding a backend or building an ORM.
 | --- | --- |
 | `registerBackend(scheme, factory)` | Claim a scheme. Built-ins cannot be replaced; `otfdb:` is reserved. |
 | `backendSchemes()` | The registered schemes. |
-| `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`. |
+| `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`; override `_executeMany` for a fast batch path. |
 | `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports`. |
 | `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder every backend shares. |
 | `encodeParams` / `splitParams` | Parameter encoding. |
@@ -231,6 +231,11 @@ class MyConnection extends BaseConnection {
   async _query({ text, positional }) { /* … */ }
   async _execute({ text, positional }) { /* … */ }
   async _close() { /* … */ }
+
+  // Optional. The default loops `_execute` — correct, and no faster than the
+  // loop it replaces. Override it with whatever the backend does in one round
+  // trip: a reused prepared statement, or pipelined protocol messages.
+  async _executeMany(text, sets) { /* … */ }
 }
 
 registerBackend("mydb", async (url, options) => new MyConnection(await open(url)));

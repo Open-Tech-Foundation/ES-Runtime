@@ -606,6 +606,51 @@ fn a_third_party_backend_registers_its_own_scheme() {
     );
 }
 
+/// `executeMany` means the same thing on every backend from the day the backend
+/// exists. A driver overrides the batch path to make it fast; not overriding it
+/// must leave the *semantics* intact, not raise a TypeError naming a private
+/// method at an application developer.
+#[test]
+fn a_backend_that_does_not_optimize_batching_still_supports_it() {
+    let out = run(
+        "batch-default",
+        r#"
+        import { connect, registerBackend, BaseConnection, Dialect } from "runtime:db";
+
+        const dialect = new Dialect({ name: "toy", placeholder: (i) => `$${i}` });
+        const seen = [];
+        class Toy extends BaseConnection {
+          constructor() { super({ dialect, backend: "toy" }); }
+          async _query() { return { columns: [], async *[Symbol.asyncIterator]() {} }; }
+          async _execute({ text, positional }) {
+            seen.push(`${text}|${positional.join(",")}`);
+            return { changes: 1, lastInsertRowid: null };
+          }
+          async _close() {}
+        }
+        registerBackend("toy", async () => new Toy());
+
+        const db = await connect("toy://x");
+        const result = await db.executeMany("INSERT INTO t VALUES ($1)", [[1], [2], [3]]);
+        console.log("changes:", result.changes);
+        // The default is a loop over _execute — and it is still wrapped in the
+        // transaction, so the batch is atomic on a backend that never thought
+        // about batching.
+        console.log("calls:", seen.length);
+        console.log("bracketed:", seen[0] === "BEGIN|" && seen[seen.length - 1] === "COMMIT|");
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "changes: 3
+calls: 5
+bracketed: true"
+    );
+}
+
 /// The AST form is in the contract from the first release, so an engine that
 /// never speaks SQL can be a first-class backend later. The backends that ship
 /// today refuse it by name rather than by a type error somewhere downstream.

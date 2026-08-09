@@ -1474,7 +1474,8 @@ stays on `e.backendCode`.
 
 For building a backend or an ORM: `registerBackend(scheme, factory)` and
 `backendSchemes()`; `BaseConnection` (transactions, savepoints, the
-closed-connection check); `Dialect` (`placeholder`, `quoteIdent`, `supports`);
+closed-connection check, and a correct-but-slow default batch a driver overrides
+to make fast); `Dialect` (`placeholder`, `quoteIdent`, `supports`);
 `defineRowShape` and `decodeBatch` (the row decoder, shared by every backend);
 `encodeParams` / `splitParams`; `ByteWriter`; `mapError` / `asDbError`; and
 `runBackendConformance(open)`, the suite a driver runs to demonstrate it behaves

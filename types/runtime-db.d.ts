@@ -226,7 +226,12 @@ declare module "runtime:db" {
     [Symbol.asyncDispose](): Promise<void>;
     protected abstract _query(q: NormalizedQuery): Promise<Rows>;
     protected abstract _execute(q: NormalizedQuery): Promise<ExecuteResult>;
-    protected abstract _executeMany(
+    /**
+     * The batch path. **Optional** — the default loops `_execute`, which is
+     * correct and no faster than the loop it replaces. Override it with
+     * whatever the backend does in one round trip.
+     */
+    protected _executeMany(
       text: string,
       sets: [DbInput[], [string, DbInput][]][],
     ): Promise<ExecuteResult>;

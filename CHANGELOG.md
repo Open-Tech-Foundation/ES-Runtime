@@ -46,7 +46,10 @@ namespace) is unstable and may change between minor releases until the API freez
   312 ms. It runs as one transaction unless one is already open. And a result
   small enough to fit one batch now comes back **with the query itself**: no
   cursor is opened, so a lookup by primary key costs one crossing instead of
-  three (`rows.exhausted` reports which happened).
+  three (`rows.exhausted` reports which happened). `executeMany` works on every
+  backend from the day the backend exists: `BaseConnection` supplies a default
+  that loops `_execute` inside the same transaction, so a driver overriding it
+  is buying speed rather than the feature.
 
 - **`EmbeddedDb` provider trait** — the seam an in-process database engine
   arrives through, and the only database seam below the op boundary (D56).
