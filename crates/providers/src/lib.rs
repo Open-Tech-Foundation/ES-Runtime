@@ -1925,6 +1925,7 @@ pub struct DbCursor {
 }
 
 /// A run of rows, encoded (see [`EmbeddedDb::fetch`]) and sized by bytes.
+#[derive(Debug)]
 pub struct RowBatch {
     /// The encoded rows.
     pub bytes: Vec<u8>,
@@ -1937,6 +1938,7 @@ pub struct RowBatch {
 }
 
 /// What a non-query statement did.
+#[derive(Debug)]
 pub struct ExecuteResult {
     /// Rows inserted, updated, or deleted by the statement.
     pub changes: u64,
@@ -2151,6 +2153,6 @@ mod tests {
     #[test]
     fn embedded_db_is_object_safe() {
         let db: &dyn EmbeddedDb = &NoDb;
-        let _ = db.close(1);
+        drop(db.close(1));
     }
 }

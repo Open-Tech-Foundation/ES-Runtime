@@ -53,6 +53,21 @@ encoding_rs = "0.8.35"
 # (via self_update); named here so the dependency is deliberate rather than
 # inherited. Confined to `default-providers`.
 tempfile = "3.27.0"
+# The embedded SQL engine behind `runtime:db`'s `sqlite:` scheme (DECISIONS.md
+# D56). `turso_core` rather than the `turso` wrapper: the wrapper pulls mimalloc
+# and a full-text index we do not use, and cannot be handed a custom VFS.
+#
+# `fs` is on, and not by choice — the crate's own vacuum path calls an
+# `fs`-gated constructor, so building without it fails upstream rather than
+# trimming anything. It costs the external-VFS module loader, which nothing here
+# calls. What matters is that it does *not* choose the engine's I/O for us:
+# `Database::open` takes the `IO` we hand it, and ours resolves every path
+# through the same jail `runtime:fs` uses. `series` and `percentile` (extra SQL
+# functions, neither in SQLite core) are dropped and can return when asked for.
+#
+# Pinned at a pre-release deliberately (D56): it is the only reliable Rust
+# implementation, and the `sqlite:` scheme keeps the choice swappable.
+turso_core = { version = "0.8.0-pre.3", default-features = false, features = ["fs", "encryption", "json", "uuid", "time"] }
 # WHATWG URL parsing, used by `runtime` for the URL family (DECISIONS.md D17).
 url = "2.5.8"
 # URLPattern, used by `runtime` for the URLPattern global. Same reasoning as

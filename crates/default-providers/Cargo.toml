@@ -34,6 +34,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros", "signal", "process"] }
 tracing.workspace = true
+turso_core.workspace = true
 url.workspace = true
 
 # Safe (no `unsafe` in this crate) syscall wrappers, for sending a chosen signal

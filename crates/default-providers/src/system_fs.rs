@@ -196,7 +196,7 @@ impl SystemFileSystem {
         )
     }
 
-    fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
+    pub(crate) fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
         let raw = reject_empty(p)?;
         let abs = if raw.is_absolute() {
             raw.to_path_buf()

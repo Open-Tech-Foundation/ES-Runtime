@@ -18,6 +18,12 @@ namespace) is unstable and may change between minor releases until the API freez
   embedded engine and the wire protocols alike; batches are bounded by bytes
   rather than row count. Embedder-facing only for now — `runtime:db` is not yet
   exposed.
+- **`SystemEmbeddedDb`** — the `EmbeddedDb` implementation behind `sqlite:`,
+  over `turso_core`. The engine runs against a **jailed VFS**: every file it
+  opens, including the write-ahead log and shared-memory index it opens without
+  being asked, resolves through the same root jail and `--allow-read` /
+  `--allow-write` scopes that back `runtime:fs`. Queries stream through a
+  cursor, and each fetch runs off the event loop.
 
 ## [0.20.0] - 2026-08-08
 
