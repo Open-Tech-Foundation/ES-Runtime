@@ -290,21 +290,9 @@ function splitParams(params) {
 // Rows
 // ---------------------------------------------------------------------------
 
-// The row's own state, on symbols so that no column name can collide with it —
-// a table with a column called `buffer` is not a reason for a row to misbehave.
-const BYTES = Symbol("bytes");
-const VIEW = Symbol("view");
-const AT = Symbol("offsets");
-const OFFSETS = Symbol("offsetTable");
-
-function readColumn(row, index) {
-  const offsets = row[OFFSETS];
-  const base = row[AT] + index * 2;
-  const start = offsets[base];
-  const length = offsets[base + 1];
-  if (length < 0) return null;
-  return row.constructor.decoders[index](row[BYTES], row[VIEW], start, length);
-}
+// The row's reader, on a symbol so that no column name can collide with it — a
+// table with a column called `read` is not a reason for a row to misbehave.
+const READ = Symbol("read");
 
 // The decoders. Each takes the batch buffer and a span, and produces a JS
 // value — so a column nobody reads costs nothing but the two integers its span
@@ -359,23 +347,53 @@ function decodeBytes(bytes, _view, start, length) {
 /// like SQLite needs.
 function defineRowShape(columns, { decoders } = {}) {
   class Row {
+    // Private fields, not properties. A row holds references to the whole
+    // batch's buffer, and anything reachable from the instance is reachable by
+    // a caller who spreads it — `{ ...row }` copies own symbol keys as happily
+    // as own string ones. Private fields are copied by nothing and enumerated
+    // by nothing, so the buffer cannot escape through a row by accident. The
+    // reader has to live in the class body to see them, which is why it is a
+    // method rather than a free function.
+    #bytes;
+    #view;
+    #offsets;
+    #at;
+
     constructor(bytes, view, offsets, at) {
-      this[BYTES] = bytes;
-      this[VIEW] = view;
-      this[OFFSETS] = offsets;
-      this[AT] = at;
+      this.#bytes = bytes;
+      this.#view = view;
+      this.#offsets = offsets;
+      this.#at = at;
+    }
+
+    [READ](index) {
+      const base = this.#at + index * 2;
+      const length = this.#offsets[base + 1];
+      if (length < 0) return null;
+      return Row.decoders[index](this.#bytes, this.#view, this.#offsets[base], length);
     }
 
     // The columns as an array, in order — for a caller that wants positions
     // rather than names, and for one whose columns are not valid identifiers.
     values() {
-      return columns.map((_, i) => readColumn(this, i));
+      return columns.map((_, i) => this[READ](i));
+    }
+
+    /// The row as a plain object, every column decoded.
+    ///
+    /// **This is how a row is materialized**, and `{ ...row }` is not: the
+    /// columns are prototype getters so that a column nobody reads costs
+    /// nothing, and spreading copies own properties only. The cost of laziness
+    /// is that the shorthand for "copy this" does not reach it, so there is an
+    /// explicit spelling instead of a silently empty object.
+    toObject() {
+      const out = {};
+      for (let i = 0; i < columns.length; i++) out[columns[i].name] = this[READ](i);
+      return out;
     }
 
     toJSON() {
-      const out = {};
-      for (let i = 0; i < columns.length; i++) out[columns[i].name] = readColumn(this, i);
-      return out;
+      return this.toObject();
     }
   }
 
@@ -391,7 +409,7 @@ function defineRowShape(columns, { decoders } = {}) {
     seen.add(column.name);
     Object.defineProperty(Row.prototype, column.name, {
       get() {
-        return readColumn(this, index);
+        return this[READ](index);
       },
       enumerable: true,
       configurable: true,
@@ -935,6 +953,327 @@ async function connect(url, options = {}) {
   return factory(url, options);
 }
 
+
+// ---------------------------------------------------------------------------
+// Backend conformance
+// ---------------------------------------------------------------------------
+
+// The table every check builds and drops. Named rather than random so that a
+// run interrupted half-way leaves one identifiable thing behind instead of a
+// scatter of them.
+const CONFORMANCE_TABLE = "esrun_conformance";
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function fresh(open, columns) {
+  const db = await open();
+  await db.execute(`DROP TABLE IF EXISTS ${CONFORMANCE_TABLE}`);
+  await db.execute(`CREATE TABLE ${CONFORMANCE_TABLE} (${columns})`);
+  return db;
+}
+
+// Each check is `[name, async (open, options) => void]` and throws to fail.
+// A list rather than a framework: a driver author runs this from whatever they
+// already use, and importing a test runner into the runtime to check a driver
+// would be the wrong dependency in the wrong direction.
+const CONFORMANCE_CHECKS = [
+  [
+    "columns are reported in order, by name",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER, b TEXT");
+      try {
+        await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1, 'x')`);
+        const rows = await db.query(`SELECT a, b FROM ${CONFORMANCE_TABLE}`);
+        assert(
+          rows.columns.map((c) => c.name).join(",") === "a,b",
+          `columns were ${JSON.stringify(rows.columns.map((c) => c.name))}`,
+        );
+        const row = await rows.first();
+        assert(row.a === 1 && row.b === "x", "values did not match the columns");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a row materializes explicitly, and leaks nothing when spread",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER, b TEXT");
+      try {
+        await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1, 'x')`);
+        const row = await (await db.query(`SELECT a, b FROM ${CONFORMANCE_TABLE}`)).first();
+        assert(JSON.stringify(row) === '{"a":1,"b":"x"}', `serialized as ${JSON.stringify(row)}`);
+        assert(
+          JSON.stringify(row.toObject()) === '{"a":1,"b":"x"}',
+          `toObject gave ${JSON.stringify(row.toObject())}`,
+        );
+        assert(row.values().join(",") === "1,x", "values() did not agree with the getters");
+        // A row is a lazy view over the batch, so spreading it does not reach
+        // the columns — and, more importantly, must not reach the batch either.
+        assert(
+          Object.keys({ ...row }).length === 0,
+          `spreading a row exposed ${JSON.stringify(Object.keys({ ...row }))}`,
+        );
+        assert(
+          Object.getOwnPropertySymbols({ ...row }).length === 0,
+          "spreading a row leaked the batch buffer through a symbol key",
+        );
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "parameters bind by position, and are never interpolated",
+    async (open) => {
+      const db = await fresh(open, "a TEXT");
+      try {
+        // The injection classic: as a parameter it is a value, not syntax.
+        const hostile = `'); DROP TABLE ${CONFORMANCE_TABLE}; --`;
+        await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (${db.dialect.placeholder(1)})`, [
+          hostile,
+        ]);
+        const row = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)).first();
+        assert(row.a === hostile, "the parameter did not round-trip");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a sql`` template renders through the backend's own dialect",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER, b TEXT");
+      try {
+        await db.execute(sql`INSERT INTO ${new Query([CONFORMANCE_TABLE], [])} VALUES (${7}, ${"z"})`);
+        const row = await (await db.query(sql`SELECT a, b FROM ${new Query([CONFORMANCE_TABLE], [])} WHERE a = ${7}`)).first();
+        assert(row !== null && row.b === "z", "the template did not round-trip");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "null round-trips as null, and is not confused with a missing row",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER, b TEXT");
+      try {
+        await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1, NULL)`);
+        const row = await (await db.query(`SELECT a, b FROM ${CONFORMANCE_TABLE}`)).first();
+        assert(row !== null, "a row with a NULL column came back as no row");
+        assert(row.b === null, `a NULL column came back as ${JSON.stringify(row.b)}`);
+        const none = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE} WHERE a = 999`)).first();
+        assert(none === null, "an empty result did not answer null");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "an empty result set iterates zero times and closes cleanly",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      try {
+        let seen = 0;
+        for await (const _row of await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)) seen++;
+        assert(seen === 0, `iterated ${seen} times over an empty result`);
+        const rows = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)).toArray();
+        assert(rows.length === 0, "toArray on an empty result was not empty");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a result set streams, and stopping early leaves the connection usable",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      try {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < 200; i++) {
+            await tx.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (${tx.dialect.placeholder(1)})`, [i]);
+          }
+        });
+        let seen = 0;
+        for await (const _row of await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)) {
+          if (++seen === 3) break;
+        }
+        assert(seen === 3, `stopped after ${seen} rows`);
+        // The abandoned cursor must not have taken the connection with it.
+        const all = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)).toArray();
+        assert(all.length === 200, `saw ${all.length} rows after abandoning a cursor`);
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a transaction commits, and rolls back when its body throws",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      try {
+        await db.transaction(async (tx) => {
+          await tx.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1)`);
+        });
+        try {
+          await db.transaction(async (tx) => {
+            await tx.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (2)`);
+            throw new Error("rollback");
+          });
+          throw new Error("the transaction did not rethrow its body's error");
+        } catch (e) {
+          assert(e.message === "rollback", `a rollback replaced the error with: ${e.message}`);
+        }
+        const rows = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)).toArray();
+        assert(rows.length === 1 && rows[0].a === 1, "the failed transaction was not rolled back");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a nested transaction rolls back without taking the outer one with it",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      try {
+        if (!db.dialect.supports.savepoints) return; // reported as passing: not claimed
+        await db.transaction(async (tx) => {
+          await tx.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1)`);
+          try {
+            await tx.transaction(async (inner) => {
+              await inner.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (2)`);
+              throw new Error("inner");
+            });
+          } catch {
+            /* expected */
+          }
+        });
+        const rows = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)).toArray();
+        assert(
+          rows.length === 1 && rows[0].a === 1,
+          `expected only the outer insert, saw ${JSON.stringify(rows.map((r) => r.a))}`,
+        );
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a failure is a DbError carrying a code",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      try {
+        let caught = null;
+        try {
+          await db.query(`SELECT * FROM ${CONFORMANCE_TABLE}_missing`);
+        } catch (e) {
+          caught = e;
+        }
+        assert(caught !== null, "a query against a missing table did not fail");
+        assert(caught instanceof DbError, `threw ${caught.constructor.name}, not DbError`);
+        assert(typeof caught.code === "string", "the error carried no code");
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a constraint violation maps onto the portable code",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER PRIMARY KEY");
+      try {
+        await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1)`);
+        let code = null;
+        try {
+          await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1)`);
+        } catch (e) {
+          code = e.code;
+        }
+        assert(
+          code === DbErrorCode.UniqueViolation,
+          `a duplicate key reported ${code} rather than ${DbErrorCode.UniqueViolation}`,
+        );
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "a closed connection refuses work rather than hanging",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      await db.close();
+      await db.close(); // idempotent
+      let code = null;
+      try {
+        await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`);
+      } catch (e) {
+        code = e.code;
+      }
+      assert(code === DbErrorCode.Closed, `a closed connection reported ${code}`);
+    },
+  ],
+  [
+    "the query form this backend does not take is refused by name",
+    async (open) => {
+      const db = await open();
+      try {
+        let code = null;
+        try {
+          await db.query(queryAst({ select: ["a"] }));
+        } catch (e) {
+          code = e.code;
+        }
+        assert(
+          code === DbErrorCode.QueryForm,
+          `an unsupported query form reported ${code} rather than ${DbErrorCode.QueryForm}`,
+        );
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+];
+
+/// Runs the conformance suite against a backend.
+///
+///     const report = await runBackendConformance(() => connect("mysql://…"));
+///     if (!report.ok) console.error(report.failures);
+///
+/// `open` is called once per check and must resolve to a fresh connection; the
+/// check closes it. Every check builds and drops its own table, so the suite
+/// needs a database it may write to and leaves nothing behind.
+///
+/// This exists so that a third-party driver can *demonstrate* it behaves like
+/// the built-ins rather than intend to. An ecosystem where an ORM can rely on
+/// cross-backend behaviour needs the drivers to be checkable, and a shared
+/// suite is the only version of that which does not decay.
+async function runBackendConformance(open, { skip = [] } = {}) {
+  const results = [];
+  for (const [name, run] of CONFORMANCE_CHECKS) {
+    if (skip.includes(name)) {
+      results.push({ name, skipped: true });
+      continue;
+    }
+    try {
+      await run(open);
+      results.push({ name, ok: true });
+    } catch (e) {
+      results.push({ name, ok: false, error: e && e.message != null ? e.message : String(e) });
+    }
+  }
+  const failures = results.filter((r) => r.ok === false);
+  return {
+    ok: failures.length === 0,
+    passed: results.filter((r) => r.ok === true).length,
+    skipped: results.filter((r) => r.skipped).length,
+    failures,
+    results,
+  };
+}
+
 export {
   // Application tier.
   connect,
@@ -956,6 +1295,7 @@ export {
   splitParams,
   mapError,
   asDbError,
+  runBackendConformance,
 };
 
 export default { connect, sql, queryAst, DbError, DbErrorCode, registerBackend };

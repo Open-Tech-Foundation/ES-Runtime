@@ -35,6 +35,12 @@ namespace) is unstable and may change between minor releases until the API freez
   form (`:memory:name`), which in SQLite means *sharing* one, is refused rather
   than quietly not sharing.
 
+  `runBackendConformance()` is exported so a third-party driver can demonstrate
+  it behaves like the built-ins rather than intend to — thirteen checks covering
+  column order, parameter binding, null handling, streaming and early exit,
+  transactions and savepoints, the portable error codes, and the refusals. The
+  built-in backend runs it too, against both a file and an in-memory database.
+
 - **`EmbeddedDb` provider trait** — the seam an in-process database engine
   arrives through, and the only database seam below the op boundary (D56).
   Networked backends are built in JS on `NetProvider`, so adding Postgres or

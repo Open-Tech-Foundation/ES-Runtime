@@ -38,7 +38,7 @@ use turso_core::types::Text;
 use turso_core::{
     Clock, Completion, Connection, Database, DatabaseOpts, EncryptionKey, EncryptionOpts, File, IO,
     LimboError, MemoryIO, MonotonicInstant, NonNan, Numeric, OpenFlags, OpenOptions, PlatformIO,
-    SqliteDialect, Statement, StepResult, Value as TursoValue, WallClockInstant,
+    SqliteDialect, Statement, StepResult, TempStore, Value as TursoValue, WallClockInstant,
 };
 
 use crate::path_allowlist::Access;
@@ -273,6 +273,7 @@ impl EmbeddedDb for SystemEmbeddedDb {
                         .map_err(engine_error)?,
                     None => db.connect().map_err(engine_error)?,
                 };
+                confine_temp_storage(&conn);
                 Ok(ConnEntry {
                     conn,
                     _db: db,
@@ -483,11 +484,31 @@ fn open_in_memory(opts: &EmbeddedDbOptions) -> Result<ConnEntry, ProviderError> 
             .map_err(engine_error)?,
         None => db.connect().map_err(engine_error)?,
     };
+    confine_temp_storage(&conn);
     Ok(ConnEntry {
         conn,
         _db: db,
         _io: io,
     })
+}
+
+/// Points the engine's scratch space at memory rather than at the OS temp
+/// directory.
+///
+/// Not a tuning choice — a jail one. Some statements (`DROP TABLE`, a large
+/// sort) ask the engine for a temp file, and it takes one from
+/// `tempfile::tempdir()`: `/tmp/.tmpXXXX/tursodb_temp_file`, which is outside
+/// the root jail by construction. Our VFS refuses it, correctly, and the
+/// statement fails. Redirecting the path into the jail would mean recognising
+/// the engine's own temp naming and leaving scratch files in the user's
+/// project; memory needs neither.
+///
+/// The cost is real and worth stating: work that would have spilled to disk is
+/// now bounded by memory instead. That is the same bound `runtime:fs` already
+/// puts on temp files by refusing to use the OS temp directory (D25), so the
+/// two agree rather than one of them being an exception.
+fn confine_temp_storage(conn: &Arc<Connection>) {
+    conn.set_temp_store(TempStore::Memory);
 }
 
 /// Prepares `sql` on `conn` and binds `params`.
@@ -939,6 +960,35 @@ mod tests {
         // than a step into a freed statement.
         db.close_cursor(cursor.id).await.unwrap();
         assert!(db.fetch(cursor.id, 16).await.is_err());
+    }
+
+    /// The engine asks for a scratch file for some statements, and takes it
+    /// from the OS temp directory — which is outside the root jail by
+    /// construction, so the VFS refuses it and the statement fails. Found by
+    /// the conformance suite, which drops its table between checks.
+    #[tokio::test]
+    async fn a_statement_needing_scratch_space_does_not_reach_for_the_os_temp_dir() {
+        let (root, db) = engine("temp-store");
+        let id = open(&db, "app.db").await;
+        exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
+        exec(&db, id, "INSERT INTO t VALUES (1)").await;
+        // The statement that reaches for scratch space.
+        db.execute(id, "DROP TABLE t".to_string(), DbParams::default())
+            .await
+            .expect("a drop must not need a file outside the jail");
+        exec(&db, id, "CREATE TABLE t (a INTEGER)").await;
+        db.close(id).await.unwrap();
+
+        // Nothing scratch-shaped was left inside the jail either — the scratch
+        // space is memory, not a file somewhere more convenient.
+        let names: Vec<String> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|n| n.starts_with("app.db")),
+            "scratch files were left behind: {names:?}"
+        );
     }
 
     /// The engine picks its storage from the `IO` it is handed and from nothing

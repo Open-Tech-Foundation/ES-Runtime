@@ -252,6 +252,72 @@ fn opening_a_database_is_gated_like_a_file() {
     );
 }
 
+/// The suite a third-party driver runs to show it behaves like the built-ins.
+/// The built-ins run it too — a conformance suite the reference backend does
+/// not pass is a description of nothing.
+#[test]
+fn the_built_in_backend_passes_its_own_conformance_suite() {
+    for (name, url, flags) in [
+        ("conformance-file", "sqlite:./app.db", &[][..]),
+        ("conformance-memory", "sqlite::memory:", &["--deny-all"][..]),
+    ] {
+        let base = dir(name);
+        std::fs::write(
+            base.join("app.mjs"),
+            format!(
+                r#"
+                import {{ connect, runBackendConformance }} from "runtime:db";
+                const report = await runBackendConformance(() => connect("{url}"));
+                for (const f of report.failures) console.log(`FAIL ${{f.name}}: ${{f.error}}`);
+                console.log(`ok=${{report.ok}} passed=${{report.passed}} skipped=${{report.skipped}}`);
+                "#
+            ),
+        )
+        .unwrap();
+        let out = esrun()
+            .current_dir(&base)
+            .args(flags)
+            .arg("app.mjs")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{name} stderr: {}", stderr(&out));
+        assert_eq!(
+            stdout(&out).trim(),
+            "ok=true passed=13 skipped=0",
+            "{name} did not pass its own suite"
+        );
+    }
+}
+
+/// A row is a lazy view over its batch. That buys a query which selects more
+/// columns than it reads, and it costs the spread shorthand — so the explicit
+/// spelling has to work, and spreading must not reach the batch buffer.
+#[test]
+fn a_row_materializes_explicitly_and_leaks_nothing() {
+    let out = run(
+        "row-shape",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite::memory:");
+        await db.execute("CREATE TABLE t (a INTEGER, b TEXT)");
+        await db.execute("INSERT INTO t VALUES (1, 'x')");
+        const row = await (await db.query("SELECT a, b FROM t")).first();
+        console.log(JSON.stringify(row.toObject()));
+        console.log(JSON.stringify(row));
+        console.log(row.values().join(","));
+        const spread = { ...row };
+        console.log(Object.keys(spread).length, Object.getOwnPropertySymbols(spread).length);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "{\"a\":1,\"b\":\"x\"}\n{\"a\":1,\"b\":\"x\"}\n1,x\n0 0"
+    );
+}
+
 /// An in-memory database reaches no filesystem, so it needs no filesystem
 /// grant — it is the one open that works under `--deny-all`. Which is also the
 /// reason its op takes no path: an ungated op that accepted one would be a way
