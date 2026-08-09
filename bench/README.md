@@ -13,6 +13,31 @@ esrun/Node/Deno and JavaScriptCore for Bun). It runs the engine + Web-API
 workloads it supports; `http`/`streams`/`fs`/`glob`/`fetch_upload` and the
 `wasm_*`/`wasi_*` rows fall through to n/a.
 
+## The database benchmark
+
+`bench/db/run.sh` compares **SQLite** across esrun, Node.js, Bun and Deno.
+
+It is separate from `run.sh` because it cannot share a script: esrun's
+`runtime:db` is **async over an op boundary**, while `node:sqlite` and
+`bun:sqlite` are **synchronous and in-process**. So each runtime gets its own
+script (`bench/db/<runtime>.mjs`) against one shared workload definition
+(`bench/db/workload.mjs`) — same schema, same row counts, same checksum, which
+the runner verifies so a runtime cannot look fast by doing less. LLRT has no
+SQLite and is n/a.
+
+```sh
+cargo build --release -p es-runtime-cli
+bench/db/run.sh                          # everything
+REPS=5 bench/db/run.sh                   # more repetitions
+WORKLOADS="insert point" bench/db/run.sh
+RUNTIMES="esrun bun" bench/db/run.sh
+```
+
+Each cell is the **minimum** of `REPS` runs (the suite's convention), with peak
+RSS and the user/sys CPU split of that run. Measurement is
+`resource.getrusage(RUSAGE_CHILDREN)` via `bench/db/measure.py` — the same
+mechanism `run.sh` falls back to when GNU `time` is absent.
+
 ## Running
 
 ```sh
