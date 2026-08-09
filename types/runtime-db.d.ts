@@ -244,6 +244,13 @@ declare module "runtime:db" {
     transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
     close(): Promise<void>;
     [Symbol.asyncDispose](): Promise<void>;
+    /**
+     * Throws `ERR_DB_CLOSED` if this connection is closed.
+     *
+     * For a driver adding methods of its own: every entry point should refuse a
+     * closed connection the same way the built-in ones do.
+     */
+    protected _open(): void;
     protected abstract _query(q: NormalizedQuery): Promise<Rows>;
     protected abstract _execute(q: NormalizedQuery): Promise<ExecuteResult>;
     /**

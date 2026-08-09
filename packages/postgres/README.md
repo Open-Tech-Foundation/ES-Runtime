@@ -57,6 +57,42 @@ const db = await connect("postgres://localhost/app", {
 });
 ```
 
+## Running a script
+
+`query()` and `execute()` use the extended protocol, which prepares the
+statement — and a prepared statement is one statement by definition, so a string
+with two of them is refused:
+
+```js
+await db.execute("SELECT 1; SELECT 2");   // ERR_DB_SYNTAX
+```
+
+That is the right answer for a query and the wrong one for a migration, so
+scripts get their own door:
+
+```js
+import { connect } from "@opentf/esrun-postgres";
+
+const db = await connect(url);
+const results = await db.executeScript(`
+  CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL);
+  CREATE INDEX users_name ON users (name);
+`);
+// [{ command: "CREATE", changes: 0 }, { command: "CREATE", changes: 0 }]
+```
+
+Two things to know. **It takes no parameters** — the simple protocol has nowhere
+to put them, so anything variable would have to be quoted into the text, and
+quoting values into SQL is how injection happens. Use it for schema and fixed
+statements, never for data from outside. And PostgreSQL wraps a multi-statement
+string in a **single implicit transaction**, so a failure part-way rolls back
+everything before it, unless the script manages its own transactions.
+
+Rows are discarded: it reports what each statement did, not what it returned.
+
+`executeScript` is on `PgConnection` rather than the portable `Connection`
+surface — reach it through this package's own `connect()`.
+
 ## One result set at a time
 
 A PostgreSQL connection is a single conversation, so a connection can have one

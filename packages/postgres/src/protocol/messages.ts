@@ -108,6 +108,18 @@ export function saslResponse(final: string): Uint8Array {
   return tagged(F.PasswordMessage, (w) => w.bytes(ENCODER.encode(final)));
 }
 
+/**
+ * The simple query protocol: one string, run as written.
+ *
+ * The extended protocol cannot carry more than one statement — a prepared
+ * statement is one statement by definition — so this is the only way to run a
+ * script. It takes no parameters, which is exactly why it can: nothing has to
+ * be prepared.
+ */
+export function simpleQuery(sql: string): Uint8Array {
+  return tagged(F.Query, (w) => cstring(w, sql));
+}
+
 export function parse(name: string, sql: string): Uint8Array {
   return tagged(F.Parse, (w) => {
     cstring(w, name);

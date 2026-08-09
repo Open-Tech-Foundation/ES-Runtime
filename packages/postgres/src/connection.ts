@@ -613,6 +613,71 @@ export class PgConnection extends BaseConnection {
     }
   }
 
+  /**
+   * Runs a script — several statements in one string — through the simple query
+   * protocol.
+   *
+   * `query()` and `execute()` use the extended protocol, which prepares the
+   * statement, and a prepared statement is one statement by definition: a
+   * string with two of them is refused by the server with "cannot insert
+   * multiple commands into a prepared statement". That is the right answer for
+   * a query and the wrong one for a migration, so scripts get their own door.
+   *
+   * Two consequences worth knowing. **No parameters** — the simple protocol has
+   * nowhere to put them, so anything variable has to be quoted into the text,
+   * and quoting values into SQL is how injection happens. Use it for schema and
+   * fixed statements, not for data from outside. And PostgreSQL wraps a
+   * multi-statement string in a **single implicit transaction**, so a failure
+   * part-way rolls back everything before it — unless the script manages its own
+   * transactions, in which case it gets what it asked for.
+   *
+   * Rows are discarded: this reports what each statement did, not what it
+   * returned.
+   */
+  async executeScript(sql: string): Promise<{ command: string; changes: number }[]> {
+    this._open();
+    const release = await this.#acquire();
+    try {
+      await this.#send(msg.simpleQuery(sql));
+      const results: { command: string; changes: number }[] = [];
+      for (;;) {
+        const { tag, frame } = await this.#next();
+        if (tag === B.DataRow) continue; // a script reports, it does not return
+        const fields = new Fields(frame);
+        switch (tag) {
+          case B.CommandComplete: {
+            const completion = fields.cstring();
+            results.push({
+              command: completion.split(" ")[0] ?? completion,
+              changes: affectedRows(completion),
+            });
+            break;
+          }
+          case B.ErrorResponse: {
+            const error = readServerMessage(fields);
+            await this.#drainToReady();
+            throw serverError(error);
+          }
+          case B.ReadyForQuery:
+            this.status = String.fromCharCode(fields.u8());
+            return results;
+          default:
+            this.#observe(tag, fields);
+            break;
+        }
+      }
+    } finally {
+      release();
+    }
+  }
+
+  /** Messages that can arrive at any time and are not this exchange's answer. */
+  #observe(tag: number, fields: Fields): void {
+    if (tag === B.ParameterStatus) {
+      this.parameters[fields.cstring()] = fields.cstring();
+    }
+  }
+
   #rejectNamed(named: [string, unknown][]): void {
     if (named.length > 0) {
       throw new DbError(
