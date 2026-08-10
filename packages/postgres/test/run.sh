@@ -32,7 +32,7 @@ export PGDATABASE="${pg_dbpart%%\?*}"
 export PGSSLMODE=disable
 
 status=0
-for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool environment cancel listen; do
+for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool environment cancel listen binary; do
   printf '\n== %s ==\n' "$test"
   "$esrun" "$here/$test.mjs" || status=1
 done

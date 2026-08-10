@@ -144,10 +144,19 @@ export function parse(name: string, sql: string): Uint8Array {
   });
 }
 
+/**
+ * `Bind`, with a result format per column.
+ *
+ * `formats` is `0` (text) or `1` (binary) for each column, and an empty list
+ * means text throughout. The formats have to be chosen **here**, before the
+ * server has said what the columns are — which is why the statement's shape is
+ * learned once with `Describe` and kept.
+ */
 export function bind(
   portal: string,
   statement: string,
   params: (Uint8Array | null)[],
+  formats: readonly number[] = [],
 ): Uint8Array {
   return tagged(F.Bind, (w) => {
     cstring(w, portal);
@@ -161,7 +170,23 @@ export function bind(
         w.i32(value.length).bytes(value);
       }
     }
-    w.i16(0); // every result column in text format
+    w.i16(formats.length);
+    for (const format of formats) w.i16(format);
+  });
+}
+
+/**
+ * `Describe` for a prepared statement, which answers with the parameter types
+ * *and* the row shape — before anything is bound.
+ *
+ * That ordering is the whole reason this exists: `Bind` carries the result
+ * formats, so the column types must be known before it is sent, and only a
+ * statement-level describe can say them that early.
+ */
+export function describeStatement(name: string): Uint8Array {
+  return tagged(F.Describe, (w) => {
+    w.u8(0x53); // 'S'
+    cstring(w, name);
   });
 }
 

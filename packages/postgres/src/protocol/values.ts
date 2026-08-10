@@ -177,6 +177,73 @@ export function parseArray(literal: string, element: (text: string) => unknown):
   return literal[at] === "{" ? parseList() : [];
 }
 
+/** PostgreSQL counts time from 2000-01-01, not 1970. */
+const PG_EPOCH_MS = 946_684_800_000;
+
+/**
+ * Decoders for the binary wire format, by OID.
+ *
+ * Only the types where binary is *simpler and cheaper* than text. An `int8`
+ * arrives as eight bytes to read rather than up to nineteen digits to parse; a
+ * `float8` is the double itself rather than a decimal rendering of it to
+ * reconstruct.
+ *
+ * Three families deliberately stay on text. `numeric` is a base-10000 digit
+ * array in binary, more work to decode than the string it would replace and no
+ * more exact. `json`/`jsonb` still have to be parsed as text at the end, and
+ * jsonb's binary adds a version byte for nothing. Arrays have a binary form
+ * too, but it carries element OIDs and dimension headers, and the text parser
+ * already exists and is correct.
+ */
+const binary: Record<number, Decoder> = {
+  [OID.bool]: (bytes, _v, start) => bytes[start] !== 0,
+  [OID.int2]: (_b, view, start) => view.getInt16(start),
+  [OID.int4]: (_b, view, start) => view.getInt32(start),
+  [OID.int8]: (_b, view, start) => {
+    const value = view.getBigInt64(start);
+    return value >= MIN_SAFE && value <= MAX_SAFE ? Number(value) : value;
+  },
+  [OID.float4]: (_b, view, start) => view.getFloat32(start),
+  [OID.float8]: (_b, view, start) => view.getFloat64(start),
+  // Already the bytes. This is the one where text was actively wasteful: hex
+  // doubles the size on the wire and then has to be parsed back.
+  [OID.bytea]: (bytes, _v, start, length) => bytes.slice(start, start + length),
+  [OID.uuid]: (bytes, _v, start) => {
+    let hex = "";
+    for (let i = 0; i < 16; i++) hex += bytes[start + i]!.toString(16).padStart(2, "0");
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  },
+  // Microseconds since the PostgreSQL epoch. Divided in BigInt before the
+  // conversion to a number, so a timestamp far from now loses microseconds
+  // rather than milliseconds.
+  [OID.timestamptz]: (_b, view, start) =>
+    new Date(Number(view.getBigInt64(start) / 1000n) + PG_EPOCH_MS),
+  [OID.timestamp]: (_b, view, start) =>
+    new Date(Number(view.getBigInt64(start) / 1000n) + PG_EPOCH_MS),
+  // A `date` is a calendar day, not an instant, so it stays the day it was —
+  // the same `YYYY-MM-DD` the text format sends. Turning it into a `Date` would
+  // force a time zone the value does not have, which is where off-by-one-day
+  // bugs come from; and it would make the column change type depending on
+  // whether the statement cache happened to be on, which is worse than either
+  // choice.
+  [OID.date]: (_b, view, start) =>
+    new Date(view.getInt32(start) * 86_400_000 + PG_EPOCH_MS).toISOString().slice(0, 10),
+};
+
+/** Whether this column is worth asking for in binary. */
+export function prefersBinary(oid: number): boolean {
+  return binary[oid] !== undefined;
+}
+
+/** The decoder for a column of type `oid` in the given wire format. */
+export function decoderForFormat(oid: number, format: number): Decoder {
+  if (format === 1) {
+    const decode = binary[oid];
+    if (decode !== undefined) return decode;
+  }
+  return decoderFor(oid);
+}
+
 /** The decoder for a column of type `oid`. */
 export function decoderFor(oid: number): Decoder {
   const elementOid = ARRAY_ELEMENT[oid];

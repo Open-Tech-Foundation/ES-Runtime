@@ -27,7 +27,39 @@ import * as msg from "./protocol/messages.js";
 import { AUTH, B } from "./protocol/messages.js";
 import { scram } from "./protocol/scram.js";
 import { portableCode, type ServerMessage } from "./protocol/errors.js";
-import { decoderFor, encodeParam } from "./protocol/values.js";
+import { decoderFor, decoderForFormat, encodeParam, prefersBinary } from "./protocol/values.js";
+
+/** A result set's shape, as `RowDescription` reports it. */
+interface Columns {
+  names: string[];
+  oids: number[];
+}
+
+/** A statement prepared on the server, and what its rows will look like. */
+interface Prepared {
+  name: string;
+  /** `null` when the statement returns no rows. */
+  columns: Columns | null;
+  /** Result format per column; empty means text throughout. */
+  formats: number[];
+}
+
+/** Reads a `RowDescription` body into names and type OIDs. */
+function readRowDescription(fields: Fields): Columns {
+  const count = fields.i16();
+  const names: string[] = [];
+  const oids: number[] = [];
+  for (let i = 0; i < count; i++) {
+    names.push(fields.cstring());
+    fields.i32(); // table oid
+    fields.i16(); // column attribute number
+    oids.push(fields.i32());
+    fields.i16(); // type size
+    fields.i32(); // type modifier
+    fields.i16(); // format code
+  }
+  return { names, oids };
+}
 
 /** How much of a result set to gather before handing it to the caller. */
 const BATCH_BYTES = 64 * 1024;
@@ -462,18 +494,89 @@ export class PgConnection extends BaseConnection {
    * than a sort: the oldest entry is the first key, and a hit re-inserts to
    * move itself to the back.
    */
-  #statements = new Map<string, string>();
+  #statements = new Map<string, Prepared>();
   #nextStatement = 0;
   #cacheLimit = 100;
 
   /**
-   * Sends one extended-protocol round: parse (only when the statement is new),
-   * bind, describe, execute, sync.
+   * Prepares `text`, learning its shape once.
    *
-   * The parse is the part caching removes. The rest happens every time — the
-   * parameters are new, so the bind is new, and the portal with it.
+   * The shape has to be known *before* `Bind`, because `Bind` is what carries
+   * the result formats — and the server only reports columns after it. So a
+   * statement-level `Describe` runs with the `Parse`, one extra round trip the
+   * first time a statement is seen and none of the times after, which is
+   * exactly what the statement cache already made cheap.
    */
-  async #ask(text: string, params: unknown[]): Promise<void> {
+  async #prepare(text: string): Promise<Prepared> {
+    const cached = this.#statements.get(text);
+    if (cached !== undefined) {
+      // Re-inserting moves it to the back, making eviction least-recently-used.
+      this.#statements.delete(text);
+      this.#statements.set(text, cached);
+      return cached;
+    }
+
+    const parts: Uint8Array[] = [];
+    while (this.#statements.size >= this.#cacheLimit) {
+      const oldest = this.#statements.keys().next();
+      if (oldest.done === true) break;
+      parts.push(msg.closeStatement(this.#statements.get(oldest.value)!.name));
+      this.#statements.delete(oldest.value);
+    }
+    const name = `esrun_s${this.#nextStatement++}`;
+    parts.push(msg.parse(name, text), msg.describeStatement(name), msg.sync());
+    await this.#send(msg.concat(parts));
+
+    const columns = await this.#readShape();
+    // Binary where it is simpler and cheaper to read than text, and text where
+    // it is not. An all-text statement sends no format list at all, which is
+    // both shorter and exactly what the server assumes.
+    const formats = columns === null ? [] : columns.oids.map((oid) => (prefersBinary(oid) ? 1 : 0));
+    const entry: Prepared = {
+      name,
+      columns,
+      formats: formats.includes(1) ? formats : [],
+    };
+    this.#statements.set(text, entry);
+    return entry;
+  }
+
+  /** Reads the answer to a statement-level `Describe`, up to `ReadyForQuery`. */
+  async #readShape(): Promise<Columns | null> {
+    let columns: Columns | null = null;
+    let failure: unknown = null;
+    for (;;) {
+      const { tag, frame } = await this.#next();
+      const fields = new Fields(frame);
+      switch (tag) {
+        case B.RowDescription:
+          columns = readRowDescription(fields);
+          break;
+        case B.NoData:
+          columns = null;
+          break;
+        case B.ErrorResponse:
+          failure = serverError(readServerMessage(fields));
+          break;
+        case B.ReadyForQuery:
+          this.status = String.fromCharCode(fields.u8());
+          if (failure !== null) throw failure;
+          return columns;
+        default:
+          this.#observe(tag, fields);
+          break;
+      }
+    }
+  }
+
+  /**
+   * Sends the parameters and starts the statement, returning its shape.
+   *
+   * With caching off there is nothing to amortize a describe against, so this
+   * keeps the older shape-per-execution path: everything in one write, all
+   * columns in text.
+   */
+  async #start(text: string, params: unknown[]): Promise<Columns | null> {
     const bound = params.map((value) => encodeParam(value));
     if (this.#cacheLimit === 0) {
       await this.#send(
@@ -485,32 +588,34 @@ export class PgConnection extends BaseConnection {
           msg.sync(),
         ]),
       );
-      return;
+      return this.#describe();
     }
 
-    const parts: Uint8Array[] = [];
-    let name = this.#statements.get(text);
-    if (name === undefined) {
-      // Evicted before the new one is added, so the cache never exceeds its
-      // bound even briefly. The Close rides along in the same write: a round
-      // trip to free a plan would cost what the cache saves.
-      while (this.#statements.size >= this.#cacheLimit) {
-        const oldest = this.#statements.keys().next();
-        if (oldest.done === true) break;
-        parts.push(msg.closeStatement(this.#statements.get(oldest.value)!));
-        this.#statements.delete(oldest.value);
+    const prepared = await this.#prepare(text);
+    await this.#send(
+      msg.concat([
+        msg.bind("", prepared.name, bound, prepared.formats),
+        msg.execute("", 0),
+        msg.sync(),
+      ]),
+    );
+    await this.#awaitBindComplete();
+    return prepared.columns;
+  }
+
+  /** Reads up to `BindComplete`, leaving the rows for the batch reader. */
+  async #awaitBindComplete(): Promise<void> {
+    for (;;) {
+      const { tag, frame } = await this.#next();
+      if (tag === B.BindComplete) return;
+      const fields = new Fields(frame);
+      if (tag === B.ErrorResponse) {
+        const error = readServerMessage(fields);
+        await this.#drainToReady();
+        throw serverError(error);
       }
-      name = `esrun_s${this.#nextStatement++}`;
-      this.#statements.set(text, name);
-      parts.push(msg.parse(name, text));
-    } else {
-      // Re-inserting moves it to the back, which is what makes the eviction
-      // above least-recently-used rather than first-in.
-      this.#statements.delete(text);
-      this.#statements.set(text, name);
+      this.#observe(tag, fields);
     }
-    parts.push(msg.bind("", name, bound), msg.describePortal(""), msg.execute("", 0), msg.sync());
-    await this.#send(msg.concat(parts));
   }
 
   /**
@@ -531,8 +636,12 @@ export class PgConnection extends BaseConnection {
   /**
    * Reads until the statement's rows begin, returning the column description —
    * or `null` when the statement returns no rows at all.
+   *
+   * Only the uncached path uses this: with a statement cache the shape is
+   * already known, and asking again per execution would be a message and a
+   * parse for an answer that cannot have changed.
    */
-  async #describe(): Promise<{ names: string[]; oids: number[] } | null> {
+  async #describe(): Promise<Columns | null> {
     for (;;) {
       const { tag, frame } = await this.#next();
       const fields = new Fields(frame);
@@ -540,21 +649,8 @@ export class PgConnection extends BaseConnection {
         case B.ParseComplete:
         case B.BindComplete:
           break;
-        case B.RowDescription: {
-          const count = fields.i16();
-          const names: string[] = [];
-          const oids: number[] = [];
-          for (let i = 0; i < count; i++) {
-            names.push(fields.cstring());
-            fields.i32(); // table oid
-            fields.i16(); // column attribute number
-            oids.push(fields.i32());
-            fields.i16(); // type size
-            fields.i32(); // type modifier
-            fields.i16(); // format code
-          }
-          return { names, oids };
-        }
+        case B.RowDescription:
+          return readRowDescription(fields);
         case B.NoData:
           return null;
         case B.ErrorResponse: {
@@ -639,20 +735,15 @@ export class PgConnection extends BaseConnection {
    * starts from the same place the first did. A second failure is the caller's
    * to see.
    */
-  async #askAndDescribe(
-    text: string,
-    params: unknown[],
-  ): Promise<{ names: string[]; oids: number[] } | null> {
+  async #askAndDescribe(text: string, params: unknown[]): Promise<Columns | null> {
     try {
-      await this.#ask(text, params);
-      return await this.#describe();
+      return await this.#start(text, params);
     } catch (e) {
       if (!this.#isStalePlan(e)) throw e;
       // The whole cache goes, not just this entry: whatever invalidated one
       // plan — a migration, a DISCARD — rarely stopped at one.
       this.#statements.clear();
-      await this.#ask(text, params);
-      return await this.#describe();
+      return await this.#start(text, params);
     }
   }
 
@@ -688,11 +779,12 @@ export class PgConnection extends BaseConnection {
         declType: null,
         // The type is fixed for the whole column, so the decoder is chosen once
         // here rather than per value — which is what the shared row format
-        // makes possible.
+        // makes possible, and what lets a column be asked for in binary at all.
         oid: described.oids[i]!,
       }));
+      const formats = this.#statements.get(q.text)?.formats ?? [];
       const shape = defineRowShape(columns, {
-        decoders: described.oids.map((oid) => decoderFor(oid)),
+        decoders: described.oids.map((oid, i) => decoderForFormat(oid, formats[i] ?? 0)),
       });
 
       let first: Batch | null = await this.#batch(columns.length);

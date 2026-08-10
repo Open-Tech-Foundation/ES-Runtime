@@ -386,6 +386,17 @@ An array of a type not in that list comes back as its raw literal
 `int4[]` reports OID 1007 and nothing else — and guessing would corrupt a text
 column that happens to contain braces.
 
+Columns whose type is cheaper to read as bytes than as text — `int2` `int4`
+`int8` `float4` `float8` `bool` `bytea` `uuid` `timestamp` `timestamptz` `date`
+— are requested in the **binary** format. `numeric`, `json`/`jsonb` and arrays
+stay text: binary `numeric` is a base-10000 digit array that is more work to
+decode and no more exact, JSON has to be parsed as text at the end anyway, and
+the array text parser already exists and is correct.
+
+The wire format is how a value travels, not what it is: a column decodes to the
+same JavaScript value either way, and a test asserts exactly that by reading the
+same row through both paths.
+
 Parameters bind by **position** — `$1`, `$2`, or the `sql` tag. PostgreSQL's
 wire protocol has no named parameters, and supporting `:name` would mean parsing
 SQL in the driver, which is the one thing a driver should not do.
