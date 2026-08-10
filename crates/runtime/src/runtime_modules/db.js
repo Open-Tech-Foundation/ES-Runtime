@@ -2164,6 +2164,38 @@ const CONFORMANCE_CHECKS = [
     },
   ],
   [
+    "a connection answers usable, reusable, and withConnection",
+    async (open) => {
+      const db = await open();
+      try {
+        assert(
+          typeof db.usable === "boolean" && typeof db.reusable === "boolean",
+          "usable and reusable must be booleans: a pool asks both before handing a connection on",
+        );
+        assert(db.usable, "a connection just opened reported itself unusable");
+
+        // `withConnection` promises that everything inside runs on one
+        // connection. A client with no single session to lend — a cluster —
+        // refuses by name instead, which is an answer rather than a failure.
+        let held = null;
+        let refused = null;
+        try {
+          held = await db.withConnection(async (connection) => connection.backend);
+        } catch (e) {
+          refused = e?.code ?? null;
+        }
+        assert(
+          held === db.backend || refused === DbErrorCode.Unsupported,
+          `withConnection neither held a connection nor refused by name (got ${held}, ${refused})`,
+        );
+      } finally {
+        await db.close();
+      }
+      assert(!db.usable, "a closed connection still reported itself usable");
+    },
+    "any",
+  ],
+  [
     "a closed connection refuses work rather than hanging",
     async (open) => {
       const db = await open();

@@ -603,7 +603,7 @@ fn the_built_in_backend_passes_its_own_conformance_suite() {
         assert!(out.status.success(), "{name} stderr: {}", stderr(&out));
         assert_eq!(
             stdout(&out).trim(),
-            "ok=true passed=15 skipped=0",
+            "ok=true passed=16 skipped=0",
             "{name} did not pass its own suite"
         );
     }

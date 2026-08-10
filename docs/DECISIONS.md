@@ -672,7 +672,7 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 - **One row-batch format for every backend.** Rows cross as **one byte buffer per batch in Postgres `DataRow` layout** — per column an `int32` length (`-1` for NULL) then raw bytes — with column descriptors emitted once per cursor. Never as `Value::Array` of `Value::Object`: structural marshaling is recursive and per-value, which is the cost this design exists to avoid. Postgres already sends this layout; the embedded engine is made to emit it. So the decode layer — a per-query accessor class generated from the descriptors, prototype getters, `DataView` numerics, `TextDecoder` per column only when the column is read, a fresh buffer per batch — is written **once** and is the hot path for native and third-party backends alike. A MySQL driver transcodes into the layout and inherits it. **No `Proxy` for lazy rows**: it is a known V8 deopt, and a generated class keeps shapes monomorphic. **No buffer reuse**: it silently corrupts any row retained past its batch; an opt-in fast path with documented invalidation may come later, never the default.
 
-- **`runtime:db` is one module with two documented tiers**, not a subpath. `connect`, `sql`, `Connection`, `Statement`, `Rows`, `Transaction`, `DbError` are the application tier; `defineDriver` (*amended 2026-08-10; was `registerBackend`*), `defineRowShape`, `decodeBatch`, `TypeRegistry`, `Dialect`, `mapError`, `BaseConnection`/`BaseRows`, `Pool`, `FrameReader`, `ByteWriter` are the driver tier. **Rejected: `runtime:db/driver`.** It would keep the application surface smaller and let the kit stabilize separately, but no `runtime:` module has subpaths and the namespace precedent costs more than the tidiness buys.
+- **`runtime:db` is one module with two documented tiers**, not a subpath. `connect`, `sql`, `Connection`, `Statement`, `Rows`, `Transaction`, `DbError` are the application tier; `registerBackend`, `defineRowShape`, `decodeBatch`, `TypeRegistry`, `Dialect`, `mapError`, `BaseConnection`/`BaseRows`, `Pool`, `FrameReader`, `ByteWriter` are the driver tier. **Rejected: `runtime:db/driver`.** It would keep the application surface smaller and let the kit stabilize separately, but no `runtime:` module has subpaths and the namespace precedent costs more than the tidiness buys.
 - **A kit primitive ships when a backend proves it.** Everything above is public API from the moment it exports, so nothing exports on speculation: the registry, row shapes, type registry, dialect, error mapping and base classes ship with `sqlite:`, which exercises them; `Pool`, `FrameReader` and `ByteWriter` wait for Postgres, their first consumer. This is SPEC §6's no-stubs rule applied to an API surface instead of a crate.
 - **A conformance suite is part of the kit.** `runBackendConformance(factory)` is exported so a third-party driver can prove it behaves like the built-ins. An ecosystem where ORMs can rely on cross-driver behaviour needs drivers able to demonstrate it, not merely intend it.
 
@@ -766,7 +766,56 @@ finishes on its own and `rows.exhausted` is always true. The portable
 they all do — and a driver that copied Postgres's refusal here would have been
 refusing something safe.
 
-**What the third driver showed: a scheme is a global, and a driver is a value**
+**The tier list above is the plan, not the inventory** (*noted 2026-08-11*).
+Five names in it were never built and are not exported: `Statement` and
+`Transaction` (statements are prepared inside a driver and a transaction is a
+callback, so neither became a type), `TypeRegistry` (each driver owns its own
+type mapping), `BaseRows` (`Rows` needed no base class once the row layout was
+shared) and `FrameReader` (Postgres has one, and it is Postgres's — nothing
+else wanted it). `registerBackend` is gone, replaced by `defineDriver` below.
+What actually ships is: `connect`, `sql`, `queryAst`, `sqlite`, `Query`,
+`Rows`, `DbError`, `DbErrorCode` in the application tier; `defineDriver`,
+`Driver`, `BaseConnection`, `PooledConnection`, `Pool`, `Dialect`,
+`defineRowShape`, `defineRecordShape`, `decodeBatch`, `encodeParams`,
+`encodeParamSets`, `splitParams`, `ByteWriter`, `mapError`, `asDbError` and
+`runBackendConformance` in the driver tier. The list is left as it was written
+because a decision records what was decided; this note records what was true.
+
+**What the backend that does not exist showed: rows are not always bytes**
+(*amended 2026-08-11*). The row layout above is stated as though every backend
+has bytes to hand over, because both backends that existed when it was written
+did. A backend whose values are already JavaScript — a document store answering
+JSON, a graph or vector service over HTTP, an in-process engine holding objects
+— has nothing to decode, and the layout made it *encode* its values so that
+`decodeBatch` could immediately take them apart again.
+
+This was not hypothetical by the time it was found: `@opentf/esrun-redis` was
+doing exactly that. A RESP reply is fully in memory and already JavaScript, and
+the driver packed it into `DataRow` frames — duplicating the kit's four value
+tags into the package to do it — for the sole purpose of satisfying `Rows`. So
+a `RowSource` may now answer `{ records, done }` instead of `{ bytes, rows,
+done }`, paired with `defineRecordShape`; `Rows.fromObjects` is the one-line
+form. The byte layout is unchanged and is still the right answer for every
+backend that was handed bytes, which is every wire protocol.
+
+Batching survived the move deliberately. It buys nothing on the wire for a
+reply already in memory, but it is what keeps `LRANGE 0 -1` followed by a
+`break` from building ten million row objects first — the same reason it
+existed on the byte path, which the first records implementation lost and a
+test now pins.
+
+**Two more asymmetries, found the same way.** `withConnection` existed on a
+pool and not on a connection; `usable` and `reusable` on a connection and not
+on a pool. Each is meaningless on the other *as an implementation* and
+essential on both *as a contract*, because otherwise code holding "a
+connection" must know which kind it holds — an ORM would have to demand a pool
+or write itself twice. Both are now on both, and on the portable `Connection`
+type. A client with no single session to lend refuses `withConnection` by name,
+which is the same shape as a backend refusing `transaction`. The conformance
+suite checks all three, and it checks them on backends with no SQL, where the
+type system is not doing the work.
+
+**What the third driver showed: a scheme is a global, and a driver is a value****What the third driver showed: a scheme is a global, and a driver is a value**
 (*amended 2026-08-10*). `registerBackend(scheme, factory)` and `backendSchemes()`
 are removed. `connect(url, options)` now **requires** `options.driver`, and the
 built-in SQLite backend is `sqlite`, an ordinary driver defined with the same
