@@ -62,29 +62,31 @@ driver tier anyone else would use. Node and Deno leave both to npm.
 
 ## Redis clients, feature by feature
 
-Every cell below was produced by **running** the client, not by reading its
-documentation. Node and Deno have no built-in Redis, so they are measured on
-`ioredis`, which is the comparison rather than a handicap; Bun is measured on its
-own `RedisClient`, because that is what a Bun user gets.
+Every cell was produced by **running** the client, not by reading its
+documentation. Node and Deno have no built-in Redis, so they are shown on both
+npm clients: `redis` (node-redis, the official one, maintained in
+`redis/node-redis`) and `ioredis` (about twice the weekly downloads, and now
+under the same organisation). They differ enough that showing only one would
+misreport Node.
 
-| | esrun + `esrun-redis` | Node + `ioredis` | Bun (built-in) | Deno + `ioredis` |
+| | esrun<br/>`esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
 | --- | :---: | :---: | :---: | :---: |
-| Ships with the runtime | <No /> | <No /> | <Yes /> | <No /> |
-| RESP3 negotiated by default | <Yes /> | <No /> | <Yes /> | <No /> |
+| Ships with the runtime | <No /> | <No /> | <No /> | <Yes /> |
+| RESP3 negotiated by default | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Exact 64-bit integers | <Yes /> | <No /> | <No /> | <No /> |
 | Binary-safe values | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Pub/sub | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Pipeline builder | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
-| `MULTI`/`EXEC` API | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
-| `WATCH` | <Yes /> | <Yes /> | <No /> | <Yes /> |
-| Cluster | <Yes /> | <Yes /> | <No /> | <Yes /> |
-| Sentinel | <Yes /> | <Yes /> | <No /> | <Yes /> |
-| Streams & consumer groups | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
+| Pipeline builder | <Yes /> | <Partial /> | <Yes /> | <Partial /> |
+| `MULTI`/`EXEC` API | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| `WATCH` | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Cluster | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Sentinel | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Streams & consumer groups | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
 | TLS with a private CA | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Auto-reconnect | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
 | Unbounded-block guard | <Yes /> | <No /> | <No /> | <No /> |
 | Portable error codes | <Yes /> | <No /> | <No /> | <No /> |
-| Scoped by a capability flag | <Yes /> | <No /> | <No /> | <Yes /> |
+| Scoped by a capability flag | <Yes /> | Deno only | Deno only | <No /> |
 
 **Exact 64-bit integers** is the one difference that changes an answer rather
 than an ergonomic. `INCRBY k 9007199254740993` returns `9007199254740993n` here
@@ -94,29 +96,36 @@ smaller case of the same thing: Redis returns a *count*, which is what
 `exists("a", "b")` answers here, where Bun's returns a boolean that cannot
 express the multi-key form.
 
-**Bun's <Partial /> cells** are all the same shape: its client has no builder for
-these, but the commands are reachable through `send()`. There is no `pipeline()`
-— commands issued together are pipelined, so `Promise.all` is the idiom — and no
-`multi()`, `watch()`, `Cluster`, or Sentinel option at all.
+**RESP3 is now universal**, which was not true a version ago — ioredis 5
+negotiated RESP2 even when asked for 3, and ioredis 6 negotiates 3 by default.
+Worth stating because it is the row most likely to be out of date in anything
+written earlier, including an earlier draft of this page.
 
-**Auto-reconnect** is <Partial /> for esrun because it is **off by default**,
-which is a deliberate disagreement rather than a gap: turning it on changes what
-a thrown error means, and a pool already replaces dead connections. The others
-reconnect out of the box — verified by killing the connection server-side and
-watching all three come back.
+**The <Partial /> cells.** node-redis and Bun have no pipeline builder; both
+pipeline commands issued together, so `Promise.all` is the idiom rather than a
+missing feature. Bun's stream support is `send()` rather than typed methods, and
+its client has no `multi`, `watch`, cluster or Sentinel at all.
+
+**Auto-reconnect** is <Partial /> for esrun because it is **off by default** —
+a deliberate disagreement rather than a gap: turning it on changes what a thrown
+error means, and a pool already replaces dead connections. The other three
+reconnect out of the box, verified by killing connections server-side.
 
 The last three rows are esrun's own: a blocking command with no timeout is
 refused before it can hold a connection for the life of the process; failures
-carry `runtime:db`'s portable codes so an application can branch on what happened
-without knowing which database said it; and the connection is scoped by
-`--allow-net`, like every other socket. Deno can scope the socket too, but its
-Redis client cannot map an error onto anything portable, because it has no
-portable vocabulary to map onto.
+carry `runtime:db`'s portable codes, so an application can branch on what
+happened without knowing which database said it; and the connection is scoped by
+`--allow-net` like every other socket. Deno can scope the socket too, but
+neither npm client has a portable error vocabulary to map onto.
 
-Where esrun is currently **behind** is decoding: on a 50 000-element `LRANGE` it
-is 1.8× slower than `ioredis` and 5.7× slower than Bun's native client. See
-[Benchmarks](/docs/benchmarks#redis-clients), which also says what the cause is
-and is not.
+### Speed
+
+Full numbers in [Benchmarks](/docs/benchmarks#redis-clients). The short version:
+Bun's native client leads everything by 1.3× on round trips and 3–5× on
+decoding. Among the **JavaScript** clients esrun is the fastest where the round
+trip dominates, in a third of the memory, and ahead of the official node-redis
+on batches and list scans — but **twice as slow on repeated `HGETALL`**, which
+is a map-decoding cost specific to this driver and fixable.
 
 **On the HTTP/2 row.** esrun and Deno detect the version per connection on the
 server they already have, so one `serve()` answers both. Node's h2c is a separate

@@ -14,6 +14,9 @@
 #   WORKLOADS="pipeline list" RUNTIMES="esrun bun" bench/db/redis/run.sh
 #   BUN_REDIS=ioredis bench/db/redis/run.sh    # Bun on the same library as Node
 #
+# Columns: `node`/`deno` are node-redis (official); `node-ioredis`/`deno-ioredis`
+# are ioredis. Both are kept because they differ — see the note by RUNTIMES.
+#
 # Reported per cell: the **minimum** of REPS runs (the repo's convention — a
 # minimum is the contention-free sample), plus peak RSS. Every workload prints a
 # checksum the runner compares across runtimes, so a client cannot look fast by
@@ -27,23 +30,38 @@ esrun_bin="${ESRUN:-$root/target/release/esrun}"
 
 REPS="${REPS:-3}"
 WORKLOADS="${WORKLOADS:-serial_set serial_get pipeline list hash}"
-RUNTIMES="${RUNTIMES:-esrun node bun deno}"
+# `node` and `deno` mean the **official** client (the `redis` package);
+# `node-ioredis` and `deno-ioredis` are the same runtimes on ioredis, which has
+# roughly twice the downloads and negotiates RESP2 where node-redis negotiates
+# RESP3 — a difference large enough that standing one in for the other would
+# misreport Node.
+RUNTIMES="${RUNTIMES:-esrun node node-ioredis bun deno deno-ioredis}"
 
 command -v python3 >/dev/null || { echo "python3 is required for the measurements" >&2; exit 1; }
 
 cmd() {
   case "$1" in
-    esrun) echo "$esrun_bin" ;;
-    node)  echo "node" ;;
-    bun)   echo "bun" ;;
-    deno)  echo "deno run --quiet --allow-all" ;;
+    esrun)             echo "$esrun_bin" ;;
+    node|node-ioredis) echo "node" ;;
+    bun|bun-ioredis)   echo "bun" ;;
+    deno|deno-ioredis) echo "deno run --quiet --allow-all" ;;
+  esac
+}
+
+# The binary a column needs, which is not always its own name.
+binary() {
+  case "$1" in
+    esrun) echo "esrun" ;;
+    node*) echo "node" ;;
+    bun*)  echo "bun" ;;
+    deno*) echo "deno" ;;
   esac
 }
 
 available() {
-  case "$1" in
+  case "$(binary "$1")" in
     esrun) [ -x "$esrun_bin" ] ;;
-    *) command -v "$1" >/dev/null 2>&1 ;;
+    *) command -v "$(binary "$1")" >/dev/null 2>&1 ;;
   esac
 }
 
@@ -85,7 +103,7 @@ for rt in $RUNTIMES; do
       WALL[$rt/$workload]="$(printf '%s' "$best_json" | field wall_ms)"
       RSS[$rt/$workload]="$(printf '%s' "$best_json" | field rss_mb)"
       OUT[$rt/$workload]="$(printf '%s' "$best_json" | field out)"
-      printf '%-6s %-11s %9s ms  %6s MB  %s\n' \
+      printf '%-13s %-11s %9s ms  %6s MB  %s\n' \
         "$rt" "$workload" "${WALL[$rt/$workload]}" "${RSS[$rt/$workload]}" "${OUT[$rt/$workload]}"
     else
       WALL[$rt/$workload]="n/a"
@@ -95,19 +113,19 @@ done
 
 echo
 echo "== wall ms (min of $REPS) =="
-printf '%-12s' "workload"; for rt in $RUNTIMES; do printf '%12s' "$rt"; done; echo
+printf '%-12s' "workload"; for rt in $RUNTIMES; do printf '%14s' "$rt"; done; echo
 for workload in $WORKLOADS; do
   printf '%-12s' "$workload"
-  for rt in $RUNTIMES; do printf '%12s' "${WALL[$rt/$workload]:-n/a}"; done
+  for rt in $RUNTIMES; do printf '%14s' "${WALL[$rt/$workload]:-n/a}"; done
   echo
 done
 
 echo
 echo "== peak RSS MB =="
-printf '%-12s' "workload"; for rt in $RUNTIMES; do printf '%12s' "$rt"; done; echo
+printf '%-12s' "workload"; for rt in $RUNTIMES; do printf '%14s' "$rt"; done; echo
 for workload in $WORKLOADS; do
   printf '%-12s' "$workload"
-  for rt in $RUNTIMES; do printf '%12s' "${RSS[$rt/$workload]:-n/a}"; done
+  for rt in $RUNTIMES; do printf '%14s' "${RSS[$rt/$workload]:-n/a}"; done
   echo
 done
 

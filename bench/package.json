@@ -13,6 +13,7 @@
     "msgpackr": "^1.11.2",
     "ndjson": "^2.0.0",
     "postgres": "^3.4.9",
-    "ioredis": "^5.9.1"
+    "ioredis": "^6.0.0",
+    "redis": "^6.2.0"
   }
 }

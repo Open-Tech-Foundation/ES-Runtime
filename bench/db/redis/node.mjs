@@ -1,18 +1,20 @@
-// Node.js / Deno + ioredis.
+// Node.js + node-redis (the `redis` package).
 //
-// ioredis rather than a runtime built-in, because neither Node nor Deno has
-// one — which is the comparison, not a handicap. Each workload uses the idiom
-// an ioredis user would reach for: `.pipeline()` for the batch, plain awaits
-// for the serial shapes.
-import Redis from "ioredis";
+// The official client, maintained by Redis in `redis/node-redis`, and the
+// default here for that reason. `ioredis` gets its own column rather than
+// standing in for Node: it has roughly twice the downloads but negotiates
+// RESP2 where this negotiates RESP3, and the two do not perform alike.
+//
+// node-redis has no pipeline builder — commands issued together in one tick are
+// pipelined automatically — so `Promise.all` is the idiom a node-redis user
+// would reach for, and the fair thing to measure.
+import { createClient } from "redis";
 import * as w from "./workload.mjs";
 
 const workload = process.argv[2];
 const url = process.env.REDIS_BENCH_URL ?? "redis://127.0.0.1:6379";
-// ioredis pipelines automatically inside one tick, which would make the
-// "serial" workloads measure something other than round trips. Off, so serial
-// means serial for everybody.
-const r = new Redis(url, { enableAutoPipelining: false, maxRetriesPerRequest: null });
+const r = createClient({ url });
+await r.connect();
 
 if (workload === "serial_set") {
   for (let i = 0; i < w.SERIAL; i++) await r.set(w.keyOf(i), w.VALUE);
@@ -22,19 +24,18 @@ if (workload === "serial_set") {
   for (let i = 0; i < w.SERIAL; i++) n += (await r.get(w.keyOf(i))).length;
   console.log(String(n));
 } else if (workload === "pipeline") {
-  const p = r.pipeline();
-  for (let i = 0; i < w.PIPELINE; i++) p.set(w.keyOf(i), w.VALUE);
-  const results = await p.exec();
-  console.log(String(results.length));
+  const pending = [];
+  for (let i = 0; i < w.PIPELINE; i++) pending.push(r.set(w.keyOf(i), w.VALUE));
+  console.log(String((await Promise.all(pending)).length));
 } else if (workload === "list") {
-  const items = await r.lrange(w.LIST_KEY, 0, -1);
+  const items = await r.lRange(w.LIST_KEY, 0, -1);
   let n = 0;
   for (const item of items) n += item.length;
   console.log(String(n));
 } else if (workload === "hash") {
   let n = 0;
   for (let i = 0; i < w.HASH_REPEATS; i++) {
-    const all = await r.hgetall(w.HASH_KEY);
+    const all = await r.hGetAll(w.HASH_KEY);
     for (const value of Object.values(all)) n += value.length;
   }
   console.log(String(n));

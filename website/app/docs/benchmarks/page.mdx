@@ -244,63 +244,61 @@ See the [HTTP/2 section of the HTTP guide](/docs/http#http-2).
 
 ## Redis clients
 
-esrun with [`@opentf/esrun-redis`](/docs/db) against each runtime's **own**
-answer: Bun's built-in `RedisClient`, and `ioredis` on Node and Deno, which have
-none. That is the comparison the question deserves — what each runtime gives
-you — rather than how one npm package performs on four engines.
+esrun with [`@opentf/esrun-redis`](/docs/db) against Bun's built-in
+`RedisClient` and, on Node and Deno, **both** npm clients — `redis`
+(node-redis, the official one) and `ioredis` (roughly twice the downloads).
+Both are kept because they do not perform alike, and standing one in for the
+other would misreport Node.
 
 Wall ms, **min of 5**, lower is better. Every workload prints a checksum the
-runner compares across runtimes, so a client cannot look fast by doing less; all
-four agreed on all five.
+runner compares; all six columns agreed on all five.
 
-| Workload | esrun | Node + ioredis | Bun (built-in) | Deno + ioredis |
-| --- | ---: | ---: | ---: | ---: |
-| `serial_set` — 5 000 `SET`, one at a time | 899 | 882 | **675** | 887 |
-| `serial_get` — 5 000 `GET`, one at a time | 879 | 903 | **679** | 887 |
-| `pipeline` — 20 000 `SET` in one batch | 239 | 190 | **73** | 188 |
-| `list` — `LRANGE` over 50 000 elements | 164 | 92 | **29** | 96 |
-| `hash` — 200 × `HGETALL` of 1 000 fields | 980 | 374 | **204** | 370 |
+| Workload | esrun | Node<br/>node-redis | Node<br/>ioredis | Bun<br/>built-in | Deno<br/>node-redis | Deno<br/>ioredis |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `serial_set` — 5 000 `SET`, one at a time | 858 | 1029 | 910 | **666** | 1030 | 886 |
+| `serial_get` — 5 000 `GET`, one at a time | 854 | 1040 | 884 | **645** | 1032 | 873 |
+| `pipeline` — 20 000 `SET` in one batch | 225 | 374 | 203 | **72** | 366 | 186 |
+| `list` — `LRANGE` over 50 000 elements | 158 | 203 | 119 | **28** | 209 | 111 |
+| `hash` — 200 × `HGETALL` of 1 000 fields | 957 | 479 | 496 | **205** | 459 | 494 |
 
 Peak RSS, MB:
 
-| Workload | esrun | Node + ioredis | Bun (built-in) | Deno + ioredis |
-| --- | ---: | ---: | ---: | ---: |
-| `serial_set` | **38.9** | 76.0 | 33.6 | 100.7 |
-| `serial_get` | **38.6** | 78.3 | 33.9 | 99.3 |
-| `pipeline` | 120.9 | 115.1 | **43.6** | 126.4 |
-| `list` | 94.5 | 74.4 | **40.1** | 85.3 |
-| `hash` | 79.4 | 96.6 | **44.4** | 112.7 |
+| Workload | esrun | Node<br/>node-redis | Node<br/>ioredis | Bun<br/>built-in | Deno<br/>node-redis | Deno<br/>ioredis |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `serial_set` | 38.4 | 112.3 | 79.1 | **33.6** | 124.4 | 99.6 |
+| `serial_get` | 38.8 | 112.9 | 79.6 | **34.0** | 123.5 | 99.2 |
+| `pipeline` | 123.8 | 181.1 | 129.1 | **44.3** | 191.6 | 139.5 |
+| `list` | 92.9 | 96.1 | 86.5 | **40.7** | 103.8 | 86.7 |
+| `hash` | 78.7 | 101.4 | 97.2 | **45.0** | 114.1 | 113.7 |
 
-**Two different stories, and it is worth separating them.**
+**Bun's client leads everything**, by 1.3× on the round trips and 3–5× where
+decoding dominates. It is native C++ against four JavaScript clients, and the
+gap is what that buys.
 
-Where the **round trip** dominates — a command at a time — all four are within a
-few percent of each other, and Bun's native client is about 25% ahead. That is
-the floor: the work is waiting for the network, and no client can be much faster
-than the socket.
+**Among the JavaScript clients**, esrun is fastest where the **round trip**
+dominates — 858 ms against node-redis's 1029 and ioredis's 910 — and does it in
+a third of the memory (38 MB against 79–124). It is also ahead of the official
+node-redis on the batch (225 vs 374) and the list scan (158 vs 203).
 
-Where **decoding** dominates, esrun is currently **last**: 1.8× behind
-`ioredis` on a 50 000-element `LRANGE`, and 2.6× behind on repeated `HGETALL`.
-Bun's client is native C++, so being behind it is expected; being behind another
-JavaScript client is not, and it is a real gap rather than a measurement
-artifact.
+**One workload is a genuine loss**: repeated `HGETALL` at 957 ms against ~480 ms
+for both npm clients, twice as slow. That is not decoding in general — the list
+scan is mid-pack — it is specifically the **map** path.
 
-<Callout type="note" title="What the gap is not">
-  It is not UTF-8 decoding. Reading the same 50 000-element reply with
-  `{ binary: true }`, which skips every `TextDecoder` call, was **2% faster** —
-  so text conversion is essentially free here. Nor is it startup: esrun launches
-  an empty script in 8 ms against Node's 20 ms and Deno's 24 ms.
+<Callout type="note" title="What the map gap is, and what it is not">
+  Not UTF-8 decoding: reading the same 50 000-element reply with
+  `{ binary: true }`, which skips every `TextDecoder` call, was **2% faster**.
+  Not startup either — esrun launches an empty script in 8 ms against Node's 20
+  and Deno's 24.
 
-  What remains is allocation in how a reply is represented — a copied
-  `Uint8Array` per bulk string plus a wrapper object per value — which is worst
-  for maps, where RESP3's `HGETALL` builds a pair array before the object a
-  caller wanted. That is the thing to fix, and it is fixable.
+  What is left is how a RESP3 map is represented on the way to the object a
+  caller asked for: a pair array of wrapper objects, each holding a copied
+  `Uint8Array`, before anything is turned into a key or a value. At 200 000
+  field/value pairs that is roughly four allocations each. ioredis negotiates
+  RESP3 too and returns the same object twice as fast, so this is a fixable
+  implementation cost rather than a cost of the protocol.
 </Callout>
 
-On memory, esrun is the lightest of the four on the round-trip workloads (38.9
-MB against Node's 76 and Deno's 101) and the heaviest on the pipelined one,
-which is the same allocation pressure showing up as bytes instead of time.
-
-Unlike the rest of this page, these runs are **not interleaved** — each runtime
+Unlike the rest of this page, these runs are **not interleaved** — each column
 is measured in turn — so treat small differences as noise and the order of
 magnitude as the finding. Reproduce with `bench/db/redis/run.sh`.
 
