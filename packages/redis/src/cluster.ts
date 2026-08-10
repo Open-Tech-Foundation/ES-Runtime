@@ -23,6 +23,7 @@ import {
   type DbParams,
   type ExecuteResult,
   type Queryable,
+  type Row,
   type Rows,
 } from "runtime:db";
 
@@ -268,7 +269,11 @@ export class RedisCluster extends RedisCommands {
   readonly backend = "redis-cluster";
 
   /** A command read as rows, on whichever node owns its key. */
-  query(q: Queryable | readonly CommandArg[], params?: DbParams, options?: CallOptions): Promise<Rows> {
+  query(
+    q: Queryable | readonly CommandArg[],
+    params?: DbParams,
+    options?: CallOptions,
+  ): Promise<Rows<Row<unknown>>> {
     const args = commandOf(q);
     return this.#follow(args, (pool) => pool.query(queryAst(args), params, options));
   }
