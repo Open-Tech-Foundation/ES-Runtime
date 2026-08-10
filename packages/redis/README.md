@@ -9,14 +9,16 @@ the runtime for it.
 npm install @opentf/esrun-redis
 ```
 
-## Two surfaces, one connection
+## Two vocabularies, one connection
 
-Most code wants the **client**, which is Redis with its own vocabulary:
+`connect(url, { driver: redis })` opens a connection. What comes back speaks
+Redis, which is what most code wants:
 
 ```js
-import { Redis } from "@opentf/esrun-redis";
+import { connect } from "runtime:db";
+import redis from "@opentf/esrun-redis";      // the package's export *is* the driver
 
-const r = await Redis.connect("redis://localhost");
+const r = await connect("redis://localhost", { driver: redis });
 
 await r.set("session:42", "ada", { ex: 3600 });
 await r.get("session:42");                    // "ada"
@@ -28,19 +30,22 @@ await r.zrange("scores", 0, -1, { withScores: true });
 await r.close();
 ```
 
-The **backend** is the same connection reached through `runtime:db`, for code
-that is written against the portable surface rather than against Redis:
+It is also a `runtime:db` backend, and **the same object**: code written against
+the portable surface rather than against Redis uses `query` and `execute` on the
+connection it already has.
 
 ```js
-import "@opentf/esrun-redis";
-import { connect, queryAst } from "runtime:db";
+import { queryAst } from "runtime:db";
 
-const db = await connect("redis://localhost");
-await db.execute(queryAst(["SET", "k", "v"]));
+await r.execute(queryAst(["SET", "k", "v"]));
 
-const rows = await db.query(queryAst(["LRANGE", "log", 0, -1]));
+const rows = await r.query(queryAst(["LRANGE", "log", 0, -1]));
 for await (const row of rows) console.log(row.value);
 ```
+
+There is no second object and no second way to open one. A connection is not
+either a client or a backend; it is both, and the vocabulary is a property of
+the call rather than of the thing you opened.
 
 A command is an array, not a string: `queryAst(["SET", key, value])`. Nothing is
 parsed and nothing is quoted, so there is no injection to prevent — the
@@ -100,7 +105,7 @@ a URL-redacting logger only has to know about one.
 > that looks like a secret, so a URL with a password in it arrives as
 > `"[redacted]"`. Pass it through `unmask` from `runtime:process` first.
 
-Everything is also an option: `Redis.connect(url, { password, db, tlsCa, … })`,
+Everything is also an option: `connect(url, { driver: redis, password, db, … })`,
 and explicit options beat the URL.
 
 ## TLS
@@ -111,7 +116,7 @@ simpler than PostgreSQL's. An internal server with a certificate from a private
 authority needs that authority, because the public roots have never heard of it:
 
 ```js
-const r = await Redis.connect("rediss://redis.internal", { tlsCa: await readFile("ca.crt") });
+const r = await connect("rediss://redis.internal", { driver: redis, tlsCa: await readFile("ca.crt") });
 ```
 
 ## RESP3, and what it buys
@@ -198,13 +203,11 @@ sees the same lost connection rather than a different symptom of it.
 ## Pub/sub
 
 ```js
-import { Redis, createSubscriber } from "@opentf/esrun-redis";
-
-const sub = await createSubscriber("redis://localhost");
+const sub = await connect("redis://localhost", { driver: redis });
 await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
 await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
 
-const pub = await Redis.connect("redis://localhost");
+const pub = await connect("redis://localhost", { driver: redis });
 await pub.publish("news", "hello");        // → how many subscribers received it
 ```
 
@@ -216,7 +219,8 @@ subscribed connection accepts nothing but the subscribe family; over RESP3 it is
 this driver's, because the read loop owns the reader and there is nobody to hand
 an ordinary reply to. It is also how you would deploy it anyway: a connection
 that must notice a message promptly should not be queued behind a report query.
-`createSubscriber()` is `createClient()` under a name that says which one it is.
+A subscriber is an ordinary connection; what makes it one is that you subscribed
+on it.
 
 Subscribing is **confirmed** before it resolves, so publishing immediately after
 cannot race it and a subscribe the server refuses fails at the call rather than
@@ -360,11 +364,11 @@ callers fail on `acquireTimeout` pointing at pool exhaustion rather than at the
 cause. So it is refused unless the connection was opened to be tied up:
 
 ```js
-const worker = await Redis.connect(url, { blocking: true });
+const worker = await connect(url, { driver: redis, blocking: true });
 await worker.call(["BLPOP", "jobs", "0"]);           // allowed here
 ```
 
-`createPool` **strips** that option. A pool's premise is that its connections
+A pool **strips** that option. A pool's premise is that its connections
 come back; blocking indefinitely needs a connection of its own, by construction.
 
 ### Consuming a queue
@@ -372,7 +376,7 @@ come back; blocking indefinitely needs a connection of its own, by construction.
 The loop blocking pops exist for, written once:
 
 ```js
-const worker = await Redis.connect(url);
+const worker = await connect(url, { driver: redis });
 for await (const job of worker.consume("jobs", { timeout: 5, signal })) {
   await handle(job.value);
 }
@@ -394,7 +398,8 @@ three, including that a stream legitimately named `BLOCK` is not the option.
 Off by default. `{ reconnect: true }` turns it on, or an object tunes it:
 
 ```js
-const r = await Redis.connect(url, {
+const r = await connect(url, {
+  driver: redis,
   reconnect: { attempts: 10, delay: 100, maxDelay: 5000 },
 });
 ```
@@ -402,7 +407,7 @@ const r = await Redis.connect(url, {
 Off by default because turning it on changes what a thrown error *means* — with
 it, a failure that reached your code is one the driver already gave up on — and
 because a **pool does not need it**: a pool replaces a dead connection with a
-new one, which is reconnection with none of the state questions. `createPool`
+new one, which is reconnection with none of the state questions. A pool
 still accepts the option for the connections it opens, but the pool's own
 recovery does not depend on it.
 
@@ -469,19 +474,21 @@ Anything without a helper is still one call away — `r.call(["OBJECT", "ENCODIN
 ## Cluster
 
 ```js
-import { createCluster } from "@opentf/esrun-redis";
+import { connect } from "runtime:db";
+import { redisCluster } from "@opentf/esrun-redis";
 
-const cluster = await createCluster([
-  "redis://10.0.0.1:7001",
-  "redis://10.0.0.2:7001",
-]);
+const cluster = await connect("redis://10.0.0.1:7001", {
+  driver: redisCluster,
+  seeds: ["redis://10.0.0.2:7001"],
+});
 
 await cluster.set("user:1", "ada");
 await cluster.get("user:1");
 ```
 
-One seed is enough — the topology is read from the cluster itself with
-`CLUSTER SLOTS` — but naming several means the client can still start when one
+The URL is the first seed and `seeds` names the rest. One is enough — the
+topology is read from the cluster itself with `CLUSTER SLOTS` — but naming
+several means the client can still start when one
 of them is down, which is the situation a cluster exists for. A pool is opened
 per node, on first use.
 
@@ -535,10 +542,12 @@ for sharded channels, or a connection to a specific node.
 ## Sentinel
 
 ```js
-import { createSentinelClient } from "@opentf/esrun-redis";
+import { connect } from "runtime:db";
+import { redisSentinel } from "@opentf/esrun-redis";
 
-const r = await createSentinelClient({
-  sentinels: ["redis://10.0.0.1:26379", "redis://10.0.0.2:26379"],
+const r = await connect("redis://10.0.0.1:26379", {
+  driver: redisSentinel,
+  sentinels: ["redis://10.0.0.2:26379"],       // the URL is the first one
   masterName: "mymaster",
   reconnect: true,
 });
@@ -566,7 +575,7 @@ that follows a failover and one that talks to a replica until somebody notices.
 With `reconnect: true` the transport-loss case is covered too, and the two
 together mean a failover needs nothing from the caller.
 
-`createSentinelPool` is the shape that survives one best, and not by accident: a
+`pool: true` is the shape that survives one best, and not by accident: a
 pool already discards connections that fail and every replacement resolves
 again, so it converges on the new master by doing what it does anyway.
 
@@ -578,7 +587,7 @@ used perfectly well.
 ## Command timeouts
 
 ```js
-const r = await Redis.connect(url, { commandTimeout: 5000, reconnect: true });
+const r = await connect(url, { driver: redis, commandTimeout: 5000, reconnect: true });
 ```
 
 **A timeout destroys the connection**, and that is not a shortcut. Redis has no
@@ -599,9 +608,7 @@ is the consequence, and the deadline is the cause.
 ## Pooling
 
 ```js
-import { createPool } from "@opentf/esrun-redis";
-
-const pool = createPool("redis://localhost", { max: 10 });
+const pool = await connect("redis://localhost", { driver: redis, pool: { max: 10 } });
 await pool.set("k", "v");                    // the same commands, borrowed per call
 await pool.withConnection((c) => …);         // for anything stateful across commands
 ```

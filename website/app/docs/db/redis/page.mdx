@@ -13,9 +13,10 @@ export const Partial = () => <StatusIcon status="partial" className="size-4 shri
 # Redis
 
 [`@opentf/esrun-redis`](https://github.com/Open-Tech-Foundation/ES-Runtime/tree/main/packages/redis)
-is a Redis client **and** a [`runtime:db`](/api/db) backend, written entirely in
-JavaScript over [`runtime:net`](/docs/guides/networking). There is no native code
-in the package, and none was added to the runtime for it.
+is a Redis client **and** a [`runtime:db`](/api/db) backend — the same
+connection, answering both — written entirely in JavaScript over
+[`runtime:net`](/docs/guides/networking). There is no native code in the
+package, and none was added to the runtime for it.
 
 ```sh
 npm install @opentf/esrun-redis
@@ -27,14 +28,16 @@ npm install @opentf/esrun-redis
   server and nothing else. See [Securing Runtime](/docs/guides/securing-runtime).
 </Callout>
 
-## Two surfaces
+## Two vocabularies, one object
 
-Most code wants the **client**, which is Redis with its own vocabulary:
+`connect(url, { driver: redis })` opens a connection. What comes back speaks
+Redis, which is what most code wants:
 
 ```js
-import { Redis } from "@opentf/esrun-redis";
+import { connect } from "runtime:db";
+import redis from "@opentf/esrun-redis";
 
-const r = await Redis.connect("redis://localhost");
+const r = await connect("redis://localhost", { driver: redis });
 
 await r.set("session:42", "ada", { ex: 3600 });
 await r.get("session:42");                     // "ada"
@@ -46,20 +49,23 @@ await r.zrange("scores", 0, -1, { withScores: true });
 await r.close();
 ```
 
-The **backend** is the same connection reached through `runtime:db`, for code
-written against the portable surface rather than against Redis:
+It is also a `runtime:db` backend, and **the same object**: code written against
+the portable surface rather than against Redis uses `query` and `execute` on the
+connection it already has.
 
 ```js
-import "@opentf/esrun-redis";
-import { connect, queryAst } from "runtime:db";
+import { queryAst } from "runtime:db";
 
-const db = await connect("redis://localhost");
-await db.execute(queryAst(["SET", "k", "v"]));
+await r.execute(queryAst(["SET", "k", "v"]));
 
-for await (const row of await db.query(queryAst(["LRANGE", "log", 0, -1]))) {
+for await (const row of await r.query(queryAst(["LRANGE", "log", 0, -1]))) {
   console.log(row.value);
 }
 ```
+
+There is no second object and no second way to open one: a connection is not
+either a client or a backend, it is both, and which vocabulary you use is a
+property of the call you make rather than of the thing you opened.
 
 A command is an array, not a string. Nothing is parsed and nothing is quoted, so
 there is no injection to prevent — the arguments were never text that could
@@ -109,7 +115,7 @@ TLS from a private authority needs that authority, because the public roots have
 never heard of it:
 
 ```js
-const r = await Redis.connect("rediss://redis.internal", { tlsCa: await readFile("ca.crt") });
+const r = await connect("rediss://redis.internal", { driver: redis, tlsCa: await readFile("ca.crt") });
 ```
 
 ## RESP3, and what it buys
@@ -203,13 +209,11 @@ needs `withConnection()`.
 ## Pub/sub
 
 ```js
-import { Redis, createSubscriber } from "@opentf/esrun-redis";
-
-const sub = await createSubscriber("redis://localhost");
+const sub = await connect("redis://localhost", { driver: redis });
 await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
 await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
 
-const pub = await Redis.connect("redis://localhost");
+const pub = await connect("redis://localhost", { driver: redis });
 await pub.publish("news", "hello");
 ```
 
@@ -247,11 +251,20 @@ makes an abandoned loop or an aborted signal stop it.
 ## Cluster
 
 ```js
-import { createCluster } from "@opentf/esrun-redis";
+import { connect } from "runtime:db";
+import { redisCluster } from "@opentf/esrun-redis";
 
-const cluster = await createCluster(["redis://10.0.0.1:7001", "redis://10.0.0.2:7001"]);
+const cluster = await connect("redis://10.0.0.1:7001", {
+  driver: redisCluster,
+  seeds: ["redis://10.0.0.2:7001"],
+});
 await cluster.set("user:1", "ada");
 ```
+
+A different driver rather than a flag, because it is a different client: it
+holds a pool per node and routes by slot. One seed is enough — the topology is
+read from the cluster itself — but naming several means it can still start when
+one of them is down, which is the situation a cluster exists for.
 
 **Routing is an optimization; correctness comes from following redirects.** Keys
 are hashed to one of the 16384 slots and sent straight to the owning node, but a
@@ -276,14 +289,20 @@ may be behind and nothing here knows which reads could tolerate that.
 ## Sentinel
 
 ```js
-import { createSentinelClient } from "@opentf/esrun-redis";
+import { connect } from "runtime:db";
+import { redisSentinel } from "@opentf/esrun-redis";
 
-const r = await createSentinelClient({
-  sentinels: ["redis://10.0.0.1:26379", "redis://10.0.0.2:26379"],
+const r = await connect("redis://10.0.0.1:26379", {
+  driver: redisSentinel,
+  sentinels: ["redis://10.0.0.2:26379"],
   masterName: "mymaster",
   reconnect: true,
 });
 ```
+
+The URL is the first sentinel to ask and `sentinels` names the rest. What comes
+back is an ordinary connection pointed at the master, so nothing downstream has
+to know it was found this way.
 
 Each sentinel is tried in turn, and the one that answered moves to the front. The
 address is **verified** with `ROLE` before use: a sentinel mid-failover will hand
@@ -295,18 +314,21 @@ writes silently.
   writes with `READONLY`. That makes a failover invisible to every ordinary
   recovery path: the socket is fine and nothing is lost. This treats a `READONLY`
   reply on a Sentinel-backed connection as *the master moved*, re-resolves and
-  retries. `createSentinelPool` survives one by doing what a pool does anyway.
+  retries. `pool: true` survives one by doing what a pool does anyway: every
+  replacement connection resolves again.
 </Callout>
 
 ## Pooling
 
 ```js
-import { createPool } from "@opentf/esrun-redis";
-
-const pool = createPool("redis://localhost", { max: 10 });
+const pool = await connect("redis://localhost", { driver: redis, pool: { max: 10 } });
 await pool.set("k", "v");
 await pool.withConnection((c) => …);   // for anything stateful across commands
 ```
+
+The same driver and the same call — pooling is an option rather than a different
+object reached a different way, and the pool answers everything a single
+connection does.
 
 A connection returns to the pool only if the driver vouches for it: alive, on the
 database it was opened for, and not inside an open `MULTI`. A connection left on
@@ -335,7 +357,7 @@ reached the server, so running it again cannot repeat it.
 ## Timeouts
 
 ```js
-const r = await Redis.connect(url, { commandTimeout: 5000, reconnect: true });
+const r = await connect(url, { driver: redis, commandTimeout: 5000, reconnect: true });
 ```
 
 **A timeout destroys the connection.** Redis cannot cancel a command in flight:

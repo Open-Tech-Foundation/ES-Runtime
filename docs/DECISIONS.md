@@ -672,7 +672,7 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 - **One row-batch format for every backend.** Rows cross as **one byte buffer per batch in Postgres `DataRow` layout** — per column an `int32` length (`-1` for NULL) then raw bytes — with column descriptors emitted once per cursor. Never as `Value::Array` of `Value::Object`: structural marshaling is recursive and per-value, which is the cost this design exists to avoid. Postgres already sends this layout; the embedded engine is made to emit it. So the decode layer — a per-query accessor class generated from the descriptors, prototype getters, `DataView` numerics, `TextDecoder` per column only when the column is read, a fresh buffer per batch — is written **once** and is the hot path for native and third-party backends alike. A MySQL driver transcodes into the layout and inherits it. **No `Proxy` for lazy rows**: it is a known V8 deopt, and a generated class keeps shapes monomorphic. **No buffer reuse**: it silently corrupts any row retained past its batch; an opt-in fast path with documented invalidation may come later, never the default.
 
-- **`runtime:db` is one module with two documented tiers**, not a subpath. `connect`, `sql`, `Connection`, `Statement`, `Rows`, `Transaction`, `DbError` are the application tier; `registerBackend`, `defineRowShape`, `decodeBatch`, `TypeRegistry`, `Dialect`, `mapError`, `BaseConnection`/`BaseRows`, `Pool`, `FrameReader`, `ByteWriter` are the driver tier. **Rejected: `runtime:db/driver`.** It would keep the application surface smaller and let the kit stabilize separately, but no `runtime:` module has subpaths and the namespace precedent costs more than the tidiness buys.
+- **`runtime:db` is one module with two documented tiers**, not a subpath. `connect`, `sql`, `Connection`, `Statement`, `Rows`, `Transaction`, `DbError` are the application tier; `defineDriver` (*amended 2026-08-10; was `registerBackend`*), `defineRowShape`, `decodeBatch`, `TypeRegistry`, `Dialect`, `mapError`, `BaseConnection`/`BaseRows`, `Pool`, `FrameReader`, `ByteWriter` are the driver tier. **Rejected: `runtime:db/driver`.** It would keep the application surface smaller and let the kit stabilize separately, but no `runtime:` module has subpaths and the namespace precedent costs more than the tidiness buys.
 - **A kit primitive ships when a backend proves it.** Everything above is public API from the moment it exports, so nothing exports on speculation: the registry, row shapes, type registry, dialect, error mapping and base classes ship with `sqlite:`, which exercises them; `Pool`, `FrameReader` and `ByteWriter` wait for Postgres, their first consumer. This is SPEC §6's no-stubs rule applied to an API surface instead of a crate.
 - **A conformance suite is part of the kit.** `runBackendConformance(factory)` is exported so a third-party driver can prove it behaves like the built-ins. An ecosystem where ORMs can rely on cross-driver behaviour needs drivers able to demonstrate it, not merely intend it.
 
@@ -765,6 +765,45 @@ finishes on its own and `rows.exhausted` is always true. The portable
 `ERR_DB_CONNECTION_BUSY` is a constraint every wire protocol *can* have, not one
 they all do — and a driver that copied Postgres's refusal here would have been
 refusing something safe.
+
+**What the third driver showed: a scheme is a global, and a driver is a value**
+(*amended 2026-08-10*). `registerBackend(scheme, factory)` and `backendSchemes()`
+are removed. `connect(url, options)` now **requires** `options.driver`, and the
+built-in SQLite backend is `sqlite`, an ordinary driver defined with the same
+`defineDriver` a third party uses.
+
+The registry was the last piece of this design that worked by ambient state.
+Which backends existed depended on which modules had been evaluated, so the
+dependency was invisible at the call site and order-sensitive; a scheme was a
+global name claimed by whoever imported first, which is why the decision above
+had to reserve `otfdb:` and forbid replacing a built-in — both of those rules
+exist only because the namespace was shared, and both are gone with it. Two
+implementations of `postgres:` — a fork, a fake for a test, a migration between
+two — could not coexist. As a value, a driver needs none of it.
+
+The consequence that mattered more than the tidiness: **because the driver is
+part of the call, `connect` can return that driver's connection**, and the
+second entry point every driver had grown was unnecessary. Redis had shipped
+`Redis`, `createClient`, `createSubscriber`, `createPool`, `createCluster`,
+`createSentinelClient` and `createSentinelPool` — seven ways in, because the
+registry's `connect` could only promise the portable `Connection` and Redis's
+own vocabulary had to be reached some other way. The command surface now sits on
+`RedisConnection` itself, one object answers both vocabularies, and the package
+exports three drivers instead. Postgres lost its own `connect`/`createPool` the
+same way.
+
+Pooling followed. It is now `pool: true` on the same call, served by one
+`PooledConnection` in the driver tier; `PgPool` and `RedisPool` had each written
+out the same borrow-per-call wrapper, the same "return the connection when a
+streaming result ends", and their own answer to what a pooled `query` returns.
+The one question a protocol-blind `Pool` cannot decide is now asked by one name
+on every backend — `reusable`, beside `usable` — where there had been three
+spellings (`status === "I"`, `clean`, and nothing at all on `sqlite:`).
+
+**The generalisable form of it:** the extension point that is a *value* the
+caller passes beats the one that is a *name* the callee looks up, whenever both
+are possible. It is visible where it is used, it types, it composes, and it
+needs no registry, no reservation and no rule about who may replace what.
 
 **Also rejected:** a `node:sqlite` compatibility layer, or Node compatibility of any kind; an ORM or query builder in the runtime — the kit exists so those are written *on* the runtime, not *in* it. **Rejected for Redis specifically:** presenting `MULTI`/`EXEC` as `transaction(fn)` — it queues commands and applies them together, but does not roll back one that fails at `EXEC` time, so the helper would commit half a body that threw; a backend saying it has no transactions is more useful than one whose transactions silently are not.
 
