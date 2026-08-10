@@ -489,6 +489,20 @@ class Dialect {
       returning: false,
       savepoints: false,
       namedParameters: false,
+      // Which forms of query this backend takes. Defaulted so that every
+      // backend written before these existed keeps its behaviour exactly: SQL
+      // text, no AST.
+      //
+      // Both are declared rather than one being inferred from the other,
+      // because a backend may take both — an engine that accepts an AST and
+      // also parses SQL is a reasonable thing to be, and so is one that takes
+      // neither form the other does.
+      sqlText: true,
+      queryAst: false,
+      // Whether the backend has transactions at all. A backend that says no
+      // gets a refusal from `transaction()` rather than a `BEGIN` it has never
+      // heard of.
+      transactions: true,
       ...supports,
     });
     Object.freeze(this);
@@ -577,17 +591,34 @@ function isQueryAst(q) {
   return typeof q === "object" && q !== null && q.__queryAst === true;
 }
 
-// Normalizes whatever a caller passed into `{ text, positional, named }`.
+// Normalizes whatever a caller passed into `{ text, ast, positional, named }`.
+//
+// Exactly one of `text` and `ast` is non-null. Which forms a backend takes is
+// its own declaration (`dialect.supports.sqlText` / `.queryAst`), so the door
+// D56 opened for a backend that never speaks SQL is a capability check here
+// rather than a refusal welded into this function. Both directions are
+// expressible: an engine that wants an AST refuses text with the same code, and
+// the same message shape, that a SQL engine refuses an AST with.
 function normalizeQuery(q, params, dialect, backend) {
   if (isQueryAst(q)) {
-    throw dbError(
-      `the ${backend} backend takes SQL text, not a query AST`,
-      DbErrorCode.QueryForm,
-    );
+    if (!dialect.supports.queryAst) {
+      throw dbError(
+        `the ${backend} backend takes SQL text, not a query AST`,
+        DbErrorCode.QueryForm,
+      );
+    }
+    const [positional, named] = splitParams(params);
+    return { text: null, ast: q.ast, positional, named };
   }
   if (q instanceof Query) {
+    if (!dialect.supports.sqlText) {
+      throw dbError(
+        `the ${backend} backend takes a query AST, not SQL text — build one with queryAst()`,
+        DbErrorCode.QueryForm,
+      );
+    }
     const rendered = q.render(dialect);
-    return { text: rendered.text, positional: rendered.params, named: [] };
+    return { text: rendered.text, ast: null, positional: rendered.params, named: [] };
   }
   if (typeof q !== "string") {
     throw dbError(
@@ -595,8 +626,14 @@ function normalizeQuery(q, params, dialect, backend) {
       DbErrorCode.QueryForm,
     );
   }
+  if (!dialect.supports.sqlText) {
+    throw dbError(
+      `the ${backend} backend takes a query AST, not SQL text — build one with queryAst()`,
+      DbErrorCode.QueryForm,
+    );
+  }
   const [positional, named] = splitParams(params);
-  return { text: q, positional, named };
+  return { text: q, ast: null, positional, named };
 }
 
 // ---------------------------------------------------------------------------
@@ -746,10 +783,18 @@ class BaseConnection {
       );
     }
     if (rows.length === 0) return { changes: 0, lastInsertRowid: null };
-    const { text } = normalizeQuery(q, undefined, this.dialect, this.backend);
+    // The whole normalized query, not just its text: a backend taking an AST
+    // has no text, and passing one field of a two-field union is how the AST
+    // form ends up working everywhere except the batch path.
+    const normalized = normalizeQuery(q, undefined, this.dialect, this.backend);
     const sets = rows.map((row) => splitParams(row));
-    const run = () => this._executeMany(text, sets);
-    return this._depth > 0 ? run() : this.transaction(run);
+    const run = () => this._executeMany(normalized, sets);
+    // A backend without transactions cannot make a batch atomic, and wrapping
+    // one in a transaction it does not have would fail every batch. It gets the
+    // batch it can have, and the difference is stated in `supports`.
+    return this._depth > 0 || !this.dialect.supports.transactions
+      ? run()
+      : this.transaction(run);
   }
 
   /**
@@ -848,11 +893,11 @@ class BaseConnection {
   /// without asking which driver is loaded. Without a default it would be a
   /// method that throws a `TypeError` naming a private method, on backends
   /// chosen by nobody in particular.
-  async _executeMany(text, sets) {
+  async _executeMany(query, sets) {
     let changes = 0;
     let lastInsertRowid = null;
     for (const [positional, named] of sets) {
-      const result = await this._execute({ text, positional, named });
+      const result = await this._execute({ ...query, positional, named });
       changes += result.changes ?? 0;
       if (result.lastInsertRowid != null) lastInsertRowid = result.lastInsertRowid;
     }
@@ -867,6 +912,12 @@ class BaseConnection {
   /// of failing or — worse — committing the outer one early.
   async transaction(fn) {
     this._open();
+    if (!this.dialect.supports.transactions) {
+      throw dbError(
+        `the ${this.backend} backend has no transactions`,
+        DbErrorCode.Unsupported,
+      );
+    }
     const depth = this._depth;
     const nested = depth > 0;
     if (nested && !this.dialect.supports.savepoints) {
@@ -875,19 +926,19 @@ class BaseConnection {
         DbErrorCode.Unsupported,
       );
     }
-    const name = `esrun_sp_${depth}`;
-    await this.execute(nested ? `SAVEPOINT ${name}` : "BEGIN");
+    const scope = { nested, name: nested ? `esrun_sp_${depth}` : null };
+    await this._beginTransaction(scope);
     this._depth = depth + 1;
     try {
       const result = await fn(this);
-      await this.execute(nested ? `RELEASE ${name}` : "COMMIT");
+      await this._commitTransaction(scope);
       return result;
     } catch (e) {
       // A rollback that itself fails must not replace the error that caused
       // it: the first failure is the one worth reporting, and the second is
       // usually a consequence of it.
       try {
-        await this.execute(nested ? `ROLLBACK TO ${name}` : "ROLLBACK");
+        await this._rollbackTransaction(scope);
       } catch {
         /* the original error is the one that matters */
       }
@@ -895,6 +946,32 @@ class BaseConnection {
     } finally {
       this._depth = depth;
     }
+  }
+
+  /**
+   * The three statements a transaction is made of.
+   *
+   * They default to the SQL every SQL backend spells the same way, and they are
+   * **methods** so that a backend which does not speak SQL can still have real
+   * transactions — `MULTI`/`EXEC`, a protocol message, an engine call. Before
+   * these existed the SQL was written into `transaction()` itself, which quietly
+   * assumed that every backend was a SQL backend; a key-value store inheriting
+   * that got a `BEGIN` sent to a server that has never heard of one.
+   *
+   * `scope` is `{ nested, name }`: `name` is the savepoint's, and is `null` at
+   * the outermost level. A backend claiming `supports.savepoints` is the only
+   * one that will ever see `nested: true`.
+   */
+  async _beginTransaction({ nested, name }) {
+    await this.execute(nested ? `SAVEPOINT ${name}` : "BEGIN");
+  }
+
+  async _commitTransaction({ nested, name }) {
+    await this.execute(nested ? `RELEASE ${name}` : "COMMIT");
+  }
+
+  async _rollbackTransaction({ nested, name }) {
+    await this.execute(nested ? `ROLLBACK TO ${name}` : "ROLLBACK");
   }
 
   async close() {
@@ -993,7 +1070,7 @@ class SqliteConnection extends BaseConnection {
     );
   }
 
-  async _executeMany(text, sets) {
+  async _executeMany({ text }, sets) {
     try {
       return await ops.db_execute_many(this._id, text, encodeParamSets(sets));
     } catch (e) {
@@ -1382,10 +1459,27 @@ async function fresh(open, columns) {
   return db;
 }
 
-// Each check is `[name, async (open, options) => void]` and throws to fail.
+// A query in whichever form the backend takes.
+//
+// Only for the checks that are about the *connection* rather than about SQL.
+// What it contains does not matter and it never reaches a backend: the check
+// using it expects a refusal that happens before dispatch.
+function anyForm(dialect) {
+  return dialect.supports.sqlText ? `SELECT 1` : queryAst(null);
+}
+
+// Each check is `[name, async (open) => void, needs]` and throws to fail.
 // A list rather than a framework: a driver author runs this from whatever they
 // already use, and importing a test runner into the runtime to check a driver
 // would be the wrong dependency in the wrong direction.
+//
+// `needs` is `"sql"` (the default) for a check written in SQL DDL and DML, and
+// `"any"` for one that holds whatever form a backend takes. The distinction
+// exists because most of this suite tests the *contract* through SQL, and a
+// backend that never speaks SQL — which D56 has admitted as first-class since
+// the first release — could otherwise only fail it. Failing a check you cannot
+// express is not a finding, so those are skipped with a reason instead. What
+// stays is the part that is genuinely about every backend.
 const CONFORMANCE_CHECKS = [
   [
     "columns are reported in order, by name",
@@ -1676,26 +1770,32 @@ const CONFORMANCE_CHECKS = [
   [
     "a closed connection refuses work rather than hanging",
     async (open) => {
-      const db = await fresh(open, "a INTEGER");
+      const db = await open();
       await db.close();
       await db.close(); // idempotent
       let code = null;
       try {
-        await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`);
+        await db.query(anyForm(db.dialect));
       } catch (e) {
         code = e.code;
       }
       assert(code === DbErrorCode.Closed, `a closed connection reported ${code}`);
     },
+    "any",
   ],
   [
     "the query form this backend does not take is refused by name",
     async (open) => {
       const db = await open();
       try {
+        const { sqlText, queryAst: takesAst } = db.dialect.supports;
+        // A backend that takes both forms has nothing to refuse, and demanding
+        // that it refuse *something* would be inventing a requirement.
+        if (sqlText && takesAst) return;
+        const wrong = sqlText ? queryAst({ select: ["a"] }) : `SELECT 1`;
         let code = null;
         try {
-          await db.query(queryAst({ select: ["a"] }));
+          await db.query(wrong);
         } catch (e) {
           code = e.code;
         }
@@ -1707,6 +1807,7 @@ const CONFORMANCE_CHECKS = [
         await db.close();
       }
     },
+    "any",
   ],
 ];
 
@@ -1724,10 +1825,41 @@ const CONFORMANCE_CHECKS = [
 /// cross-backend behaviour needs the drivers to be checkable, and a shared
 /// suite is the only version of that which does not decay.
 async function runBackendConformance(open, { skip = [] } = {}) {
+  // One connection up front, purely to ask what this backend can express. A
+  // check written in SQL says nothing about a backend that has no SQL, so it is
+  // skipped **with a reason** rather than failed — and the reason is reported,
+  // because "13 skipped" with no explanation is how a driver author concludes
+  // they passed something they never ran.
+  let speaksSql = true;
+  try {
+    const probe = await open();
+    try {
+      speaksSql = probe.dialect.supports.sqlText === true;
+    } finally {
+      await probe.close();
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      passed: 0,
+      skipped: 0,
+      failures: [{ name: "open a connection", ok: false, error: e?.message ?? String(e) }],
+      results: [{ name: "open a connection", ok: false, error: e?.message ?? String(e) }],
+    };
+  }
+
   const results = [];
-  for (const [name, run] of CONFORMANCE_CHECKS) {
+  for (const [name, run, needs = "sql"] of CONFORMANCE_CHECKS) {
     if (skip.includes(name)) {
-      results.push({ name, skipped: true });
+      results.push({ name, skipped: true, reason: "skipped by the caller" });
+      continue;
+    }
+    if (needs === "sql" && !speaksSql) {
+      results.push({
+        name,
+        skipped: true,
+        reason: "this check is written in SQL, and the backend takes a query AST",
+      });
       continue;
     }
     try {

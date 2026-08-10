@@ -227,6 +227,25 @@ declare module "runtime:db" {
     returning: boolean;
     savepoints: boolean;
     namedParameters: boolean;
+    /**
+     * The backend takes SQL text and `` sql`` `` templates. Default `true`.
+     *
+     * A backend that says `false` refuses text with `ERR_DB_QUERY_FORM`, the
+     * same way a SQL backend refuses an AST.
+     */
+    sqlText: boolean;
+    /** The backend takes {@link queryAst}. Default `false`. */
+    queryAst: boolean;
+    /**
+     * The backend has transactions. Default `true`.
+     *
+     * `false` makes {@link Connection.transaction} refuse with
+     * `ERR_DB_UNSUPPORTED` rather than emit a `BEGIN` the backend has never
+     * heard of, and makes {@link Connection.executeMany} run its batch without
+     * one — so a batch is **not** atomic there, which is why this is declared
+     * rather than assumed.
+     */
+    transactions: boolean;
   }
 
   /**
@@ -279,17 +298,41 @@ declare module "runtime:db" {
      * The batch path. **Optional** — the default loops `_execute`, which is
      * correct and no faster than the loop it replaces. Override it with
      * whatever the backend does in one round trip.
+     *
+     * It takes the whole {@link NormalizedQuery} rather than just its text, so
+     * that a backend which took an AST still has one here.
      */
     protected _executeMany(
-      text: string,
+      query: NormalizedQuery,
       sets: [DbInput[], [string, DbInput][]][],
     ): Promise<ExecuteResult>;
+    /**
+     * The three statements a transaction is made of.
+     *
+     * They default to the SQL every SQL backend spells the same way. A backend
+     * that does not speak SQL overrides them — `MULTI`/`EXEC`, a protocol
+     * message, an engine call — rather than inheriting a `BEGIN` it cannot use.
+     *
+     * `name` is the savepoint's, and is `null` at the outermost level; only a
+     * backend claiming `supports.savepoints` ever sees `nested: true`.
+     */
+    protected _beginTransaction(scope: TransactionScope): Promise<void>;
+    protected _commitTransaction(scope: TransactionScope): Promise<void>;
+    protected _rollbackTransaction(scope: TransactionScope): Promise<void>;
     protected abstract _close(): Promise<void>;
   }
 
-  /** A query after the dialect has rendered it. */
+  /**
+   * A query after the dialect has rendered it.
+   *
+   * Exactly one of `text` and `ast` is non-null: which one depends on the form
+   * the caller used and on what the backend declared it takes.
+   */
   export interface NormalizedQuery {
-    readonly text: string;
+    /** The rendered SQL, or `null` for a backend that took an AST. */
+    readonly text: string | null;
+    /** The AST {@link queryAst} carried, or `null` for a SQL backend. */
+    readonly ast: unknown;
     readonly positional: DbInput[];
     readonly named: [string, DbInput][];
   }
@@ -425,11 +468,20 @@ declare module "runtime:db" {
   /** Rewraps a failure as a {@link DbError}, layering driver code over host code. */
   export function asDbError(e: unknown, code?: string | null): DbError;
 
+  /** Which transaction level `_beginTransaction` and friends are running at. */
+  export interface TransactionScope {
+    readonly nested: boolean;
+    /** The savepoint's name, or `null` at the outermost level. */
+    readonly name: string | null;
+  }
+
   /** One conformance check's outcome. */
   export interface ConformanceResult {
     readonly name: string;
     readonly ok?: boolean;
     readonly skipped?: boolean;
+    /** Why it was skipped — the caller asked, or the backend cannot express it. */
+    readonly reason?: string;
     readonly error?: string;
   }
 
@@ -447,6 +499,11 @@ declare module "runtime:db" {
    * it behaves like the built-ins rather than intend to. `open` is called once
    * per check and must resolve to a fresh connection; each check builds and
    * drops its own table.
+   *
+   * Most checks are written in SQL. Against a backend that declares
+   * `supports.sqlText: false` those are **skipped with a reason** rather than
+   * failed — a check you cannot express is not a finding — and what runs is the
+   * part that holds for every backend whatever form it takes.
    */
   export function runBackendConformance(
     open: () => Promise<Connection>,
