@@ -20,6 +20,9 @@ import {
 } from "runtime:db";
 
 import { Fields, FrameReader } from "./protocol/frame.js";
+
+/** What `runtime:net`'s `connect()` hands back. */
+type PgSocket = ReturnType<typeof netConnect>;
 import * as msg from "./protocol/messages.js";
 import { AUTH, B } from "./protocol/messages.js";
 import { scram } from "./protocol/scram.js";
@@ -104,7 +107,7 @@ interface Batch {
 }
 
 export class PgConnection extends BaseConnection {
-  #socket: Awaited<ReturnType<typeof netConnect>> | null = null;
+  #socket: PgSocket | null = null;
   #frames: FrameReader | null = null;
   #writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   /** Server parameters from the handshake (`server_version`, and so on). */
@@ -179,7 +182,42 @@ export class PgConnection extends BaseConnection {
     }
   }
 
+  /** Where and how to reach this server, kept so a cancel can reach it too. */
+  #target: PgOptions = {};
+
   async #open(options: PgOptions): Promise<void> {
+    this.#target = options;
+    const dialled = await this.#dial(options);
+    this.#socket = dialled.socket;
+    this.#frames = dialled.frames ?? new FrameReader(dialled.socket.readable);
+    this.#writer = dialled.socket.writable.getWriter();
+
+    const params: Record<string, string> = {
+      user: options.user ?? "postgres",
+      database: options.database ?? options.user ?? "postgres",
+      application_name: options.applicationName ?? "esrun",
+      client_encoding: "UTF8",
+    };
+    if (options.preparedStatementCacheSize !== undefined) {
+      this.#cacheLimit = Math.max(0, Math.trunc(options.preparedStatementCacheSize));
+    }
+    if (options.statementTimeout !== undefined && options.statementTimeout > 0) {
+      // A GUC in the startup packet: in force from the first statement, with no
+      // extra round trip and no window where it is not yet set.
+      params["statement_timeout"] = String(Math.trunc(options.statementTimeout));
+    }
+    await this.#send(msg.startup(params));
+    await this.#authenticate(options);
+  }
+
+  /**
+   * Opens a socket to the server and negotiates TLS, speaking no protocol on it.
+   *
+   * Shared by the connection itself and by `cancel()`, which has to reach the
+   * same server the same way — a cancel that skipped TLS against a server
+   * requiring it would simply be refused.
+   */
+  async #dial(options: PgOptions): Promise<{ socket: PgSocket; frames: FrameReader | null }> {
     const host = options.host ?? "localhost";
     const port = options.port ?? 5432;
     const sslmode = options.sslmode ?? "prefer";
@@ -221,26 +259,30 @@ export class PgConnection extends BaseConnection {
       }
     }
 
-    this.#socket = socket;
-    this.#frames = frames ?? new FrameReader(socket.readable);
-    this.#writer = socket.writable.getWriter();
+    return { socket, frames };
+  }
 
-    const params: Record<string, string> = {
-      user: options.user ?? "postgres",
-      database: options.database ?? options.user ?? "postgres",
-      application_name: options.applicationName ?? "esrun",
-      client_encoding: "UTF8",
-    };
-    if (options.preparedStatementCacheSize !== undefined) {
-      this.#cacheLimit = Math.max(0, Math.trunc(options.preparedStatementCacheSize));
+  /**
+   * Asks the server to cancel whatever this connection is running.
+   *
+   * On a connection of its own, because the protocol leaves no choice: the one
+   * running the query is busy reading the answer, which is the thing being
+   * cancelled. The server replies to nothing and closes — so this returns once
+   * the request has been *sent*, not once anything has been cancelled, and the
+   * outcome shows up at the query: a `57014` error, or nothing at all if it had
+   * already finished. Cancellation is a request rather than an instruction, and
+   * the protocol is honest about that.
+   */
+  async cancel(): Promise<void> {
+    if (this.#processId === 0) return;
+    const { socket } = await this.#dial(this.#target);
+    try {
+      const writer = socket.writable.getWriter();
+      await writer.write(msg.cancelRequest(this.#processId, this.#secretKey));
+      writer.releaseLock();
+    } finally {
+      await socket.close().catch(() => {});
     }
-    if (options.statementTimeout !== undefined && options.statementTimeout > 0) {
-      // A GUC in the startup packet: in force from the first statement, with no
-      // extra round trip and no window where it is not yet set.
-      params["statement_timeout"] = String(Math.trunc(options.statementTimeout));
-    }
-    await this.#send(msg.startup(params));
-    await this.#authenticate(options);
   }
 
   /** Latches the first transport failure and tears the connection down. */
@@ -717,6 +759,113 @@ export class PgConnection extends BaseConnection {
   }
 
   /**
+   * Runs `work` with an `AbortSignal` attached.
+   *
+   * Aborting sends a cancel and then waits: the server answers the *query* with
+   * `57014`, and only then is the connection back in a known state. Rejecting
+   * the caller the instant the signal fired would leave a statement running and
+   * a connection mid-exchange, which is worse than waiting a moment for the
+   * cancellation to land.
+   *
+   * What the caller sees is their own `reason`, not the server's error. They
+   * asked for the abort; `57014` is a detail of how the asking was carried out.
+   */
+  async #withSignal<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
+    if (signal === undefined) return work();
+    if (signal.aborted) throw signal.reason;
+    const onAbort = (): void => {
+      void this.cancel().catch(() => {});
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await work();
+    } catch (e) {
+      if (signal.aborted) throw signal.reason;
+      throw e;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * As `Connection.query`, plus an `AbortSignal`.
+   *
+   * The signal stays attached until the **rows** end, not merely until the
+   * first batch arrives: a streaming result is still the query running, and a
+   * caller who abandons one halfway is exactly who wanted to cancel.
+   */
+  override async query(
+    q: Parameters<BaseConnection["query"]>[0],
+    params?: Parameters<BaseConnection["query"]>[1],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<Rows> {
+    const signal = options.signal;
+    if (signal === undefined) return super.query(q, params);
+    if (signal.aborted) throw signal.reason;
+
+    const onAbort = (): void => {
+      void this.cancel().catch(() => {});
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    let rows: Rows;
+    try {
+      rows = await super.query(q, params);
+    } catch (e) {
+      signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) throw signal.reason;
+      throw e;
+    }
+    if (rows.exhausted) {
+      // Already complete, so there is nothing left to cancel and nothing to
+      // keep listening for.
+      signal.removeEventListener("abort", onAbort);
+      return rows;
+    }
+
+    const close = rows.close.bind(rows);
+    rows.close = async () => {
+      try {
+        await close();
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+
+    // The failure from an aborted stream arrives *out of the iterator*, not out
+    // of the call that started it — so without this the caller would get the
+    // server's `57014` here and their own reason from `execute()`, for the same
+    // act. `toArray()` and `first()` iterate through this too.
+    const iterate = rows[Symbol.asyncIterator].bind(rows);
+    rows[Symbol.asyncIterator] = async function* wrapped() {
+      const inner = iterate();
+      try {
+        for (;;) {
+          const next = await inner.next();
+          if (next.done === true) return;
+          yield next.value;
+        }
+      } catch (e) {
+        if (signal.aborted) throw signal.reason;
+        throw e;
+      } finally {
+        // Forwarded, not assumed: a caller that breaks out of *this* generator
+        // must still run the inner one's cleanup, which is what closes the
+        // cursor and gives the connection back.
+        await inner.return?.(undefined);
+      }
+    };
+    return rows;
+  }
+
+  override async execute(
+    q: Parameters<BaseConnection["execute"]>[0],
+    params?: Parameters<BaseConnection["execute"]>[1],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ changes: number; lastInsertRowid: number | null }> {
+    return this.#withSignal(options.signal, () => super.execute(q, params));
+  }
+
+  /**
    * Runs a script — several statements in one string — through the simple query
    * protocol.
    *
@@ -737,8 +886,15 @@ export class PgConnection extends BaseConnection {
    * Rows are discarded: this reports what each statement did, not what it
    * returned.
    */
-  async executeScript(sql: string): Promise<{ command: string; changes: number }[]> {
+  async executeScript(
+    sql: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<{ command: string; changes: number }[]> {
     this._open();
+    return this.#withSignal(options.signal, () => this.#runScript(sql));
+  }
+
+  async #runScript(sql: string): Promise<{ command: string; changes: number }[]> {
     const release = await this.#acquire();
     try {
       // A script is where DDL and DISCARD live, and both can invalidate plans

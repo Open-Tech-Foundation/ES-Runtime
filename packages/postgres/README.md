@@ -210,6 +210,34 @@ A query here costs a network round trip, and parsing was never the dominant
 term. It is still worth doing: it removes parse work from the server and the SQL
 text from the wire on every repeat.
 
+## Cancelling a query
+
+```js
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 5_000);
+
+await db.query("SELECT * FROM slow", [], { signal: controller.signal });
+```
+
+Works on `query`, `execute` and `executeScript`, and `db.cancel()` cancels
+whatever the connection is running without a signal.
+
+The cancel goes out on a **second connection** — the protocol leaves no choice,
+since the first is busy reading the answer to the very thing being cancelled.
+That means cancellation is a *request*: the server may have finished already,
+and the outcome shows up at the query rather than at `cancel()`.
+
+Aborting sends the cancel and then **waits** for the server to answer, rather
+than rejecting the caller immediately. The difference matters: rejecting at once
+would leave a statement running and a connection mid-exchange, where waiting a
+moment leaves both in a known state. The connection stays usable afterwards,
+which is the whole difference between cancelling and hanging up.
+
+What you get is your own `reason`, not the server's `57014` — including from a
+result you abandon halfway, where the failure arrives out of the iterator rather
+than out of the call that started it. A signal attached to a result that arrives
+in one batch is detached immediately: cancelling a finished query means nothing.
+
 ## Timeouts
 
 ```js

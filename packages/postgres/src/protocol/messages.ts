@@ -77,6 +77,20 @@ export function sslRequest(): Uint8Array {
   return w.finish();
 }
 
+/**
+ * `CancelRequest` — a length, a magic number, and the backend's identity.
+ *
+ * Sent on a **new** connection, not the one running the query: the connection
+ * running it is busy reading the answer, which is the thing being cancelled.
+ * The server closes this connection without replying, so there is nothing to
+ * wait for and no way to learn from here whether it worked.
+ */
+export function cancelRequest(processId: number, secretKey: number): Uint8Array {
+  const w = new ByteWriter(16);
+  w.i32(16).i32(80877102).i32(processId).i32(secretKey);
+  return w.finish();
+}
+
 /** The startup packet: protocol 3.0 and the connection parameters. */
 export function startup(params: Record<string, string>): Uint8Array {
   const w = new ByteWriter(256);
