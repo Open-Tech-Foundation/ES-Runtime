@@ -90,6 +90,19 @@ export interface RedisOptions extends DecodeOptions {
    */
   connectTimeout?: number;
   /**
+   * This connection exists to block, so `BLPOP key 0` and its relatives are
+   * allowed on it. Default `false`.
+   *
+   * A blocking command holds the connection for as long as it blocks, and an
+   * unbounded one therefore never gives it back — which is refused by default
+   * because on a shared or pooled connection it is a hang nobody chose. Setting
+   * this is the caller saying that tying *this* connection up is the point,
+   * which is exactly how a queue worker is deployed.
+   *
+   * `createPool` strips it: a pool's premise is that its connections come back.
+   */
+  blocking?: boolean;
+  /**
    * Ask for RESP3. Default `true`.
    *
    * RESP3 is worth the default because it types the reply: `HGETALL` comes back
@@ -137,6 +150,8 @@ export class RedisConnection extends BaseConnection {
   #writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   #fatal: DbError | null = null;
   #decode: DecodeOptions = {};
+  /** Whether this connection opted into blocking indefinitely. */
+  #blocking = false;
 
   /** What the server reported at `HELLO`. Empty until the handshake finishes. */
   readonly hello: Partial<ServerHello> = {};
@@ -239,6 +254,7 @@ export class RedisConnection extends BaseConnection {
 
   async #open(options: RedisOptions): Promise<void> {
     this.#decode = options.binary === undefined ? {} : { binary: options.binary };
+    this.#blocking = options.blocking === true;
     const host = options.host ?? "localhost";
     const port = options.port ?? 6379;
 
@@ -424,7 +440,7 @@ export class RedisConnection extends BaseConnection {
    */
   async command(args: readonly CommandArg[], options: { signal?: AbortSignal } = {}): Promise<unknown> {
     this._open();
-    const checked = guard(args);
+    const checked = guard(args, this.#blocking);
     return this._withSignal(options.signal, async () => toValue(await this.#call(checked), this.#decode));
   }
 
@@ -441,6 +457,11 @@ export class RedisConnection extends BaseConnection {
 
   /** Called when the read loop fails, since nobody is awaiting it. */
   onSubscribeError: ((error: unknown) => void) | undefined;
+
+  /** Whether this connection may block indefinitely — `{ blocking: true }`. */
+  get blocking(): boolean {
+    return this.#blocking;
+  }
 
   /** Whether this connection has been given over to subscribing. */
   get subscribed(): boolean {
@@ -702,7 +723,7 @@ export class RedisConnection extends BaseConnection {
         { code: DbErrorCode.QueryForm },
       );
     }
-    return guard([...ast, ...q.positional] as CommandArg[]);
+    return guard([...ast, ...q.positional] as CommandArg[], this.#blocking);
   }
 
   protected async _query(q: NormalizedQuery): Promise<Rows> {
@@ -807,7 +828,7 @@ const MODE_CHANGING = new Set([
   "SUNSUBSCRIBE",
 ]);
 
-function guard(args: readonly CommandArg[]): CommandArg[] {
+function guard(args: readonly CommandArg[], blocking: boolean): CommandArg[] {
   if (args.length === 0) {
     throw new DbError("a redis command needs at least a name", { code: DbErrorCode.QueryForm });
   }
@@ -828,7 +849,7 @@ function guard(args: readonly CommandArg[]): CommandArg[] {
   // timeout, which is a cost the caller chose. An unbounded one never gives it
   // back, which is not a cost anyone chose knowingly.
   const forever = blocksForever(args);
-  if (forever !== null) {
+  if (forever !== null && !blocking) {
     throw new DbError(foreverMessage(forever), { code: DbErrorCode.Unsupported });
   }
   return args as CommandArg[];

@@ -10,6 +10,21 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Blocking commands in `@opentf/esrun-redis`** — `blpop`, `brpop`, `blmove`,
+  `bzpopmin`, `bzpopmax` and `wait`, each taking its timeout as a **required**
+  argument (seconds for the pop family, milliseconds for `wait`), and each
+  answering a named shape rather than a positional array: `{ key, value }` for a
+  pop, `{ key, member, score }` for a sorted-set pop. Plus `consume(keys)`, an
+  async iterator over a list as a queue, which polls with a *bounded* pop even
+  though it loops forever — that is what makes an abandoned loop or an aborted
+  signal stop it, where an unbounded wait could never notice.
+
+  The indefinite form is now allowed on a connection opened with
+  `{ blocking: true }`, which is the caller saying that tying that one up is the
+  point. `createPool` **strips** the option: a pool's premise is that its
+  connections come back, and honouring it there would hand out connections that
+  can leave circulation permanently.
+
 - **Pub/sub in `@opentf/esrun-redis`** — `subscribe`, `psubscribe`, `ssubscribe`
   and their unsubscribes, with per-channel handlers, an `onMessage` catch-all,
   and `publish`/`spublish`/`PUBSUB` introspection on the ordinary command

@@ -25,7 +25,7 @@ printf "\n== unit ==\n"
 "$here/unit/run.sh" || exit 1
 
 status=0
-for test in smoke db conformance errors auth pubsub pool tls; do
+for test in smoke db conformance errors auth pubsub blocking pool tls; do
   printf '\n== %s ==\n' "$test"
   "$esrun" "$here/$test.mjs" || status=1
 done

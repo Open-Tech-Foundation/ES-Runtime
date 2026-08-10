@@ -238,7 +238,8 @@ driver's — so a program that both listens and works needs two connections. And
 connection for as long as it blocks, so a bounded wait is a stall you chose,
 while `0` means forever — a connection that never comes back, and through a pool
 one that is gone for the life of the process. The unbounded form is refused
-before it reaches the wire.
+before it reaches the wire unless the connection was opened with
+`{ blocking: true }`, which is how a queue worker says that is the point.
 
 If you are writing a driver, see [Drivers & ORMs](/docs/db/authoring) and run
 `runBackendConformance()` to check it behaves like the built-ins.

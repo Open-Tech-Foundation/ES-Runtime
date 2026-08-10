@@ -93,7 +93,13 @@ export function createSubscriber(url: string, options: RedisOptions = {}): Promi
  */
 export function createPool(url: string, options: RedisPoolOptions = {}): RedisPool {
   const settings = parseConnectionString(url, options);
-  return new RedisPool(() => connect(url, settings), options);
+  // `blocking` is stripped rather than honoured. A pool's whole premise is that
+  // its connections come back, and a command that blocks indefinitely is one
+  // that never returns its connection — so a pool built with the option would
+  // hand out connections that can be taken out of circulation permanently,
+  // which is the failure the option exists to make deliberate. Blocking
+  // indefinitely needs a connection of its own, by construction.
+  return new RedisPool(() => connect(url, { ...settings, blocking: false }), options);
 }
 
 for (const scheme of ["redis", "rediss"]) {

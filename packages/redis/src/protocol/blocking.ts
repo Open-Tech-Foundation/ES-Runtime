@@ -93,6 +93,7 @@ export function foreverMessage(name: string): string {
     `${name} with a timeout of 0 blocks forever, and would hold this connection ` +
     `for the life of the process — every other command on it, including a pool's ` +
     `other callers, would queue behind it and never run. Give it a timeout, or ` +
-    `open a connection of its own for it.`
+    `open a connection for it with { blocking: true }, which says that tying ` +
+    `that one up is the point.`
   );
 }

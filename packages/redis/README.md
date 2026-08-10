@@ -243,33 +243,58 @@ Pub/sub is fire-and-forget. There is no queue and no delivery guarantee, and
 
 ## Blocking commands
 
-`BLPOP`, `BRPOP`, `BLMOVE`, `BZPOPMIN`, `BLMPOP`, `WAIT` and `XREAD BLOCK` work,
-with one rule: **give them a timeout.**
-
 ```js
-await r.call(["BLPOP", "queue", "5"]);       // waits up to 5s, then null
-await r.call(["BLPOP", "queue", "0"]);       // refused
+await r.blpop("queue", 5);        // → { key, value } | null
+await r.brpop(["a", "b"], 5);     // the first of several that has anything
+await r.blmove("src", "dst", 5);
+await r.bzpopmin("scores", 5);    // → { key, member, score } | null
+await r.wait(2, 1000);            // replicas acknowledged (timeout in **ms**)
 ```
 
-A blocking command holds the connection for as long as it blocks — that is
-inherent, since the server sends no reply until it has one and a connection is
-one conversation. A bounded wait is therefore a stall the caller chose, and it
-is allowed. A timeout of `0` means *forever*, which is not a stall but a stuck
-connection: nothing else on it will ever run. Through a pool that connection is
-gone for the life of the process, and the other callers fail on `acquireTimeout`
-with a message about pool exhaustion rather than about the cause — so the
-unbounded form is refused with `ERR_DB_UNSUPPORTED` before it reaches the wire.
+The timeout is a **required** argument on every one of them, in the units Redis
+takes it — seconds for the pop family, milliseconds for `wait`. Required rather
+than defaulted, because the one value that has to be a deliberate choice is the
+one meaning *forever*, and a default would make it an accident.
 
-If you want a worker blocked on a queue indefinitely, give it a connection of
-its own and loop over a bounded wait:
+A blocking command holds its connection for as long as it blocks. That is
+inherent: the server sends no reply until it has one, and a connection is one
+conversation. So a bounded wait is a stall you chose, and everything else on
+that connection waits behind it:
+
+```js
+await Promise.all([r.blpop("idle", 1), r.ping()]);   // the PING takes ~1s too
+```
+
+`0` means forever, which is not a stall but a stuck connection, and on a pooled
+one it is worse than it looks — gone for the life of the process, while other
+callers fail on `acquireTimeout` pointing at pool exhaustion rather than at the
+cause. So it is refused unless the connection was opened to be tied up:
+
+```js
+const worker = await Redis.connect(url, { blocking: true });
+await worker.call(["BLPOP", "jobs", "0"]);           // allowed here
+```
+
+`createPool` **strips** that option. A pool's premise is that its connections
+come back; blocking indefinitely needs a connection of its own, by construction.
+
+### Consuming a queue
+
+The loop blocking pops exist for, written once:
 
 ```js
 const worker = await Redis.connect(url);
-for (;;) {
-  const job = await worker.call(["BLPOP", "queue", "5"]);
-  if (job !== null) await handle(job[1]);
+for await (const job of worker.consume("jobs", { timeout: 5, signal })) {
+  await handle(job.value);
 }
 ```
+
+It polls with a **bounded** pop even though it loops forever, and that is what
+makes it interruptible: an abandoned `for await` or an aborted signal is noticed
+when the current wait ends rather than never. `timeout` is the worst case for
+how long stopping takes, not a latency — a job arriving mid-wait is delivered
+immediately. An empty queue is not the end of the queue, so a timed-out wait
+just goes round again.
 
 Redis keeps the timeout in three different places — last for `BLPOP`, first for
 `BLMPOP`, behind the `BLOCK` keyword for `XREAD` — and the check knows all
@@ -295,7 +320,6 @@ different dataset.
 
 Named rather than left to be discovered:
 
-- **Blocking commands with no timeout.** See above — the bounded forms work.
 - **`MONITOR`**, which turns the connection into a firehose of every command the
   server runs. One reply per command cannot represent that; use `redis-cli`.
 - **Cluster.** `MOVED` and `ASK` are reported as `ERR_DB_UNSUPPORTED` with an

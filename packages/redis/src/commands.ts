@@ -559,6 +559,107 @@ export abstract class RedisCommands {
 
   // -- server and connection ------------------------------------------------
 
+  // -- blocking -------------------------------------------------------------
+  //
+  // Every one of these takes its timeout as a **required** argument, in the
+  // units Redis takes it: seconds for the pop family (fractions allowed since
+  // 6.0), milliseconds for `wait`. Required rather than defaulted, because the
+  // one value that must be a deliberate choice is the one that means "forever" —
+  // and a default would make it an accident.
+  //
+  // A blocking command holds its connection for as long as it blocks. `0` is
+  // allowed only on a connection opened with `{ blocking: true }`; see the
+  // README.
+
+  /**
+   * `BLPOP` — pop from the head of the first list that has anything, waiting up
+   * to `timeout` seconds. `null` when the wait expired.
+   *
+   * The reply is `[key, value]`, which is turned into an object here because
+   * remembering which end of a two-element array is which is not a thing an API
+   * should ask of anyone.
+   */
+  async blpop(keys: string | string[], timeout: number): Promise<{ key: string; value: RedisValue } | null> {
+    return popped(await this.call(["BLPOP", ...many(keys), timeout]));
+  }
+
+  /** `BRPOP` — the same, from the tail. */
+  async brpop(keys: string | string[], timeout: number): Promise<{ key: string; value: RedisValue } | null> {
+    return popped(await this.call(["BRPOP", ...many(keys), timeout]));
+  }
+
+  /** `BLMOVE` — pop from one list and push onto another, atomically. */
+  async blmove(
+    source: string,
+    destination: string,
+    timeout: number,
+    from: "LEFT" | "RIGHT" = "LEFT",
+    to: "LEFT" | "RIGHT" = "RIGHT",
+  ): Promise<RedisValue | null> {
+    return (await this.call(["BLMOVE", source, destination, from, to, timeout])) as RedisValue | null;
+  }
+
+  /** `BZPOPMIN` — pop the lowest-scored member of the first non-empty set. */
+  async bzpopmin(
+    keys: string | string[],
+    timeout: number,
+  ): Promise<{ key: string; member: RedisValue; score: number } | null> {
+    return zpopped(await this.call(["BZPOPMIN", ...many(keys), timeout]));
+  }
+
+  /** `BZPOPMAX` — the same, highest-scored. */
+  async bzpopmax(
+    keys: string | string[],
+    timeout: number,
+  ): Promise<{ key: string; member: RedisValue; score: number } | null> {
+    return zpopped(await this.call(["BZPOPMAX", ...many(keys), timeout]));
+  }
+
+  /**
+   * `WAIT` — block until `replicas` replicas have acknowledged the writes made
+   * on this connection, or `timeoutMs` passes. Answers how many did.
+   *
+   * The timeout is in **milliseconds** here, unlike the pop family's seconds,
+   * because that is what Redis takes. Note that a smaller answer than asked for
+   * is not an error: it is the point of the return value.
+   */
+  async wait(replicas: number, timeoutMs: number): Promise<number> {
+    return count(await this.call(["WAIT", replicas, timeoutMs]));
+  }
+
+  /**
+   * Consumes a list as a queue, forever.
+   *
+   * The loop a blocking pop exists for, written once:
+   *
+   * ```js
+   * const worker = await Redis.connect(url, { blocking: true });
+   * for await (const job of worker.consume("jobs")) await handle(job.value);
+   * ```
+   *
+   * It polls with a **bounded** `BLPOP` rather than an unbounded one even on a
+   * blocking connection, because a bounded wait is what makes the loop
+   * interruptible: an abandoned `for await` or an aborted signal is noticed
+   * when the current wait ends rather than never. `timeout` is therefore the
+   * worst case for how long stopping takes, not a latency — a job that arrives
+   * mid-wait is delivered immediately.
+   */
+  async *consume(
+    keys: string | string[],
+    options: { timeout?: number; from?: "LEFT" | "RIGHT"; signal?: AbortSignal } = {},
+  ): AsyncGenerator<{ key: string; value: RedisValue }> {
+    const timeout = options.timeout ?? 5;
+    const pop = options.from === "RIGHT" ? "BRPOP" : "BLPOP";
+    const list = many(keys);
+    for (;;) {
+      if (options.signal?.aborted) return;
+      const job = popped(await this.call([pop, ...list, timeout], { ...(options.signal ? { signal: options.signal } : {}) }));
+      // `null` is the wait expiring with nothing to show, which is ordinary and
+      // not the end of the queue — go round again.
+      if (job !== null) yield job;
+    }
+  }
+
   // -- publishing -----------------------------------------------------------
 
   /**
@@ -680,6 +781,23 @@ function scored(items: readonly unknown[]): [RedisValue, number][] {
     out.push([items[i] as RedisValue, Number(items[i + 1])]);
   }
   return out;
+}
+
+/** One key, or several, as the argument list a command wants. */
+function many(keys: string | string[]): string[] {
+  return typeof keys === "string" ? [keys] : keys;
+}
+
+/** `BLPOP`'s `[key, value]`, or `null` when the wait expired. */
+function popped(reply: unknown): { key: string; value: RedisValue } | null {
+  if (reply === null || !Array.isArray(reply)) return null;
+  return { key: String(reply[0]), value: reply[1] as RedisValue };
+}
+
+/** `BZPOPMIN`'s `[key, member, score]`. */
+function zpopped(reply: unknown): { key: string; member: RedisValue; score: number } | null {
+  if (reply === null || !Array.isArray(reply)) return null;
+  return { key: String(reply[0]), member: reply[1] as RedisValue, score: Number(reply[2]) };
 }
 
 /** A `SCAN`-family reply: `[cursor, items]`. */
