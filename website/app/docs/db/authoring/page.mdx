@@ -164,6 +164,14 @@ Batch either way: a caller who breaks out of the loop after three rows must not
 have paid for three thousand, and that is as true of building objects as it is
 of decoding bytes.
 
+**The columns are fixed for the whole result set**, which is a real constraint
+if your documents do not agree on a shape. `Rows.fromObjects` unions the keys of
+the records you hand it, so it is correct when the answer is in hand and wrong
+when the second page introduces a field the first never had — that field would
+simply not be there. A backend streaming heterogeneous documents should say so
+in its shape rather than guess: one `doc` column holding the document is an
+honest result set, and a document is what the caller wanted anyway.
+
 <Callout type="warning" title="Do not encode objects into the byte layout">
   The first version of the Redis driver did, because the byte layout was the
   only one there was: it packed a reply it already held in memory into
