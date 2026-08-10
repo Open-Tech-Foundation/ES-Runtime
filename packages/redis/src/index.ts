@@ -45,6 +45,12 @@ import { RedisPool, type RedisPoolOptions } from "./pool.js";
 import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
 import { RedisCluster, type RedisClusterOptions } from "./cluster.js";
 import { connect } from "./connect.js";
+import {
+  SentinelResolver,
+  createSentinelClient,
+  createSentinelPool,
+  type SentinelOptions,
+} from "./sentinel.js";
 import { parseConnectionString } from "./url.js";
 
 export {
@@ -57,6 +63,9 @@ export {
   RedisPool,
   RedisTransaction,
   REDIS_DIALECT,
+  SentinelResolver,
+  createSentinelClient,
+  createSentinelPool,
   parseConnectionString,
   type MessageContext,
   type MessageHandler,
@@ -65,6 +74,7 @@ export {
   type RedisPayload,
   type RedisClusterOptions,
   type RedisPoolOptions,
+  type SentinelOptions,
   type ServerHello,
 };
 export type { CommandArg, Reply } from "./protocol/resp.js";

@@ -205,6 +205,12 @@ jobs:
       - name: start the cluster
         run: ./test/cluster-server.sh >> "$GITHUB_ENV"
 
+      # A Sentinel deployment — one master, one replica, three sentinels — for
+      # the discovery and the failover. Three because quorum is the part worth
+      # testing: one sentinel can announce a failover it agreed with nobody about.
+      - name: start the sentinel deployment
+        run: ./test/sentinel-server.sh >> "$GITHUB_ENV"
+
       - run: ./test/unit/run.sh
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun

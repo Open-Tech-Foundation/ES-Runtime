@@ -10,6 +10,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Sentinel support in `@opentf/esrun-redis`** — `createSentinelClient` and
+  `createSentinelPool` ask the sentinels where the master is and connect there,
+  trying each in turn and promoting the one that answered. The address is
+  **verified** with `ROLE` before it is used, because a sentinel mid-failover
+  hands out a server that has just become a replica and writing to a replica
+  loses the writes silently.
+
+  A failover does not close the connection — the old master is demoted, not
+  killed — so it is invisible to every other recovery path. A `READONLY` reply
+  on a Sentinel-backed connection is therefore treated as *the master moved*:
+  the connection is re-resolved and the command retried. `RedisOptions.resolve`
+  is the small seam underneath, called before every dial including
+  reconnections.
+
 - **Cluster support in `@opentf/esrun-redis`** — `createCluster(seeds)` reads
   the topology with `CLUSTER SLOTS`, keeps a pool per primary, hashes keys to
   slots (CRC16/XMODEM with hash-tag rules, checked against published vectors)

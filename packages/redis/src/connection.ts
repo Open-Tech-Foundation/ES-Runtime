@@ -104,6 +104,17 @@ export interface RedisOptions extends DecodeOptions {
    */
   blocking?: boolean;
   /**
+   * Where to actually connect, resolved at dial time.
+   *
+   * A seam for a deployment whose address is not fixed. Sentinel is the reason
+   * it exists: the master moves, and a connection that reopened against the
+   * address it was first given would reconnect to a server that is now a
+   * replica — or to nothing. Called before every dial, including reconnections,
+   * so re-resolving is automatic rather than something a caller has to
+   * remember. Overrides `host` and `port`.
+   */
+  resolve?: () => Promise<{ host: string; port: number }>;
+  /**
    * Reopen the connection after a transport failure. Default **off**.
    *
    * `true` takes the defaults; an object tunes them. Off by default because
@@ -320,8 +331,11 @@ export class RedisConnection extends BaseConnection {
 
   /** Opens the socket and does everything that makes it a usable connection. */
   async #dial(options: RedisOptions): Promise<void> {
-    const host = options.host ?? "localhost";
-    const port = options.port ?? 6379;
+    // Resolved every time, not once: the whole point of the hook is that the
+    // answer can change between the first dial and a reconnection.
+    const resolved = options.resolve === undefined ? null : await options.resolve();
+    const host = resolved?.host ?? options.host ?? "localhost";
+    const port = resolved?.port ?? options.port ?? 6379;
 
     // TLS from the first byte. Redis has no in-band upgrade — there is no
     // `SSLRequest` equivalent — so `rediss://` is an ordinary TLS socket, which
@@ -374,6 +388,26 @@ export class RedisConnection extends BaseConnection {
       this.#reopening = null;
     });
     await this.#reopening;
+  }
+
+  /**
+   * Replaces the connection with a fresh one, resolving its address again.
+   *
+   * For a server that is still answering but is no longer the one we want —
+   * where waiting for a transport failure would mean waiting forever.
+   */
+  async #redial(): Promise<void> {
+    await this.#tearingDown?.catch(() => {});
+    this.#tearingDown = null;
+    await this.#teardown();
+    this.#fatal = null;
+    await this.#dial(this.#target);
+    if (this.#watching) {
+      this.#watchLost = true;
+      this.#watching = false;
+    }
+    this.#inMulti = false;
+    await this.#resubscribe();
   }
 
   async #reopen(): Promise<void> {
@@ -785,6 +819,22 @@ export class RedisConnection extends BaseConnection {
     try {
       return await work();
     } catch (e) {
+      // A master that was demoted to a replica under us does not close the
+      // connection — it stays up and starts refusing writes with READONLY. So a
+      // Sentinel failover is invisible to every other recovery path here: the
+      // socket is fine, nothing is lost, and the connection would go on talking
+      // to a server that is no longer the master until something noticed.
+      // Re-resolving is what noticing looks like.
+      if (
+        retry &&
+        this.#target.resolve !== undefined &&
+        !this.#closing &&
+        e instanceof DbError &&
+        e.backendCode === "READONLY"
+      ) {
+        await this.#redial();
+        return work();
+      }
       if (
         !retry ||
         this.#reconnect === null ||

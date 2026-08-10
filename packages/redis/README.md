@@ -502,6 +502,49 @@ ignored, because a replica may be behind and nothing here knows which of your
 reads could tolerate that. Pub/sub is not cluster-aware either — use `ssubscribe`
 for sharded channels, or a connection to a specific node.
 
+## Sentinel
+
+```js
+import { createSentinelClient } from "@opentf/esrun-redis";
+
+const r = await createSentinelClient({
+  sentinels: ["redis://10.0.0.1:26379", "redis://10.0.0.2:26379"],
+  masterName: "mymaster",
+  reconnect: true,
+});
+```
+
+The sentinels are asked where the master is; the connection goes there. Each is
+tried in turn — a sentinel being down is the ordinary case rather than an
+exception, which is what there are several of them for — and the one that
+answered is moved to the front so the next lookup does not walk the dead ones
+again.
+
+The address is **verified** before it is used. A sentinel mid-failover will
+hand out a server that has just become a replica, and writing to a replica loses
+the writes silently; one `ROLE` turns that window into a retry.
+
+### Surviving a failover
+
+A failover does not close your connection. The old master is **demoted**, not
+killed — it stays up and starts refusing writes with `READONLY` — so a failover
+is invisible to every ordinary recovery path: the socket is fine and nothing is
+lost. This treats a `READONLY` reply on a Sentinel-backed connection as *the
+master moved*, re-resolves, and retries. That is the difference between a client
+that follows a failover and one that talks to a replica until somebody notices.
+
+With `reconnect: true` the transport-loss case is covered too, and the two
+together mean a failover needs nothing from the caller.
+
+`createSentinelPool` is the shape that survives one best, and not by accident: a
+pool already discards connections that fail and every replacement resolves
+again, so it converges on the new master by doing what it does anyway.
+
+Sentinels often have their own credentials — `sentinelPassword` and
+`sentinelUsername` are separate from the data connection's, because reusing one
+for the other is how a client ends up unable to find a master it could have
+used perfectly well.
+
 ## Pooling
 
 ```js
@@ -525,8 +568,7 @@ Named rather than left to be discovered:
 - **`MONITOR`**, which turns the connection into a firehose of every command the
   server runs. One reply per command cannot represent that; use `redis-cli`.
 - **Reading from replicas** in a cluster, and cluster-aware pub/sub.
-- **Sentinel**, and RESP3 client-side caching (server attributes are read and
-  discarded).
+- **RESP3 client-side caching** (server attributes are read and discarded).
 
 ## Tests
 
@@ -539,6 +581,7 @@ docker run -d --name esrun-redis-plain -p 6379:6379 redis:latest
 docker run -d --name esrun-redis-auth  -p 6380:6379 redis:latest redis-server --requirepass esrun
 eval "$(test/tls-server.sh)"       # optional; the tls test skips without it
 eval "$(test/cluster-server.sh)"  # optional; the cluster test skips without it
+eval "$(test/sentinel-server.sh)" # optional; the sentinel test skips without it
 ./test/run.sh
 ```
 
@@ -550,9 +593,9 @@ pub/sub over **both** protocols — RESP3 delivers messages as push frames and
 RESP2 as ordinary arrays, so the reader tells a message from a reply by its
 content there rather than by its type byte.
 
-Both halves run in CI against four servers: a `redis:8` service container, a
-password-protected one, a TLS one with a certificate from a private authority,
-and a three-primary cluster — because the things most likely to break are the
+Both halves run in CI against five deployments: a `redis:8` service container, a
+password-protected one, a TLS one with a certificate from a private authority, a
+three-primary cluster, and a Sentinel set that the tests really do fail over — because the things most likely to break are the
 ones a single default server cannot show.
 
 ## License
