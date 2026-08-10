@@ -6,7 +6,7 @@
 import { exit, env } from "runtime:process";
 import { connect, DbErrorCode } from "runtime:db";
 
-import redis, { redisSentinel, SentinelResolver } from "../dist/index.js";
+import { driver as redis, redisSentinel, SentinelResolver } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const sentinels = (env.REDIS_SENTINELS ?? "").split(",").filter(Boolean);

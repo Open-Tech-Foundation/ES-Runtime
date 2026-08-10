@@ -2,7 +2,7 @@
 import { exit, env } from "runtime:process";
 import { connect, DbError, DbErrorCode } from "runtime:db";
 
-import redis from "../dist/index.js";
+import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";

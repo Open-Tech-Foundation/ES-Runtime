@@ -7,9 +7,9 @@
  *
  * ```js
  * import { connect, queryAst } from "runtime:db";
- * import redis from "@opentf/esrun-redis";
+ * import { driver } from "@opentf/esrun-redis";
  *
- * const r = await connect("redis://localhost", { driver: redis });
+ * const r = await connect("redis://localhost", { driver });
  * await r.set("greeting", "hello", { ex: 60 });
  * await r.get("greeting");
  *
@@ -17,11 +17,16 @@
  * const rows = await r.query(queryAst(["LRANGE", "log", 0, -1]));
  * ```
  *
- * Three drivers, one call. `redis` opens a connection — `pool: true` makes it a
- * pool with the same surface. {@link redisCluster} opens a cluster client, and
- * {@link redisSentinel} finds a master through Sentinel. Which client you get
- * follows from the driver you passed, rather than from which of six functions
- * you happened to call.
+ * Three drivers, one call. {@link driver} opens a connection — `pool: true`
+ * makes it a pool with the same surface. {@link redisCluster} opens a cluster
+ * client, and {@link redisSentinel} finds a master through Sentinel. Which
+ * client you get follows from the driver you passed, rather than from which of
+ * seven functions you happened to call.
+ *
+ * Every driver package exports its driver under the name `driver`, and nothing
+ * as a default — so the import is the same shape whichever backend it is, and
+ * `{ driver }` is the whole of the option. Two drivers in one module are
+ * `import { driver as redis }`.
  *
  * There is no native code here, and none was added to the runtime for it. The
  * driver is JavaScript over `runtime:net` — the arrangement D56 committed to,
@@ -41,7 +46,7 @@ import {
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
 import { RedisCluster, redisCluster, type RedisClusterOptions } from "./cluster.js";
-import { redis, openConnection } from "./driver.js";
+import { driver, openConnection } from "./driver.js";
 import {
   SentinelResolver,
   redisSentinel,
@@ -52,7 +57,7 @@ import { parseConnectionString } from "./url.js";
 
 export {
   // The drivers — what `connect` takes.
-  redis,
+  driver,
   redisCluster,
   redisSentinel,
   // The classes they open, for typing and for extending.
@@ -90,5 +95,3 @@ export type {
   StreamEntry,
   TransactionRunner,
 } from "./commands.js";
-
-export default redis;

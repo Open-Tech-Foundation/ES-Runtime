@@ -5,7 +5,7 @@
 import { exit, env } from "runtime:process";
 import { connect, DbErrorCode } from "runtime:db";
 
-import redis, { redisCluster, RedisCluster, parseConnectionString } from "../dist/index.js";
+import { driver as redis, redisCluster, RedisCluster, parseConnectionString } from "../dist/index.js";
 import { hashSlot } from "../dist/protocol/slots.js";
 import { is, ok, report } from "./unit/assert.mjs";
 

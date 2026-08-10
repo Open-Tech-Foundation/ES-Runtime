@@ -7,14 +7,19 @@
  *
  * ```js
  * import { connect, sql } from "runtime:db";
- * import postgres from "@opentf/esrun-postgres";
+ * import { driver } from "@opentf/esrun-postgres";
  *
- * const db = await connect("postgres://user:pass@localhost/app", { driver: postgres });
+ * const db = await connect("postgres://user:pass@localhost/app", { driver });
  * const rows = await db.query(sql`SELECT * FROM users WHERE id = ${id}`);
  *
  * // A pool is the same call with the same driver.
- * const pool = await connect("postgres://localhost/app", { driver: postgres, pool: { max: 20 } });
+ * const pool = await connect("postgres://localhost/app", { driver, pool: { max: 20 } });
  * ```
+ *
+ * Every driver package exports its driver under the name `driver`, and nothing
+ * as a default — so the import is the same shape whichever backend it is, and
+ * `{ driver }` is the whole of the option. Two drivers in one module are
+ * `import { driver as postgres }`.
  *
  * There is no native code here. The driver is JavaScript over `runtime:net`,
  * which is the arrangement `runtime:db` exists to make possible: adding a
@@ -142,7 +147,7 @@ function stripUndefined<T extends object>(value: T): T {
  * everything a connection string can carry is also accepted as an option, with
  * explicit options winning over the URL and the URL winning over `PG*`.
  */
-export const postgres = defineDriver<PgConnection, PgOptions, PgPooled>({
+export const driver = defineDriver<PgConnection, PgOptions, PgPooled>({
   name: "postgres",
   schemes: ["postgres", "postgresql"],
   dialect: POSTGRES_DIALECT,
@@ -159,8 +164,6 @@ export const postgres = defineDriver<PgConnection, PgOptions, PgPooled>({
     // Parsed once, up front, so a malformed connection string fails where it
     // was written rather than at whichever call happens to open the first
     // connection.
-    return new PgPooled(postgres, url, parseConnectionString(url, options), poolOptions);
+    return new PgPooled(driver, url, parseConnectionString(url, options), poolOptions);
   },
 });
-
-export default postgres;

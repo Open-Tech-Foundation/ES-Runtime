@@ -8,7 +8,7 @@
 import { exit, env, unmask } from "runtime:process";
 import { connect, queryAst, DbErrorCode } from "runtime:db";
 
-import redis from "../dist/index.js";
+import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 // `unmask` through, always. A connection string with a password in it is

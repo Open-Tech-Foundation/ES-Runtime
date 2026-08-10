@@ -26,9 +26,9 @@ export async function openConnection(
  *
  * ```js
  * import { connect } from "runtime:db";
- * import redis from "@opentf/esrun-redis";
+ * import { driver } from "@opentf/esrun-redis";
  *
- * const r = await connect("redis://localhost", { driver: redis });
+ * const r = await connect("redis://localhost", { driver });
  * await r.set("greeting", "hello", { ex: 60 });
  * ```
  *
@@ -36,7 +36,7 @@ export async function openConnection(
  * `runtime:db`'s `query`/`execute` for anything portable. They are the same
  * connection, so there is nothing to choose between at the point of opening it.
  */
-export const redis = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
+export const driver = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
   name: "redis",
   schemes: ["redis", "rediss"],
   dialect: REDIS_DIALECT,
@@ -54,6 +54,6 @@ export const redis = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
    */
   pooled(url: string, options: RedisOptions = {}, poolOptions: PoolSettings = {}): RedisPooled {
     const settings = parseConnectionString(url, options);
-    return new RedisPooled(redis, url, { ...settings, blocking: false }, poolOptions);
+    return new RedisPooled(driver, url, { ...settings, blocking: false }, poolOptions);
   },
 });

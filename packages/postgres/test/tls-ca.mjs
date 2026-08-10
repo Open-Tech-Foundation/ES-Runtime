@@ -1,4 +1,4 @@
-import postgres from "../dist/index.js";
+import { driver as postgres } from "../dist/index.js";
 import { env } from "runtime:process";
 import { connect, DbErrorCode } from "runtime:db";
 

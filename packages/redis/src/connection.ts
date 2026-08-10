@@ -35,7 +35,7 @@ import { RedisCommands, mixinCommands } from "./commands.js";
 import { RespReader, encodeCommand, type CommandArg, type Reply } from "./protocol/resp.js";
 import { blocksForever, foreverMessage } from "./protocol/blocking.js";
 import { parseRedirect, portableCode, redirectMessage, type Redirect } from "./protocol/errors.js";
-import { shapeOf, toValue, writeRows, type DecodeOptions } from "./protocol/values.js";
+import { rowsOf, toValue, type DecodeOptions } from "./protocol/values.js";
 
 /** What `runtime:net`'s `connect()` hands back. */
 type RedisSocket = ReturnType<typeof netConnect>;
@@ -1264,27 +1264,12 @@ export class RedisConnection extends BaseConnection {
   }
 
   protected async _query(q: NormalizedQuery): Promise<Rows> {
-    const reply = await this.#call(this.#commandOf(q));
-    const { columns, rows: total } = shapeOf(reply);
-    const shape = defineRowShape(columns);
-    const decode = this.#decode;
-    let at = 0;
-    return new Rows(
-      {
-        // Always. A RESP reply is complete once it has been read — there is no
-        // cursor to leave open and nothing to close — so the connection is free
-        // the moment this returns, which is exactly what a pool wants to know.
-        exhausted: true,
-        async next(maxBytes: number) {
-          if (at >= total) return { bytes: EMPTY, rows: 0, done: true };
-          const batch = writeRows(reply, at, total, maxBytes || BATCH_BYTES, decode);
-          at += batch.rows;
-          return batch;
-        },
-        async close(): Promise<void> {},
-      },
-      shape,
-    );
+    // The reply is already JavaScript, so it is handed over as records rather
+    // than encoded into the shared byte layout for `decodeBatch` to take apart
+    // again. `exhausted` is always true: a RESP reply is complete once it has
+    // been read, so there is no cursor to leave open and the connection is free
+    // the moment this returns — which is exactly what a pool wants to know.
+    return rowsOf(await this.#call(this.#commandOf(q)), this.#decode);
   }
 
   protected async _execute(q: NormalizedQuery): Promise<ExecuteResult> {

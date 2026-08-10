@@ -96,8 +96,22 @@ declare module "runtime:db" {
    * iteration, early-exit and close discipline come from `Rows` itself.
    */
   export interface RowSource {
-    /** The next batch. `done` ends the result. */
-    next(maxBytes: number): Promise<{ bytes: Uint8Array; rows: number; done: boolean }>;
+    /**
+     * The next batch. `done` ends the result.
+     *
+     * A batch arrives one of two ways, and which one is the backend's nature
+     * rather than its choice. `bytes` + `rows` is the shared layout, for
+     * anything that read its values off a socket or out of an engine — pair it
+     * with {@link defineRowShape}. `records` is for a backend whose values are
+     * already JavaScript, and each record is an array of values in column
+     * order — pair it with {@link defineRecordShape}.
+     */
+    next(
+      maxBytes: number,
+    ): Promise<
+      | { bytes: Uint8Array; rows: number; done: boolean; records?: undefined }
+      | { records: readonly unknown[][]; done: boolean }
+    >;
     /** Called once, however the iteration ended. */
     close(): Promise<void>;
     /** `true` when the backend finished the result without opening a cursor. */
@@ -105,7 +119,17 @@ declare module "runtime:db" {
   }
 
   export class Rows implements AsyncIterable<Row> {
-    constructor(source: RowSource, shape: RowShape);
+    constructor(source: RowSource, shape: RowShape | RecordShape);
+    /**
+     * Rows already in hand, as a result set — for a backend whose answer is
+     * JavaScript rather than bytes. The records are wrapped, not encoded and
+     * decoded. `columns` defaults to the union of the records' keys, in
+     * first-seen order.
+     */
+    static fromObjects(
+      records: Iterable<Record<string, unknown>>,
+      columns?: readonly Column[],
+    ): Rows;
     [Symbol.asyncIterator](): AsyncIterator<Row>;
     readonly columns: readonly Column[];
     /**
@@ -124,7 +148,16 @@ declare module "runtime:db" {
   /** What a statement run for its effect did. */
   export interface ExecuteResult {
     readonly changes: number;
-    readonly lastInsertRowid: number | null;
+    /**
+     * The key the backend generated, where it generated one, and `null`
+     * everywhere else — which includes every backend that has no such concept
+     * and every insert that did not make one. SQLite's word for it, because
+     * SQLite is where the concept comes from; the type is wider than SQLite's
+     * because a generated key elsewhere is as often a string (a document id, a
+     * UUID) as an integer. PostgreSQL always reports `null` and expects
+     * `RETURNING`.
+     */
+    readonly lastInsertRowid: number | bigint | string | null;
   }
 
   /** A query built by the {@link sql} tag: fragments and values, kept apart. */
@@ -169,6 +202,19 @@ declare module "runtime:db" {
      * them, so a helper that opens one composes with a caller that already did.
      */
     transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
+    /**
+     * Runs `fn` with a connection held for the whole of it.
+     *
+     * On a single connection that connection is the receiver; on a pool it is
+     * one borrowed for the duration. It is on both so that code which must not
+     * be spread over two connections — a session setting, a `LISTEN`, a
+     * `WATCH`, a temporary table — does not have to know which kind it holds.
+     */
+    withConnection<T>(fn: (connection: Connection) => Promise<T>): Promise<T>;
+    /** Whether this is still worth using at all. */
+    readonly usable: boolean;
+    /** Whether this is fit for the next caller — what a pool asks before reusing one. */
+    readonly reusable: boolean;
     close(): Promise<void>;
     [Symbol.asyncDispose](): Promise<void>;
   }
@@ -274,6 +320,15 @@ declare module "runtime:db" {
   }
 
   export interface DialectSupport {
+    /**
+     * A driver may declare capabilities of its own beside these — a vector
+     * index, full-text search, a graph traversal — and they survive on
+     * `dialect.supports` unchanged. The names here are the ones the kit itself
+     * acts on; anything else is a backend telling an ORM what it can do, which
+     * is the only way an ORM can branch on a backend that did not exist when
+     * the ORM was written.
+     */
+    [capability: string]: boolean | undefined;
     returning: boolean;
     savepoints: boolean;
     namedParameters: boolean;
@@ -325,6 +380,15 @@ declare module "runtime:db" {
     execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
     transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
+    /**
+     * Runs `fn` with a connection held for the whole of it — here, this one.
+     *
+     * It exists on a single connection so that code which must not be spread
+     * over two does not have to know whether it was handed a connection or a
+     * pool. A driver overrides it only to refuse: a client with no single
+     * session to offer (a cluster) says so by name.
+     */
+    withConnection<T>(fn: (connection: Connection) => Promise<T>): Promise<T>;
     close(): Promise<void>;
     [Symbol.asyncDispose](): Promise<void>;
     /**
@@ -436,6 +500,10 @@ declare module "runtime:db" {
     readonly idle: number;
     /** Callers queued behind a full pool. */
     readonly pending: number;
+    /** Usable until closed. */
+    readonly usable: boolean;
+    /** Always true while open: an unfit connection was destroyed, not kept. */
+    readonly reusable: boolean;
     acquire(): Promise<T>;
     /**
      * Returns a resource. `clean` is the driver's assertion that it is fit for
@@ -594,6 +662,26 @@ declare module "runtime:db" {
     columns: readonly Column[],
     options?: { decoders?: readonly ColumnDecoder[] },
   ): RowShape;
+
+  /** The accessor class for records — values in column order, already decoded. */
+  export interface RecordShape {
+    new (values: readonly unknown[]): Row;
+    readonly columns: readonly Column[];
+    readonly records: true;
+  }
+
+  /**
+   * Builds the accessor class for a backend whose values are **already
+   * JavaScript**.
+   *
+   * The byte layout exists because a wire protocol hands over bytes and
+   * decoding them lazily is worth the machinery. A backend that never had bytes
+   * — a document store answering JSON, a graph or vector service over HTTP, an
+   * in-process engine holding objects — would otherwise encode its values so
+   * that `decodeBatch` could immediately take them apart again. Same `Row`
+   * contract either way; nothing downstream can tell which kind it holds.
+   */
+  export function defineRecordShape(columns: readonly Column[]): RecordShape;
 
   /** Walks a batch and returns its rows, decoding nothing until a column is read. */
   export function decodeBatch(bytes: Uint8Array, shape: RowShape, rowCount: number): Row[];

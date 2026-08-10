@@ -5,7 +5,7 @@ import { args, env } from "runtime:process";
 // package.json — so a reach up into `packages/` is refused, correctly. Copying
 // the built driver in is the honest way across that line.
 import { connect } from "runtime:db";
-import postgres from "./.driver/index.js";
+import { driver as postgres } from "./.driver/index.js";
 import * as w from "./workload.mjs";
 
 const workload = args[0];

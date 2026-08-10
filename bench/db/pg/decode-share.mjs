@@ -9,7 +9,7 @@
 //   PG_URL=… esrun bench/db/pg/decode-share.mjs     (after run.sh has seeded)
 import { env } from "runtime:process";
 import { connect } from "runtime:db";
-import postgres from "./.driver/index.js";
+import { driver as postgres } from "./.driver/index.js";
 
 const db = await connect(env.PG_URL, { driver: postgres });
 const N = 10_000;

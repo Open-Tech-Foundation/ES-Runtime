@@ -1,5 +1,5 @@
 import { env } from "runtime:process";
-import postgres, { parseConnectionString, environmentDefaults } from "../dist/index.js";
+import { driver as postgres, parseConnectionString, environmentDefaults } from "../dist/index.js";
 import { connect } from "runtime:db";
 
 const show = (o) => JSON.stringify({ host: o.host, port: o.port, user: o.user, database: o.database, sslmode: o.sslmode, connectTimeout: o.connectTimeout, applicationName: o.applicationName });

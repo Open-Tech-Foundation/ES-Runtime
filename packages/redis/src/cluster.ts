@@ -27,7 +27,7 @@ import {
 } from "runtime:db";
 
 import { RedisCommands } from "./commands.js";
-import { openConnection, redis } from "./driver.js";
+import { driver, openConnection } from "./driver.js";
 import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import type { Redirect } from "./protocol/errors.js";
@@ -234,7 +234,7 @@ export class RedisCluster extends RedisCommands {
     let pool = this.#pools.get(key);
     if (pool === undefined) {
       const target = this.#optionsFor(key);
-      pool = new RedisPooled(redis, hostPort(target), target, this.#options);
+      pool = new RedisPooled(driver, hostPort(target), target, this.#options);
       this.#pools.set(key, pool);
     }
     return pool;
@@ -300,6 +300,36 @@ export class RedisCluster extends RedisCommands {
       changes += result.changes;
     }
     return { changes, lastInsertRowid: null };
+  }
+
+  /** Usable until closed. */
+  get usable(): boolean {
+    return !this.#closed;
+  }
+
+  /** A cluster hands out nothing that could come back unfit; it holds pools. */
+  get reusable(): boolean {
+    return this.usable;
+  }
+
+  /**
+   * Refused, and by name — a cluster has no single session to lend.
+   *
+   * Every other `Connection` can promise that what runs inside `fn` runs on one
+   * connection. A cluster cannot: the keys touched inside it may live on
+   * different nodes, and the whole point of the client is that it sends each
+   * one where it belongs. Refusing is the honest answer, and it is the same
+   * answer `transaction` gives for the same reason. For state that must sit on
+   * one node — a `WATCH`, a `SELECT` — reach that node's pool with a key that
+   * hashes to it.
+   */
+  withConnection<T>(_fn: (connection: never) => Promise<T>): Promise<T> {
+    return Promise.reject(
+      new DbError(
+        "a cluster has no single connection to hold: its keys may live on different nodes — run the affected keys through one slot, or open a connection to that node",
+        { code: DbErrorCode.Unsupported },
+      ),
+    );
   }
 
   /**

@@ -6,7 +6,7 @@ import { args, env } from "runtime:process";
 // way across that line, and it keeps the benchmark measuring the artifact that
 // ships.
 import { connect } from "runtime:db";
-import redis from "./.driver/index.js";
+import { driver as redis } from "./.driver/index.js";
 import * as w from "./workload.mjs";
 
 const workload = args[0];

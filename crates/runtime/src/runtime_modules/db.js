@@ -439,6 +439,70 @@ function defineRowShape(columns, { decoders } = {}) {
   return Row;
 }
 
+/// The accessor class for a backend whose values are **already JavaScript**.
+///
+/// The batch layout exists because a wire protocol hands over bytes, and
+/// decoding them lazily is the whole performance argument of D56. A backend
+/// that never had bytes — a document store answering JSON, a graph or vector
+/// service over HTTP, an in-process engine holding objects — has nothing to
+/// decode, and making it encode its values into the layout so that `decodeBatch`
+/// can immediately take them apart again is pure loss. Two shapes, one `Row`
+/// contract: the columns are prototype getters either way, so nothing
+/// downstream can tell which kind it holds.
+///
+/// A record is an **array of values in column order**, which is what keeps one
+/// accessor class monomorphic. `Rows.fromObjects` is the conversion for a
+/// backend holding objects instead.
+function defineRecordShape(columns) {
+  class Row {
+    // Private, for the same reason the byte shape's buffer is: a spread must
+    // not carry the backing values out through a row.
+    #values;
+
+    constructor(values) {
+      this.#values = values;
+    }
+
+    [READ](index) {
+      const value = this.#values[index];
+      return value === undefined ? null : value;
+    }
+
+    values() {
+      return columns.map((_, i) => this[READ](i));
+    }
+
+    toObject() {
+      const out = {};
+      for (let i = 0; i < columns.length; i++) out[columns[i].name] = this[READ](i);
+      return out;
+    }
+
+    toJSON() {
+      return this.toObject();
+    }
+  }
+
+  Row.columns = columns;
+  Row.decoders = [];
+  Row.records = true;
+
+  const seen = new Set();
+  columns.forEach((column, index) => {
+    if (seen.has(column.name)) return;
+    seen.add(column.name);
+    Object.defineProperty(Row.prototype, column.name, {
+      get() {
+        return this[READ](index);
+      },
+      enumerable: true,
+      configurable: true,
+    });
+  });
+
+  return Row;
+}
+
 /// Walks a batch of rows and returns them as instances of `shape`.
 ///
 /// One pass over the buffer records each column's span; nothing is decoded.
@@ -663,12 +727,49 @@ class Rows {
     return this._source.exhausted === true;
   }
 
+  /// Rows already in hand, as a result set.
+  ///
+  /// For a backend whose answer is JavaScript rather than bytes: the records
+  /// are wrapped, not encoded and decoded. `columns` may be omitted, in which
+  /// case it is the union of the records' keys, in first-seen order — which is
+  /// the right default for a document store, where the shape is the data's
+  /// rather than the schema's.
+  static fromObjects(records, columns) {
+    const list = [...records];
+    const shape = defineRecordShape(
+      columns ?? inferColumns(list),
+    );
+    const names = shape.columns.map((column) => column.name);
+    const rows = list.map((record) => names.map((name) => record[name]));
+    let sent = false;
+    return new Rows(
+      {
+        // The whole answer is here: there is no cursor to leave open, which a
+        // pool reads as "this connection is free the moment the call returns".
+        exhausted: true,
+        async next() {
+          if (sent) return { records: [], done: true };
+          sent = true;
+          return { records: rows, done: true };
+        },
+        async close() {},
+      },
+      shape,
+    );
+  }
+
   async *[Symbol.asyncIterator]() {
     try {
       while (!this._done) {
         const batch = await this._source.next(BATCH_BYTES);
         this._done = batch.done;
-        if (batch.rows > 0) {
+        // A batch arrives one of two ways, and which one is the backend's
+        // nature rather than its choice: `bytes` for anything that read them
+        // off a socket or out of an engine, `records` for a backend whose
+        // values are already JavaScript. The branch is per batch, not per row.
+        if (batch.records !== undefined) {
+          for (const record of batch.records) yield new this._shape(record);
+        } else if (batch.rows > 0) {
           const rows = decodeBatch(batch.bytes, this._shape, batch.rows);
           for (const row of rows) yield row;
         }
@@ -698,6 +799,23 @@ class Rows {
     this._closed = true;
     await this._source.close();
   }
+}
+
+// The columns of a set of records: every key any of them has, in the order they
+// were first seen. A document store's rows are not required to agree on a
+// shape, and dropping the keys a later record introduced would lose data
+// silently — the worst of the available failures.
+function inferColumns(records) {
+  const names = [];
+  const seen = new Set();
+  for (const record of records) {
+    for (const name of Object.keys(record)) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
+  }
+  return names.map((name) => ({ name, declType: null }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,6 +1119,21 @@ class BaseConnection {
 
   async _rollbackTransaction({ nested, name }) {
     await this.execute(nested ? `ROLLBACK TO ${name}` : "ROLLBACK");
+  }
+
+  /**
+   * Runs `fn` with a connection held for the whole of it.
+   *
+   * On a single connection that connection is `this`, and the method exists
+   * anyway — because the alternative is that code which must not be spread over
+   * two connections (a session setting, a `LISTEN`, a `WATCH`, a temporary
+   * table) has to know whether it was handed a connection or a pool. An ORM
+   * would then either demand a pool or duplicate itself. One name, both kinds,
+   * and the pooled implementation is the one that actually borrows.
+   */
+  async withConnection(fn) {
+    this._open();
+    return fn(this);
   }
 
   async close() {
@@ -1613,6 +1746,22 @@ class PooledConnection {
     return this._pool.pending;
   }
 
+  /**
+   * The same two questions a single connection answers.
+   *
+   * A pool is usable until it is closed, and always fit for the next caller: a
+   * connection that came back unfit was destroyed rather than kept, so the pool
+   * itself never carries one caller's leftovers into the next. They are here so
+   * that code holding "a connection" can ask without knowing which kind it has.
+   */
+  get usable() {
+    return !this._pool._closed;
+  }
+
+  get reusable() {
+    return this.usable;
+  }
+
   /// Returns a connection, asking it whether it is fit for the next caller.
   /// `reusable` is strictly `true` or the connection is destroyed: a driver
   /// that never answered has not vouched for anything.
@@ -2145,6 +2294,7 @@ export {
   Dialect,
   ByteWriter,
   defineRowShape,
+  defineRecordShape,
   decodeBatch,
   encodeParams,
   encodeParamSets,

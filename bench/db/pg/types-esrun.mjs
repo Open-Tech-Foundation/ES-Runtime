@@ -1,6 +1,6 @@
 import { args, env } from "runtime:process";
 import { connect } from "runtime:db";
-import postgres from "./.driver/index.js";
+import { driver as postgres } from "./.driver/index.js";
 import { TYPES_SQL, COLUMNS, describe } from "./types-shared.mjs";
 
 // Caching off asks for everything in text; on asks for binary where the driver

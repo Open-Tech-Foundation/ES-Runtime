@@ -2,31 +2,22 @@
  * Turning a RESP reply into what a caller sees — twice, for the two surfaces.
  *
  * `toValue` produces ordinary JavaScript, which is what the client API returns.
- * `writeRows` transcodes into `runtime:db`'s shared row layout, which is what
- * `connection.query()` returns. They are separate functions and they agree on
- * every rule that matters, because a value that changed type depending on which
- * door it came through would be the sharpest edge in the package.
+ * `rowsOf` presents the same replies as `runtime:db` rows. They agree on every
+ * rule that matters, because a value that changed type depending on which door
+ * it came through would be the sharpest edge in the package — so the row path
+ * is `toValue` plus a flattening, not a second decoder.
  *
- * The layout is the one D56 fixed for every backend: per row an `int32` length
- * counting itself, an `int16` column count, then per column an `int32` length
- * (`-1` for NULL) and that many bytes. Redis replies carry a type per value
- * rather than per column — an array need not be homogeneous — so each cell is
- * written in the kit's **tagged** encoding and read back by its dynamic
- * decoder, exactly as the embedded SQLite backend's values are.
+ * It hands the kit **records**: a RESP reply is already fully in memory and
+ * already JavaScript, so encoding it into the shared byte layout only to have
+ * `decodeBatch` take it apart again was work with no reader. That layout is
+ * for backends that were handed bytes; this one never was.
  */
-import { ByteWriter, DbError, DbErrorCode } from "runtime:db";
+import { DbError, DbErrorCode, Rows, defineRecordShape } from "runtime:db";
 
 import type { Reply } from "./resp.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-
-// The kit's per-value tags. Shared with the host and with every backend that
-// produces rows in this layout.
-const TAG_INTEGER = 1;
-const TAG_REAL = 2;
-const TAG_TEXT = 3;
-const TAG_BLOB = 4;
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 const MIN_SAFE = -MAX_SAFE;
@@ -152,99 +143,92 @@ function cellsAt(reply: Reply, index: number): Reply[] {
   }
 }
 
-/**
- * Writes one cell in the kit's tagged encoding.
- *
- * A nested aggregate has nowhere to go in a flat row, so it is written as JSON
- * text. That is a real limitation and it is stated rather than hidden: the
- * command whose reply nests — `XRANGE`, `GEOPOS`, `EXEC` — is better read
- * through the client API, which returns the structure itself.
- */
-function writeCell(w: ByteWriter, cell: Reply, options: DecodeOptions): void {
-  switch (cell.kind) {
-    case "null":
-      // A length of -1 is the whole of NULL: no tag, no payload.
-      w.i32(-1);
-      return;
-    case "integer":
-      w.i32(9).u8(TAG_INTEGER).i64(cell.value);
-      return;
-    case "boolean":
-      w.i32(9).u8(TAG_INTEGER).i64(cell.value ? 1 : 0);
-      return;
-    case "double":
-      w.i32(9).u8(TAG_REAL).f64(cell.value);
-      return;
-    case "bignumber":
-      // Past what `i64` holds, so it stays exact as text rather than wrapping.
-      writeText(w, cell.value.toString());
-      return;
-    case "status":
-      writeText(w, cell.value);
-      return;
-    case "string":
-      if (options.binary) {
-        w.i32(cell.bytes.length + 1).u8(TAG_BLOB).bytes(cell.bytes);
-      } else {
-        w.i32(cell.bytes.length + 1).u8(TAG_TEXT).bytes(cell.bytes);
-      }
-      return;
-    case "array":
-    case "set":
-    case "push":
-    case "map":
-      writeText(w, JSON.stringify(toValue(cell, { binary: false }), jsonSafe));
-      return;
-    case "error":
-      // Not written as a value. An error that arrived inside an array is still
-      // an error, and turning it into a string cell would hand the caller a row
-      // that reads like data.
-      throw nestedError(cell.value.prefix, cell.value.message);
-  }
-}
-
-function writeText(w: ByteWriter, text: string): void {
-  const bytes = encoder.encode(text);
-  w.i32(bytes.length + 1).u8(TAG_TEXT).bytes(bytes);
-}
-
 /** `JSON.stringify` refuses a bigint; a nested counter should not fail a query. */
 function jsonSafe(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
 }
 
 /**
- * Encodes rows `[from, …)` of `reply` into one batch, stopping at `maxBytes`.
+ * One cell as an ordinary JavaScript value.
  *
- * A whole reply is already in memory — RESP gives no way to know where a reply
- * ends without reading it — so batching buys nothing on the wire. What it buys
- * is that `decodeBatch` is not asked to build ten million row objects at once,
- * and that a caller who breaks out of the loop after three rows never pays for
- * the rest.
+ * A nested aggregate has nowhere to go in a flat row, so it becomes JSON text.
+ * That is a real limitation and it is stated rather than hidden: the command
+ * whose reply nests — `XRANGE`, `GEOPOS`, `EXEC` — is better read through the
+ * command surface, which returns the structure itself.
  */
-export function writeRows(
-  reply: Reply,
-  from: number,
-  total: number,
-  maxBytes: number,
-  options: DecodeOptions,
-): { bytes: Uint8Array; rows: number; done: boolean } {
-  const w = new ByteWriter(Math.min(maxBytes, 8192));
-  let written = 0;
-  let at = from;
-  while (at < total) {
-    const cells = cellsAt(reply, at);
-    const start = w.beginLength();
-    w.i16(cells.length);
-    for (const cell of cells) writeCell(w, cell, options);
-    // Inclusive of the length field itself, which is how the decoder walks from
-    // one row to the next.
-    w.endLength(start, { inclusive: true });
-    at++;
-    written++;
-    if (w.length >= maxBytes) break;
+function cellValue(cell: Reply, options: DecodeOptions): unknown {
+  switch (cell.kind) {
+    case "null":
+      return null;
+    case "integer":
+      return narrow(cell.value);
+    case "boolean":
+      return cell.value ? 1 : 0;
+    case "double":
+      return cell.value;
+    case "bignumber":
+      // Past what an i64 holds, so it stays exact as text rather than wrapping.
+      return cell.value.toString();
+    case "status":
+      return cell.value;
+    case "string":
+      return options.binary ? cell.bytes : decoder.decode(cell.bytes);
+    case "array":
+    case "set":
+    case "push":
+    case "map":
+      return JSON.stringify(toValue(cell, { binary: false }), jsonSafe);
+    case "error":
+      // Not returned as a value. An error that arrived inside an array is still
+      // an error, and handing it back as a string would give the caller a row
+      // that reads like data.
+      throw nestedError(cell.value.prefix, cell.value.message);
   }
-  return { bytes: w.finish(), rows: written, done: at >= total };
+}
+
+/**
+ * How many rows are converted per batch.
+ *
+ * Rows rather than bytes, which is the natural unit once nothing is being
+ * encoded — the kit's `maxBytes` budget describes a buffer this path does not
+ * build. The number is a compromise between per-batch overhead and how much a
+ * caller who stops early has already paid for.
+ */
+const ROWS_PER_BATCH = 1024;
+
+/**
+ * A reply as a result set.
+ *
+ * The whole reply is already in memory — RESP gives no way to know where one
+ * ends without reading it — so there is nothing to stream and no cursor to
+ * leave open, which is why `rows.exhausted` is always true and why a pooled
+ * connection is free the moment the call returns.
+ *
+ * It is still converted **in batches**, and that is not vestigial. A ten
+ * million element reply would otherwise become ten million arrays before the
+ * caller saw the first one, and a caller who breaks out of the loop after three
+ * rows would have paid for all of them. Batching is what keeps `LRANGE 0 -1`
+ * followed by `break` cheap.
+ */
+export function rowsOf(reply: Reply, options: DecodeOptions): Rows {
+  const { columns, rows: total } = shapeOf(reply);
+  let at = 0;
+  return new Rows(
+    {
+      exhausted: true,
+      async next() {
+        if (at >= total) return { records: [], done: true };
+        const end = Math.min(total, at + ROWS_PER_BATCH);
+        const records: unknown[][] = new Array(end - at);
+        for (let slot = 0; at < end; at++, slot++) {
+          records[slot] = cellsAt(reply, at).map((cell) => cellValue(cell, options));
+        }
+        return { records, done: at >= total };
+      },
+      async close() {},
+    },
+    defineRecordShape(columns),
+  );
 }
 
 /** Decodes a bulk string the way `toValue` would, for the command helpers. */

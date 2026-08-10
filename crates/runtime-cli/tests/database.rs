@@ -852,6 +852,136 @@ no driver: a driver is required"
     );
 }
 
+/// The families `runtime:db` has no backend for yet — a document store, a
+/// vector index, a graph — are the ones most likely to find the driver tier
+/// shaped around SQL over a socket. This is one of them, written the way a
+/// third party would write it: no SQL, no transactions, values that are already
+/// JavaScript, a generated key that is a string, and a capability of its own to
+/// declare.
+///
+/// It is a test rather than a paragraph because D56's own lesson was that an
+/// extension point with no consumer is a comment.
+#[test]
+fn a_backend_that_is_not_a_sql_database_over_a_socket() {
+    let out = run(
+        "docdb",
+        r#"
+        import {
+          BaseConnection, Dialect, DbError, DbErrorCode, Rows,
+          connect, defineDriver, queryAst,
+        } from "runtime:db";
+
+        const dialect = new Dialect({
+          name: "docdb",
+          placeholder: () => {
+            throw new DbError("docdb has no placeholders", { code: DbErrorCode.QueryForm });
+          },
+          // The three the kit acts on, and one of this backend's own — which an
+          // ORM written before this backend existed can still branch on.
+          supports: { sqlText: false, queryAst: true, transactions: false, vectorSearch: true },
+        });
+
+        const store = new Map();
+        let seq = 0;
+
+        class DocConnection extends BaseConnection {
+          constructor() { super({ dialect, backend: "docdb" }); }
+
+          async _query(q) {
+            const op = q.ast;
+            if (op.find !== undefined) {
+              const docs = [...store.values()].filter((d) =>
+                Object.entries(op.find).every(([k, v]) => d[k] === v));
+              // The documents are already objects: they are handed over, not
+              // encoded into the batch layout for a decoder to undo.
+              return Rows.fromObjects(docs);
+            }
+            const scored = [...store.values()]
+              .map((d) => ({ ...d, score: distance(d.embedding, op.nearest) }))
+              .sort((a, b) => a.score - b.score)
+              .slice(0, op.k ?? 3);
+            return Rows.fromObjects(scored);
+          }
+
+          async _execute(q) {
+            const id = `doc_${++seq}`;
+            store.set(id, { id, ...q.ast.insert });
+            return { changes: 1, lastInsertRowid: id };
+          }
+
+          async _close() {}
+        }
+
+        function distance(a, b) {
+          let sum = 0;
+          for (let i = 0; i < b.length; i++) sum += (a[i] - b[i]) ** 2;
+          return Math.sqrt(sum);
+        }
+
+        const driver = defineDriver({
+          name: "docdb", schemes: ["docdb"], dialect,
+          open: async () => new DocConnection(),
+        });
+
+        const db = await connect("docdb://memory", { driver });
+        const written = await db.execute(queryAst({ insert: { name: "ada", embedding: [1, 0, 0] } }));
+        await db.execute(queryAst({ insert: { name: "grace", embedding: [0, 1, 0] } }));
+        // A generated key that is not a rowid, which is what every backend
+        // outside SQLite's family has.
+        console.log("key:", written.lastInsertRowid);
+
+        const [row] = await (await db.query(queryAst({ find: { name: "ada" } }))).toArray();
+        // A nested value survives as itself. Through the byte layout it would
+        // have had to be flattened or JSON-encoded on the way in and parsed on
+        // the way back out.
+        console.log("nested:", Array.isArray(row.embedding), JSON.stringify(row.toObject()));
+
+        const near = await (await db.query(queryAst({ nearest: [0.9, 0.1, 0], k: 2 }))).toArray();
+        console.log("nearest:", near.map((r) => r.name).join(","));
+
+        // The columns are the union of the documents' keys, in first-seen order:
+        // a document store's rows do not have to agree on a shape.
+        const all = await db.query(queryAst({ find: {} }));
+        console.log("columns:", all.columns.map((c) => c.name).join(","));
+        await all.close();
+
+        console.log("capability:", db.dialect.supports.vectorSearch,
+          "| before connecting:", driver.dialect.supports.vectorSearch);
+
+        // The portable surface, on a connection and on a pool alike.
+        const pool = await connect("docdb://memory", { driver, pool: true });
+        console.log("withConnection:", typeof db.withConnection, typeof pool.withConnection);
+        console.log("usable/reusable:", db.usable, db.reusable, pool.usable, pool.reusable);
+        console.log("held:", await pool.withConnection(async (c) => c.backend));
+        await pool.close();
+
+        for (const [what, attempt] of [
+          ["text", () => db.query("SELECT 1")],
+          ["transaction", () => db.transaction(async () => {})],
+        ]) {
+          try { await attempt(); console.log(`${what}: allowed`); }
+          catch (e) { console.log(`${what}: refused (${e.code})`); }
+        }
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "key: doc_1
+nested: true {\"id\":\"doc_1\",\"name\":\"ada\",\"embedding\":[1,0,0]}
+nearest: ada,grace
+columns: id,name,embedding
+capability: true | before connecting: true
+withConnection: function function
+usable/reusable: true true true true
+held: docdb
+text: refused (ERR_DB_QUERY_FORM)
+transaction: refused (ERR_DB_UNSUPPORTED)"
+    );
+}
+
 /// `executeMany` means the same thing on every backend from the day the backend
 /// exists. A driver overrides the batch path to make it fast; not overriding it
 /// must leave the *semantics* intact, not raise a TypeError naming a private

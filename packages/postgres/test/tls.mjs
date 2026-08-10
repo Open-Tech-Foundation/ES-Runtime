@@ -1,4 +1,4 @@
-import postgres from "../dist/index.js";
+import { driver as postgres } from "../dist/index.js";
 import { env } from "runtime:process";
 import { connect } from "runtime:db";
 // No sslmode: the default is "prefer" — ask for TLS, continue without it if the

@@ -62,7 +62,7 @@ export class RedisPooled extends PooledConnection {
    * share the state.
    */
   override withConnection<T>(fn: (connection: RedisConnection) => Promise<T>): Promise<T> {
-    return super.withConnection(fn as (connection: Connection) => Promise<T>);
+    return super.withConnection(fn as unknown as (connection: Connection) => Promise<T>);
   }
 }
 
