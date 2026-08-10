@@ -90,6 +90,8 @@ spelling and means the `default` user.
 | `?connect_timeout=` | **seconds**, as every connection string spells it |
 | `?protocol=2` \| `3` | force RESP2, or ask for RESP3 (the default) |
 | `?client_name=` | `CLIENT SETNAME`, so the connection is identifiable |
+| `?binary=1` | hand values back as `Uint8Array` rather than decoding them |
+| `?command_timeout=` | **milliseconds** — see below, it destroys the connection |
 
 A password in a query parameter is **refused**: one place for a credential means
 a URL-redacting logger only has to know about one.
@@ -573,6 +575,27 @@ Sentinels often have their own credentials — `sentinelPassword` and
 for the other is how a client ends up unable to find a master it could have
 used perfectly well.
 
+## Command timeouts
+
+```js
+const r = await Redis.connect(url, { commandTimeout: 5000, reconnect: true });
+```
+
+**A timeout destroys the connection**, and that is not a shortcut. Redis has no
+way to cancel a command in flight: the server finishes it and sends the reply
+whenever it is ready. A client that gave up but kept the connection would read
+that reply as the *next* command's answer — and every value after it would be
+one behind, silently. So the only safe way to stop waiting is to stop using the
+connection.
+
+That makes it a blunt instrument. Set it generously, or not at all. It earns its
+place for the case it exists for — a server that has stopped answering without
+closing the socket, where the alternative is waiting forever — and with
+`reconnect` on the cost is one dropped socket.
+
+The error is `ERR_DB_TIMEOUT`, not `ERR_DB_CONNECTION_LOST`: the lost connection
+is the consequence, and the deadline is the cause.
+
 ## Pooling
 
 ```js
@@ -596,6 +619,9 @@ Named rather than left to be discovered:
 - **`MONITOR`**, which turns the connection into a firehose of every command the
   server runs. One reply per command cannot represent that; use `redis-cli`.
 - **Reading from replicas** in a cluster, and cluster-aware pub/sub.
+- **Cancelling a command in flight.** Redis has no such thing, so `{ signal }`
+  rejects the caller when the reply arrives rather than stopping the work, and
+  `commandTimeout` has to close the connection instead.
 - **RESP3 client-side caching** (server attributes are read and discarded).
 
 ## Tests

@@ -155,6 +155,49 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
   is(closer, ["Palermo"], "and only one within 100km");
 }
 
+// -- scan iterators ---------------------------------------------------------
+
+{
+  await r.del("bighash", "bigset", "bigzset");
+  const seed = r.pipeline();
+  for (let i = 0; i < 300; i++) {
+    seed.hset("bighash", `f${i}`, String(i));
+    seed.sadd("bigset", `m${i}`);
+    seed.zadd("bigzset", { [`z${i}`]: i });
+  }
+  await seed.exec();
+
+  const fields = {};
+  for await (const [field, value] of r.hscanIterator("bighash", { count: 10 })) fields[field] = value;
+  is(Object.keys(fields).length, 300, "hscanIterator walks every field");
+  is(fields.f299, "299", "with the right values");
+
+  const members = new Set();
+  for await (const member of r.sscanIterator("bigset", { count: 10 })) members.add(member);
+  is(members.size, 300, "sscanIterator walks every member");
+
+  const scores = new Map();
+  for await (const [member, score] of r.zscanIterator("bigzset", { count: 10 })) scores.set(member, score);
+  is(scores.size, 300, "zscanIterator walks every member");
+  is(scores.get("z42"), 42, "with numeric scores");
+
+  // MATCH narrows without changing the walk.
+  let matched = 0;
+  for await (const _ of r.sscanIterator("bigset", { match: "m1?", count: 10 })) matched++;
+  is(matched, 10, "MATCH narrows an iterator (m10–m19)");
+}
+
+// -- popping several --------------------------------------------------------
+
+{
+  await r.del("popme");
+  await r.rpush("popme", "a", "b", "c", "d");
+  is(await r.lpop("popme"), "a", "LPOP with no count answers a value");
+  is(await r.lpop("popme", 2), ["b", "c"], "and with a count answers an array");
+  is(await r.rpop("popme", 5), ["d"], "a count larger than the list gives what there is");
+  is(await r.lpop("popme", 2), null, "and an empty list answers null, not an empty array");
+}
+
 // -- odds and ends ----------------------------------------------------------
 
 {

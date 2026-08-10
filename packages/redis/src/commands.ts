@@ -339,6 +339,42 @@ export abstract class RedisCommands {
     } while (cursor !== "0");
   }
 
+  /**
+   * Every field of a hash, by walking {@link hscan} to the end.
+   *
+   * The reason to prefer this over `hgetall` on a large hash is the same reason
+   * `scan` exists: `HGETALL` builds the whole reply on the server and sends it
+   * in one go, where this pays for a page at a time.
+   */
+  async *hscanIterator(key: string, options: ScanOptions = {}): AsyncGenerator<[string, RedisValue]> {
+    let cursor = "0";
+    do {
+      const page = await this.hscan(key, cursor, options);
+      cursor = page.cursor;
+      for (const entry of page.items) yield entry;
+    } while (cursor !== "0");
+  }
+
+  /** Every member of a set, a page at a time. */
+  async *sscanIterator(key: string, options: ScanOptions = {}): AsyncGenerator<RedisValue> {
+    let cursor = "0";
+    do {
+      const page = await this.sscan(key, cursor, options);
+      cursor = page.cursor;
+      for (const member of page.items) yield member;
+    } while (cursor !== "0");
+  }
+
+  /** Every member of a sorted set with its score, a page at a time. */
+  async *zscanIterator(key: string, options: ScanOptions = {}): AsyncGenerator<[RedisValue, number]> {
+    let cursor = "0";
+    do {
+      const page = await this.zscan(key, cursor, options);
+      cursor = page.cursor;
+      for (const entry of page.items) yield entry;
+    } while (cursor !== "0");
+  }
+
   // -- hashes ---------------------------------------------------------------
 
   async hget(key: string, field: string): Promise<RedisValue | null> {
@@ -463,12 +499,23 @@ export abstract class RedisCommands {
     return count(await this.call(["RPUSH", key, ...values]));
   }
 
-  async lpop(key: string): Promise<RedisValue | null> {
-    return (await this.call(["LPOP", key])) as RedisValue | null;
+  /**
+   * Pops from the head. With `count`, pops that many and answers an **array**.
+   *
+   * The two shapes are Redis's, not this client's: `LPOP key` answers a value
+   * and `LPOP key 1` answers a one-element array. Flattening them would make
+   * `lpop(key, n)` unable to say "the list was empty" distinctly from "it had
+   * one element".
+   */
+  async lpop(key: string, count?: number): Promise<RedisValue | RedisValue[] | null> {
+    const args: CommandArg[] = count === undefined ? ["LPOP", key] : ["LPOP", key, count];
+    return (await this.call(args)) as RedisValue | RedisValue[] | null;
   }
 
-  async rpop(key: string): Promise<RedisValue | null> {
-    return (await this.call(["RPOP", key])) as RedisValue | null;
+  /** Pops from the tail; same two shapes as {@link lpop}. */
+  async rpop(key: string, count?: number): Promise<RedisValue | RedisValue[] | null> {
+    const args: CommandArg[] = count === undefined ? ["RPOP", key] : ["RPOP", key, count];
+    return (await this.call(args)) as RedisValue | RedisValue[] | null;
   }
 
   /** `stop` is **inclusive**, and `-1` is the last element. */

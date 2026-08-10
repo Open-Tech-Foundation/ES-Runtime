@@ -27,7 +27,7 @@ printf "\n== unit ==\n"
 "$here/unit/run.sh" || exit 1
 
 status=0
-for test in smoke db commands conformance errors auth pubsub blocking multi pipeline reconnect pool tls cluster sentinel; do
+for test in smoke db commands timeout conformance errors auth pubsub blocking multi pipeline reconnect pool tls cluster sentinel; do
   printf '\n== %s ==\n' "$test"
   "$esrun" "$here/$test.mjs" || status=1
 done

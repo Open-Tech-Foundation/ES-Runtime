@@ -104,6 +104,23 @@ export interface RedisOptions extends DecodeOptions {
    */
   blocking?: boolean;
   /**
+   * How long to wait for any one command's reply, in ms. Default off.
+   *
+   * **A timeout here destroys the connection**, and that is not a shortcut.
+   * Redis has no way to cancel a command in flight: the server will finish it
+   * and send the reply whenever it is ready, and a client that gave up but kept
+   * the connection would read that reply as the *next* command's answer —
+   * every later value off by one, silently. So the only safe way to stop
+   * waiting is to stop using the connection.
+   *
+   * That makes this a blunt instrument, and it should be set generously if at
+   * all. It is worth having for the case it exists for: a server that has
+   * stopped answering without closing the socket, where the alternative is
+   * waiting forever. With `reconnect` on, the next command opens a fresh
+   * connection and the cost is one dropped socket.
+   */
+  commandTimeout?: number;
+  /**
    * Where to actually connect, resolved at dial time.
    *
    * A seam for a deployment whose address is not fixed. Sentinel is the reason
@@ -197,6 +214,8 @@ export class RedisConnection extends BaseConnection {
   #decode: DecodeOptions = {};
   /** Whether this connection opted into blocking indefinitely. */
   #blocking = false;
+  /** Per-command reply deadline, in ms; `0` for none. */
+  #commandTimeout = 0;
   /** How this connection was opened, so it can be opened the same way again. */
   #target: RedisOptions = {};
   #reconnect: Required<ReconnectOptions> | null = null;
@@ -324,6 +343,7 @@ export class RedisConnection extends BaseConnection {
   async #open(options: RedisOptions): Promise<void> {
     this.#decode = options.binary === undefined ? {} : { binary: options.binary };
     this.#blocking = options.blocking === true;
+    this.#commandTimeout = Math.max(0, options.commandTimeout ?? 0);
     this.#target = options;
     this.#reconnect = normalizeReconnect(options.reconnect);
     await this.#dial(options);
@@ -575,11 +595,16 @@ export class RedisConnection extends BaseConnection {
 
     let reply: Reply;
     try {
-      reply = await replies.next();
+      reply = await this.#deadline(replies.next(), args);
     } catch (e) {
       // A protocol error is as fatal as a dropped socket: both mean the reader
       // no longer knows where it is in the stream. And this one *was* sent.
-      throw this.#die(e);
+      const fatal = this.#die(e);
+      // An expired deadline is fatal for the same reason — the reply is still
+      // coming — but the caller asked about their timeout, and telling them the
+      // connection was lost would describe the consequence rather than the
+      // cause.
+      throw e instanceof DbError && e.code === DbErrorCode.Timeout ? e : fatal;
     }
     if (reply.kind === "error") throw serverError(reply.value.prefix, reply.value.message);
     return reply;
@@ -773,6 +798,35 @@ export class RedisConnection extends BaseConnection {
         ? serverError(reply.value.prefix, reply.value.message)
         : toValue(reply, this.#decode),
     );
+  }
+
+  /**
+   * Bounds how long a reply may take, if this connection asked for a bound.
+   *
+   * Expiring throws, and the caller of this treats that as fatal — which is the
+   * only correct thing to do. The reply is still on its way, and a connection
+   * that gave up but stayed in use would hand it to the next command as *its*
+   * answer, and every later value would be one behind. There is no cancel to
+   * send: this is what "Redis has no way to stop a command" costs.
+   */
+  async #deadline<T>(work: Promise<T>, args: readonly CommandArg[]): Promise<T> {
+    if (this.#commandTimeout <= 0) return work;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new DbError(
+            `${commandName(args) || "a command"} did not answer within ${this.#commandTimeout}ms — the connection is being closed, because its reply is still coming and would otherwise be read as the next command's`,
+            { code: DbErrorCode.Timeout },
+          ),
+        );
+      }, this.#commandTimeout);
+    });
+    try {
+      return await Promise.race([work, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Takes the connection for one exchange, and gives it back. */

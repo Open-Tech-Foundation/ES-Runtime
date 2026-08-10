@@ -69,6 +69,18 @@ export function parseConnectionString(url: string, overrides: RedisOptions = {})
   const clientName = search.get("client_name");
   if (clientName !== null && clientName !== "") options.clientName = clientName;
 
+  // Values are bytes rather than text — for a keyspace that holds images,
+  // protobufs or anything else a UTF-8 decode would corrupt.
+  const binary = search.get("binary");
+  if (binary === "1" || binary === "true") options.binary = true;
+  if (binary === "0" || binary === "false") options.binary = false;
+
+  const commandTimeoutMs = search.get("command_timeout");
+  if (commandTimeoutMs !== null && commandTimeoutMs !== "") {
+    const ms = Number(commandTimeoutMs);
+    if (Number.isFinite(ms) && ms >= 0) options.commandTimeout = ms;
+  }
+
   const protocol = search.get("protocol");
   if (protocol === "2") options.resp3 = false;
   if (protocol === "3") options.resp3 = true;

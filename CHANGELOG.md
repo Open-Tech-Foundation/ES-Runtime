@@ -10,6 +10,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`commandTimeout` in `@opentf/esrun-redis`** (and `?command_timeout=`), which
+  **destroys the connection** when it expires. Redis cannot cancel a command in
+  flight, so the reply is still coming; a client that gave up but kept the
+  connection would read it as the next command's answer and every later value
+  would be one behind. It reports `ERR_DB_TIMEOUT` rather than
+  `ERR_DB_CONNECTION_LOST` — the lost connection is the consequence, the
+  deadline is the cause — and with `reconnect` the cost is one dropped socket.
+
+- **`hscanIterator`, `sscanIterator`, `zscanIterator`** to match `scanIterator`;
+  the `LPOP`/`RPOP` count form, which answers an array where the countless form
+  answers a value, as Redis does; and `?binary=` on the connection string.
+
 - **More command families in `@opentf/esrun-redis`** — streams (including
   consumer groups), geo, bitmaps, HyperLogLog, hash-field TTLs (Redis 7.4+),
   and `setrange`/`getrange`/`lpos`/`sintercard`/`zmscore`/`zrangestore`.

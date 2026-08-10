@@ -46,6 +46,13 @@ is(
 // Seconds in the URL, milliseconds in the options object.
 is(parseConnectionString("redis://host?connect_timeout=5").connectTimeout, 5000, "connect_timeout is seconds");
 
+is(parseConnectionString("redis://host?binary=1").binary, true, "?binary=1 hands back bytes");
+is(parseConnectionString("redis://host?binary=true").binary, true, "and ?binary=true");
+is(parseConnectionString("redis://host?binary=0").binary, false, "?binary=0 turns it off explicitly");
+is(parseConnectionString("redis://host").binary, undefined, "and it is unset by default");
+is(parseConnectionString("redis://host?command_timeout=250").commandTimeout, 250,
+  "?command_timeout is milliseconds, unlike connect_timeout's seconds");
+
 is(parseConnectionString("redis://host?protocol=2").resp3, false, "?protocol=2 forces RESP2");
 is(parseConnectionString("redis://host?protocol=3").resp3, true, "?protocol=3 asks for RESP3");
 is(parseConnectionString("redis://host?client_name=web").clientName, "web", "?client_name");
