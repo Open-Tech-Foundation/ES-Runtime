@@ -54,6 +54,18 @@ export default function BenchStandings() {
   const positions = [];
   for (let i = 1; i <= n; i++) positions.push(i);
 
+  // Order table rows by total medal count (🥇+🥈+🥉), tie-break by golds
+  // then silvers so Deno (7🥇) edges Node (5🥇) at 34 medals, then
+  // stable alphabetical fallback via ORDER.
+  const sorted = [...runtimes].sort((a, b) => {
+    const ma = tally[a].pos[1] + tally[a].pos[2] + tally[a].pos[3];
+    const mb = tally[b].pos[1] + tally[b].pos[2] + tally[b].pos[3];
+    if (mb !== ma) return mb - ma;
+    if (tally[b].pos[1] !== tally[a].pos[1]) return tally[b].pos[1] - tally[a].pos[1];
+    if (tally[b].pos[2] !== tally[a].pos[2]) return tally[b].pos[2] - tally[a].pos[2];
+    return ORDER.indexOf(a) - ORDER.indexOf(b);
+  });
+
   return (
     <div>
       <div className="overflow-x-auto rounded-xl border border-zinc-200">
@@ -72,7 +84,7 @@ export default function BenchStandings() {
             </tr>
           </thead>
           <tbody>
-            {runtimes.map((r) => {
+            {sorted.map((r) => {
               const t = tally[r];
               return (
                 <tr className="border-t border-zinc-100">

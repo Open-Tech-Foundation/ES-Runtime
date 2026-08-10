@@ -1,0 +1,437 @@
+---
+title: Redis
+description: The Redis driver for esrun — a client and a runtime:db backend in one package, with pub/sub, pipelining, cluster and Sentinel, and how it compares to Node, Bun and Deno.
+---
+
+import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
+# Redis
+
+[`@opentf/esrun-redis`](https://github.com/Open-Tech-Foundation/ES-Runtime/tree/main/packages/redis)
+is a Redis client **and** a [`runtime:db`](/api/db) backend, written entirely in
+JavaScript over [`runtime:net`](/docs/guides/networking). There is no native code
+in the package, and none was added to the runtime for it.
+
+```sh
+esrun add @opentf/esrun-redis
+```
+
+<Callout type="info" title="Capability: Net">
+  A Redis connection is a socket, and is scoped like one.
+  `esrun --deny-all --allow-net=127.0.0.1:6379 app.js` is enough to reach one
+  server and nothing else. See [Securing Runtime](/docs/guides/securing-runtime).
+</Callout>
+
+## Two surfaces
+
+Most code wants the **client**, which is Redis with its own vocabulary:
+
+```js
+import { Redis } from "@opentf/esrun-redis";
+
+const r = await Redis.connect("redis://localhost");
+
+await r.set("session:42", "ada", { ex: 3600 });
+await r.get("session:42");                     // "ada"
+await r.hset("user:42", { name: "ada", age: "36" });
+await r.hgetall("user:42");                    // { name: "ada", age: "36" }
+await r.zadd("scores", { ada: 9.5, grace: 8 });
+await r.zrange("scores", 0, -1, { withScores: true });
+
+await r.close();
+```
+
+The **backend** is the same connection reached through `runtime:db`, for code
+written against the portable surface rather than against Redis:
+
+```js
+import "@opentf/esrun-redis";
+import { connect, queryAst } from "runtime:db";
+
+const db = await connect("redis://localhost");
+await db.execute(queryAst(["SET", "k", "v"]));
+
+for await (const row of await db.query(queryAst(["LRANGE", "log", 0, -1]))) {
+  console.log(row.value);
+}
+```
+
+A command is an array, not a string. Nothing is parsed and nothing is quoted, so
+there is no injection to prevent — the arguments were never text that could
+become syntax.
+
+<Callout type="warning" title="Redis is not a SQL database, and the driver says so">
+  `supports.sqlText` is `false`, so SQL is refused with `ERR_DB_QUERY_FORM`, and
+  `supports.transactions` is `false`, so `transaction(fn)` throws
+  `ERR_DB_UNSUPPORTED`. Redis's `MULTI`/`EXEC` applies commands together but does
+  **not** roll back one that fails at exec time, so a `transaction(fn)` built on
+  it would commit half a body that threw. Use [`multi()`](#multiexec) instead —
+  named after the command it sends. See
+  [Drivers &amp; ORMs](/docs/db/authoring) for what that means for portable code.
+</Callout>
+
+## Connecting
+
+```
+redis://[[username][:password]@]host[:port][/db][?option=value]
+rediss://…                                   TLS from the first byte
+```
+
+The path is a database **index**, not a name — `redis://host/3` is database 3.
+An empty username with a password (`redis://:secret@host`) is the pre-ACL
+spelling and means the `default` user.
+
+| Option | |
+| --- | --- |
+| `?db=` | the database index, when the path is not used |
+| `?connect_timeout=` | **seconds**, as every connection string spells it |
+| `?command_timeout=` | **milliseconds** — see [Timeouts](#timeouts) |
+| `?protocol=2` \| `3` | force RESP2, or ask for RESP3 (the default) |
+| `?client_name=` | `CLIENT SETNAME`, so the connection is identifiable |
+| `?binary=1` | hand values back as `Uint8Array` rather than decoding them |
+
+A password in a query parameter is **refused**: one place for a credential means
+a URL-redacting logger only has to know about one.
+
+<Callout type="warning" title="Unmask a URL read from the environment">
+  `env` redacts anything that looks like a secret, so a connection string with a
+  password in it arrives as the literal `"[redacted]"` — which then fails as a
+  *URL*, several layers from the cause. Pass it through `unmask` from
+  [`runtime:process`](/docs/process) first.
+</Callout>
+
+TLS from a private authority needs that authority, because the public roots have
+never heard of it:
+
+```js
+const r = await Redis.connect("rediss://redis.internal", { tlsCa: await readFile("ca.crt") });
+```
+
+## RESP3, and what it buys
+
+`HELLO 3` is sent on connect, negotiating the protocol **and** authenticating in
+one round trip. RESP3 types the reply: `HGETALL` comes back as a map rather than
+a flat array the client has to re-pair, and a double is a double rather than a
+string.
+
+A server older than Redis 6 has no `HELLO`, and one built without RESP3 answers
+`NOPROTO`; both fall back to RESP2 and authenticate separately. A wrong password
+is **not** a fallback — it fails, rather than quietly becoming an
+unauthenticated session. `r.protocol` reports which is in force, and the client
+absorbs the difference either way.
+
+## Types
+
+| Redis | JavaScript |
+| --- | --- |
+| bulk string | `string` (UTF-8), or `Uint8Array` with `{ binary: true }` |
+| integer | `number`, or `bigint` past 2⁵³ |
+| double, big number, boolean (RESP3) | `number`, `bigint`, `boolean` |
+| null / `$-1` / `*-1` | `null` |
+| array, set | `Array` |
+| map (RESP3) | plain object |
+
+Redis integers are signed 64-bit, so a counter can pass 2⁵³ — a `number` where
+the value is exact and a `bigint` where it is not, which is the rule
+`runtime:db` applies to every backend. **This is the one place the four runtimes
+disagree on an answer** rather than on ergonomics; see
+[the comparison](#how-it-compares).
+
+Bitmaps are **bytes**: pass a `Uint8Array`, not a string. `"\xff"` is U+00FF,
+which is two bytes in UTF-8, and a bitmap that went through a text encoding is
+not the bitmap you meant.
+
+## Pipelining
+
+```js
+const p = r.pipeline();
+for (const id of ids) p.hgetall(`user:${id}`);
+const users = await p.exec();
+```
+
+The reason is arithmetic rather than taste: a Redis command's whole cost is a
+round trip, so a loop of `await`s spends its time on the network. Measured on
+loopback, where a round trip is nearly free, **500 `INCR`s took 102 ms one at a
+time and 6 ms pipelined**.
+
+A pipeline is **not** a transaction — another client's commands may land among
+yours, and one failing does not stop the rest. Failed commands come back as
+`DbError` in place.
+
+## MULTI/EXEC
+
+```js
+const tx = r.multi();
+tx.set("a", "1");
+const counter = tx.incr("visits");
+const results = await tx.exec();     // ["OK", 1]
+```
+
+Commands are **buffered**, so a transaction is one round trip — and a **pool**
+can run one, since there is nothing to hold a connection for until `exec()`.
+
+What `MULTI` gives you is that nothing interleaves. What it does not give you is
+rollback: a command that fails at exec time leaves the ones beside it applied.
+So `exec()` hands errors back **in place** rather than throwing, and the
+per-command promises resolve with them for the same reason.
+
+One case *is* all-or-nothing: a command the server refuses as it is **queued**
+makes `EXEC` fail with `EXECABORT` and nothing runs. That one throws.
+
+### WATCH
+
+```js
+await r.watch("balance");
+const current = Number(await r.get("balance"));
+
+const tx = r.multi();
+tx.set("balance", current - 10);
+if (await tx.exec() === null) retry();   // someone else changed it first
+```
+
+`exec()` answers `null` when a watched key moved — the optimistic-locking
+outcome, not an error. Queued commands settle with `ERR_DB_SERIALIZATION_FAILURE`,
+which is what an optimistic-concurrency failure is called everywhere else in
+`runtime:db`. `WATCH` is tied by the server to one connection, so on a pool it
+needs `withConnection()`.
+
+## Pub/sub
+
+```js
+import { Redis, createSubscriber } from "@opentf/esrun-redis";
+
+const sub = await createSubscriber("redis://localhost");
+await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
+await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
+
+const pub = await Redis.connect("redis://localhost");
+await pub.publish("news", "hello");
+```
+
+**Two connections, and that is not a workaround.** The first `subscribe` gives
+its connection over to a read loop, and it then runs no ordinary commands —
+`get`, `set`, even `publish` refuse with `ERR_DB_CONNECTION_BUSY`. Over RESP2
+that is the protocol's own rule; over RESP3 it is because the loop owns the
+reader. It is also how you would deploy it anyway.
+
+Subscribing is **confirmed** before it resolves, so publishing immediately after
+cannot race it. A handler that throws is reported to `onSubscribeError` and the
+loop continues — it is the only thing reading the socket, and one bad handler
+must not silently stop every other subscription.
+
+## Blocking commands
+
+```js
+await r.blpop("queue", 5);        // → { key, value } | null
+await r.bzpopmin("scores", 5);    // → { key, member, score } | null
+
+for await (const job of r.consume("jobs", { timeout: 5, signal })) {
+  await handle(job.value);
+}
+```
+
+The timeout is **required**, in the units Redis takes it. A blocking command
+holds its connection for as long as it blocks — that is inherent — so a bounded
+wait is a stall you chose. `0` means forever, which is a stuck connection, and
+through a pool one that is gone for the life of the process. It is refused
+unless the connection was opened with `{ blocking: true }`.
+
+`consume` polls with a *bounded* pop even though it loops forever, which is what
+makes an abandoned loop or an aborted signal stop it.
+
+## Cluster
+
+```js
+import { createCluster } from "@opentf/esrun-redis";
+
+const cluster = await createCluster(["redis://10.0.0.1:7001", "redis://10.0.0.2:7001"]);
+await cluster.set("user:1", "ada");
+```
+
+**Routing is an optimization; correctness comes from following redirects.** Keys
+are hashed to one of the 16384 slots and sent straight to the owning node, but a
+cluster corrects a client that guessed wrong — so a bad guess is slow, not wrong.
+`MOVED` updates the map; `ASK` is preceded by `ASKING` on the same connection and
+does **not**, because treating one as the other during a resharding would point
+every later key at a node that does not own it yet.
+
+One command touching keys in **different slots** has no node that owns both:
+
+```js
+await cluster.mget("foo", "bar");                          // CROSSSLOT
+await cluster.mget("{cart:9}:items", "{cart:9}:total");    // same slot, fine
+```
+
+A transaction must be single-slot and is refused *before* being sent, naming
+hash tags as the fix. A pipeline may span nodes: it is split per node, each group
+stays one round trip, and the groups run at the same time. Everything goes to
+primaries — replicas are read from the topology and ignored, because a replica
+may be behind and nothing here knows which reads could tolerate that.
+
+## Sentinel
+
+```js
+import { createSentinelClient } from "@opentf/esrun-redis";
+
+const r = await createSentinelClient({
+  sentinels: ["redis://10.0.0.1:26379", "redis://10.0.0.2:26379"],
+  masterName: "mymaster",
+  reconnect: true,
+});
+```
+
+Each sentinel is tried in turn, and the one that answered moves to the front. The
+address is **verified** with `ROLE` before use: a sentinel mid-failover will hand
+out a server that has just become a replica, and writing to a replica loses the
+writes silently.
+
+<Callout type="note" title="A failover does not close your connection">
+  The old master is **demoted**, not killed — it stays up and starts refusing
+  writes with `READONLY`. That makes a failover invisible to every ordinary
+  recovery path: the socket is fine and nothing is lost. This treats a `READONLY`
+  reply on a Sentinel-backed connection as *the master moved*, re-resolves and
+  retries. `createSentinelPool` survives one by doing what a pool does anyway.
+</Callout>
+
+## Pooling
+
+```js
+import { createPool } from "@opentf/esrun-redis";
+
+const pool = createPool("redis://localhost", { max: 10 });
+await pool.set("k", "v");
+await pool.withConnection((c) => …);   // for anything stateful across commands
+```
+
+A connection returns to the pool only if the driver vouches for it: alive, on the
+database it was opened for, and not inside an open `MULTI`. A connection left on
+another database by a stray `SELECT` is **destroyed** rather than handed to the
+next borrower.
+
+## Reconnecting
+
+Off by default. `{ reconnect: true }` turns it on. Off because turning it on
+changes what a thrown error means, and a pool does not need it — replacing a dead
+connection is reconnection with none of the state questions.
+
+Restored: the handshake, the selected database, the client name, and every
+subscription. **Not** restored, deliberately:
+
+| | |
+| --- | --- |
+| The command in flight | It was written, and whether the server ran it is not knowable. Replaying `INCR` would double-count. |
+| `WATCH` | The server forgot it. The next `EXEC` fails with `ERR_DB_SERIALIZATION_FAILURE` rather than succeeding on a guarantee nobody is making. |
+| An open `MULTI` | Its queued commands went with the connection. |
+| Messages published during the gap | Pub/sub has no queue and no delivery guarantee. |
+
+There is one retry, and it is precise: a command whose **write** failed never
+reached the server, so running it again cannot repeat it.
+
+## Timeouts
+
+```js
+const r = await Redis.connect(url, { commandTimeout: 5000, reconnect: true });
+```
+
+**A timeout destroys the connection.** Redis cannot cancel a command in flight:
+the server finishes it and sends the reply whenever it is ready, and a client
+that gave up but kept the connection would read that reply as the *next*
+command's answer — every value after it one behind, silently. So the only safe
+way to stop waiting is to stop using the connection. Set it generously, or not
+at all.
+
+## Errors
+
+Redis's leading word — `WRONGTYPE`, `NOAUTH`, `LOADING` — is mapped onto
+`DbErrorCode`, with the original always on `e.backendCode`.
+
+```js
+import { DbErrorCode } from "runtime:db";
+
+try { await r.set("k", "v"); }
+catch (e) {
+  if (e.code === DbErrorCode.AuthFailed) …   // NOAUTH, WRONGPASS, NOPERM
+  if (e.backendCode === "WRONGTYPE") …       // needs Redis-specific handling
+}
+```
+
+`WRONGTYPE` is deliberately **not** mapped: no portable code means "you ran a
+list command against a hash", and the nearest one would tell an application
+something false.
+
+## How it compares
+
+Every cell was produced by **running** the client, not by reading its
+documentation. Node and Deno have no built-in Redis, so both npm clients are
+shown: `redis` (node-redis, the official one) and `ioredis` (about twice the
+downloads, same organisation). They differ enough that showing only one would
+misreport Node.
+
+| | esrun<br/>`esrun-redis` | Node/Deno<br/>node-redis 6 | Node/Deno<br/>ioredis 6 | Bun<br/>built-in |
+| --- | :---: | :---: | :---: | :---: |
+| Ships with the runtime | <No /> | <No /> | <No /> | <Yes /> |
+| RESP3 negotiated by default | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Exact 64-bit integers | <Yes /> | <No /> | <No /> | <No /> |
+| Binary-safe values | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Pub/sub | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Pipeline builder | <Yes /> | <Partial /> | <Yes /> | <Partial /> |
+| `MULTI`/`EXEC` API | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| `WATCH` | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Cluster | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Sentinel | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Streams & consumer groups | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
+| TLS with a private CA | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
+| Auto-reconnect | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
+| Unbounded-block guard | <Yes /> | <No /> | <No /> | <No /> |
+| Portable error codes | <Yes /> | <No /> | <No /> | <No /> |
+| Scoped by a capability flag | <Yes /> | Deno only | Deno only | <No /> |
+
+**Exact 64-bit integers** is the only row that changes an *answer*.
+`INCRBY k 9007199254740993` returns `9007199254740993n` here and
+`9007199254740992` — a `number`, off by one — on all three others.
+
+**The partial cells.** node-redis and Bun have no pipeline builder; both
+pipeline commands issued together, so `Promise.all` is the idiom rather than a
+missing feature. Bun's streams are reachable through `send()` rather than typed
+methods, and its client has no `multi`, `watch`, cluster or Sentinel at all.
+esrun's reconnect is partial because it is **off by default** — a deliberate
+disagreement rather than a gap: turning it on changes what a thrown error means,
+and a pool already replaces dead connections.
+
+### Speed
+
+Wall ms, min of 5, from [Benchmarks](/docs/benchmarks#redis-clients):
+
+| Workload | esrun | node-redis | ioredis | Bun |
+| --- | ---: | ---: | ---: | ---: |
+| 5 000 `SET`, one at a time | 858 | 1029 | 910 | **666** |
+| 20 000 `SET` in one batch | 225 | 374 | 203 | **72** |
+| `LRANGE` over 50 000 elements | 158 | 203 | 119 | **28** |
+| 200 × `HGETALL` of 1 000 fields | 957 | 479 | 496 | **205** |
+
+Bun's client is native C++ and leads everything. Among the **JavaScript**
+clients, esrun is fastest where the round trip dominates — and does it in about a
+third of the memory (38 MB against 79–124) — and ahead of the official
+node-redis on batches and list scans.
+
+<Callout type="warning" title="Where it is behind">
+  Repeated `HGETALL` is twice as slow as both npm clients. That is not decoding
+  in general — the list scan is mid-pack — but the **map** path specifically: a
+  RESP3 map becomes a pair array of wrapper objects, each holding a copied
+  `Uint8Array`, before anything becomes a key or a value. ioredis negotiates
+  RESP3 too and builds the same object twice as fast, so it is an implementation
+  cost rather than a protocol one, and it is fixable.
+</Callout>
+
+## Not supported
+
+Named rather than left to be discovered: reading from replicas in a cluster,
+cluster-aware pub/sub, RESP3 client-side caching (server attributes are read and
+discarded), `MONITOR`, and cancelling a command in flight — Redis has no such
+thing, which is why `{ signal }` rejects the caller when the reply arrives rather
+than stopping the work.

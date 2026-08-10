@@ -28,6 +28,7 @@ const NAV = [
       { title: "Process & Env", path: "/docs/process" },
       { title: "Path handling", path: "/docs/path" },
       { title: "Databases", path: "/docs/db" },
+      { title: "Redis", path: "/docs/db/redis" },
       { title: "Drivers & ORMs", path: "/docs/db/authoring" },
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },

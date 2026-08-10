@@ -207,7 +207,7 @@ exported pieces the built-in backend is.
 | --- | --- | --- |
 | built in | `sqlite:` | a file format and a SQL dialect |
 | `@opentf/esrun-postgres` | `postgres:` `postgresql:` | the wire protocol, Temporal types, LISTEN/NOTIFY |
-| `@opentf/esrun-redis` | `redis:` `rediss:` | RESP3, pub/sub, pipelining, cluster, and a Redis client alongside the backend |
+| [`@opentf/esrun-redis`](/docs/db/redis) | `redis:` `rediss:` | RESP3, pub/sub, pipelining, cluster, Sentinel, and a Redis client alongside the backend |
 
 ### A backend that is not a SQL database
 
@@ -240,6 +240,10 @@ while `0` means forever — a connection that never comes back, and through a po
 one that is gone for the life of the process. The unbounded form is refused
 before it reaches the wire unless the connection was opened with
 `{ blocking: true }`, which is how a queue worker says that is the point.
+
+The [Redis guide](/docs/db/redis) covers both surfaces in full — pub/sub,
+pipelining, `MULTI`/`EXEC`, cluster, Sentinel — and compares the driver against
+Node, Bun and Deno feature by feature.
 
 If you are writing a driver, see [Drivers & ORMs](/docs/db/authoring) and run
 `runBackendConformance()` to check it behaves like the built-ins.
