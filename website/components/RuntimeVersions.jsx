@@ -13,8 +13,8 @@ export default function RuntimeVersions() {
     <ul className="mt-2 grid gap-1 font-mono text-[12px] sm:grid-cols-2">
       {versions.map((r) => (
         <li>
-          <span className="text-brand-700">{r.k}</span>{" "}
-          <span className="text-zinc-500">{r.v}</span>
+          <span className="text-brand-700 dark:text-brand-400">{r.k}</span>{" "}
+          <span className="text-zinc-500 dark:text-zinc-400">{r.v}</span>
         </li>
       ))}
     </ul>

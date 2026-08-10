@@ -17,9 +17,9 @@ export default function Http2Table({ data }) {
   if (!data) return null;
   const rows = ORDER.filter((rt) => data[rt]);
   return (
-    <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200">
+    <div className="mt-3 overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
       <table className="w-full text-left text-sm">
-        <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500">
+        <thead className="bg-zinc-50 text-xs uppercase tracking-wider text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
           <tr>
             <th className="px-4 py-3 font-semibold" rowSpan={2}>
               Runtime
@@ -40,30 +40,30 @@ export default function Http2Table({ data }) {
             <th className="px-4 py-2 text-right font-semibold">Gain</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-100">
+        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {rows.map((rt) => {
             const d = data[rt];
             const mark = d.split_server ? "†" : "";
             return (
               <tr>
-                <td className="px-4 py-3 font-mono text-zinc-900">{LABELS[rt] || rt}</td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600">
+                <td className="px-4 py-3 font-mono text-zinc-900 dark:text-zinc-100">{LABELS[rt] || rt}</td>
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
                   {fmt(d.wide_h1)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600">
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
                   {fmt(d.wide_h2)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-500">
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
                   {gain(d.wide_h1, d.wide_h2)}
                   {mark}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600">
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
                   {fmt(d.narrow_h1)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600">
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-600 dark:text-zinc-400">
                   {fmt(d.narrow_h2)}
                 </td>
-                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-500">
+                <td className="px-4 py-3 text-right font-mono tabular-nums text-zinc-500 dark:text-zinc-400">
                   {gain(d.narrow_h1, d.narrow_h2)}
                   {mark}
                 </td>

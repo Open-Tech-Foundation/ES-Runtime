@@ -8,6 +8,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **Benchmarks tables in dark mode** — `BenchStandings` (Standings at a glance), `WsSweepTable`, `Http2Table` and `RuntimeVersions` now carry `dark:` borders, backgrounds and text (`dark:border-zinc-800`, `dark:bg-zinc-900`, `dark:text-zinc-100/400`, `dark:text-emerald-400`) matching `BenchCard`/`MemorySafetyTable`, so all tables on `/docs/benchmarks` remain readable.
+
+### Changed
+
+- **Standings ordered by total medal count** — “Standings at a glance” now sorts by 🥇+🥈+🥉 descending (tie-break golds then silvers, stable fallback to `ORDER`), so `Bun → esrun → Deno → Node → LLRT`.
+
+- **Site config version** — `website/otfw.config.js` `docs.version` bumped `v0.16.0 → v0.22.0` to match `workspace.package.version`.
+
 ## [0.22.0] - 2026-08-10
 
 ### Added

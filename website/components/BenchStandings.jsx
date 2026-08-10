@@ -68,16 +68,16 @@ export default function BenchStandings() {
 
   return (
     <div>
-      <div className="overflow-x-auto rounded-xl border border-zinc-200">
+      <div className="overflow-x-auto rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
         <table className="w-full border-collapse text-sm">
           <thead>
-            <tr className="bg-zinc-50 text-zinc-500">
-              <th className="px-3 py-2 text-left font-semibold">Runtime</th>
-              <th className="px-3 py-2 text-right font-medium" title="Metrics this runtime could run">
+            <tr className="bg-zinc-50 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+              <th className="px-3 py-2 text-left font-semibold text-zinc-700 dark:text-zinc-300">Runtime</th>
+              <th className="px-3 py-2 text-right font-medium text-zinc-500 dark:text-zinc-400" title="Metrics this runtime could run">
                 Tests
               </th>
               {positions.map((p) => (
-                <th className="px-3 py-2 text-right font-medium" title={p + (p === 1 ? "st" : p === 2 ? "nd" : p === 3 ? "rd" : "th") + " places"}>
+                <th className="px-3 py-2 text-right font-medium text-zinc-500 dark:text-zinc-400" title={p + (p === 1 ? "st" : p === 2 ? "nd" : p === 3 ? "rd" : "th") + " places"}>
                   {medalHead(p)}
                 </th>
               ))}
@@ -87,11 +87,11 @@ export default function BenchStandings() {
             {sorted.map((r) => {
               const t = tally[r];
               return (
-                <tr className="border-t border-zinc-100">
-                  <td className="px-3 py-2 font-semibold text-zinc-900">
+                <tr className="border-t border-zinc-100 dark:border-zinc-800">
+                  <td className="px-3 py-2 font-semibold text-zinc-900 dark:text-zinc-100">
                     {LABELS[r]}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-zinc-500">{t.tests}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-500 dark:text-zinc-400">{t.tests}</td>
                   {positions.map((p) => {
                     const c = t.pos[p];
                     const win = p === 1 && c > 0;
@@ -99,8 +99,8 @@ export default function BenchStandings() {
                       <td
                         className={
                           win
-                            ? "px-3 py-2 text-right font-semibold tabular-nums text-emerald-700"
-                            : "px-3 py-2 text-right tabular-nums text-zinc-600"
+                            ? "px-3 py-2 text-right font-semibold tabular-nums text-emerald-700 dark:text-emerald-400"
+                            : "px-3 py-2 text-right tabular-nums text-zinc-600 dark:text-zinc-400"
                         }
                       >
                         {c || "·"}
@@ -113,7 +113,7 @@ export default function BenchStandings() {
           </tbody>
         </table>
       </div>
-      <p className="mt-2 text-xs text-zinc-400">
+      <p className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
         Across {metrics.length} comparable metrics, each ranked by its own better
         direction. Each runtime is ranked only on metrics it can run, so totals
         differ — e.g. LLRT has no HTTP server or filesystem here. Place counts are
