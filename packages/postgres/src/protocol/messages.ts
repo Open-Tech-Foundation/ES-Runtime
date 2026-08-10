@@ -165,6 +165,14 @@ export function execute(portal: string, maxRows = 0): Uint8Array {
   });
 }
 
+/** `Close` for a prepared statement — releases its name and its plan. */
+export function closeStatement(name: string): Uint8Array {
+  return tagged(F.Close, (w) => {
+    w.u8(0x53); // 'S'
+    cstring(w, name);
+  });
+}
+
 export function sync(): Uint8Array {
   return tagged(F.Sync, () => {});
 }

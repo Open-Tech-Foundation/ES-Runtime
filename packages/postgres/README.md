@@ -139,6 +139,29 @@ an exchange in flight finishes on its own, so waiting for it is finite:
 await Promise.all([db.execute(a), db.execute(b)]);   // fine
 ```
 
+## Prepared statements
+
+Every statement is prepared once per connection and reused, keyed by its SQL
+text. `preparedStatementCacheSize` bounds it (default 100, `0` disables).
+
+The bound matters as much as the cache. Each entry is a plan the **server**
+holds, so an application generating unique SQL — a query builder inlining a
+different literal each time — would otherwise accumulate them until the backend
+ran out of memory. Eviction is least-recently-used and its `Close` rides along
+with the next query rather than costing a round trip of its own.
+
+A plan invalidated underneath you is handled rather than raised: if the server
+says the cached plan is stale (`0A000`) or the statement is gone (`26000`,
+after a pooler reset or `DISCARD ALL`), the cache is dropped and the statement
+prepared again, once. Neither is the caller's mistake and neither surfaces as
+one. `executeScript` clears the cache too, since DDL and `DISCARD` live there.
+
+**On the speed of it:** measured against PostgreSQL in a container, caching is
+worth about 6% per query — not the large win it is for an in-process engine.
+A query here costs a network round trip, and parsing was never the dominant
+term. It is still worth doing: it removes parse work from the server and the SQL
+text from the wire on every repeat.
+
 ## Timeouts
 
 ```js

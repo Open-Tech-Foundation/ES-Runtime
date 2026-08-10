@@ -1,6 +1,6 @@
 {
   "name": "@opentf/esrun-postgres",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "PostgreSQL driver for ES Runtime (esrun) — a runtime:db backend written entirely in JavaScript over runtime:net.",
   "type": "module",
   "exports": {
@@ -31,7 +31,7 @@
     "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
     "directory": "packages/postgres"
   },
-  "homepage": "https://es-runtime.opentechf.org/docs/db",
+  "homepage": "https://esrun.opentechf.org/docs/db",
   "publishConfig": {
     "access": "public"
   }

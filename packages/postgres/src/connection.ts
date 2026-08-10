@@ -74,6 +74,17 @@ export interface PgOptions {
    */
   statementTimeout?: number;
   /**
+   * How many prepared statements to keep per connection. Default 100; `0`
+   * disables caching.
+   *
+   * Without it every query re-parses its SQL, which for a statement run a
+   * thousand times is a thousand parses of the same text. The bound matters as
+   * much as the cache: each entry is a plan the server holds, so an application
+   * generating unique SQL — a query builder inlining a different literal each
+   * time — would otherwise accumulate them until the backend ran out of memory.
+   */
+  preparedStatementCacheSize?: number;
+  /**
    * A certificate authority to trust in addition to the public roots, as PEM.
    *
    * The case this exists for is the ordinary one: an internal PostgreSQL
@@ -209,6 +220,9 @@ export class PgConnection extends BaseConnection {
       application_name: options.applicationName ?? "esrun",
       client_encoding: "UTF8",
     };
+    if (options.preparedStatementCacheSize !== undefined) {
+      this.#cacheLimit = Math.max(0, Math.trunc(options.preparedStatementCacheSize));
+    }
     if (options.statementTimeout !== undefined && options.statementTimeout > 0) {
       // A GUC in the startup packet: in force from the first statement, with no
       // extra round trip and no window where it is not yet set.
@@ -382,18 +396,77 @@ export class PgConnection extends BaseConnection {
 
   // -- queries --------------------------------------------------------------
 
-  /** Sends one extended-protocol round: parse, bind, describe, execute, sync. */
+  /**
+   * SQL text → the name it is prepared under.
+   *
+   * Insertion-ordered, which is what makes eviction a `keys().next()` rather
+   * than a sort: the oldest entry is the first key, and a hit re-inserts to
+   * move itself to the back.
+   */
+  #statements = new Map<string, string>();
+  #nextStatement = 0;
+  #cacheLimit = 100;
+
+  /**
+   * Sends one extended-protocol round: parse (only when the statement is new),
+   * bind, describe, execute, sync.
+   *
+   * The parse is the part caching removes. The rest happens every time — the
+   * parameters are new, so the bind is new, and the portal with it.
+   */
   async #ask(text: string, params: unknown[]): Promise<void> {
     const bound = params.map((value) => encodeParam(value));
-    await this.#send(
-      msg.concat([
-        msg.parse("", text),
-        msg.bind("", "", bound),
-        msg.describePortal(""),
-        msg.execute("", 0),
-        msg.sync(),
-      ]),
-    );
+    if (this.#cacheLimit === 0) {
+      await this.#send(
+        msg.concat([
+          msg.parse("", text),
+          msg.bind("", "", bound),
+          msg.describePortal(""),
+          msg.execute("", 0),
+          msg.sync(),
+        ]),
+      );
+      return;
+    }
+
+    const parts: Uint8Array[] = [];
+    let name = this.#statements.get(text);
+    if (name === undefined) {
+      // Evicted before the new one is added, so the cache never exceeds its
+      // bound even briefly. The Close rides along in the same write: a round
+      // trip to free a plan would cost what the cache saves.
+      while (this.#statements.size >= this.#cacheLimit) {
+        const oldest = this.#statements.keys().next();
+        if (oldest.done === true) break;
+        parts.push(msg.closeStatement(this.#statements.get(oldest.value)!));
+        this.#statements.delete(oldest.value);
+      }
+      name = `esrun_s${this.#nextStatement++}`;
+      this.#statements.set(text, name);
+      parts.push(msg.parse(name, text));
+    } else {
+      // Re-inserting moves it to the back, which is what makes the eviction
+      // above least-recently-used rather than first-in.
+      this.#statements.delete(text);
+      this.#statements.set(text, name);
+    }
+    parts.push(msg.bind("", name, bound), msg.describePortal(""), msg.execute("", 0), msg.sync());
+    await this.#send(msg.concat(parts));
+  }
+
+  /**
+   * Whether `error` says a cached plan has gone stale and the statement should
+   * be prepared again.
+   *
+   * Two ways it happens, neither the caller's doing. The table changed under a
+   * plan, so the server refuses to reuse it (`0A000`, "cached plan must not
+   * change result type"). Or the statement is simply not there (`26000`) — a
+   * pooler reset the session, or something ran `DISCARD ALL`. A cache that
+   * turned either into an application error would be worse than no cache.
+   */
+  #isStalePlan(error: unknown): boolean {
+    const code = (error as { backendCode?: string } | null)?.backendCode;
+    return code === "0A000" || code === "26000" || code === "42P05";
   }
 
   /**
@@ -498,6 +571,32 @@ export class PgConnection extends BaseConnection {
     }
   }
 
+  /**
+   * Runs the send-and-describe half of an exchange, preparing again if the
+   * server says the cached plan is stale.
+   *
+   * Retried exactly once, and only for that: an error response is followed by a
+   * drain to `ReadyForQuery`, so the connection is clean and the second attempt
+   * starts from the same place the first did. A second failure is the caller's
+   * to see.
+   */
+  async #askAndDescribe(
+    text: string,
+    params: unknown[],
+  ): Promise<{ names: string[]; oids: number[] } | null> {
+    try {
+      await this.#ask(text, params);
+      return await this.#describe();
+    } catch (e) {
+      if (!this.#isStalePlan(e)) throw e;
+      // The whole cache goes, not just this entry: whatever invalidated one
+      // plan — a migration, a DISCARD — rarely stopped at one.
+      this.#statements.clear();
+      await this.#ask(text, params);
+      return await this.#describe();
+    }
+  }
+
   protected async _query(q: {
     text: string;
     positional: unknown[];
@@ -516,8 +615,7 @@ export class PgConnection extends BaseConnection {
     };
 
     try {
-      await this.#ask(q.text, q.positional);
-      const described = await this.#describe();
+      const described = await this.#askAndDescribe(q.text, q.positional);
       if (described === null) {
         // A statement with no result — `INSERT` without `RETURNING`, run
         // through `query()`. Finish it and hand back an empty result rather
@@ -599,8 +697,7 @@ export class PgConnection extends BaseConnection {
     this.#rejectNamed(q.named);
     const release = await this.#acquire();
     try {
-      await this.#ask(q.text, q.positional);
-      await this.#describe();
+      await this.#askAndDescribe(q.text, q.positional);
       await this.#batch(0);
       return { changes: affectedRows(this.#lastTag), lastInsertRowid: null };
     } finally {
@@ -633,6 +730,10 @@ export class PgConnection extends BaseConnection {
     this._open();
     const release = await this.#acquire();
     try {
+      // A script is where DDL and DISCARD live, and both can invalidate plans
+      // the cache is holding. Forgetting them costs a re-parse each; keeping a
+      // stale one costs an error the caller did not cause.
+      this.#statements.clear();
       await this.#send(msg.simpleQuery(sql));
       const results: { command: string; changes: number }[] = [];
       for (;;) {
