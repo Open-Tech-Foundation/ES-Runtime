@@ -199,6 +199,12 @@ jobs:
             echo "PEM_EOF"
           } >> "$GITHUB_ENV"
 
+      # A three-primary cluster, for the slot map and the redirects. All three
+      # nodes share one container so that `--cluster-announce-ip 127.0.0.1` is
+      # true for the cluster bus and for the client at the same time.
+      - name: start the cluster
+        run: ./test/cluster-server.sh >> "$GITHUB_ENV"
+
       - run: ./test/unit/run.sh
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun

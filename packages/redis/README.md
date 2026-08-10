@@ -436,6 +436,72 @@ did not deserve to be the one that fails.
 A transaction under a `WATCH` is excluded from even that retry: re-sending it
 onto a reopened connection would run it with no watch held.
 
+## Cluster
+
+```js
+import { createCluster } from "@opentf/esrun-redis";
+
+const cluster = await createCluster([
+  "redis://10.0.0.1:7001",
+  "redis://10.0.0.2:7001",
+]);
+
+await cluster.set("user:1", "ada");
+await cluster.get("user:1");
+```
+
+One seed is enough — the topology is read from the cluster itself with
+`CLUSTER SLOTS` — but naming several means the client can still start when one
+of them is down, which is the situation a cluster exists for. A pool is opened
+per node, on first use.
+
+**Routing is an optimization; correctness comes from following redirects.** The
+client hashes a command's key to one of the 16384 slots and goes straight to the
+node that owns it, but a cluster tells a client that guessed wrong — by name and
+with the right address — so a bad guess is *slow*, not wrong. That is why the
+key-extraction table is modest rather than a copy of every command Redis ships:
+
+- `MOVED` means the slot has moved for good. The map is updated and re-read.
+- `ASK` means only this one command goes elsewhere, and it is preceded by
+  `ASKING` **on the same connection** — the flag lasts exactly one command.
+  Treating an `ASK` as a `MOVED` during a resharding would point every later key
+  at a node that does not own it yet.
+
+`maxRedirects` (default 16) bounds it: a cluster mid-resharding legitimately
+sends a few, and a misconfigured one can send them in a circle.
+
+### CROSSSLOT, and hash tags
+
+What a cluster cannot forgive is one command touching keys in **different
+slots** — no node owns both:
+
+```js
+await cluster.mget("foo", "bar");        // CROSSSLOT
+```
+
+Hash tags are how you say some keys must stay together. Only the part inside
+`{…}` is hashed:
+
+```js
+await cluster.mget("{cart:9}:items", "{cart:9}:total");   // same slot, fine
+```
+
+A **transaction** must be single-slot, and this refuses one that is not *before*
+sending it — naming the fix rather than relaying `CROSSSLOT`. A **pipeline**
+may span nodes: it is split per node, each group is still one round trip, and
+the groups run at the same time.
+
+Two tag rules that catch people out, both following from "first" being literal:
+`foo{}{bar}` hashes as the whole key (an empty tag does not send it looking for
+a later pair), and `foo{{bar}}` hashes `{bar`.
+
+### What the cluster client does not do
+
+Everything goes to **primaries**. Replicas are read from the topology and
+ignored, because a replica may be behind and nothing here knows which of your
+reads could tolerate that. Pub/sub is not cluster-aware either — use `ssubscribe`
+for sharded channels, or a connection to a specific node.
+
 ## Pooling
 
 ```js
@@ -458,11 +524,7 @@ Named rather than left to be discovered:
 
 - **`MONITOR`**, which turns the connection into a firehose of every command the
   server runs. One reply per command cannot represent that; use `redis-cli`.
-- **Cluster.** `MOVED` and `ASK` are reported as `ERR_DB_UNSUPPORTED` with an
-  explanation rather than as a bare redirect. Connect to the node that owns the
-  key, or put a proxy in front.
-- **Pipelining.** Every command is one round trip, including `executeMany`. It
-  is the one place this driver leaves measurable time on the table.
+- **Reading from replicas** in a cluster, and cluster-aware pub/sub.
 - **Sentinel**, and RESP3 client-side caching (server attributes are read and
   discarded).
 
@@ -476,6 +538,7 @@ bun run build
 docker run -d --name esrun-redis-plain -p 6379:6379 redis:latest
 docker run -d --name esrun-redis-auth  -p 6380:6379 redis:latest redis-server --requirepass esrun
 eval "$(test/tls-server.sh)"       # optional; the tls test skips without it
+eval "$(test/cluster-server.sh)"  # optional; the cluster test skips without it
 ./test/run.sh
 ```
 
@@ -487,10 +550,10 @@ pub/sub over **both** protocols — RESP3 delivers messages as push frames and
 RESP2 as ordinary arrays, so the reader tells a message from a reply by its
 content there rather than by its type byte.
 
-Both halves run in CI against three servers: a `redis:8` service container, a
-password-protected one, and a TLS one with a certificate from a private
-authority — because the things most likely to break are the ones a single
-default server cannot show.
+Both halves run in CI against four servers: a `redis:8` service container, a
+password-protected one, a TLS one with a certificate from a private authority,
+and a three-primary cluster — because the things most likely to break are the
+ones a single default server cannot show.
 
 ## License
 

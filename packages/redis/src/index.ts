@@ -43,6 +43,8 @@ import {
 } from "./connection.js";
 import { RedisPool, type RedisPoolOptions } from "./pool.js";
 import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
+import { RedisCluster, type RedisClusterOptions } from "./cluster.js";
+import { connect } from "./connect.js";
 import { parseConnectionString } from "./url.js";
 
 export {
@@ -50,6 +52,7 @@ export {
   RedisCommands,
   RedisConnection,
   RedisBatch,
+  RedisCluster,
   RedisPipeline,
   RedisPool,
   RedisTransaction,
@@ -60,6 +63,7 @@ export {
   type ReconnectOptions,
   type RedisOptions,
   type RedisPayload,
+  type RedisClusterOptions,
   type RedisPoolOptions,
   type ServerHello,
 };
@@ -72,12 +76,7 @@ export type {
   TransactionRunner,
 } from "./commands.js";
 
-/** Opens a connection without going through `runtime:db`'s registry. */
-export async function connect(url: string, options: RedisOptions = {}): Promise<RedisConnection> {
-  const connection = new RedisConnection();
-  await connection.open(parseConnectionString(url, options));
-  return connection;
-}
+export { connect };
 
 /** Opens a client — a connection with the command surface on it. */
 export function createClient(url: string, options: RedisOptions = {}): Promise<Redis> {
@@ -95,6 +94,25 @@ export function createClient(url: string, options: RedisOptions = {}): Promise<R
  */
 export function createSubscriber(url: string, options: RedisOptions = {}): Promise<Redis> {
   return Redis.connect(url, options);
+}
+
+/**
+ * Connects to a cluster, given one or more seed nodes.
+ *
+ * ```js
+ * const cluster = await createCluster(["redis://10.0.0.1:7001", "redis://10.0.0.2:7001"]);
+ * await cluster.set("user:1", "ada");
+ * ```
+ *
+ * One seed is enough — the topology is read from the cluster itself — but
+ * naming several means the client can still start when one of them is down,
+ * which is the situation a cluster exists for.
+ */
+export function createCluster(
+  urls: string | readonly string[],
+  options: RedisClusterOptions = {},
+): Promise<RedisCluster> {
+  return RedisCluster.connect(urls, options);
 }
 
 /**

@@ -81,6 +81,37 @@ export function portableCode(prefix: string, message: string): string {
   return DbErrorCode.Backend;
 }
 
+/** Where a cluster told us to go instead. */
+export interface Redirect {
+  /** `MOVED` — the slot has moved for good; `ASK` — just this one command. */
+  readonly kind: "MOVED" | "ASK";
+  readonly slot: number;
+  readonly host: string;
+  readonly port: number;
+}
+
+/**
+ * Parses `MOVED 3999 127.0.0.1:6381` into somewhere to go.
+ *
+ * IPv6 endpoints are spelled with the port after the last colon and the address
+ * possibly containing several, so the split is from the right. An empty host —
+ * which a cluster sends while a node's address is not yet known — is not
+ * somewhere anyone can be redirected to, so it is refused rather than dialled.
+ */
+export function parseRedirect(prefix: string, message: string): Redirect | null {
+  if (prefix !== "MOVED" && prefix !== "ASK") return null;
+  const parts = message.trim().split(/\s+/);
+  if (parts.length < 3) return null;
+  const slot = Number(parts[1]);
+  const endpoint = parts[2]!;
+  const colon = endpoint.lastIndexOf(":");
+  if (!Number.isInteger(slot) || colon <= 0) return null;
+  const host = endpoint.slice(0, colon);
+  const port = Number(endpoint.slice(colon + 1));
+  if (host === "" || !Number.isInteger(port) || port <= 0) return null;
+  return { kind: prefix, slot, host, port };
+}
+
 /** A cluster redirect, spelled so the reader knows what to do about it. */
 export function redirectMessage(prefix: string, message: string): string {
   return (

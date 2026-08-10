@@ -28,7 +28,7 @@ import {
 
 import { RespReader, encodeCommand, type CommandArg, type Reply } from "./protocol/resp.js";
 import { blocksForever, foreverMessage } from "./protocol/blocking.js";
-import { portableCode, redirectMessage } from "./protocol/errors.js";
+import { parseRedirect, portableCode, redirectMessage, type Redirect } from "./protocol/errors.js";
 import { shapeOf, toValue, writeRows, type DecodeOptions } from "./protocol/values.js";
 
 /** What `runtime:net`'s `connect()` hands back. */
@@ -1415,9 +1415,18 @@ function isMissingHello(e: unknown): boolean {
 }
 
 function serverError(prefix: string, message: string): DbError {
-  const text = prefix === "MOVED" || prefix === "ASK" ? redirectMessage(prefix, message) : message;
-  return new DbError(text, {
+  const redirect = parseRedirect(prefix, message);
+  // A redirect keeps the server's own words *and* gains the advice, because the
+  // two audiences differ: `RedisCluster` reads `redirect` and follows it, while
+  // a human who reached this on a single connection needs to be told that this
+  // driver's cluster support is a different entry point rather than absent.
+  const text = redirect === null ? message : redirectMessage(prefix, message);
+  const error = new DbError(text, {
     code: portableCode(prefix, message),
     backendCode: prefix,
   });
+  return redirect === null ? error : Object.assign(error, { redirect });
 }
+
+/** The redirect a `MOVED`/`ASK` failure carries, for whoever can follow it. */
+export type { Redirect };

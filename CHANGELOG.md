@@ -10,6 +10,26 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Cluster support in `@opentf/esrun-redis`** — `createCluster(seeds)` reads
+  the topology with `CLUSTER SLOTS`, keeps a pool per primary, hashes keys to
+  slots (CRC16/XMODEM with hash-tag rules, checked against published vectors)
+  and follows `MOVED` and `ASK` redirects. `ASK` is distinguished properly: it
+  is preceded by `ASKING` on the same connection and does **not** update the
+  slot map, because treating it as a `MOVED` during a resharding would point
+  every later key at a node that does not own it yet.
+
+  Routing is treated as an optimization — a cluster corrects a client that
+  guessed wrong, so a wrong guess is slow rather than incorrect — which is why
+  the key-extraction table is modest rather than a copy of every command Redis
+  ships. The cases handled specially are the ones where argument 1 is not a key:
+  `EVAL` and friends route by the key after `numkeys`, not by the script text.
+
+  A transaction spanning two slots is refused **before** it is sent, naming hash
+  tags as the fix rather than relaying `CROSSSLOT`. A pipeline may span nodes: it
+  is split per node, each group stays one round trip, and the groups run
+  concurrently. Everything goes to primaries; replicas are read from the
+  topology and deliberately ignored.
+
 - **Reconnection in `@opentf/esrun-redis`** — `{ reconnect: true }`, or an
   object with `attempts`/`delay`/`maxDelay`. **Off by default**: turning it on
   changes what a thrown error means, and a `Pool` does not need it, since

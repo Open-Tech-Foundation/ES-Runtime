@@ -13,7 +13,7 @@ esrun="${ESRUN:-$here/../../../../target/release/esrun}"
 [ -f "$here/../../dist/index.js" ] || { echo "not built — bun run build" >&2; exit 1; }
 
 status=0
-for test in resp values url blocking; do
+for test in resp values url blocking slots; do
   "$esrun" "$here/$test.mjs" || status=1
 done
 exit $status
