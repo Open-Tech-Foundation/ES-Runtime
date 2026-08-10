@@ -103,6 +103,36 @@ and ioredis, `Promise.all` for Bun, whose client pipelines commands issued
 together rather than offering a builder. Every workload prints a checksum the
 runner compares across runtimes, so a client cannot look fast by doing less.
 
+### Results (min of 5, wall ms)
+
+| Workload | esrun | node+ioredis | bun (built-in) | deno+ioredis |
+| --- | ---: | ---: | ---: | ---: |
+| serial_set | 899 | 882 | **675** | 887 |
+| serial_get | 879 | 903 | **679** | 887 |
+| pipeline | 239 | 190 | **73** | 188 |
+| list | 164 | 92 | **29** | 96 |
+| hash | 980 | 374 | **204** | 370 |
+
+Where the round trip dominates, all four sit within a few percent and Bun's
+native client is ~25% ahead — that is the floor. Where **decoding** dominates,
+esrun is last: 1.8× behind ioredis on the list scan and 2.6× behind on repeated
+`HGETALL`.
+
+The cause is **not** UTF-8 decoding — reading the same reply with
+`{ binary: true }`, which skips every `TextDecoder` call, was 2% faster — and not
+startup, where esrun is fastest of the four (8 ms against Node's 20 ms). What is
+left is allocation in the reply representation: a copied `Uint8Array` per bulk
+string and a wrapper object per value, worst for maps, where RESP3's `HGETALL`
+builds a pair array before the object the caller asked for.
+
+Peak RSS tells the same story from the other side: esrun is the lightest of the
+four on the round-trip workloads (38.9 MB against Node's 76 and Deno's 101) and
+the heaviest on the pipelined one.
+
+Unlike `bench/run.sh`, these runs are not interleaved — each runtime is measured
+in turn — so small differences are noise and the order of magnitude is the
+finding.
+
 ## Running
 
 ```sh

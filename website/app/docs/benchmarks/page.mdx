@@ -242,6 +242,68 @@ and the feature needed no new machinery to exploit.
 
 See the [HTTP/2 section of the HTTP guide](/docs/http#http-2).
 
+## Redis clients
+
+esrun with [`@opentf/esrun-redis`](/docs/db) against each runtime's **own**
+answer: Bun's built-in `RedisClient`, and `ioredis` on Node and Deno, which have
+none. That is the comparison the question deserves — what each runtime gives
+you — rather than how one npm package performs on four engines.
+
+Wall ms, **min of 5**, lower is better. Every workload prints a checksum the
+runner compares across runtimes, so a client cannot look fast by doing less; all
+four agreed on all five.
+
+| Workload | esrun | Node + ioredis | Bun (built-in) | Deno + ioredis |
+| --- | ---: | ---: | ---: | ---: |
+| `serial_set` — 5 000 `SET`, one at a time | 899 | 882 | **675** | 887 |
+| `serial_get` — 5 000 `GET`, one at a time | 879 | 903 | **679** | 887 |
+| `pipeline` — 20 000 `SET` in one batch | 239 | 190 | **73** | 188 |
+| `list` — `LRANGE` over 50 000 elements | 164 | 92 | **29** | 96 |
+| `hash` — 200 × `HGETALL` of 1 000 fields | 980 | 374 | **204** | 370 |
+
+Peak RSS, MB:
+
+| Workload | esrun | Node + ioredis | Bun (built-in) | Deno + ioredis |
+| --- | ---: | ---: | ---: | ---: |
+| `serial_set` | **38.9** | 76.0 | 33.6 | 100.7 |
+| `serial_get` | **38.6** | 78.3 | 33.9 | 99.3 |
+| `pipeline` | 120.9 | 115.1 | **43.6** | 126.4 |
+| `list` | 94.5 | 74.4 | **40.1** | 85.3 |
+| `hash` | 79.4 | 96.6 | **44.4** | 112.7 |
+
+**Two different stories, and it is worth separating them.**
+
+Where the **round trip** dominates — a command at a time — all four are within a
+few percent of each other, and Bun's native client is about 25% ahead. That is
+the floor: the work is waiting for the network, and no client can be much faster
+than the socket.
+
+Where **decoding** dominates, esrun is currently **last**: 1.8× behind
+`ioredis` on a 50 000-element `LRANGE`, and 2.6× behind on repeated `HGETALL`.
+Bun's client is native C++, so being behind it is expected; being behind another
+JavaScript client is not, and it is a real gap rather than a measurement
+artifact.
+
+<Callout type="note" title="What the gap is not">
+  It is not UTF-8 decoding. Reading the same 50 000-element reply with
+  `{ binary: true }`, which skips every `TextDecoder` call, was **2% faster** —
+  so text conversion is essentially free here. Nor is it startup: esrun launches
+  an empty script in 8 ms against Node's 20 ms and Deno's 24 ms.
+
+  What remains is allocation in how a reply is represented — a copied
+  `Uint8Array` per bulk string plus a wrapper object per value — which is worst
+  for maps, where RESP3's `HGETALL` builds a pair array before the object a
+  caller wanted. That is the thing to fix, and it is fixable.
+</Callout>
+
+On memory, esrun is the lightest of the four on the round-trip workloads (38.9
+MB against Node's 76 and Deno's 101) and the heaviest on the pipelined one,
+which is the same allocation pressure showing up as bytes instead of time.
+
+Unlike the rest of this page, these runs are **not interleaved** — each runtime
+is measured in turn — so treat small differences as noise and the order of
+magnitude as the finding. Reproduce with `bench/db/redis/run.sh`.
+
 ## Reproduce
 
 The harness lives in `bench/`. It auto-detects installed runtimes and can emit
