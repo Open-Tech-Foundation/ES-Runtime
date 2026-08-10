@@ -33,7 +33,8 @@ makes the trade-offs explicit.
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WASI preview 1 | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | Built-in SQLite | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| Built-in Postgres / MySQL client | <No /> | <No /> | <Yes /> | <No /> |
+| Built-in Postgres / MySQL client | <Partial /> | <No /> | <Yes /> | <No /> |
+| Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
 | Capability sandbox (deny by default) | <Partial /> | <Partial /> | <No /> | <Yes /> |
@@ -50,6 +51,31 @@ makes the trade-offs explicit.
 | Embeddable as a library | <Yes /> | <No /> | <No /> | <Partial /> |
 
 **Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental · <No /> Not supported
+
+**On the database client rows.** esrun is <Partial /> because the drivers are
+first-party *packages* rather than runtime API — `@opentf/esrun-postgres` and
+`@opentf/esrun-redis`, both entirely JavaScript over `runtime:net`, adding no
+native code to the runtime. That is the point of the row below them: Bun ships a
+driver per backend as runtime API and its internals are not exported, so a third
+party's second backend starts from nothing, while esrun's ship on the same public
+driver tier anyone else would use. Node and Deno leave both to npm.
+
+Two verified differences against Bun 1.4.0's built-in client, on Redis 8.10.0.
+**Integer exactness**: `INCRBY k 9007199254740993` answers `9007199254740993n`
+here and `9007199254740992` — a `number`, off by one — on Bun. Redis integers are
+signed 64-bit, so this is the same trap the `int8` row in the
+[driver guide](/docs/db/authoring) records for PostgreSQL, and the same answer: a
+`number` where one holds the value exactly, a `bigint` where it does not.
+**`EXISTS`**: Redis returns a *count*, which is what `exists("a", "b")` answers
+here; Bun's returns a boolean, which cannot express the multi-key form. Both
+runtimes negotiate RESP3, agree that a missing key is `null` and an empty range
+is `[]`, and both require an explicit CA for a private authority over `rediss://`
+and refuse the connection without one.
+
+Bun's client is ahead on surface area: it has pub/sub and the blocking commands,
+which this release of `@opentf/esrun-redis` refuses by name rather than
+half-supports. Versions: esrun 0.21.0, Node 24.14.0, Bun 1.4.0, Deno 2.8.3,
+Redis 8.10.0, on Linux, 2026-08-10.
 
 **On the HTTP/2 row.** esrun and Deno detect the version per connection on the
 server they already have, so one `serve()` answers both. Node's h2c is a separate
