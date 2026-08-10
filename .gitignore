@@ -40,3 +40,6 @@ bench/db/.scratch/
 # Built npm packages — produced by `bun run build`, published from CI.
 packages/*/dist/
 packages/*/node_modules/
+
+# Staged driver build for the postgres benchmark.
+bench/db/pg/.driver/

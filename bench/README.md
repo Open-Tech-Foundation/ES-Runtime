@@ -38,6 +38,26 @@ RSS and the user/sys CPU split of that run. Measurement is
 `resource.getrusage(RUSAGE_CHILDREN)` via `bench/db/measure.py` — the same
 mechanism `run.sh` falls back to when GNU `time` is absent.
 
+## The PostgreSQL driver benchmark
+
+`bench/db/pg/run.sh` compares esrun with `@opentf/esrun-postgres` against
+`postgres.js` on Node, Bun and Deno — the acceptance test DECISIONS D56 set for
+the Postgres path.
+
+```sh
+(cd packages/postgres && bun run build)
+PG_URL=postgres://postgres:esrun@127.0.0.1:5433/esrun_test bench/db/pg/run.sh
+```
+
+Each runtime uses the idiom its driver user would reach for: the buffering path
+for a scan, a cursor only for the streaming workload, where the point is that
+memory must not grow with the result. Every workload prints a checksum the
+runner compares, so a runtime cannot look fast by doing less.
+
+`bench/db/pg/decode-share.mjs` answers a narrower question — what share of a
+scan is decoding — by exploiting lazy rows: the same query, touching a different
+number of columns, holds the network and the protocol constant.
+
 ## Running
 
 ```sh
