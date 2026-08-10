@@ -26,6 +26,7 @@ import {
 } from "runtime:db";
 
 import { RespReader, encodeCommand, type CommandArg, type Reply } from "./protocol/resp.js";
+import { blocksForever, foreverMessage } from "./protocol/blocking.js";
 import { portableCode, redirectMessage } from "./protocol/errors.js";
 import { shapeOf, toValue, writeRows, type DecodeOptions } from "./protocol/values.js";
 
@@ -518,6 +519,13 @@ function guard(args: readonly CommandArg[]): CommandArg[] {
       `${name} puts the connection into a mode where the server pushes messages, which this release does not support — pub/sub is a separate feature, and running it here would desynchronize the reply stream`,
       { code: DbErrorCode.Unsupported },
     );
+  }
+  // A *bounded* blocking command is allowed: it holds the connection for its
+  // timeout, which is a cost the caller chose. An unbounded one never gives it
+  // back, which is not a cost anyone chose knowingly.
+  const forever = blocksForever(args);
+  if (forever !== null) {
+    throw new DbError(foreverMessage(forever), { code: DbErrorCode.Unsupported });
   }
   return args as CommandArg[];
 }

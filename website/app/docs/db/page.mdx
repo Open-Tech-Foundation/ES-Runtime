@@ -229,5 +229,12 @@ working, and code that does not gets `ERR_DB_QUERY_FORM` or
 `ERR_DB_UNSUPPORTED` by name rather than something stranger further down. Most
 programs using Redis want its own client instead, which the same package ships.
 
+One rule worth knowing before you meet it: a **blocking** command
+(`BLPOP` and its family, `XREAD BLOCK`) must be given a timeout. It holds the
+connection for as long as it blocks, so a bounded wait is a stall you chose,
+while `0` means forever — a connection that never comes back, and through a pool
+one that is gone for the life of the process. The unbounded form is refused
+before it reaches the wire.
+
 If you are writing a driver, see [Drivers & ORMs](/docs/db/authoring) and run
 `runBackendConformance()` to check it behaves like the built-ins.

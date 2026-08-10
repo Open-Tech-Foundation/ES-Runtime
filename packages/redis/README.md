@@ -191,6 +191,40 @@ An error reply is a complete reply, so the connection stays usable — only a
 transport failure is fatal, and the first one is latched so every later caller
 sees the same lost connection rather than a different symptom of it.
 
+## Blocking commands
+
+`BLPOP`, `BRPOP`, `BLMOVE`, `BZPOPMIN`, `BLMPOP`, `WAIT` and `XREAD BLOCK` work,
+with one rule: **give them a timeout.**
+
+```js
+await r.call(["BLPOP", "queue", "5"]);       // waits up to 5s, then null
+await r.call(["BLPOP", "queue", "0"]);       // refused
+```
+
+A blocking command holds the connection for as long as it blocks — that is
+inherent, since the server sends no reply until it has one and a connection is
+one conversation. A bounded wait is therefore a stall the caller chose, and it
+is allowed. A timeout of `0` means *forever*, which is not a stall but a stuck
+connection: nothing else on it will ever run. Through a pool that connection is
+gone for the life of the process, and the other callers fail on `acquireTimeout`
+with a message about pool exhaustion rather than about the cause — so the
+unbounded form is refused with `ERR_DB_UNSUPPORTED` before it reaches the wire.
+
+If you want a worker blocked on a queue indefinitely, give it a connection of
+its own and loop over a bounded wait:
+
+```js
+const worker = await Redis.connect(url);
+for (;;) {
+  const job = await worker.call(["BLPOP", "queue", "5"]);
+  if (job !== null) await handle(job[1]);
+}
+```
+
+Redis keeps the timeout in three different places — last for `BLPOP`, first for
+`BLMPOP`, behind the `BLOCK` keyword for `XREAD` — and the check knows all
+three, including that a stream legitimately named `BLOCK` is not the option.
+
 ## Pooling
 
 ```js
@@ -211,10 +245,11 @@ different dataset.
 
 Named rather than left to be discovered:
 
-- **Pub/sub and blocking commands.** `SUBSCRIBE`, `MONITOR` and the rest are
-  refused by name: they change what the server pushes, and this reader expects
-  one reply per command. Accepting them would desynchronize the stream in a way
-  that surfaces later, elsewhere, as a nonsense value.
+- **Pub/sub.** `SUBSCRIBE`, `PSUBSCRIBE`, `MONITOR` and the rest are refused by
+  name: they change what the server pushes, and this reader expects one reply
+  per command. Accepting them would desynchronize the stream in a way that
+  surfaces later, elsewhere, as a nonsense value.
+- **Blocking commands with no timeout.** See below — the bounded forms work.
 - **Cluster.** `MOVED` and `ASK` are reported as `ERR_DB_UNSUPPORTED` with an
   explanation rather than as a bare redirect. Connect to the node that owns the
   key, or put a proxy in front.

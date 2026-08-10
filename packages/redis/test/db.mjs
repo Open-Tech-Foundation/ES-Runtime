@@ -151,6 +151,29 @@ is(await codeOf(() => db.execute(queryAst(["SUBSCRIBE", "channel"]))), DbErrorCo
   "SUBSCRIBE is refused by name");
 is(await codeOf(() => db.execute(queryAst(["MONITOR"]))), DbErrorCode.Unsupported, "and so is MONITOR");
 
+// A blocking command holds the connection for its timeout, which is the
+// caller's to choose — but a timeout of 0 never gives it back at all, and would
+// stop every other command on the connection for the life of the process.
+is(await codeOf(() => db.query(queryAst(["BLPOP", "q", "0"]))), DbErrorCode.Unsupported,
+  "an unbounded BLPOP is refused");
+is(await codeOf(() => db.query(queryAst(["XREAD", "BLOCK", "0", "STREAMS", "s", "$"]))),
+  DbErrorCode.Unsupported, "and an unbounded XREAD");
+{
+  // The refusal happens before anything is written, so the connection is
+  // untouched by it.
+  const e = await (async () => {
+    try {
+      await db.query(queryAst(["BLPOP", "q", "0"]));
+      return null;
+    } catch (err) {
+      return err;
+    }
+  })();
+  ok(e.message.includes("timeout"), "the message says how to fix it");
+  is((await db.execute(queryAst(["SET", "after-refusal", "1"]))).changes, 1,
+    "and the connection is unharmed, because nothing reached the wire");
+}
+
 // -- signals ----------------------------------------------------------------
 
 {

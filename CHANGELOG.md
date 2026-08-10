@@ -8,6 +8,22 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **`@opentf/esrun-redis` refuses a blocking command with no timeout.**
+  `BLPOP`, `BRPOP`, `BLMOVE`, `BRPOPLPUSH`, `BZPOPMIN`, `BZPOPMAX`, `BLMPOP`,
+  `BZMPOP`, `WAIT`, `WAITAOF` and `XREAD`/`XREADGROUP` `BLOCK` hold the
+  connection for as long as they block — inherent, since the server sends no
+  reply until it has one. A **bounded** wait is a stall the caller chose and is
+  allowed; a timeout of `0` means forever, which is a connection that never
+  comes back, and through a pool one that is out of circulation for the life of
+  the process while every other caller fails on `acquireTimeout` pointing at
+  pool exhaustion rather than at the cause. The unbounded form now throws
+  `ERR_DB_UNSUPPORTED` before anything reaches the wire. Redis keeps the timeout
+  in three different places — last for `BLPOP`, first for `BLMPOP`, behind the
+  `BLOCK` keyword for `XREAD` — and the check knows all three, including that a
+  stream legitimately named `BLOCK` is not the option.
+
 ### Added
 
 - **`@opentf/esrun-redis`** — a Redis driver, and the second proof that a socket

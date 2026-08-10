@@ -138,6 +138,30 @@ ok(Array.isArray(await r.time()), "TIME is a pair");
 // helper list a convenience rather than a ceiling.
 is(await r.call(["OBJECT", "ENCODING", "list"]), "listpack", "an unwrapped command");
 
+// -- blocking commands ------------------------------------------------------
+
+{
+  // Bounded is allowed: the connection is held for the timeout, and that is a
+  // cost the caller chose knowingly.
+  const started = Date.now();
+  is(await r.call(["BLPOP", "empty-queue", "1"]), null, "a bounded BLPOP times out and answers null");
+  ok(Date.now() - started >= 900, "having actually waited");
+
+  // And it does return a value when there is one.
+  await r.rpush("queue", "job");
+  is(await r.call(["BLPOP", "queue", "1"]), ["queue", "job"], "and pops when the list has something");
+
+  // Unbounded is refused, because it would never give the connection back.
+  let refused = null;
+  try {
+    await r.call(["BLPOP", "empty-queue", "0"]);
+  } catch (e) {
+    refused = e.message;
+  }
+  ok(refused !== null && refused.includes("BLPOP"), "an unbounded BLPOP is refused by name");
+  is(await r.ping(), "PONG", "and the connection still works afterwards");
+}
+
 await r.flushdb();
 await r.close();
 if (report("smoke") > 0) exit(1);
