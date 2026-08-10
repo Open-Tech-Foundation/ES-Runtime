@@ -387,6 +387,55 @@ Redis keeps the timeout in three different places — last for `BLPOP`, first fo
 `BLMPOP`, behind the `BLOCK` keyword for `XREAD` — and the check knows all
 three, including that a stream legitimately named `BLOCK` is not the option.
 
+## Reconnecting
+
+Off by default. `{ reconnect: true }` turns it on, or an object tunes it:
+
+```js
+const r = await Redis.connect(url, {
+  reconnect: { attempts: 10, delay: 100, maxDelay: 5000 },
+});
+```
+
+Off by default because turning it on changes what a thrown error *means* — with
+it, a failure that reached your code is one the driver already gave up on — and
+because a **pool does not need it**: a pool replaces a dead connection with a
+new one, which is reconnection with none of the state questions. `createPool`
+still accepts the option for the connections it opens, but the pool's own
+recovery does not depend on it.
+
+Reconnection is **lazy**: it happens when the next command needs a connection,
+not the moment one dies, so an idle connection does not spend the process's life
+dialling a server that is down. A subscriber is the exception and reopens from
+its read loop, because nobody is going to call it.
+
+### What comes back, and what does not
+
+Restored: the handshake (`HELLO`, authentication), the selected database, the
+client name, and every subscription — resubscribing is idempotent, so it is safe
+to replay.
+
+**Not** restored, deliberately:
+
+| | |
+| --- | --- |
+| The command in flight | It was written, and whether the server ran it before the socket died is not knowable. Replaying `INCR` would double-count. Its caller gets the error. |
+| `WATCH` | The server forgot it, so the lock it stood for is void. The next `EXEC` fails with `ERR_DB_SERIALIZATION_FAILURE` rather than succeeding on a guarantee nobody is making. |
+| An open `MULTI` | Its queued commands went with the connection. |
+| Messages published during the gap | Pub/sub has no queue and no delivery guarantee. If you cannot lose them, you want a stream, not a channel. |
+
+There is one retry, and it is precise: a command whose **write** failed never
+reached the server, so running it again cannot repeat it. The host invalidates a
+socket handle when the peer goes away, so a write to a connection the server
+closed fails rather than succeeding into nothing — which covers the ordinary
+case of a server restart or a `CLIENT KILL`. Without that, every restart would
+cost each live connection one spurious error, because nothing notices a socket
+has closed until something tries to use it, and the command that discovers it
+did not deserve to be the one that fails.
+
+A transaction under a `WATCH` is excluded from even that retry: re-sending it
+onto a reopened connection would run it with no watch held.
+
 ## Pooling
 
 ```js

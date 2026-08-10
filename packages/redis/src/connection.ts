@@ -104,6 +104,29 @@ export interface RedisOptions extends DecodeOptions {
    */
   blocking?: boolean;
   /**
+   * Reopen the connection after a transport failure. Default **off**.
+   *
+   * `true` takes the defaults; an object tunes them. Off by default because
+   * turning it on changes what a thrown error means — with it, a failure that
+   * reached your code is one the driver already gave up on — and because a
+   * `Pool` does not need it: a pool replaces a dead connection with a new one,
+   * which is reconnection with none of the state questions.
+   *
+   * What is restored is what is safe to restore: the handshake, the selected
+   * database, the client name, and any subscriptions. What is **not**:
+   *
+   * - **The command that failed.** It was written, and whether the server ran
+   *   it before the socket died is not knowable — replaying `INCR` would
+   *   double-count. Its caller gets the error.
+   * - **`WATCH`.** The server forgot it, so the optimistic lock it stood for is
+   *   void. The next `EXEC` fails with `ERR_DB_SERIALIZATION_FAILURE` rather
+   *   than succeeding on a guarantee nobody is making any more.
+   * - **An open `MULTI`.** Its queued commands are gone with the connection.
+   * - **Messages published while the connection was down.** Pub/sub has no
+   *   queue and no delivery guarantee; a gap loses what was sent in it.
+   */
+  reconnect?: boolean | ReconnectOptions;
+  /**
    * Ask for RESP3. Default `true`.
    *
    * RESP3 is worth the default because it types the reply: `HGETALL` comes back
@@ -113,6 +136,16 @@ export interface RedisOptions extends DecodeOptions {
    * option is for forcing RESP2 against a server that has both.
    */
   resp3?: boolean;
+}
+
+/** How hard to try, and how long to wait between attempts. */
+export interface ReconnectOptions {
+  /** How many times to try before giving up. Default 10; `0` means forever. */
+  attempts?: number;
+  /** The first wait, in ms. Doubles each attempt. Default 100. */
+  delay?: number;
+  /** The longest wait, in ms. Default 5000. */
+  maxDelay?: number;
 }
 
 /** A published message's payload — bytes in `binary` mode, text otherwise. */
@@ -153,6 +186,30 @@ export class RedisConnection extends BaseConnection {
   #decode: DecodeOptions = {};
   /** Whether this connection opted into blocking indefinitely. */
   #blocking = false;
+  /** How this connection was opened, so it can be opened the same way again. */
+  #target: RedisOptions = {};
+  #reconnect: Required<ReconnectOptions> | null = null;
+  /** The reconnection in progress, so concurrent callers share one attempt. */
+  #reopening: Promise<void> | null = null;
+  /**
+   * The teardown a failure started, which reopening has to wait for.
+   *
+   * `#die` cannot await it — it is called from the middle of a failing
+   * exchange — so it starts it and leaves the handle here. Dialing before that
+   * finishes is a real race and not a theoretical one: the host recycles socket
+   * ids, so the close of the old socket can land on the *new* one and kill the
+   * connection that just replaced it.
+   */
+  #tearingDown: Promise<void> | null = null;
+  /**
+   * Set when a reconnection happened while `WATCH`es were outstanding.
+   *
+   * The server forgot them, so the optimistic lock they stood for is void. An
+   * `EXEC` that went ahead would report success for a check nobody made.
+   */
+  #watchLost = false;
+  /** Whether any `WATCH` is outstanding on this connection. */
+  #watching = false;
 
   /** What the server reported at `HELLO`. Empty until the handshake finishes. */
   readonly hello: Partial<ServerHello> = {};
@@ -256,6 +313,13 @@ export class RedisConnection extends BaseConnection {
   async #open(options: RedisOptions): Promise<void> {
     this.#decode = options.binary === undefined ? {} : { binary: options.binary };
     this.#blocking = options.blocking === true;
+    this.#target = options;
+    this.#reconnect = normalizeReconnect(options.reconnect);
+    await this.#dial(options);
+  }
+
+  /** Opens the socket and does everything that makes it a usable connection. */
+  async #dial(options: RedisOptions): Promise<void> {
     const host = options.host ?? "localhost";
     const port = options.port ?? 6379;
 
@@ -283,6 +347,100 @@ export class RedisConnection extends BaseConnection {
     }
     if (options.clientName !== undefined) {
       await this.#exchange(["CLIENT", "SETNAME", options.clientName]);
+    }
+  }
+
+  // -- reconnection ---------------------------------------------------------
+
+  /** Whether this connection will try to reopen itself after a failure. */
+  get reconnects(): boolean {
+    return this.#reconnect !== null;
+  }
+
+  /**
+   * Makes sure there is a live connection, reopening if one was lost.
+   *
+   * Called at the head of every exchange rather than eagerly from the failure,
+   * so an idle connection nobody is using does not spend the process's life
+   * reconnecting to a server that is down. A subscriber is the exception and
+   * reconnects from its read loop, because nobody is going to call it.
+   */
+  async #ensureOpen(): Promise<void> {
+    if (this.#fatal === null) return;
+    if (this.#reconnect === null || this.#closing) throw this.#fatal;
+    // One attempt shared by every waiting caller: a burst of commands arriving
+    // after a server restart should reopen the connection once, not once each.
+    this.#reopening ??= this.#reopen().finally(() => {
+      this.#reopening = null;
+    });
+    await this.#reopening;
+  }
+
+  async #reopen(): Promise<void> {
+    const plan = this.#reconnect;
+    if (plan === null) throw this.#fatal ?? new DbError("no connection", { code: DbErrorCode.Closed });
+    const previous = this.#fatal;
+    let wait = plan.delay;
+
+    for (let attempt = 1; plan.attempts === 0 || attempt <= plan.attempts; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, wait));
+      wait = Math.min(wait * 2, plan.maxDelay);
+      if (this.#closing) throw previous ?? new DbError("closed", { code: DbErrorCode.Closed });
+      // The failure's own teardown first, then anything left of ours.
+      await this.#tearingDown?.catch(() => {});
+      this.#tearingDown = null;
+      await this.#teardown();
+      try {
+        this.#fatal = null;
+        await this.#dial(this.#target);
+      } catch {
+        // Left latched for the next attempt; the loop is what decides to stop.
+        this.#fatal = previous;
+        continue;
+      }
+      // A WATCH the old connection held is gone with it, and the server has no
+      // memory of it. Recorded rather than silently forgotten, because an EXEC
+      // that proceeded would be reporting a guarantee nobody is making.
+      if (this.#watching) {
+        this.#watchLost = true;
+        this.#watching = false;
+      }
+      // An open MULTI went with the connection too.
+      this.#inMulti = false;
+      await this.#resubscribe();
+      return;
+    }
+    this.#fatal = previous;
+    throw previous ?? new DbError("the connection could not be reopened", {
+      code: DbErrorCode.ConnectionLost,
+    });
+  }
+
+  /**
+   * Puts the subscriptions back after a reconnect.
+   *
+   * Safe to replay in a way an ordinary command is not: subscribing twice is
+   * subscribing once. What cannot be recovered is anything published while the
+   * connection was down — pub/sub has no queue, so a gap loses what was sent in
+   * it, and a caller that cannot tolerate that wants a stream rather than a
+   * channel.
+   */
+  async #resubscribe(): Promise<void> {
+    const groups: [string, Map<string, Set<MessageHandler>>][] = [
+      ["SUBSCRIBE", this.#channels],
+      ["PSUBSCRIBE", this.#patterns],
+      ["SSUBSCRIBE", this.#shards],
+    ];
+    const wanted = groups.filter(([, registry]) => registry.size > 0);
+    if (wanted.length === 0) return;
+    // The pump is gone with the old socket; a fresh one reads the new
+    // confirmations and everything after them.
+    this.#pump = null;
+    this.#confirmations.length = 0;
+    this.#startPump();
+    for (const [command, registry] of wanted) {
+      const names = [...registry.keys()];
+      await this.#confirmed(names.length, [command, ...names]);
     }
   }
 
@@ -371,13 +529,22 @@ export class RedisConnection extends BaseConnection {
       });
     }
 
-    let reply: Reply;
     try {
       await writer.write(bytes);
+    } catch (e) {
+      // Nothing reached the server, so this one is safe to run again on a
+      // reopened connection.
+      const failure = this.#die(e);
+      UNSENT.add(failure);
+      throw failure;
+    }
+
+    let reply: Reply;
+    try {
       reply = await replies.next();
     } catch (e) {
       // A protocol error is as fatal as a dropped socket: both mean the reader
-      // no longer knows where it is in the stream.
+      // no longer knows where it is in the stream. And this one *was* sent.
       throw this.#die(e);
     }
     if (reply.kind === "error") throw serverError(reply.value.prefix, reply.value.message);
@@ -397,7 +564,11 @@ export class RedisConnection extends BaseConnection {
    * stands alone, so one failing says nothing about the others, and the caller
    * is the only layer that knows what to do about that.
    */
-  async #pipeline(commands: readonly (readonly CommandArg[])[]): Promise<Reply[]> {
+  async #pipeline(
+    commands: readonly (readonly CommandArg[])[],
+    { retry = true }: { retry?: boolean } = {},
+  ): Promise<Reply[]> {
+    await this.#ensureOpen();
     if (this.#fatal !== null) throw this.#fatal;
     if (this.#pump !== null) {
       throw new DbError(
@@ -427,23 +598,34 @@ export class RedisConnection extends BaseConnection {
     await previous.catch(() => {});
 
     try {
-      const writer = this.#writer;
-      const replies = this.#replies;
-      if (writer === null || replies === null) {
-        throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
-      }
-      const out: Reply[] = [];
-      try {
-        // One write for the whole batch. Writing them separately would be
-        // correct and would give up most of what pipelining buys.
-        await writer.write(concat(payloads));
-        for (let i = 0; i < commands.length; i++) out.push(await replies.next());
-      } catch (e) {
-        // A batch that failed part-way has left replies on the wire that nobody
-        // will read, so the stream can no longer be trusted to start on a
-        // boundary. That is fatal, exactly as a dropped socket is.
-        throw this.#die(e);
-      }
+      // Re-read on every attempt: a retry runs after a reconnect, and the
+      // writer and reader it should use are the new socket's.
+      const out = await this.#retrying(async () => {
+        const writer = this.#writer;
+        const replies = this.#replies;
+        if (writer === null || replies === null) {
+          throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
+        }
+        try {
+          // One write for the whole batch. Writing them separately would be
+          // correct and would give up most of what pipelining buys.
+          await writer.write(concat(payloads));
+        } catch (e) {
+          const failure = this.#die(e);
+          UNSENT.add(failure);
+          throw failure;
+        }
+        const replied: Reply[] = [];
+        try {
+          for (let i = 0; i < commands.length; i++) replied.push(await replies.next());
+        } catch (e) {
+          // A batch that failed part-way has left replies on the wire that
+          // nobody will read, so the stream can no longer be trusted to start
+          // on a boundary. That is fatal, exactly as a dropped socket is.
+          throw this.#die(e);
+        }
+        return replied;
+      }, retry);
       for (const args of commands) this.#observe(args);
       return out;
     } finally {
@@ -471,8 +653,34 @@ export class RedisConnection extends BaseConnection {
   async execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null> {
     this._open();
     if (commands.length === 0) return [];
+    if (this.#watchLost) {
+      // Reported once. The caller now knows to redo the whole read-and-compare
+      // cycle, and leaving the flags set would refuse their retry as well.
+      this.#watchLost = false;
+      this.#watching = false;
+      throw new DbError(
+        "this connection was reopened while a WATCH was outstanding, so the server no longer holds it — the transaction was not sent. Read the watched keys again and retry.",
+        { code: DbErrorCode.SerializationFailure },
+      );
+    }
     const checked = commands.map((args) => guard(args, this.#blocking));
-    const replies = await this.#pipeline([["MULTI"], ...checked, ["EXEC"]]);
+    // A `WATCH` lives on the server, on *this* connection. If sending fails and
+    // the connection is reopened, the watch is gone — so this must not take the
+    // ordinary unsent-retry, which would re-send the transaction onto a
+    // connection holding no watch and report success for a check nobody made.
+    const watching = this.#watching;
+    let replies: Reply[];
+    try {
+      replies = await this.#pipeline([["MULTI"], ...checked, ["EXEC"]], { retry: !watching });
+    } catch (e) {
+      if (!watching) throw e;
+      this.#watchLost = false;
+      this.#watching = false;
+      throw new DbError(
+        "the connection was lost while a WATCH was outstanding, so the transaction was not applied and the watch is void — read the watched keys again and retry",
+        { code: DbErrorCode.SerializationFailure, cause: e },
+      );
+    }
     const exec = replies[replies.length - 1]!;
 
     if (exec.kind === "error") {
@@ -514,6 +722,16 @@ export class RedisConnection extends BaseConnection {
   async execPipeline(commands: readonly (readonly CommandArg[])[]): Promise<unknown[]> {
     this._open();
     if (commands.length === 0) return [];
+    if (this.#watchLost) {
+      // Reported once. The caller now knows to redo the whole read-and-compare
+      // cycle, and leaving the flags set would refuse their retry as well.
+      this.#watchLost = false;
+      this.#watching = false;
+      throw new DbError(
+        "this connection was reopened while a WATCH was outstanding, so the server no longer holds it — the transaction was not sent. Read the watched keys again and retry.",
+        { code: DbErrorCode.SerializationFailure },
+      );
+    }
     const checked = commands.map((args) => guard(args, this.#blocking));
     const replies = await this.#pipeline(checked);
     return replies.map((reply) =>
@@ -525,6 +743,7 @@ export class RedisConnection extends BaseConnection {
 
   /** Takes the connection for one exchange, and gives it back. */
   async #call(args: readonly CommandArg[]): Promise<Reply> {
+    await this.#ensureOpen();
     if (this.#fatal !== null) throw this.#fatal;
     if (this.#pump !== null) {
       // The read loop owns the reader, so there is nobody to hand a reply to.
@@ -545,11 +764,39 @@ export class RedisConnection extends BaseConnection {
     // A failed exchange must not poison the ones behind it.
     await previous.catch(() => {});
     try {
-      const reply = await this.#exchange(args);
+      const reply = await this.#retrying(() => this.#exchange(args));
       this.#observe(args);
       return reply;
     } finally {
       release();
+    }
+  }
+
+  /**
+   * Runs `work`, and runs it once more if the connection had gone away before
+   * it sent anything.
+   *
+   * The retry is bounded to one and to the unsent case. Without it a server
+   * restart costs every live connection one spurious error, because nothing
+   * notices a socket has closed until something tries to use it — and the
+   * command that discovers it did not deserve to be the one that fails.
+   */
+  async #retrying<T>(work: () => Promise<T>, retry = true): Promise<T> {
+    try {
+      return await work();
+    } catch (e) {
+      if (
+        !retry ||
+        this.#reconnect === null ||
+        this.#closing ||
+        typeof e !== "object" ||
+        e === null ||
+        !UNSENT.has(e)
+      ) {
+        throw e;
+      }
+      await this.#ensureOpen();
+      return work();
     }
   }
 
@@ -568,6 +815,14 @@ export class RedisConnection extends BaseConnection {
       this.#inMulti = true;
     } else if (name === "EXEC" || name === "DISCARD" || name === "RESET") {
       this.#inMulti = false;
+      this.#watching = false;
+    } else if (name === "WATCH") {
+      this.#watching = true;
+    } else if (name === "UNWATCH") {
+      this.#watching = false;
+      // The caller has said they no longer depend on the lost watch, so the
+      // connection stops answering for it.
+      this.#watchLost = false;
     }
   }
 
@@ -760,6 +1015,14 @@ export class RedisConnection extends BaseConnection {
           // line that did not cause it.
           for (const pending of this.#confirmations.splice(0)) pending.reject(error);
           this.onSubscribeError?.(error);
+          // A subscriber has to reconnect itself: nobody is going to call it,
+          // so the lazy path every other command takes would never run.
+          if (this.#reconnect !== null && !this.#closing) {
+            this.#reopening ??= this.#reopen().finally(() => {
+              this.#reopening = null;
+            });
+            this.#reopening.catch((failure) => this.onSubscribeError?.(failure));
+          }
           return;
         }
         this.#deliver(reply);
@@ -982,6 +1245,37 @@ export class RedisConnection extends BaseConnection {
 }
 
 const EMPTY = new Uint8Array(0);
+
+/**
+ * Errors raised **before** anything reached the server.
+ *
+ * The distinction reconnection turns on. A command whose write failed was never
+ * sent, so running it again cannot repeat it — and the host invalidates a socket
+ * handle when the peer goes away, so a write to a connection the server closed
+ * fails rather than succeeding into nothing. That covers the ordinary case: a
+ * server restart, a `CLIENT KILL`, an idle timeout at the far end.
+ *
+ * A command whose *reply* never arrived is the opposite: it was written, and
+ * whether the server ran it first is not knowable. Retrying `INCR` there would
+ * double-count, so that one fails and its caller decides.
+ *
+ * A `WeakSet` rather than a property on the error, so the distinction stays an
+ * implementation detail instead of becoming API nobody meant to promise.
+ */
+const UNSENT = new WeakSet<object>();
+
+/** The reconnection plan, or `null` for a connection that stays dead. */
+function normalizeReconnect(
+  option: boolean | ReconnectOptions | undefined,
+): Required<ReconnectOptions> | null {
+  if (option === undefined || option === false) return null;
+  const given = option === true ? {} : option;
+  return {
+    attempts: given.attempts ?? 10,
+    delay: Math.max(1, given.delay ?? 100),
+    maxDelay: Math.max(1, given.maxDelay ?? 5000),
+  };
+}
 
 /** Joins encoded commands into the single write a pipeline sends. */
 function concat(parts: readonly Uint8Array[]): Uint8Array {

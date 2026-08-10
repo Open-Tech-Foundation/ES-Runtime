@@ -10,6 +10,27 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Reconnection in `@opentf/esrun-redis`** — `{ reconnect: true }`, or an
+  object with `attempts`/`delay`/`maxDelay`. **Off by default**: turning it on
+  changes what a thrown error means, and a `Pool` does not need it, since
+  replacing a dead connection is reconnection with none of the state questions.
+  It is lazy — the next command reopens, so an idle connection does not spend
+  the process's life dialling a server that is down — except for a subscriber,
+  which reopens from its read loop because nobody is going to call it.
+
+  What is restored is what is safe to restore: the handshake, the selected
+  database, the client name, and every subscription. What is not, deliberately:
+  the command in flight (it was written, and whether the server ran it first is
+  unknowable — replaying `INCR` would double-count), a `WATCH` (the server
+  forgot it, so the next `EXEC` fails with `ERR_DB_SERIALIZATION_FAILURE` rather
+  than succeeding on a guarantee nobody is making), an open `MULTI`, and any
+  message published while the connection was down.
+
+  One retry is allowed and it is precise: a command whose **write** failed never
+  reached the server. Without it every server restart would cost each live
+  connection one spurious error, since nothing notices a closed socket until
+  something uses it.
+
 - **Pipelining in `@opentf/esrun-redis`** — `pipeline()` builds a batch with the
   whole command surface on it and sends it in **one round trip**. Measured on
   loopback, where a round trip is nearly free: 500 `INCR`s took 102 ms one at a
