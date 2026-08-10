@@ -255,17 +255,34 @@ as the reverse — the mutual half of SCRAM is verified, not skipped.
 
 Tests need a PostgreSQL to talk to:
 
+The tests come in two halves. The **unit** tests need no database — a wire
+codec is checkable on its own, and the cases worth pinning (a message split
+across three chunks, a quoted `NULL` inside an array, RFC 7677's published SCRAM
+vectors) are exactly the ones a live server will not produce on demand:
+
+```sh
+bun install
+bun run build
+./test/unit/run.sh
+```
+
+The **integration** tests need a real server, because speaking to one is the
+whole point of the package:
+
 ```sh
 docker run -d --name esrun-pg-test \
   -e POSTGRES_PASSWORD=esrun -e POSTGRES_DB=esrun_test \
   -p 127.0.0.1:5433:5432 postgres:latest
 
-bun run build
-./test/run.sh                 # smoke, conformance, TLS negotiation
+./test/run.sh                 # unit, then the suite against the server
 docker rm -f esrun-pg-test
 ```
 
-`PG_URL` overrides the connection string.
+`PG_URL` overrides the connection string and `ESRUN` the binary. The TLS test
+needs a server with a certificate from a private authority; `test/tls-server.sh`
+stands one up and prints the environment for it.
+
+Both halves run in CI, against a `postgres:18` service container.
 
 ## License
 

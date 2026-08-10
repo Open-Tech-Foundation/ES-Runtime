@@ -88,6 +88,50 @@ jobs:
       - run: bun run build
       - run: git diff --exit-code -- ../src/runtime_modules/serialization.js
 
+  # The PostgreSQL driver (packages/postgres). Two halves, deliberately.
+  #
+  # The unit tests need no database: a wire codec is checkable on its own, and
+  # the cases worth pinning — a message split across three chunks, a quoted NULL
+  # inside an array, RFC 7677's published SCRAM vectors — are precisely the ones
+  # a live server will not produce on demand. The integration tests need a real
+  # server, because the point of the package is that it speaks to one.
+  postgres:
+    name: postgres driver
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: esrun
+          POSTGRES_DB: esrun_test
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: packages/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: Swatinem/rust-cache@v2
+      # The debug binary, not release: these tests check behaviour rather than
+      # speed, and a release build of v8 is not worth the minutes here.
+      - run: cargo build -p es-runtime-cli
+        working-directory: .
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: ./test/unit/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+      - run: ./test/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          PG_URL: postgres://postgres:esrun@127.0.0.1:5432/esrun_test?sslmode=disable
+
   msrv:
     name: msrv build (1.95)
     runs-on: ubuntu-latest

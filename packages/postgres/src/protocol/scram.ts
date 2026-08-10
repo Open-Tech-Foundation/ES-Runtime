@@ -75,12 +75,22 @@ function normalize(password: string): string {
   return password.normalize("NFKC");
 }
 
-/** Begins a SCRAM exchange for `password`. */
-export function scram(password: string): ScramSession {
-  const nonceBytes = crypto.getRandomValues(new Uint8Array(18));
-  const clientNonce = base64(nonceBytes);
+/**
+ * Begins a SCRAM exchange for `password`.
+ *
+ * `options` exists for the tests: RFC 7677's published vectors fix the nonce and
+ * carry a username, and an algorithm that can only be run with a random nonce
+ * can only be checked against itself. Neither is used in production —
+ * PostgreSQL takes the username from the startup packet and ignores the one in
+ * the SCRAM message, which is why the default is empty.
+ */
+export function scram(
+  password: string,
+  options: { nonce?: string; username?: string } = {},
+): ScramSession {
+  const clientNonce = options.nonce ?? base64(crypto.getRandomValues(new Uint8Array(18)));
   // `n,,` is the GS2 header: no channel binding, no authorization identity.
-  const bare = `n=,r=${clientNonce}`;
+  const bare = `n=${options.username ?? ""},r=${clientNonce}`;
   const initial = `n,,${bare}`;
 
   return {

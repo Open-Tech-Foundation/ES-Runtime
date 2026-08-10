@@ -1,25 +1,15 @@
-// Builds src/index.ts into dist/ — one ESM bundle plus its declarations.
+// Builds src/ into dist/ — plain ESM plus declarations, module for module.
 //
-// Bundled rather than emitted file-per-module because the whole package is a
-// single import in practice, and because `runtime:` specifiers must survive the
-// build untouched: they are resolved by the runtime, not by a bundler, and a
-// bundler that tried to follow them would fail rather than leave them alone.
+// Not bundled. A library that ships its module structure is easier to read a
+// stack trace from, and `runtime:` specifiers pass through untouched because
+// nothing tries to follow them: they are resolved by the runtime, and a bundler
+// asked to look would fail rather than leave them alone.
+//
+// It also means the protocol modules can be imported one at a time, which is
+// what the unit tests do — the alternative was exporting the internals from the
+// package's public surface so a test could reach them, which is a poor reason to
+// widen an API.
 import { $ } from "bun";
 
-const EXTERNAL = ["runtime:db", "runtime:net", "runtime:process"];
-
-const result = await Bun.build({
-  entrypoints: ["./src/index.ts"],
-  outdir: "./dist",
-  format: "esm",
-  target: "node",
-  external: EXTERNAL,
-});
-
-if (!result.success) {
-  for (const log of result.logs) console.error(log);
-  process.exit(1);
-}
-
 await $`tsc`;
-console.log(`built ${result.outputs.map((o) => o.path).join(", ")}`);
+console.log("built dist/");

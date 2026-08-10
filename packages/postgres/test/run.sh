@@ -15,6 +15,9 @@ export PG_URL="${PG_URL:-postgres://postgres:esrun@127.0.0.1:5433/esrun_test?ssl
 [ -f "$here/../dist/index.js" ] || { echo "not built — bun run build" >&2; exit 1; }
 [ "$here/../dist/index.js" -nt "$here/../src/connection.ts" ] || echo "warning: dist is older than src — run 'bun run build'" >&2
 
+printf "\n== unit ==\n"
+"$here/unit/run.sh" || exit 1
+
 status=0
 for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages; do
   printf '\n== %s ==\n' "$test"

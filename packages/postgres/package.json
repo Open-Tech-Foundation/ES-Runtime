@@ -16,7 +16,8 @@
   },
   "scripts": {
     "build": "bun run build.mjs",
-    "test": "bun test",
+    "test": "./test/unit/run.sh && ./test/run.sh",
+    "test:unit": "./test/unit/run.sh",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
