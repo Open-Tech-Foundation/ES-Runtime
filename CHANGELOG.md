@@ -61,6 +61,51 @@ namespace) is unstable and may change between minor releases until the API freez
   Which client you get follows from the driver you passed rather than from which
   of seven functions you called.
 
+- **One subscription surface, on every connection.** `LISTEN`/`NOTIFY`, Redis
+  pub/sub and a change stream are one concept, and the two shipped drivers had
+  each invented a name for it: PostgreSQL had `listen`, `unlisten`,
+  `onNotification`, `listening` and `onListenError`; Redis had `subscribe`,
+  `unsubscribe`, `onMessage`, `subscribed` and `onSubscribeError`. The portable
+  spelling is now the second one, on every `Connection`:
+
+  ```js
+  await conn.subscribe("orders", (payload, { channel }) => …);
+  conn.onMessage = (payload, context) => …;
+  await conn.unsubscribe("orders");
+  ```
+
+  `supports.subscriptions` declares it; a backend without it refuses by name.
+  So does a **pooled** connection — a subscription needs a connection that does
+  not come back, which is the opposite of a pool's premise — and so does a
+  cluster client, where Redis pub/sub is not cluster-aware and a cluster-wide
+  subscribe would deliver some messages and silently miss others. A driver
+  implements `_subscribe`/`_unsubscribe` and inherits the rest.
+
+- **`supports.sqlText` is `supports.queryText`.** The flag means "takes query
+  text", and a backend speaking Cypher, N1QL or a language of its own takes text
+  without being a SQL backend — which the old name made unsayable.
+
+- **`executeMany` reports per parameter set.** `ExecuteResult.results` carries
+  one result per set wherever the backend can report them, which the default
+  batch path always can, since it ran them one at a time and had them in hand.
+  Without it a batch of inserts against a backend that generates keys was a
+  batch whose keys were unreachable: the aggregate carries only the last.
+
+- **`Row<V>` and `Rows<R>` are generic.** `DbOutput` describes what the built-in
+  backend produces, and the types said it described every backend while
+  `@opentf/esrun-postgres` was already returning `Temporal` values and parsed
+  JSON. A driver now declares what it produces (`Rows<PgRow>`); the portable
+  `Connection` types its rows `unknown`, because an unknown backend decodes what
+  it likes, and `sqlite` narrows back to `DbOutput`.
+
+- **`ERR_DB_THROTTLED` and `ERR_DB_NOT_FOUND`** join the portable codes.
+  Throttling is the service shedding load — a quota, a rate limit, a connection
+  cap — as distinct from `ERR_DB_BUSY`, which is one resource held by someone
+  else; both shipped backends map real conditions onto it (PostgreSQL's
+  `53300`/`53400`, Redis's `MAXCLIENTS`). `NOT_FOUND` is for a backend asked for
+  one named thing that has none, which is not the same as a query that matched
+  nothing.
+
 - **Every driver package exports its driver as `driver`, and nothing as a
   default.** One import shape for every backend, and `{ driver }` is the whole
   of the option:

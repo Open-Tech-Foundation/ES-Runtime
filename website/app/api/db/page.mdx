@@ -93,15 +93,22 @@ connection gets its own. The named form (`:memory:name`), which in SQLite means
 | --- | --- |
 | `query(q, params?)` | `Promise<Rows>` |
 | `execute(q, params?)` | `Promise<{ changes, lastInsertRowid }>` |
-| `executeMany(sql, rows)` | `Promise<{ changes, lastInsertRowid }>` |
+| `executeMany(sql, rows)` | `Promise<{ changes, lastInsertRowid, results? }>` |
 | `transaction(fn)` | whatever `fn` returns |
+| `withConnection(fn)` | whatever `fn` returns, with **one** connection held for it |
+| `subscribe(channels, handler?)` / `unsubscribe(channels?)` | `Promise<void>` |
+| `subscribed`, `subscriptions` | whether it is delivering messages, and what it listens to |
+| `usable`, `reusable` | still worth using; fit for the next caller |
 | `close()` | `Promise<void>` — also `Symbol.asyncDispose` |
 | `dialect`, `backend` | the backend's dialect and name |
+
+Every one of these is on a single connection **and** on a pooled one, so code
+that holds "a connection" never has to ask which kind it has.
 
 `q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
 (bound by position) or an object (bound by name).
 
-Which forms a backend takes is its own declaration — `dialect.supports.sqlText`
+Which forms a backend takes is its own declaration — `dialect.supports.queryText`
 and `supports.queryAst` — and the form it does not take is refused with
 `ERR_DB_QUERY_FORM`, in either direction. `sqlite:` and `postgres:` take SQL;
 `redis:` takes command arrays and refuses SQL.
@@ -157,6 +164,35 @@ its time on the boundary instead of in the database.
 
 A `` sql`` `` template with values describes a single row, so it is refused
 here rather than silently running the first row's values for every row.
+
+`results` carries **one result per parameter set** where the backend reports
+them — which the default batch path always does, since it ran the sets one at a
+time. It is absent when the backend answered for the batch as a whole, so check
+before reading it. Without it, a batch of inserts against a backend that
+generates keys is a batch whose keys are unreachable: the aggregate can only
+carry the last.
+
+### `subscribe(channels, handler?)`
+
+Server-pushed messages: PostgreSQL's `LISTEN`/`NOTIFY`, Redis's pub/sub, a
+change stream elsewhere.
+
+```js
+await conn.subscribe("orders", (payload, { channel }) => console.log(channel, payload));
+conn.onMessage = (payload, context) => …;      // the catch-all
+conn.onSubscribeError = (error) => …;          // the delivery loop failed
+await conn.unsubscribe("orders");              // omit the name for all of them
+```
+
+It resolves once the backend has **confirmed** the subscription, so publishing
+immediately afterwards cannot race it. Subscribing gives the connection over to
+delivering messages, and on most backends it then refuses ordinary work with
+`ERR_DB_CONNECTION_BUSY` — which is the protocol's own rule as often as it is
+the driver's, and how you would deploy it anyway.
+
+`supports.subscriptions` is the declaration; a backend without them refuses by
+name. **A pooled connection refuses too**: a subscription needs a connection
+that does not come back, which is the opposite of a pool's premise.
 
 ### `transaction(fn)`
 
@@ -223,6 +259,13 @@ selects more columns than it reads pays only for the ones it touches. A 64-bit
 integer arrives as a `bigint` only where a `number` would have lost it; a blob
 arrives as a `Uint8Array`.
 
+**What a column produces is the backend's decision.** `DbOutput` — the union
+above — is what `sqlite` produces, and `Row<V>` is generic so a driver can say
+what it produces instead: `@opentf/esrun-postgres` decodes `timestamptz` into a
+`Temporal.Instant` and `jsonb` into the document, and types its rows
+accordingly. Held through the portable `Connection` type, a row's values are
+`unknown`, because an unknown backend decodes what it likes.
+
 <Callout type="warning" title="Spreading a row does not copy its columns">
   The getters live on the prototype, so `{ ...row }` yields an **empty object**
   (and leaks nothing internal either). `row.toObject()` is how a row is
@@ -258,6 +301,8 @@ try {
 | `ERR_DB_CHECK_VIOLATION` | A `CHECK` constraint failed. |
 | `ERR_DB_DEADLOCK` | The transaction was chosen as a deadlock victim. |
 | `ERR_DB_SERIALIZATION_FAILURE` | The transaction could not be serialized; retry it. |
+| `ERR_DB_THROTTLED` | The service is shedding load — a quota, a rate limit, a connection cap. Distinct from `ERR_DB_BUSY`, which is one resource held by someone else. |
+| `ERR_DB_NOT_FOUND` | The thing addressed does not exist. Distinct from an empty result: a query that matched nothing succeeded. |
 | `ERR_DB_BUSY` | The database is locked by another writer. |
 | `ERR_DB_CONNECTION_LOST` | The connection went away mid-operation. |
 | `ERR_DB_AUTH_FAILED` | The server refused the credentials. |
@@ -280,7 +325,7 @@ For adding a backend or building an ORM.
 | `defineDriver(spec)` | Make a driver: `name`, `schemes`, `dialect`, `open(url, options)`, and optionally `pooled(url, options, poolOptions)`. |
 | `PooledConnection` | The pooled form `pool: true` builds. Subclass it to put your own surface on a pool. |
 | `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`; override `_executeMany` for a fast batch path, `_cancel` to really cancel, and the `_*Transaction` trio for a backend without SQL. |
-| `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports` — including `sqlText`, `queryAst` and `transactions`. |
+| `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports` — including `queryText`, `queryAst` and `transactions`. |
 | `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder for a backend handed **bytes**. |
 | `defineRecordShape(columns)` / `Rows.fromObjects(records)` | The same `Row` contract for a backend whose values are **already JavaScript**. |
 | `encodeParams` / `splitParams` | Parameter encoding. |
@@ -349,7 +394,7 @@ A backend that does not speak SQL declares it, and inherits the rest unchanged:
 const dialect = new Dialect({
   name: "mydb",
   placeholder: () => { throw new DbError("no placeholders here", { code: DbErrorCode.QueryForm }); },
-  supports: { sqlText: false, queryAst: true, transactions: false },
+  supports: { queryText: false, queryAst: true, transactions: false },
 });
 ```
 

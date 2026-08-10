@@ -72,7 +72,7 @@ there is no injection to prevent — the arguments were never text that could
 become syntax.
 
 <Callout type="warning" title="Redis is not a SQL database, and the driver says so">
-  `supports.sqlText` is `false`, so SQL is refused with `ERR_DB_QUERY_FORM`, and
+  `supports.queryText` is `false`, so SQL is refused with `ERR_DB_QUERY_FORM`, and
   `supports.transactions` is `false`, so `transaction(fn)` throws
   `ERR_DB_UNSUPPORTED`. Redis's `MULTI`/`EXEC` applies commands together but does
   **not** roll back one that fails at exec time, so a `transaction(fn)` built on
@@ -210,12 +210,17 @@ needs `withConnection()`.
 
 ```js
 const sub = await connect("redis://localhost", { driver });
-await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
-await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
+await sub.subscribe("news", (payload, { channel }) => console.log(channel, payload));
+await sub.psubscribe("room.*", (payload, { channel, pattern }) => …);
 
 const pub = await connect("redis://localhost", { driver });
 await pub.publish("news", "hello");
 ```
+
+`subscribe`, `unsubscribe`, `onMessage` and `subscribed` are the portable names
+every backend with subscriptions answers to — PostgreSQL's `LISTEN` is the same
+call. `psubscribe` and `ssubscribe` are Redis's own, because patterns and shard
+channels are.
 
 **Two connections, and that is not a workaround.** The first `subscribe` gives
 its connection over to a read loop, and it then runs no ordinary commands —

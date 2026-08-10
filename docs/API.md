@@ -1447,7 +1447,7 @@ the backend's word for a cancelled statement, including when a streaming result
 is abandoned halfway. `sqlite:` interrupts a running statement; a networked
 backend cancels over the protocol.
 
-**Which forms a backend takes is its own declaration.** `dialect.supports.sqlText`
+**Which forms a backend takes is its own declaration.** `dialect.supports.queryText`
 (default `true`) and `supports.queryAst` (default `false`) say so, and the form a
 backend does not take is refused with `ERR_DB_QUERY_FORM` — in either direction.
 `sqlite:` and `postgres:` take SQL; `redis:` takes command arrays and refuses
@@ -1538,7 +1538,7 @@ same way, and exist as methods so that a backend without SQL can still have
 transactions.
 
 Most conformance checks are written in SQL. Against a backend declaring
-`supports.sqlText: false` those are **skipped with a reason** rather than
+`supports.queryText: false` those are **skipped with a reason** rather than
 failed — a check you cannot express is not a finding — and what runs is the part
 that holds for every backend whatever form it takes.
 

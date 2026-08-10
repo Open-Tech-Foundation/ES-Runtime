@@ -93,24 +93,31 @@ Rows are discarded: it reports what each statement did, not what it returned.
 surface, and needs nothing extra to reach: `connect(url, { driver })`
 returns a `PgConnection`, because the driver you pass decides what comes back.
 
-## LISTEN / NOTIFY
+## Subscriptions (LISTEN / NOTIFY)
 
 ```js
 const listener = await connect(url, { driver });
-listener.onNotification = ({ channel, payload }) => console.log(channel, payload);
 
-await listener.listen("orders");
+await listener.subscribe("orders", (payload, { channel }) => console.log(channel, payload));
+listener.onMessage = (payload, { channel, processId }) => …;   // the catch-all
+await listener.unsubscribe("orders");
 ```
 
-**A listening connection is dedicated.** A notification arrives when it arrives,
+`subscribe`/`unsubscribe`/`onMessage` are `runtime:db`'s names for this, and
+they are the ones used here rather than PostgreSQL's: a program that subscribes
+to a channel should read the same whichever backend is under it, and the SQL
+being sent is `LISTEN`. It resolves once the server has confirmed, so a `NOTIFY`
+immediately afterwards cannot race the subscription.
+
+**A subscribed connection is dedicated.** A notification arrives when it arrives,
 and a connection only sees messages while it is reading — which an idle one is
-not. So the first `listen()` gives the connection over to a read loop, and from
+not. So the first `subscribe()` gives the connection over to a read loop, and from
 then on it runs no queries: `query()` and `execute()` refuse with
 `ERR_DB_CONNECTION_BUSY`. That is how you would deploy it anyway — a connection
 that must notice a notification promptly should not be waiting behind someone's
 report query. Use a second connection, or a pool, for the work.
 
-`listen()` and `unlisten()` **await confirmation**, so a misspelled channel
+`subscribe()` and `unsubscribe()` **await confirmation**, so a misspelled channel
 fails there rather than silently never firing. The read loop owns reading; a
 `LISTEN` only needs writing, and TCP is full duplex, so commands go out
 underneath the loop and it settles them when their reply comes back.
@@ -121,7 +128,12 @@ when the notifier sent none, and `processId` identifies the sending backend —
 which is how a connection recognises its own notifications, since PostgreSQL
 delivers them to the sender too.
 
-`onListenError` is called if the loop itself fails, since nobody is awaiting it.
+`onSubscribeError` is called if the loop itself fails, since nobody is awaiting
+it — and a handler that throws goes there too, because the loop is the only
+thing reading the socket and one bad handler must not stop the others.
+
+A **pooled** connection refuses to subscribe: a subscription needs a connection
+that does not come back, which is the opposite of a pool's premise.
 
 ## Notices and server parameters
 
@@ -427,7 +439,7 @@ as the reverse — the mutual half of SCRAM is verified, not skipped.
 - **Binary result formats.** Everything is text for now. Binary is the larger
   win for numeric-heavy results and is next.
 - **A connection pool.** One connection per `connect()` — unless you ask for `pool`.
-- **`COPY`**, `LISTEN`/`NOTIFY`, and cursors held across transactions.
+- **`COPY`** and cursors held across transactions.
 - **Prepared-statement caching** — each query re-parses.
 
 ## Development

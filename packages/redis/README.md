@@ -60,7 +60,7 @@ it is:
 | | |
 | --- | --- |
 | `supports.queryAst` | `true` — commands are arrays |
-| `supports.sqlText` | `false` — SQL is refused with `ERR_DB_QUERY_FORM` |
+| `supports.queryText` | `false` — SQL is refused with `ERR_DB_QUERY_FORM` |
 | `supports.transactions` | `false` — see below |
 | `supports.savepoints` | `false` |
 | `supports.returning` | `false` |
@@ -204,12 +204,17 @@ sees the same lost connection rather than a different symptom of it.
 
 ```js
 const sub = await connect("redis://localhost", { driver });
-await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
-await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
+await sub.subscribe("news", (payload, { channel }) => console.log(channel, payload));
+await sub.psubscribe("room.*", (payload, { channel, pattern }) => …);
 
 const pub = await connect("redis://localhost", { driver });
 await pub.publish("news", "hello");        // → how many subscribers received it
 ```
+
+`subscribe`/`unsubscribe`/`onMessage`/`subscribed` are `runtime:db`'s portable
+names, so this reads the same as subscribing on any other backend that has
+them; `psubscribe` and `ssubscribe` are Redis's own, since patterns and shard
+channels are. `subscriptions` lists all three kinds together.
 
 **Two connections, and that is not a workaround.** The first `subscribe` gives
 its connection over to a read loop, and from then on that connection runs no

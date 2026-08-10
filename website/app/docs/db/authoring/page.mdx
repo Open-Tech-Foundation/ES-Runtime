@@ -86,9 +86,30 @@ abandoned-result discipline and `AbortSignal` handling all come from the base
 class. You do not reimplement them, and — more to the point — you do not get to
 implement them *differently*, which is what makes an ORM able to rely on them.
 
+### If your backend pushes messages
+
+`LISTEN`/`NOTIFY`, pub/sub, a change stream: one concept, and the kit gives it
+one surface. Declare `supports.subscriptions` and implement two methods:
+
+```js
+protected async _subscribe(channels, handler) { /* confirmed before it resolves */ }
+protected async _unsubscribe(channels) { /* undefined means all of them */ }
+```
+
+`subscribe`/`unsubscribe`/`subscribed`/`subscriptions`/`onMessage`/
+`onSubscribeError` come with it, along with the closed-connection check, the
+capability refusal, and the normalization of one name or several. Deliver with
+`(payload, context)` — `context.channel` always, plus whatever only your backend
+knows. A handler that throws goes to `onSubscribeError` and the loop continues:
+it is the only thing reading the socket, and one bad handler must not stop every
+other subscription.
+
+Resolve **after** the backend confirms, not after the write. A subscribe that
+resolves early makes `subscribe(); publish()` a race that fails once a week.
+
 ### If your backend does not speak SQL
 
-Say so, and the rest still works. `supports.sqlText: false` makes SQL text and
+Say so, and the rest still works. `supports.queryText: false` makes SQL text and
 `` sql`` `` templates refused with `ERR_DB_QUERY_FORM`; `supports.queryAst: true`
 makes `queryAst(…)` arrive as `q.ast`. That form has been in the contract since
 the first release for exactly this, and `redis:` is the backend that uses it —
@@ -376,6 +397,11 @@ wrote it:
   was handed. `usable` and `reusable` answer on both too.
 - `driver.dialect.supports` answers **before** a connection exists, so an ORM
   can pick a strategy at configuration time rather than at first query.
+- `executeMany` reports `results` per parameter set wherever the backend can,
+  which is where a batch of inserts against a key-generating backend finds its
+  keys — the aggregate carries only the last.
+- `subscribe`/`unsubscribe` mean the same thing on every backend that has them,
+  and are refused by name on every backend that does not.
 
 What is **not** portable, and should be behind a capability check rather than an
 assumption: named parameters (`dialect.supports.namedParameters` —
@@ -385,7 +411,7 @@ scripts, and `lastInsertRowid`, which PostgreSQL has no equivalent of and
 always reports as `null`.
 
 Three more, which an ORM that assumed "every backend is a SQL backend" will meet
-the moment one is not. `supports.sqlText` — `redis:` refuses SQL, so a query
+the moment one is not. `supports.queryText` — `redis:` refuses SQL, so a query
 builder that emits text has to check before it emits any. `supports.queryAst`,
 which is how you reach such a backend at all. And `supports.transactions`: where
 it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
@@ -395,7 +421,7 @@ it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
 
 - [ ] `defineDriver`, exported as your package's default — that *is* the API
 - [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
-- [ ] `supports` states what you take and what you have — `sqlText`, `queryAst`, `transactions`, plus any capability of your own an ORM should be able to branch on
+- [ ] `supports` states what you take and what you have — `queryText`, `queryAst`, `transactions`, plus any capability of your own an ORM should be able to branch on
 - [ ] Rows as bytes if that is what you were handed, as records if they are already JavaScript — never encode objects to satisfy the byte layout
 - [ ] Both wire formats, if you have two, decode to identical values
 - [ ] SQLSTATE or equivalent mapped onto the portable codes, host codes preserved
@@ -404,4 +430,5 @@ it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
 - [ ] `reusable` answered from the protocol's own idea of idle, so pooling is correct
 - [ ] Timeouts on connect; let the server bound the statement if it can
 - [ ] Transport failures latched
+- [ ] `_subscribe`/`_unsubscribe` if you push messages, confirmed before resolving
 - [ ] `runBackendConformance()` passing, in CI, against a real server

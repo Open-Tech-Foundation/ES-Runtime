@@ -236,8 +236,8 @@ const db = await connect("redis://localhost", { driver });
 await db.execute(queryAst(["SET", "k", "v"]));
 ```
 
-It declares what it is — `supports.sqlText: false`, `supports.queryAst: true`,
-`supports.transactions: false` — so code that checks rather than assumes keeps
+It declares what it is — `supports.queryText: false`, `supports.queryAst: true`,
+`supports.transactions: false`, `supports.subscriptions: true` — so code that checks rather than assumes keeps
 working, and code that does not gets `ERR_DB_QUERY_FORM` or
 `ERR_DB_UNSUPPORTED` by name rather than something stranger further down. Most
 programs using Redis want its own vocabulary instead, and it is on the very same

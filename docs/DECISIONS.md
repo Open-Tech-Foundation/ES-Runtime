@@ -804,7 +804,42 @@ reply already in memory, but it is what keeps `LRANGE 0 -1` followed by a
 existed on the byte path, which the first records implementation lost and a
 test now pins.
 
-**Two more asymmetries, found the same way.** `withConnection` existed on a
+**One concept, two drivers, two vocabularies** (*amended 2026-08-11*).
+`LISTEN`/`NOTIFY` and pub/sub are the same arrangement — a connection given
+over to delivering messages the server pushes — and the two drivers had
+invented `listen`/`onNotification`/`listening`/`onListenError` and
+`subscribe`/`onMessage`/`subscribed`/`onSubscribeError` for it independently.
+Neither was wrong; having both was. The portable surface is now
+`subscribe`/`unsubscribe`/`subscribed`/`subscriptions`/`onMessage`/
+`onSubscribeError`, declared by `supports.subscriptions`, with `_subscribe` and
+`_unsubscribe` as the driver seam.
+
+The rule this followed is D56's own: a kit primitive ships when a backend
+proves it. Two backends had proved this one and the proof had been read as "two
+drivers, each with a feature" rather than as "one feature, spelled twice" —
+which is what a driver tier exists to catch. **The generalisable form: when the
+second consumer of a concept arrives, the question is not whether it works but
+whether it agrees.**
+
+Three refusals fall out of it, and all three are by name rather than by
+absence. A pooled connection cannot subscribe, because a subscription needs a
+connection that does not come back. A cluster cannot, because Redis pub/sub is
+not cluster-aware and a cluster-wide subscribe would deliver some messages and
+silently drop others. A backend with no subscriptions says so in `supports`.
+
+Four smaller corrections went with it. `supports.sqlText` became
+`supports.queryText` — the flag means "takes text", and a backend speaking
+Cypher takes text without being a SQL backend, which the old name could not
+express. `executeMany` now reports per parameter set, because the default batch
+path had each result in its hand and discarded them, leaving a batch of inserts
+against a key-generating backend with no way to learn its keys. `Row` and
+`Rows` became generic, since `DbOutput` describes the built-in backend and the
+type claimed it described all of them while Postgres was already returning
+`Temporal` values. And `ERR_DB_THROTTLED` and `ERR_DB_NOT_FOUND` were added
+with mappings from both shipped backends rather than on the strength of
+backends that do not exist yet.
+
+**Two more asymmetries, found the same way.****Two more asymmetries, found the same way.** `withConnection` existed on a
 pool and not on a connection; `usable` and `reusable` on a connection and not
 on a pool. Each is meaningless on the other *as an implementation* and
 essential on both *as a contract*, because otherwise code holding "a
