@@ -658,7 +658,7 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
-### D56 — `runtime:db`: a driver kit in JS, transport in Rust, and no new authority · *Proposed (2026-08-09)*
+### D56 — `runtime:db`: a driver kit in JS, transport in Rust, and no new authority · *Locked (maintainer sign-off, 2026-08-10)*
 
 **Context:** a server runtime without a database story sends every user to a driver written for someone else's I/O model. The peers split two ways: Bun ships a driver per backend as runtime API, Node and Deno leave it to npm. Neither gives a third party the fast path — an npm driver reaches the socket through a compatibility layer, and a built-in driver's internals are not exported, so the second backend starts from nothing. The audit that opened this work also found that the transport half was already built: D28's `net_start_tls` is the mid-connection upgrade libpq's `SSLRequest` needs, and `SystemNet`'s reader already fills a 64 KB buffer per `net_read`. What was missing was not the plumbing but the substrate above it.
 
@@ -689,6 +689,36 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
   Found the hard way, and worth writing down: **the engine chooses its storage from the `IO` it is handed and from nothing else.** `Database::open` uses the IO given it; the `:memory:` → memory-storage mapping lives in a convenience constructor no embedder supplying its own VFS can use. Passing the jailed VFS with a `:memory:` path therefore produces a *file called `:memory:`* while `is_in_memory_db()` reports true — the two disagree and nothing errors. The dispatch belongs to us, and every future custom-VFS embedder inherits the same obligation.
 
 - **The engine's scratch space is memory** (*amended 2026-08-09*). Some statements ask the engine for a temp file, and it takes one from the OS temp directory — outside the root jail by construction, so the VFS refuses it and the statement fails. `TempStore::Memory` is set on every connection, which is the same answer `runtime:fs` already gives by refusing to put its temp files in the OS temp directory (D25). Redirecting the path into the jail was rejected: it means recognising the engine's own temp naming, and it leaves scratch files in the user's project. The cost is stated rather than hidden — work that would have spilled to disk is now bounded by memory. **Found by the conformance suite on its first run**, which is the argument for shipping one.
+
+**What the implementation showed** (*added on locking, 2026-08-10*). The central
+claim held: `@opentf/esrun-postgres` speaks the wire protocol in JavaScript over
+`runtime:net` and added **no Rust to the runtime**, and it passes the same
+conformance suite `sqlite:` does. The shared row layout paid for itself — a
+Postgres `DataRow` frame *is* the encoding the decoder reads, so rows are copied
+into a batch as they arrive and never transcoded.
+
+Two of the acceptance criteria were met and one was not, and the reason is worth
+keeping. Text-heavy rows were to tie and win by 1.2×; memory is lowest of the
+four runtimes on every non-streaming workload. Numeric-heavy rows were to "win by
+a wide margin" and won by 7% — until binary result formats, which took the scan
+from 72 ms to 51.6 ms (1.46× `postgres.js`). The measurement that decided it:
+**decoding was 54% of a numeric scan**, and 8% afterwards.
+
+The lesson underneath it is the one to carry forward. A prepared-statement cache
+bought 6%, from which the wrong conclusion was drawn — that the round trip
+dominates, so decoding was not worth attacking. A round trip is a **fixed cost
+per query**: the whole cost of a point query, and negligible against ten thousand
+rows, where decoding is what scales. Both numbers were right; generalising one to
+the other's shape was not.
+
+Three things this decision did not anticipate and which the work added: a
+connection is one conversation, so a query issued during a streaming result is
+refused rather than queued (`ERR_DB_CONNECTION_BUSY`) — queueing would deadlock,
+since the open result only finishes when the caller drains it. `Pool` shipped
+into the driver tier as planned, with `release(clean)` defaulting to **false**.
+And `AbortSignal` became portable rather than driver-local, because `turso`
+exposes an interrupt: `sqlite:` stops a statement mid-flight, so cancellation
+means the same thing on both backends instead of something weaker on one.
 
 **Also rejected:** a `node:sqlite` compatibility layer, or Node compatibility of any kind; an ORM or query builder in the runtime — the kit exists so those are written *on* the runtime, not *in* it.
 
