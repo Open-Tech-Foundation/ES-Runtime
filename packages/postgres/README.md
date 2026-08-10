@@ -93,6 +93,36 @@ Rows are discarded: it reports what each statement did, not what it returned.
 `executeScript` is on `PgConnection` rather than the portable `Connection`
 surface — reach it through this package's own `connect()`.
 
+## LISTEN / NOTIFY
+
+```js
+const listener = await connect(url);
+listener.onNotification = ({ channel, payload }) => console.log(channel, payload);
+
+await listener.listen("orders");
+```
+
+**A listening connection is dedicated.** A notification arrives when it arrives,
+and a connection only sees messages while it is reading — which an idle one is
+not. So the first `listen()` gives the connection over to a read loop, and from
+then on it runs no queries: `query()` and `execute()` refuse with
+`ERR_DB_CONNECTION_BUSY`. That is how you would deploy it anyway — a connection
+that must notice a notification promptly should not be waiting behind someone's
+report query. Use a second connection, or a pool, for the work.
+
+`listen()` and `unlisten()` **await confirmation**, so a misspelled channel
+fails there rather than silently never firing. The read loop owns reading; a
+`LISTEN` only needs writing, and TCP is full duplex, so commands go out
+underneath the loop and it settles them when their reply comes back.
+
+Channel names are quoted as identifiers, so a name with a space or a quote in it
+works and a name from somewhere else cannot become syntax. `payload` is `""`
+when the notifier sent none, and `processId` identifies the sending backend —
+which is how a connection recognises its own notifications, since PostgreSQL
+delivers them to the sender too.
+
+`onListenError` is called if the loop itself fails, since nobody is awaiting it.
+
 ## Notices and server parameters
 
 ```js

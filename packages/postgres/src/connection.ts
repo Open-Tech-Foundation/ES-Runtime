@@ -335,6 +335,12 @@ export class PgConnection extends BaseConnection {
     // A dead connection answers immediately rather than queueing behind an
     // exchange that will never finish.
     if (this.#fatal !== null) throw this.#fatal;
+    if (this.#pump !== null) {
+      throw new DbError(
+        "this connection is listening for notifications and runs no queries — use another connection, or a pool",
+        { code: DbErrorCode.ConnectionBusy },
+      );
+    }
     if (this.#streaming) {
       throw new DbError(
         "this connection is streaming a result set — finish it (await rows.toArray(), or let the for-await end), or run the second query on another connection",
@@ -932,6 +938,120 @@ export class PgConnection extends BaseConnection {
     } finally {
       release();
     }
+  }
+
+  // -- LISTEN/NOTIFY --------------------------------------------------------
+
+  /**
+   * Called for each `NOTIFY` on a channel this connection is listening to.
+   *
+   * `payload` is `""` when the notifier sent none, and `processId` is the
+   * backend that sent it — which is how a connection recognises its own
+   * notifications, since PostgreSQL delivers them to the sender too.
+   */
+  onNotification:
+    | ((notification: { channel: string; payload: string; processId: number }) => void)
+    | undefined;
+
+  /** Called when the listening loop fails, since nobody is awaiting it. */
+  onListenError: ((error: unknown) => void) | undefined;
+
+  #pump: Promise<void> | null = null;
+  /** Commands sent into the pump, awaiting their `ReadyForQuery`. */
+  #pumpCommands: { resolve: () => void; reject: (e: unknown) => void }[] = [];
+  #channels = new Set<string>();
+
+  /** The channels this connection is listening to. */
+  get channels(): string[] {
+    return [...this.#channels];
+  }
+
+  /** Whether this connection has been given over to listening. */
+  get listening(): boolean {
+    return this.#pump !== null;
+  }
+
+  /**
+   * Starts listening on `channel`.
+   *
+   * A notification arrives when it arrives, and a connection only sees messages
+   * while it is reading — which an idle one is not. So the first `listen()`
+   * gives this connection over to a **read loop**, and from then on it runs no
+   * queries: `query()` and `execute()` refuse with `ERR_DB_CONNECTION_BUSY`.
+   * That is not a limitation worked around but how you would deploy it anyway —
+   * a connection that must notice a notification promptly should not be waiting
+   * behind someone's report query.
+   *
+   * The loop owns *reading*; a `LISTEN` only needs *writing*, and TCP is full
+   * duplex — so commands go out underneath the loop and it resolves them when
+   * their `ReadyForQuery` comes back. That is why this can await confirmation
+   * rather than hope: a misspelled channel fails here, instead of silently
+   * never firing.
+   */
+  async listen(channel: string): Promise<void> {
+    this._open();
+    this.#startPump();
+    await this.#pumpCommand(`LISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
+    this.#channels.add(channel);
+  }
+
+  /** Stops listening on `channel`. The read loop stays, and so do the others. */
+  async unlisten(channel: string): Promise<void> {
+    this._open();
+    if (this.#pump === null) return;
+    await this.#pumpCommand(`UNLISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
+    this.#channels.delete(channel);
+  }
+
+  #pumpCommand(sql: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      this.#pumpCommands.push({ resolve, reject });
+      this.#send(msg.simpleQuery(sql)).catch(reject);
+    });
+  }
+
+  #settle(error?: unknown): void {
+    const pending = this.#pumpCommands.shift();
+    if (pending === undefined) return;
+    if (error === undefined) pending.resolve();
+    else pending.reject(error);
+  }
+
+  #startPump(): void {
+    if (this.#pump !== null) return;
+    this.#pump = (async () => {
+      for (;;) {
+        const { tag, frame } = await this.#next();
+        const fields = new Fields(frame);
+        switch (tag) {
+          case B.NotificationResponse: {
+            const processId = fields.i32();
+            const channel = fields.cstring();
+            const payload = fields.cstring();
+            this.onNotification?.({ channel, payload, processId });
+            break;
+          }
+          case B.ReadyForQuery:
+            this.status = String.fromCharCode(fields.u8());
+            this.#settle();
+            break;
+          case B.ErrorResponse:
+            this.#settle(serverError(readServerMessage(fields)));
+            break;
+          case B.CommandComplete:
+            break;
+          default:
+            this.#observe(tag, fields);
+            break;
+        }
+      }
+    })().catch((e) => {
+      // The loop only ends when the connection does. Everyone still waiting on
+      // a command hears about it, and the failure goes to a handler rather than
+      // becoming an unhandled rejection nobody asked for.
+      for (const pending of this.#pumpCommands.splice(0)) pending.reject(e);
+      this.onListenError?.(e);
+    });
   }
 
   /**
