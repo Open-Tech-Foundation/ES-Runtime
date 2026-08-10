@@ -8,150 +8,39 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
-### Changed
-
-- **`runtime:db` takes a driver rather than a registry.** `connect(url, options)`
-  now requires `options.driver` — a value you import and pass, not a global
-  installed by importing a package for its side effects:
-
-  ```js
-  import { connect, sqlite } from "runtime:db";
-  import { driver as postgres } from "@opentf/esrun-postgres";
-  import { driver as redis } from "@opentf/esrun-redis";
-
-  const db = await connect("sqlite:./app.db", { driver: sqlite });
-  const pg = await connect("postgres://user@host/app", { driver: postgres });
-  const r  = await connect("redis://localhost", { driver: redis });
-  ```
-
-  `registerBackend` and `backendSchemes` are **gone**, and with them the
-  reserved-scheme list and the rule that a built-in could not be replaced. A
-  scheme was a global name a package claimed by being imported: which backends
-  existed depended on which modules had been evaluated, the dependency was
-  invisible at the call site, and two implementations of `postgres:` could not
-  coexist. A driver is an ordinary value, so none of that arises — and because
-  the driver is part of the call, `connect` returns **that driver's**
-  connection, which is what removed the second entry point every driver had
-  grown.
-
-  The built-in SQLite backend is now `sqlite`, an ordinary driver defined with
-  the same `defineDriver` a third party uses; `connect` knows nothing about it
-  that it does not know about a driver published this morning.
-
-- **Pooling is an option on `connect`, and lives in one place.**
-  `connect(url, { driver, pool: true })` — or `pool: { max: 20 }` — returns a
-  `PooledConnection` presenting exactly the surface one connection does, plus
-  `size`, `idle`, `pending` and `withConnection(fn)`. The borrow-per-call
-  discipline, returning a connection when a streaming result ends, and
-  destroying one that came back dirty were written out once per driver before
-  this; they are now written once, in `runtime:db`.
-
-  A connection answers `usable` (worth using at all) and `reusable` (fit for the
-  next caller) — the one question a protocol-blind pool cannot decide for
-  itself, now asked by one name on every backend instead of three
-  (`status === "I"`, `clean`, nothing at all).
-
-- **`@opentf/esrun-redis` is one object per connection.** `Redis`,
-  `createClient`, `createSubscriber`, `createPool`, `createCluster`,
-  `createSentinelClient` and `createSentinelPool` are gone. The command surface
-  is now on `RedisConnection` itself, so the connection `connect` returns
-  answers both vocabularies — `r.set("k", "v")` and
-  `r.query(queryAst(["LRANGE", …]))` on the same object — and the package
-  exports three drivers instead: `driver`, `redisCluster`, `redisSentinel`.
-  Which client you get follows from the driver you passed rather than from which
-  of seven functions you called.
-
-- **One subscription surface, on every connection.** `LISTEN`/`NOTIFY`, Redis
-  pub/sub and a change stream are one concept, and the two shipped drivers had
-  each invented a name for it: PostgreSQL had `listen`, `unlisten`,
-  `onNotification`, `listening` and `onListenError`; Redis had `subscribe`,
-  `unsubscribe`, `onMessage`, `subscribed` and `onSubscribeError`. The portable
-  spelling is now the second one, on every `Connection`:
-
-  ```js
-  await conn.subscribe("orders", (payload, { channel }) => …);
-  conn.onMessage = (payload, context) => …;
-  await conn.unsubscribe("orders");
-  ```
-
-  `supports.subscriptions` declares it; a backend without it refuses by name.
-  So does a **pooled** connection — a subscription needs a connection that does
-  not come back, which is the opposite of a pool's premise — and so does a
-  cluster client, where Redis pub/sub is not cluster-aware and a cluster-wide
-  subscribe would deliver some messages and silently miss others. A driver
-  implements `_subscribe`/`_unsubscribe` and inherits the rest.
-
-- **`supports.sqlText` is `supports.queryText`.** The flag means "takes query
-  text", and a backend speaking Cypher, N1QL or a language of its own takes text
-  without being a SQL backend — which the old name made unsayable.
-
-- **`executeMany` reports per parameter set.** `ExecuteResult.results` carries
-  one result per set wherever the backend can report them, which the default
-  batch path always can, since it ran them one at a time and had them in hand.
-  Without it a batch of inserts against a backend that generates keys was a
-  batch whose keys were unreachable: the aggregate carries only the last.
-
-- **`Row<V>` and `Rows<R>` are generic.** `DbOutput` describes what the built-in
-  backend produces, and the types said it described every backend while
-  `@opentf/esrun-postgres` was already returning `Temporal` values and parsed
-  JSON. A driver now declares what it produces (`Rows<PgRow>`); the portable
-  `Connection` types its rows `unknown`, because an unknown backend decodes what
-  it likes, and `sqlite` narrows back to `DbOutput`.
-
-- **`ERR_DB_THROTTLED` and `ERR_DB_NOT_FOUND`** join the portable codes.
-  Throttling is the service shedding load — a quota, a rate limit, a connection
-  cap — as distinct from `ERR_DB_BUSY`, which is one resource held by someone
-  else; both shipped backends map real conditions onto it (PostgreSQL's
-  `53300`/`53400`, Redis's `MAXCLIENTS`). `NOT_FOUND` is for a backend asked for
-  one named thing that has none, which is not the same as a query that matched
-  nothing.
-
-- **Every driver package exports its driver as `driver`, and nothing as a
-  default.** One import shape for every backend, and `{ driver }` is the whole
-  of the option:
-
-  ```js
-  import { connect } from "runtime:db";
-  import { driver } from "@opentf/esrun-postgres";
-
-  const db = await connect("postgres://user@host/app", { driver });
-  ```
-
-  Two drivers in one module are told apart with `as`
-  (`import { driver as postgres }`). A default export alongside named ones was
-  two ways to import the same value, which is the confusion that makes people
-  check the README to write an import.
-
-- **Rows may cross as `records`, not only as bytes.** `Rows.fromObjects(records)`
-  — or a `RowSource` answering `{ records, done }` with `defineRecordShape` —
-  is for a backend whose values are already JavaScript: a document store
-  answering JSON, a graph or vector service over HTTP, an engine holding
-  objects. The byte layout stays exactly what it was for the backends it was
-  designed for, which is every wire protocol.
-
-  It came out of finding that `@opentf/esrun-redis` was encoding a reply it
-  already held in memory into the layout so that `decodeBatch` could take it
-  apart again — duplicating the kit's value tags to do it. That path is gone:
-  the driver loses about ninety lines and its copy of the tags, and nothing
-  downstream can tell which kind of batch it is reading.
-
-- **`withConnection`, `usable` and `reusable` are on every connection.**
-  `withConnection(fn)` was on a pool only and `usable`/`reusable` on a single
-  connection only, so code holding "a connection" had to know which kind it
-  held — an ORM would have had to demand a pool or duplicate itself. A cluster
-  client refuses `withConnection` by name, since its keys may live on different
-  nodes.
-
-- **`dialect.supports` takes a driver's own capability flags**, so a backend can
-  tell an ORM about a vector index or a full-text mode the ORM has never heard
-  of; and `ExecuteResult.lastInsertRowid` is typed for the string keys every
-  backend outside SQLite's family generates.
-
-- **`@opentf/esrun-postgres` exports its driver.** `connect` and `createPool` are
-  gone from the package; import its `driver` and pass it. `PgPool` is now `PgPooled`, a `PooledConnection` subclass that adds
-  `executeScript` and nothing else.
-
 ### Added
+
+- **Temporal by default in `@opentf/esrun-postgres`.** `timestamptz` arrives as a
+  `Temporal.Instant`, `timestamp` as a `Temporal.PlainDateTime`, `date` as a
+  `Temporal.PlainDate`, `time` as a `Temporal.PlainTime` and `interval` as a
+  `Temporal.Duration` — because `Date` cannot say what those columns are. A
+  `timestamp without time zone` is not an instant, a `date` is not midnight
+  anywhere in particular, and an interval is not a number of milliseconds; every
+  one of those had to be guessed at before, and the guess was wrong somewhere.
+  `connect(url, { driver, temporal: false })` restores `Date` and strings for
+  code that was written against them.
+
+- **`LISTEN`/`NOTIFY` in `@opentf/esrun-postgres`**, under `runtime:db`'s
+  subscription surface (see *Changed*). The connection is given over to a read
+  loop on the first `subscribe()` and then refuses queries with
+  `ERR_DB_CONNECTION_BUSY`, which is how you would deploy it anyway — a
+  connection that must notice a notification promptly should not be queued
+  behind a report query. Channel names are quoted as identifiers, subscribing
+  awaits the server's confirmation, and a handler that throws is reported rather
+  than allowed to stop the loop.
+
+- **The `PG*` environment in `@opentf/esrun-postgres`** — `PGHOST`, `PGPORT`,
+  `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGAPPNAME`, `PGSSLMODE`,
+  `PGCONNECT_TIMEOUT`, read the way every libpq tool reads them. Below the URL
+  and below explicit options, so they are defaults rather than overrides. A
+  program running **without the `Env` capability** is not asking for libpq's
+  defaults, so a refusal there is not an error: it means no defaults, and the
+  connection string stands on its own.
+
+- **`@opentf/esrun-types` publishes all of itself**, and is built with
+  TypeScript 7. `globals.d.ts` and the `runtime:*` module declarations shipped
+  incomplete before, so a program could typecheck against a module the package
+  did not actually describe.
 
 - **`commandTimeout` in `@opentf/esrun-redis`** (and `?command_timeout=`), which
   **destroys the connection** when it expires. Redis cannot cancel a command in
@@ -301,23 +190,6 @@ namespace) is unstable and may change between minor releases until the API freez
   instead of calling the feature unsupported. `MONITOR` remains refused: one
   reply per command cannot represent a firehose of every command the server runs.
 
-### Fixed
-
-- **`@opentf/esrun-redis` refuses a blocking command with no timeout.**
-  `BLPOP`, `BRPOP`, `BLMOVE`, `BRPOPLPUSH`, `BZPOPMIN`, `BZPOPMAX`, `BLMPOP`,
-  `BZMPOP`, `WAIT`, `WAITAOF` and `XREAD`/`XREADGROUP` `BLOCK` hold the
-  connection for as long as they block — inherent, since the server sends no
-  reply until it has one. A **bounded** wait is a stall the caller chose and is
-  allowed; a timeout of `0` means forever, which is a connection that never
-  comes back, and through a pool one that is out of circulation for the life of
-  the process while every other caller fails on `acquireTimeout` pointing at
-  pool exhaustion rather than at the cause. The unbounded form now throws
-  `ERR_DB_UNSUPPORTED` before anything reaches the wire. Redis keeps the timeout
-  in three different places — last for `BLPOP`, first for `BLMPOP`, behind the
-  `BLOCK` keyword for `XREAD` — and the check knows all three, including that a
-  stream legitimately named `BLOCK` is not the option.
-
-### Added
 
 - **`@opentf/esrun-redis`** — a Redis driver, and the second proof that a socket
   backend needs no new Rust (D56 named Redis in the sentence stating that test).
@@ -350,6 +222,163 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **Binary result formats in `@opentf/esrun-postgres`**, which is a performance
+  change big enough to be a behavioural one. Numbers, timestamps, booleans and
+  UUIDs are read as bytes rather than parsed from digits: a numeric scan went
+  from 72 ms to 51.6 ms — 1.46× `postgres.js`, where it had been 7% ahead — and
+  decoding fell from **54% of the scan to 8%**. Both formats decode to identical
+  values, which the test suite checks column by column rather than assumes.
+
+- **Each statement is prepared once in `@opentf/esrun-postgres`**, cached per
+  connection and bounded by `preparedStatementCacheSize` (default 100, `0`
+  disables). Worth 6% on its own; the reason it is not worth more is the reason
+  binary formats were: a round trip is a fixed cost per query, so it is the whole
+  cost of a point query and negligible against ten thousand rows, where decoding
+  is what scales. A cached plan the server has invalidated is detected and
+  re-prepared rather than failing the query.
+
+- **`runtime:db` takes a driver rather than a registry.** `connect(url, options)`
+  now requires `options.driver` — a value you import and pass, not a global
+  installed by importing a package for its side effects:
+
+  ```js
+  import { connect, sqlite } from "runtime:db";
+  import { driver as postgres } from "@opentf/esrun-postgres";
+  import { driver as redis } from "@opentf/esrun-redis";
+
+  const db = await connect("sqlite:./app.db", { driver: sqlite });
+  const pg = await connect("postgres://user@host/app", { driver: postgres });
+  const r  = await connect("redis://localhost", { driver: redis });
+  ```
+
+  `registerBackend` and `backendSchemes` are **gone**, and with them the
+  reserved-scheme list and the rule that a built-in could not be replaced. A
+  scheme was a global name a package claimed by being imported: which backends
+  existed depended on which modules had been evaluated, the dependency was
+  invisible at the call site, and two implementations of `postgres:` could not
+  coexist. A driver is an ordinary value, so none of that arises — and because
+  the driver is part of the call, `connect` returns **that driver's**
+  connection, which is what removed the second entry point every driver had
+  grown.
+
+  The built-in SQLite backend is now `sqlite`, an ordinary driver defined with
+  the same `defineDriver` a third party uses; `connect` knows nothing about it
+  that it does not know about a driver published this morning.
+
+- **Pooling is an option on `connect`, and lives in one place.**
+  `connect(url, { driver, pool: true })` — or `pool: { max: 20 }` — returns a
+  `PooledConnection` presenting exactly the surface one connection does, plus
+  `size`, `idle`, `pending` and `withConnection(fn)`. The borrow-per-call
+  discipline, returning a connection when a streaming result ends, and
+  destroying one that came back dirty were written out once per driver before
+  this; they are now written once, in `runtime:db`.
+
+  A connection answers `usable` (worth using at all) and `reusable` (fit for the
+  next caller) — the one question a protocol-blind pool cannot decide for
+  itself, now asked by one name on every backend instead of three
+  (`status === "I"`, `clean`, nothing at all).
+
+- **`@opentf/esrun-redis` is one object per connection.** `Redis`,
+  `createClient`, `createSubscriber`, `createPool`, `createCluster`,
+  `createSentinelClient` and `createSentinelPool` are gone. The command surface
+  is now on `RedisConnection` itself, so the connection `connect` returns
+  answers both vocabularies — `r.set("k", "v")` and
+  `r.query(queryAst(["LRANGE", …]))` on the same object — and the package
+  exports three drivers instead: `driver`, `redisCluster`, `redisSentinel`.
+  Which client you get follows from the driver you passed rather than from which
+  of seven functions you called.
+
+- **One subscription surface, on every connection.** `LISTEN`/`NOTIFY`, Redis
+  pub/sub and a change stream are one concept, and the two shipped drivers had
+  each invented a name for it: PostgreSQL had `listen`, `unlisten`,
+  `onNotification`, `listening` and `onListenError`; Redis had `subscribe`,
+  `unsubscribe`, `onMessage`, `subscribed` and `onSubscribeError`. The portable
+  spelling is now the second one, on every `Connection`:
+
+  ```js
+  await conn.subscribe("orders", (payload, { channel }) => …);
+  conn.onMessage = (payload, context) => …;
+  await conn.unsubscribe("orders");
+  ```
+
+  `supports.subscriptions` declares it; a backend without it refuses by name.
+  So does a **pooled** connection — a subscription needs a connection that does
+  not come back, which is the opposite of a pool's premise — and so does a
+  cluster client, where Redis pub/sub is not cluster-aware and a cluster-wide
+  subscribe would deliver some messages and silently miss others. A driver
+  implements `_subscribe`/`_unsubscribe` and inherits the rest.
+
+- **`supports.sqlText` is `supports.queryText`.** The flag means "takes query
+  text", and a backend speaking Cypher, N1QL or a language of its own takes text
+  without being a SQL backend — which the old name made unsayable.
+
+- **`executeMany` reports per parameter set.** `ExecuteResult.results` carries
+  one result per set wherever the backend can report them, which the default
+  batch path always can, since it ran them one at a time and had them in hand.
+  Without it a batch of inserts against a backend that generates keys was a
+  batch whose keys were unreachable: the aggregate carries only the last.
+
+- **`Row<V>` and `Rows<R>` are generic.** `DbOutput` describes what the built-in
+  backend produces, and the types said it described every backend while
+  `@opentf/esrun-postgres` was already returning `Temporal` values and parsed
+  JSON. A driver now declares what it produces (`Rows<PgRow>`); the portable
+  `Connection` types its rows `unknown`, because an unknown backend decodes what
+  it likes, and `sqlite` narrows back to `DbOutput`.
+
+- **`ERR_DB_THROTTLED` and `ERR_DB_NOT_FOUND`** join the portable codes.
+  Throttling is the service shedding load — a quota, a rate limit, a connection
+  cap — as distinct from `ERR_DB_BUSY`, which is one resource held by someone
+  else; both shipped backends map real conditions onto it (PostgreSQL's
+  `53300`/`53400`, Redis's `MAXCLIENTS`). `NOT_FOUND` is for a backend asked for
+  one named thing that has none, which is not the same as a query that matched
+  nothing.
+
+- **Every driver package exports its driver as `driver`, and nothing as a
+  default.** One import shape for every backend, and `{ driver }` is the whole
+  of the option:
+
+  ```js
+  import { connect } from "runtime:db";
+  import { driver } from "@opentf/esrun-postgres";
+
+  const db = await connect("postgres://user@host/app", { driver });
+  ```
+
+  Two drivers in one module are told apart with `as`
+  (`import { driver as postgres }`). A default export alongside named ones was
+  two ways to import the same value, which is the confusion that makes people
+  check the README to write an import.
+
+- **Rows may cross as `records`, not only as bytes.** `Rows.fromObjects(records)`
+  — or a `RowSource` answering `{ records, done }` with `defineRecordShape` —
+  is for a backend whose values are already JavaScript: a document store
+  answering JSON, a graph or vector service over HTTP, an engine holding
+  objects. The byte layout stays exactly what it was for the backends it was
+  designed for, which is every wire protocol.
+
+  It came out of finding that `@opentf/esrun-redis` was encoding a reply it
+  already held in memory into the layout so that `decodeBatch` could take it
+  apart again — duplicating the kit's value tags to do it. That path is gone:
+  the driver loses about ninety lines and its copy of the tags, and nothing
+  downstream can tell which kind of batch it is reading.
+
+- **`withConnection`, `usable` and `reusable` are on every connection.**
+  `withConnection(fn)` was on a pool only and `usable`/`reusable` on a single
+  connection only, so code holding "a connection" had to know which kind it
+  held — an ORM would have had to demand a pool or duplicate itself. A cluster
+  client refuses `withConnection` by name, since its keys may live on different
+  nodes.
+
+- **`dialect.supports` takes a driver's own capability flags**, so a backend can
+  tell an ORM about a vector index or a full-text mode the ORM has never heard
+  of; and `ExecuteResult.lastInsertRowid` is typed for the string keys every
+  backend outside SQLite's family generates.
+
+- **`@opentf/esrun-postgres` exports its driver.** `connect` and `createPool` are
+  gone from the package; import its `driver` and pass it. `PgPool` is now `PgPooled`, a `PooledConnection` subclass that adds
+  `executeScript` and nothing else.
+
+
 - **`BaseConnection._executeMany(query, sets)`** takes the whole
   `NormalizedQuery` rather than just its `text`, which is `null` for a backend
   that took an AST. A driver-tier signature change; only the built-in `sqlite:`
@@ -366,6 +395,22 @@ namespace) is unstable and may change between minor releases until the API freez
   generalized to run everywhere; the query-form check previously hardcoded the
   AST as the wrong form, which is backwards for a backend that takes one.
   `sqlite:` and `postgres:` still run and pass all fifteen.
+
+### Fixed
+
+- **`@opentf/esrun-redis` refuses a blocking command with no timeout.**
+  `BLPOP`, `BRPOP`, `BLMOVE`, `BRPOPLPUSH`, `BZPOPMIN`, `BZPOPMAX`, `BLMPOP`,
+  `BZMPOP`, `WAIT`, `WAITAOF` and `XREAD`/`XREADGROUP` `BLOCK` hold the
+  connection for as long as they block — inherent, since the server sends no
+  reply until it has one. A **bounded** wait is a stall the caller chose and is
+  allowed; a timeout of `0` means forever, which is a connection that never
+  comes back, and through a pool one that is out of circulation for the life of
+  the process while every other caller fails on `acquireTimeout` pointing at
+  pool exhaustion rather than at the cause. The unbounded form now throws
+  `ERR_DB_UNSUPPORTED` before anything reaches the wire. Redis keeps the timeout
+  in three different places — last for `BLPOP`, first for `BLMPOP`, behind the
+  `BLOCK` keyword for `XREAD` — and the check knows all three, including that a
+  stream legitimately named `BLOCK` is not the option.
 
 ## [0.21.0] - 2026-08-09
 
