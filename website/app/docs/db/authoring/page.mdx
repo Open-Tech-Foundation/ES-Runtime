@@ -62,8 +62,9 @@ class MyConnection extends BaseConnection {
   async _cancel() { /* stop what is running */ }
 }
 
-// The package's export *is* the driver.
-export default defineDriver({
+// The package's export *is* the driver, and every driver package spells it the
+// same way: a named `driver`, no default.
+export const driver = defineDriver({
   name: "mydb",
   schemes: ["mydb"],
   dialect,
@@ -75,9 +76,9 @@ Your users then write:
 
 ```js
 import { connect } from "runtime:db";
-import mydb from "@you/esrun-mydb";
+import { driver } from "@you/esrun-mydb";
 
-const db = await connect("mydb://host/app", { driver: mydb });
+const db = await connect("mydb://host/app", { driver });
 ```
 
 Transactions, savepoints, the closed-connection check, the `sql` tag, the
@@ -123,7 +124,7 @@ and it belongs in your README.
 ```js
 import { runBackendConformance } from "runtime:db";
 
-const report = await runBackendConformance(() => connect(url));
+const report = await runBackendConformance(() => connect(url, { driver }));
 if (!report.ok) console.error(report.failures);
 ```
 
@@ -136,11 +137,44 @@ description of nothing.
 
 ## Rows
 
-Rows cross as **one byte buffer per batch**, in the layout PostgreSQL already
-uses for `DataRow`: per column an `int32` length (`-1` for NULL) then the bytes.
-Both backends use it, which means a `DataRow` frame is copied into a batch as it
-arrives and **never transcoded**. If you are writing a wire driver, transcode
-into that layout and you inherit the decoder.
+There are two ways to hand rows over, and which one you use is your backend's
+nature rather than a preference.
+
+**If your values arrive as bytes** — every wire protocol, and the embedded
+engine — rows cross as **one byte buffer per batch**, in the layout PostgreSQL
+already uses for `DataRow`: per column an `int32` length (`-1` for NULL) then
+the bytes. A `DataRow` frame is copied into a batch as it arrives and **never
+transcoded**. Transcode into that layout and you inherit the decoder.
+
+**If your values are already JavaScript** — a document store answering JSON, a
+graph or vector service over HTTP, an engine holding objects — hand over
+**records** and skip the encoding entirely:
+
+```js
+async _query(q) {
+  const docs = await this.find(q.ast);   // already objects
+  return Rows.fromObjects(docs);         // columns default to their keys
+}
+```
+
+`Rows.fromObjects` is the whole of it for most such backends. For control of
+batching, answer `{ records, done }` from your `RowSource` — each record an
+array of values in column order — and pair it with `defineRecordShape(columns)`.
+Batch either way: a caller who breaks out of the loop after three rows must not
+have paid for three thousand, and that is as true of building objects as it is
+of decoding bytes.
+
+<Callout type="warning" title="Do not encode objects into the byte layout">
+  The first version of the Redis driver did, because the byte layout was the
+  only one there was: it packed a reply it already held in memory into
+  `DataRow` frames so that `decodeBatch` could immediately take them apart
+  again, and it duplicated the kit's value tags to do it. If you find yourself
+  writing a serializer to satisfy `Rows`, you want records.
+</Callout>
+
+Either way the `Row` contract is the same — prototype getters per column,
+`values()`, `toObject()`, `toJSON()` — so nothing downstream can tell which kind
+it holds.
 
 `defineRowShape(columns, { decoders })` generates the accessor class;
 `decodeBatch(bytes, shape, count)` walks a batch. Rows are **lazy** — one pass
@@ -329,6 +363,11 @@ wrote it:
 - `{ signal }` rejects with your reason and leaves the connection usable.
 - `Rows` streams; `rows.exhausted` tells you whether a connection is still tied
   up by it, which is what a pool needs to know.
+- `withConnection(fn)` holds **one** connection for the whole of `fn`, on a
+  single connection and on a pool alike — so an ORM never has to ask which it
+  was handed. `usable` and `reusable` answer on both too.
+- `driver.dialect.supports` answers **before** a connection exists, so an ORM
+  can pick a strategy at configuration time rather than at first query.
 
 What is **not** portable, and should be behind a capability check rather than an
 assumption: named parameters (`dialect.supports.namedParameters` —
@@ -348,11 +387,12 @@ it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
 
 - [ ] `defineDriver`, exported as your package's default — that *is* the API
 - [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
-- [ ] `supports` states what you take and what you have — `sqlText`, `queryAst`, `transactions`
-- [ ] Transcode rows into the shared batch layout — do not write a decoder
+- [ ] `supports` states what you take and what you have — `sqlText`, `queryAst`, `transactions`, plus any capability of your own an ORM should be able to branch on
+- [ ] Rows as bytes if that is what you were handed, as records if they are already JavaScript — never encode objects to satisfy the byte layout
 - [ ] Both wire formats, if you have two, decode to identical values
 - [ ] SQLSTATE or equivalent mapped onto the portable codes, host codes preserved
 - [ ] One open result set per connection, enforced rather than hoped
+- [ ] `withConnection` left alone unless you genuinely have no single session to lend, in which case refuse it by name
 - [ ] `reusable` answered from the protocol's own idea of idle, so pooling is correct
 - [ ] Timeouts on connect; let the server bound the statement if it can
 - [ ] Transport failures latched

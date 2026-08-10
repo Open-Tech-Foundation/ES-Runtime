@@ -16,8 +16,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
   ```js
   import { connect, sqlite } from "runtime:db";
-  import postgres from "@opentf/esrun-postgres";
-  import redis from "@opentf/esrun-redis";
+  import { driver as postgres } from "@opentf/esrun-postgres";
+  import { driver as redis } from "@opentf/esrun-redis";
 
   const db = await connect("sqlite:./app.db", { driver: sqlite });
   const pg = await connect("postgres://user@host/app", { driver: postgres });
@@ -57,13 +57,53 @@ namespace) is unstable and may change between minor releases until the API freez
   is now on `RedisConnection` itself, so the connection `connect` returns
   answers both vocabularies — `r.set("k", "v")` and
   `r.query(queryAst(["LRANGE", …]))` on the same object — and the package
-  exports three drivers instead: `redis`, `redisCluster`, `redisSentinel`.
+  exports three drivers instead: `driver`, `redisCluster`, `redisSentinel`.
   Which client you get follows from the driver you passed rather than from which
   of seven functions you called.
 
+- **Every driver package exports its driver as `driver`, and nothing as a
+  default.** One import shape for every backend, and `{ driver }` is the whole
+  of the option:
+
+  ```js
+  import { connect } from "runtime:db";
+  import { driver } from "@opentf/esrun-postgres";
+
+  const db = await connect("postgres://user@host/app", { driver });
+  ```
+
+  Two drivers in one module are told apart with `as`
+  (`import { driver as postgres }`). A default export alongside named ones was
+  two ways to import the same value, which is the confusion that makes people
+  check the README to write an import.
+
+- **Rows may cross as `records`, not only as bytes.** `Rows.fromObjects(records)`
+  — or a `RowSource` answering `{ records, done }` with `defineRecordShape` —
+  is for a backend whose values are already JavaScript: a document store
+  answering JSON, a graph or vector service over HTTP, an engine holding
+  objects. The byte layout stays exactly what it was for the backends it was
+  designed for, which is every wire protocol.
+
+  It came out of finding that `@opentf/esrun-redis` was encoding a reply it
+  already held in memory into the layout so that `decodeBatch` could take it
+  apart again — duplicating the kit's value tags to do it. That path is gone:
+  the driver loses about ninety lines and its copy of the tags, and nothing
+  downstream can tell which kind of batch it is reading.
+
+- **`withConnection`, `usable` and `reusable` are on every connection.**
+  `withConnection(fn)` was on a pool only and `usable`/`reusable` on a single
+  connection only, so code holding "a connection" had to know which kind it
+  held — an ORM would have had to demand a pool or duplicate itself. A cluster
+  client refuses `withConnection` by name, since its keys may live on different
+  nodes.
+
+- **`dialect.supports` takes a driver's own capability flags**, so a backend can
+  tell an ORM about a vector index or a full-text mode the ORM has never heard
+  of; and `ExecuteResult.lastInsertRowid` is typed for the string keys every
+  backend outside SQLite's family generates.
+
 - **`@opentf/esrun-postgres` exports its driver.** `connect` and `createPool` are
-  gone from the package; `import postgres from "@opentf/esrun-postgres"` and
-  pass it. `PgPool` is now `PgPooled`, a `PooledConnection` subclass that adds
+  gone from the package; import its `driver` and pass it. `PgPool` is now `PgPooled`, a `PooledConnection` subclass that adds
   `executeScript` and nothing else.
 
 ### Added

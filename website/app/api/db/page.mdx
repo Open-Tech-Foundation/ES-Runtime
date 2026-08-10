@@ -35,13 +35,15 @@ const db  = await connect("sqlite:./app.db", { driver: sqlite });
 const mem = await connect("sqlite::memory:", { driver: sqlite });
 const enc = await connect("sqlite:./secret.db", { driver: sqlite, key });
 
-import postgres from "@opentf/esrun-postgres";
+// Every driver package exports its driver as `driver`, and nothing as a
+// default. Two of them in one module are told apart with `as`.
+import { driver as postgres } from "@opentf/esrun-postgres";
 const pg = await connect("postgres://user@host/app", { driver: postgres });
 ```
 
 | Option | Type | Meaning |
 | --- | --- | --- |
-| `driver` | `Driver` | **Required.** The backend to open with. |
+| `driver` | `Driver` | **Required.** The backend to open with — every driver package exports one as `driver`. |
 | `pool` | `boolean \| { max, idleTimeout, acquireTimeout }` | Pool instead of opening one connection. |
 
 Everything else in the options object belongs to the driver — `key`, `cipher`
@@ -279,7 +281,8 @@ For adding a backend or building an ORM.
 | `PooledConnection` | The pooled form `pool: true` builds. Subclass it to put your own surface on a pool. |
 | `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`; override `_executeMany` for a fast batch path, `_cancel` to really cancel, and the `_*Transaction` trio for a backend without SQL. |
 | `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports` — including `sqlText`, `queryAst` and `transactions`. |
-| `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder every backend shares. |
+| `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder for a backend handed **bytes**. |
+| `defineRecordShape(columns)` / `Rows.fromObjects(records)` | The same `Row` contract for a backend whose values are **already JavaScript**. |
 | `encodeParams` / `splitParams` | Parameter encoding. |
 | `ByteWriter` | A growable buffer with length-prefix back-fill. |
 | `mapError` / `asDbError` | Map a backend's vocabulary onto the portable codes. |
@@ -305,7 +308,7 @@ class MyConnection extends BaseConnection {
   async _executeMany(query, sets) { /* … */ }
 }
 
-export default defineDriver({
+export const driver = defineDriver({
   name: "mydb",
   schemes: ["mydb"],
   dialect,
@@ -315,7 +318,30 @@ export default defineDriver({
 
 Nothing is registered, and nothing has to be imported for its side effects: your
 package's export *is* the driver, and `connect(url, { driver })` is how a caller
-reaches it.
+reaches it. Export it as a **named** `driver` and nothing as a default, as the
+first-party packages do — one import shape for every backend, and a caller with
+two of them tells them apart with `as`.
+
+### If your rows are not bytes
+
+The batch layout exists because a wire protocol hands over bytes and decoding
+them lazily is worth the machinery. A backend that never had bytes — a document
+store answering JSON, a graph or vector service over HTTP, an in-process engine
+holding objects — hands over **records** instead, and nothing downstream can
+tell the difference:
+
+```js
+async _query(q) {
+  const docs = await this.find(q.ast);       // already objects
+  return Rows.fromObjects(docs);             // columns default to their keys
+}
+```
+
+For a driver that wants control of batching, a `RowSource` may answer
+`{ records, done }` — each record an array of values in column order, paired
+with `defineRecordShape(columns)` — instead of `{ bytes, rows, done }`. Batch
+either way: a caller who breaks out of the loop after three rows should not have
+paid for three thousand.
 
 A backend that does not speak SQL declares it, and inherits the rest unchanged:
 
@@ -326,6 +352,11 @@ const dialect = new Dialect({
   supports: { sqlText: false, queryAst: true, transactions: false },
 });
 ```
+
+`supports` also carries **your own** capabilities — a vector index, a full-text
+mode, a graph traversal. They survive on `dialect.supports` untouched, and they
+are how an ORM branches on a backend that did not exist when it was written.
+`driver.dialect.supports` answers before a connection is opened.
 
 Most conformance checks are written in SQL. Against such a backend they are
 **skipped with a reason** rather than failed — a check you cannot express is not

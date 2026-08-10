@@ -30,14 +30,14 @@ npm install @opentf/esrun-redis
 
 ## Two vocabularies, one object
 
-`connect(url, { driver: redis })` opens a connection. What comes back speaks
+`connect(url, { driver })` opens a connection. What comes back speaks
 Redis, which is what most code wants:
 
 ```js
 import { connect } from "runtime:db";
-import redis from "@opentf/esrun-redis";
+import { driver } from "@opentf/esrun-redis";
 
-const r = await connect("redis://localhost", { driver: redis });
+const r = await connect("redis://localhost", { driver });
 
 await r.set("session:42", "ada", { ex: 3600 });
 await r.get("session:42");                     // "ada"
@@ -115,7 +115,7 @@ TLS from a private authority needs that authority, because the public roots have
 never heard of it:
 
 ```js
-const r = await connect("rediss://redis.internal", { driver: redis, tlsCa: await readFile("ca.crt") });
+const r = await connect("rediss://redis.internal", { driver, tlsCa: await readFile("ca.crt") });
 ```
 
 ## RESP3, and what it buys
@@ -209,11 +209,11 @@ needs `withConnection()`.
 ## Pub/sub
 
 ```js
-const sub = await connect("redis://localhost", { driver: redis });
+const sub = await connect("redis://localhost", { driver });
 await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
 await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
 
-const pub = await connect("redis://localhost", { driver: redis });
+const pub = await connect("redis://localhost", { driver });
 await pub.publish("news", "hello");
 ```
 
@@ -321,7 +321,7 @@ writes silently.
 ## Pooling
 
 ```js
-const pool = await connect("redis://localhost", { driver: redis, pool: { max: 10 } });
+const pool = await connect("redis://localhost", { driver, pool: { max: 10 } });
 await pool.set("k", "v");
 await pool.withConnection((c) => …);   // for anything stateful across commands
 ```
@@ -357,7 +357,7 @@ reached the server, so running it again cannot repeat it.
 ## Timeouts
 
 ```js
-const r = await connect(url, { driver: redis, commandTimeout: 5000, reconnect: true });
+const r = await connect(url, { driver, commandTimeout: 5000, reconnect: true });
 ```
 
 **A timeout destroys the connection.** Redis cannot cancel a command in flight:

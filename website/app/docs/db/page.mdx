@@ -200,16 +200,21 @@ and the call is the call you already know:
 
 ```js
 import { connect } from "runtime:db";
-import postgres from "@opentf/esrun-postgres";
+import { driver } from "@opentf/esrun-postgres";
 
-const db = await connect("postgres://user@host/db", { driver: postgres });
+const db = await connect("postgres://user@host/db", { driver });
 ```
 
 Everything above — `sql`, streaming rows, transactions, the portable error
 codes — works the same against it, because drivers are built on the same
 exported pieces the built-in one is. Pooling is the same call too:
-`connect(url, { driver: postgres, pool: { max: 20 } })` gives a pool that
-presents exactly what one connection does.
+`connect(url, { driver, pool: { max: 20 } })` gives a pool that presents
+exactly what one connection does.
+
+Every driver package exports its driver under the same name — `driver` — and
+nothing as a default, so the import reads the same whichever backend it is and
+`{ driver }` is the whole of the option. Two of them in one module are
+`import { driver as postgres }`.
 
 | Package | Schemes | |
 | --- | --- | --- |
@@ -225,9 +230,9 @@ form the contract has carried since the first release:
 
 ```js
 import { connect, queryAst } from "runtime:db";
-import redis from "@opentf/esrun-redis";
+import { driver } from "@opentf/esrun-redis";
 
-const db = await connect("redis://localhost", { driver: redis });
+const db = await connect("redis://localhost", { driver });
 await db.execute(queryAst(["SET", "k", "v"]));
 ```
 

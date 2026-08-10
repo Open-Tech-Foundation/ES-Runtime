@@ -1392,7 +1392,8 @@ that happens, and what it costs is memory, which guest JS can already spend.
 Opens a connection with the **driver** passed in `options.driver` — a value you
 import, not a global installed by importing a package for its side effects.
 `sqlite` is exported from `runtime:db`; every other driver is a package export
-(`import postgres from "@opentf/esrun-postgres"`). What comes back is that
+(`import { driver } from "@opentf/esrun-postgres"` — every driver package
+exports one under that name, and nothing as a default). What comes back is that
 driver's connection, so its own surface needs no second entry point. The URL's
 scheme is checked against the driver's schemes.
 
@@ -1509,16 +1510,25 @@ For building a backend or an ORM: `defineDriver(spec)`, which turns
 subclasses to add its own surface; `BaseConnection` (transactions, savepoints, the
 closed-connection check, and a correct-but-slow default batch a driver overrides
 to make fast); `Dialect` (`placeholder`, `quoteIdent`, `supports`);
-`defineRowShape` and `decodeBatch` (the row decoder, shared by every backend);
+`defineRowShape` and `decodeBatch` (the row decoder for a backend handed bytes)
+and `defineRecordShape` / `Rows.fromObjects` (the same `Row` contract for one
+whose values are already JavaScript);
 `encodeParams` / `splitParams`; `ByteWriter`; `mapError` / `asDbError`; and
 `runBackendConformance(open)`, the suite a driver runs to demonstrate it behaves
 like the built-ins. There is no registry to claim a scheme in: a driver is a
 value, so two drivers for the same scheme coexist and the caller says which one
 it meant.
 
-A connection also answers `usable` (still worth using) and `reusable` (fit for
-the next caller) — the one question a protocol-blind pool cannot decide, asked
-by one name on every backend.
+A connection also answers `usable` (still worth using), `reusable` (fit for the
+next caller — the one question a protocol-blind pool cannot decide) and
+`withConnection(fn)` (one connection held for the whole of `fn`). All three are
+on a single connection and on a pool alike, so code that holds "a connection"
+never has to ask which kind it has.
+
+`dialect.supports` carries a driver's **own** capability flags beside the ones
+the kit acts on, and `driver.dialect` answers before a connection is opened —
+which is how an ORM branches on a backend that did not exist when it was
+written.
 
 A driver supplies `_query`, `_execute` and `_close`, and may override
 `_executeMany(query, sets)` for a real batch path, `_cancel()` for whatever its

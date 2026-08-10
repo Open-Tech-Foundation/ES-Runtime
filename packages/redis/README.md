@@ -11,14 +11,14 @@ npm install @opentf/esrun-redis
 
 ## Two vocabularies, one connection
 
-`connect(url, { driver: redis })` opens a connection. What comes back speaks
+`connect(url, { driver })` opens a connection. What comes back speaks
 Redis, which is what most code wants:
 
 ```js
 import { connect } from "runtime:db";
-import redis from "@opentf/esrun-redis";      // the package's export *is* the driver
+import { driver } from "@opentf/esrun-redis";   // the package's export *is* the driver
 
-const r = await connect("redis://localhost", { driver: redis });
+const r = await connect("redis://localhost", { driver });
 
 await r.set("session:42", "ada", { ex: 3600 });
 await r.get("session:42");                    // "ada"
@@ -105,7 +105,7 @@ a URL-redacting logger only has to know about one.
 > that looks like a secret, so a URL with a password in it arrives as
 > `"[redacted]"`. Pass it through `unmask` from `runtime:process` first.
 
-Everything is also an option: `connect(url, { driver: redis, password, db, … })`,
+Everything is also an option: `connect(url, { driver, password, db, … })`,
 and explicit options beat the URL.
 
 ## TLS
@@ -116,7 +116,7 @@ simpler than PostgreSQL's. An internal server with a certificate from a private
 authority needs that authority, because the public roots have never heard of it:
 
 ```js
-const r = await connect("rediss://redis.internal", { driver: redis, tlsCa: await readFile("ca.crt") });
+const r = await connect("rediss://redis.internal", { driver, tlsCa: await readFile("ca.crt") });
 ```
 
 ## RESP3, and what it buys
@@ -203,11 +203,11 @@ sees the same lost connection rather than a different symptom of it.
 ## Pub/sub
 
 ```js
-const sub = await connect("redis://localhost", { driver: redis });
+const sub = await connect("redis://localhost", { driver });
 await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
 await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
 
-const pub = await connect("redis://localhost", { driver: redis });
+const pub = await connect("redis://localhost", { driver });
 await pub.publish("news", "hello");        // → how many subscribers received it
 ```
 
@@ -364,7 +364,7 @@ callers fail on `acquireTimeout` pointing at pool exhaustion rather than at the
 cause. So it is refused unless the connection was opened to be tied up:
 
 ```js
-const worker = await connect(url, { driver: redis, blocking: true });
+const worker = await connect(url, { driver, blocking: true });
 await worker.call(["BLPOP", "jobs", "0"]);           // allowed here
 ```
 
@@ -376,7 +376,7 @@ come back; blocking indefinitely needs a connection of its own, by construction.
 The loop blocking pops exist for, written once:
 
 ```js
-const worker = await connect(url, { driver: redis });
+const worker = await connect(url, { driver });
 for await (const job of worker.consume("jobs", { timeout: 5, signal })) {
   await handle(job.value);
 }
@@ -399,7 +399,7 @@ Off by default. `{ reconnect: true }` turns it on, or an object tunes it:
 
 ```js
 const r = await connect(url, {
-  driver: redis,
+  driver,
   reconnect: { attempts: 10, delay: 100, maxDelay: 5000 },
 });
 ```
@@ -587,7 +587,7 @@ used perfectly well.
 ## Command timeouts
 
 ```js
-const r = await connect(url, { driver: redis, commandTimeout: 5000, reconnect: true });
+const r = await connect(url, { driver, commandTimeout: 5000, reconnect: true });
 ```
 
 **A timeout destroys the connection**, and that is not a shortcut. Redis has no
@@ -608,7 +608,7 @@ is the consequence, and the deadline is the cause.
 ## Pooling
 
 ```js
-const pool = await connect("redis://localhost", { driver: redis, pool: { max: 10 } });
+const pool = await connect("redis://localhost", { driver, pool: { max: 10 } });
 await pool.set("k", "v");                    // the same commands, borrowed per call
 await pool.withConnection((c) => …);         // for anything stateful across commands
 ```

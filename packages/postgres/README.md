@@ -13,9 +13,9 @@ npm install @opentf/esrun-postgres
 
 ```js
 import { connect, sql } from "runtime:db";
-import postgres from "@opentf/esrun-postgres";   // the package's export *is* the driver
+import { driver } from "@opentf/esrun-postgres";   // the package's export *is* the driver
 
-const db = await connect("postgres://user:secret@localhost/app", { driver: postgres });
+const db = await connect("postgres://user:secret@localhost/app", { driver });
 
 await db.execute(sql`INSERT INTO users (name) VALUES (${name})`);
 
@@ -51,7 +51,7 @@ override the URL.
 
 ```js
 const db = await connect("postgres://localhost/app", {
-  driver: postgres,
+  driver,
   user: "app",
   password: env.PGPASSWORD,
   sslmode: "require",
@@ -72,7 +72,7 @@ That is the right answer for a query and the wrong one for a migration, so
 scripts get their own door:
 
 ```js
-const db = await connect(url, { driver: postgres });
+const db = await connect(url, { driver });
 const results = await db.executeScript(`
   CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL);
   CREATE INDEX users_name ON users (name);
@@ -90,13 +90,13 @@ everything before it, unless the script manages its own transactions.
 Rows are discarded: it reports what each statement did, not what it returned.
 
 `executeScript` is on `PgConnection` rather than the portable `Connection`
-surface, and needs nothing extra to reach: `connect(url, { driver: postgres })`
+surface, and needs nothing extra to reach: `connect(url, { driver })`
 returns a `PgConnection`, because the driver you pass decides what comes back.
 
 ## LISTEN / NOTIFY
 
 ```js
-const listener = await connect(url, { driver: postgres });
+const listener = await connect(url, { driver });
 listener.onNotification = ({ channel, payload }) => console.log(channel, payload);
 
 await listener.listen("orders");
@@ -149,7 +149,7 @@ One connection is one conversation, so concurrent work on a single connection is
 not concurrent — it queues. A pool is how you get parallelism:
 
 ```js
-const db = await connect(url, { driver: postgres, pool: { max: 10 } });
+const db = await connect(url, { driver, pool: { max: 10 } });
 
 await Promise.all([db.query(a), db.query(b), db.query(c)]);   // actually parallel
 await db.close();
@@ -266,7 +266,7 @@ in one batch is detached immediately: cancelling a finished query means nothing.
 
 ```js
 const db = await connect(url, {
-  driver: postgres,
+  driver,
   connectTimeout: 10_000,    // ms — the connection *and* its handshake
   statementTimeout: 30_000,  // ms — applied to every statement
 });
@@ -311,7 +311,7 @@ authority, which the public roots have never heard of. Name it:
 import { file } from "runtime:fs";
 
 const db = await connect(url, {
-  driver: postgres,
+  driver,
   sslmode: "require",
   sslRootCert: await file("/etc/ssl/internal-ca.crt").text(),
 });
@@ -332,7 +332,7 @@ The `PG*` variables every libpq tool reads are honoured as **defaults**:
 `PGAPPNAME`, `PGCONNECT_TIMEOUT` (seconds, libpq's spelling).
 
 ```js
-const db = await connect("postgres://", { driver: postgres });   // everything from the environment
+const db = await connect("postgres://", { driver });   // everything from the environment
 ```
 
 Precedence, highest first: **explicit options → the URL → the environment →
@@ -388,7 +388,7 @@ once: it cannot hold the microseconds a `timestamp` has, it can only express
 which — `postgres.js` uses the client's, so the same column reads differently on
 different machines), and a `date` is a calendar day rather than an instant.
 
-`connect(url, { driver: postgres, temporal: false })` restores `Date` and strings for code that
+`connect(url, { driver, temporal: false })` restores `Date` and strings for code that
 has to hand a `Date` to something else.
 
 A full table, including how Node, Bun and Deno's drivers map the same columns,
