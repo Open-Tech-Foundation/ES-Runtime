@@ -77,6 +77,25 @@ export class RedisPool extends RedisCommands {
   }
 
   /**
+   * Runs a transaction built by `multi()` on **one** borrowed connection.
+   *
+   * A pool can do this at all only because the commands were buffered: there is
+   * nothing to hold a connection for until `exec()`, and then the whole
+   * `MULTI`…`EXEC` goes out as one batch. `WATCH` is the exception — the server
+   * ties it to a connection, so optimistic locking needs `withConnection()`.
+   */
+  override async execTransaction(
+    commands: readonly (readonly CommandArg[])[],
+  ): Promise<unknown[] | null> {
+    const connection = await this.#pool.acquire();
+    try {
+      return await connection.execTransaction(commands);
+    } finally {
+      this.#give(connection);
+    }
+  }
+
+  /**
    * A command read as rows.
    *
    * The connection is returned before the caller reads a row, and that is

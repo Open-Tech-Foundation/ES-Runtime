@@ -65,8 +65,8 @@ it is:
 it is deliberately not presented as a transaction: it queues commands and applies
 them together, but a command that fails at `EXEC` time does **not** roll back the
 ones beside it. A `transaction(fn)` built on it would commit half a body that
-threw, which is worse than not having one. Send `MULTI` yourself through
-`call()` — on a pool, inside `withConnection()` so it stays on one connection.
+threw, which is worse than not having one. Use [`multi()`](#multiexec) instead,
+which is named after the command it sends.
 
 **`executeMany` is not atomic here**, for the same reason: there is no
 transaction to wrap it in. It runs one round trip per set.
@@ -240,6 +240,68 @@ subscription on the connection.
 
 Pub/sub is fire-and-forget. There is no queue and no delivery guarantee, and
 `publish` returning `0` means nobody was listening — which is not an error.
+
+## MULTI/EXEC
+
+```js
+const tx = r.multi();
+tx.set("a", "1");
+const counter = tx.incr("visits");
+const results = await tx.exec();     // ["OK", 1]
+await counter;                       // 1 — the same result, read the other way
+```
+
+Every command helper works on a transaction, because they all route through the
+same `call()`. Commands are **buffered**, not sent as they are written, so the
+whole transaction is one round trip — and a **pool** can run one, since there is
+nothing to hold a connection for until `exec()`.
+
+What `MULTI` gives you is that nothing interleaves: no other client's command
+lands in the middle. What it does **not** give you is rollback.
+
+```js
+await r.set("str", "not-a-list");
+const tx = r.multi();
+tx.set("before", "1");
+tx.call(["LPUSH", "str", "boom"]);   // fails at exec time
+tx.set("after", "1");
+
+const results = await tx.exec();
+results[1] instanceof DbError;       // true
+await r.get("after");                // "1" — it still applied
+```
+
+So `exec()` hands the errors back **in place** rather than throwing: the other
+commands ran, and throwing would discard their results. The per-command promises
+mirror that exactly — they **resolve** with the error rather than rejecting,
+because every helper wraps `call()` in an async method of its own and
+`tx.set(k, v)` is written for its effect, so rejecting would produce one
+unhandled rejection per queued command, each pointing at a line that did nothing
+wrong.
+
+There is one case Redis *does* undo everything: a command it refuses as it is
+**queued** — a bad argument count, an unknown command — makes `EXEC` fail with
+`EXECABORT` and nothing runs at all. That one throws, with the queue-time reason
+attached.
+
+### WATCH
+
+```js
+await r.watch("balance");
+const current = Number(await r.get("balance"));
+
+const tx = r.multi();
+tx.set("balance", current - 10);
+if (await tx.exec() === null) retry();   // someone else changed it first
+```
+
+`exec()` answers `null` when a watched key moved before `EXEC` — the
+optimistic-locking outcome, not an error. The queued commands settle with a
+`DbError` whose code is `ERR_DB_SERIALIZATION_FAILURE`, which is what an
+optimistic-concurrency failure is called everywhere else in `runtime:db`.
+
+`WATCH` is tied by the server to **one connection**, so on a pool it needs
+`withConnection()` — watch, read and exec inside it.
 
 ## Blocking commands
 

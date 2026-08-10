@@ -10,6 +10,23 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`MULTI`/`EXEC` in `@opentf/esrun-redis`** — `multi()` returns a transaction
+  with the whole command surface on it, `exec()` sends it, `watch()`/`unwatch()`
+  do optimistic locking. Commands are **buffered** rather than sent as they are
+  written, so a transaction is one round trip and a **pool** can run one — there
+  is nothing to hold a connection for until `exec()`.
+
+  It is deliberately **not** wired to `runtime:db`'s `transaction(fn)`, and
+  `supports.transactions` stays `false`: `MULTI` applies its commands with
+  nothing interleaved but does not roll back one that fails at exec time, so a
+  `transaction(fn)` on top would commit half a body that threw. `exec()`
+  therefore hands per-command errors back **in place** rather than throwing —
+  the other commands applied, and throwing would discard their results — and
+  answers `null` when a `WATCH`ed key changed, with the queued commands settling
+  on `ERR_DB_SERIALIZATION_FAILURE`. The one case that is all-or-nothing is a
+  command the server refuses at *queue* time, which makes `EXEC` fail with
+  `EXECABORT`; that throws, with the queue-time reason attached.
+
 - **Blocking commands in `@opentf/esrun-redis`** — `blpop`, `brpop`, `blmove`,
   `bzpopmin`, `bzpopmax` and `wait`, each taking its timeout as a **required**
   argument (seconds for the pop family, milliseconds for `wait`), and each

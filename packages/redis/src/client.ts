@@ -38,6 +38,11 @@ export class Redis extends RedisCommands {
     return this.connection.command(args, options);
   }
 
+  /** Runs a transaction built by `multi()`, on this client's connection. */
+  override execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null> {
+    return this.connection.execTransaction(commands);
+  }
+
   /** What the server said at `HELLO` — its version, id, role, and protocol. */
   get server(): Partial<ServerHello> {
     return this.connection.hello;

@@ -383,6 +383,122 @@ export class RedisConnection extends BaseConnection {
     return reply;
   }
 
+  /**
+   * Writes many commands, then reads their replies in order.
+   *
+   * The pipelining primitive: N commands cost one round trip instead of N,
+   * because the replies are already on their way back while the later commands
+   * are still being written. It holds the connection for the whole batch, which
+   * is what makes matching reply *i* to command *i* safe — the lock is the only
+   * thing guaranteeing nobody else's reply is in between.
+   *
+   * Error replies are **returned, not thrown**. In a pipeline each command
+   * stands alone, so one failing says nothing about the others, and the caller
+   * is the only layer that knows what to do about that.
+   */
+  async #pipeline(commands: readonly (readonly CommandArg[])[]): Promise<Reply[]> {
+    if (this.#fatal !== null) throw this.#fatal;
+    if (this.#pump !== null) {
+      throw new DbError(
+        "this connection is subscribed and runs no commands — use another connection, or a pool",
+        { code: DbErrorCode.ConnectionBusy },
+      );
+    }
+    // Encoded before the lock is taken: an argument that cannot be serialized is
+    // the caller's mistake, and nothing should be written or held for it.
+    const payloads = commands.map((args) => {
+      try {
+        return encodeCommand(args);
+      } catch (e) {
+        throw new DbError(e instanceof Error ? e.message : String(e), {
+          code: DbErrorCode.Unsupported,
+          cause: e,
+        });
+      }
+    });
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = this.#lock;
+    this.#lock = held;
+    await previous.catch(() => {});
+
+    try {
+      const writer = this.#writer;
+      const replies = this.#replies;
+      if (writer === null || replies === null) {
+        throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
+      }
+      const out: Reply[] = [];
+      try {
+        // One write for the whole batch. Writing them separately would be
+        // correct and would give up most of what pipelining buys.
+        await writer.write(concat(payloads));
+        for (let i = 0; i < commands.length; i++) out.push(await replies.next());
+      } catch (e) {
+        // A batch that failed part-way has left replies on the wire that nobody
+        // will read, so the stream can no longer be trusted to start on a
+        // boundary. That is fatal, exactly as a dropped socket is.
+        throw this.#die(e);
+      }
+      for (const args of commands) this.#observe(args);
+      return out;
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Runs `commands` inside `MULTI`/`EXEC`.
+   *
+   * Sent as one batch — `MULTI`, every command, `EXEC` — so the whole
+   * transaction is one round trip rather than one per queued command.
+   *
+   * Answers `null` when `EXEC` was aborted because a `WATCH`ed key changed,
+   * which is the optimistic-locking outcome and not an error. Throws when the
+   * transaction was **discarded** by the server: a command rejected at queue
+   * time (a bad argument count, an unknown command) makes `EXEC` fail with
+   * `EXECABORT` and nothing runs at all — the one case Redis does undo the lot.
+   *
+   * Otherwise the array is one entry per command, and an entry may itself be a
+   * `DbError`: a command that fails at *execution* time does not roll back the
+   * ones beside it, and reporting that as a thrown error would discard the
+   * results of the commands that did apply.
+   */
+  async execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null> {
+    this._open();
+    if (commands.length === 0) return [];
+    const checked = commands.map((args) => guard(args, this.#blocking));
+    const replies = await this.#pipeline([["MULTI"], ...checked, ["EXEC"]]);
+    const exec = replies[replies.length - 1]!;
+
+    if (exec.kind === "error") {
+      // EXECABORT, almost always — one of the commands was refused as it was
+      // queued, so the server threw the whole transaction away.
+      const queueError = replies.slice(1, -1).find((r) => r.kind === "error");
+      const detail =
+        queueError !== undefined && queueError.kind === "error"
+          ? ` — ${queueError.value.message}`
+          : "";
+      throw serverError(exec.value.prefix, `${exec.value.message}${detail}`);
+    }
+    // `EXEC` answers a null reply when a WATCHed key was touched by someone
+    // else. Nothing ran, and the caller is meant to read again and retry.
+    if (exec.kind === "null") return null;
+    if (exec.kind !== "array" && exec.kind !== "push") {
+      throw new DbError(`EXEC answered a ${exec.kind}, which is not a result list`, {
+        code: DbErrorCode.Backend,
+      });
+    }
+    return exec.value.map((reply) =>
+      reply.kind === "error"
+        ? serverError(reply.value.prefix, reply.value.message)
+        : toValue(reply, this.#decode),
+    );
+  }
+
   /** Takes the connection for one exchange, and gives it back. */
   async #call(args: readonly CommandArg[]): Promise<Reply> {
     if (this.#fatal !== null) throw this.#fatal;
@@ -800,6 +916,19 @@ export class RedisConnection extends BaseConnection {
 }
 
 const EMPTY = new Uint8Array(0);
+
+/** Joins encoded commands into the single write a pipeline sends. */
+function concat(parts: readonly Uint8Array[]): Uint8Array {
+  let size = 0;
+  for (const part of parts) size += part.length;
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}
 
 /** The command's name, upper-cased, for the few decisions that need it. */
 function commandName(args: readonly CommandArg[]): string {

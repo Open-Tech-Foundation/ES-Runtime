@@ -41,6 +41,7 @@ import {
   type ServerHello,
 } from "./connection.js";
 import { RedisPool, type RedisPoolOptions } from "./pool.js";
+import { RedisTransaction } from "./transaction.js";
 import { parseConnectionString } from "./url.js";
 
 export {
@@ -48,6 +49,7 @@ export {
   RedisCommands,
   RedisConnection,
   RedisPool,
+  RedisTransaction,
   REDIS_DIALECT,
   parseConnectionString,
   type MessageContext,
@@ -58,7 +60,13 @@ export {
   type ServerHello,
 };
 export type { CommandArg, Reply } from "./protocol/resp.js";
-export type { RedisValue, ScanOptions, ScanPage, SetOptions } from "./commands.js";
+export type {
+  RedisValue,
+  ScanOptions,
+  ScanPage,
+  SetOptions,
+  TransactionRunner,
+} from "./commands.js";
 
 /** Opens a connection without going through `runtime:db`'s registry. */
 export async function connect(url: string, options: RedisOptions = {}): Promise<RedisConnection> {

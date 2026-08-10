@@ -18,6 +18,12 @@
  * methods without either of them reimplementing eighty of them.
  */
 import type { CommandArg } from "./protocol/resp.js";
+import type { RedisTransaction } from "./transaction.js";
+
+/** What can run a built transaction — a client, or a pool. */
+export interface TransactionRunner {
+  execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null>;
+}
 
 /** The value a Redis key holds. `Uint8Array` in `binary` mode. */
 export type RedisValue = string | Uint8Array;
@@ -65,6 +71,37 @@ export abstract class RedisCommands {
    * agree on what a command does by construction.
    */
   abstract call(args: readonly CommandArg[], options?: { signal?: AbortSignal }): Promise<unknown>;
+
+  /**
+   * Runs a built transaction. Supplied by whatever owns a connection.
+   *
+   * On {@link RedisTransaction} itself this is not reachable — a transaction
+   * inside a transaction is not a thing Redis has — so it refuses.
+   */
+  abstract execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null>;
+
+  // -- MULTI/EXEC -----------------------------------------------------------
+
+  /**
+   * Starts a transaction.
+   *
+   * ```js
+   * const tx = r.multi();
+   * tx.set("a", "1");
+   * const n = tx.incr("counter");
+   * const [, counter] = await tx.exec();
+   * ```
+   *
+   * Not `transaction(fn)`: `MULTI`/`EXEC` applies its commands together with
+   * nothing interleaved, but does **not** roll back one that fails at exec
+   * time. See {@link RedisTransaction.exec}.
+   */
+  multi(): RedisTransaction {
+    // Required lazily: `transaction.ts` extends this class, so importing it at
+    // the top would be a cycle that leaves one of the two undefined at
+    // construction time depending on which module loaded first.
+    return new (loadTransaction())(this);
+  }
 
   // -- strings --------------------------------------------------------------
 
@@ -728,6 +765,24 @@ export abstract class RedisCommands {
     return String(await this.call(["CONFIG", "SET", parameter, value]));
   }
 
+  // -- optimistic locking ---------------------------------------------------
+
+  /**
+   * `WATCH` — abort the next `EXEC` if any of these keys changes first.
+   *
+   * **It must be on the same connection as the `EXEC`**, which is what the
+   * server ties it to. On a client that is automatic; on a pool it is not, so
+   * use `withConnection()` and watch, read and exec inside it.
+   */
+  async watch(...keys: string[]): Promise<string> {
+    return String(await this.call(["WATCH", ...keys]));
+  }
+
+  /** Forgets every `WATCH` on this connection. */
+  async unwatch(): Promise<string> {
+    return String(await this.call(["UNWATCH"]));
+  }
+
   /** `[seconds, microseconds]`, as the server sees the clock. */
   async time(): Promise<[number, number]> {
     const reply = (await this.call(["TIME"])) as unknown[];
@@ -804,4 +859,26 @@ function zpopped(reply: unknown): { key: string; member: RedisValue; score: numb
 function page<T>(reply: unknown, map: (items: unknown[]) => T[]): ScanPage<T> {
   const [cursor, items] = reply as [unknown, unknown[]];
   return { cursor: String(cursor), items: map(items ?? []) };
+}
+
+// The constructor for `RedisTransaction`, resolved on first use.
+//
+// `transaction.ts` imports this module to extend `RedisCommands`, so a static
+// import back would be a cycle: whichever module the loader reached second
+// would see the other's binding still uninitialized, and `multi()` would fail
+// with a TDZ error rather than anything that names the problem.
+let TransactionClass: (new (runner: TransactionRunner) => RedisTransaction) | null = null;
+
+/** Registered by `transaction.ts`'s module, breaking the cycle at run time. */
+export function registerTransaction(
+  ctor: new (runner: TransactionRunner) => RedisTransaction,
+): void {
+  TransactionClass = ctor;
+}
+
+function loadTransaction(): new (runner: TransactionRunner) => RedisTransaction {
+  if (TransactionClass === null) {
+    throw new Error("the transaction module was not loaded — import the package entry point");
+  }
+  return TransactionClass;
 }
