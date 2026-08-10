@@ -31,6 +31,8 @@ declare module "runtime:db" {
     readonly Deadlock: "ERR_DB_DEADLOCK";
     readonly SerializationFailure: "ERR_DB_SERIALIZATION_FAILURE";
     readonly Busy: "ERR_DB_BUSY";
+    readonly Throttled: "ERR_DB_THROTTLED";
+    readonly NotFound: "ERR_DB_NOT_FOUND";
     readonly ConnectionLost: "ERR_DB_CONNECTION_LOST";
     readonly AuthFailed: "ERR_DB_AUTH_FAILED";
     readonly Timeout: "ERR_DB_TIMEOUT";
@@ -62,6 +64,15 @@ declare module "runtime:db" {
     readonly backendCode?: string;
   }
 
+  /**
+   * What a column can produce, when the backend is not the built-in one.
+   *
+   * `DbOutput` describes what `sqlite` produces and is the default a `Row` is
+   * typed with. A driver decoding `timestamptz` into a `Temporal.Instant` or
+   * `jsonb` into an object is doing its job, not exceeding it, and says so by
+   * declaring its own value type: `Rows<Row<PgValue>>`.
+   */
+
   /** A column of a result set, described once per query. */
   export interface Column {
     readonly name: string;
@@ -77,13 +88,13 @@ declare module "runtime:db" {
    * the columns — use {@link Row.toObject}. Nothing internal leaks through a
    * spread either; it yields an empty object.
    */
-  export interface Row {
-    readonly [column: string]: DbOutput | (() => unknown);
+  export interface Row<V = DbOutput> {
+    readonly [column: string]: V | (() => unknown);
     /** The columns as an array, in query order. */
-    values(): DbOutput[];
+    values(): V[];
     /** The row as a plain object — how a row is materialized. */
-    toObject(): Record<string, DbOutput>;
-    toJSON(): Record<string, DbOutput>;
+    toObject(): Record<string, V>;
+    toJSON(): Record<string, V>;
   }
 
   /**
@@ -118,7 +129,7 @@ declare module "runtime:db" {
     exhausted?: boolean;
   }
 
-  export class Rows implements AsyncIterable<Row> {
+  export class Rows<R extends Row<unknown> = Row> implements AsyncIterable<R> {
     constructor(source: RowSource, shape: RowShape | RecordShape);
     /**
      * Rows already in hand, as a result set — for a backend whose answer is
@@ -129,8 +140,8 @@ declare module "runtime:db" {
     static fromObjects(
       records: Iterable<Record<string, unknown>>,
       columns?: readonly Column[],
-    ): Rows;
-    [Symbol.asyncIterator](): AsyncIterator<Row>;
+    ): Rows<Row<unknown>>;
+    [Symbol.asyncIterator](): AsyncIterator<R>;
     readonly columns: readonly Column[];
     /**
      * `true` when the backend finished this result without leaving a cursor
@@ -139,9 +150,9 @@ declare module "runtime:db" {
      */
     readonly exhausted: boolean;
     /** The whole result set as an array. */
-    toArray(): Promise<Row[]>;
+    toArray(): Promise<R[]>;
     /** The first row, or `null`. Closes the cursor without reading the rest. */
-    first(): Promise<Row | null>;
+    first(): Promise<R | null>;
     close(): Promise<void>;
   }
 
@@ -158,6 +169,18 @@ declare module "runtime:db" {
      * `RETURNING`.
      */
     readonly lastInsertRowid: number | bigint | string | null;
+    /**
+     * One result per parameter set, from {@link Connection.executeMany}, where
+     * the backend reports them — which the default batch path always does,
+     * since it ran the sets one at a time and had them in hand.
+     *
+     * Absent when the backend answered for the batch as a whole (the embedded
+     * SQLite path, a `COPY`), because inventing per-set numbers would be worse
+     * than not having them. A batch of inserts against a backend that generates
+     * keys is otherwise a batch whose keys are unreachable: the aggregate can
+     * only carry the last.
+     */
+    readonly results?: readonly ExecuteResult[];
   }
 
   /** A query built by the {@link sql} tag: fragments and values, kept apart. */
@@ -174,6 +197,22 @@ declare module "runtime:db" {
   /** Anything `query`/`execute` accepts. */
   export type Queryable = string | Query | QueryAst;
 
+  /**
+   * What a delivered message carries.
+   *
+   * The payload is the argument because it is what almost every caller wants;
+   * the context is where a backend puts what only it has — PostgreSQL's
+   * `processId`, Redis's `pattern`. `channel` is the name, always.
+   */
+  export type MessageHandler = (payload: unknown, context: MessageContext) => void;
+
+  export interface MessageContext {
+    /** The name the message arrived on. */
+    readonly channel: string;
+    /** Whatever else the backend knows about it. */
+    readonly [detail: string]: unknown;
+  }
+
   /** Per-call options every backend takes. */
   export interface CallOptions {
     /**
@@ -188,7 +227,15 @@ declare module "runtime:db" {
     readonly dialect: Dialect;
     /** The backend's name, e.g. `"sqlite"`. */
     readonly backend: string;
-    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
+    /**
+     * The rows are typed `unknown` on the portable surface, because what a
+     * column produces is the backend's decision: `DbOutput` describes the
+     * built-in one, and a driver decoding `timestamptz` into a
+     * `Temporal.Instant` is doing its job. A concrete driver narrows this —
+     * `sqlite` to {@link DbOutput}, `@opentf/esrun-postgres` to its `PgValue` —
+     * so precision is lost only where the backend genuinely is not known.
+     */
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<Row<unknown>>>;
     execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     /**
      * Runs one statement against many parameter sets, crossing the boundary
@@ -211,6 +258,28 @@ declare module "runtime:db" {
      * `WATCH`, a temporary table — does not have to know which kind it holds.
      */
     withConnection<T>(fn: (connection: Connection) => Promise<T>): Promise<T>;
+    /**
+     * Subscribes to server-pushed messages, resolving once the backend has
+     * **confirmed** it — so publishing immediately afterwards cannot race the
+     * subscription. Refused with `ERR_DB_UNSUPPORTED` unless
+     * `dialect.supports.subscriptions`.
+     *
+     * Subscribing gives the connection over to delivering messages: on most
+     * backends it then runs no ordinary work, by the protocol's own rule. A
+     * pooled connection refuses, since a subscription needs a connection of its
+     * own.
+     */
+    subscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<void>;
+    /** Unsubscribes; omitting `channels` unsubscribes from everything. */
+    unsubscribe(channels?: string | readonly string[]): Promise<void>;
+    /** Whether this connection has been given over to delivering messages. */
+    readonly subscribed: boolean;
+    /** The names it is subscribed to. */
+    readonly subscriptions: readonly string[];
+    /** The catch-all handler, after any handler registered for a name. */
+    onMessage?: MessageHandler | undefined;
+    /** Called when the delivery loop fails, since nobody is awaiting it. */
+    onSubscribeError?: ((error: unknown) => void) | undefined;
     /** Whether this is still worth using at all. */
     readonly usable: boolean;
     /** Whether this is fit for the next caller — what a pool asks before reusing one. */
@@ -283,8 +352,20 @@ declare module "runtime:db" {
     options: O & { driver: Driver<C, O, P>; pool?: false },
   ): Promise<C>;
 
+  /**
+   * A connection to the built-in SQLite backend.
+   *
+   * The portable `Connection` types its rows `unknown`, because an unknown
+   * backend decodes what it likes. This one is known: it produces
+   * {@link DbOutput} and nothing else, so `row.name` is a `DbOutput` rather
+   * than something to narrow first.
+   */
+  export interface SqliteConnection extends Connection {
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
+  }
+
   /** The built-in SQLite driver — an ordinary driver, passed the ordinary way. */
-  export const sqlite: Driver<Connection, SqliteOptions, PooledConnection>;
+  export const sqlite: Driver<SqliteConnection, SqliteOptions, PooledConnection>;
 
   /**
    * The `sql` tagged template: every interpolation becomes a parameter, never
@@ -333,14 +414,22 @@ declare module "runtime:db" {
     savepoints: boolean;
     namedParameters: boolean;
     /**
-     * The backend takes SQL text and `` sql`` `` templates. Default `true`.
+     * The backend takes query **text** and `` sql`` `` templates. Default
+     * `true`.
      *
-     * A backend that says `false` refuses text with `ERR_DB_QUERY_FORM`, the
-     * same way a SQL backend refuses an AST.
+     * Text, not SQL: a backend speaking Cypher, N1QL or a language of its own
+     * takes text and is not a SQL backend, and the flag has to be able to say
+     * so. A backend that says `false` refuses text with `ERR_DB_QUERY_FORM`,
+     * the same way a text backend refuses an AST.
      */
-    sqlText: boolean;
+    queryText: boolean;
     /** The backend takes {@link queryAst}. Default `false`. */
     queryAst: boolean;
+    /**
+     * The backend can push messages to a subscribed connection. Default
+     * `false`, which makes {@link Connection.subscribe} refuse by name.
+     */
+    subscriptions: boolean;
     /**
      * The backend has transactions. Default `true`.
      *
@@ -420,7 +509,23 @@ declare module "runtime:db" {
      * closed connection the same way the built-in ones do.
      */
     protected _open(): void;
-    protected abstract _query(q: NormalizedQuery): Promise<Rows>;
+    subscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<void>;
+    unsubscribe(channels?: string | readonly string[]): Promise<void>;
+    get subscribed(): boolean;
+    get subscriptions(): readonly string[];
+    onMessage?: MessageHandler | undefined;
+    onSubscribeError?: ((error: unknown) => void) | undefined;
+    /**
+     * What a backend declaring `supports.subscriptions` implements. `subscribe`
+     * has already refused a closed connection, checked the capability and
+     * normalized one name or several into an array.
+     */
+    protected _subscribe(channels: string[], handler?: MessageHandler): Promise<void>;
+    /** `undefined` means everything. */
+    protected _unsubscribe(channels?: string[]): Promise<void>;
+    /** Refuses unless the dialect declares `capability`. */
+    protected _capable(capability: string, complaint: string): void;
+    protected abstract _query(q: NormalizedQuery): Promise<Rows<Row<unknown>>>;
     protected abstract _execute(q: NormalizedQuery): Promise<ExecuteResult>;
     /**
      * The batch path. **Optional** — the default loops `_execute`, which is
@@ -504,6 +609,12 @@ declare module "runtime:db" {
     readonly usable: boolean;
     /** Always true while open: an unfit connection was destroyed, not kept. */
     readonly reusable: boolean;
+    /** Always false: a pool subscribes to nothing. */
+    readonly subscribed: boolean;
+    readonly subscriptions: readonly string[];
+    /** Refused: a subscription needs a connection of its own. */
+    subscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<void>;
+    unsubscribe(channels?: string | readonly string[]): Promise<void>;
     acquire(): Promise<T>;
     /**
      * Returns a resource. `clean` is the driver's assertion that it is fit for
@@ -597,7 +708,7 @@ declare module "runtime:db" {
     readonly idle: number;
     /** Callers queued behind a full pool. */
     readonly pending: number;
-    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<Row<unknown>>>;
     execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
     /** Runs `fn` in a transaction on **one** connection. */
@@ -743,7 +854,7 @@ declare module "runtime:db" {
    * drops its own table.
    *
    * Most checks are written in SQL. Against a backend that declares
-   * `supports.sqlText: false` those are **skipped with a reason** rather than
+   * `supports.queryText: false` those are **skipped with a reason** rather than
    * failed — a check you cannot express is not a finding — and what runs is the
    * part that holds for every backend whatever form it takes.
    */

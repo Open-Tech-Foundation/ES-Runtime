@@ -302,6 +302,37 @@ export class RedisCluster extends RedisCommands {
     return { changes, lastInsertRowid: null };
   }
 
+  /** A cluster subscribes to nothing: pub/sub here is not cluster-aware. */
+  get subscribed(): boolean {
+    return false;
+  }
+
+  get subscriptions(): string[] {
+    return [];
+  }
+
+  /**
+   * Refused, and by name.
+   *
+   * Redis pub/sub is not cluster-aware: a message published to one node is not
+   * seen by a subscriber on another, so a cluster-wide `subscribe` would
+   * deliver some messages and silently miss others — the worst of the available
+   * behaviours. Subscribe to a specific node instead, or use `ssubscribe` on a
+   * sharded channel, where the slot decides the node and the guarantee holds.
+   */
+  subscribe(): Promise<void> {
+    return Promise.reject(
+      new DbError(
+        "Redis pub/sub is not cluster-aware: subscribe to one node's connection, or use a sharded channel with ssubscribe",
+        { code: DbErrorCode.Unsupported },
+      ),
+    );
+  }
+
+  unsubscribe(): Promise<void> {
+    return this.subscribe();
+  }
+
   /** Usable until closed. */
   get usable(): boolean {
     return !this.#closed;

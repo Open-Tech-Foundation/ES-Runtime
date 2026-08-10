@@ -603,7 +603,7 @@ fn the_built_in_backend_passes_its_own_conformance_suite() {
         assert!(out.status.success(), "{name} stderr: {}", stderr(&out));
         assert_eq!(
             stdout(&out).trim(),
-            "ok=true passed=16 skipped=0",
+            "ok=true passed=17 skipped=0",
             "{name} did not pass its own suite"
         );
     }
@@ -878,7 +878,7 @@ fn a_backend_that_is_not_a_sql_database_over_a_socket() {
           },
           // The three the kit acts on, and one of this backend's own — which an
           // ORM written before this backend existed can still branch on.
-          supports: { sqlText: false, queryAst: true, transactions: false, vectorSearch: true },
+          supports: { queryText: false, queryAst: true, transactions: false, vectorSearch: true },
         });
 
         const store = new Map();
@@ -904,8 +904,19 @@ fn a_backend_that_is_not_a_sql_database_over_a_socket() {
           }
 
           async _execute(q) {
+            const op = q.ast;
+            if (op.get !== undefined) {
+              // A key-value or document store is asked for one named thing, and
+              // either has it or does not. That is not an empty result set —
+              // the query did not match nothing, the document is absent — which
+              // is the distinction ERR_DB_NOT_FOUND exists to carry.
+              if (!store.has(op.get)) {
+                throw new DbError(`no document ${op.get}`, { code: DbErrorCode.NotFound });
+              }
+              return { changes: 0, lastInsertRowid: op.get };
+            }
             const id = `doc_${++seq}`;
-            store.set(id, { id, ...q.ast.insert });
+            store.set(id, { id, ...op.insert });
             return { changes: 1, lastInsertRowid: id };
           }
 
@@ -939,9 +950,21 @@ fn a_backend_that_is_not_a_sql_database_over_a_socket() {
         const near = await (await db.query(queryAst({ nearest: [0.9, 0.1, 0], k: 2 }))).toArray();
         console.log("nearest:", near.map((r) => r.name).join(","));
 
+        // A batch of inserts against a backend that generates keys: the
+        // aggregate can only carry the last one, so the per-set results are
+        // where the rest are.
+        const batch = await db.executeMany(queryAst({ insert: {} }), [{}, {}]);
+        console.log("batch keys:", batch.results.map((r) => r.lastInsertRowid).join(","));
+
+        try {
+          await db.execute(queryAst({ get: "doc_404" }));
+        } catch (e) {
+          console.log("absent:", e.code);
+        }
+
         // The columns are the union of the documents' keys, in first-seen order:
         // a document store's rows do not have to agree on a shape.
-        const all = await db.query(queryAst({ find: {} }));
+        const all = await db.query(queryAst({ find: { name: "ada" } }));
         console.log("columns:", all.columns.map((c) => c.name).join(","));
         await all.close();
 
@@ -958,6 +981,7 @@ fn a_backend_that_is_not_a_sql_database_over_a_socket() {
         for (const [what, attempt] of [
           ["text", () => db.query("SELECT 1")],
           ["transaction", () => db.transaction(async () => {})],
+          ["subscribe", () => db.subscribe("changes")],
         ]) {
           try { await attempt(); console.log(`${what}: allowed`); }
           catch (e) { console.log(`${what}: refused (${e.code})`); }
@@ -972,13 +996,16 @@ fn a_backend_that_is_not_a_sql_database_over_a_socket() {
         "key: doc_1
 nested: true {\"id\":\"doc_1\",\"name\":\"ada\",\"embedding\":[1,0,0]}
 nearest: ada,grace
+batch keys: doc_3,doc_4
+absent: ERR_DB_NOT_FOUND
 columns: id,name,embedding
 capability: true | before connecting: true
 withConnection: function function
 usable/reusable: true true true true
 held: docdb
 text: refused (ERR_DB_QUERY_FORM)
-transaction: refused (ERR_DB_UNSUPPORTED)"
+transaction: refused (ERR_DB_UNSUPPORTED)
+subscribe: refused (ERR_DB_UNSUPPORTED)"
     );
 }
 

@@ -12,11 +12,15 @@
 import {
   PooledConnection,
   type AnyDriver,
+  type CallOptions,
   type Connection,
+  type DbParams,
   type PoolSettings,
+  type Queryable,
+  type Rows,
 } from "runtime:db";
 
-import { PgConnection, type PgOptions } from "./connection.js";
+import { PgConnection, type PgOptions, type PgRow } from "./connection.js";
 
 /** Connection options, plus how big the pool is. */
 export interface PgPoolOptions extends PgOptions, PoolSettings {}
@@ -44,6 +48,15 @@ export class PgPooled extends PooledConnection {
 
   override transaction<T>(fn: (tx: PgConnection) => Promise<T>): Promise<T> {
     return super.transaction(fn as (tx: Connection) => Promise<T>);
+  }
+
+  /** Rows from this backend, typed as this backend decodes them. */
+  override query(
+    q: Queryable,
+    params?: DbParams,
+    options?: CallOptions,
+  ): Promise<Rows<PgRow>> {
+    return super.query(q, params, options) as Promise<Rows<PgRow>>;
   }
 
   /** Runs a script on a borrowed connection. */

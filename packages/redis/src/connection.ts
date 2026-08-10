@@ -26,6 +26,7 @@ import {
   type DbInput,
   type DbParams,
   type ExecuteResult,
+  type MessageContext as DbMessageContext,
   type NormalizedQuery,
   type Queryable,
 } from "runtime:db";
@@ -45,7 +46,7 @@ const BATCH_BYTES = 64 * 1024;
 /**
  * Redis's dialect, which is mostly a list of things it is not.
  *
- * `sqlText: false` and `queryAst: true` are the two that matter: this backend
+ * `queryText: false` and `queryAst: true` are the two that matter: this backend
  * refuses SQL by name, and takes command arrays. Everything else follows from
  * Redis rather than from a choice made here — there are no placeholders because
  * there is no statement to put them in, and no savepoints because there is
@@ -66,8 +67,10 @@ export const REDIS_DIALECT = new Dialect({
     returning: false,
     savepoints: false,
     namedParameters: false,
-    sqlText: false,
+    queryText: false,
     queryAst: true,
+    // Pub/sub, behind `runtime:db`'s portable subscription surface.
+    subscriptions: true,
     // MULTI/EXEC is not a transaction in the sense `transaction(fn)` promises.
     // It queues commands and applies them together, but a command that fails at
     // EXEC time does not roll back the ones beside it — so a `transaction()`
@@ -186,7 +189,7 @@ export interface ReconnectOptions {
 export type RedisPayload = string | Uint8Array;
 
 /** Where a message came from. `pattern` only for a `psubscribe` delivery. */
-export interface MessageContext {
+export interface MessageContext extends DbMessageContext {
   /** The channel the message was published to — always the concrete one. */
   readonly channel: string;
   /** The pattern that matched, for a `psubscribe` handler. */
@@ -982,10 +985,6 @@ export class RedisConnection extends BaseConnection {
    * The catch-all, for a caller that would rather switch on the channel itself
    * than register per channel.
    */
-  onMessage: MessageHandler | undefined;
-
-  /** Called when the read loop fails, since nobody is awaiting it. */
-  onSubscribeError: ((error: unknown) => void) | undefined;
 
   /** Whether this connection may block indefinitely — `{ blocking: true }`. */
   get blocking(): boolean {
@@ -993,8 +992,18 @@ export class RedisConnection extends BaseConnection {
   }
 
   /** Whether this connection has been given over to subscribing. */
-  get subscribed(): boolean {
+  override get subscribed(): boolean {
     return this.#pump !== null;
+  }
+
+  /**
+   * Everything this connection is subscribed to, whichever kind it is.
+   *
+   * `runtime:db`'s portable name; `channels`, `patterns` and `shardChannels`
+   * below are the breakdown, and only Redis has the distinction.
+   */
+  override get subscriptions(): string[] {
+    return [...this.channels, ...this.patterns, ...this.shardChannels];
   }
 
   /** The channels, patterns and shard channels currently subscribed. */
@@ -1031,7 +1040,10 @@ export class RedisConnection extends BaseConnection {
    * from everything stops the messages, not the mode; open another connection
    * for ordinary work, which is what a subscriber wants anyway.
    */
-  async subscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<void> {
+  protected override async _subscribe(
+    channels: readonly string[],
+    handler?: MessageHandler,
+  ): Promise<void> {
     await this.#subscribeTo("SUBSCRIBE", this.#channels, channels, handler);
   }
 
@@ -1046,7 +1058,7 @@ export class RedisConnection extends BaseConnection {
   }
 
   /** Unsubscribes. With no argument, from every channel. */
-  async unsubscribe(channels?: string | readonly string[]): Promise<void> {
+  protected override async _unsubscribe(channels?: readonly string[]): Promise<void> {
     await this.#unsubscribeFrom("UNSUBSCRIBE", this.#channels, channels);
   }
 
@@ -1315,17 +1327,24 @@ export class RedisConnection extends BaseConnection {
 
     let changes = 0;
     let failure: DbError | null = null;
+    // Per set as well as in total. A pipeline answers one reply per command, so
+    // the per-set results are already here — throwing them away and reporting
+    // only the sum would lose what the batch actually did.
+    const results: ExecuteResult[] = [];
     for (const reply of replies) {
       if (reply.kind === "error") {
         // The first failure is the one reported; the rest ran regardless, and
         // their results are counted so `changes` says what actually happened.
         failure ??= serverError(reply.value.prefix, reply.value.message);
+        results.push({ changes: 0, lastInsertRowid: null });
         continue;
       }
-      changes += asExecuteResult(reply).changes;
+      const result = asExecuteResult(reply);
+      results.push(result);
+      changes += result.changes;
     }
     if (failure !== null) throw failure;
-    return { changes, lastInsertRowid: null };
+    return { changes, lastInsertRowid: null, results };
   }
 
   protected async _close(): Promise<void> {

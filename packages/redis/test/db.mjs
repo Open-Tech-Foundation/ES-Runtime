@@ -32,7 +32,7 @@ is(db.dialect.name, "redis", "and its dialect");
 // -- the query form ---------------------------------------------------------
 
 is(db.dialect.supports.queryAst, true, "the backend declares it takes an AST");
-is(db.dialect.supports.sqlText, false, "and that it does not take SQL");
+is(db.dialect.supports.queryText, false, "and that it does not take SQL");
 
 is(await codeOf(() => db.query("SELECT 1")), DbErrorCode.QueryForm,
   "SQL text is refused by name rather than sent to a server that would not parse it");

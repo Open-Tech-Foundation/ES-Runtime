@@ -35,6 +35,11 @@ const BY_PREFIX: Record<string, string> = {
   // already there.
   BUSYGROUP: DbErrorCode.UniqueViolation,
 
+  // The server shedding load rather than failing the command: it is at its
+  // client limit. The caller backs off and retries, which is what `Throttled`
+  // means — `Busy` is one resource held by someone else.
+  MAXCLIENTS: DbErrorCode.Throttled,
+
   // Cluster redirects. This driver does not follow them (see the README), and
   // the message says so rather than leaving a bare `MOVED 3999 …` to be
   // interpreted by whoever reads the log.
@@ -61,6 +66,8 @@ const BY_MESSAGE: [RegExp, string][] = [
   // transient in the way `LOADING` is, but the caller can back off and retry,
   // which is what `Busy` means to one.
   [/OOM command not allowed/i, DbErrorCode.Busy],
+  // Redis sends this one under a bare `ERR`, with no prefix of its own.
+  [/max number of clients reached/i, DbErrorCode.Throttled],
 ];
 
 /**

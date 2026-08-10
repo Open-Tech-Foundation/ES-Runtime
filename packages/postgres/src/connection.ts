@@ -17,7 +17,10 @@ import {
   asDbError,
   defineRowShape,
   decodeBatch,
+  type DbOutput,
+  type MessageHandler,
   type NormalizedQuery,
+  type Row,
 } from "runtime:db";
 
 import { Fields, FrameReader } from "./protocol/frame.js";
@@ -81,6 +84,8 @@ export const POSTGRES_DIALECT = new Dialect({
     // server, so claiming it would mean rewriting SQL here — which means
     // parsing SQL here, which is the thing a driver should not do.
     namedParameters: false,
+    // LISTEN/NOTIFY: the portable subscription surface is over it.
+    subscriptions: true,
   },
 });
 
@@ -152,6 +157,19 @@ interface Batch {
   rows: number;
   done: boolean;
 }
+
+/**
+ * What a PostgreSQL column can produce.
+ *
+ * Wider than `DbOutput`, which describes the built-in SQLite backend: this
+ * driver decodes `timestamptz` into a `Temporal.Instant`, `jsonb` into whatever
+ * the document was, an array into an array. `Rows<PgRow>` is how that is said
+ * in the types rather than left for a caller to discover.
+ */
+export type PgValue = DbOutput | boolean | Date | readonly unknown[] | object;
+
+/** A row from this backend. */
+export type PgRow = Row<PgValue>;
 
 export class PgConnection extends BaseConnection {
   #socket: PgSocket | null = null;
@@ -411,7 +429,7 @@ export class PgConnection extends BaseConnection {
     if (this.#fatal !== null) throw this.#fatal;
     if (this.#pump !== null) {
       throw new DbError(
-        "this connection is listening for notifications and runs no queries — use another connection, or a pool",
+        "this connection is subscribed and runs no queries — use another connection, or a pool",
         { code: DbErrorCode.ConnectionBusy },
       );
     }
@@ -792,7 +810,7 @@ export class PgConnection extends BaseConnection {
     }
   }
 
-  protected async _query(query: NormalizedQuery): Promise<Rows> {
+  protected async _query(query: NormalizedQuery): Promise<Rows<PgRow>> {
     const q = this.#sql(query);
     this.#rejectNamed(q.named);
     const release = await this.#acquire();
@@ -966,21 +984,19 @@ export class PgConnection extends BaseConnection {
     }
   }
 
-  // -- LISTEN/NOTIFY --------------------------------------------------------
+  // -- subscriptions, which here are LISTEN/NOTIFY ---------------------------
+  //
+  // `subscribe`/`unsubscribe`/`onMessage` are `runtime:db`'s names for this,
+  // and they are the ones used here rather than PostgreSQL's — a program that
+  // subscribes to a channel should read the same whichever backend is under it,
+  // and the SQL being sent is `LISTEN`. A handler receives
+  // `(payload, { channel, processId })`: the payload is `""` when the notifier
+  // sent none, and `processId` is the backend that sent it, which is how a
+  // connection recognises its own notifications since PostgreSQL delivers them
+  // to the sender too.
 
-  /**
-   * Called for each `NOTIFY` on a channel this connection is listening to.
-   *
-   * `payload` is `""` when the notifier sent none, and `processId` is the
-   * backend that sent it — which is how a connection recognises its own
-   * notifications, since PostgreSQL delivers them to the sender too.
-   */
-  onNotification:
-    | ((notification: { channel: string; payload: string; processId: number }) => void)
-    | undefined;
-
-  /** Called when the listening loop fails, since nobody is awaiting it. */
-  onListenError: ((error: unknown) => void) | undefined;
+  /** Handlers registered for one channel, called before {@link onMessage}. */
+  readonly #handlers = new Map<string, Set<MessageHandler>>();
 
   #pump: Promise<void> | null = null;
   /** Commands sent into the pump, awaiting their `ReadyForQuery`. */
@@ -988,20 +1004,20 @@ export class PgConnection extends BaseConnection {
   #channels = new Set<string>();
 
   /** The channels this connection is listening to. */
-  get channels(): string[] {
+  override get subscriptions(): string[] {
     return [...this.#channels];
   }
 
-  /** Whether this connection has been given over to listening. */
-  get listening(): boolean {
+  /** Whether this connection has been given over to delivering notifications. */
+  override get subscribed(): boolean {
     return this.#pump !== null;
   }
 
   /**
-   * Starts listening on `channel`.
+   * Starts listening, one `LISTEN` per channel.
    *
    * A notification arrives when it arrives, and a connection only sees messages
-   * while it is reading — which an idle one is not. So the first `listen()`
+   * while it is reading — which an idle one is not. So the first `subscribe()`
    * gives this connection over to a **read loop**, and from then on it runs no
    * queries: `query()` and `execute()` refuse with `ERR_DB_CONNECTION_BUSY`.
    * That is not a limitation worked around but how you would deploy it anyway —
@@ -1014,19 +1030,33 @@ export class PgConnection extends BaseConnection {
    * rather than hope: a misspelled channel fails here, instead of silently
    * never firing.
    */
-  async listen(channel: string): Promise<void> {
-    this._open();
+  protected override async _subscribe(
+    channels: string[],
+    handler?: MessageHandler,
+  ): Promise<void> {
     this.#startPump();
-    await this.#pumpCommand(`LISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
-    this.#channels.add(channel);
+    for (const channel of channels) {
+      // Confirmed before it resolves — the `ReadyForQuery` for this `LISTEN` —
+      // so a `NOTIFY` sent immediately afterwards cannot race the subscription.
+      await this.#pumpCommand(`LISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
+      this.#channels.add(channel);
+      if (handler !== undefined) {
+        let handlers = this.#handlers.get(channel);
+        if (handlers === undefined) this.#handlers.set(channel, (handlers = new Set()));
+        handlers.add(handler);
+      }
+    }
   }
 
-  /** Stops listening on `channel`. The read loop stays, and so do the others. */
-  async unlisten(channel: string): Promise<void> {
-    this._open();
+  /** The read loop stays, and so do the other channels. */
+  protected override async _unsubscribe(channels?: string[]): Promise<void> {
     if (this.#pump === null) return;
-    await this.#pumpCommand(`UNLISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
-    this.#channels.delete(channel);
+    const names = channels ?? [...this.#channels];
+    for (const channel of names) {
+      await this.#pumpCommand(`UNLISTEN ${POSTGRES_DIALECT.quoteIdent(channel)}`);
+      this.#channels.delete(channel);
+      this.#handlers.delete(channel);
+    }
   }
 
   #pumpCommand(sql: string): Promise<void> {
@@ -1034,6 +1064,32 @@ export class PgConnection extends BaseConnection {
       this.#pumpCommands.push({ resolve, reject });
       this.#send(msg.simpleQuery(sql)).catch(reject);
     });
+  }
+
+  /**
+   * Delivers one notification: the channel's own handlers, then the catch-all.
+   *
+   * A handler that throws is reported to `onSubscribeError` and the loop
+   * continues. It is the only thing reading the socket, and one bad handler
+   * must not stop every other subscription — the same rule the Redis driver
+   * follows, for the same reason.
+   */
+  #deliver(channel: string, payload: string, processId: number): void {
+    const context = { channel, processId };
+    for (const handler of this.#handlers.get(channel) ?? []) {
+      try {
+        handler(payload, context);
+      } catch (e) {
+        this.onSubscribeError?.(e);
+      }
+    }
+    if (this.onMessage !== undefined) {
+      try {
+        this.onMessage(payload, context);
+      } catch (e) {
+        this.onSubscribeError?.(e);
+      }
+    }
   }
 
   #settle(error?: unknown): void {
@@ -1054,7 +1110,7 @@ export class PgConnection extends BaseConnection {
             const processId = fields.i32();
             const channel = fields.cstring();
             const payload = fields.cstring();
-            this.onNotification?.({ channel, payload, processId });
+            this.#deliver(channel, payload, processId);
             break;
           }
           case B.ReadyForQuery:
@@ -1076,7 +1132,7 @@ export class PgConnection extends BaseConnection {
       // a command hears about it, and the failure goes to a handler rather than
       // becoming an unhandled rejection nobody asked for.
       for (const pending of this.#pumpCommands.splice(0)) pending.reject(e);
-      this.onListenError?.(e);
+      this.onSubscribeError?.(e);
     });
   }
 
@@ -1121,7 +1177,7 @@ export class PgConnection extends BaseConnection {
    * The query as SQL text, which for this backend it always is.
    *
    * `NormalizedQuery.text` is nullable because a backend may take an AST
-   * instead, and this one does not: `POSTGRES_DIALECT` declares `sqlText` and
+   * instead, and this one does not: `POSTGRES_DIALECT` declares `queryText` and
    * not `queryAst`, so `normalizeQuery` has already refused everything that
    * would arrive without text. Narrowing it here, once, is how that fact is
    * stated to the type checker rather than asserted at three call sites.

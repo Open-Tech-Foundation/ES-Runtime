@@ -25,6 +25,12 @@ const BY_SQLSTATE: Record<string, string> = {
   "42703": DbErrorCode.UndefinedColumn,
   "25006": DbErrorCode.ReadOnly, // read_only_sql_transaction
   "0A000": DbErrorCode.Unsupported, // feature_not_supported
+  // The server shedding load rather than failing the statement: it is at its
+  // connection limit, or a configuration limit was reached. The caller backs
+  // off and retries, which is what `Throttled` means and `Busy` does not —
+  // `Busy` is one resource held by someone else.
+  "53300": DbErrorCode.Throttled, // too_many_connections
+  "53400": DbErrorCode.Throttled, // configuration_limit_exceeded
 };
 
 /** The fields of an `ErrorResponse` / `NoticeResponse`. */

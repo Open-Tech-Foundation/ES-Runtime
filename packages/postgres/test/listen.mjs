@@ -7,13 +7,14 @@ const listener = await connect(url, { driver: postgres });
 const notifier = await connect(url, { driver: postgres });
 
 const seen = [];
-listener.onNotification = (n) => seen.push(`${n.channel}:${n.payload}`);
+listener.onMessage = (payload, { channel }) => seen.push(`${channel}:${payload}`);
 
-await listener.listen("orders");
-await listener.listen("shipments");
-console.log("channels:", listener.channels.join(","), "| listening:", listener.listening);
+const perChannel = [];
+await listener.subscribe("orders", (payload) => perChannel.push(payload));
+await listener.subscribe("shipments");
+console.log("channels:", listener.subscriptions.join(","), "| subscribed:", listener.subscribed);
 
-// A listening connection is dedicated: it owns its reader, so it runs no
+// A subscribed connection is dedicated: it owns its reader, so it runs no
 // queries. Refused by name rather than deadlocking behind the read loop.
 let refused = null;
 try {
@@ -35,10 +36,11 @@ await notifier.execute("NOTIFY shipments, 'second'");
 await notifier.execute("NOTIFY orders");
 await wait(3);
 console.log("received:", seen.join(" | "));
+console.log("per-channel handler:", perChannel.join(","));
 
-// Unlisten stops one channel and leaves the rest.
-await listener.unlisten("orders");
-console.log("after unlisten:", listener.channels.join(","));
+// Unsubscribing stops one channel and leaves the rest.
+await listener.unsubscribe("orders");
+console.log("after unsubscribe:", listener.subscriptions.join(","));
 seen.length = 0;
 await notifier.execute("NOTIFY orders, 'ignored'");
 await notifier.execute("NOTIFY shipments, 'still here'");
@@ -48,7 +50,7 @@ console.log("only shipments:", seen.join(" | "));
 // A channel name is an identifier, so it is quoted rather than interpolated:
 // this one would be a syntax error unquoted, and worse than that if it were
 // chosen by someone else.
-await listener.listen('weird "name"');
+await listener.subscribe('weird "name"');
 seen.length = 0;
 await notifier.execute(`NOTIFY "weird ""name""", 'quoted'`);
 await wait(1);

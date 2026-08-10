@@ -47,6 +47,16 @@ const DbErrorCode = Object.freeze({
   Deadlock: "ERR_DB_DEADLOCK",
   SerializationFailure: "ERR_DB_SERIALIZATION_FAILURE",
   Busy: "ERR_DB_BUSY",
+  /// The service is shedding load — a quota, a rate limit, a connection cap.
+  /// Distinct from `Busy`, which is one resource being held by someone else:
+  /// this one is the backend telling you to come back later, and it is what a
+  /// managed backend answers before it answers anything else.
+  Throttled: "ERR_DB_THROTTLED",
+  /// The thing addressed does not exist — a key, a document, a node.
+  /// Distinct from an empty result: a query that matched nothing succeeded,
+  /// while this is a backend that was asked for one named thing and has none.
+  /// A SQL backend has no use for it; a key-value or document store does.
+  NotFound: "ERR_DB_NOT_FOUND",
   ConnectionLost: "ERR_DB_CONNECTION_LOST",
   AuthFailed: "ERR_DB_AUTH_FAILED",
   Timeout: "ERR_DB_TIMEOUT",
@@ -553,20 +563,24 @@ class Dialect {
       returning: false,
       savepoints: false,
       namedParameters: false,
-      // Which forms of query this backend takes. Defaulted so that every
-      // backend written before these existed keeps its behaviour exactly: SQL
-      // text, no AST.
+      // Which forms of query this backend takes. `queryText` is *text*, not
+      // SQL: a backend speaking Cypher, N1QL or its own query language takes
+      // text and is not a SQL backend, and the flag has to be able to say so.
       //
       // Both are declared rather than one being inferred from the other,
       // because a backend may take both — an engine that accepts an AST and
       // also parses SQL is a reasonable thing to be, and so is one that takes
       // neither form the other does.
-      sqlText: true,
+      queryText: true,
       queryAst: false,
       // Whether the backend has transactions at all. A backend that says no
       // gets a refusal from `transaction()` rather than a `BEGIN` it has never
       // heard of.
       transactions: true,
+      // Whether it can push messages to a subscribed connection. `false` makes
+      // `subscribe()` refuse by name rather than send a `LISTEN` nothing would
+      // understand.
+      subscriptions: false,
       ...supports,
     });
     Object.freeze(this);
@@ -658,7 +672,7 @@ function isQueryAst(q) {
 // Normalizes whatever a caller passed into `{ text, ast, positional, named }`.
 //
 // Exactly one of `text` and `ast` is non-null. Which forms a backend takes is
-// its own declaration (`dialect.supports.sqlText` / `.queryAst`), so the door
+// its own declaration (`dialect.supports.queryText` / `.queryAst`), so the door
 // D56 opened for a backend that never speaks SQL is a capability check here
 // rather than a refusal welded into this function. Both directions are
 // expressible: an engine that wants an AST refuses text with the same code, and
@@ -675,7 +689,7 @@ function normalizeQuery(q, params, dialect, backend) {
     return { text: null, ast: q.ast, positional, named };
   }
   if (q instanceof Query) {
-    if (!dialect.supports.sqlText) {
+    if (!dialect.supports.queryText) {
       throw dbError(
         `the ${backend} backend takes a query AST, not SQL text — build one with queryAst()`,
         DbErrorCode.QueryForm,
@@ -690,7 +704,7 @@ function normalizeQuery(q, params, dialect, backend) {
       DbErrorCode.QueryForm,
     );
   }
-  if (!dialect.supports.sqlText) {
+  if (!dialect.supports.queryText) {
     throw dbError(
       `the ${backend} backend takes a query AST, not SQL text — build one with queryAst()`,
       DbErrorCode.QueryForm,
@@ -799,6 +813,17 @@ class Rows {
     this._closed = true;
     await this._source.close();
   }
+}
+
+// One name or several, as several. Every subscription method takes both, since
+// subscribing to one thing is the common case and subscribing to a list is the
+// same operation.
+function toNames(channels) {
+  const names = typeof channels === "string" ? [channels] : [...channels];
+  if (names.length === 0 || names.some((name) => typeof name !== "string" || name === "")) {
+    throw dbError("a subscription needs at least one non-empty name", DbErrorCode.Unsupported);
+  }
+  return names;
 }
 
 // The columns of a set of records: every key any of them has, in the order they
@@ -1043,12 +1068,19 @@ class BaseConnection {
   async _executeMany(query, sets) {
     let changes = 0;
     let lastInsertRowid = null;
+    // Per set as well as in total. The loop has each result in its hand
+    // already, and a batch of inserts against a backend that generates keys is
+    // otherwise a batch whose keys are unreachable — the aggregate can only
+    // carry the last one. A driver whose backend reports the batch as a whole
+    // omits `results` rather than inventing them, so a caller checks.
+    const results = [];
     for (const [positional, named] of sets) {
       const result = await this._execute({ ...query, positional, named });
+      results.push(result);
       changes += result.changes ?? 0;
       if (result.lastInsertRowid != null) lastInsertRowid = result.lastInsertRowid;
     }
-    return { changes, lastInsertRowid };
+    return { changes, lastInsertRowid, results };
   }
 
   /// Runs `fn` inside a transaction, committing when it returns and rolling
@@ -1119,6 +1151,90 @@ class BaseConnection {
 
   async _rollbackTransaction({ nested, name }) {
     await this.execute(nested ? `ROLLBACK TO ${name}` : "ROLLBACK");
+  }
+
+  // -- subscriptions --------------------------------------------------------
+  //
+  // Server-pushed messages on a connection given over to reading them.
+  // PostgreSQL calls it `LISTEN`/`NOTIFY`, Redis calls it pub/sub, a document
+  // store calls it a change stream; they differ in what they can carry and
+  // agree on everything a caller has to arrange. Before this the two drivers
+  // had invented `listen`/`onNotification`/`listening`/`onListenError` and
+  // `subscribe`/`onMessage`/`subscribed`/`onSubscribeError` for the same
+  // concept, which is exactly the kind of divergence the driver tier exists to
+  // prevent.
+
+  /**
+   * The catch-all handler, called for every message this connection receives
+   * after any handler registered for that name specifically.
+   *
+   * `(payload, context)` rather than one object, because the payload is what
+   * almost every caller wants and the context is where a backend puts what only
+   * it has — PostgreSQL's `processId`, Redis's `pattern`. `context.channel` is
+   * the name, always.
+   */
+  onMessage;
+
+  /** Called when the delivery loop fails, since nobody is awaiting it. */
+  onSubscribeError;
+
+  /**
+   * Whether this connection has been given over to delivering messages.
+   *
+   * Subscribing is not a query: the connection stops being available for
+   * ordinary work, on most backends by the protocol's own rule. A driver
+   * overrides this; the base answers `false` because a backend with no
+   * subscriptions never becomes one.
+   */
+  get subscribed() {
+    return false;
+  }
+
+  /** The names this connection is subscribed to. */
+  get subscriptions() {
+    return [];
+  }
+
+  /**
+   * Subscribes to one or more names, delivering to `handler`.
+   *
+   * Resolves when the backend has **confirmed** it, so publishing immediately
+   * afterwards cannot race the subscription. Omitting `handler` leaves delivery
+   * to {@link onMessage}.
+   */
+  async subscribe(channels, handler) {
+    this._open();
+    this._capable("subscriptions", "has no subscriptions");
+    return this._subscribe(toNames(channels), handler);
+  }
+
+  /** Unsubscribes. Omitting `channels` unsubscribes from everything. */
+  async unsubscribe(channels) {
+    this._open();
+    this._capable("subscriptions", "has no subscriptions");
+    return this._unsubscribe(channels === undefined ? undefined : toNames(channels));
+  }
+
+  /// Refuses unless the dialect declares `capability`.
+  _capable(capability, complaint) {
+    if (this.dialect.supports[capability] !== true) {
+      throw dbError(`the ${this.backend} backend ${complaint}`, DbErrorCode.Unsupported);
+    }
+  }
+
+  /// What a backend declaring `supports.subscriptions` implements.
+  async _subscribe(_channels, _handler) {
+    throw dbError(
+      `the ${this.backend} backend declares subscriptions but does not implement _subscribe`,
+      DbErrorCode.Unsupported,
+    );
+  }
+
+  async _unsubscribe(_channels) {
+    throw dbError(
+      `the ${this.backend} backend declares subscriptions but does not implement _unsubscribe`,
+      DbErrorCode.Unsupported,
+    );
   }
 
   /**
@@ -1812,6 +1928,39 @@ class PooledConnection {
     return this.withConnection((connection) => connection.transaction(fn));
   }
 
+  /** A pool subscribes to nothing: a subscription needs a connection of its own. */
+  get subscribed() {
+    return false;
+  }
+
+  get subscriptions() {
+    return [];
+  }
+
+  /**
+   * Refused, and by name.
+   *
+   * Subscribing gives a connection over to delivering messages, and a pool's
+   * whole premise is that its connections come back. One borrowed to subscribe
+   * would either never return or return still subscribed, and the next caller
+   * would find a connection that refuses ordinary work. Open a connection of
+   * its own — which is how you would deploy it anyway, since a subscriber
+   * should not be queued behind someone's report query.
+   */
+  async subscribe() {
+    throw dbError(
+      "a pooled connection cannot subscribe: a subscription needs a connection of its own, opened without pool",
+      DbErrorCode.Unsupported,
+    );
+  }
+
+  async unsubscribe() {
+    throw dbError(
+      "a pooled connection cannot subscribe: a subscription needs a connection of its own, opened without pool",
+      DbErrorCode.Unsupported,
+    );
+  }
+
   /// Runs `fn` with one connection held for the whole of it.
   ///
   /// The escape hatch for everything that is stateful across calls — a session
@@ -1861,7 +2010,7 @@ async function fresh(open, columns) {
 // What it contains does not matter and it never reaches a backend: the check
 // using it expects a refusal that happens before dispatch.
 function anyForm(dialect) {
-  return dialect.supports.sqlText ? `SELECT 1` : queryAst(null);
+  return dialect.supports.queryText ? `SELECT 1` : queryAst(null);
 }
 
 // Each check is `[name, async (open) => void, needs]` and throws to fail.
@@ -2164,6 +2313,44 @@ const CONFORMANCE_CHECKS = [
     },
   ],
   [
+    "subscriptions are declared, and refused by name where there are none",
+    async (open) => {
+      const db = await open();
+      try {
+        const declared = db.dialect.supports.subscriptions === true;
+        if (!declared) {
+          let code = null;
+          try {
+            await db.subscribe("esrun_conformance_channel");
+          } catch (e) {
+            code = e?.code ?? null;
+          }
+          assert(
+            code === DbErrorCode.Unsupported,
+            `a backend without subscriptions reported ${code} rather than ${DbErrorCode.Unsupported}`,
+          );
+          assert(!db.subscribed, "a backend without subscriptions reported itself subscribed");
+          return;
+        }
+        // Declared: it has to work, and to say so afterwards.
+        await db.subscribe("esrun_conformance_channel");
+        assert(db.subscribed, "a subscribed connection did not report itself subscribed");
+        assert(
+          db.subscriptions.includes("esrun_conformance_channel"),
+          "a subscribed connection did not list what it subscribed to",
+        );
+        await db.unsubscribe("esrun_conformance_channel");
+        assert(
+          !db.subscriptions.includes("esrun_conformance_channel"),
+          "an unsubscribed name was still listed",
+        );
+      } finally {
+        await db.close();
+      }
+    },
+    "any",
+  ],
+  [
     "a connection answers usable, reusable, and withConnection",
     async (open) => {
       const db = await open();
@@ -2216,11 +2403,11 @@ const CONFORMANCE_CHECKS = [
     async (open) => {
       const db = await open();
       try {
-        const { sqlText, queryAst: takesAst } = db.dialect.supports;
+        const { queryText, queryAst: takesAst } = db.dialect.supports;
         // A backend that takes both forms has nothing to refuse, and demanding
         // that it refuse *something* would be inventing a requirement.
-        if (sqlText && takesAst) return;
-        const wrong = sqlText ? queryAst({ select: ["a"] }) : `SELECT 1`;
+        if (queryText && takesAst) return;
+        const wrong = queryText ? queryAst({ select: ["a"] }) : `SELECT 1`;
         let code = null;
         try {
           await db.query(wrong);
@@ -2262,7 +2449,7 @@ async function runBackendConformance(open, { skip = [] } = {}) {
   try {
     const probe = await open();
     try {
-      speaksSql = probe.dialect.supports.sqlText === true;
+      speaksSql = probe.dialect.supports.queryText === true;
     } finally {
       await probe.close();
     }
