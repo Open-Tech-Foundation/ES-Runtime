@@ -54,6 +54,20 @@ for a scan, a cursor only for the streaming workload, where the point is that
 memory must not grow with the result. Every workload prints a checksum the
 runner compares, so a runtime cannot look fast by doing less.
 
+`bench/db/pg/types-*.mjs` put the **type mappings** side by side: one query of
+twenty-one typed columns, run through esrun (in both wire formats),
+`postgres.js` on Node and Deno, and Bun's built-in `bun:sql`, each printing
+`type value` in the same shape so the results can be diffed. It is how you check
+that a driver's binary path agrees with its text path, and where the ecosystem
+disagrees with itself.
+
+```sh
+PG_URL=… esrun bench/db/pg/types-esrun.mjs binary
+PG_URL=… esrun bench/db/pg/types-esrun.mjs text
+PG_URL=… node bench/db/pg/types-postgresjs.mjs
+PG_URL=… bun  bench/db/pg/types-bunsql.mjs
+```
+
 `bench/db/pg/decode-share.mjs` answers a narrower question — what share of a
 scan is decoding — by exploiting lazy rows: the same query, touching a different
 number of columns, holds the network and the protocol constant.
