@@ -72,6 +72,37 @@ PG_URL=… bun  bench/db/pg/types-bunsql.mjs
 scan is decoding — by exploiting lazy rows: the same query, touching a different
 number of columns, holds the network and the protocol constant.
 
+## The Redis client benchmark
+
+`bench/db/redis/run.sh` compares esrun with `@opentf/esrun-redis` against each
+runtime's **own** answer: Bun's built-in `RedisClient`, and `ioredis` on Node and
+Deno, which have none. That is the comparison the question deserves — what each
+runtime gives you — rather than how one npm package performs on four engines.
+`BUN_REDIS=ioredis` switches Bun onto the same library as Node when you want the
+like-for-like version instead.
+
+```sh
+(cd packages/redis && bun run build)
+docker run -d --name esrun-redis-plain -p 6379:6379 redis:8
+bench/db/redis/run.sh
+```
+
+What it measures is the **client**, not Redis: a command's cost is a round trip
+and a decode, and the server's share of that is small. The workloads separate
+the two.
+
+| Workload | What it isolates |
+| --- | --- |
+| `serial_set` / `serial_get` | one command at a time — round-trip bound, the floor every client shares |
+| `pipeline` | the same work batched; the gap against `serial_set` is the whole argument for pipelining |
+| `list` | one 50 000-element reply — decode bound |
+| `hash` | 200 × a 1 000-field map — decode bound, over the shape RESP3 types and RESP2 does not |
+
+Each client uses its own idiom for the batch: a `pipeline()` builder for esrun
+and ioredis, `Promise.all` for Bun, whose client pipelines commands issued
+together rather than offering a builder. Every workload prints a checksum the
+runner compares across runtimes, so a client cannot look fast by doing less.
+
 ## Running
 
 ```sh
