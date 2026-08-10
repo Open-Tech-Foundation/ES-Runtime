@@ -141,13 +141,22 @@ declare module "runtime:db" {
   /** Anything `query`/`execute` accepts. */
   export type Queryable = string | Query | QueryAst;
 
+  /** Per-call options every backend takes. */
+  export interface CallOptions {
+    /**
+     * Cancels the call. The backend is asked to abandon the statement and the
+     * connection is left usable; the rejection carries the signal's `reason`.
+     */
+    signal?: AbortSignal;
+  }
+
   /** An open connection. */
   export interface Connection {
     readonly dialect: Dialect;
     /** The backend's name, e.g. `"sqlite"`. */
     readonly backend: string;
-    query(q: Queryable, params?: DbParams): Promise<Rows>;
-    execute(q: Queryable, params?: DbParams): Promise<ExecuteResult>;
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
+    execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     /**
      * Runs one statement against many parameter sets, crossing the boundary
      * once and preparing once. Runs as a single transaction unless one is
@@ -164,8 +173,26 @@ declare module "runtime:db" {
     [Symbol.asyncDispose](): Promise<void>;
   }
 
-  /** Options for {@link connect}. */
+  /** How big a pool is and how long it waits. */
+  export interface PoolSettings {
+    /** Connections to open at most. Default 10. */
+    max?: number;
+    /** How long an unused connection is kept, in ms. Default 30 000; `0` never reaps. */
+    idleTimeout?: number;
+    /** How long to wait for a free connection, in ms. Default 10 000; `0` waits forever. */
+    acquireTimeout?: number;
+  }
+
+  /** Options every {@link connect} takes, whatever the driver. */
   export interface ConnectOptions {
+    /** The driver to open with. Required. */
+    driver: AnyDriver;
+    /** Pool instead of opening one connection. `true` takes the defaults. */
+    pool?: boolean | PoolSettings;
+  }
+
+  /** Options for the built-in {@link sqlite} driver. */
+  export interface SqliteOptions {
     /**
      * Encryption key — hex string or bytes. **Never put a key in the connection
      * string**; one passed as a URL parameter is refused, because a key in a URL
@@ -174,13 +201,26 @@ declare module "runtime:db" {
     key?: string | Uint8Array | ArrayBuffer | ArrayBufferView;
     /** Cipher name; defaults to the backend's. */
     cipher?: string;
-    /** Open without the ability to write (`sqlite:`). */
+    /** Open without the ability to write. */
     readOnly?: boolean;
-    [option: string]: unknown;
   }
 
   /**
-   * Opens a connection, choosing the backend by the connection string's scheme.
+   * Opens a connection with the driver you pass.
+   *
+   * ```js
+   * import { connect, sqlite } from "runtime:db";
+   * const db = await connect("sqlite:./app.db", { driver: sqlite });
+   *
+   * import postgres from "@opentf/esrun-postgres";
+   * const pg = await connect("postgres://user@host/app", { driver: postgres });
+   * ```
+   *
+   * What comes back is **that driver's** connection, so a driver's own surface
+   * — Redis's commands, PostgreSQL's `LISTEN` — is on the object `connect`
+   * returned and needs no second entry point to reach.
+   *
+   * `pool: true` gives a pool presenting the same surface one connection does.
    *
    * `sqlite:` names a file format and a SQL dialect the way `postgres://` names
    * a wire protocol — not an implementation, which may change without the URL
@@ -188,7 +228,17 @@ declare module "runtime:db" {
    * needs no capability; every other `sqlite:` open is scoped by `--allow-read`
    * / `--allow-write` exactly as a file is.
    */
-  export function connect(url: string, options?: ConnectOptions): Promise<Connection>;
+  export function connect<C extends Connection, O, P>(
+    url: string,
+    options: O & { driver: Driver<C, O, P>; pool: true | PoolSettings },
+  ): Promise<Awaited<P>>;
+  export function connect<C extends Connection, O, P>(
+    url: string,
+    options: O & { driver: Driver<C, O, P>; pool?: false },
+  ): Promise<C>;
+
+  /** The built-in SQLite driver — an ordinary driver, passed the ordinary way. */
+  export const sqlite: Driver<Connection, SqliteOptions, PooledConnection>;
 
   /**
    * The `sql` tagged template: every interpolation becomes a parameter, never
@@ -257,6 +307,20 @@ declare module "runtime:db" {
     constructor(options: { dialect: Dialect; backend: string });
     readonly dialect: Dialect;
     readonly backend: string;
+    /**
+     * Whether this connection is still worth using at all.
+     *
+     * A driver overrides it to account for a transport that died while nobody
+     * was looking. A pool checks it before handing a connection out.
+     */
+    get usable(): boolean;
+    /**
+     * Whether this connection is fit for the **next** caller — the one question
+     * a protocol-blind pool cannot answer for itself, asked by one name on
+     * every backend. Defaults to alive and not inside a transaction; a driver
+     * adds what its protocol knows.
+     */
+    get reusable(): boolean;
     query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
     execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
@@ -383,14 +447,104 @@ declare module "runtime:db" {
     close(): Promise<void>;
   }
 
-  /** Registers a backend for a connection-string scheme. */
-  export function registerBackend(
-    scheme: string,
-    factory: (url: string, options: ConnectOptions) => Promise<Connection>,
-  ): void;
+  /**
+   * A backend, as a value.
+   *
+   * Imported and handed to {@link connect} rather than installed by the side
+   * effect of an import. `C` is the connection it opens, `O` the options it
+   * takes, `P` its pooled form — which is what makes `connect` return the
+   * driver's own connection type rather than the portable minimum.
+   */
+  export interface Driver<C extends Connection = Connection, O = object, P = PooledConnection> {
+    /** The backend's name, e.g. `"postgres"`. Reported as `Connection.backend`. */
+    readonly name: string;
+    /** The schemes it takes, without colons, e.g. `["postgres", "postgresql"]`. */
+    readonly schemes: readonly string[];
+    readonly dialect: Dialect;
+    /** Whether it takes URLs of that scheme, with or without the colon. */
+    accepts(scheme: string): boolean;
+    /**
+     * Opens one connection. {@link connect} is how callers reach this; a driver
+     * calls it directly when it opens connections of its own — a cluster client
+     * following a redirect, a pool filling a slot.
+     */
+    open(url: string, options?: O): Promise<C>;
+    /**
+     * Opens the pooled form. {@link connect}'s `pool` option is this.
+     *
+     * May be async — a driver that has to look something up before it can pool
+     * (Sentinel asking where the master is) does it here, so a misconfiguration
+     * fails at `connect` rather than at the first command.
+     */
+    pooled(url: string, options?: O, poolOptions?: PoolSettings): P | Promise<P>;
+  }
 
-  /** The registered schemes, in registration order. */
-  export function backendSchemes(): string[];
+  /** Any driver, for code that holds one without caring what it opens. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export type AnyDriver = Driver<Connection, any, unknown>;
+
+  /** What {@link defineDriver} takes. */
+  export interface DriverSpec<C extends Connection, O = object, P = PooledConnection> {
+    name: string;
+    schemes: readonly string[];
+    dialect: Dialect;
+    open(url: string, options: O): Promise<C>;
+    /**
+     * The pooled form, when the default {@link PooledConnection} is not it —
+     * a driver adding its own surface to a pool, or refusing to pool a URL that
+     * cannot be pooled.
+     */
+    pooled?(url: string, options: O, poolOptions: PoolSettings): P | Promise<P>;
+  }
+
+  /**
+   * Defines a driver.
+   *
+   * ```js
+   * export default defineDriver({
+   *   name: "mydb",
+   *   schemes: ["mydb"],
+   *   dialect,
+   *   open: (url, options) => MyConnection.connect(url, options),
+   * });
+   * ```
+   */
+  export function defineDriver<C extends Connection, O = object, P = PooledConnection>(
+    spec: DriverSpec<C, O, P>,
+  ): Driver<C, O, P>;
+
+  /**
+   * A pool that behaves like one connection.
+   *
+   * What `connect(url, { driver, pool: true })` returns. It implements the same
+   * {@link Connection} surface a single connection does and borrows a real one
+   * per call. A driver subclasses it to put its own surface on the pooled form.
+   */
+  export class PooledConnection implements Connection {
+    constructor(driver: AnyDriver, url: string, options?: object, poolOptions?: PoolSettings);
+    readonly dialect: Dialect;
+    readonly backend: string;
+    /** Borrowed and idle together. */
+    readonly size: number;
+    readonly idle: number;
+    /** Callers queued behind a full pool. */
+    readonly pending: number;
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
+    execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
+    executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
+    /** Runs `fn` in a transaction on **one** connection. */
+    transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
+    /**
+     * Runs `fn` with one connection held for the whole of it — the escape hatch
+     * for everything stateful across calls: a session setting, a `LISTEN`, a
+     * `WATCH`.
+     */
+    withConnection<T>(fn: (connection: Connection) => Promise<T>): Promise<T>;
+    /** Returns a borrowed connection, destroying it unless `reusable`. */
+    protected _release(connection: Connection): void;
+    close(): Promise<void>;
+    [Symbol.asyncDispose](): Promise<void>;
+  }
 
   /** A growable buffer with the length-prefix helpers every wire protocol needs. */
   export class ByteWriter {
@@ -514,9 +668,10 @@ declare module "runtime:db" {
     connect: typeof connect;
     sql: typeof sql;
     queryAst: typeof queryAst;
+    sqlite: typeof sqlite;
+    defineDriver: typeof defineDriver;
     DbError: typeof DbError;
     DbErrorCode: typeof DbErrorCode;
-    registerBackend: typeof registerBackend;
   };
   export default _default;
 }

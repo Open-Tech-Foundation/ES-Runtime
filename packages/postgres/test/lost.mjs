@@ -1,4 +1,4 @@
-import "../dist/index.js";
+import postgres from "../dist/index.js";
 import { env } from "runtime:process";
 import { connect as netConnect, listen } from "runtime:net";
 import { connect, DbErrorCode } from "runtime:db";
@@ -24,7 +24,7 @@ const live = new Set();
 })().catch(() => {});
 
 const through = `postgres://${target.username}:${target.password}@127.0.0.1:${port}${target.pathname}?sslmode=disable`;
-const db = await connect(through);
+const db = await connect(through, { driver: postgres });
 console.log("connected through proxy:", (await (await db.query("SELECT 1 AS n")).first()).n);
 
 // Cut every socket, then ask for something.

@@ -8,9 +8,10 @@
 //
 //   PG_URL=… esrun bench/db/pg/decode-share.mjs     (after run.sh has seeded)
 import { env } from "runtime:process";
-import { connect } from "./.driver/index.js";
+import { connect } from "runtime:db";
+import postgres from "./.driver/index.js";
 
-const db = await connect(env.PG_URL);
+const db = await connect(env.PG_URL, { driver: postgres });
 const N = 10_000;
 const SQL = `SELECT a, b, c, d, e FROM bench_num WHERE id <= ${N}`;
 

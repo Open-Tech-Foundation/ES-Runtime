@@ -1,10 +1,10 @@
 import { env } from "runtime:process";
-import { connect } from "../dist/index.js";
-import { DbErrorCode } from "runtime:db";
+import postgres from "../dist/index.js";
+import { connect, DbErrorCode } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
-const listener = await connect(url);
-const notifier = await connect(url);
+const listener = await connect(url, { driver: postgres });
+const notifier = await connect(url, { driver: postgres });
 
 const seen = [];
 listener.onNotification = (n) => seen.push(`${n.channel}:${n.payload}`);

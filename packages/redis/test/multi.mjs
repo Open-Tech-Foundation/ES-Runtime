@@ -1,12 +1,12 @@
 // MULTI/EXEC — which is deliberately not `transaction(fn)`.
 import { exit, env } from "runtime:process";
-import { DbError, DbErrorCode } from "runtime:db";
+import { connect, DbError, DbErrorCode } from "runtime:db";
 
-import { Redis, createPool } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
-const r = await Redis.connect(url);
+const r = await connect(url, { driver: redis });
 await r.flushdb();
 
 // -- the happy path ---------------------------------------------------------
@@ -44,7 +44,7 @@ await r.flushdb();
   // middle. Two concurrent increment-pairs must never leave the two counters
   // disagreeing.
   await r.del("x", "y");
-  const other = await Redis.connect(url);
+  const other = await connect(url, { driver: redis });
   await Promise.all([
     (async () => {
       for (let i = 0; i < 20; i++) {
@@ -141,7 +141,7 @@ await r.flushdb();
   // Somebody else changes the key between WATCH and EXEC: EXEC is abandoned.
   await r.set("contended", "1");
   await r.watch("contended");
-  const other = await Redis.connect(url);
+  const other = await connect(url, { driver: redis });
   await other.set("contended", "changed-by-someone-else");
   await other.close();
 
@@ -156,7 +156,7 @@ await r.flushdb();
   // optimistic-concurrency failure.
   await r.set("c2", "1");
   await r.watch("c2");
-  const other = await Redis.connect(url);
+  const other = await connect(url, { driver: redis });
   await other.set("c2", "moved");
   await other.close();
   const tx = r.multi();
@@ -197,12 +197,12 @@ await r.flushdb();
   // point of having both.
   let code = null;
   try {
-    await r.connection.transaction(async () => {});
+    await r.transaction(async () => {});
   } catch (e) {
     code = e.code;
   }
   is(code, DbErrorCode.Unsupported, "runtime:db's transaction() is still unsupported");
-  is(r.connection.dialect.supports.transactions, false, "and the dialect still says so");
+  is(r.dialect.supports.transactions, false, "and the dialect still says so");
 }
 
 // -- through a pool ---------------------------------------------------------
@@ -210,7 +210,7 @@ await r.flushdb();
 {
   // A pool can run one, because the commands were buffered — there is nothing
   // to hold a connection for until exec.
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   const tx = pool.multi();
   tx.set("pooled", "1");
   tx.incr("pooled-n");

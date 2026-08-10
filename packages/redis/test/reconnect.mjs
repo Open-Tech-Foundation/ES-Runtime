@@ -1,17 +1,17 @@
 // Reopening a connection the server took away — and what must not come back.
 import { exit, env } from "runtime:process";
-import { DbErrorCode } from "runtime:db";
+import { connect, DbErrorCode } from "runtime:db";
 
 import { listen } from "runtime:net";
 
-import { Redis, createSubscriber } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 /** Kills a server-side connection by id, from another one. */
 async function killId(id) {
-  const executioner = await Redis.connect(url);
+  const executioner = await connect(url, { driver: redis });
   await executioner.call(["CLIENT", "KILL", "ID", String(id)]);
   await executioner.close();
   // Let the close reach us.
@@ -36,8 +36,8 @@ async function until(check, what, budget = 4000) {
 // -- off by default ---------------------------------------------------------
 
 {
-  const r = await Redis.connect(url);
-  is(r.connection.reconnects, false, "reconnection is off unless asked for");
+  const r = await connect(url, { driver: redis });
+  is(r.reconnects, false, "reconnection is off unless asked for");
   await kill(r);
   let code = null;
   try {
@@ -52,8 +52,8 @@ async function until(check, what, budget = 4000) {
 // -- reopening --------------------------------------------------------------
 
 {
-  const r = await Redis.connect(url, { reconnect: true });
-  is(r.connection.reconnects, true, "{ reconnect: true } turns it on");
+  const r = await connect(url, { driver: redis, reconnect: true });
+  is(r.reconnects, true, "{ reconnect: true } turns it on");
   await r.set("survives", "yes");
   await kill(r);
   is(await r.ping(), "PONG", "the next command reopens the connection");
@@ -66,7 +66,7 @@ async function until(check, what, budget = 4000) {
   // The database and the client name are connection configuration, so they are
   // restored — a reopened connection pointing at db 0 would silently move every
   // later key.
-  const r = await Redis.connect(`${url}/7?client_name=reconnect-test`, { reconnect: true });
+  const r = await connect(`${url}/7?client_name=reconnect-test`, { driver: redis, reconnect: true });
   await r.call(["FLUSHDB"]);
   await r.set("in-seven", "1");
   await kill(r);
@@ -80,7 +80,7 @@ async function until(check, what, budget = 4000) {
 {
   // A burst arriving after the server went away must reopen once, not once per
   // caller.
-  const r = await Redis.connect(url, { reconnect: true });
+  const r = await connect(url, { driver: redis, reconnect: true });
   await kill(r);
   const answers = await Promise.all(Array.from({ length: 10 }, () => r.ping()));
   is(answers.length, 10, "ten concurrent commands all completed");
@@ -94,7 +94,7 @@ async function until(check, what, budget = 4000) {
   // The command that was in flight is not retried. Whether the server ran it
   // before the socket died is not knowable, and replaying INCR would
   // double-count — so its caller sees the failure.
-  const r = await Redis.connect(url, { reconnect: true });
+  const r = await connect(url, { driver: redis, reconnect: true });
   await r.set("counter", "0");
   // The id is taken *before* the blocking command starts: asking afterwards
   // would queue behind it and the kill would land after it had finished.
@@ -119,7 +119,7 @@ async function until(check, what, budget = 4000) {
 {
   // A WATCH is void after a reconnect: the server has no memory of it, so an
   // EXEC that went ahead would report a guarantee nobody is making.
-  const r = await Redis.connect(url, { reconnect: true });
+  const r = await connect(url, { driver: redis, reconnect: true });
   await r.set("guarded", "1");
   await r.watch("guarded");
   await kill(r);
@@ -147,15 +147,15 @@ async function until(check, what, budget = 4000) {
 {
   // An open MULTI went with the connection, so the pool's cleanliness check
   // must not still believe one is open.
-  const r = await Redis.connect(url, { reconnect: true });
+  const r = await connect(url, { driver: redis, reconnect: true });
   // The id first: inside a MULTI every command answers QUEUED, including the
   // one that would tell us which connection to kill.
   const id = await r.call(["CLIENT", "ID"]);
   await r.call(["MULTI"]);
-  is(r.connection.clean, false, "a connection inside MULTI is not clean");
+  is(r.reusable, false, "a connection inside MULTI is not clean");
   await killId(id);
   await r.ping();
-  is(r.connection.clean, true, "and after a reconnect the MULTI is forgotten");
+  is(r.reusable, true, "and after a reconnect the MULTI is forgotten");
   await r.close();
 }
 
@@ -185,7 +185,8 @@ async function until(check, what, budget = 4000) {
     await socket.close().catch(() => {});
   })();
 
-  const doomed = await Redis.connect(`redis://127.0.0.1:${port}`, {
+  const doomed = await connect(`redis://127.0.0.1:${port}`, {
+    driver: redis,
     reconnect: { attempts: 2, delay: 20, maxDelay: 40 },
   });
   is(await doomed.ping(), "PONG", "the stand-in server answered once");
@@ -210,7 +211,7 @@ async function until(check, what, budget = 4000) {
 {
   // Nobody calls a subscriber, so the lazy path every other command takes would
   // never run. Its read loop reopens instead, and puts the subscriptions back.
-  const sub = await createSubscriber(url, { reconnect: { delay: 20 } });
+  const sub = await connect(url, { driver: redis, reconnect: { delay: 20 } });
   // Before subscribing: a subscribed connection runs no ordinary commands, so
   // asking it for its own id afterwards is refused.
   const subId = await sub.call(["CLIENT", "ID"]);
@@ -218,12 +219,12 @@ async function until(check, what, budget = 4000) {
   await sub.subscribe("resilient", (payload) => seen.push(payload));
   await sub.psubscribe("res.*", (payload) => seen.push(`p:${payload}`));
 
-  const pub = await Redis.connect(url);
+  const pub = await connect(url, { driver: redis });
   await pub.publish("resilient", "before");
   await until(() => seen.length === 1, "the first message");
 
   await killId(subId);
-  await until(() => sub.connection.usable, "the subscriber to reopen");
+  await until(() => sub.usable, "the subscriber to reopen");
   is(sub.channels, ["resilient"], "it still knows its channels");
   is(sub.patterns, ["res.*"], "and its patterns");
 

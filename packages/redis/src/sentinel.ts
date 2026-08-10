@@ -12,17 +12,17 @@
  * sentinel mid-failover will happily hand out the address of a server that has
  * just become a replica, and a client that wrote to it would lose the writes.
  */
-import { DbError, DbErrorCode } from "runtime:db";
+import { DbError, DbErrorCode, defineDriver, type PoolSettings } from "runtime:db";
 
-import { Redis } from "./client.js";
-import { connect } from "./connect.js";
-import type { RedisOptions } from "./connection.js";
-import { RedisPool, type RedisPoolOptions } from "./pool.js";
+import { openConnection } from "./driver.js";
+import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
+import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import { parseConnectionString } from "./url.js";
 
 export interface SentinelOptions extends RedisPoolOptions {
   /** The sentinels to ask, as `redis://host:26379` URLs. */
   sentinels: readonly string[];
+
   /** The name the sentinels know this master by — `mymaster`, usually. */
   masterName: string;
   /**
@@ -37,6 +37,18 @@ export interface SentinelOptions extends RedisPoolOptions {
   sentinelUsername?: string;
   /** How long to spend asking one sentinel before trying the next. Default 1000ms. */
   sentinelTimeout?: number;
+}
+
+/**
+ * What the Sentinel driver takes through `connect`.
+ *
+ * The connection string is the first sentinel, so `sentinels` holds only the
+ * others and is optional — one sentinel is a working configuration, and
+ * repeating the URL in the options to say so would be a trap.
+ */
+export interface SentinelDriverOptions extends Omit<SentinelOptions, "sentinels"> {
+  /** The other sentinels to ask, as `redis://host:26379` URLs. */
+  sentinels?: readonly string[];
 }
 
 /** Where the master is, and how to ask again when it moves. */
@@ -83,9 +95,9 @@ export class SentinelResolver {
     const failures: string[] = [];
     for (let i = 0; i < this.#sentinels.length; i++) {
       const address = this.#sentinels[i]!;
-      let sentinel: Redis | null = null;
+      let sentinel: RedisConnection | null = null;
       try {
-        sentinel = await Redis.connect(address, {
+        sentinel = await openConnection(address, {
           connectTimeout: this.#options.sentinelTimeout ?? 1000,
           ...(this.#options.sentinelPassword === undefined
             ? {}
@@ -133,7 +145,7 @@ export class SentinelResolver {
 
   /** Refuses an address that is not actually a master any more. */
   async #verifyMaster(host: string, port: number): Promise<void> {
-    const candidate = await connect(`redis://${host}:${port}`, {
+    const candidate = await openConnection(`redis://${host}:${port}`, {
       ...dataOptions(this.#options),
       host,
       port,
@@ -142,7 +154,7 @@ export class SentinelResolver {
     try {
       // `ROLE` answers `["master", …]` or `["slave", …]`. Redis has not renamed
       // the reply, whatever the documentation now calls it.
-      const role = (await candidate.command(["ROLE"])) as unknown;
+      const role = (await candidate.call(["ROLE"])) as unknown;
       const kind = Array.isArray(role) ? String(role[0]) : "";
       if (kind !== "master") {
         throw new DbError(
@@ -170,16 +182,25 @@ function dataOptions(options: SentinelOptions): RedisOptions {
 }
 
 /**
- * A client that finds its master through Sentinel, and finds it again when it
- * moves.
+ * The Sentinel driver: a client that finds its master through Sentinel, and
+ * finds it again when the master moves.
  *
  * ```js
- * const r = await createSentinelClient({
- *   sentinels: ["redis://10.0.0.1:26379", "redis://10.0.0.2:26379"],
+ * import { connect } from "runtime:db";
+ * import { redisSentinel } from "@opentf/esrun-redis";
+ *
+ * const r = await connect("redis://10.0.0.1:26379", {
+ *   driver: redisSentinel,
  *   masterName: "mymaster",
+ *   sentinels: ["redis://10.0.0.2:26379"],
  *   reconnect: true,
  * });
  * ```
+ *
+ * The URL is the first sentinel to ask, and `sentinels` names the rest — one is
+ * enough to start, several mean the lookup still works when one is down. What
+ * comes back is an ordinary `RedisConnection` pointed at the master, so nothing
+ * downstream has to know it was found this way.
  *
  * With `reconnect` on, a failover is handled without the caller doing anything:
  * the connection to the old master dies, reopening re-runs the lookup, and the
@@ -187,35 +208,59 @@ function dataOptions(options: SentinelOptions): RedisOptions {
  * loss — which is the same choice reconnection makes everywhere else, for the
  * same reason.
  */
-export async function createSentinelClient(options: SentinelOptions): Promise<Redis> {
-  const resolver = new SentinelResolver(options);
-  const first = await resolver.resolve();
-  const connection = await connect(`redis://${first.host}:${first.port}`, {
-    ...parseConnectionString(`redis://${first.host}:${first.port}`, dataOptions(options)),
-    resolve: () => resolver.resolve(),
-  });
-  return new Redis(connection);
-}
+export const redisSentinel = defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
+  name: "redis-sentinel",
+  schemes: ["redis", "rediss"],
+  dialect: REDIS_DIALECT,
+  async open(url: string, options: SentinelDriverOptions): Promise<RedisConnection> {
+    const resolver = new SentinelResolver(sentinelOptions(url, options));
+    const first = await resolver.resolve();
+    const address = `redis://${first.host}:${first.port}`;
+    return openConnection(address, {
+      ...parseConnectionString(address, dataOptions(sentinelOptions(url, options))),
+      resolve: () => resolver.resolve(),
+    });
+  },
+  /**
+   * A pool whose connections each find the master when they are opened.
+   *
+   * The shape that survives a failover best, and not by accident: a pool
+   * already discards connections that fail, and every replacement resolves
+   * again. So the pool converges on the new master by doing the thing it does
+   * anyway.
+   *
+   * One resolver is shared by the whole pool — it reorders the sentinels as
+   * they answer, and that is worth keeping across opens — and it resolves once
+   * up front, so a misconfiguration (a master nobody has heard of, sentinels
+   * that are all down) fails here rather than at the first command, somewhere
+   * far from the code that got it wrong.
+   */
+  async pooled(
+    url: string,
+    options: SentinelDriverOptions,
+    poolOptions: PoolSettings,
+  ): Promise<RedisPooled> {
+    const settings = sentinelOptions(url, options);
+    const resolver = new SentinelResolver(settings);
+    await resolver.resolve();
+    // A driver is a value, so the pool gets one of its own: every slot it fills
+    // resolves through *this* resolver rather than starting a lookup from
+    // scratch.
+    const perPool = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
+      name: "redis-sentinel",
+      schemes: ["redis", "rediss"],
+      dialect: REDIS_DIALECT,
+      open: (_url: string, connectionOptions: RedisOptions = {}) =>
+        openConnection("redis://sentinel-resolved", {
+          ...connectionOptions,
+          resolve: () => resolver.resolve(),
+        }),
+    });
+    return new RedisPooled(perPool, "redis://sentinel-resolved", dataOptions(settings), poolOptions);
+  },
+});
 
-/**
- * A pool whose connections each find the master when they are opened.
- *
- * The shape that survives a failover best, and not by accident: a pool already
- * discards connections that fail, and every replacement resolves again. So the
- * pool converges on the new master by doing the thing it does anyway.
- */
-export async function createSentinelPool(options: SentinelOptions): Promise<RedisPool> {
-  const resolver = new SentinelResolver(options);
-  // Resolved once up front so a misconfiguration — a master nobody has heard
-  // of, sentinels that are all down — fails here rather than at the first
-  // command, somewhere far from the code that got it wrong.
-  await resolver.resolve();
-  return new RedisPool(
-    () =>
-      connect("redis://placeholder", {
-        ...dataOptions(options),
-        resolve: () => resolver.resolve(),
-      }),
-    options,
-  );
+/** The URL is the first sentinel; `sentinels` names any others. */
+function sentinelOptions(url: string, options: SentinelDriverOptions): SentinelOptions {
+  return { ...options, sentinels: [url, ...(options.sentinels ?? [])] };
 }

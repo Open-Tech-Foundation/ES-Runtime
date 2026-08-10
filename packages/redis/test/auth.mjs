@@ -8,8 +8,7 @@
 import { exit, env, unmask } from "runtime:process";
 import { connect, queryAst, DbErrorCode } from "runtime:db";
 
-import "../dist/index.js";
-import { Redis } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 // `unmask` through, always. A connection string with a password in it is
@@ -22,7 +21,7 @@ const plain = unmask(env.REDIS_URL) ?? "redis://127.0.0.1:6379";
 /** The code a connection attempt failed with, or `null`. */
 async function codeOf(target, options = {}) {
   try {
-    const db = await connect(target, options);
+    const db = await connect(target, { driver: redis, ...options });
     await db.close();
     return null;
   } catch (e) {
@@ -33,7 +32,7 @@ async function codeOf(target, options = {}) {
 // -- a password that works --------------------------------------------------
 
 {
-  const r = await Redis.connect(url);
+  const r = await connect(url, { driver: redis });
   is(await r.ping(), "PONG", "a password in the URL's userinfo authenticates");
   is(r.protocol, 3, "and RESP3 was still negotiated, in the same round trip");
   await r.close();
@@ -41,7 +40,7 @@ async function codeOf(target, options = {}) {
 
 {
   // The same credential, passed as an option rather than in the URL.
-  const r = await Redis.connect("redis://127.0.0.1:6380", { password: "esrun" });
+  const r = await connect("redis://127.0.0.1:6380", { driver: redis, password: "esrun" });
   is(await r.ping(), "PONG", "a password as an option authenticates too");
   await r.close();
 }
@@ -58,7 +57,7 @@ is(await codeOf("redis://127.0.0.1:6380"), DbErrorCode.AuthFailed,
 {
   let connected = false;
   try {
-    const db = await connect("redis://:wrong@127.0.0.1:6380");
+    const db = await connect("redis://:wrong@127.0.0.1:6380", { driver: redis });
     // If this is reached the handshake let a bad credential through.
     await db.execute(queryAst(["PING"]));
     connected = true;
@@ -72,10 +71,10 @@ is(await codeOf("redis://127.0.0.1:6380"), DbErrorCode.AuthFailed,
 // -- an ACL username --------------------------------------------------------
 
 {
-  const admin = await Redis.connect(url);
+  const admin = await connect(url, { driver: redis });
   await admin.call(["ACL", "SETUSER", "reader", "on", ">readerpass", "~*", "+@read", "+ping"]);
 
-  const reader = await Redis.connect("redis://reader:readerpass@127.0.0.1:6380");
+  const reader = await connect("redis://reader:readerpass@127.0.0.1:6380", { driver: redis });
   is(await reader.ping(), "PONG", "an ACL user connects with username and password");
   is(await reader.get("anything"), null, "and may read");
   {
@@ -101,7 +100,7 @@ is(await codeOf("redis://127.0.0.1:6380"), DbErrorCode.AuthFailed,
   // Forced, since the containers are modern. It exercises the same fallback a
   // server older than Redis 6 would take, minus the failed HELLO that triggers
   // it — and the point is that the client's answers do not change shape.
-  const r = await Redis.connect(`${plain}?protocol=2`);
+  const r = await connect(`${plain}?protocol=2`, { driver: redis });
   is(r.protocol, 2, "?protocol=2 stays on RESP2");
   await r.flushdb();
   is(await r.set("k", "v"), "OK", "SET over RESP2");
@@ -128,7 +127,7 @@ is(await codeOf("redis://127.0.0.1:6380"), DbErrorCode.AuthFailed,
   // Testing only the configured path is how the PostgreSQL driver shipped a
   // TLS bug that broke every server without it. A password is the configured
   // path here; no password is the default one.
-  const r = await Redis.connect(plain);
+  const r = await connect(plain, { driver: redis });
   is(await r.ping(), "PONG", "a server with no password needs no credentials");
   await r.close();
 }

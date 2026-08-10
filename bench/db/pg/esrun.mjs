@@ -4,11 +4,12 @@ import { args, env } from "runtime:process";
 // project root it detects from the entry file — `bench/`, which has its own
 // package.json — so a reach up into `packages/` is refused, correctly. Copying
 // the built driver in is the honest way across that line.
-import { connect } from "./.driver/index.js";
+import { connect } from "runtime:db";
+import postgres from "./.driver/index.js";
 import * as w from "./workload.mjs";
 
 const workload = args[0];
-const db = await connect(env.PG_URL);
+const db = await connect(env.PG_URL, { driver: postgres });
 
 if (workload === "setup") {
   await db.executeScript(w.SCHEMA);

@@ -21,10 +21,16 @@ import {
   Dialect,
   Rows,
   defineRowShape,
+  queryAst,
+  type CallOptions,
   type DbInput,
+  type DbParams,
   type ExecuteResult,
   type NormalizedQuery,
+  type Queryable,
 } from "runtime:db";
+
+import { RedisCommands, mixinCommands } from "./commands.js";
 
 import { RespReader, encodeCommand, type CommandArg, type Reply } from "./protocol/resp.js";
 import { blocksForever, foreverMessage } from "./protocol/blocking.js";
@@ -292,7 +298,7 @@ export class RedisConnection extends BaseConnection {
    * holds it — a server restart, an idle timeout at the far end — and the first
    * anyone hears of that is otherwise the next caller's error.
    */
-  get usable(): boolean {
+  override get usable(): boolean {
     // `_close()` nulls the socket, so a closed connection reports unusable
     // without this needing to reach into the base class's state.
     return this.#fatal === null && this.#socket !== null;
@@ -301,14 +307,14 @@ export class RedisConnection extends BaseConnection {
   /**
    * Whether this connection is fit for the **next** caller.
    *
-   * `Pool` cannot decide this: it needs the protocol. Two things make a Redis
+   * `PooledConnection` cannot decide this: it needs the protocol. Two things make a Redis
    * connection unfit even though it is alive. It may be on a different database
    * than it was opened for, because something ran `SELECT` — handing that to
    * the next borrower would silently point their keys at another dataset. And
    * it may be inside a `MULTI`, holding a queue of commands nobody is going to
    * `EXEC`.
    */
-  get clean(): boolean {
+  override get reusable(): boolean {
     return this.usable && this.#db === this.#wantedDb && !this.#inMulti;
   }
 
@@ -933,14 +939,38 @@ export class RedisConnection extends BaseConnection {
   /**
    * Runs one command and returns the reply as ordinary JavaScript.
    *
-   * The driver's own entry point, under `runtime:db`'s surface rather than
-   * inside it — the client API in this package is built on this, and so is
-   * anything a caller wants to send that has no helper.
+   * Every command helper on this connection — `get`, `hset`, all eighty of them
+   * — is this method with the arguments spelled out, so anything without a
+   * helper is still reachable: `r.call(["OBJECT", "ENCODING", key])`.
    */
-  async command(args: readonly CommandArg[], options: { signal?: AbortSignal } = {}): Promise<unknown> {
+  async call(args: readonly CommandArg[], options: { signal?: AbortSignal } = {}): Promise<unknown> {
     this._open();
     const checked = guard(args, this.#blocking);
     return this._withSignal(options.signal, async () => toValue(await this.#call(checked), this.#decode));
+  }
+
+  /**
+   * A command read as rows — `runtime:db`'s vocabulary, on the same object.
+   *
+   * A bare command array is accepted as well as a `queryAst(…)`, because
+   * wrapping one to run it here and not there would be a difference with no
+   * reason behind it. An aggregate reply becomes one row per element, a map
+   * becomes `field`/`value` rows, and anything else becomes a single row.
+   */
+  override query(
+    q: Queryable | readonly CommandArg[],
+    params?: DbParams,
+    options?: CallOptions,
+  ): Promise<Rows> {
+    return super.query(asQueryable(q), params, options);
+  }
+
+  override execute(
+    q: Queryable | readonly CommandArg[],
+    params?: DbParams,
+    options?: CallOptions,
+  ): Promise<ExecuteResult> {
+    return super.execute(asQueryable(q), params, options);
   }
 
   // -- pub/sub --------------------------------------------------------------
@@ -984,7 +1014,7 @@ export class RedisConnection extends BaseConnection {
    * Subscribes to one or more channels.
    *
    * **The first subscribe gives this connection over to a read loop**, and from
-   * then on it runs no ordinary commands: `query`, `execute` and `command`
+   * then on it runs no ordinary commands: `query`, `execute` and `call`
    * refuse with `ERR_DB_CONNECTION_BUSY`. That is not a simplification — over
    * RESP2 it is the protocol's own rule, since a subscribed connection accepts
    * nothing but the subscribe family — and it is how you would deploy it
@@ -1534,3 +1564,26 @@ function serverError(prefix: string, message: string): DbError {
 
 /** The redirect a `MOVED`/`ASK` failure carries, for whoever can follow it. */
 export type { Redirect };
+
+/**
+ * The command surface, on the connection itself.
+ *
+ * `RedisConnection` already extends `BaseConnection`, so it cannot also extend
+ * `RedisCommands`, and there is exactly one thing worth doing about that. The
+ * alternative — a separate client object wrapping a connection — is what this
+ * package shipped first, and it meant two types with two names for the same
+ * server, one of which could do `get` and the other of which could do `query`.
+ * Callers had to know which they were holding. Now `connect()` returns one
+ * object that answers both vocabularies, and this is where the second one is
+ * attached.
+ *
+ * The interface declaration is the type half; `mixinCommands` is the runtime
+ * half. A method the class defines itself always wins.
+ */
+export interface RedisConnection extends RedisCommands {}
+mixinCommands(RedisConnection);
+
+/** A bare command array, as something `BaseConnection` will accept. */
+function asQueryable(q: Queryable | readonly CommandArg[]): Queryable {
+  return Array.isArray(q) ? queryAst(q) : (q as Queryable);
+}

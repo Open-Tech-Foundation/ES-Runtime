@@ -1,10 +1,10 @@
 import { env } from "runtime:process";
-import { createPool } from "../dist/index.js";
+
 import { connect } from "runtime:db";
-import "../dist/index.js";
+import postgres from "../dist/index.js";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
-const pool = createPool(url, { max: 3 });
+const pool = await connect(url, { driver: postgres, pool: { max: 3 } });
 
 // Nothing is opened until something asks for work.
 console.log("starts empty:", pool.size === 0);
@@ -53,7 +53,8 @@ console.log("survives a killed backend:", (await (await pool.query("SELECT 3 AS 
 await pool.close();
 console.log("closed:", pool.idle === 0);
 
-// The same thing through runtime:db's own connect().
-const viaRegistry = await connect(url, { pool: { max: 2 } });
-console.log("via registry:", (await (await viaRegistry.query("SELECT 4 AS n")).first()).n);
-await viaRegistry.close();
+// A second pool over the same URL is a second pool, and closing the first left
+// nothing behind that would stop it.
+const another = await connect(url, { driver: postgres, pool: { max: 2 } });
+console.log("a second pool:", (await (await another.query("SELECT 4 AS n")).first()).n);
+await another.close();

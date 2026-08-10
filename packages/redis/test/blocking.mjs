@@ -3,14 +3,14 @@
 // The unit half (test/unit/blocking.mjs) settles which commands block and where
 // each keeps its timeout. This settles what happens when one actually blocks.
 import { exit, env } from "runtime:process";
-import { DbErrorCode } from "runtime:db";
+import { connect, DbErrorCode } from "runtime:db";
 
-import { Redis, createPool } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
-const r = await Redis.connect(url);
+const r = await connect(url, { driver: redis });
 await r.flushdb();
 
 // -- the bounded forms ------------------------------------------------------
@@ -76,13 +76,13 @@ is(await r.wait(0, 100), 0, "WAIT with no replicas asked for answers 0");
     code = e.code;
   }
   is(code, DbErrorCode.Unsupported, "an unbounded BLPOP is refused on an ordinary connection");
-  is(r.connection.blocking, false, "which is not a blocking connection");
+  is(r.blocking, false, "which is not a blocking connection");
 }
 
 {
   // Opted into: this connection exists to be tied up, so it is allowed.
-  const worker = await Redis.connect(url, { blocking: true });
-  is(worker.connection.blocking, true, "a { blocking: true } connection says so");
+  const worker = await connect(url, { driver: redis, blocking: true });
+  is(worker.blocking, true, "a { blocking: true } connection says so");
 
   // Prove it really blocks indefinitely and is released by data arriving.
   await r.del("handoff");
@@ -97,7 +97,7 @@ is(await r.wait(0, 100), 0, "WAIT with no replicas asked for answers 0");
 {
   // A pool's premise is that its connections come back, so an unbounded command
   // is refused through one whatever the option says.
-  const pool = createPool(url, { blocking: true });
+  const pool = await connect(url, { driver: redis, blocking: true, pool: true });
   let code = null;
   try {
     await pool.call(["BLPOP", "q", "0"]);
@@ -114,7 +114,7 @@ is(await r.wait(0, 100), 0, "WAIT with no replicas asked for answers 0");
 {
   await r.del("jobs");
   await r.rpush("jobs", "a", "b", "c");
-  const worker = await Redis.connect(url);
+  const worker = await connect(url, { driver: redis });
   const seen = [];
   for await (const job of worker.consume("jobs", { timeout: 1 })) {
     seen.push(job.value);
@@ -131,7 +131,7 @@ is(await r.wait(0, 100), 0, "WAIT with no replicas asked for answers 0");
   // An empty queue is not the end of the queue: consume keeps waiting, and a
   // job pushed later is delivered.
   await r.del("later");
-  const worker = await Redis.connect(url);
+  const worker = await connect(url, { driver: redis });
   const seen = [];
   const running = (async () => {
     for await (const job of worker.consume("later", { timeout: 1 })) {
@@ -149,7 +149,7 @@ is(await r.wait(0, 100), 0, "WAIT with no replicas asked for answers 0");
 {
   // A signal stops the loop, which is what the bounded poll is for: an
   // unbounded wait could not notice.
-  const worker = await Redis.connect(url);
+  const worker = await connect(url, { driver: redis });
   const controller = new AbortController();
   await r.del("never");
   const started = Date.now();

@@ -23,9 +23,15 @@ it was measured, and the script that measured it is committed.
 
 `runtime:db` is one module with two tiers. The **application tier** —
 `connect`, `sql`, `Connection`, `Rows`, transactions — is what your users call.
-The **driver tier** is what you build on: the scheme registry, the row decoder,
-the parameter encoder, `Dialect`, `Pool`, the portable error codes,
-`BaseConnection`, and the conformance suite.
+The **driver tier** is what you build on: `defineDriver`, the row decoder, the
+parameter encoder, `Dialect`, `Pool` and `PooledConnection`, the portable error
+codes, `BaseConnection`, and the conformance suite.
+
+**A driver is a value.** Your package exports one; a caller imports it and hands
+it to `connect(url, { driver })`. There is no registry to claim a scheme in,
+nothing is installed by the side effect of an import, and two drivers for the
+same scheme can coexist — which is what makes a fork, a fake for tests, or a
+second implementation of `postgres:` an ordinary thing rather than a conflict.
 
 A backend for a networked database needs **no runtime code at all**. The
 transport is [`runtime:net`](/docs/guides/networking) — a TLS socket, a
@@ -38,7 +44,7 @@ whole design exists to preserve.
 Subclass `BaseConnection` and implement five things:
 
 ```js
-import { registerBackend, BaseConnection, Dialect } from "runtime:db";
+import { defineDriver, BaseConnection, Dialect } from "runtime:db";
 
 const dialect = new Dialect({ name: "mydb", placeholder: (i) => `$${i}` });
 
@@ -56,7 +62,22 @@ class MyConnection extends BaseConnection {
   async _cancel() { /* stop what is running */ }
 }
 
-registerBackend("mydb", async (url, options) => new MyConnection(await open(url)));
+// The package's export *is* the driver.
+export default defineDriver({
+  name: "mydb",
+  schemes: ["mydb"],
+  dialect,
+  open: async (url, options) => new MyConnection(await open(url, options)),
+});
+```
+
+Your users then write:
+
+```js
+import { connect } from "runtime:db";
+import mydb from "@you/esrun-mydb";
+
+const db = await connect("mydb://host/app", { driver: mydb });
 ```
 
 Transactions, savepoints, the closed-connection check, the `sql` tag, the
@@ -325,14 +346,14 @@ it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
 
 ## A checklist
 
-- [ ] `registerBackend` on import, so `connect()` finds you
+- [ ] `defineDriver`, exported as your package's default — that *is* the API
 - [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
 - [ ] `supports` states what you take and what you have — `sqlText`, `queryAst`, `transactions`
 - [ ] Transcode rows into the shared batch layout — do not write a decoder
 - [ ] Both wire formats, if you have two, decode to identical values
 - [ ] SQLSTATE or equivalent mapped onto the portable codes, host codes preserved
 - [ ] One open result set per connection, enforced rather than hoped
-- [ ] `release(clean)` asserted from the protocol's own idea of idle
+- [ ] `reusable` answered from the protocol's own idea of idle, so pooling is correct
 - [ ] Timeouts on connect; let the server bound the statement if it can
 - [ ] Transport failures latched
 - [ ] `runBackendConformance()` passing, in CI, against a real server

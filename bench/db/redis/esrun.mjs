@@ -5,11 +5,12 @@ import { args, env } from "runtime:process";
 // `packages/` is refused, correctly. Copying the built driver in is the honest
 // way across that line, and it keeps the benchmark measuring the artifact that
 // ships.
-import { Redis } from "./.driver/index.js";
+import { connect } from "runtime:db";
+import redis from "./.driver/index.js";
 import * as w from "./workload.mjs";
 
 const workload = args[0];
-const r = await Redis.connect(env.REDIS_BENCH_URL ?? "redis://127.0.0.1:6379");
+const r = await connect(env.REDIS_BENCH_URL ?? "redis://127.0.0.1:6379", { driver: redis });
 
 if (workload === "setup") {
   await r.call(["FLUSHDB"]);

@@ -14,18 +14,37 @@
  * than a redirect. Hash tags (`{user:1}:name`) are how an application says that
  * some keys must stay together.
  */
-import { DbError, DbErrorCode } from "runtime:db";
+import {
+  DbError,
+  DbErrorCode,
+  defineDriver,
+  queryAst,
+  type CallOptions,
+  type DbParams,
+  type ExecuteResult,
+  type Queryable,
+  type Rows,
+} from "runtime:db";
 
 import { RedisCommands } from "./commands.js";
-import { connect } from "./connect.js";
-import type { RedisConnection, RedisOptions } from "./connection.js";
-import { RedisPool, type RedisPoolOptions } from "./pool.js";
+import { openConnection, redis } from "./driver.js";
+import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
+import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import type { Redirect } from "./protocol/errors.js";
 import type { CommandArg } from "./protocol/resp.js";
 import { SLOTS, hashSlot } from "./protocol/slots.js";
 import { parseConnectionString } from "./url.js";
 
 export interface RedisClusterOptions extends RedisPoolOptions {
+  /**
+   * More seed nodes, as `redis://host:port` URLs.
+   *
+   * The connection string is the first seed. One is enough — the topology is
+   * read from the cluster itself — but naming several means the client can
+   * still start when one of them is down, which is the situation a cluster
+   * exists for.
+   */
+  seeds?: readonly string[];
   /**
    * How many redirects to follow before giving up. Default 16.
    *
@@ -35,13 +54,31 @@ export interface RedisClusterOptions extends RedisPoolOptions {
   maxRedirects?: number;
 }
 
+/**
+ * The command a `query`/`execute` argument carries.
+ *
+ * A bare array or a `queryAst(…)`; SQL text is refused with the same code the
+ * single-connection backend refuses it with, because it is the same refusal —
+ * Redis has no SQL, in a cluster or out of one.
+ */
+function commandOf(q: unknown): readonly CommandArg[] {
+  if (Array.isArray(q)) return q as readonly CommandArg[];
+  if (typeof q === "object" && q !== null && (q as { __queryAst?: boolean }).__queryAst === true) {
+    return (q as { ast: readonly CommandArg[] }).ast;
+  }
+  throw new DbError(
+    "the redis backend takes a query AST, not SQL text — build one with queryAst()",
+    { code: DbErrorCode.QueryForm },
+  );
+}
+
 /** A node's address, as the cluster spells it. */
 type NodeKey = string;
 
 export class RedisCluster extends RedisCommands {
   readonly #seeds: RedisOptions[];
   readonly #options: RedisClusterOptions;
-  readonly #pools = new Map<NodeKey, RedisPool>();
+  readonly #pools = new Map<NodeKey, RedisPooled>();
   /** slot → node. Empty until the first refresh. */
   #slots: (NodeKey | undefined)[] = new Array(SLOTS);
   /** Every node the topology named, whether or not one has been dialled. */
@@ -123,8 +160,8 @@ export class RedisCluster extends RedisCommands {
     for (const target of candidates) {
       let connection: RedisConnection | null = null;
       try {
-        connection = await connect(hostPort(target), target);
-        const reply = (await connection.command(["CLUSTER", "SLOTS"])) as unknown[];
+        connection = await openConnection(hostPort(target), target);
+        const reply = (await connection.call(["CLUSTER", "SLOTS"])) as unknown[];
         this.#apply(reply);
         return;
       } catch (e) {
@@ -193,18 +230,18 @@ export class RedisCluster extends RedisCommands {
     };
   }
 
-  #poolFor(key: NodeKey): RedisPool {
+  #poolFor(key: NodeKey): RedisPooled {
     let pool = this.#pools.get(key);
     if (pool === undefined) {
       const target = this.#optionsFor(key);
-      pool = new RedisPool(() => connect(hostPort(target), target), this.#options);
+      pool = new RedisPooled(redis, hostPort(target), target, this.#options);
       this.#pools.set(key, pool);
     }
     return pool;
   }
 
   /** Any node at all, for a command that names no key. */
-  #anyPool(): RedisPool {
+  #anyPool(): RedisPooled {
     for (const key of this.#slots) {
       if (key !== undefined) return this.#poolFor(key);
     }
@@ -212,11 +249,75 @@ export class RedisCluster extends RedisCommands {
     return this.#poolFor(`${seed.host ?? "localhost"}:${seed.port ?? 6379}`);
   }
 
-  #poolForCommand(args: readonly CommandArg[]): RedisPool {
+  #poolForCommand(args: readonly CommandArg[]): RedisPooled {
     const key = routingKey(args);
     if (key === null) return this.#anyPool();
     const node = this.#slots[hashSlot(key)];
     return node === undefined ? this.#anyPool() : this.#poolFor(node);
+  }
+
+  // -- the runtime:db half --------------------------------------------------
+  //
+  // A cluster client is a `Connection` like the rest, so a caller that took one
+  // from `connect()` can use `query`/`execute` without knowing whether it is
+  // talking to one node or twelve. Each call is routed by its key and run on
+  // the node that owns it, through the same redirect-following path the command
+  // surface uses.
+
+  readonly dialect = REDIS_DIALECT;
+  readonly backend = "redis-cluster";
+
+  /** A command read as rows, on whichever node owns its key. */
+  query(q: Queryable | readonly CommandArg[], params?: DbParams, options?: CallOptions): Promise<Rows> {
+    const args = commandOf(q);
+    return this.#follow(args, (pool) => pool.query(queryAst(args), params, options));
+  }
+
+  execute(
+    q: Queryable | readonly CommandArg[],
+    params?: DbParams,
+    options?: CallOptions,
+  ): Promise<ExecuteResult> {
+    const args = commandOf(q);
+    return this.#follow(args, (pool) => pool.execute(queryAst(args), params, options));
+  }
+
+  /**
+   * One command against many argument sets.
+   *
+   * A loop rather than a batch, and it has to be: the sets may hash to
+   * different slots, so there is no one node to send them to. Each lands where
+   * its key belongs.
+   */
+  async executeMany(
+    q: Queryable | readonly CommandArg[],
+    rows: readonly DbParams[],
+  ): Promise<ExecuteResult> {
+    const args = commandOf(q);
+    let changes = 0;
+    for (const row of rows) {
+      const result = await this.execute(args, row);
+      changes += result.changes;
+    }
+    return { changes, lastInsertRowid: null };
+  }
+
+  /**
+   * Refused, and by name.
+   *
+   * `REDIS_DIALECT` already declares that Redis has no transactions in the
+   * sense `transaction(fn)` promises. A cluster adds a second reason: the
+   * commands in a body may belong to different nodes, and there is no node that
+   * could hold them together. `multi()` is the honest thing, and it stays
+   * within one slot.
+   */
+  transaction<T>(_fn: (tx: never) => Promise<T>): Promise<T> {
+    return Promise.reject(
+      new DbError(
+        "a cluster has no transactions: the keys in one may belong to different nodes — use multi() within a single slot",
+        { code: DbErrorCode.Unsupported },
+      ),
+    );
   }
 
   // -- running commands -----------------------------------------------------
@@ -232,8 +333,8 @@ export class RedisCluster extends RedisCommands {
             // `ASKING` and the command must travel on the *same* connection —
             // the flag it sets lasts exactly one command — so this borrows a
             // connection rather than making two pooled calls.
-            for (const prelude of extra) await connection.command(prelude);
-            return connection.command(args, options);
+            for (const prelude of extra) await connection.call(prelude);
+            return connection.call(args, options);
           }),
     );
   }
@@ -249,7 +350,7 @@ export class RedisCluster extends RedisCommands {
    */
   async #follow<T>(
     args: readonly CommandArg[],
-    work: (pool: RedisPool, prelude: readonly (readonly CommandArg[])[]) => Promise<T>,
+    work: (pool: RedisPooled, prelude: readonly (readonly CommandArg[])[]) => Promise<T>,
   ): Promise<T> {
     this.#open();
     const limit = this.#options.maxRedirects ?? 16;
@@ -307,7 +408,7 @@ export class RedisCluster extends RedisCommands {
     // Grouped by node so each group is still one round trip, and the groups run
     // at the same time — which is a cluster's own advantage rather than a
     // consolation for having to split.
-    const groups = new Map<RedisPool, number[]>();
+    const groups = new Map<RedisPooled, number[]>();
     for (let i = 0; i < commands.length; i++) {
       const pool = this.#poolForCommand(commands[i]!);
       const group = groups.get(pool);
@@ -481,3 +582,42 @@ export function routingKey(args: readonly CommandArg[]): string | null {
   const key = args[1];
   return key === undefined ? null : String(key);
 }
+
+/**
+ * The cluster driver.
+ *
+ * ```js
+ * import { connect } from "runtime:db";
+ * import { redisCluster } from "@opentf/esrun-redis";
+ *
+ * const cluster = await connect("redis://10.0.0.1:7001", {
+ *   driver: redisCluster,
+ *   seeds: ["redis://10.0.0.2:7001"],
+ * });
+ * await cluster.set("user:1", "ada");
+ * ```
+ *
+ * A different driver rather than an option on the first one, because it is a
+ * different client: it holds a pool per node and routes by slot, and the thing
+ * it returns is a `RedisCluster`. Making that a flag would mean one call whose
+ * return type depended on a boolean.
+ */
+export const redisCluster = defineDriver<RedisCluster, RedisClusterOptions, never>({
+  name: "redis-cluster",
+  schemes: ["redis", "rediss"],
+  dialect: REDIS_DIALECT,
+  open(url: string, options: RedisClusterOptions = {}): Promise<RedisCluster> {
+    return RedisCluster.connect([url, ...(options.seeds ?? [])], options);
+  },
+  /**
+   * A cluster client already pools — one pool per node, sized by the same
+   * options. `pool: true` on top of it would be a second pool over the first,
+   * so it is refused by name rather than quietly built.
+   */
+  pooled(): never {
+    throw new DbError(
+      "a cluster client already holds a pool per node — pass max/idleTimeout as ordinary options instead of pool",
+      { code: DbErrorCode.Unsupported },
+    );
+  },
+});

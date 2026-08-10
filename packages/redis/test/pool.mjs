@@ -2,7 +2,7 @@
 import { exit, env } from "runtime:process";
 import { connect, queryAst, DbErrorCode } from "runtime:db";
 
-import { createPool } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
@@ -10,7 +10,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- nothing is opened until something is asked -----------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   is(pool.size, 0, "a pool costs nothing until it is used");
   is(await pool.ping(), "PONG", "and opens a connection when it is");
   is(pool.size, 1, "one connection");
@@ -27,7 +27,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- concurrency ------------------------------------------------------------
 
 {
-  const pool = createPool(url, { max: 4 });
+  const pool = await connect(url, { driver: redis, pool: { max: 4 } });
   const results = await Promise.all(
     Array.from({ length: 50 }, (_, i) => pool.set(`c${i}`, String(i))),
   );
@@ -43,7 +43,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- release(clean), which needs the protocol -------------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   await pool.ping();
   is(pool.idle, 1, "a connection is idle after an ordinary command");
 
@@ -61,7 +61,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 {
   // The same rule for an unfinished MULTI: a connection holding a queue nobody
   // is going to EXEC is not fit for anyone else.
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   await pool.call(["MULTI"]);
   is(pool.size, 0, "a connection inside an open MULTI is destroyed on release");
   await pool.close();
@@ -70,13 +70,13 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- a connection that died while nobody held it ----------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   await pool.ping();
   is(pool.idle, 1, "one idle connection");
 
   // Killed from outside, exactly as a server restart would. The pool's
   // `validate` is what notices, on the way out rather than at the caller.
-  const executioner = await connect(url);
+  const executioner = await connect(url, { driver: redis });
   await executioner.execute(queryAst(["CLIENT", "KILL", "TYPE", "normal", "LADDR", "*"]));
   await executioner.close().catch(() => {});
   // Give the close a moment to reach us.
@@ -89,11 +89,11 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- withConnection ---------------------------------------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   // The escape hatch for the few things that are stateful across commands.
   const answer = await pool.withConnection(async (connection) => {
-    await connection.command(["SET", "held", "1"]);
-    return connection.command(["GET", "held"]);
+    await connection.call(["SET", "held", "1"]);
+    return connection.call(["GET", "held"]);
   });
   is(answer, "1", "withConnection holds one connection for the whole of it");
   await pool.close();
@@ -102,7 +102,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- rows through a pool ----------------------------------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   await pool.del("plist");
   await pool.rpush("plist", "a", "b", "c");
   const rows = await pool.query(["LRANGE", "plist", 0, -1]);
@@ -117,7 +117,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- a closed pool ----------------------------------------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   await pool.ping();
   await pool.close();
   let code = null;
@@ -132,13 +132,13 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- through runtime:db's registry ------------------------------------------
 
 {
-  const pool = await connect(url, { pool: true, max: 2 });
+  const pool = await connect(url, { driver: redis, pool: { max: 2 } });
   is(await pool.ping(), "PONG", "connect(url, { pool: true }) gives a pool");
   await pool.close();
 }
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   await pool.call(["FLUSHDB"]);
   await pool.close();
 }

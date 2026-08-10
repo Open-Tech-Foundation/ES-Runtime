@@ -1,8 +1,9 @@
 import { env } from "runtime:process";
-import { connect } from "../dist/index.js";
+import postgres from "../dist/index.js";
+import { connect } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
-const db = await connect(url);
+const db = await connect(url, { driver: postgres });
 
 // An abort reaches a query already running. The cancel goes on its own
 // connection, because this one is busy reading the answer to the very thing

@@ -3,9 +3,9 @@
 // Needs a cluster (see test/cluster-server.sh). Skipped without one, because a
 // test that quietly passes when it did not run is worse than no test.
 import { exit, env } from "runtime:process";
-import { DbErrorCode } from "runtime:db";
+import { connect, DbErrorCode } from "runtime:db";
 
-import { Redis, RedisCluster, createCluster, parseConnectionString } from "../dist/index.js";
+import redis, { redisCluster, RedisCluster, parseConnectionString } from "../dist/index.js";
 import { hashSlot } from "../dist/protocol/slots.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
@@ -15,7 +15,7 @@ if (seeds.length === 0) {
   exit(0);
 }
 
-const cluster = await createCluster(seeds);
+const cluster = await connect(seeds[0], { driver: redisCluster, seeds: seeds.slice(1) });
 
 // -- the topology -----------------------------------------------------------
 
@@ -60,11 +60,11 @@ is(cluster.nodes.length, 3, `the cluster reported its three primaries`);
   const owner = cluster.nodeForSlot(hashSlot(key));
   const other = cluster.nodes.find((n) => n !== owner);
 
-  const direct = await Redis.connect(`redis://${owner}`);
+  const direct = await connect(`redis://${owner}`, { driver: redis });
   is(await direct.get(key), "here", "the owning node has the key");
   await direct.close();
 
-  const wrong = await Redis.connect(`redis://${other}`);
+  const wrong = await connect(`redis://${other}`, { driver: redis });
   let code = null;
   try {
     await wrong.get(key);

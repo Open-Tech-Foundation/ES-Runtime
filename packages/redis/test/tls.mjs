@@ -10,7 +10,9 @@
 // because a test that quietly passes when it did not run is worse than no test.
 import { exit, env } from "runtime:process";
 
-import { Redis } from "../dist/index.js";
+import { connect } from "runtime:db";
+
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_TLS_URL;
@@ -24,7 +26,7 @@ if (!url || !ca) {
 // -- the certificate has to be trusted --------------------------------------
 
 {
-  const r = await Redis.connect(url, { tlsCa: ca });
+  const r = await connect(url, { driver: redis, tlsCa: ca });
   is(await r.ping(), "PONG", "rediss:// with a private CA connects");
   is(r.protocol, 3, "and negotiates RESP3 over TLS like anywhere else");
   await r.flushdb();
@@ -42,7 +44,7 @@ if (!url || !ca) {
   // mode TLS exists to prevent.
   let connected = false;
   try {
-    const r = await Redis.connect(url);
+    const r = await connect(url, { driver: redis });
     await r.ping();
     connected = true;
     await r.close();
@@ -57,7 +59,7 @@ if (!url || !ca) {
 {
   // TLS records are not RESP replies, and a value that spans several of them is
   // where a reader that conflated the two would come apart.
-  const r = await Redis.connect(url, { tlsCa: ca });
+  const r = await connect(url, { driver: redis, tlsCa: ca });
   const big = "x".repeat(300_000);
   await r.set("big", big);
   const read = await r.get("big");

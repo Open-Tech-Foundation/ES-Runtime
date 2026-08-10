@@ -1,5 +1,6 @@
 import { env } from "runtime:process";
-import { parseConnectionString, environmentDefaults, connect } from "../dist/index.js";
+import postgres, { parseConnectionString, environmentDefaults } from "../dist/index.js";
+import { connect } from "runtime:db";
 
 const show = (o) => JSON.stringify({ host: o.host, port: o.port, user: o.user, database: o.database, sslmode: o.sslmode, connectTimeout: o.connectTimeout, applicationName: o.applicationName });
 
@@ -26,7 +27,7 @@ try {
 
 // And it actually connects using only the environment.
 if (granted) {
-  const db = await connect("postgres://");
+  const db = await connect("postgres://", { driver: postgres });
   console.log("connected from env:", (await (await db.query("SELECT 5 AS n")).first()).n);
   await db.close();
 }

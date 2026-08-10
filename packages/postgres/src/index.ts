@@ -1,27 +1,32 @@
 /**
- * `@opentf/esrun-postgres` — a PostgreSQL backend for `runtime:db`.
+ * `@opentf/esrun-postgres` — the PostgreSQL driver for `runtime:db`.
  *
- * Importing this package registers the `postgres:` and `postgresql:` schemes.
- * Nothing else is required:
+ * The package's export *is* the driver. Nothing is registered by importing it,
+ * because nothing needs to be: you hand the driver to `connect`, and what comes
+ * back is a `PgConnection` with PostgreSQL's own surface on it.
  *
  * ```js
- * import "@opentf/esrun-postgres";
  * import { connect, sql } from "runtime:db";
+ * import postgres from "@opentf/esrun-postgres";
  *
- * const db = await connect("postgres://user:pass@localhost/app");
+ * const db = await connect("postgres://user:pass@localhost/app", { driver: postgres });
+ * const rows = await db.query(sql`SELECT * FROM users WHERE id = ${id}`);
+ *
+ * // A pool is the same call with the same driver.
+ * const pool = await connect("postgres://localhost/app", { driver: postgres, pool: { max: 20 } });
  * ```
  *
  * There is no native code here. The driver is JavaScript over `runtime:net`,
  * which is the arrangement `runtime:db` exists to make possible: adding a
  * database to this runtime does not mean adding anything to the runtime.
  */
-import { registerBackend } from "runtime:db";
+import { defineDriver, type PoolSettings } from "runtime:db";
 import { env, unmask } from "runtime:process";
 
 import { PgConnection, POSTGRES_DIALECT, type PgOptions } from "./connection.js";
-import { PgPool, type PgPoolOptions } from "./pool.js";
+import { PgPooled, type PgPoolOptions } from "./pool.js";
 
-export { PgConnection, PgPool, POSTGRES_DIALECT, type PgOptions, type PgPoolOptions };
+export { PgConnection, PgPooled, POSTGRES_DIALECT, type PgOptions, type PgPoolOptions };
 
 /**
  * The `PG*` environment variables, which every libpq tool reads.
@@ -129,35 +134,33 @@ function stripUndefined<T extends object>(value: T): T {
   ) as T;
 }
 
-/** Opens a connection without going through `runtime:db`'s registry. */
-export async function connect(url: string, options: PgOptions = {}): Promise<PgConnection> {
-  const connection = new PgConnection();
-  await connection.open(parseConnectionString(url, options));
-  return connection;
-}
-
 /**
- * A pool over the same connection string.
+ * The PostgreSQL driver.
  *
- * Nothing is opened here: connections are made when they are first needed, so a
- * pool costs nothing until something asks it for work.
+ * Pass it to `connect`. It takes `postgres:` and `postgresql:` URLs — both
+ * spellings are in the wild and neither is more correct than the other — and
+ * everything a connection string can carry is also accepted as an option, with
+ * explicit options winning over the URL and the URL winning over `PG*`.
  */
-export function createPool(url: string, options: PgPoolOptions = {}): PgPool {
-  const settings = parseConnectionString(url, options);
-  return new PgPool(() => connect(url, settings), options);
-}
+export const postgres = defineDriver<PgConnection, PgOptions, PgPooled>({
+  name: "postgres",
+  schemes: ["postgres", "postgresql"],
+  dialect: POSTGRES_DIALECT,
+  async open(url: string, options: PgOptions = {}): Promise<PgConnection> {
+    const connection = new PgConnection();
+    await connection.open(parseConnectionString(url, options));
+    return connection;
+  },
+  /**
+   * Nothing is opened here: connections are made when they are first needed, so
+   * a pool costs nothing until something asks it for work.
+   */
+  pooled(url: string, options: PgOptions = {}, poolOptions: PoolSettings = {}): PgPooled {
+    // Parsed once, up front, so a malformed connection string fails where it
+    // was written rather than at whichever call happens to open the first
+    // connection.
+    return new PgPooled(postgres, url, parseConnectionString(url, options), poolOptions);
+  },
+});
 
-for (const scheme of ["postgres", "postgresql"]) {
-  registerBackend(scheme, (url, options) => {
-    // `connect("postgres://…", { pool: true })` through `runtime:db` gives a
-    // pool, since a driver's own entry point should not be the only way to
-    // reach one.
-    const pool = (options as { pool?: boolean | PgPoolOptions }).pool;
-    if (pool !== undefined && pool !== false) {
-      return Promise.resolve(
-        createPool(url, { ...(options as PgPoolOptions), ...(pool === true ? {} : pool) }),
-      ) as Promise<never>;
-    }
-    return connect(url, options as PgOptions);
-  });
-}
+export default postgres;

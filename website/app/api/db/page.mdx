@@ -1,6 +1,6 @@
 ---
 title: runtime:db
-description: Databases in two tiers — connect, sql and streaming rows for applications, plus the registry, row decoder and conformance suite drivers are built on.
+description: Databases in two tiers — connect, sql and streaming rows for applications, plus the driver value, row decoder and conformance suite drivers are built on.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -22,30 +22,60 @@ documentation, not the specifier.
 ## Import
 
 ```js
-import { connect, sql } from "runtime:db";
+import { connect, sqlite, sql } from "runtime:db";
 ```
 
-## `connect(url, options?)`
+## `connect(url, options)`
 
-Chooses a backend by the connection string's **scheme**.
+Opens a connection with the **driver** you pass. `sqlite` is built in; every
+other driver is a package export.
 
 ```js
-const db = await connect("sqlite:./app.db");
-const mem = await connect("sqlite::memory:");
-const enc = await connect("sqlite:./secret.db", { key });
+const db  = await connect("sqlite:./app.db", { driver: sqlite });
+const mem = await connect("sqlite::memory:", { driver: sqlite });
+const enc = await connect("sqlite:./secret.db", { driver: sqlite, key });
+
+import postgres from "@opentf/esrun-postgres";
+const pg = await connect("postgres://user@host/app", { driver: postgres });
 ```
 
 | Option | Type | Meaning |
+| --- | --- | --- |
+| `driver` | `Driver` | **Required.** The backend to open with. |
+| `pool` | `boolean \| { max, idleTimeout, acquireTimeout }` | Pool instead of opening one connection. |
+
+Everything else in the options object belongs to the driver — `key`, `cipher`
+and `readOnly` for `sqlite`, a host and TLS settings for a networked one.
+
+| `sqlite` option | Type | Meaning |
 | --- | --- | --- |
 | `key` | `string \| Uint8Array` | Encryption key, hex or bytes. |
 | `cipher` | `string` | Cipher name; defaults to the backend's. |
 | `readOnly` | `boolean` | Open without the ability to write. |
 
+What comes back is **that driver's** connection, so a driver's own surface is on
+the object `connect` returned and needs no second entry point: Redis's commands,
+PostgreSQL's `LISTEN`. The URL's scheme is checked against the driver's, so a
+driver pointed at a URL it does not take is refused at the call.
+
 <Callout type="warning" title="A key never goes in the URL">
   A key in a connection string ends up in logs, in error messages and in stack
-  traces. `connect("sqlite:./app.db?key=…")` is **refused**, not honoured
-  quietly. Pass it in the options object.
+  traces. `connect("sqlite:./app.db?key=…", { driver: sqlite })` is **refused**,
+  not honoured quietly. Pass it in the options object.
 </Callout>
+
+### `pool`
+
+```js
+const pool = await connect("postgres://host/app", { driver: postgres, pool: { max: 20 } });
+await pool.query("SELECT 1");            // borrows and returns a connection
+await pool.transaction(async (tx) => …); // holds one for the whole of it
+await pool.withConnection(async (c) => …);  // for anything stateful across calls
+```
+
+A pooled connection answers the same surface a single one does, plus `size`,
+`idle` and `pending`. A connection is returned to the pool only if the driver
+says it is fit for the next caller (`reusable`), and destroyed otherwise.
 
 `sqlite:` names a file format and a SQL dialect the way `postgres://` names a
 wire protocol — not a particular implementation, which may be replaced without
@@ -245,8 +275,8 @@ For adding a backend or building an ORM.
 
 | Export | Purpose |
 | --- | --- |
-| `registerBackend(scheme, factory)` | Claim a scheme. Built-ins cannot be replaced; `otfdb:` is reserved. |
-| `backendSchemes()` | The registered schemes. |
+| `defineDriver(spec)` | Make a driver: `name`, `schemes`, `dialect`, `open(url, options)`, and optionally `pooled(url, options, poolOptions)`. |
+| `PooledConnection` | The pooled form `pool: true` builds. Subclass it to put your own surface on a pool. |
 | `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`; override `_executeMany` for a fast batch path, `_cancel` to really cancel, and the `_*Transaction` trio for a backend without SQL. |
 | `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports` — including `sqlText`, `queryAst` and `transactions`. |
 | `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder every backend shares. |
@@ -256,7 +286,7 @@ For adding a backend or building an ORM.
 | `runBackendConformance(open)` | The suite that proves a backend behaves like the built-ins. |
 
 ```js
-import { registerBackend, BaseConnection, Dialect } from "runtime:db";
+import { defineDriver, BaseConnection, Dialect } from "runtime:db";
 
 const dialect = new Dialect({ name: "mydb", placeholder: (i) => `$${i}` });
 
@@ -275,8 +305,17 @@ class MyConnection extends BaseConnection {
   async _executeMany(query, sets) { /* … */ }
 }
 
-registerBackend("mydb", async (url, options) => new MyConnection(await open(url)));
+export default defineDriver({
+  name: "mydb",
+  schemes: ["mydb"],
+  dialect,
+  open: async (url, options) => new MyConnection(await open(url, options)),
+});
 ```
+
+Nothing is registered, and nothing has to be imported for its side effects: your
+package's export *is* the driver, and `connect(url, { driver })` is how a caller
+reaches it.
 
 A backend that does not speak SQL declares it, and inherits the rest unchanged:
 

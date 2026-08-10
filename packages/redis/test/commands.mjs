@@ -2,11 +2,13 @@
 // HyperLogLog, hash-field TTLs, and the odds and ends.
 import { exit, env } from "runtime:process";
 
-import { Redis } from "../dist/index.js";
+import { connect } from "runtime:db";
+
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
-const r = await Redis.connect(url);
+const r = await connect(url, { driver: redis });
 await r.flushdb();
 
 const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1] ?? 0);

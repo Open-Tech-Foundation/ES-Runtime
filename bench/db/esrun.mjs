@@ -1,10 +1,10 @@
 // esrun — `runtime:db`, async over the op boundary.
-import { connect } from "runtime:db";
+import { connect, sqlite } from "runtime:db";
 import { args } from "runtime:process";
 import * as w from "./workload.mjs";
 
 const [workload, path] = args;
-const db = await connect(`sqlite:${path}`);
+const db = await connect(`sqlite:${path}`, { driver: sqlite });
 
 if (workload === "open") {
   await db.execute(w.SCHEMA);

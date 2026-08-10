@@ -4,9 +4,9 @@
 // one, because a test that quietly passes when it did not run is worse than no
 // test.
 import { exit, env } from "runtime:process";
-import { DbErrorCode } from "runtime:db";
+import { connect, DbErrorCode } from "runtime:db";
 
-import { Redis, SentinelResolver, createSentinelClient, createSentinelPool } from "../dist/index.js";
+import redis, { redisSentinel, SentinelResolver } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const sentinels = (env.REDIS_SENTINELS ?? "").split(",").filter(Boolean);
@@ -31,7 +31,7 @@ async function until(check, what, budget = 30000) {
 
 /** Asks a sentinel directly, so the test's expectations do not come from the code under test. */
 async function askSentinel() {
-  const s = await Redis.connect(sentinels[0]);
+  const s = await connect(sentinels[0], { driver: redis });
   try {
     return await s.call(["SENTINEL", "get-master-addr-by-name", masterName]);
   } finally {
@@ -49,7 +49,7 @@ async function askSentinel() {
 
   // The address it returns really is a master, which is the check that turns a
   // failover window from data loss into a retry.
-  const direct = await Redis.connect(`redis://${found.host}:${found.port}`);
+  const direct = await connect(`redis://${found.host}:${found.port}`, { driver: redis });
   const role = await direct.call(["ROLE"]);
   is(role[0], "master", "and the address it returned is a master");
   await direct.close();
@@ -97,7 +97,7 @@ async function askSentinel() {
 // -- a client -------------------------------------------------------------
 
 {
-  const r = await createSentinelClient({ sentinels, masterName });
+  const r = await connect(sentinels[0], { driver: redisSentinel, sentinels: sentinels.slice(1), masterName });
   is(await r.ping(), "PONG", "a sentinel client connects");
   await r.set("via-sentinel", "yes");
   is(await r.get("via-sentinel"), "yes", "and reads and writes the master");
@@ -107,7 +107,12 @@ async function askSentinel() {
 }
 
 {
-  const pool = await createSentinelPool({ sentinels, masterName });
+  const pool = await connect(sentinels[0], {
+    driver: redisSentinel,
+    sentinels: sentinels.slice(1),
+    masterName,
+    pool: true,
+  });
   is(await pool.ping(), "PONG", "a sentinel pool connects");
   await pool.set("pooled-sentinel", "yes");
   is(await pool.get("pooled-sentinel"), "yes", "and works");
@@ -118,7 +123,12 @@ async function askSentinel() {
 
 {
   const before = await askSentinel();
-  const r = await createSentinelClient({ sentinels, masterName, reconnect: true });
+  const r = await connect(sentinels[0], {
+    driver: redisSentinel,
+    sentinels: sentinels.slice(1),
+    masterName,
+    reconnect: true,
+  });
   await r.set("survives-failover", "before");
   is(await r.get("survives-failover"), "before", "written to the original master");
 
@@ -126,7 +136,7 @@ async function askSentinel() {
   // soon is refused with `-INPROG` — so this asks until it is accepted rather
   // than assuming the deployment is idle. That makes the test re-runnable,
   // which matters because the master alternates between runs.
-  const admin = await Redis.connect(sentinels[0]);
+  const admin = await connect(sentinels[0], { driver: redis });
   let accepted = false;
   const askDeadline = Date.now() + 40000;
   while (!accepted && Date.now() < askDeadline) {
@@ -163,14 +173,19 @@ async function askSentinel() {
   is(await r.get("survives-failover"), "after", "the client writes to the new master");
   const role = await r.call(["ROLE"]);
   is(role[0], "master", "on a connection that is to a master again");
-  is(r.connection.hello.proto, 3, "with a full handshake, not a half-reused connection");
+  is(r.hello.proto, 3, "with a full handshake, not a half-reused connection");
   await r.close();
 }
 
 {
   // A pool converges by doing what it does anyway: failed connections are
   // discarded, and every replacement resolves again.
-  const pool = await createSentinelPool({ sentinels, masterName });
+  const pool = await connect(sentinels[0], {
+    driver: redisSentinel,
+    sentinels: sentinels.slice(1),
+    masterName,
+    pool: true,
+  });
   await until(async () => {
     try {
       await pool.set("pool-after-failover", "ok");

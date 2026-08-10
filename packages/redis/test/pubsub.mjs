@@ -1,8 +1,8 @@
 // Pub/sub, on a connection given over to it.
 import { exit, env } from "runtime:process";
-import { DbErrorCode } from "runtime:db";
+import { connect, DbErrorCode } from "runtime:db";
 
-import { Redis, createSubscriber } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
@@ -18,12 +18,12 @@ async function until(check, what, budget = 2000) {
   return false;
 }
 
-const pub = await Redis.connect(url);
+const pub = await connect(url, { driver: redis });
 
 // -- a channel --------------------------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   const seen = [];
   await sub.subscribe("news", (payload, ctx) => seen.push([ctx.channel, payload]));
 
@@ -50,7 +50,7 @@ const pub = await Redis.connect(url);
 // -- several channels, and per-channel handlers -----------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   const a = [];
   const b = [];
   await sub.subscribe(["alpha", "beta"], (p, c) => (c.channel === "alpha" ? a : b).push(p));
@@ -74,7 +74,7 @@ const pub = await Redis.connect(url);
 // -- the catch-all ----------------------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   const all = [];
   sub.onMessage = (p, c) => all.push(`${c.channel}:${p}`);
   await sub.subscribe("x");
@@ -87,7 +87,7 @@ const pub = await Redis.connect(url);
 // -- patterns ---------------------------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   const seen = [];
   await sub.psubscribe("news.*", (p, c) => seen.push([c.pattern, c.channel, p]));
   is(sub.patterns, ["news.*"], "the pattern is reported");
@@ -106,7 +106,7 @@ const pub = await Redis.connect(url);
 // -- unsubscribing ----------------------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   const seen = [];
   await sub.subscribe(["one", "two"], (p) => seen.push(p));
 
@@ -127,7 +127,7 @@ const pub = await Redis.connect(url);
 // -- what a subscriber will not do ------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   await sub.subscribe("busy");
 
   let code = null;
@@ -154,7 +154,7 @@ const pub = await Redis.connect(url);
 {
   // A raw SUBSCRIBE would bypass the read loop's bookkeeping, so it is refused
   // by name — pointing at the method that does it properly.
-  const r = await Redis.connect(url);
+  const r = await connect(url, { driver: redis });
   let message = null;
   try {
     await r.call(["SUBSCRIBE", "raw"]);
@@ -171,7 +171,7 @@ const pub = await Redis.connect(url);
 {
   // The read loop is the only thing reading this socket. One bad handler must
   // not end it, or every other subscription on the connection stops silently.
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   const errors = [];
   const good = [];
   sub.onSubscribeError = (e) => errors.push(e);
@@ -193,7 +193,7 @@ const pub = await Redis.connect(url);
 // -- binary payloads --------------------------------------------------------
 
 {
-  const sub = await createSubscriber(url, { binary: true });
+  const sub = await connect(url, { driver: redis, binary: true });
   const seen = [];
   await sub.subscribe("bytes", (p) => seen.push(p));
   await pub.publish("bytes", new Uint8Array([0xff, 0x00, 0xfe]));
@@ -206,7 +206,7 @@ const pub = await Redis.connect(url);
 // -- introspection ----------------------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   await sub.subscribe(["room:1", "room:2"]);
   const channels = await pub.pubsubChannels("room:*");
   is(channels.sort(), ["room:1", "room:2"], "PUBSUB CHANNELS sees them from another connection");
@@ -220,7 +220,7 @@ const pub = await Redis.connect(url);
   // A genuinely different branch, not a variation: RESP3 delivers these as
   // push frames and RESP2 as ordinary arrays, so the reader tells a message
   // from a reply by its *content* there rather than by its type byte.
-  const sub = await createSubscriber(`${url}?protocol=2`);
+  const sub = await connect(`${url}?protocol=2`, { driver: redis });
   is(sub.protocol, 2, "the subscriber is on RESP2");
   const seen = [];
   await sub.subscribe("legacy", (p, c) => seen.push([c.channel, p]));
@@ -242,7 +242,7 @@ const pub = await Redis.connect(url);
 // -- closing a subscriber ---------------------------------------------------
 
 {
-  const sub = await createSubscriber(url);
+  const sub = await connect(url, { driver: redis });
   await sub.subscribe("closing");
   const errors = [];
   sub.onSubscribeError = (e) => errors.push(e);

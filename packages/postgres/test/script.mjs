@@ -1,10 +1,9 @@
-import "../dist/index.js";
+import postgres from "../dist/index.js";
 import { env } from "runtime:process";
 import { connect, DbErrorCode } from "runtime:db";
-import { connect as pgConnect } from "../dist/index.js";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
-const db = await pgConnect(url);
+const db = await connect(url, { driver: postgres });
 
 // The extended protocol cannot carry two statements, and says so.
 try {

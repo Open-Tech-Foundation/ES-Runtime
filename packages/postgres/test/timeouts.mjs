@@ -1,4 +1,4 @@
-import "../dist/index.js";
+import postgres from "../dist/index.js";
 import { env } from "runtime:process";
 import { listen } from "runtime:net";
 import { connect, DbErrorCode } from "runtime:db";
@@ -20,6 +20,7 @@ const { port } = await blackhole.addr;
 const started = performance.now();
 try {
   await connect(`postgres://postgres:esrun@127.0.0.1:${port}/x?sslmode=disable`, {
+    driver: postgres,
     connectTimeout: 400,
   });
   console.log("blackhole: connected (should not happen)");
@@ -31,7 +32,7 @@ await blackhole.close();
 
 // statement_timeout is the server's to enforce: it cancels the statement and
 // keeps the connection, which a client-side timer cannot do.
-const db = await connect(url, { statementTimeout: 300 });
+const db = await connect(url, { driver: postgres, statementTimeout: 300 });
 console.log("guc:", db.parameters.statement_timeout ?? "(not reported)");
 try {
   await db.execute("SELECT pg_sleep(3)");
@@ -44,6 +45,6 @@ console.log("still usable:", (await (await db.query("SELECT 1 AS n")).first()).n
 await db.close();
 
 // The URL spells connect_timeout in seconds, libpq-style.
-const viaUrl = await connect(`${url}&connect_timeout=5&statement_timeout=250`);
+const viaUrl = await connect(`${url}&connect_timeout=5&statement_timeout=250`, { driver: postgres });
 console.log("from url:", (await (await viaUrl.query("SELECT 2 AS n")).first()).n);
 await viaUrl.close();

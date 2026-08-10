@@ -17,6 +17,7 @@ import {
   asDbError,
   defineRowShape,
   decodeBatch,
+  type NormalizedQuery,
 } from "runtime:db";
 
 import { Fields, FrameReader } from "./protocol/frame.js";
@@ -168,8 +169,22 @@ export class PgConnection extends BaseConnection {
    * before offering one, because a connection can die while nobody is holding
    * it and the first anyone hears of that is otherwise the next caller's error.
    */
-  get usable(): boolean {
+  override get usable(): boolean {
     return this.#fatal === null && this.#socket !== null;
+  }
+
+  /**
+   * Whether this connection is fit for the **next** caller.
+   *
+   * PostgreSQL answers this itself, in every `ReadyForQuery`: `I` is idle and
+   * outside any transaction. `T` means one is still open and `E` means one
+   * failed and was never rolled back — either would leak into whoever borrowed
+   * the connection next, so both are destroyed instead. This is the one
+   * question `PooledConnection` cannot answer without the protocol, which is
+   * why it asks here.
+   */
+  override get reusable(): boolean {
+    return this.usable && this.status === "I";
   }
   /**
    * One exchange at a time: a connection is a single conversation.
@@ -777,11 +792,8 @@ export class PgConnection extends BaseConnection {
     }
   }
 
-  protected async _query(q: {
-    text: string;
-    positional: unknown[];
-    named: [string, unknown][];
-  }): Promise<Rows> {
+  protected async _query(query: NormalizedQuery): Promise<Rows> {
+    const q = this.#sql(query);
     this.#rejectNamed(q.named);
     const release = await this.#acquire();
     let held = true;
@@ -872,11 +884,8 @@ export class PgConnection extends BaseConnection {
     }
   }
 
-  protected async _execute(q: {
-    text: string;
-    positional: unknown[];
-    named: [string, unknown][];
-  }): Promise<{ changes: number; lastInsertRowid: number | null }> {
+  protected async _execute(query: NormalizedQuery): Promise<{ changes: number; lastInsertRowid: number | null }> {
+    const q = this.#sql(query);
     this.#rejectNamed(q.named);
     const release = await this.#acquire();
     try {
@@ -1107,6 +1116,19 @@ export class PgConnection extends BaseConnection {
    * function, a deprecation, a truncation. Unset, they are discarded.
    */
   onNotice: ((notice: ServerMessage) => void) | undefined;
+
+  /**
+   * The query as SQL text, which for this backend it always is.
+   *
+   * `NormalizedQuery.text` is nullable because a backend may take an AST
+   * instead, and this one does not: `POSTGRES_DIALECT` declares `sqlText` and
+   * not `queryAst`, so `normalizeQuery` has already refused everything that
+   * would arrive without text. Narrowing it here, once, is how that fact is
+   * stated to the type checker rather than asserted at three call sites.
+   */
+  #sql(q: NormalizedQuery): { text: string; positional: unknown[]; named: [string, unknown][] } {
+    return { text: q.text ?? "", positional: q.positional, named: q.named };
+  }
 
   #rejectNamed(named: [string, unknown][]): void {
     if (named.length > 0) {

@@ -1,14 +1,14 @@
 // A per-command deadline, and the connection it has to destroy.
 import { exit, env } from "runtime:process";
-import { DbErrorCode } from "runtime:db";
+import { connect, DbErrorCode } from "runtime:db";
 
-import { Redis } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 {
-  const r = await Redis.connect(url, { commandTimeout: 300 });
+  const r = await connect(url, { driver: redis, commandTimeout: 300 });
   is(await r.ping(), "PONG", "an ordinary command is well inside the deadline");
   await r.set("k", "v");
   is(await r.get("k"), "v", "and so is another");
@@ -18,7 +18,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 {
   // A bounded blocking command that outlasts the deadline is the honest way to
   // make a reply late without breaking the server.
-  const r = await Redis.connect(url, { commandTimeout: 200 });
+  const r = await connect(url, { driver: redis, commandTimeout: 200 });
   const started = Date.now();
   let code = null;
   try {
@@ -44,7 +44,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 {
   // With reconnect on, that cost is one dropped socket.
-  const r = await Redis.connect(url, { commandTimeout: 200, reconnect: true });
+  const r = await connect(url, { driver: redis, commandTimeout: 200, reconnect: true });
   try {
     await r.call(["BLPOP", "nothing-ever", "3"]);
   } catch {
@@ -57,7 +57,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 
 {
   // Settable from the connection string too.
-  const r = await Redis.connect(`${url}?command_timeout=200`);
+  const r = await connect(`${url}?command_timeout=200`, { driver: redis });
   let code = null;
   try {
     await r.call(["BLPOP", "nothing-ever", "3"]);
@@ -69,7 +69,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 }
 
 {
-  const r = await Redis.connect(url);
+  const r = await connect(url, { driver: redis });
   const started = Date.now();
   is(await r.call(["BLPOP", "nothing-ever", "1"]), null, "with no deadline a command runs to completion");
   ok(Date.now() - started >= 900, "however long it takes");
@@ -79,7 +79,7 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 // -- binary from the URL ----------------------------------------------------
 
 {
-  const r = await Redis.connect(`${url}?binary=1`);
+  const r = await connect(`${url}?binary=1`, { driver: redis });
   await r.set("bytes", new Uint8Array([0xff, 0x00, 0xfe]));
   const value = await r.get("bytes");
   ok(value instanceof Uint8Array, "?binary=1 hands values back as bytes");

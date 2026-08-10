@@ -2,11 +2,11 @@
 import { exit, env } from "runtime:process";
 import { DbError, queryAst, connect } from "runtime:db";
 
-import { Redis, createPool } from "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
-const r = await Redis.connect(url);
+const r = await connect(url, { driver: redis });
 await r.flushdb();
 
 // -- the basics -------------------------------------------------------------
@@ -132,7 +132,7 @@ is(await r.pipeline().exec(), [], "an empty pipeline is an empty result");
 // -- executeMany, which now pipelines ---------------------------------------
 
 {
-  const db = await connect(url);
+  const db = await connect(url, { driver: redis });
   await db.execute(queryAst(["FLUSHDB"]));
 
   const result = await db.executeMany(queryAst(["SET"]), [
@@ -164,7 +164,7 @@ is(await r.pipeline().exec(), [], "an empty pipeline is an empty result");
 // -- through a pool ---------------------------------------------------------
 
 {
-  const pool = createPool(url);
+  const pool = await connect(url, { driver: redis, pool: true });
   const p = pool.pipeline();
   p.set("pooled", "1");
   p.get("pooled");

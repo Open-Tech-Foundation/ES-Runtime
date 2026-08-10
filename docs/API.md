@@ -1369,9 +1369,9 @@ backend of their own; both are exported from `runtime:db`, and the split is in
 this documentation rather than in the specifier.
 
 ```js
-import { connect, sql } from "runtime:db";
+import { connect, sqlite, sql } from "runtime:db";
 
-const db = await connect("sqlite:./app.db");
+const db = await connect("sqlite:./app.db", { driver: sqlite });
 await db.execute(sql`INSERT INTO users (name) VALUES (${name})`);
 for await (const row of await db.query("SELECT id, name FROM users")) {
   console.log(row.id, row.name);
@@ -1387,17 +1387,26 @@ no file and touches no filesystem, so a filesystem grant would guard nothing
 that happens, and what it costs is memory, which guest JS can already spend.
 `runtime:db` adds no capability of its own.
 
-### `connect(url, options?)`
+### `connect(url, options)`
 
-Chooses a backend by the connection string's **scheme**. `sqlite:` names a file
-format and a SQL dialect the way `postgres://` names a wire protocol — not a
-particular implementation, which may be replaced without the URL changing.
+Opens a connection with the **driver** passed in `options.driver` — a value you
+import, not a global installed by importing a package for its side effects.
+`sqlite` is exported from `runtime:db`; every other driver is a package export
+(`import postgres from "@opentf/esrun-postgres"`). What comes back is that
+driver's connection, so its own surface needs no second entry point. The URL's
+scheme is checked against the driver's schemes.
+
+`sqlite:` names a file format and a SQL dialect the way `postgres://` names a
+wire protocol — not a particular implementation, which may be replaced without
+the URL changing.
 
 | Option | Meaning |
 | --- | --- |
-| `key` | Encryption key: hex string or bytes. |
-| `cipher` | Cipher name; defaults to the backend's. |
-| `readOnly` | Open without the ability to write. |
+| `driver` | **Required.** The driver to open with. |
+| `pool` | `true`, or `{ max, idleTimeout, acquireTimeout }` — a pool presenting the same surface one connection does, plus `size`, `idle`, `pending` and `withConnection(fn)`. |
+| `key` | `sqlite`: encryption key, hex string or bytes. |
+| `cipher` | `sqlite`: cipher name; defaults to the backend's. |
+| `readOnly` | `sqlite`: open without the ability to write. |
 
 A key belongs in the **options object, never the connection string** — a key in
 a URL ends up in logs, error messages and stack traces, so one passed as a URL
@@ -1494,15 +1503,22 @@ stays on `e.backendCode`.
 
 ### The driver tier
 
-For building a backend or an ORM: `registerBackend(scheme, factory)` and
-`backendSchemes()`; `BaseConnection` (transactions, savepoints, the
+For building a backend or an ORM: `defineDriver(spec)`, which turns
+`{ name, schemes, dialect, open, pooled? }` into the value a caller passes to
+`connect`; `PooledConnection`, the pooled form `pool: true` builds and a driver
+subclasses to add its own surface; `BaseConnection` (transactions, savepoints, the
 closed-connection check, and a correct-but-slow default batch a driver overrides
 to make fast); `Dialect` (`placeholder`, `quoteIdent`, `supports`);
 `defineRowShape` and `decodeBatch` (the row decoder, shared by every backend);
 `encodeParams` / `splitParams`; `ByteWriter`; `mapError` / `asDbError`; and
 `runBackendConformance(open)`, the suite a driver runs to demonstrate it behaves
-like the built-ins. A built-in scheme cannot be replaced, and `otfdb:` is
-reserved.
+like the built-ins. There is no registry to claim a scheme in: a driver is a
+value, so two drivers for the same scheme coexist and the caller says which one
+it meant.
+
+A connection also answers `usable` (still worth using) and `reusable` (fit for
+the next caller) — the one question a protocol-blind pool cannot decide, asked
+by one name on every backend.
 
 A driver supplies `_query`, `_execute` and `_close`, and may override
 `_executeMany(query, sets)` for a real batch path, `_cancel()` for whatever its

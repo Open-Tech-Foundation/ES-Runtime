@@ -8,13 +8,18 @@ import { Callout } from "@opentf/web-docs";
 # Databases
 
 [`runtime:db`](/api/db) connects to a database, runs queries, and streams the
-results. It ships with `sqlite:`; anything else is a driver, and the pieces
-those drivers are built from are exported alongside.
+results. It ships with a SQLite driver; anything else is a package, and the
+pieces those drivers are built from are exported alongside.
+
+**One call opens every database, and you pass the driver to it.** A driver is a
+value you import, not a global you install by importing it for its side effects
+— so the backend is visible at the call, and what comes back is that driver's
+connection rather than the portable minimum.
 
 ```js
-import { connect, sql } from "runtime:db";
+import { connect, sqlite, sql } from "runtime:db";
 
-const db = await connect("sqlite:./app.db");
+const db = await connect("sqlite:./app.db", { driver: sqlite });
 
 await db.execute(`
   CREATE TABLE IF NOT EXISTS users (
@@ -167,7 +172,7 @@ being flattened into a database error, so the two stay distinguishable.
 tests, and for using SQL as a query language over data you already have:
 
 ```js
-const db = await connect("sqlite::memory:");
+const db = await connect("sqlite::memory:", { driver: sqlite });
 ```
 
 It touches no filesystem, so it needs **no capability**: it works under
@@ -177,31 +182,34 @@ It touches no filesystem, so it needs **no capability**: it works under
 
 ```js
 const key = crypto.getRandomValues(new Uint8Array(32));
-const db = await connect("sqlite:./secret.db", { key });
+const db = await connect("sqlite:./secret.db", { driver: sqlite, key });
 ```
 
 <Callout type="warning" title="Experimental, and the key belongs in the options">
   Encryption is experimental upstream. The key goes in the options object — a
   key in the connection string ends up in logs, error messages and stack traces,
-  so `connect("sqlite:./app.db?key=…")` is refused rather than honoured quietly.
+  so `connect("sqlite:./app.db?key=…", { driver: sqlite })` is refused rather than honoured quietly.
 </Callout>
 
 ## Other databases
 
-`sqlite:` is the backend that ships **in** the runtime. Every other one is
-ordinary JavaScript over [`runtime:net`](/docs/guides/networking) that registers
-its own scheme — no native code, and nothing added to the runtime for it:
+`sqlite` is the driver that ships **in** the runtime. Every other one is
+ordinary JavaScript over [`runtime:net`](/docs/guides/networking) — no native
+code, and nothing added to the runtime for it. Importing one gives you a driver,
+and the call is the call you already know:
 
 ```js
-import "@opentf/esrun-postgres";         // registers postgres: and postgresql:
 import { connect } from "runtime:db";
+import postgres from "@opentf/esrun-postgres";
 
-const db = await connect("postgres://user@host/db");
+const db = await connect("postgres://user@host/db", { driver: postgres });
 ```
 
 Everything above — `sql`, streaming rows, transactions, the portable error
 codes — works the same against it, because drivers are built on the same
-exported pieces the built-in backend is.
+exported pieces the built-in one is. Pooling is the same call too:
+`connect(url, { driver: postgres, pool: { max: 20 } })` gives a pool that
+presents exactly what one connection does.
 
 | Package | Schemes | |
 | --- | --- | --- |
@@ -216,10 +224,10 @@ write portable code. Commands are arrays rather than text, through the query-AST
 form the contract has carried since the first release:
 
 ```js
-import "@opentf/esrun-redis";
 import { connect, queryAst } from "runtime:db";
+import redis from "@opentf/esrun-redis";
 
-const db = await connect("redis://localhost");
+const db = await connect("redis://localhost", { driver: redis });
 await db.execute(queryAst(["SET", "k", "v"]));
 ```
 
@@ -227,7 +235,8 @@ It declares what it is — `supports.sqlText: false`, `supports.queryAst: true`,
 `supports.transactions: false` — so code that checks rather than assumes keeps
 working, and code that does not gets `ERR_DB_QUERY_FORM` or
 `ERR_DB_UNSUPPORTED` by name rather than something stranger further down. Most
-programs using Redis want its own client instead, which the same package ships.
+programs using Redis want its own vocabulary instead, and it is on the very same
+object: `await db.set("k", "v", { ex: 60 })`.
 
 Two rules worth knowing before you meet them. **Subscribing takes a connection
 over**: the first `subscribe` gives it to a read loop, and it runs no ordinary

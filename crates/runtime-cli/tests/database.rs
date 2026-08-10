@@ -45,8 +45,8 @@ fn a_database_round_trips_every_value_kind() {
     let out = run(
         "values",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (i INTEGER, r REAL, s TEXT, b BLOB, n INTEGER)");
         await db.execute("INSERT INTO t VALUES (?, ?, ?, ?, ?)",
           [7, 1.5, "hi", new Uint8Array([1, 2]), null]);
@@ -75,8 +75,8 @@ fn an_integer_too_large_for_a_number_survives_the_round_trip() {
     let out = run(
         "bigint",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)");
         await db.execute("INSERT INTO t VALUES (?)", [9007199254740993n]);
         const row = await (await db.query("SELECT id FROM t")).first();
@@ -94,8 +94,8 @@ fn the_sql_tag_binds_every_interpolation_as_a_parameter() {
     let out = run(
         "sql-tag",
         r#"
-        import { connect, sql } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite, sql } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (name TEXT)");
         // The classic injection: as a parameter it is a name, not syntax.
         const hostile = "'); DROP TABLE t; --";
@@ -115,8 +115,8 @@ fn parameters_bind_by_position_and_by_name() {
     let out = run(
         "params",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER, b TEXT)");
         await db.execute("INSERT INTO t VALUES (:a, :b)", { a: 1, b: "one" });
         await db.execute("INSERT INTO t VALUES (?, ?)", [2, "two"]);
@@ -137,8 +137,8 @@ fn a_result_set_streams_and_can_be_abandoned() {
     let out = run(
         "streaming",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER, pad TEXT)");
         await db.transaction(async (tx) => {
           for (let i = 0; i < 5000; i++) {
@@ -166,8 +166,8 @@ fn a_transaction_commits_or_rolls_back_and_nests_by_savepoint() {
     let out = run(
         "transactions",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER)");
         await db.transaction(async (tx) => { await tx.execute("INSERT INTO t VALUES (1)"); });
         try {
@@ -203,18 +203,18 @@ fn a_transaction_commits_or_rolls_back_and_nests_by_savepoint() {
 #[test]
 fn opening_a_database_is_gated_like_a_file() {
     let source = r#"
-        import { connect } from "runtime:db";
+        import { connect, sqlite } from "runtime:db";
         const report = async (label, fn) => {
           try { await fn(); console.log(`${label}: ok`); }
           catch (e) { console.log(`${label}: ${e.code}`); }
         };
         await report("write", async () => {
-          const db = await connect("sqlite:./app.db");
+          const db = await connect("sqlite:./app.db", { driver: sqlite });
           await db.execute("CREATE TABLE IF NOT EXISTS t (a INTEGER)");
           await db.close();
         });
         await report("read", async () => {
-          const db = await connect("sqlite:./app.db", { readOnly: true });
+          const db = await connect("sqlite:./app.db", { driver: sqlite, readOnly: true });
           await (await db.query("SELECT count(*) AS n FROM t")).first();
           await db.close();
         });
@@ -260,8 +260,8 @@ fn execute_many_crosses_once_and_is_all_or_nothing() {
     let out = run(
         "execute-many",
         r#"
-        import { connect, sql, DbErrorCode } from "runtime:db";
-        const db = await connect("sqlite::memory:");
+        import { connect, sqlite, sql, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite::memory:", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT)");
 
         const rows = [];
@@ -316,8 +316,8 @@ fn a_small_result_costs_one_crossing() {
     let out = run(
         "one-crossing",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite::memory:");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite::memory:", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER, pad TEXT)");
         const rows = [];
         for (let i = 0; i < 4000; i++) rows.push([i, "x".repeat(200)]);
@@ -353,8 +353,8 @@ fn a_signal_cancels_a_running_statement_and_leaves_the_connection_usable() {
     let out = run(
         "signal",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite::memory:");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite::memory:", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER)");
         const rows = [];
         for (let i = 0; i < 40000; i++) rows.push([i]);
@@ -472,6 +472,52 @@ closed waiter: true"
     );
 }
 
+/// `pool: true` is a property of the call rather than a different object
+/// reached a different way, and what comes back answers the same surface one
+/// connection does.
+#[test]
+fn pooling_is_an_option_on_connect() {
+    let out = run(
+        "pooled",
+        r#"
+        import { connect, sqlite, DbErrorCode } from "runtime:db";
+
+        const pool = await connect("sqlite:./app.db", { driver: sqlite, pool: { max: 2 } });
+        console.log("empty until used:", pool.size === 0);
+        await pool.execute("CREATE TABLE t (n INTEGER)");
+        await pool.executeMany("INSERT INTO t VALUES (?)", [[1], [2], [3]]);
+        console.log("rows:", (await (await pool.query("SELECT count(*) AS n FROM t")).first()).n);
+        console.log("one connection, returned:", pool.size === 1 && pool.idle === 1);
+        console.log("same surface:", pool.backend, pool.dialect.name);
+
+        // A transaction holds one connection for the whole of it.
+        await pool.transaction(async (tx) => { await tx.execute("INSERT INTO t VALUES (4)"); });
+        console.log("after commit:", (await (await pool.query("SELECT count(*) AS n FROM t")).first()).n);
+        await pool.close();
+
+        // Every `sqlite::memory:` open is its own database, so a pool of them
+        // would be a pool of unrelated databases. Refused by name.
+        try {
+          await connect("sqlite::memory:", { driver: sqlite, pool: true });
+          console.log("memory pool: allowed");
+        } catch (e) {
+          console.log("memory pool:", e.code === DbErrorCode.Unsupported);
+        }
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "empty until used: true
+rows: 3
+one connection, returned: true
+same surface: sqlite sqlite
+after commit: 4
+memory pool: true"
+    );
+}
+
 /// A resource the driver rejects on the way out is not handed to the next
 /// caller, and a create that fails must still wake whoever was queued behind
 /// the slot it freed — otherwise a pool whose connections all fail parks every
@@ -540,8 +586,8 @@ fn the_built_in_backend_passes_its_own_conformance_suite() {
             base.join("app.mjs"),
             format!(
                 r#"
-                import {{ connect, runBackendConformance }} from "runtime:db";
-                const report = await runBackendConformance(() => connect("{url}"));
+                import {{ connect, sqlite, runBackendConformance }} from "runtime:db";
+                const report = await runBackendConformance(() => connect("{url}", {{ driver: sqlite }}));
                 for (const f of report.failures) console.log(`FAIL ${{f.name}}: ${{f.error}}`);
                 console.log(`ok=${{report.ok}} passed=${{report.passed}} skipped=${{report.skipped}}`);
                 "#
@@ -571,8 +617,8 @@ fn a_row_materializes_explicitly_and_leaks_nothing() {
     let out = run(
         "row-shape",
         r#"
-        import { connect } from "runtime:db";
-        const db = await connect("sqlite::memory:");
+        import { connect, sqlite } from "runtime:db";
+        const db = await connect("sqlite::memory:", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER, b TEXT)");
         await db.execute("INSERT INTO t VALUES (1, 'x')");
         const row = await (await db.query("SELECT a, b FROM t")).first();
@@ -602,15 +648,15 @@ fn an_in_memory_database_needs_no_capability_and_leaves_no_files() {
     std::fs::write(
         base.join("app.mjs"),
         r#"
-        import { connect, DbErrorCode } from "runtime:db";
-        const db = await connect("sqlite::memory:");
+        import { connect, sqlite, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite::memory:", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER)");
         await db.execute("INSERT INTO t VALUES (1)");
         console.log("rows:", (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
 
         // Each connection gets its own, so nothing is shared by name — which is
         // why the named spelling is refused rather than quietly not sharing.
-        const other = await connect("sqlite::memory:");
+        const other = await connect("sqlite::memory:", { driver: sqlite });
         try {
           await other.query("SELECT a FROM t");
           console.log("shared: yes");
@@ -621,7 +667,7 @@ fn an_in_memory_database_needs_no_capability_and_leaves_no_files() {
         await other.close();
 
         try {
-          await connect("sqlite::memory:named");
+          await connect("sqlite::memory:named", { driver: sqlite });
         } catch (e) {
           console.log("named:", e.code === DbErrorCode.Unsupported);
         }
@@ -659,9 +705,9 @@ fn a_database_outside_the_scope_is_refused() {
     let out = run(
         "scope",
         r#"
-        import { connect } from "runtime:db";
+        import { connect, sqlite } from "runtime:db";
         try {
-          await connect("sqlite:/etc/passwd.db");
+          await connect("sqlite:/etc/passwd.db", { driver: sqlite });
           console.log("opened");
         } catch (e) {
           console.log(e.code);
@@ -680,9 +726,9 @@ fn a_key_in_the_connection_string_is_refused() {
     let out = run(
         "url-key",
         r#"
-        import { connect, DbErrorCode } from "runtime:db";
+        import { connect, sqlite, DbErrorCode } from "runtime:db";
         try {
-          await connect("sqlite:./app.db?key=hunter2");
+          await connect("sqlite:./app.db?key=hunter2", { driver: sqlite });
         } catch (e) {
           console.log(e.code === DbErrorCode.Unsupported, /options object/.test(e.message));
         }
@@ -698,19 +744,19 @@ fn an_encrypted_database_needs_its_key() {
     let out = run(
         "encrypted",
         r#"
-        import { connect } from "runtime:db";
+        import { connect, sqlite } from "runtime:db";
         const key = new Uint8Array(32).fill(7);
-        const db = await connect("sqlite:./secret.db", { key });
+        const db = await connect("sqlite:./secret.db", { driver: sqlite, key });
         await db.execute("CREATE TABLE t (a INTEGER)");
         await db.execute("INSERT INTO t VALUES (1)");
         await db.close();
 
-        const again = await connect("sqlite:./secret.db", { key });
+        const again = await connect("sqlite:./secret.db", { driver: sqlite, key });
         console.log("with key:", (await (await again.query("SELECT a FROM t")).first()).a);
         await again.close();
 
         try {
-          const plain = await connect("sqlite:./secret.db");
+          const plain = await connect("sqlite:./secret.db", { driver: sqlite });
           await (await plain.query("SELECT a FROM t")).first();
           console.log("without key: opened");
         } catch (e) {
@@ -728,8 +774,8 @@ fn a_backend_maps_its_errors_onto_the_portable_codes() {
     let out = run(
         "errors",
         r#"
-        import { connect, DbErrorCode } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         await db.execute("CREATE TABLE t (a INTEGER PRIMARY KEY, b TEXT NOT NULL)");
         await db.execute("INSERT INTO t VALUES (1, 'x')");
         const code = async (sql) => {
@@ -746,14 +792,15 @@ fn a_backend_maps_its_errors_onto_the_portable_codes() {
     assert_eq!(stdout(&out).trim(), "true\ntrue\ntrue");
 }
 
-/// The registry is the whole extension story: a third-party driver registers
-/// its own scheme, and `connect` then routes to it with no change here.
+/// A driver is a value, and that is the whole extension story: a third party
+/// defines one and hands it to `connect`, which needs no knowledge of it and no
+/// registry to look it up in.
 #[test]
-fn a_third_party_backend_registers_its_own_scheme() {
+fn a_third_party_driver_is_just_a_value() {
     let out = run(
-        "registry",
+        "driver",
         r#"
-        import { connect, registerBackend, BaseConnection, Dialect, backendSchemes } from "runtime:db";
+        import { connect, sqlite, defineDriver, BaseConnection, Dialect } from "runtime:db";
 
         const dialect = new Dialect({ name: "toy", placeholder: (i) => `$${i}` });
         class ToyConnection extends BaseConnection {
@@ -762,28 +809,46 @@ fn a_third_party_backend_registers_its_own_scheme() {
           async _execute({ text }) { return { text }; }
           async _close() {}
         }
-        registerBackend("toy", async () => new ToyConnection());
+        const toy = defineDriver({
+          name: "toy",
+          schemes: ["toy"],
+          dialect,
+          open: async () => new ToyConnection(),
+        });
 
-        const db = await connect("toy://anywhere");
+        const db = await connect("toy://anywhere", { driver: toy });
         // The dialect renders the placeholders, so one template targets any
         // backend: this one numbers them, sqlite writes `?`.
         const { text, positional } = await db.query(
           (await import("runtime:db")).sql`SELECT ${1} , ${2}`,
         );
         console.log(text, positional.join(","));
-        console.log(backendSchemes().join(","));
+        console.log("backend:", db.backend, "| schemes:", toy.schemes.join(","));
 
-        for (const [scheme, why] of [["sqlite", "built-in"], ["otfdb", "reserved"]]) {
-          try { registerBackend(scheme, async () => {}); console.log(`${scheme}: allowed`); }
-          catch (e) { console.log(`${scheme}: refused (${why})`); }
+        // The scheme is checked against the driver, so a URL and a driver that
+        // do not belong together are caught at the call rather than inside a
+        // parser that was never meant to see it.
+        for (const [url, driver, label] of [
+          ["postgres://x", toy, "wrong driver"],
+          ["sqlite::memory:", toy, "wrong driver"],
+        ]) {
+          try { await connect(url, { driver }); console.log(`${label}: allowed`); }
+          catch (e) { console.log(`${label}: refused (${e.code})`); }
         }
+        // And a connect with no driver at all names the fix.
+        try { await connect("toy://x"); }
+        catch (e) { console.log("no driver:", e.message.slice(0, 20)); }
         "#,
         &[],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out).trim(),
-        "SELECT $1 , $2 1,2\nsqlite,toy\nsqlite: refused (built-in)\notfdb: refused (reserved)"
+        "SELECT $1 , $2 1,2
+backend: toy | schemes: toy
+wrong driver: refused (ERR_DB_UNSUPPORTED)
+wrong driver: refused (ERR_DB_UNSUPPORTED)
+no driver: a driver is required"
     );
 }
 
@@ -796,7 +861,7 @@ fn a_backend_that_does_not_optimize_batching_still_supports_it() {
     let out = run(
         "batch-default",
         r#"
-        import { connect, registerBackend, BaseConnection, Dialect } from "runtime:db";
+        import { connect, defineDriver, BaseConnection, Dialect } from "runtime:db";
 
         const dialect = new Dialect({ name: "toy", placeholder: (i) => `$${i}` });
         const seen = [];
@@ -809,9 +874,9 @@ fn a_backend_that_does_not_optimize_batching_still_supports_it() {
           }
           async _close() {}
         }
-        registerBackend("toy", async () => new Toy());
+        const toy = defineDriver({ name: "toy", schemes: ["toy"], dialect, open: async () => new Toy() });
 
-        const db = await connect("toy://x");
+        const db = await connect("toy://x", { driver: toy });
         const result = await db.executeMany("INSERT INTO t VALUES ($1)", [[1], [2], [3]]);
         console.log("changes:", result.changes);
         // The default is a loop over _execute — and it is still wrapped in the
@@ -840,8 +905,8 @@ fn a_query_ast_is_refused_by_name() {
     let out = run(
         "ast",
         r#"
-        import { connect, queryAst, DbErrorCode } from "runtime:db";
-        const db = await connect("sqlite:./app.db");
+        import { connect, sqlite, queryAst, DbErrorCode } from "runtime:db";
+        const db = await connect("sqlite:./app.db", { driver: sqlite });
         try {
           await db.query(queryAst({ select: ["a"], from: "t" }));
         } catch (e) {

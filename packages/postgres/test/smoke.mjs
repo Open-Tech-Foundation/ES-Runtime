@@ -1,9 +1,9 @@
-import "../dist/index.js";
+import postgres from "../dist/index.js";
 import { env } from "runtime:process";
 import { connect, sql, DbErrorCode } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
-const db = await connect(url);
+const db = await connect(url, { driver: postgres });
 console.log("connected, server:", db.parameters.server_version);
 
 await db.execute("DROP TABLE IF EXISTS smoke");

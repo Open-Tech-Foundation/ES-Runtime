@@ -8,7 +8,7 @@
 import { exit, env } from "runtime:process";
 import { connect, queryAst, sql, DbErrorCode } from "runtime:db";
 
-import "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
@@ -23,7 +23,7 @@ async function codeOf(fn) {
   }
 }
 
-const db = await connect(url);
+const db = await connect(url, { driver: redis });
 await db.execute(queryAst(["FLUSHDB"]));
 
 is(db.backend, "redis", "the scheme found the backend");

@@ -724,6 +724,35 @@ class BaseConnection {
     }
   }
 
+  /**
+   * Whether this connection is still worth using at all.
+   *
+   * A driver overrides it to account for a transport that died while nobody was
+   * looking — a server restart, an idle timeout at the far end — which an
+   * in-process engine cannot suffer and a socket can. A pool checks it before
+   * handing a connection out, because otherwise the first anyone hears of a
+   * dead connection is the next caller's error.
+   */
+  get usable() {
+    return !this._closed;
+  }
+
+  /**
+   * Whether this connection is fit for the **next** caller.
+   *
+   * The one question a protocol-blind pool cannot answer for itself, so it is
+   * asked here, by one name, on every backend. The default is the part that is
+   * true everywhere: alive, and not left inside a transaction. A driver adds
+   * what its protocol knows — PostgreSQL's `ReadyForQuery` status, the Redis
+   * database a stray `SELECT` moved the connection to — and anything not
+   * vouched for is destroyed rather than reused, which is how an aborted
+   * transaction or an open portal is stopped from leaking into the next
+   * request.
+   */
+  get reusable() {
+    return this.usable && this._depth === 0;
+  }
+
   async query(q, params, options = {}) {
     this._open();
     const normalized = normalizeQuery(q, params, this.dialect, this.backend);
@@ -1103,7 +1132,11 @@ class SqliteConnection extends BaseConnection {
   }
 }
 
-async function connectSqlite(url, options) {
+/// The database a `sqlite:` URL names.
+///
+/// Split out because the driver needs it twice: once to open, and once to
+/// answer whether the URL can be pooled at all.
+function sqlitePath(url) {
   // The path is everything after the scheme, with any query string removed —
   // `sqlite:./app.db`, `sqlite:/var/lib/app.db`, `sqlite::memory:`.
   const rest = url.slice("sqlite:".length);
@@ -1134,7 +1167,11 @@ async function connectSqlite(url, options) {
       DbErrorCode.Unsupported,
     );
   }
+  return path;
+}
 
+async function connectSqlite(url, options) {
+  const path = sqlitePath(url);
   const key = options.key === undefined ? "" : toHexKey(options.key);
   const cipher = options.cipher === undefined ? "" : String(options.cipher);
   try {
@@ -1178,60 +1215,153 @@ function toHexKey(key) {
 }
 
 // ---------------------------------------------------------------------------
-// The backend registry
+// Drivers
 // ---------------------------------------------------------------------------
 
-const backends = new Map([["sqlite", connectSqlite]]);
-
-// Reserved for the OpenTF engine. Held rather than left free so that the name
-// cannot be taken before the engine that owns it arrives — a scheme is part of
-// the contract, and one squatted by a third party could not be given back.
-const RESERVED = new Set(["otfdb"]);
-
-/// Registers a backend for a connection-string scheme.
+/// A backend, as a value.
 ///
-///     registerBackend("mysql", async (url, options) => new MyConnection(...));
-///
-/// The factory resolves to a connection — a `BaseConnection` subclass, in
-/// practice, since that is what makes it behave like the built-ins.
-function registerBackend(scheme, factory) {
+/// A driver is imported and handed to `connect()` — `connect(url, { driver })` —
+/// rather than installed into a registry by the side effect of importing it.
+/// The difference is not stylistic. A registry makes the set of usable backends
+/// depend on which modules happened to be evaluated, which is invisible at the
+/// call site, order-dependent, and impossible to type: `connect()` could only
+/// promise the portable `Connection`, so a driver's own surface needed a second
+/// object to reach it. Passing the driver makes the backend part of the call,
+/// so the connection that comes back is *that driver's* connection — Redis
+/// commands and all — and nothing has to be registered, reserved, or replaced.
+class Driver {
+  constructor({ name, schemes, dialect, open, pooled }) {
+    if (typeof name !== "string" || name === "") {
+      throw dbError("a driver needs a name", DbErrorCode.Unsupported);
+    }
+    if (!Array.isArray(schemes) || schemes.length === 0) {
+      throw dbError(
+        `the ${name} driver must name the schemes it takes, e.g. schemes: ["${name}"]`,
+        DbErrorCode.Unsupported,
+      );
+    }
+    if (!(dialect instanceof Dialect)) {
+      throw dbError(`the ${name} driver needs a Dialect`, DbErrorCode.Unsupported);
+    }
+    if (typeof open !== "function") {
+      throw dbError(`the ${name} driver needs an open(url, options)`, DbErrorCode.Unsupported);
+    }
+    if (pooled !== undefined && typeof pooled !== "function") {
+      throw dbError(`the ${name} driver's pooled must be a function`, DbErrorCode.Unsupported);
+    }
+    this.name = name;
+    this.schemes = Object.freeze(schemes.map((scheme) => normalizeScheme(scheme, name)));
+    this.dialect = dialect;
+    this._open = open;
+    this._pooled = pooled;
+    Object.freeze(this);
+  }
+
+  /// Whether this driver takes URLs of that scheme, with or without the colon.
+  accepts(scheme) {
+    return this.schemes.includes(String(scheme).replace(/:$/, "").toLowerCase());
+  }
+
+  /// Opens one connection. `connect()` is the way callers reach this; a driver
+  /// calls it directly when it opens connections of its own — a cluster client
+  /// following a redirect, a pool filling a slot.
+  open(url, options = {}) {
+    return this._open(url, options);
+  }
+
+  /// Opens a pool that behaves like one connection.
+  ///
+  /// The default is `PooledConnection`, which is the whole of it for most
+  /// backends. A driver overrides it to add its own surface to the pooled form
+  /// — or to refuse pooling for a URL that cannot be pooled, which `sqlite:`
+  /// does for `:memory:`.
+  pooled(url, options = {}, poolOptions = {}) {
+    return this._pooled === undefined
+      ? new PooledConnection(this, url, options, poolOptions)
+      : this._pooled(url, options, poolOptions);
+  }
+}
+
+function normalizeScheme(scheme, driverName) {
   const name = String(scheme).replace(/:$/, "").toLowerCase();
   if (!/^[a-z][a-z0-9+.-]*$/.test(name)) {
-    throw dbError(`${scheme} is not a usable scheme`, DbErrorCode.Unsupported);
-  }
-  if (RESERVED.has(name)) {
     throw dbError(
-      `the ${name}: scheme is reserved`,
+      `${scheme} is not a usable scheme for the ${driverName} driver`,
       DbErrorCode.Unsupported,
     );
   }
-  if (backends.has(name)) {
-    throw dbError(
-      `the ${name}: scheme is already registered; a built-in backend cannot be replaced`,
-      DbErrorCode.Unsupported,
-    );
-  }
-  if (typeof factory !== "function") {
-    throw dbError("a backend factory must be a function", DbErrorCode.Unsupported);
-  }
-  backends.set(name, factory);
+  return name;
 }
 
-/// The registered schemes, in registration order.
-function backendSchemes() {
-  return [...backends.keys()];
+/// Defines a driver.
+///
+///     export default defineDriver({
+///       name: "mydb",
+///       schemes: ["mydb"],
+///       dialect,
+///       open: (url, options) => MyConnection.connect(url, options),
+///     });
+function defineDriver(spec) {
+  return new Driver(spec ?? {});
 }
 
-/// Opens a connection, choosing the backend by the connection string's scheme.
+/// The built-in SQLite driver.
 ///
-///     const db = await connect("sqlite:./app.db", { key });
+/// It is an ordinary driver, defined with the same `defineDriver` a third party
+/// uses and passed the same way. Being built in buys it nothing but the fact
+/// that it is already imported: there is no privileged scheme, no seeded
+/// registry entry, and nothing `connect()` knows about it that it does not know
+/// about a driver published this morning.
+const sqlite = defineDriver({
+  name: "sqlite",
+  schemes: ["sqlite"],
+  dialect: SQLITE_DIALECT,
+  open: connectSqlite,
+  pooled(url, options, poolOptions) {
+    // Every `sqlite::memory:` open is its **own** database — nothing is shared
+    // between connections — so a pool of them is a pool of unrelated databases
+    // handed out at random. Refused by name rather than silently.
+    if (sqlitePath(url) === ":memory:") {
+      throw dbError(
+        "sqlite::memory: cannot be pooled: each connection would be its own database. Open it once, or use a file.",
+        DbErrorCode.Unsupported,
+      );
+    }
+    return new PooledConnection(sqlite, url, options, poolOptions);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Connecting
+// ---------------------------------------------------------------------------
+
+/// Opens a connection with the driver the caller passed.
 ///
-/// `sqlite:` names a file format and a SQL dialect, the way `postgres://` names
-/// a wire protocol — not a particular implementation, which is free to change
-/// underneath without the URL changing.
+///     import { connect, sqlite } from "runtime:db";
+///     const db = await connect("sqlite:./app.db", { driver: sqlite });
+///
+///     import postgres from "@opentf/esrun-postgres";
+///     const pg = await connect("postgres://user@host/app", { driver: postgres });
+///
+/// `pool: true` — or `pool: { max: 20 }` — gives a pool that presents the same
+/// surface one connection does, so pooling is a property of the call rather
+/// than a different object reached a different way.
+///
+/// The URL's scheme still matters: it is checked against the driver's, so
+/// pointing the SQLite driver at a `postgres://` URL is caught here rather than
+/// as a parse failure somewhere inside a driver that was never meant to see it.
 async function connect(url, options = {}) {
   if (typeof url !== "string") {
     throw dbError("a connection string is required", DbErrorCode.Unsupported);
+  }
+  const { driver, pool, ...rest } = options ?? {};
+  if (!(driver instanceof Driver)) {
+    throw dbError(
+      driver === undefined
+        ? 'a driver is required: connect(url, { driver }). The built-in is `import { sqlite } from "runtime:db"`; others are packages, e.g. `import postgres from "@opentf/esrun-postgres"`.'
+        : "options.driver must be a driver from defineDriver()",
+      DbErrorCode.Unsupported,
+    );
   }
   const colon = url.indexOf(":");
   if (colon <= 0) {
@@ -1241,17 +1371,16 @@ async function connect(url, options = {}) {
     );
   }
   const scheme = url.slice(0, colon).toLowerCase();
-  const factory = backends.get(scheme);
-  if (!factory) {
-    const known = backendSchemes().join(", ");
+  if (!driver.accepts(scheme)) {
     throw dbError(
-      RESERVED.has(scheme)
-        ? `the ${scheme}: scheme is reserved and has no backend yet`
-        : `no backend is registered for ${scheme}: — registered schemes are ${known}. A third-party driver registers its own with registerBackend().`,
+      `the ${driver.name} driver does not take ${scheme}: URLs — it takes ${driver.schemes
+        .map((s) => `${s}:`)
+        .join(", ")}`,
       DbErrorCode.Unsupported,
     );
   }
-  return factory(url, options);
+  if (pool === undefined || pool === false) return driver.open(url, rest);
+  return driver.pooled(url, rest, pool === true ? {} : pool);
 }
 
 
@@ -1436,6 +1565,124 @@ class Pool {
     for (const { resource } of this._idle.splice(0)) this._discard(resource);
     // Borrowed resources are left alone: their holders are still using them,
     // and will find the pool closed when they release.
+  }
+}
+
+/// A pool that behaves like one connection.
+///
+/// The whole of `connect(url, { driver, pool: true })`. It implements the same
+/// `Connection` surface a single connection does and borrows a real one per
+/// call, so pooling is something a connection *is* rather than a different
+/// object with a different shape reached through a different function. Every
+/// driver got this wrong in its own way before it lived here: each had written
+/// out the same acquire/release wrapper per method, and each had invented its
+/// own answer to what a pooled connection's `query` returns.
+///
+/// A driver subclasses it to add its own surface — `withConnection` is here for
+/// the things that are stateful across calls and therefore need one connection
+/// held for the whole of them.
+class PooledConnection {
+  constructor(driver, url, options = {}, poolOptions = {}) {
+    this.dialect = driver.dialect;
+    this.backend = driver.name;
+    this._driver = driver;
+    this._pool = new Pool({
+      create: () => driver.open(url, options),
+      destroy: (connection) => connection.close(),
+      // Checked on the way out as well as asserted on the way in: a connection
+      // can die while nobody is holding it, and a pool that only asks on
+      // release hands out the corpse.
+      validate: (connection) => connection.usable !== false,
+      max: poolOptions.max,
+      idleTimeout: poolOptions.idleTimeout,
+      acquireTimeout: poolOptions.acquireTimeout,
+    });
+  }
+
+  /** Borrowed and idle together. */
+  get size() {
+    return this._pool.size;
+  }
+
+  get idle() {
+    return this._pool.idle;
+  }
+
+  /** Callers queued behind a full pool. */
+  get pending() {
+    return this._pool.pending;
+  }
+
+  /// Returns a connection, asking it whether it is fit for the next caller.
+  /// `reusable` is strictly `true` or the connection is destroyed: a driver
+  /// that never answered has not vouched for anything.
+  _release(connection) {
+    this._pool.release(connection, { clean: connection.reusable === true });
+  }
+
+  async query(q, params, options) {
+    const connection = await this._pool.acquire();
+    try {
+      const rows = await connection.query(q, params, options);
+      if (rows.exhausted) {
+        // The whole result already arrived, so the connection is free before
+        // the caller reads a row — which is most queries, and the case where
+        // holding it until an iterator happened to finish would waste it.
+        this._release(connection);
+        return rows;
+      }
+      // A streaming result owns the connection until it ends. `Rows` closes
+      // itself however the iteration finishes, so this rides on that rather
+      // than asking the caller to remember.
+      const close = rows.close.bind(rows);
+      rows.close = async () => {
+        try {
+          await close();
+        } finally {
+          this._release(connection);
+        }
+      };
+      return rows;
+    } catch (e) {
+      this._release(connection);
+      throw e;
+    }
+  }
+
+  async execute(q, params, options) {
+    return this.withConnection((connection) => connection.execute(q, params, options));
+  }
+
+  async executeMany(q, rows) {
+    return this.withConnection((connection) => connection.executeMany(q, rows));
+  }
+
+  /// Runs `fn` in a transaction on **one** connection, which is the point: a
+  /// transaction spread across connections is not a transaction.
+  async transaction(fn) {
+    return this.withConnection((connection) => connection.transaction(fn));
+  }
+
+  /// Runs `fn` with one connection held for the whole of it.
+  ///
+  /// The escape hatch for everything that is stateful across calls — a session
+  /// setting, a `LISTEN`, a `WATCH` — where borrowing per call would spread the
+  /// state over connections that do not share it.
+  async withConnection(fn) {
+    const connection = await this._pool.acquire();
+    try {
+      return await fn(connection);
+    } finally {
+      this._release(connection);
+    }
+  }
+
+  async close() {
+    await this._pool.close();
+  }
+
+  async [Symbol.asyncDispose]() {
+    await this.close();
   }
 }
 
@@ -1888,10 +2135,12 @@ export {
   Rows,
   DbError,
   DbErrorCode,
+  sqlite,
   // Driver tier.
-  registerBackend,
-  backendSchemes,
+  defineDriver,
+  Driver,
   BaseConnection,
+  PooledConnection,
   Pool,
   Dialect,
   ByteWriter,
@@ -1905,4 +2154,4 @@ export {
   runBackendConformance,
 };
 
-export default { connect, sql, queryAst, DbError, DbErrorCode, registerBackend };
+export default { connect, sql, queryAst, sqlite, defineDriver, DbError, DbErrorCode };

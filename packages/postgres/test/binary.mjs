@@ -1,5 +1,6 @@
 import { env } from "runtime:process";
-import { connect } from "../dist/index.js";
+import postgres from "../dist/index.js";
+import { connect } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 
@@ -39,7 +40,7 @@ const describe = (v) => {
 };
 
 const read = async (cacheSize, temporal = true) => {
-  const db = await connect(url, { preparedStatementCacheSize: cacheSize, temporal });
+  const db = await connect(url, { driver: postgres, preparedStatementCacheSize: cacheSize, temporal });
   const row = await (await db.query(SQL)).first();
   const out = Object.entries(row.toObject()).map(([k, v]) => `${k}=${describe(v)}`);
   await db.close();

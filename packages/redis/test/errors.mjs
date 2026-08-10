@@ -7,11 +7,11 @@
 import { exit, env } from "runtime:process";
 import { connect, queryAst, DbError, DbErrorCode } from "runtime:db";
 
-import "../dist/index.js";
+import redis from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
 const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
-const db = await connect(url);
+const db = await connect(url, { driver: redis });
 await db.execute(queryAst(["FLUSHDB"]));
 
 /** The error a command threw, or `null`. */
@@ -68,13 +68,13 @@ is((await db.execute(queryAst(["SET", "after", "1"]))).changes, 1, "an error rep
 {
   // Once a socket is gone, every later caller gets the same latched error
   // rather than a different symptom of the one dead connection.
-  const doomed = await connect(url);
+  const doomed = await connect(url, { driver: redis });
   await doomed.execute(queryAst(["PING"]));
   const id = (await (await doomed.query(queryAst(["CLIENT", "ID"]))).first()).value;
   // Killed from a *second* connection. Redis defers a self-kill until after it
   // has replied, so asking a connection to kill itself is a race; asking
   // another one is not.
-  const executioner = await connect(url);
+  const executioner = await connect(url, { driver: redis });
   await executioner.execute(queryAst(["CLIENT", "KILL", "ID", String(id)]));
   await executioner.close();
 

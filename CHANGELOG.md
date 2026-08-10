@@ -8,6 +8,64 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **`runtime:db` takes a driver rather than a registry.** `connect(url, options)`
+  now requires `options.driver` — a value you import and pass, not a global
+  installed by importing a package for its side effects:
+
+  ```js
+  import { connect, sqlite } from "runtime:db";
+  import postgres from "@opentf/esrun-postgres";
+  import redis from "@opentf/esrun-redis";
+
+  const db = await connect("sqlite:./app.db", { driver: sqlite });
+  const pg = await connect("postgres://user@host/app", { driver: postgres });
+  const r  = await connect("redis://localhost", { driver: redis });
+  ```
+
+  `registerBackend` and `backendSchemes` are **gone**, and with them the
+  reserved-scheme list and the rule that a built-in could not be replaced. A
+  scheme was a global name a package claimed by being imported: which backends
+  existed depended on which modules had been evaluated, the dependency was
+  invisible at the call site, and two implementations of `postgres:` could not
+  coexist. A driver is an ordinary value, so none of that arises — and because
+  the driver is part of the call, `connect` returns **that driver's**
+  connection, which is what removed the second entry point every driver had
+  grown.
+
+  The built-in SQLite backend is now `sqlite`, an ordinary driver defined with
+  the same `defineDriver` a third party uses; `connect` knows nothing about it
+  that it does not know about a driver published this morning.
+
+- **Pooling is an option on `connect`, and lives in one place.**
+  `connect(url, { driver, pool: true })` — or `pool: { max: 20 }` — returns a
+  `PooledConnection` presenting exactly the surface one connection does, plus
+  `size`, `idle`, `pending` and `withConnection(fn)`. The borrow-per-call
+  discipline, returning a connection when a streaming result ends, and
+  destroying one that came back dirty were written out once per driver before
+  this; they are now written once, in `runtime:db`.
+
+  A connection answers `usable` (worth using at all) and `reusable` (fit for the
+  next caller) — the one question a protocol-blind pool cannot decide for
+  itself, now asked by one name on every backend instead of three
+  (`status === "I"`, `clean`, nothing at all).
+
+- **`@opentf/esrun-redis` is one object per connection.** `Redis`,
+  `createClient`, `createSubscriber`, `createPool`, `createCluster`,
+  `createSentinelClient` and `createSentinelPool` are gone. The command surface
+  is now on `RedisConnection` itself, so the connection `connect` returns
+  answers both vocabularies — `r.set("k", "v")` and
+  `r.query(queryAst(["LRANGE", …]))` on the same object — and the package
+  exports three drivers instead: `redis`, `redisCluster`, `redisSentinel`.
+  Which client you get follows from the driver you passed rather than from which
+  of seven functions you called.
+
+- **`@opentf/esrun-postgres` exports its driver.** `connect` and `createPool` are
+  gone from the package; `import postgres from "@opentf/esrun-postgres"` and
+  pass it. `PgPool` is now `PgPooled`, a `PooledConnection` subclass that adds
+  `executeScript` and nothing else.
+
 ### Added
 
 - **`commandTimeout` in `@opentf/esrun-redis`** (and `?command_timeout=`), which
@@ -32,8 +90,8 @@ namespace) is unstable and may change between minor releases until the API freez
   per-field numbers rather than flattening four outcomes into a boolean. An
   unbounded `XREAD BLOCK 0` is refused like every other blocking command.
 
-- **Sentinel support in `@opentf/esrun-redis`** — `createSentinelClient` and
-  `createSentinelPool` ask the sentinels where the master is and connect there,
+- **Sentinel support in `@opentf/esrun-redis`** — the `redisSentinel` driver
+  asks the sentinels where the master is and connects there,
   trying each in turn and promoting the one that answered. The address is
   **verified** with `ROLE` before it is used, because a sentinel mid-failover
   hands out a server that has just become a replica and writing to a replica
@@ -46,7 +104,7 @@ namespace) is unstable and may change between minor releases until the API freez
   is the small seam underneath, called before every dial including
   reconnections.
 
-- **Cluster support in `@opentf/esrun-redis`** — `createCluster(seeds)` reads
+- **Cluster support in `@opentf/esrun-redis`** — the `redisCluster` driver reads
   the topology with `CLUSTER SLOTS`, keeps a pool per primary, hashes keys to
   slots (CRC16/XMODEM with hash-tag rules, checked against published vectors)
   and follows `MOVED` and `ASK` redirects. `ASK` is distinguished properly: it
@@ -132,7 +190,7 @@ namespace) is unstable and may change between minor releases until the API freez
 
   The indefinite form is now allowed on a connection opened with
   `{ blocking: true }`, which is the caller saying that tying that one up is the
-  point. `createPool` **strips** the option: a pool's premise is that its
+  point. A pool **strips** the option: a pool's premise is that its
   connections come back, and honouring it there would hand out connections that
   can leave circulation permanently.
 
@@ -143,7 +201,7 @@ namespace) is unstable and may change between minor releases until the API freez
   which then refuses ordinary commands with `ERR_DB_CONNECTION_BUSY` — over
   RESP2 that is the protocol's own rule, since a subscribed connection accepts
   nothing but the subscribe family, and over RESP3 it is because the loop owns
-  the reader. `createSubscriber()` opens a client under a name that says so.
+  the reader. Open a second connection for it.
 
   Subscribing is **confirmed** before it resolves, so a publish straight after
   cannot race it and a subscribe the server refuses fails at the call rather

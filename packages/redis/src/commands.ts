@@ -1309,6 +1309,32 @@ function page<T>(reply: unknown, map: (items: unknown[]) => T[]): ScanPage<T> {
 
 // The batch constructors, resolved on first use.
 //
+/**
+ * Puts the command surface on a class that already has a base class.
+ *
+ * `RedisConnection` extends `runtime:db`'s `BaseConnection` and `RedisPooled`
+ * extends its `PooledConnection`, so neither can also extend `RedisCommands` —
+ * single inheritance, and both of those bases are the right one to have. The
+ * methods are copied onto the prototype instead, which is what a mixin is when
+ * the base is fixed rather than chosen.
+ *
+ * A method the target defines itself is **kept**: `call`, `execTransaction` and
+ * `execPipeline` are the three each implementation supplies, and they are the
+ * ones everything here is built from. Nothing is copied over them.
+ *
+ * The type half is a declaration merge at each call site
+ * (`export interface RedisConnection extends RedisCommands {}`), so the
+ * compiler sees the same surface the prototype gets.
+ */
+export function mixinCommands(target: { prototype: object }): void {
+  const descriptors = Object.getOwnPropertyDescriptors(RedisCommands.prototype);
+  for (const [name, descriptor] of Object.entries(descriptors)) {
+    if (name === "constructor") continue;
+    if (Object.hasOwn(target.prototype, name)) continue;
+    Object.defineProperty(target.prototype, name, descriptor);
+  }
+}
+
 // `batch.ts` imports this module to extend `RedisCommands`, so a static import
 // back would be a cycle: whichever module the loader reached second would see
 // the other's binding still uninitialized, and `multi()` would fail with a TDZ
