@@ -49,6 +49,19 @@ export interface SetOptions {
   get?: boolean;
 }
 
+/** One entry in a stream: its id, and its field/value pairs. */
+export interface StreamEntry {
+  /** `1699999999999-0` — a millisecond timestamp and a sequence number. */
+  id: string;
+  fields: Record<string, RedisValue>;
+}
+
+/** A point on the earth, as Redis stores it. */
+export interface GeoPosition {
+  longitude: number;
+  latitude: number;
+}
+
 /** What `SCAN` and its relatives answer: a cursor to continue from, and a page. */
 export interface ScanPage<T> {
   /** `"0"` when the iteration is complete. */
@@ -393,6 +406,41 @@ export abstract class RedisCommands {
     return count(await this.call(["HLEN", key]));
   }
 
+  /**
+   * Expires individual hash **fields** (Redis 7.4+).
+   *
+   * Answers one status per field: `1` set, `0` refused because the condition
+   * failed, `2` the field was deleted because the TTL was in the past, `-2` no
+   * such field. Reported as the numbers Redis uses rather than flattened to a
+   * boolean, because four outcomes do not fit in one.
+   */
+  async hexpire(key: string, seconds: number, ...fields: string[]): Promise<number[]> {
+    const reply = (await this.call([
+      "HEXPIRE", key, seconds, "FIELDS", fields.length, ...fields,
+    ])) as unknown[];
+    return reply.map(count);
+  }
+
+  async hpexpire(key: string, milliseconds: number, ...fields: string[]): Promise<number[]> {
+    const reply = (await this.call([
+      "HPEXPIRE", key, milliseconds, "FIELDS", fields.length, ...fields,
+    ])) as unknown[];
+    return reply.map(count);
+  }
+
+  /** Seconds left per field; `-1` no expiry, `-2` no such field. */
+  async httl(key: string, ...fields: string[]): Promise<number[]> {
+    const reply = (await this.call(["HTTL", key, "FIELDS", fields.length, ...fields])) as unknown[];
+    return reply.map(count);
+  }
+
+  async hpersist(key: string, ...fields: string[]): Promise<number[]> {
+    const reply = (await this.call([
+      "HPERSIST", key, "FIELDS", fields.length, ...fields,
+    ])) as unknown[];
+    return reply.map(count);
+  }
+
   /** One page of `HSCAN`, with the field/value pairs already re-paired. */
   async hscan(
     key: string,
@@ -448,6 +496,14 @@ export abstract class RedisCommands {
     return String(await this.call(["LTRIM", key, start, stop]));
   }
 
+  /** The index of the first matching element, or `null`. */
+  async lpos(key: string, value: CommandArg, options: { rank?: number } = {}): Promise<number | null> {
+    const args: CommandArg[] = ["LPOS", key, value];
+    if (options.rank !== undefined) args.push("RANK", options.rank);
+    const reply = await this.call(args);
+    return reply === null ? null : count(reply);
+  }
+
   async lmove(
     source: string,
     destination: string,
@@ -494,6 +550,13 @@ export abstract class RedisCommands {
 
   async smove(source: string, destination: string, member: CommandArg): Promise<boolean> {
     return truthy(await this.call(["SMOVE", source, destination, member]));
+  }
+
+  /** How many members the intersection has, without building it. */
+  async sintercard(keys: string[], options: { limit?: number } = {}): Promise<number> {
+    const args: CommandArg[] = ["SINTERCARD", keys.length, ...keys];
+    if (options.limit !== undefined) args.push("LIMIT", options.limit);
+    return count(await this.call(args));
   }
 
   async sunion(...keys: string[]): Promise<RedisValue[]> {
@@ -589,6 +652,27 @@ export abstract class RedisCommands {
     return value === null ? null : count(value);
   }
 
+  /** The scores of several members at once; `null` for ones not in the set. */
+  async zmscore(key: string, ...members: CommandArg[]): Promise<(number | null)[]> {
+    const reply = (await this.call(["ZMSCORE", key, ...members])) as unknown[];
+    return reply.map((score) => (score === null ? null : Number(score)));
+  }
+
+  /** Stores a range into another key, answering how many members it holds. */
+  async zrangestore(
+    destination: string,
+    source: string,
+    start: number | string,
+    stop: number | string,
+    options: { byScore?: boolean; byLex?: boolean; rev?: boolean } = {},
+  ): Promise<number> {
+    const args: CommandArg[] = ["ZRANGESTORE", destination, source, start, stop];
+    if (options.byScore) args.push("BYSCORE");
+    if (options.byLex) args.push("BYLEX");
+    if (options.rev) args.push("REV");
+    return count(await this.call(args));
+  }
+
   async zscan(
     key: string,
     cursor: string | number = 0,
@@ -598,6 +682,263 @@ export abstract class RedisCommands {
     if (options.match !== undefined) args.push("MATCH", options.match);
     if (options.count !== undefined) args.push("COUNT", options.count);
     return page(await this.call(args), scored);
+  }
+
+  // -- string ranges and bits -----------------------------------------------
+
+  /** Overwrites part of a string, padding with NUL bytes if it has to. */
+  async setrange(key: string, offset: number, value: CommandArg): Promise<number> {
+    return count(await this.call(["SETRANGE", key, offset, value]));
+  }
+
+  /** A substring by byte offsets. `end` is **inclusive**, and `-1` is the last byte. */
+  async getrange(key: string, start: number, end: number): Promise<RedisValue> {
+    return (await this.call(["GETRANGE", key, start, end])) as RedisValue;
+  }
+
+  async setbit(key: string, offset: number, value: 0 | 1): Promise<number> {
+    return count(await this.call(["SETBIT", key, offset, value]));
+  }
+
+  async getbit(key: string, offset: number): Promise<number> {
+    return count(await this.call(["GETBIT", key, offset]));
+  }
+
+  /** How many bits are set. The range, if given, is in **bytes** unless `bit`. */
+  async bitcount(
+    key: string,
+    range?: { start: number; end: number; bit?: boolean },
+  ): Promise<number> {
+    const args: CommandArg[] = ["BITCOUNT", key];
+    if (range !== undefined) {
+      args.push(range.start, range.end, range.bit ? "BIT" : "BYTE");
+    }
+    return count(await this.call(args));
+  }
+
+  /** The first bit set to `bit`, or `-1`. */
+  async bitpos(key: string, bit: 0 | 1, range?: { start: number; end?: number }): Promise<number> {
+    const args: CommandArg[] = ["BITPOS", key, bit];
+    if (range !== undefined) {
+      args.push(range.start);
+      if (range.end !== undefined) args.push(range.end);
+    }
+    return count(await this.call(args));
+  }
+
+  /** A bitwise operation across keys, into `destination`. */
+  async bitop(
+    operation: "AND" | "OR" | "XOR" | "NOT",
+    destination: string,
+    ...keys: string[]
+  ): Promise<number> {
+    return count(await this.call(["BITOP", operation, destination, ...keys]));
+  }
+
+  // -- HyperLogLog ----------------------------------------------------------
+
+  /**
+   * Adds to a HyperLogLog — a set that counts its members in 12 KB however many
+   * there are, at the cost of being approximate (about 0.81% error).
+   *
+   * Returns `true` when the estimate changed, which is not the same as "this
+   * member was new".
+   */
+  async pfadd(key: string, ...members: CommandArg[]): Promise<boolean> {
+    return truthy(await this.call(["PFADD", key, ...members]));
+  }
+
+  /** The approximate cardinality, across several keys if given. */
+  async pfcount(...keys: string[]): Promise<number> {
+    return count(await this.call(["PFCOUNT", ...keys]));
+  }
+
+  async pfmerge(destination: string, ...sources: string[]): Promise<string> {
+    return String(await this.call(["PFMERGE", destination, ...sources]));
+  }
+
+  // -- streams --------------------------------------------------------------
+
+  /**
+   * Appends to a stream, answering the id it was given.
+   *
+   * `id` defaults to `*`, which asks the server to assign one — the ordinary
+   * case, and the only one that cannot produce an out-of-order stream.
+   * `maxlen` with `approximate` (the default) is how a stream is kept bounded
+   * cheaply: Redis trims whole nodes rather than exact counts.
+   */
+  async xadd(
+    key: string,
+    fields: Record<string, CommandArg>,
+    options: { id?: string; maxlen?: number; minid?: string; approximate?: boolean } = {},
+  ): Promise<string> {
+    const args: CommandArg[] = ["XADD", key];
+    const approx = options.approximate !== false;
+    if (options.maxlen !== undefined) args.push("MAXLEN", approx ? "~" : "=", options.maxlen);
+    if (options.minid !== undefined) args.push("MINID", approx ? "~" : "=", options.minid);
+    args.push(options.id ?? "*");
+    for (const [field, value] of Object.entries(fields)) args.push(field, value);
+    return String(await this.call(args));
+  }
+
+  async xlen(key: string): Promise<number> {
+    return count(await this.call(["XLEN", key]));
+  }
+
+  /** Entries between two ids. `-` and `+` are the smallest and largest. */
+  async xrange(
+    key: string,
+    start = "-",
+    end = "+",
+    options: { count?: number } = {},
+  ): Promise<StreamEntry[]> {
+    const args: CommandArg[] = ["XRANGE", key, start, end];
+    if (options.count !== undefined) args.push("COUNT", options.count);
+    return entries(await this.call(args));
+  }
+
+  async xrevrange(
+    key: string,
+    end = "+",
+    start = "-",
+    options: { count?: number } = {},
+  ): Promise<StreamEntry[]> {
+    const args: CommandArg[] = ["XREVRANGE", key, end, start];
+    if (options.count !== undefined) args.push("COUNT", options.count);
+    return entries(await this.call(args));
+  }
+
+  async xdel(key: string, ...ids: string[]): Promise<number> {
+    return count(await this.call(["XDEL", key, ...ids]));
+  }
+
+  async xtrim(
+    key: string,
+    options: { maxlen?: number; minid?: string; approximate?: boolean },
+  ): Promise<number> {
+    const args: CommandArg[] = ["XTRIM", key];
+    const approx = options.approximate !== false;
+    if (options.maxlen !== undefined) args.push("MAXLEN", approx ? "~" : "=", options.maxlen);
+    if (options.minid !== undefined) args.push("MINID", approx ? "~" : "=", options.minid);
+    return count(await this.call(args));
+  }
+
+  /**
+   * Reads from one or more streams, from an id exclusive.
+   *
+   * `streams` maps a key to the id to read *after* — `"0"` for everything so
+   * far, `"$"` for only what arrives next. `block` waits that many
+   * milliseconds; `0` would wait forever and is refused, for the reason every
+   * blocking command is (see the README).
+   */
+  async xread(
+    streams: Record<string, string>,
+    options: { count?: number; block?: number } = {},
+  ): Promise<Record<string, StreamEntry[]>> {
+    const args: CommandArg[] = ["XREAD"];
+    if (options.count !== undefined) args.push("COUNT", options.count);
+    if (options.block !== undefined) args.push("BLOCK", options.block);
+    const keys = Object.keys(streams);
+    args.push("STREAMS", ...keys, ...keys.map((key) => streams[key]!));
+    return streamReply(await this.call(args));
+  }
+
+  /** Creates a consumer group. `id` is where it starts — `$` for new entries only. */
+  async xgroupCreate(
+    key: string,
+    group: string,
+    id = "$",
+    options: { mkstream?: boolean } = {},
+  ): Promise<string> {
+    const args: CommandArg[] = ["XGROUP", "CREATE", key, group, id];
+    if (options.mkstream) args.push("MKSTREAM");
+    return String(await this.call(args));
+  }
+
+  async xgroupDestroy(key: string, group: string): Promise<boolean> {
+    return truthy(await this.call(["XGROUP", "DESTROY", key, group]));
+  }
+
+  /**
+   * Reads as a member of a consumer group.
+   *
+   * `">"` means entries no one in the group has taken yet; any other id means
+   * this consumer's own pending entries, for recovering after a crash.
+   */
+  async xreadgroup(
+    group: string,
+    consumer: string,
+    streams: Record<string, string>,
+    options: { count?: number; block?: number; noack?: boolean } = {},
+  ): Promise<Record<string, StreamEntry[]>> {
+    const args: CommandArg[] = ["XREADGROUP", "GROUP", group, consumer];
+    if (options.count !== undefined) args.push("COUNT", options.count);
+    if (options.block !== undefined) args.push("BLOCK", options.block);
+    if (options.noack) args.push("NOACK");
+    const keys = Object.keys(streams);
+    args.push("STREAMS", ...keys, ...keys.map((key) => streams[key]!));
+    return streamReply(await this.call(args));
+  }
+
+  /** Marks entries as handled, so they leave the group's pending list. */
+  async xack(key: string, group: string, ...ids: string[]): Promise<number> {
+    return count(await this.call(["XACK", key, group, ...ids]));
+  }
+
+  // -- geo ------------------------------------------------------------------
+
+  /** Adds points, as `{ member: [longitude, latitude] }`. */
+  async geoadd(key: string, members: Record<string, [number, number]>): Promise<number> {
+    const args: CommandArg[] = ["GEOADD", key];
+    for (const [member, [longitude, latitude]] of Object.entries(members)) {
+      args.push(longitude, latitude, member);
+    }
+    return count(await this.call(args));
+  }
+
+  /** Where each member is, or `null` for one that is not there. */
+  async geopos(key: string, ...members: string[]): Promise<(GeoPosition | null)[]> {
+    const reply = (await this.call(["GEOPOS", key, ...members])) as unknown[];
+    return reply.map((point) =>
+      Array.isArray(point)
+        ? { longitude: Number(point[0]), latitude: Number(point[1]) }
+        : null,
+    );
+  }
+
+  /** The distance between two members, or `null` if either is missing. */
+  async geodist(
+    key: string,
+    from: string,
+    to: string,
+    unit: "m" | "km" | "mi" | "ft" = "m",
+  ): Promise<number | null> {
+    const value = await this.call(["GEODIST", key, from, to, unit]);
+    return value === null ? null : Number(value);
+  }
+
+  /** Members within a radius of a member or a point. */
+  async geosearch(
+    key: string,
+    options: {
+      fromMember?: string;
+      fromLonLat?: [number, number];
+      byRadius?: number;
+      byBox?: [number, number];
+      unit?: "m" | "km" | "mi" | "ft";
+      sort?: "ASC" | "DESC";
+      count?: number;
+    },
+  ): Promise<RedisValue[]> {
+    const args: CommandArg[] = ["GEOSEARCH", key];
+    if (options.fromMember !== undefined) args.push("FROMMEMBER", options.fromMember);
+    if (options.fromLonLat !== undefined) args.push("FROMLONLAT", ...options.fromLonLat);
+    const unit = options.unit ?? "m";
+    if (options.byRadius !== undefined) args.push("BYRADIUS", options.byRadius, unit);
+    if (options.byBox !== undefined) args.push("BYBOX", ...options.byBox, unit);
+    if (options.sort !== undefined) args.push(options.sort);
+    if (options.count !== undefined) args.push("COUNT", options.count);
+    return (await this.call(args)) as RedisValue[];
   }
 
   // -- scripting ------------------------------------------------------------
@@ -878,6 +1219,39 @@ function popped(reply: unknown): { key: string; value: RedisValue } | null {
 function zpopped(reply: unknown): { key: string; member: RedisValue; score: number } | null {
   if (reply === null || !Array.isArray(reply)) return null;
   return { key: String(reply[0]), member: reply[1] as RedisValue, score: Number(reply[2]) };
+}
+
+/** `[[id, [field, value, …]], …]` as entries. */
+function entries(reply: unknown): StreamEntry[] {
+  if (!Array.isArray(reply)) return [];
+  return reply.map((entry) => {
+    const pair = entry as unknown[];
+    return { id: String(pair[0]), fields: pairs((pair[1] as unknown[]) ?? []) };
+  });
+}
+
+/**
+ * An `XREAD` reply, keyed by stream.
+ *
+ * RESP3 sends a map and RESP2 an array of `[name, entries]` pairs, so the two
+ * protocols disagree about the shape of the same answer — which is exactly the
+ * sort of difference a client exists to absorb. A read that timed out answers
+ * null, which is no streams rather than an error.
+ */
+function streamReply(reply: unknown): Record<string, StreamEntry[]> {
+  const out: Record<string, StreamEntry[]> = {};
+  if (reply === null || reply === undefined) return out;
+  if (Array.isArray(reply)) {
+    for (const stream of reply) {
+      const pair = stream as unknown[];
+      out[String(pair[0])] = entries(pair[1]);
+    }
+    return out;
+  }
+  for (const [name, value] of Object.entries(reply as Record<string, unknown>)) {
+    out[name] = entries(value);
+  }
+  return out;
 }
 
 /** A `SCAN`-family reply: `[cursor, items]`. */

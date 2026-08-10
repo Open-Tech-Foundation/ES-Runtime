@@ -79,10 +79,12 @@ export {
 };
 export type { CommandArg, Reply } from "./protocol/resp.js";
 export type {
+  GeoPosition,
   RedisValue,
   ScanOptions,
   ScanPage,
   SetOptions,
+  StreamEntry,
   TransactionRunner,
 } from "./commands.js";
 

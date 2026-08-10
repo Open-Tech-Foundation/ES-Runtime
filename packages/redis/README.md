@@ -436,6 +436,34 @@ did not deserve to be the one that fails.
 A transaction under a `WATCH` is excluded from even that retry: re-sending it
 onto a reopened connection would run it with no watch held.
 
+## Command families
+
+Beyond strings, keys, hashes, lists, sets and sorted sets:
+
+| | |
+| --- | --- |
+| **Streams** | `xadd`, `xrange`, `xrevrange`, `xread`, `xlen`, `xdel`, `xtrim`, and consumer groups (`xgroupCreate`, `xreadgroup`, `xack`) |
+| **Geo** | `geoadd`, `geopos`, `geodist`, `geosearch` |
+| **Bitmaps** | `setbit`, `getbit`, `bitcount`, `bitpos`, `bitop` |
+| **HyperLogLog** | `pfadd`, `pfcount`, `pfmerge` |
+| **Hash-field TTL** | `hexpire`, `hpexpire`, `httl`, `hpersist` (Redis 7.4+) |
+| **Ranges** | `setrange`, `getrange`, `lpos`, `sintercard`, `zmscore`, `zrangestore` |
+
+Stream entries come back as `{ id, fields }` rather than the nested arrays the
+wire uses, and `xread` keys its result by stream — RESP3 sends a map there and
+RESP2 an array of pairs, which the client absorbs.
+
+Bitmaps are **bytes**. Pass a `Uint8Array`, not a string: `"\xff"` is U+00FF,
+which is two bytes in UTF-8, and a bitmap that went through a text encoding is
+not the bitmap you meant.
+
+`hexpire` and friends answer one status **per field** using Redis's own numbers
+(`1` set, `0` condition failed, `2` deleted because the TTL was in the past,
+`-2` no such field) rather than flattening four outcomes into a boolean.
+
+Anything without a helper is still one call away — `r.call(["OBJECT", "ENCODING", key])`
+— so the list is a convenience over a complete surface, not the surface itself.
+
 ## Cluster
 
 ```js

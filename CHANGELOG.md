@@ -10,6 +10,16 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **More command families in `@opentf/esrun-redis`** — streams (including
+  consumer groups), geo, bitmaps, HyperLogLog, hash-field TTLs (Redis 7.4+),
+  and `setrange`/`getrange`/`lpos`/`sintercard`/`zmscore`/`zrangestore`.
+
+  Stream entries are `{ id, fields }` rather than the nested arrays the wire
+  uses, and `xread` keys its result by stream — RESP3 sends a map there where
+  RESP2 sends an array of pairs. `hexpire` and friends report Redis's own
+  per-field numbers rather than flattening four outcomes into a boolean. An
+  unbounded `XREAD BLOCK 0` is refused like every other blocking command.
+
 - **Sentinel support in `@opentf/esrun-redis`** — `createSentinelClient` and
   `createSentinelPool` ask the sentinels where the master is and connect there,
   trying each in turn and promoting the one that answered. The address is
