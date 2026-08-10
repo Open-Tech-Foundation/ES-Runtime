@@ -559,6 +559,39 @@ export abstract class RedisCommands {
 
   // -- server and connection ------------------------------------------------
 
+  // -- publishing -----------------------------------------------------------
+
+  /**
+   * Publishes to a channel, answering how many subscribers received it.
+   *
+   * An ordinary command on an ordinary connection — only the *subscribing* half
+   * of pub/sub needs a connection of its own. A count of `0` means nobody was
+   * listening, which Redis does not treat as an error and neither does this:
+   * pub/sub is fire-and-forget, with no queue and no delivery guarantee.
+   */
+  async publish(channel: string, message: CommandArg): Promise<number> {
+    return count(await this.call(["PUBLISH", channel, message]));
+  }
+
+  /** Publishes to a sharded channel (Redis 7+). */
+  async spublish(channel: string, message: CommandArg): Promise<number> {
+    return count(await this.call(["SPUBLISH", channel, message]));
+  }
+
+  /** The channels with at least one subscriber. */
+  async pubsubChannels(pattern?: string): Promise<string[]> {
+    const args: CommandArg[] = pattern === undefined ? ["PUBSUB", "CHANNELS"] : ["PUBSUB", "CHANNELS", pattern];
+    return ((await this.call(args)) as unknown[]).map(String);
+  }
+
+  /** How many subscribers each named channel has. */
+  async pubsubNumsub(...channels: string[]): Promise<Record<string, number>> {
+    const reply = (await this.call(["PUBSUB", "NUMSUB", ...channels])) as unknown[];
+    const out: Record<string, number> = {};
+    for (let i = 0; i + 1 < reply.length; i += 2) out[String(reply[i])] = Number(reply[i + 1]);
+    return out;
+  }
+
   async ping(message?: string): Promise<string> {
     return String(await this.call(message === undefined ? ["PING"] : ["PING", message]));
   }

@@ -191,6 +191,56 @@ An error reply is a complete reply, so the connection stays usable — only a
 transport failure is fatal, and the first one is latched so every later caller
 sees the same lost connection rather than a different symptom of it.
 
+## Pub/sub
+
+```js
+import { Redis, createSubscriber } from "@opentf/esrun-redis";
+
+const sub = await createSubscriber("redis://localhost");
+await sub.subscribe("news", (message, { channel }) => console.log(channel, message));
+await sub.psubscribe("room.*", (message, { channel, pattern }) => …);
+
+const pub = await Redis.connect("redis://localhost");
+await pub.publish("news", "hello");        // → how many subscribers received it
+```
+
+**Two connections, and that is not a workaround.** The first `subscribe` gives
+its connection over to a read loop, and from then on that connection runs no
+ordinary commands — `get`, `set`, even `publish` refuse with
+`ERR_DB_CONNECTION_BUSY`. Over RESP2 this is the protocol's own rule, since a
+subscribed connection accepts nothing but the subscribe family; over RESP3 it is
+this driver's, because the read loop owns the reader and there is nobody to hand
+an ordinary reply to. It is also how you would deploy it anyway: a connection
+that must notice a message promptly should not be queued behind a report query.
+`createSubscriber()` is `createClient()` under a name that says which one it is.
+
+Subscribing is **confirmed** before it resolves, so publishing immediately after
+cannot race it and a subscribe the server refuses fails at the call rather than
+silently never firing. The loop owns reading and a `SUBSCRIBE` only needs
+writing — TCP is full duplex — which is what makes that possible.
+
+A connection given over to subscribing **stays** a subscriber. `unsubscribe()`
+with no argument drops every channel and stops the messages, but not the mode.
+
+| | |
+| --- | --- |
+| `subscribe(channels, handler?)` | exact channels |
+| `psubscribe(patterns, handler?)` | glob patterns; the handler also gets `pattern` |
+| `ssubscribe(channels, handler?)` | sharded channels (Redis 7+) |
+| `unsubscribe(channels?)` | and `punsubscribe`, `sunsubscribe` |
+| `onMessage` | a catch-all, after any per-channel handler |
+| `onSubscribeError` | the read loop's failures, since nobody awaits it |
+| `channels`, `patterns`, `shardChannels`, `subscribed` | what it is doing |
+
+Handlers run synchronously in the read loop, so a slow one delays every later
+message — hand real work to a queue. A handler that **throws** is reported to
+`onSubscribeError` and the loop continues: it is the only thing reading the
+socket, and letting one bad handler end it would silently stop every other
+subscription on the connection.
+
+Pub/sub is fire-and-forget. There is no queue and no delivery guarantee, and
+`publish` returning `0` means nobody was listening — which is not an error.
+
 ## Blocking commands
 
 `BLPOP`, `BRPOP`, `BLMOVE`, `BZPOPMIN`, `BLMPOP`, `WAIT` and `XREAD BLOCK` work,
@@ -245,11 +295,9 @@ different dataset.
 
 Named rather than left to be discovered:
 
-- **Pub/sub.** `SUBSCRIBE`, `PSUBSCRIBE`, `MONITOR` and the rest are refused by
-  name: they change what the server pushes, and this reader expects one reply
-  per command. Accepting them would desynchronize the stream in a way that
-  surfaces later, elsewhere, as a nonsense value.
-- **Blocking commands with no timeout.** See below — the bounded forms work.
+- **Blocking commands with no timeout.** See above — the bounded forms work.
+- **`MONITOR`**, which turns the connection into a firehose of every command the
+  server runs. One reply per command cannot represent that; use `redis-cli`.
 - **Cluster.** `MOVED` and `ASK` are reported as `ERR_DB_UNSUPPORTED` with an
   explanation rather than as a bare redirect. Connect to the node that owns the
   key, or put a proxy in front.
@@ -274,7 +322,10 @@ eval "$(test/tls-server.sh)"       # optional; the tls test skips without it
 The unit tests need no server — a wire codec does not — and cover the cases a
 live server will not produce on demand: a reply split across five chunks, a
 CRLF inside a bulk string, an attribute nobody asked for, RESP2's two spellings
-of null, and every argument position a blocking command keeps its timeout in.
+of null, every argument position a blocking command keeps its timeout in, and
+pub/sub over **both** protocols — RESP3 delivers messages as push frames and
+RESP2 as ordinary arrays, so the reader tells a message from a reply by its
+content there rather than by its type byte.
 
 Both halves run in CI against three servers: a `redis:8` service container, a
 password-protected one, and a TLS one with a certificate from a private

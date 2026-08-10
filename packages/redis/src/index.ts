@@ -31,7 +31,15 @@ import { registerBackend } from "runtime:db";
 
 import { RedisCommands } from "./commands.js";
 import { Redis } from "./client.js";
-import { RedisConnection, REDIS_DIALECT, type RedisOptions, type ServerHello } from "./connection.js";
+import {
+  RedisConnection,
+  REDIS_DIALECT,
+  type MessageContext,
+  type MessageHandler,
+  type RedisOptions,
+  type RedisPayload,
+  type ServerHello,
+} from "./connection.js";
 import { RedisPool, type RedisPoolOptions } from "./pool.js";
 import { parseConnectionString } from "./url.js";
 
@@ -42,7 +50,10 @@ export {
   RedisPool,
   REDIS_DIALECT,
   parseConnectionString,
+  type MessageContext,
+  type MessageHandler,
   type RedisOptions,
+  type RedisPayload,
   type RedisPoolOptions,
   type ServerHello,
 };
@@ -58,6 +69,19 @@ export async function connect(url: string, options: RedisOptions = {}): Promise<
 
 /** Opens a client — a connection with the command surface on it. */
 export function createClient(url: string, options: RedisOptions = {}): Promise<Redis> {
+  return Redis.connect(url, options);
+}
+
+/**
+ * Opens a client meant for subscribing.
+ *
+ * The same `Redis` as {@link createClient} — the name is the documentation.
+ * Subscribing gives a connection over to a read loop and it runs no ordinary
+ * commands afterwards, so a program that both listens and works needs two
+ * connections, and saying which is which where they are opened is how that
+ * stops being a surprise later.
+ */
+export function createSubscriber(url: string, options: RedisOptions = {}): Promise<Redis> {
   return Redis.connect(url, options);
 }
 

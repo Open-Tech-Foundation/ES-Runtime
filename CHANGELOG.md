@@ -8,6 +8,30 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **Pub/sub in `@opentf/esrun-redis`** — `subscribe`, `psubscribe`, `ssubscribe`
+  and their unsubscribes, with per-channel handlers, an `onMessage` catch-all,
+  and `publish`/`spublish`/`PUBSUB` introspection on the ordinary command
+  surface. The first `subscribe` **gives its connection over to a read loop**,
+  which then refuses ordinary commands with `ERR_DB_CONNECTION_BUSY` — over
+  RESP2 that is the protocol's own rule, since a subscribed connection accepts
+  nothing but the subscribe family, and over RESP3 it is because the loop owns
+  the reader. `createSubscriber()` opens a client under a name that says so.
+
+  Subscribing is **confirmed** before it resolves, so a publish straight after
+  cannot race it and a subscribe the server refuses fails at the call rather
+  than silently never firing — the loop owns reading while a `SUBSCRIBE` only
+  needs writing, and TCP is full duplex. A handler that throws is reported to
+  `onSubscribeError` and the loop continues, since it is the only thing reading
+  the socket and one bad handler must not silently stop every other
+  subscription. Works over both protocols, which are genuinely different paths:
+  RESP3 delivers messages as push frames, RESP2 as ordinary arrays.
+
+  A raw `call(["SUBSCRIBE", …])` is still refused, now pointing at the method
+  instead of calling the feature unsupported. `MONITOR` remains refused: one
+  reply per command cannot represent a firehose of every command the server runs.
+
 ### Fixed
 
 - **`@opentf/esrun-redis` refuses a blocking command with no timeout.**

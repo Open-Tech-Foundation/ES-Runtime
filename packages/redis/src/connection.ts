@@ -101,6 +101,26 @@ export interface RedisOptions extends DecodeOptions {
   resp3?: boolean;
 }
 
+/** A published message's payload — bytes in `binary` mode, text otherwise. */
+export type RedisPayload = string | Uint8Array;
+
+/** Where a message came from. `pattern` only for a `psubscribe` delivery. */
+export interface MessageContext {
+  /** The channel the message was published to — always the concrete one. */
+  readonly channel: string;
+  /** The pattern that matched, for a `psubscribe` handler. */
+  readonly pattern?: string;
+}
+
+/**
+ * A subscription handler.
+ *
+ * It is called synchronously from the read loop, so it should not block: a slow
+ * handler delays every later message on the connection. Hand the work to a
+ * queue if it is not quick.
+ */
+export type MessageHandler = (payload: RedisPayload, context: MessageContext) => void;
+
 /** What the server said about itself in its `HELLO` reply. */
 export interface ServerHello {
   server: string;
@@ -145,6 +165,18 @@ export class RedisConnection extends BaseConnection {
   #wantedDb = 0;
   /** Set between `MULTI` and the `EXEC`/`DISCARD` that ends it. */
   #inMulti = false;
+
+  // -- subscriber state -----------------------------------------------------
+
+  /** The read loop, once this connection has been given over to subscribing. */
+  #pump: Promise<void> | null = null;
+  /** Subscribe/unsubscribe confirmations still owed, oldest first. */
+  #confirmations: { resolve: () => void; reject: (e: unknown) => void }[] = [];
+  #channels = new Map<string, Set<MessageHandler>>();
+  #patterns = new Map<string, Set<MessageHandler>>();
+  #shards = new Map<string, Set<MessageHandler>>();
+  /** Set while `_close` is tearing down, so the pump's failure is not news. */
+  #closing = false;
 
   constructor() {
     super({ dialect: REDIS_DIALECT, backend: "redis" });
@@ -338,6 +370,16 @@ export class RedisConnection extends BaseConnection {
   /** Takes the connection for one exchange, and gives it back. */
   async #call(args: readonly CommandArg[]): Promise<Reply> {
     if (this.#fatal !== null) throw this.#fatal;
+    if (this.#pump !== null) {
+      // The read loop owns the reader, so there is nobody to hand a reply to.
+      // Over RESP2 the server would refuse the command anyway — a subscribed
+      // connection accepts only the subscribe family — so this refuses for the
+      // protocol's reason as much as for the implementation's.
+      throw new DbError(
+        "this connection is subscribed and runs no commands — use another connection, or a pool",
+        { code: DbErrorCode.ConnectionBusy },
+      );
+    }
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => {
       release = resolve;
@@ -384,6 +426,256 @@ export class RedisConnection extends BaseConnection {
     this._open();
     const checked = guard(args);
     return this._withSignal(options.signal, async () => toValue(await this.#call(checked), this.#decode));
+  }
+
+  // -- pub/sub --------------------------------------------------------------
+
+  /**
+   * Called for every message on a channel this connection is subscribed to,
+   * after any handler registered for that channel specifically.
+   *
+   * The catch-all, for a caller that would rather switch on the channel itself
+   * than register per channel.
+   */
+  onMessage: MessageHandler | undefined;
+
+  /** Called when the read loop fails, since nobody is awaiting it. */
+  onSubscribeError: ((error: unknown) => void) | undefined;
+
+  /** Whether this connection has been given over to subscribing. */
+  get subscribed(): boolean {
+    return this.#pump !== null;
+  }
+
+  /** The channels, patterns and shard channels currently subscribed. */
+  get channels(): string[] {
+    return [...this.#channels.keys()];
+  }
+
+  get patterns(): string[] {
+    return [...this.#patterns.keys()];
+  }
+
+  get shardChannels(): string[] {
+    return [...this.#shards.keys()];
+  }
+
+  /**
+   * Subscribes to one or more channels.
+   *
+   * **The first subscribe gives this connection over to a read loop**, and from
+   * then on it runs no ordinary commands: `query`, `execute` and `command`
+   * refuse with `ERR_DB_CONNECTION_BUSY`. That is not a simplification — over
+   * RESP2 it is the protocol's own rule, since a subscribed connection accepts
+   * nothing but the subscribe family — and it is how you would deploy it
+   * anyway: a connection that must notice a message promptly should not be
+   * waiting behind someone's report query.
+   *
+   * The loop owns *reading*. A `SUBSCRIBE` only needs *writing*, and TCP is
+   * full duplex, so the command goes out underneath the loop and the loop
+   * resolves it when its confirmation comes back — which is why this can await
+   * confirmation rather than hope, and why a subscribe that the server refuses
+   * fails here instead of silently never firing.
+   *
+   * A connection given over to subscribing **stays** a subscriber. Unsubscribing
+   * from everything stops the messages, not the mode; open another connection
+   * for ordinary work, which is what a subscriber wants anyway.
+   */
+  async subscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<void> {
+    await this.#subscribeTo("SUBSCRIBE", this.#channels, channels, handler);
+  }
+
+  /** Subscribes by glob pattern — `news.*`. Messages carry the pattern too. */
+  async psubscribe(patterns: string | readonly string[], handler?: MessageHandler): Promise<void> {
+    await this.#subscribeTo("PSUBSCRIBE", this.#patterns, patterns, handler);
+  }
+
+  /** Subscribes to a sharded channel (Redis 7+), which a cluster does not broadcast. */
+  async ssubscribe(channels: string | readonly string[], handler?: MessageHandler): Promise<void> {
+    await this.#subscribeTo("SSUBSCRIBE", this.#shards, channels, handler);
+  }
+
+  /** Unsubscribes. With no argument, from every channel. */
+  async unsubscribe(channels?: string | readonly string[]): Promise<void> {
+    await this.#unsubscribeFrom("UNSUBSCRIBE", this.#channels, channels);
+  }
+
+  async punsubscribe(patterns?: string | readonly string[]): Promise<void> {
+    await this.#unsubscribeFrom("PUNSUBSCRIBE", this.#patterns, patterns);
+  }
+
+  async sunsubscribe(channels?: string | readonly string[]): Promise<void> {
+    await this.#unsubscribeFrom("SUNSUBSCRIBE", this.#shards, channels);
+  }
+
+  async #subscribeTo(
+    command: string,
+    registry: Map<string, Set<MessageHandler>>,
+    names: string | readonly string[],
+    handler?: MessageHandler,
+  ): Promise<void> {
+    this._open();
+    const list = typeof names === "string" ? [names] : [...names];
+    if (list.length === 0) return;
+    this.#startPump();
+    // Registered before the confirmation rather than after: the server may
+    // deliver a message the instant it accepts the subscription, and a handler
+    // added afterwards would miss it.
+    for (const name of list) {
+      const handlers = registry.get(name) ?? new Set();
+      if (handler !== undefined) handlers.add(handler);
+      registry.set(name, handlers);
+    }
+    try {
+      // One confirmation per name, which is what the server sends.
+      await this.#confirmed(list.length, [command, ...list]);
+    } catch (e) {
+      for (const name of list) {
+        const handlers = registry.get(name);
+        if (handlers === undefined) continue;
+        if (handler !== undefined) handlers.delete(handler);
+        if (handlers.size === 0) registry.delete(name);
+      }
+      throw e;
+    }
+  }
+
+  async #unsubscribeFrom(
+    command: string,
+    registry: Map<string, Set<MessageHandler>>,
+    names?: string | readonly string[],
+  ): Promise<void> {
+    this._open();
+    if (this.#pump === null) return;
+    const list = names === undefined ? [...registry.keys()] : typeof names === "string" ? [names] : [...names];
+    if (list.length === 0) return;
+    await this.#confirmed(list.length, [command, ...list]);
+    for (const name of list) registry.delete(name);
+  }
+
+  /** Writes a subscribe-family command and waits for `count` confirmations. */
+  #confirmed(count: number, args: readonly CommandArg[]): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      let left = count;
+      const one = {
+        resolve: () => {
+          if (--left === 0) resolve();
+        },
+        reject,
+      };
+      for (let i = 0; i < count; i++) this.#confirmations.push(one);
+      this.#write(args).catch(reject);
+    });
+  }
+
+  /** Writes without reading — the pump owns the reader. */
+  async #write(args: readonly CommandArg[]): Promise<void> {
+    if (this.#fatal !== null) throw this.#fatal;
+    const writer = this.#writer;
+    if (writer === null) {
+      throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
+    }
+    try {
+      await writer.write(encodeCommand(args));
+    } catch (e) {
+      throw this.#die(e);
+    }
+  }
+
+  #startPump(): void {
+    if (this.#pump !== null) return;
+    this.#pump = (async () => {
+      for (;;) {
+        let reply: Reply;
+        try {
+          const replies = this.#replies;
+          if (replies === null) return;
+          reply = await replies.next();
+        } catch (e) {
+          if (this.#closing) return;
+          const error = this.#die(e);
+          // Nobody is awaiting this loop, so a failure has to be handed
+          // somewhere or it would be an unhandled rejection reported against a
+          // line that did not cause it.
+          for (const pending of this.#confirmations.splice(0)) pending.reject(error);
+          this.onSubscribeError?.(error);
+          return;
+        }
+        this.#deliver(reply);
+      }
+    })();
+  }
+
+  /** Routes one thing the pump read: a message, a confirmation, or an error. */
+  #deliver(reply: Reply): void {
+    if (reply.kind === "error") {
+      const error = serverError(reply.value.prefix, reply.value.message);
+      this.#confirmations.shift()?.reject(error);
+      return;
+    }
+    // RESP3 sends these as push frames and RESP2 as ordinary arrays. Same
+    // content either way, so the only difference is which type byte carried it.
+    const items = reply.kind === "push" || reply.kind === "array" ? reply.value : null;
+    if (items === null || items.length === 0) {
+      this.#confirmations.shift()?.resolve();
+      return;
+    }
+    const kind = String(toValue(items[0]!, { binary: false })).toLowerCase();
+    switch (kind) {
+      case "subscribe":
+      case "psubscribe":
+      case "ssubscribe":
+      case "unsubscribe":
+      case "punsubscribe":
+      case "sunsubscribe":
+        this.#confirmations.shift()?.resolve();
+        return;
+      case "message":
+      case "smessage": {
+        const channel = String(toValue(items[1]!, { binary: false }));
+        const payload = toValue(items[2]!, this.#decode) as RedisPayload;
+        this.#dispatch(kind === "message" ? this.#channels : this.#shards, channel, payload, {
+          channel,
+        });
+        return;
+      }
+      case "pmessage": {
+        const pattern = String(toValue(items[1]!, { binary: false }));
+        const channel = String(toValue(items[2]!, { binary: false }));
+        const payload = toValue(items[3]!, this.#decode) as RedisPayload;
+        this.#dispatch(this.#patterns, pattern, payload, { channel, pattern });
+        return;
+      }
+      default:
+        // Anything else on a subscribed connection is a reply to something the
+        // subscribe API sent — a `PING` in RESP2's subscriber mode answers with
+        // an array, not `+PONG`.
+        this.#confirmations.shift()?.resolve();
+    }
+  }
+
+  #dispatch(
+    registry: Map<string, Set<MessageHandler>>,
+    key: string,
+    payload: RedisPayload,
+    context: MessageContext,
+  ): void {
+    for (const handler of registry.get(key) ?? []) this.#safely(handler, payload, context);
+    if (this.onMessage !== undefined) this.#safely(this.onMessage, payload, context);
+  }
+
+  /**
+   * A handler that throws must not take the read loop with it.
+   *
+   * The loop is the only thing reading this socket; letting one bad handler end
+   * it would silently stop every other subscription on the connection.
+   */
+  #safely(handler: MessageHandler, payload: RedisPayload, context: MessageContext): void {
+    try {
+      handler(payload, context);
+    } catch (e) {
+      this.onSubscribeError?.(e);
+    }
   }
 
   // -- the runtime:db surface ----------------------------------------------
@@ -452,6 +744,13 @@ export class RedisConnection extends BaseConnection {
   // `supports.transactions` is false, so `executeMany` does not wrap it in one.
 
   protected async _close(): Promise<void> {
+    // The pump is parked on a read that tearing down is about to break. Told
+    // first, so it treats that as the close it is rather than as a lost
+    // connection worth reporting to `onSubscribeError`.
+    this.#closing = true;
+    for (const pending of this.#confirmations.splice(0)) {
+      pending.reject(new DbError("the connection is closed", { code: DbErrorCode.Closed }));
+    }
     if (this.#fatal === null && this.#writer !== null) {
       try {
         // A polite goodbye. Redis closes on `QUIT` without waiting to be asked
@@ -506,7 +805,6 @@ const MODE_CHANGING = new Set([
   "PUNSUBSCRIBE",
   "SSUBSCRIBE",
   "SUNSUBSCRIBE",
-  "MONITOR",
 ]);
 
 function guard(args: readonly CommandArg[]): CommandArg[] {
@@ -516,7 +814,13 @@ function guard(args: readonly CommandArg[]): CommandArg[] {
   const name = commandName(args);
   if (MODE_CHANGING.has(name)) {
     throw new DbError(
-      `${name} puts the connection into a mode where the server pushes messages, which this release does not support — pub/sub is a separate feature, and running it here would desynchronize the reply stream`,
+      `send ${name} through the subscribe API — connection.${name.toLowerCase()}(channels, handler) — rather than as a raw command: the subscribe family is answered by a read loop that has to know about it, and a raw one would leave its confirmation and every later message unread`,
+      { code: DbErrorCode.Unsupported },
+    );
+  }
+  if (name === "MONITOR") {
+    throw new DbError(
+      "MONITOR turns the connection into a firehose of every command the server runs, which this reader — one reply per command — cannot represent. Use redis-cli for it.",
       { code: DbErrorCode.Unsupported },
     );
   }
