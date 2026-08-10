@@ -1,4 +1,18 @@
 /**
+ * Batched commands: a pipeline, and a `MULTI`/`EXEC` transaction.
+ *
+ * The two share everything except what they do with the queue when it is sent,
+ * so they share a base class and differ in one method. Both **buffer** rather
+ * than sending as commands are written, which is what makes them one round trip
+ * and what lets a pool run either — there is nothing to hold a connection for
+ * until `exec()`.
+ *
+ * The difference is worth stating plainly, because "pipeline" and "transaction"
+ * get used interchangeably and are not the same thing. A **pipeline** is purely
+ * about round trips: the commands are sent together, and anyone else's commands
+ * may land among them. A **transaction** additionally asks the server to run
+ * them with nothing interleaved.
+ *
  * `MULTI`/`EXEC`, which is not what `transaction(fn)` means.
  *
  * Redis queues the commands and applies them together with nothing interleaved,
@@ -14,31 +28,44 @@
  */
 import { DbError, DbErrorCode } from "runtime:db";
 
-import { RedisCommands, registerTransaction, type TransactionRunner } from "./commands.js";
+import { RedisCommands, registerBatches, type TransactionRunner } from "./commands.js";
 import type { CommandArg } from "./protocol/resp.js";
 
 export type { TransactionRunner };
 
-export class RedisTransaction extends RedisCommands {
-  readonly #runner: TransactionRunner;
+export abstract class RedisBatch extends RedisCommands {
+  protected readonly runner: TransactionRunner;
   readonly #commands: CommandArg[][] = [];
   readonly #settlers: ((value: unknown) => void)[] = [];
   #executed = false;
 
   constructor(runner: TransactionRunner) {
     super();
-    this.#runner = runner;
+    this.runner = runner;
   }
 
+  /** How the queue is actually sent — the one thing the two kinds differ in. */
+  protected abstract send(
+    commands: readonly (readonly CommandArg[])[],
+  ): Promise<unknown[] | null>;
+
+  /** What to call this in an error message. */
+  protected abstract get noun(): string;
+
   /**
-   * Refused: Redis has no nested transaction, and `MULTI` inside `MULTI` is an
-   * error the server would reject at queue time anyway.
+   * Refused: neither kind nests. `MULTI` inside `MULTI` is an error the server
+   * would reject at queue time, and a pipeline inside one is meaningless —
+   * there is nothing to send it on.
    */
   override execTransaction(): Promise<unknown[] | null> {
     return Promise.reject(
-      new DbError("transactions do not nest — MULTI inside MULTI is not a Redis thing", {
-        code: DbErrorCode.Unsupported,
-      }),
+      new DbError(`a ${this.noun} does not nest`, { code: DbErrorCode.Unsupported }),
+    );
+  }
+
+  override execPipeline(): Promise<unknown[]> {
+    return Promise.reject(
+      new DbError(`a ${this.noun} does not nest`, { code: DbErrorCode.Unsupported }),
     );
   }
 
@@ -71,10 +98,9 @@ export class RedisTransaction extends RedisCommands {
    */
   override call(args: readonly CommandArg[]): Promise<unknown> {
     if (this.#executed) {
-      throw new DbError(
-        "this transaction has already been executed — build a new one with multi()",
-        { code: DbErrorCode.Unsupported },
-      );
+      throw new DbError(`this ${this.noun} has already been executed — build another one`, {
+        code: DbErrorCode.Unsupported,
+      });
     }
     this.#commands.push([...args]);
     return new Promise<unknown>((resolve) => {
@@ -101,7 +127,7 @@ export class RedisTransaction extends RedisCommands {
    */
   async exec(): Promise<unknown[] | null> {
     if (this.#executed) {
-      throw new DbError("this transaction has already been executed", {
+      throw new DbError(`this ${this.noun} has already been executed`, {
         code: DbErrorCode.Unsupported,
       });
     }
@@ -110,7 +136,7 @@ export class RedisTransaction extends RedisCommands {
 
     let results: unknown[] | null;
     try {
-      results = await this.#runner.execTransaction(this.#commands);
+      results = await this.send(this.#commands);
     } catch (e) {
       // Thrown to the caller of `exec()`, who asked; handed to the queued
       // promises as a value, since nobody necessarily took those.
@@ -137,7 +163,7 @@ export class RedisTransaction extends RedisCommands {
   /** Throws the queued commands away without sending anything. */
   discard(): void {
     this.#executed = true;
-    const discarded = new DbError("the transaction was discarded", {
+    const discarded = new DbError(`the ${this.noun} was discarded`, {
       code: DbErrorCode.Unsupported,
     });
     for (const settle of this.#settlers) settle(discarded);
@@ -145,7 +171,48 @@ export class RedisTransaction extends RedisCommands {
   }
 }
 
+/** `MULTI`/`EXEC`: the commands run with nothing interleaved. */
+export class RedisTransaction extends RedisBatch {
+  protected override get noun(): string {
+    return "transaction";
+  }
+
+  protected override send(
+    commands: readonly (readonly CommandArg[])[],
+  ): Promise<unknown[] | null> {
+    return this.runner.execTransaction(commands);
+  }
+}
+
+/**
+ * A pipeline: many commands, one round trip, and **no** atomicity.
+ *
+ * Purely about the boundary rather than about correctness. The commands are
+ * written together so their replies are already coming back while the later
+ * ones are still going out, which is the whole of what it buys — another
+ * client's commands may still land among them, and a failure does not stop the
+ * rest. Use {@link RedisTransaction} when that matters.
+ *
+ * `exec()` never answers `null` here, because there is no `WATCH` to abort it.
+ */
+export class RedisPipeline extends RedisBatch {
+  protected override get noun(): string {
+    return "pipeline";
+  }
+
+  protected override async send(
+    commands: readonly (readonly CommandArg[])[],
+  ): Promise<unknown[]> {
+    return this.runner.execPipeline(commands);
+  }
+
+  /** One result per command, errors in place. Never `null`. */
+  override async exec(): Promise<unknown[]> {
+    return (await super.exec()) ?? [];
+  }
+}
+
 // Handed to `commands.ts` rather than imported by it: the two modules need each
 // other, and this is the direction that can be a run-time edge instead of a
 // load-time cycle.
-registerTransaction(RedisTransaction);
+registerBatches(RedisTransaction, RedisPipeline);

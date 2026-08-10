@@ -41,13 +41,15 @@ import {
   type ServerHello,
 } from "./connection.js";
 import { RedisPool, type RedisPoolOptions } from "./pool.js";
-import { RedisTransaction } from "./transaction.js";
+import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
 import { parseConnectionString } from "./url.js";
 
 export {
   Redis,
   RedisCommands,
   RedisConnection,
+  RedisBatch,
+  RedisPipeline,
   RedisPool,
   RedisTransaction,
   REDIS_DIALECT,

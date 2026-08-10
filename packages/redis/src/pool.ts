@@ -95,6 +95,18 @@ export class RedisPool extends RedisCommands {
     }
   }
 
+  /** Runs a pipeline on one borrowed connection, for the same reason. */
+  override async execPipeline(
+    commands: readonly (readonly CommandArg[])[],
+  ): Promise<unknown[]> {
+    const connection = await this.#pool.acquire();
+    try {
+      return await connection.execPipeline(commands);
+    } finally {
+      this.#give(connection);
+    }
+  }
+
   /**
    * A command read as rows.
    *

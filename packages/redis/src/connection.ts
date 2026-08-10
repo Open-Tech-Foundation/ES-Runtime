@@ -21,6 +21,7 @@ import {
   Dialect,
   Rows,
   defineRowShape,
+  type DbInput,
   type ExecuteResult,
   type NormalizedQuery,
 } from "runtime:db";
@@ -499,6 +500,29 @@ export class RedisConnection extends BaseConnection {
     );
   }
 
+  /**
+   * Runs many commands as a pipeline, answering one result per command.
+   *
+   * No atomicity and none implied: another client's commands may land among
+   * these, and one failing does not stop the rest. What it buys is the round
+   * trips — N commands cost one instead of N.
+   *
+   * A failed command's result is a `DbError` **in place** rather than a throw,
+   * for the same reason a transaction's is: the others ran, and throwing would
+   * discard their results.
+   */
+  async execPipeline(commands: readonly (readonly CommandArg[])[]): Promise<unknown[]> {
+    this._open();
+    if (commands.length === 0) return [];
+    const checked = commands.map((args) => guard(args, this.#blocking));
+    const replies = await this.#pipeline(checked);
+    return replies.map((reply) =>
+      reply.kind === "error"
+        ? serverError(reply.value.prefix, reply.value.message)
+        : toValue(reply, this.#decode),
+    );
+  }
+
   /** Takes the connection for one exchange, and gives it back. */
   async #call(args: readonly CommandArg[]): Promise<Reply> {
     if (this.#fatal !== null) throw this.#fatal;
@@ -870,15 +894,57 @@ export class RedisConnection extends BaseConnection {
     return asExecuteResult(await this.#call(this.#commandOf(q)));
   }
 
-  // `_executeMany` is deliberately **not** overridden. Redis batches by
-  // pipelining — many commands written before any reply is read — which is a
-  // second exchange shape this connection does not have, so the base class's
-  // loop is what runs: one round trip per set, correct and no faster. It is the
-  // one place this driver leaves measurable time on the table, and it is named
-  // in the README rather than left to be discovered.
-  //
-  // Note that the batch is **not atomic** here, where it is on a SQL backend:
-  // `supports.transactions` is false, so `executeMany` does not wrap it in one.
+  /**
+   * The batch path: one round trip for the whole set, by pipelining.
+   *
+   * The base class's default loops `_execute`, which is correct and pays a
+   * round trip per set — and a round trip is the whole cost of a Redis command,
+   * so that loop spends its time on the network rather than in Redis.
+   *
+   * Two differences from a SQL backend's batch, both following from Redis
+   * rather than from a choice here. It is **not atomic**:
+   * `supports.transactions` is false, so `executeMany` does not wrap it in a
+   * transaction and a failure part-way leaves the earlier sets applied. And
+   * every set is *attempted* — where the default loop stops at the first
+   * failure, a pipeline has already sent them all — so a failure reports what
+   * went wrong after the rest have run.
+   */
+  protected override async _executeMany(
+    query: NormalizedQuery,
+    sets: [DbInput[], [string, DbInput][]][],
+  ): Promise<ExecuteResult> {
+    if (query.named.length > 0 || sets.some(([, named]) => named.length > 0)) {
+      throw new DbError(
+        "Redis commands take positional arguments only; pass arrays rather than objects",
+        { code: DbErrorCode.Unsupported },
+      );
+    }
+    const ast = query.ast;
+    if (!Array.isArray(ast) || ast.length === 0) {
+      throw new DbError(
+        'a redis query is a non-empty command array: queryAst(["SET"])',
+        { code: DbErrorCode.QueryForm },
+      );
+    }
+    const commands = sets.map(([positional]) =>
+      guard([...ast, ...positional] as CommandArg[], this.#blocking),
+    );
+    const replies = await this.#pipeline(commands);
+
+    let changes = 0;
+    let failure: DbError | null = null;
+    for (const reply of replies) {
+      if (reply.kind === "error") {
+        // The first failure is the one reported; the rest ran regardless, and
+        // their results are counted so `changes` says what actually happened.
+        failure ??= serverError(reply.value.prefix, reply.value.message);
+        continue;
+      }
+      changes += asExecuteResult(reply).changes;
+    }
+    if (failure !== null) throw failure;
+    return { changes, lastInsertRowid: null };
+  }
 
   protected async _close(): Promise<void> {
     // The pump is parked on a read that tearing down is about to break. Told

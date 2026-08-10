@@ -43,6 +43,11 @@ export class Redis extends RedisCommands {
     return this.connection.execTransaction(commands);
   }
 
+  /** Runs a pipeline built by `pipeline()`, on this client's connection. */
+  override execPipeline(commands: readonly (readonly CommandArg[])[]): Promise<unknown[]> {
+    return this.connection.execPipeline(commands);
+  }
+
   /** What the server said at `HELLO` — its version, id, role, and protocol. */
   get server(): Partial<ServerHello> {
     return this.connection.hello;

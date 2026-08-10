@@ -69,7 +69,9 @@ threw, which is worse than not having one. Use [`multi()`](#multiexec) instead,
 which is named after the command it sends.
 
 **`executeMany` is not atomic here**, for the same reason: there is no
-transaction to wrap it in. It runs one round trip per set.
+transaction to wrap it in. It *is* pipelined, so the whole batch costs one round
+trip — and because every set is already on the wire, a failure part-way reports
+what went wrong after the rest have run, rather than stopping at it.
 
 ## Connection strings
 
@@ -240,6 +242,29 @@ subscription on the connection.
 
 Pub/sub is fire-and-forget. There is no queue and no delivery guarantee, and
 `publish` returning `0` means nobody was listening — which is not an error.
+
+## Pipelining
+
+```js
+const p = r.pipeline();
+for (const id of ids) p.hgetall(`user:${id}`);
+const users = await p.exec();
+```
+
+The reason is arithmetic rather than taste. A Redis command's whole cost is a
+round trip, so a loop of `await`s spends its time on the network rather than in
+Redis. Measured on loopback, where a round trip is nearly free: **500 `INCR`s
+took 102 ms one at a time and 6 ms pipelined.** Across a real network the gap is
+wider, not narrower.
+
+A pipeline is **not** a transaction. Another client's commands may land among
+yours, and one failing does not stop the rest — the whole batch was already on
+the wire. Failed commands come back as `DbError` in place, exactly as in a
+transaction, and for the same reason: the others ran.
+
+`multi()` and `pipeline()` are the same builder with one difference — whether
+the batch is wrapped in `MULTI`/`EXEC`. Both buffer, so both are one round trip
+and both work on a pool.
 
 ## MULTI/EXEC
 

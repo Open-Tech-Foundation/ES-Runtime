@@ -10,6 +10,23 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Pipelining in `@opentf/esrun-redis`** — `pipeline()` builds a batch with the
+  whole command surface on it and sends it in **one round trip**. Measured on
+  loopback, where a round trip is nearly free: 500 `INCR`s took 102 ms one at a
+  time and 6 ms pipelined.
+
+  `executeMany` now uses it, so a Redis batch costs one round trip rather than
+  one per set. Two differences from a SQL backend's batch, both following from
+  Redis: it is still **not atomic** (`supports.transactions` is false, so there
+  is no transaction to wrap it in), and every set is *attempted* — where the
+  default loop stopped at the first failure, a pipeline has already sent them
+  all, so a failure is reported after the rest have run.
+
+  A pipeline is explicitly not a transaction: another client's commands may land
+  among the batch and one failing does not stop the rest. `multi()` is the one
+  that asks the server for isolation, and the two are the same builder differing
+  only in whether the batch is wrapped in `MULTI`/`EXEC`.
+
 - **`MULTI`/`EXEC` in `@opentf/esrun-redis`** — `multi()` returns a transaction
   with the whole command surface on it, `exec()` sends it, `watch()`/`unwatch()`
   do optimistic locking. Commands are **buffered** rather than sent as they are

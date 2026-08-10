@@ -18,11 +18,12 @@
  * methods without either of them reimplementing eighty of them.
  */
 import type { CommandArg } from "./protocol/resp.js";
-import type { RedisTransaction } from "./transaction.js";
+import type { RedisPipeline, RedisTransaction } from "./batch.js";
 
 /** What can run a built transaction — a client, or a pool. */
 export interface TransactionRunner {
   execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null>;
+  execPipeline(commands: readonly (readonly CommandArg[])[]): Promise<unknown[]>;
 }
 
 /** The value a Redis key holds. `Uint8Array` in `binary` mode. */
@@ -80,6 +81,9 @@ export abstract class RedisCommands {
    */
   abstract execTransaction(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null>;
 
+  /** Runs a built pipeline. Supplied by whatever owns a connection. */
+  abstract execPipeline(commands: readonly (readonly CommandArg[])[]): Promise<unknown[]>;
+
   // -- MULTI/EXEC -----------------------------------------------------------
 
   /**
@@ -97,10 +101,31 @@ export abstract class RedisCommands {
    * time. See {@link RedisTransaction.exec}.
    */
   multi(): RedisTransaction {
-    // Required lazily: `transaction.ts` extends this class, so importing it at
-    // the top would be a cycle that leaves one of the two undefined at
-    // construction time depending on which module loaded first.
-    return new (loadTransaction())(this);
+    // Required lazily: `batch.ts` extends this class, so importing it at the top
+    // would be a cycle that leaves one of the two undefined at construction
+    // time depending on which module the loader reached first.
+    return new (batches().transaction)(this);
+  }
+
+  /**
+   * Starts a pipeline: many commands, one round trip, no atomicity.
+   *
+   * ```js
+   * const p = r.pipeline();
+   * for (const id of ids) p.hgetall(`user:${id}`);
+   * const users = await p.exec();
+   * ```
+   *
+   * The reason to reach for it is arithmetic rather than taste. A command costs
+   * a round trip whatever it carries, so a loop of `await`s spends its time on
+   * the network rather than in Redis; a pipeline pays for one.
+   *
+   * It is **not** a transaction. Another client's commands may land among these,
+   * and one failing does not stop the rest — {@link multi} is the one that asks
+   * the server for isolation.
+   */
+  pipeline(): RedisPipeline {
+    return new (batches().pipeline)(this);
   }
 
   // -- strings --------------------------------------------------------------
@@ -861,24 +886,30 @@ function page<T>(reply: unknown, map: (items: unknown[]) => T[]): ScanPage<T> {
   return { cursor: String(cursor), items: map(items ?? []) };
 }
 
-// The constructor for `RedisTransaction`, resolved on first use.
+// The batch constructors, resolved on first use.
 //
-// `transaction.ts` imports this module to extend `RedisCommands`, so a static
-// import back would be a cycle: whichever module the loader reached second
-// would see the other's binding still uninitialized, and `multi()` would fail
-// with a TDZ error rather than anything that names the problem.
-let TransactionClass: (new (runner: TransactionRunner) => RedisTransaction) | null = null;
-
-/** Registered by `transaction.ts`'s module, breaking the cycle at run time. */
-export function registerTransaction(
-  ctor: new (runner: TransactionRunner) => RedisTransaction,
-): void {
-  TransactionClass = ctor;
+// `batch.ts` imports this module to extend `RedisCommands`, so a static import
+// back would be a cycle: whichever module the loader reached second would see
+// the other's binding still uninitialized, and `multi()` would fail with a TDZ
+// error rather than anything that names the problem.
+interface Batches {
+  transaction: new (runner: TransactionRunner) => RedisTransaction;
+  pipeline: new (runner: TransactionRunner) => RedisPipeline;
 }
 
-function loadTransaction(): new (runner: TransactionRunner) => RedisTransaction {
-  if (TransactionClass === null) {
-    throw new Error("the transaction module was not loaded — import the package entry point");
+let registered: Batches | null = null;
+
+/** Registered by `batch.ts`'s module, breaking the cycle at run time. */
+export function registerBatches(
+  transaction: Batches["transaction"],
+  pipeline: Batches["pipeline"],
+): void {
+  registered = { transaction, pipeline };
+}
+
+function batches(): Batches {
+  if (registered === null) {
+    throw new Error("the batch module was not loaded — import the package entry point");
   }
-  return TransactionClass;
+  return registered;
 }
