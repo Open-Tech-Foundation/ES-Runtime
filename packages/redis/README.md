@@ -6,7 +6,7 @@ backend **and** a Redis client, written entirely in JavaScript over
 the runtime for it.
 
 ```sh
-esrun add @opentf/esrun-redis
+npm install @opentf/esrun-redis
 ```
 
 ## Two surfaces, one connection
