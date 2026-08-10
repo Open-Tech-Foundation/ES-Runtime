@@ -274,7 +274,12 @@ eval "$(test/tls-server.sh)"       # optional; the tls test skips without it
 The unit tests need no server — a wire codec does not — and cover the cases a
 live server will not produce on demand: a reply split across five chunks, a
 CRLF inside a bulk string, an attribute nobody asked for, RESP2's two spellings
-of null.
+of null, and every argument position a blocking command keeps its timeout in.
+
+Both halves run in CI against three servers: a `redis:8` service container, a
+password-protected one, and a TLS one with a certificate from a private
+authority — because the things most likely to break are the ones a single
+default server cannot show.
 
 ## License
 

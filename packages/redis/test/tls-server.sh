@@ -11,7 +11,9 @@ name="${REDIS_TLS_CONTAINER:-esrun-redis-tls}"
 port="${REDIS_TLS_PORT:-6390}"
 # Docker refuses to mount paths it does not consider shared, and /tmp is
 # commonly one of those. A directory under $HOME is the portable choice.
-dir="$(mktemp -d "${REDIS_TLS_CERTS:-$HOME/.cache}/esrun-redis-tls.XXXXXX")"
+certs="${REDIS_TLS_CERTS:-$HOME/.cache}"
+mkdir -p "$certs"
+dir="$(mktemp -d "$certs/esrun-redis-tls.XXXXXX")"
 
 # A CA, and a server certificate it signs. The SAN matters: rustls checks the
 # hostname, and a certificate without one is refused however well it verifies.

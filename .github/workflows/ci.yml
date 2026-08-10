@@ -133,6 +133,81 @@ jobs:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           PG_URL: postgres://postgres:esrun@127.0.0.1:5432/esrun_test?sslmode=disable
 
+  # The Redis driver (packages/redis). Split the same way as the PostgreSQL job
+  # above, for the same reason — but it needs three servers rather than one,
+  # because the things most likely to break are the ones a single default server
+  # cannot show: authentication, an ACL user, and TLS.
+  #
+  # Only the plaintext one is a service container. The other two need a command
+  # (`--requirepass`) or a certificate minted at run time, and a service has
+  # nowhere to put either — `services:` can set an image and options but not the
+  # arguments after it.
+  redis:
+    name: redis driver
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: packages/redis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: Swatinem/rust-cache@v2
+      # The debug binary, not release: these tests check behaviour rather than
+      # speed, and a release build of v8 is not worth the minutes here.
+      - run: cargo build -p es-runtime-cli
+        working-directory: .
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+
+      # The password-protected server, for the handshake half. A failed `HELLO`
+      # has to be told apart from a wrong password, and only a server that wants
+      # one can show that.
+      - name: start the password-protected server
+        run: |
+          docker run -d --name esrun-redis-auth -p 6380:6379 redis:8 \
+            redis-server --requirepass esrun
+          for _ in $(seq 1 60); do
+            docker exec esrun-redis-auth redis-cli -a esrun ping 2>/dev/null | grep -q PONG && exit 0
+            sleep 0.5
+          done
+          echo "the password-protected server never answered" >&2
+          exit 1
+
+      # TLS, from a private authority — which is what an internal deployment
+      # looks like, and the case the public roots cannot cover. The script mints
+      # a CA and a certificate and prints the environment the test wants.
+      - name: start the TLS server
+        run: |
+          eval "$(./test/tls-server.sh)"
+          # `$GITHUB_ENV` takes `NAME=value`, not the `export NAME=value` the
+          # script prints for a shell — and the CA is a multi-line PEM, which
+          # needs the heredoc form or only its first line would survive.
+          {
+            echo "REDIS_TLS_URL=$REDIS_TLS_URL"
+            echo "REDIS_CA<<PEM_EOF"
+            echo "$REDIS_CA"
+            echo "PEM_EOF"
+          } >> "$GITHUB_ENV"
+
+      - run: ./test/unit/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+      - run: ./test/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          REDIS_URL: redis://127.0.0.1:6379
+          REDIS_AUTH_URL: redis://:esrun@127.0.0.1:6380
+
   msrv:
     name: msrv build (1.95)
     runs-on: ubuntu-latest
