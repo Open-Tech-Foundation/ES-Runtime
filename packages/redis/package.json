@@ -1,0 +1,38 @@
+{
+  "name": "@opentf/esrun-redis",
+  "version": "0.0.1",
+  "description": "Redis driver for ES Runtime (esrun) — a runtime:db backend and a Redis client, written entirely in JavaScript over runtime:net.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "engines": {
+    "esrun": ">=0.21.0"
+  },
+  "scripts": {
+    "build": "bun run build.mjs",
+    "test": "./test/unit/run.sh && ./test/run.sh",
+    "test:unit": "./test/unit/run.sh",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "file:../../types",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["esrun", "es-runtime", "opentf", "redis", "resp", "database", "driver", "cache"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Open-Tech-Foundation/ES-Runtime.git",
+    "directory": "packages/redis"
+  },
+  "homepage": "https://esrun.opentechf.org/docs/db",
+  "publishConfig": {
+    "access": "public"
+  }
+}

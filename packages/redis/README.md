@@ -1,0 +1,246 @@
+# @opentf/esrun-redis
+
+A Redis driver for [ES Runtime](https://esrun.opentechf.org) — a `runtime:db`
+backend **and** a Redis client, written entirely in JavaScript over
+`runtime:net`. There is no native code in this package, and none was added to
+the runtime for it.
+
+```sh
+esrun add @opentf/esrun-redis
+```
+
+## Two surfaces, one connection
+
+Most code wants the **client**, which is Redis with its own vocabulary:
+
+```js
+import { Redis } from "@opentf/esrun-redis";
+
+const r = await Redis.connect("redis://localhost");
+
+await r.set("session:42", "ada", { ex: 3600 });
+await r.get("session:42");                    // "ada"
+await r.hset("user:42", { name: "ada", age: "36" });
+await r.hgetall("user:42");                   // { name: "ada", age: "36" }
+await r.zadd("scores", { ada: 9.5, grace: 8 });
+await r.zrange("scores", 0, -1, { withScores: true });
+
+await r.close();
+```
+
+The **backend** is the same connection reached through `runtime:db`, for code
+that is written against the portable surface rather than against Redis:
+
+```js
+import "@opentf/esrun-redis";
+import { connect, queryAst } from "runtime:db";
+
+const db = await connect("redis://localhost");
+await db.execute(queryAst(["SET", "k", "v"]));
+
+const rows = await db.query(queryAst(["LRANGE", "log", 0, -1]));
+for await (const row of rows) console.log(row.value);
+```
+
+A command is an array, not a string: `queryAst(["SET", key, value])`. Nothing is
+parsed and nothing is quoted, so there is no injection to prevent — the
+arguments were never text that could become syntax.
+
+## Redis is not a SQL database, and the driver says so
+
+`runtime:db`'s contract has carried a query-AST form since its first release,
+for exactly this case. This is the first backend to use it, and it declares what
+it is:
+
+| | |
+| --- | --- |
+| `supports.queryAst` | `true` — commands are arrays |
+| `supports.sqlText` | `false` — SQL is refused with `ERR_DB_QUERY_FORM` |
+| `supports.transactions` | `false` — see below |
+| `supports.savepoints` | `false` |
+| `supports.returning` | `false` |
+| `supports.namedParameters` | `false` — Redis arguments are positional |
+
+**`transaction()` throws `ERR_DB_UNSUPPORTED`.** Redis has `MULTI`/`EXEC`, and
+it is deliberately not presented as a transaction: it queues commands and applies
+them together, but a command that fails at `EXEC` time does **not** roll back the
+ones beside it. A `transaction(fn)` built on it would commit half a body that
+threw, which is worse than not having one. Send `MULTI` yourself through
+`call()` — on a pool, inside `withConnection()` so it stays on one connection.
+
+**`executeMany` is not atomic here**, for the same reason: there is no
+transaction to wrap it in. It runs one round trip per set.
+
+## Connection strings
+
+```
+redis://[[username][:password]@]host[:port][/db][?option=value]
+rediss://…                                  TLS from the first byte
+```
+
+The path is a database **index**, not a name — `redis://host/3` is database 3.
+An empty username with a password (`redis://:secret@host`) is the pre-ACL
+spelling and means the `default` user.
+
+| Option | |
+| --- | --- |
+| `?db=` | the database index, when the path is not used |
+| `?connect_timeout=` | **seconds**, as every connection string spells it |
+| `?protocol=2` \| `3` | force RESP2, or ask for RESP3 (the default) |
+| `?client_name=` | `CLIENT SETNAME`, so the connection is identifiable |
+
+A password in a query parameter is **refused**: one place for a credential means
+a URL-redacting logger only has to know about one.
+
+> Reading a connection string out of the environment? `env` redacts anything
+> that looks like a secret, so a URL with a password in it arrives as
+> `"[redacted]"`. Pass it through `unmask` from `runtime:process` first.
+
+Everything is also an option: `Redis.connect(url, { password, db, tlsCa, … })`,
+and explicit options beat the URL.
+
+## TLS
+
+Redis has no in-band upgrade — no `SSLRequest`, no plaintext phase — so
+`rediss://` is an ordinary TLS socket, which makes this the one handshake here
+simpler than PostgreSQL's. An internal server with a certificate from a private
+authority needs that authority, because the public roots have never heard of it:
+
+```js
+const r = await Redis.connect("rediss://redis.internal", { tlsCa: await readFile("ca.crt") });
+```
+
+## RESP3, and what it buys
+
+`HELLO 3` is sent on connect, which negotiates the protocol **and**
+authenticates in one round trip. RESP3 types the reply: `HGETALL` comes back as
+a map rather than a flat array the client has to know to re-pair, and a double
+is a double rather than a string.
+
+A server older than Redis 6 has no `HELLO` and one built without RESP3 answers
+`NOPROTO`; both fall back to RESP2 and authenticate separately. A wrong password
+is **not** a fallback — it fails, rather than quietly becoming an
+unauthenticated session.
+
+The client absorbs the difference either way: `hgetall` is an object and
+`zrange({ withScores: true })` is pairs on both protocols. `r.protocol` reports
+which is in force.
+
+## Types
+
+| Redis | JavaScript |
+| --- | --- |
+| bulk string | `string` (UTF-8), or `Uint8Array` with `{ binary: true }` |
+| simple string | `string` |
+| integer | `number`, or `bigint` past 2⁵³ |
+| double (RESP3) | `number` |
+| big number (RESP3) | `bigint` |
+| boolean (RESP3) | `boolean` |
+| null / `$-1` / `*-1` | `null` |
+| array, set | `Array` |
+| map (RESP3) | plain object |
+
+Redis integers are signed 64-bit, so a counter can pass 2⁵³ — `number` where the
+value is exact and `bigint` where it is not, which is the rule `runtime:db`
+applies to every backend. Values are binary-safe: `{ binary: true }` on the
+connection hands bulk strings back as bytes rather than decoding them.
+
+## Rows
+
+Through `db.query()`, a reply becomes rows by its own type — there is no table
+of which command returns what, because `EVAL` returns whatever the script did:
+
+| Reply | Rows |
+| --- | --- |
+| array, set | one row per element, column `value` |
+| map | one row per pair, columns `field` and `value` |
+| any scalar | one row, column `value` |
+| null | **no rows** — `rows.first()` is `null` |
+
+Rows are lazy views over their batch, as everywhere in `runtime:db`:
+`row.toObject()` materializes one and `{ ...row }` gives an empty object. A
+nested aggregate has nowhere to go in a flat row and is written as JSON text —
+read `XRANGE` and friends through the client API, which returns the structure
+itself.
+
+`rows.exhausted` is always `true`. A RESP reply is complete once it has been
+read, so there is no cursor to leave open and a pool gets its connection back
+before the caller touches a row.
+
+## Errors
+
+Redis's leading word — `WRONGTYPE`, `NOAUTH`, `LOADING` — is mapped onto
+`DbErrorCode`, with the original always on `e.backendCode`.
+
+```js
+import { DbErrorCode } from "runtime:db";
+
+try { await r.set("k", "v"); }
+catch (e) {
+  if (e.code === DbErrorCode.AuthFailed) …   // NOAUTH, WRONGPASS, NOPERM
+  if (e.backendCode === "WRONGTYPE") …       // needs Redis-specific handling
+}
+```
+
+`WRONGTYPE` is deliberately **not** mapped: none of the portable codes means
+"you ran a list command against a hash", and the nearest one would tell an
+application something false. It stays `ERR_DB_BACKEND` with its own
+`backendCode`, which is the truth.
+
+An error reply is a complete reply, so the connection stays usable — only a
+transport failure is fatal, and the first one is latched so every later caller
+sees the same lost connection rather than a different symptom of it.
+
+## Pooling
+
+```js
+import { createPool } from "@opentf/esrun-redis";
+
+const pool = createPool("redis://localhost", { max: 10 });
+await pool.set("k", "v");                    // the same commands, borrowed per call
+await pool.withConnection((c) => …);         // for anything stateful across commands
+```
+
+A connection goes back to the pool only if the driver vouches for it: alive, on
+the database it was opened for, and not inside an open `MULTI`. A connection
+left on another database by a stray `SELECT` is **destroyed** rather than handed
+to the next borrower, who would otherwise find their keys pointing at a
+different dataset.
+
+## What this release does not do
+
+Named rather than left to be discovered:
+
+- **Pub/sub and blocking commands.** `SUBSCRIBE`, `MONITOR` and the rest are
+  refused by name: they change what the server pushes, and this reader expects
+  one reply per command. Accepting them would desynchronize the stream in a way
+  that surfaces later, elsewhere, as a nonsense value.
+- **Cluster.** `MOVED` and `ASK` are reported as `ERR_DB_UNSUPPORTED` with an
+  explanation rather than as a bare redirect. Connect to the node that owns the
+  key, or put a proxy in front.
+- **Pipelining.** Every command is one round trip, including `executeMany`. It
+  is the one place this driver leaves measurable time on the table.
+- **Sentinel**, and RESP3 client-side caching (server attributes are read and
+  discarded).
+
+## Tests
+
+There is no mock. The value of this package is that it speaks a real server's
+protocol, and a fake one would only ever agree with our reading of the spec.
+
+```sh
+bun run build
+docker run -d --name esrun-redis-plain -p 6379:6379 redis:latest
+docker run -d --name esrun-redis-auth  -p 6380:6379 redis:latest redis-server --requirepass esrun
+eval "$(test/tls-server.sh)"       # optional; the tls test skips without it
+./test/run.sh
+```
+
+The unit tests need no server — a wire codec does not — and cover the cases a
+live server will not produce on demand: a reply split across five chunks, a
+CRLF inside a bulk string, an attribute nobody asked for, RESP2's two spellings
+of null.
+
+## License
+
+Apache-2.0

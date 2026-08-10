@@ -1,0 +1,73 @@
+/**
+ * `Redis` — the client most callers want.
+ *
+ * One connection, the full command surface from {@link RedisCommands}, and the
+ * `runtime:db` shapes still underneath it for anything that wants them. The
+ * split matters: `RedisConnection` is a `runtime:db` backend and answers
+ * `query`/`execute` in that vocabulary, and this is the object you reach for
+ * when you are writing Redis rather than writing something portable.
+ */
+import { queryAst, type ExecuteResult, type Rows } from "runtime:db";
+
+import { RedisCommands } from "./commands.js";
+import { RedisConnection, type RedisOptions, type ServerHello } from "./connection.js";
+import type { CommandArg } from "./protocol/resp.js";
+import { parseConnectionString } from "./url.js";
+
+export class Redis extends RedisCommands {
+  readonly connection: RedisConnection;
+
+  constructor(connection: RedisConnection) {
+    super();
+    this.connection = connection;
+  }
+
+  /** Opens a client. `redis://localhost` is the whole of the usual case. */
+  static async connect(url: string, options: RedisOptions = {}): Promise<Redis> {
+    const connection = new RedisConnection();
+    await connection.open(parseConnectionString(url, options));
+    return new Redis(connection);
+  }
+
+  override call(args: readonly CommandArg[], options: { signal?: AbortSignal } = {}): Promise<unknown> {
+    return this.connection.command(args, options);
+  }
+
+  /** What the server said at `HELLO` — its version, id, role, and protocol. */
+  get server(): Partial<ServerHello> {
+    return this.connection.hello;
+  }
+
+  /** The protocol in force: 3, or 2 against a server without RESP3. */
+  get protocol(): number {
+    return this.connection.protocol;
+  }
+
+  /** Whether this connection is still worth using. */
+  get usable(): boolean {
+    return this.connection.usable;
+  }
+
+  /**
+   * The same command, read as rows.
+   *
+   * A convenience over the backend underneath rather than a second way of
+   * talking to Redis: an aggregate reply becomes one row per element, a map
+   * becomes `field`/`value` rows, and anything else becomes a single row.
+   */
+  query(command: readonly CommandArg[]): Promise<Rows> {
+    return this.connection.query(queryAst(command));
+  }
+
+  execute(command: readonly CommandArg[]): Promise<ExecuteResult> {
+    return this.connection.execute(queryAst(command));
+  }
+
+  async close(): Promise<void> {
+    await this.connection.close();
+  }
+
+  async [Symbol.asyncDispose](): Promise<void> {
+    await this.close();
+  }
+}
