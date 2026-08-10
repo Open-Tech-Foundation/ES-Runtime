@@ -35,6 +35,11 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use crate::accept_backoff::AcceptBackoff;
 use crate::checkout::Checkout;
 
+/// What a memoized TLS client connector is keyed by: the ALPN list offered and
+/// the extra trust anchors supplied, since each produces a different config and
+/// two connects agreeing on one but not the other must not share.
+type ConnectorKey = (Vec<String>, Vec<u8>);
+
 type ReadRx = mpsc::Receiver<Result<Vec<u8>, String>>;
 type WriteTx = mpsc::Sender<Vec<u8>>;
 type AcceptRx = mpsc::Receiver<(Accepted, SocketAddr)>;
@@ -89,7 +94,7 @@ pub struct SystemNet {
     /// the whole root store, so this is shared across clones and reused for every
     /// connect with the same ALPN set; a `TlsConnector` is an `Arc` inside, so a
     /// cache hit is a refcount bump.
-    tls_connectors: Arc<Mutex<HashMap<(Vec<String>, Vec<u8>), TlsConnector>>>,
+    tls_connectors: Arc<Mutex<HashMap<ConnectorKey, TlsConnector>>>,
     /// Addresses `connect` may reach (`--allow-net=<hosts>`). `None` ⇒ any.
     allow_connect: Option<Arc<crate::HostAllowlist>>,
     /// Addresses `listen` may bind (`--allow-listen=<addresses>`). `None` ⇒ any.
@@ -162,7 +167,7 @@ impl SystemNet {
     /// crypto provider is ambiguous (both ring and aws-lc-rs are linked, so
     /// `ClientConfig::builder()` would panic).
     fn tls_connector(&self, alpn: &[String], ca: &[u8]) -> Result<TlsConnector, ProviderError> {
-        let key = (alpn.to_vec(), ca.to_vec());
+        let key: ConnectorKey = (alpn.to_vec(), ca.to_vec());
         if let Some(connector) = self.tls_connectors.lock().unwrap().get(&key) {
             return Ok(connector.clone());
         }
@@ -1049,7 +1054,12 @@ mod tests {
         assert_eq!(net.read(id).await.unwrap().unwrap(), b"OK\n");
 
         let (tls_id, info) = net
-            .start_tls(id, "localhost".to_string(), vec!["h2".to_string()], Vec::new())
+            .start_tls(
+                id,
+                "localhost".to_string(),
+                vec!["h2".to_string()],
+                Vec::new(),
+            )
             .await
             .unwrap();
         assert_eq!(info.alpn.as_deref(), Some("h2"));
