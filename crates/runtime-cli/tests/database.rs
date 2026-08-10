@@ -345,6 +345,54 @@ big rows: 4000"
     );
 }
 
+/// `sqlite:` can genuinely interrupt a running statement, so `{ signal }` means
+/// the same thing there as on a networked backend: the work stops, and the
+/// connection survives it.
+#[test]
+fn a_signal_cancels_a_running_statement_and_leaves_the_connection_usable() {
+    let out = run(
+        "signal",
+        r#"
+        import { connect } from "runtime:db";
+        const db = await connect("sqlite::memory:");
+        await db.execute("CREATE TABLE t (a INTEGER)");
+        const rows = [];
+        for (let i = 0; i < 40000; i++) rows.push([i]);
+        await db.executeMany("INSERT INTO t VALUES (?)", rows);
+
+        // A cross join over 40k rows is long enough to be interrupted rather
+        // than merely finished before the signal is noticed.
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new Error("enough")), 200);
+        const started = performance.now();
+        let outcome = "completed";
+        try {
+          await db.query(
+            "SELECT count(*) AS n FROM t a, t b WHERE a.a < b.a",
+            [],
+            { signal: controller.signal },
+          ).then((r) => r.first());
+        } catch (e) {
+          outcome = e.message;
+        }
+        const elapsed = performance.now() - started;
+        console.log("aborted:", outcome === "enough");
+        console.log("promptly:", elapsed < 5000);
+        // The whole point of cancelling rather than hanging up.
+        console.log("usable:", (await (await db.query("SELECT count(*) AS n FROM t")).first()).n);
+        await db.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "aborted: true
+promptly: true
+usable: 40000"
+    );
+}
+
 /// The pool is protocol-blind: it knows how to make a thing and how to destroy
 /// one, and it cannot know whether a returned one is fit to reuse. So the driver
 /// says, and anything not explicitly clean is thrown away — which is the rule
@@ -509,7 +557,7 @@ fn the_built_in_backend_passes_its_own_conformance_suite() {
         assert!(out.status.success(), "{name} stderr: {}", stderr(&out));
         assert_eq!(
             stdout(&out).trim(),
-            "ok=true passed=14 skipped=0",
+            "ok=true passed=15 skipped=0",
             "{name} did not pass its own suite"
         );
     }

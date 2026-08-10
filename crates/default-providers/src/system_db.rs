@@ -425,6 +425,18 @@ impl EmbeddedDb for SystemEmbeddedDb {
         })
     }
 
+    fn cancel(&self, db: u64) -> BoxFuture<Result<(), ProviderError>> {
+        let entry = self.conn(db);
+        Box::pin(async move {
+            // Not offloaded: `interrupt` sets an atomic flag and returns, and
+            // the whole point is that it runs *while* a blocking step is in
+            // flight on another thread. Handing it to that same pool could put
+            // it behind the work it is meant to stop.
+            entry?.conn.interrupt();
+            Ok(())
+        })
+    }
+
     fn close(&self, db: u64) -> BoxFuture<Result<(), ProviderError>> {
         let removed = self.conns.lock().unwrap().remove(&db);
         Box::pin(async move {

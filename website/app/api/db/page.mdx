@@ -69,6 +69,23 @@ connection gets its own. The named form (`:memory:name`), which in SQLite means
 `q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
 (bound by position) or an object (bound by name).
 
+### Cancelling
+
+```js
+await db.query(sql, params, { signal: AbortSignal.timeout(5_000) });
+```
+
+Aborting asks the backend to cancel and **waits** for it to answer, so the
+connection is left in a known state and stays usable — which is the difference
+between cancelling and hanging up. The rejection carries the signal's own
+`reason` rather than the backend's word for a cancelled statement, including
+when a streaming result is abandoned halfway.
+
+How much can actually be cancelled is a backend question, and the interface does
+not pretend otherwise: `sqlite:` interrupts a running statement, `postgres:`
+sends a cancel on a second connection, and a backend that implements neither
+still rejects the caller while the work runs to completion.
+
 ```js
 await db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["ada", 36]);
 await db.execute("INSERT INTO users (name) VALUES (:name)", { name: "grace" });

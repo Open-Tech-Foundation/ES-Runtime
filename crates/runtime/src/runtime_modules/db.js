@@ -687,14 +687,32 @@ class BaseConnection {
     }
   }
 
-  async query(q, params) {
+  async query(q, params, options = {}) {
     this._open();
-    return this._query(normalizeQuery(q, params, this.dialect, this.backend));
+    const normalized = normalizeQuery(q, params, this.dialect, this.backend);
+    const signal = options.signal;
+    if (signal === undefined) return this._query(normalized);
+    if (signal.aborted) throw signal.reason;
+
+    const onAbort = () => {
+      Promise.resolve(this._cancel()).catch(() => {});
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    let rows;
+    try {
+      rows = await this._query(normalized);
+    } catch (e) {
+      signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) throw signal.reason;
+      throw e;
+    }
+    return this._bindSignalToRows(signal, rows, onAbort);
   }
 
-  async execute(q, params) {
+  async execute(q, params, options = {}) {
     this._open();
-    return this._execute(normalizeQuery(q, params, this.dialect, this.backend));
+    const normalized = normalizeQuery(q, params, this.dialect, this.backend);
+    return this._withSignal(options.signal, () => this._execute(normalized));
   }
 
   /// Runs one statement against many parameter sets.
@@ -732,6 +750,92 @@ class BaseConnection {
     const sets = rows.map((row) => splitParams(row));
     const run = () => this._executeMany(text, sets);
     return this._depth > 0 ? run() : this.transaction(run);
+  }
+
+  /**
+   * Asks the backend to abandon whatever this connection is running.
+   *
+   * A driver overrides this with whatever its backend offers — a
+   * `CancelRequest` on a second connection for a wire protocol, an interrupt
+   * flag for an in-process engine. Not overriding it means `signal` still
+   * *rejects the caller*, but the work keeps running until it finishes on its
+   * own: the promise is abandoned, the statement is not. That is a meaningful
+   * difference and the reason this is a method rather than an assumption.
+   */
+  async _cancel() {}
+
+  /**
+   * Runs `work` with an `AbortSignal` attached.
+   *
+   * Aborting asks the backend to cancel and then **waits** for it to answer.
+   * Rejecting the caller the instant the signal fired would leave a statement
+   * running and a connection mid-exchange; waiting a moment leaves both in a
+   * known state, and the connection usable — which is the difference between
+   * cancelling and hanging up.
+   *
+   * What the caller sees is their own `reason`, not whatever the backend calls
+   * a cancelled statement. They asked; the backend's phrasing is a detail of
+   * how the asking was carried out.
+   */
+  async _withSignal(signal, work) {
+    if (signal === undefined) return work();
+    if (signal.aborted) throw signal.reason;
+    const onAbort = () => {
+      Promise.resolve(this._cancel()).catch(() => {});
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    try {
+      return await work();
+    } catch (e) {
+      if (signal.aborted) throw signal.reason;
+      throw e;
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * Keeps `signal` attached to a result set until its rows end.
+   *
+   * A streaming result is still the query running, and a caller who abandons
+   * one halfway is exactly who wanted to cancel. The failure from an aborted
+   * stream also arrives out of the *iterator* rather than out of the call that
+   * started it, so the reason has to be translated in both places or `execute`
+   * and `query` would report the same act differently.
+   */
+  _bindSignalToRows(signal, rows, onAbort) {
+    if (rows.exhausted) {
+      // Already complete: nothing left to cancel, nothing to keep listening for.
+      signal.removeEventListener("abort", onAbort);
+      return rows;
+    }
+    const close = rows.close.bind(rows);
+    rows.close = async () => {
+      try {
+        await close();
+      } finally {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const iterate = rows[Symbol.asyncIterator].bind(rows);
+    rows[Symbol.asyncIterator] = async function* withSignal() {
+      const inner = iterate();
+      try {
+        for (;;) {
+          const next = await inner.next();
+          if (next.done === true) return;
+          yield next.value;
+        }
+      } catch (e) {
+        if (signal.aborted) throw signal.reason;
+        throw e;
+      } finally {
+        // Forwarded, not assumed: a caller that breaks out of *this* generator
+        // must still run the inner one's cleanup, which closes the cursor.
+        await inner.return?.(undefined);
+      }
+    };
+    return rows;
   }
 
   /// The default batch: correct, and no faster than the loop it replaces.
@@ -903,6 +1007,18 @@ class SqliteConnection extends BaseConnection {
     } catch (e) {
       throw sqliteError(e);
     }
+  }
+
+  /**
+   * Interrupts whatever this connection is running.
+   *
+   * The engine runs its work on another thread, and this sets a flag that the
+   * step loop checks — so it can land in the middle of a statement rather than
+   * only between them, which is what makes cancellation here mean the same
+   * thing it means to a networked backend.
+   */
+  async _cancel() {
+    await ops.db_cancel(this._id);
   }
 
   async _close() {
@@ -1520,6 +1636,38 @@ const CONFORMANCE_CHECKS = [
           rows.map((r) => r.a).join(",") === "1,2,3",
           `a failed batch left ${JSON.stringify(rows.map((r) => r.a))} — it must apply none of it`,
         );
+      } finally {
+        await db.close();
+      }
+    },
+  ],
+  [
+    "an abort rejects with the caller's reason and leaves the connection usable",
+    async (open) => {
+      const db = await fresh(open, "a INTEGER");
+      try {
+        await db.execute(`INSERT INTO ${CONFORMANCE_TABLE} VALUES (1)`);
+
+        // A signal already aborted never reaches the backend.
+        const already = AbortSignal.abort(new Error("too late"));
+        let early = "ran anyway";
+        try {
+          await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`, [], { signal: already });
+        } catch (e) {
+          early = e.message;
+        }
+        assert(early === "too late", `a pre-aborted signal gave ${early}`);
+
+        // A signal that never fires changes nothing.
+        const quiet = new AbortController();
+        const rows = await (
+          await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`, [], { signal: quiet.signal })
+        ).toArray();
+        assert(rows.length === 1, "an unaborted signal changed the result");
+
+        // And the connection is unharmed by either.
+        const after = await (await db.query(`SELECT a FROM ${CONFORMANCE_TABLE}`)).first();
+        assert(after !== null, "the connection did not survive a signal");
       } finally {
         await db.close();
       }

@@ -228,6 +228,25 @@ pub(crate) fn install(engine: &mut dyn Engine, db: Option<Arc<dyn EmbeddedDb>>) 
         })
     }))?;
 
+    // Cancellation carries an ownership check and no capability, like the rest
+    // of the post-open surface. It is *not* released here: a cancelled
+    // connection is still a connection, and the caller will close it when they
+    // are done being disappointed.
+    let d = db.clone();
+    let owned = conns.clone();
+    engine.register_op(OpDecl::r#async("db_cancel", move |args| {
+        let d = d.clone();
+        let owned = owned.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            require(&d)?
+                .cancel(owned.check(id)?)
+                .await
+                .map_err(map_err)?;
+            Ok(Value::Undefined)
+        })
+    }))?;
+
     let owned = conns;
     engine.register_op(OpDecl::r#async("db_close", move |args| {
         let d = db.clone();

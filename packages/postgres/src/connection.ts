@@ -327,6 +327,11 @@ export class PgConnection extends BaseConnection {
    * already finished. Cancellation is a request rather than an instruction, and
    * the protocol is honest about that.
    */
+  /** The base class's cancellation hook: this connection's own `cancel()`. */
+  protected override async _cancel(): Promise<void> {
+    await this.cancel();
+  }
+
   async cancel(): Promise<void> {
     if (this.#processId === 0) return;
     const { socket } = await this.#dial(this.#target);
@@ -884,113 +889,6 @@ export class PgConnection extends BaseConnection {
   }
 
   /**
-   * Runs `work` with an `AbortSignal` attached.
-   *
-   * Aborting sends a cancel and then waits: the server answers the *query* with
-   * `57014`, and only then is the connection back in a known state. Rejecting
-   * the caller the instant the signal fired would leave a statement running and
-   * a connection mid-exchange, which is worse than waiting a moment for the
-   * cancellation to land.
-   *
-   * What the caller sees is their own `reason`, not the server's error. They
-   * asked for the abort; `57014` is a detail of how the asking was carried out.
-   */
-  async #withSignal<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
-    if (signal === undefined) return work();
-    if (signal.aborted) throw signal.reason;
-    const onAbort = (): void => {
-      void this.cancel().catch(() => {});
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    try {
-      return await work();
-    } catch (e) {
-      if (signal.aborted) throw signal.reason;
-      throw e;
-    } finally {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-
-  /**
-   * As `Connection.query`, plus an `AbortSignal`.
-   *
-   * The signal stays attached until the **rows** end, not merely until the
-   * first batch arrives: a streaming result is still the query running, and a
-   * caller who abandons one halfway is exactly who wanted to cancel.
-   */
-  override async query(
-    q: Parameters<BaseConnection["query"]>[0],
-    params?: Parameters<BaseConnection["query"]>[1],
-    options: { signal?: AbortSignal } = {},
-  ): Promise<Rows> {
-    const signal = options.signal;
-    if (signal === undefined) return super.query(q, params);
-    if (signal.aborted) throw signal.reason;
-
-    const onAbort = (): void => {
-      void this.cancel().catch(() => {});
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    let rows: Rows;
-    try {
-      rows = await super.query(q, params);
-    } catch (e) {
-      signal.removeEventListener("abort", onAbort);
-      if (signal.aborted) throw signal.reason;
-      throw e;
-    }
-    if (rows.exhausted) {
-      // Already complete, so there is nothing left to cancel and nothing to
-      // keep listening for.
-      signal.removeEventListener("abort", onAbort);
-      return rows;
-    }
-
-    const close = rows.close.bind(rows);
-    rows.close = async () => {
-      try {
-        await close();
-      } finally {
-        signal.removeEventListener("abort", onAbort);
-      }
-    };
-
-    // The failure from an aborted stream arrives *out of the iterator*, not out
-    // of the call that started it — so without this the caller would get the
-    // server's `57014` here and their own reason from `execute()`, for the same
-    // act. `toArray()` and `first()` iterate through this too.
-    const iterate = rows[Symbol.asyncIterator].bind(rows);
-    rows[Symbol.asyncIterator] = async function* wrapped() {
-      const inner = iterate();
-      try {
-        for (;;) {
-          const next = await inner.next();
-          if (next.done === true) return;
-          yield next.value;
-        }
-      } catch (e) {
-        if (signal.aborted) throw signal.reason;
-        throw e;
-      } finally {
-        // Forwarded, not assumed: a caller that breaks out of *this* generator
-        // must still run the inner one's cleanup, which is what closes the
-        // cursor and gives the connection back.
-        await inner.return?.(undefined);
-      }
-    };
-    return rows;
-  }
-
-  override async execute(
-    q: Parameters<BaseConnection["execute"]>[0],
-    params?: Parameters<BaseConnection["execute"]>[1],
-    options: { signal?: AbortSignal } = {},
-  ): Promise<{ changes: number; lastInsertRowid: number | null }> {
-    return this.#withSignal(options.signal, () => super.execute(q, params));
-  }
-
-  /**
    * Runs a script — several statements in one string — through the simple query
    * protocol.
    *
@@ -1016,7 +914,7 @@ export class PgConnection extends BaseConnection {
     options: { signal?: AbortSignal } = {},
   ): Promise<{ command: string; changes: number }[]> {
     this._open();
-    return this.#withSignal(options.signal, () => this.#runScript(sql));
+    return this._withSignal(options.signal, () => this.#runScript(sql));
   }
 
   async #runScript(sql: string): Promise<{ command: string; changes: number }[]> {

@@ -2103,6 +2103,19 @@ pub trait EmbeddedDb: Send + Sync {
         params: Vec<DbParams>,
     ) -> BoxFuture<Result<ExecuteResult, ProviderError>>;
 
+    /// Asks the engine to abandon whatever `db` is running.
+    ///
+    /// Returns as soon as the request is made, not once anything has stopped:
+    /// the statement notices at its next opportunity and fails with
+    /// [`ErrorCode::Cancelled`]. A connection running nothing is unaffected, so
+    /// this is safe to call without knowing whether it will land.
+    ///
+    /// It is deliberately *not* an ownership question of the running work —
+    /// cancellation has to be callable from outside whatever is awaiting the
+    /// query, or the only code able to cancel would be the code already
+    /// blocked.
+    fn cancel(&self, db: u64) -> BoxFuture<Result<(), ProviderError>>;
+
     /// Closes connection `db` and everything open on it (idempotent).
     fn close(&self, db: u64) -> BoxFuture<Result<(), ProviderError>>;
 }
@@ -2212,6 +2225,10 @@ mod tests {
                     last_insert_rowid: None,
                 })
             })
+        }
+
+        fn cancel(&self, _db: u64) -> BoxFuture<Result<(), ProviderError>> {
+            Box::pin(async { Ok(()) })
         }
 
         fn close(&self, _db: u64) -> BoxFuture<Result<(), ProviderError>> {

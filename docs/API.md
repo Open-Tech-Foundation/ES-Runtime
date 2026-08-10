@@ -1423,7 +1423,19 @@ one, is refused rather than quietly not sharing.
 - `close()`, and `Symbol.asyncDispose` for `await using`.
 
 `q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
-(bound by position) or an object (bound by name). The AST form is in the
+(bound by position) or an object (bound by name). A third argument takes
+`{ signal }`:
+
+```js
+await db.query(sql, params, { signal: AbortSignal.timeout(5_000) });
+```
+
+Aborting asks the backend to cancel and **waits** for it to answer, so the
+connection is left in a known state and stays usable — the difference between
+cancelling and hanging up. The rejection carries the signal's own `reason`, not
+the backend's word for a cancelled statement, including when a streaming result
+is abandoned halfway. `sqlite:` interrupts a running statement; a networked
+backend cancels over the protocol. The AST form is in the
 contract from the first release so that an engine which never speaks SQL can be
 a first-class backend later; the backends that ship today refuse it by name with
 `ERR_DB_QUERY_FORM`.

@@ -238,12 +238,34 @@ declare module "runtime:db" {
     constructor(options: { dialect: Dialect; backend: string });
     readonly dialect: Dialect;
     readonly backend: string;
-    query(q: Queryable, params?: DbParams): Promise<Rows>;
-    execute(q: Queryable, params?: DbParams): Promise<ExecuteResult>;
+    query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows>;
+    execute(q: Queryable, params?: DbParams, options?: CallOptions): Promise<ExecuteResult>;
     executeMany(q: string | Query, rows: readonly DbParams[]): Promise<ExecuteResult>;
     transaction<T>(fn: (tx: Connection) => Promise<T>): Promise<T>;
     close(): Promise<void>;
     [Symbol.asyncDispose](): Promise<void>;
+    /**
+     * Ask the backend to abandon whatever this connection is running.
+     *
+     * Override it with whatever the backend offers — an interrupt flag for an
+     * in-process engine, a cancel on a second connection for a wire protocol.
+     * Not overriding it means a `signal` still rejects the caller, but the work
+     * runs to completion: the promise is abandoned, the statement is not.
+     */
+    protected _cancel(): Promise<void>;
+    /**
+     * Runs `work` with a signal attached, for a driver's own entry points.
+     *
+     * Aborting cancels and then waits, so the connection is left usable, and
+     * the rejection carries the signal's `reason` rather than the backend's
+     * word for a cancelled statement.
+     */
+    protected _withSignal<T>(
+      signal: AbortSignal | undefined,
+      work: () => Promise<T>,
+    ): Promise<T>;
+    /** Keeps a signal attached to a result set until its rows end. */
+    protected _bindSignalToRows(signal: AbortSignal, rows: Rows, onAbort: () => void): Rows;
     /**
      * Throws `ERR_DB_CLOSED` if this connection is closed.
      *

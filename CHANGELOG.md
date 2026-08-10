@@ -28,6 +28,13 @@ namespace) is unstable and may change between minor releases until the API freez
   `startTls()` as well, which is what a `postgres://` connection needs. There is
   no option to skip verification.
 
+- **`{ signal }` on `query` and `execute`** — portable cancellation. Aborting
+  asks the backend to cancel and waits for it, so the connection stays usable,
+  and the rejection carries the signal's own `reason` rather than the backend's
+  word for a cancelled statement. `sqlite:` interrupts a running statement
+  through the new `EmbeddedDb::cancel` seam; `@opentf/esrun-postgres` cancels
+  over the protocol. A driver that implements neither still rejects its caller.
+
 - **`Pool`** in `runtime:db`'s driver tier — a protocol-blind resource pool with
   a bounded size, a waiter queue, lazy idle sweeping (not a timer, which would
   keep the loop alive and stop a finished program exiting), and the
