@@ -52,7 +52,7 @@ class MyConnection extends BaseConnection {
   async _close() {}
 
   // Optional, and the defaults are real behaviour rather than stubs.
-  async _executeMany(text, sets) { /* one round trip instead of N */ }
+  async _executeMany(query, sets) { /* one round trip instead of N */ }
   async _cancel() { /* stop what is running */ }
 }
 
@@ -63,6 +63,31 @@ Transactions, savepoints, the closed-connection check, the `sql` tag, the
 abandoned-result discipline and `AbortSignal` handling all come from the base
 class. You do not reimplement them, and — more to the point — you do not get to
 implement them *differently*, which is what makes an ORM able to rely on them.
+
+### If your backend does not speak SQL
+
+Say so, and the rest still works. `supports.sqlText: false` makes SQL text and
+`` sql`` `` templates refused with `ERR_DB_QUERY_FORM`; `supports.queryAst: true`
+makes `queryAst(…)` arrive as `q.ast`. That form has been in the contract since
+the first release for exactly this, and `redis:` is the backend that uses it —
+a command is `queryAst(["GET", key])`, and positional parameters are appended,
+which is what keeps `executeMany` meaningful.
+
+Two things follow. `transaction()` writes SQL by default, so a backend with
+transactions of its own overrides `_beginTransaction`, `_commitTransaction` and
+`_rollbackTransaction` — and one with none declares
+`supports.transactions: false`, which makes `transaction()` refuse by name
+rather than send a `BEGIN` nothing would understand. And `executeMany` then runs
+**without** a transaction, so its batch is not atomic; that is a real difference
+and it belongs in your README.
+
+<Callout type="info" title="What the conformance suite does about it">
+  Most of the suite is written in SQL DDL, and a backend with no SQL can express
+  none of it. Those checks are **skipped with a reason** rather than failed — a
+  check you cannot express is not a finding — and what runs is the part that
+  holds whatever form you take. Read the reasons: a count with no explanation is
+  how you conclude you passed something you never ran.
+</Callout>
 
 <Callout type="info" title="Optional means optional, not absent">
   `_executeMany` defaults to a loop over `_execute` inside the same transaction:
@@ -291,10 +316,18 @@ PostgreSQL binds by position and refuses them), `RETURNING`
 scripts, and `lastInsertRowid`, which PostgreSQL has no equivalent of and
 always reports as `null`.
 
+Three more, which an ORM that assumed "every backend is a SQL backend" will meet
+the moment one is not. `supports.sqlText` — `redis:` refuses SQL, so a query
+builder that emits text has to check before it emits any. `supports.queryAst`,
+which is how you reach such a backend at all. And `supports.transactions`: where
+it is `false`, `transaction()` throws `ERR_DB_UNSUPPORTED` and `executeMany` is
+**not** atomic, so an ORM relying on either has to say what it does instead.
+
 ## A checklist
 
 - [ ] `registerBackend` on import, so `connect()` finds you
 - [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
+- [ ] `supports` states what you take and what you have — `sqlText`, `queryAst`, `transactions`
 - [ ] Transcode rows into the shared batch layout — do not write a decoder
 - [ ] Both wire formats, if you have two, decode to identical values
 - [ ] SQLSTATE or equivalent mapped onto the portable codes, host codes preserved

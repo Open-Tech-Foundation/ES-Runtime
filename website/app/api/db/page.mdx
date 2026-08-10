@@ -69,6 +69,16 @@ connection gets its own. The named form (`:memory:name`), which in SQLite means
 `q` is SQL text, a `` sql`` `` template, or a `QueryAst`. `params` is an array
 (bound by position) or an object (bound by name).
 
+Which forms a backend takes is its own declaration — `dialect.supports.sqlText`
+and `supports.queryAst` — and the form it does not take is refused with
+`ERR_DB_QUERY_FORM`, in either direction. `sqlite:` and `postgres:` take SQL;
+`redis:` takes command arrays and refuses SQL.
+
+`supports.transactions` is the matching declaration for `transaction(fn)`: a
+backend that says `false` refuses with `ERR_DB_UNSUPPORTED` rather than emitting
+a `BEGIN` it has never heard of, and its `executeMany` is **not** atomic,
+because there is no transaction to wrap it in.
+
 ### Cancelling
 
 ```js
@@ -237,8 +247,8 @@ For adding a backend or building an ORM.
 | --- | --- |
 | `registerBackend(scheme, factory)` | Claim a scheme. Built-ins cannot be replaced; `otfdb:` is reserved. |
 | `backendSchemes()` | The registered schemes. |
-| `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`; override `_executeMany` for a fast batch path. |
-| `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports`. |
+| `BaseConnection` | Transactions, savepoints, the closed-connection check. Implement `_query`, `_execute`, `_close`; override `_executeMany` for a fast batch path, `_cancel` to really cancel, and the `_*Transaction` trio for a backend without SQL. |
+| `Dialect` | `placeholder(i)`, `quoteIdent(name)`, `supports` — including `sqlText`, `queryAst` and `transactions`. |
 | `defineRowShape(columns)` / `decodeBatch(bytes, shape, n)` | The row decoder every backend shares. |
 | `encodeParams` / `splitParams` | Parameter encoding. |
 | `ByteWriter` | A growable buffer with length-prefix back-fill. |
@@ -262,11 +272,25 @@ class MyConnection extends BaseConnection {
   // Optional. The default loops `_execute` — correct, and no faster than the
   // loop it replaces. Override it with whatever the backend does in one round
   // trip: a reused prepared statement, or pipelined protocol messages.
-  async _executeMany(text, sets) { /* … */ }
+  async _executeMany(query, sets) { /* … */ }
 }
 
 registerBackend("mydb", async (url, options) => new MyConnection(await open(url)));
 ```
+
+A backend that does not speak SQL declares it, and inherits the rest unchanged:
+
+```js
+const dialect = new Dialect({
+  name: "mydb",
+  placeholder: () => { throw new DbError("no placeholders here", { code: DbErrorCode.QueryForm }); },
+  supports: { sqlText: false, queryAst: true, transactions: false },
+});
+```
+
+Most conformance checks are written in SQL. Against such a backend they are
+**skipped with a reason** rather than failed — a check you cannot express is not
+a finding — and what runs is the part that holds for every backend.
 
 Adding a networked backend needs **no new runtime code** — a driver is JS over
 [`runtime:net`](/api/net). See [Databases](/docs/db) for the guide and

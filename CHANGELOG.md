@@ -8,6 +8,56 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`@opentf/esrun-redis`** — a Redis driver, and the second proof that a socket
+  backend needs no new Rust (D56 named Redis in the sentence stating that test).
+  RESP2 and RESP3 over `runtime:net`, `HELLO` negotiating protocol and
+  authentication in one round trip, ACL users, `rediss://` TLS, and a connection
+  pool. It ships **two surfaces over one connection**: a `Redis` client with the
+  commands spelled as Redis spells them, and a `runtime:db` backend registering
+  `redis:` and `rediss:`. Lives in `packages/redis`, versioned separately.
+
+- **The query-AST form actually works.** D56 put `query(q: string | QueryAst)` in
+  the contract from the first release so that "an engine which never speaks SQL
+  can be a first-class backend rather than a special case" — but `normalizeQuery`
+  refused every AST unconditionally, so no backend could take one. A backend now
+  declares which forms it takes with **`dialect.supports.sqlText`** (default
+  `true`) and **`supports.queryAst`** (default `false`), and the form it does not
+  take is refused with `ERR_DB_QUERY_FORM` in either direction. `redis:` is the
+  first backend to take an AST: a command is `queryAst(["GET", key])`.
+
+- **`dialect.supports.transactions`** (default `true`). A backend without
+  transactions makes `transaction(fn)` refuse with `ERR_DB_UNSUPPORTED` rather
+  than emit a `BEGIN` it has never heard of, and its `executeMany` runs without
+  one — so a batch is **not** atomic there, which is now declared rather than
+  assumed. Redis says `false`: `MULTI`/`EXEC` queues commands but does not roll
+  back one that fails at `EXEC` time, so a `transaction()` built on it would
+  commit half a body that threw.
+
+- **`_beginTransaction` / `_commitTransaction` / `_rollbackTransaction`** on
+  `BaseConnection`, defaulting to exactly the SQL they replaced. They are methods
+  so that a backend which does not speak SQL can still have real transactions.
+
+### Changed
+
+- **`BaseConnection._executeMany(query, sets)`** takes the whole
+  `NormalizedQuery` rather than just its `text`, which is `null` for a backend
+  that took an AST. A driver-tier signature change; only the built-in `sqlite:`
+  override needed following, and `@opentf/esrun-postgres` does not override it.
+
+- **`NormalizedQuery`** gains `ast`, and its `text` is now `string | null`.
+  Exactly one of the two is non-null.
+
+- **The conformance suite is form-aware.** A check written in SQL is **skipped
+  with a reason** against a backend declaring `supports.sqlText: false`, rather
+  than failed — a check a backend cannot express is not a finding. `skipped`
+  results carry `reason`, because a count with no explanation is how a driver
+  author concludes they passed something they never ran. Two checks were
+  generalized to run everywhere; the query-form check previously hardcoded the
+  AST as the wrong form, which is backwards for a backend that takes one.
+  `sqlite:` and `postgres:` still run and pass all fifteen.
+
 ## [0.21.0] - 2026-08-09
 
 ### Added

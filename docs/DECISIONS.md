@@ -720,7 +720,53 @@ And `AbortSignal` became portable rather than driver-local, because `turso`
 exposes an interrupt: `sqlite:` stops a statement mid-flight, so cancellation
 means the same thing on both backends instead of something weaker on one.
 
-**Also rejected:** a `node:sqlite` compatibility layer, or Node compatibility of any kind; an ORM or query builder in the runtime — the kit exists so those are written *on* the runtime, not *in* it.
+**What the second backend showed** (*added 2026-08-10*). Redis was named in this
+decision's own test — "adding MySQL, Redis, or any other socket backend must
+require zero new Rust" — and `@opentf/esrun-redis` met it: RESP2/RESP3 over
+`runtime:net`, TLS, pooling, no Rust. That much was expected. What it found is
+that the *other* claim in this decision was a declaration rather than a fact.
+
+`query(q: string | QueryAst)` was written into the contract "from day one" so
+that "an engine which never speaks SQL can be a first-class backend rather than
+a special case". The signature was there and the door was not: `normalizeQuery`
+threw `ERR_DB_QUERY_FORM` for every AST unconditionally, so the only way to
+accept one was to override `query`/`execute` wholesale and lose the signal
+handling and closed-connection check with them. A contract nothing had exercised
+had quietly become a contract nothing *could* exercise. **The lesson is narrower
+than "test more": an extension point with no consumer is a comment.** The AST
+form should have shipped with a backend using it, exactly as `Pool`,
+`FrameReader` and `ByteWriter` were made to wait for Postgres by this decision's
+own no-stubs rule — the rule was applied to the driver-tier exports and not to
+the query form, and that is the inconsistency that cost the time.
+
+Two further places had assumed every backend was a SQL backend, both invisible
+until something was not one. `transaction()` wrote `BEGIN`/`COMMIT`/`ROLLBACK`
+into itself, so a key-value store inheriting it would have sent a `BEGIN` to a
+server that has never heard of one; and `executeMany` passed `_executeMany` only
+the query's *text*, which is `null` for an AST backend. Both are now declared
+capabilities (`supports.sqlText`, `supports.queryAst`, `supports.transactions`)
+with overridable seams behind them.
+
+The conformance suite had the same assumption and it mattered most there.
+Fifteen checks written in SQL DDL, run against a backend with no SQL, is not a
+demanding suite — it is fifteen guaranteed failures, which would have made the
+report worthless precisely for the backend that most needed checking. A check
+now declares whether it needs SQL, and one a backend cannot express is skipped
+**with a reason** rather than failed. The reason is reported rather than merely
+counted, because "13 skipped" with no explanation is how a driver author
+concludes they passed something they never ran.
+
+Where Redis deliberately does *not* follow Postgres is also worth recording,
+since both answers are correct and the difference is the protocol. A second
+command issued while a result is open is **refused** on Postgres and **queued**
+on Redis: there, an open result set finishes only when the caller drains it, so
+queueing deadlocks; here, a RESP reply is complete once read, so every exchange
+finishes on its own and `rows.exhausted` is always true. The portable
+`ERR_DB_CONNECTION_BUSY` is a constraint every wire protocol *can* have, not one
+they all do — and a driver that copied Postgres's refusal here would have been
+refusing something safe.
+
+**Also rejected:** a `node:sqlite` compatibility layer, or Node compatibility of any kind; an ORM or query builder in the runtime — the kit exists so those are written *on* the runtime, not *in* it. **Rejected for Redis specifically:** presenting `MULTI`/`EXEC` as `transaction(fn)` — it queues commands and applies them together, but does not roll back one that fails at `EXEC` time, so the helper would commit half a body that threw; a backend saying it has no transactions is more useful than one whose transactions silently are not.
 
 **Consequences:** `providers` gains an `EmbeddedDb` trait and `default-providers` its `turso_core` implementation; that is the whole of the Rust surface, and it does not grow when backends do. The dependency is pinned at a **pre-release** (`turso_core` 0.8.0-pre.3, MIT) — accepted deliberately, since it is the only reliable Rust implementation and the `sqlite:` scheme insulates callers from the swap, but 0.x churn is a real maintenance cost until it stabilizes. `EncryptionOpts` takes its key as a hex `String`, so key material transits a non-zeroizable Rust allocation; documented in SECURITY.md rather than papered over. Requesting binary result formats from Postgres will make that driver **extended-protocol-only** — result format codes live in `Bind`, and the simple query protocol cannot ask — which costs multi-statement query strings; the restriction is decided here rather than discovered in the phase that hits it. Benchmarks cannot reuse `bench/run.sh`'s one-script-per-runtime shape, since esrun uses `runtime:db` while the comparison uses `postgres.js`; a `bench/db/` with per-runtime scripts against a shared workload and a documented Postgres container is part of the Postgres phase. Documented per D27 (`API.md`, `types/runtime-db.d.ts`, site `api/db` + `docs/internals/database`, `CHANGELOG`).
 

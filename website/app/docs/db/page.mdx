@@ -188,12 +188,12 @@ const db = await connect("sqlite:./secret.db", { key });
 
 ## Other databases
 
-`sqlite:` is the backend that ships. A Postgres or MySQL driver is ordinary
-JavaScript over [`runtime:net`](/docs/guides/networking) that registers its own
-scheme:
+`sqlite:` is the backend that ships **in** the runtime. Every other one is
+ordinary JavaScript over [`runtime:net`](/docs/guides/networking) that registers
+its own scheme — no native code, and nothing added to the runtime for it:
 
 ```js
-import "some-postgres-driver";           // registers postgres:
+import "@opentf/esrun-postgres";         // registers postgres: and postgresql:
 import { connect } from "runtime:db";
 
 const db = await connect("postgres://user@host/db");
@@ -201,6 +201,33 @@ const db = await connect("postgres://user@host/db");
 
 Everything above — `sql`, streaming rows, transactions, the portable error
 codes — works the same against it, because drivers are built on the same
-exported pieces the built-in backend is. If you are writing one, see the
-[driver tier](/api/db#the-driver-tier) and run
+exported pieces the built-in backend is.
+
+| Package | Schemes | |
+| --- | --- | --- |
+| built in | `sqlite:` | a file format and a SQL dialect |
+| `@opentf/esrun-postgres` | `postgres:` `postgresql:` | the wire protocol, Temporal types, LISTEN/NOTIFY |
+| `@opentf/esrun-redis` | `redis:` `rediss:` | RESP3, and a Redis client alongside the backend |
+
+### A backend that is not a SQL database
+
+Redis is the one that is not, and the shape it takes is worth knowing before you
+write portable code. Commands are arrays rather than text, through the query-AST
+form the contract has carried since the first release:
+
+```js
+import "@opentf/esrun-redis";
+import { connect, queryAst } from "runtime:db";
+
+const db = await connect("redis://localhost");
+await db.execute(queryAst(["SET", "k", "v"]));
+```
+
+It declares what it is — `supports.sqlText: false`, `supports.queryAst: true`,
+`supports.transactions: false` — so code that checks rather than assumes keeps
+working, and code that does not gets `ERR_DB_QUERY_FORM` or
+`ERR_DB_UNSUPPORTED` by name rather than something stranger further down. Most
+programs using Redis want its own client instead, which the same package ships.
+
+If you are writing a driver, see [Drivers & ORMs](/docs/db/authoring) and run
 `runBackendConformance()` to check it behaves like the built-ins.

@@ -1435,10 +1435,20 @@ connection is left in a known state and stays usable — the difference between
 cancelling and hanging up. The rejection carries the signal's own `reason`, not
 the backend's word for a cancelled statement, including when a streaming result
 is abandoned halfway. `sqlite:` interrupts a running statement; a networked
-backend cancels over the protocol. The AST form is in the
-contract from the first release so that an engine which never speaks SQL can be
-a first-class backend later; the backends that ship today refuse it by name with
-`ERR_DB_QUERY_FORM`.
+backend cancels over the protocol.
+
+**Which forms a backend takes is its own declaration.** `dialect.supports.sqlText`
+(default `true`) and `supports.queryAst` (default `false`) say so, and the form a
+backend does not take is refused with `ERR_DB_QUERY_FORM` — in either direction.
+`sqlite:` and `postgres:` take SQL; `redis:` takes command arrays and refuses
+SQL, which is what the AST form was carried in the contract from the first
+release for.
+
+`supports.transactions` (default `true`) is the matching declaration for
+`transaction(fn)`. A backend that says `false` refuses with
+`ERR_DB_UNSUPPORTED` rather than emitting a `BEGIN` it has never heard of, and
+its `executeMany` runs **without** a transaction — so a batch is not atomic
+there, which is why it is declared rather than assumed.
 
 ### `` sql`` ``
 
@@ -1494,8 +1504,20 @@ to make fast); `Dialect` (`placeholder`, `quoteIdent`, `supports`);
 like the built-ins. A built-in scheme cannot be replaced, and `otfdb:` is
 reserved.
 
-Adding a networked backend needs **no new runtime code**: a Postgres or MySQL
-driver is JS over [`runtime:net`](#runtimenet).
+A driver supplies `_query`, `_execute` and `_close`, and may override
+`_executeMany(query, sets)` for a real batch path, `_cancel()` for whatever its
+backend offers, and `_beginTransaction` / `_commitTransaction` /
+`_rollbackTransaction` — which default to the SQL every SQL backend spells the
+same way, and exist as methods so that a backend without SQL can still have
+transactions.
+
+Most conformance checks are written in SQL. Against a backend declaring
+`supports.sqlText: false` those are **skipped with a reason** rather than
+failed — a check you cannot express is not a finding — and what runs is the part
+that holds for every backend whatever form it takes.
+
+Adding a networked backend needs **no new runtime code**: the Postgres, Redis
+and MySQL drivers are JS over [`runtime:net`](#runtimenet).
 
 ---
 
