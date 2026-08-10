@@ -18,8 +18,9 @@
 import { registerBackend } from "runtime:db";
 
 import { PgConnection, POSTGRES_DIALECT, type PgOptions } from "./connection.js";
+import { PgPool, type PgPoolOptions } from "./pool.js";
 
-export { PgConnection, POSTGRES_DIALECT, type PgOptions };
+export { PgConnection, PgPool, POSTGRES_DIALECT, type PgOptions, type PgPoolOptions };
 
 /**
  * Turns a connection string into options.
@@ -81,6 +82,28 @@ export async function connect(url: string, options: PgOptions = {}): Promise<PgC
   return connection;
 }
 
+/**
+ * A pool over the same connection string.
+ *
+ * Nothing is opened here: connections are made when they are first needed, so a
+ * pool costs nothing until something asks it for work.
+ */
+export function createPool(url: string, options: PgPoolOptions = {}): PgPool {
+  const settings = parseConnectionString(url, options);
+  return new PgPool(() => connect(url, settings), options);
+}
+
 for (const scheme of ["postgres", "postgresql"]) {
-  registerBackend(scheme, (url, options) => connect(url, options as PgOptions));
+  registerBackend(scheme, (url, options) => {
+    // `connect("postgres://…", { pool: true })` through `runtime:db` gives a
+    // pool, since a driver's own entry point should not be the only way to
+    // reach one.
+    const pool = (options as { pool?: boolean | PgPoolOptions }).pool;
+    if (pool !== undefined && pool !== false) {
+      return Promise.resolve(
+        createPool(url, { ...(options as PgPoolOptions), ...(pool === true ? {} : pool) }),
+      ) as Promise<never>;
+    }
+    return connect(url, options as PgOptions);
+  });
 }

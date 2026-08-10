@@ -19,7 +19,7 @@ printf "\n== unit ==\n"
 "$here/unit/run.sh" || exit 1
 
 status=0
-for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements; do
+for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool; do
   printf '\n== %s ==\n' "$test"
   "$esrun" "$here/$test.mjs" || status=1
 done

@@ -272,6 +272,52 @@ declare module "runtime:db" {
     readonly named: [string, DbInput][];
   }
 
+  /** How a {@link Pool} makes, checks, and destroys what it holds. */
+  export interface PoolOptions<T> {
+    create: () => Promise<T>;
+    destroy: (resource: T) => unknown;
+    /** Checked before a pooled resource is handed out again. */
+    validate?: (resource: T) => boolean | Promise<boolean>;
+    /** Most resources to hold at once. Default 10. */
+    max?: number;
+    /** How long an unused resource is kept, in ms. Default 30 000; `0` never reaps. */
+    idleTimeout?: number;
+    /** How long to wait for a free resource, in ms. Default 10 000; `0` waits forever. */
+    acquireTimeout?: number;
+  }
+
+  /**
+   * A pool of connections, or of anything else a driver has to make and keep.
+   *
+   * Protocol-blind: it knows how to make a thing, how to destroy one, and how
+   * many to allow. What it cannot know is whether a returned connection is fit
+   * to reuse — that needs the protocol, so the driver asserts it on
+   * {@link Pool.release}, and anything not explicitly clean is destroyed.
+   * Getting that backwards is how an aborted transaction or an open portal
+   * leaks from one request into the next.
+   *
+   * Idle resources are swept **on use, not on a timer**: a repeating timer
+   * would keep the event loop alive for as long as the pool existed, so a
+   * program that had finished its work would not exit.
+   */
+  export class Pool<T = unknown> {
+    constructor(options: PoolOptions<T>);
+    /** Borrowed and idle together. */
+    readonly size: number;
+    readonly idle: number;
+    /** Callers queued behind a full pool. */
+    readonly pending: number;
+    acquire(): Promise<T>;
+    /**
+     * Returns a resource. `clean` is the driver's assertion that it is fit for
+     * the next caller, and defaults to **false** — when nobody checked, the
+     * safe answer is to throw it away.
+     */
+    release(resource: T, options?: { clean?: boolean }): void;
+    /** Destroys every idle resource and refuses everyone still waiting. */
+    close(): Promise<void>;
+  }
+
   /** Registers a backend for a connection-string scheme. */
   export function registerBackend(
     scheme: string,

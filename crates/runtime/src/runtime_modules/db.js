@@ -1063,6 +1063,190 @@ async function connect(url, options = {}) {
 
 
 // ---------------------------------------------------------------------------
+// Pooling
+// ---------------------------------------------------------------------------
+
+/// A pool of connections, or of anything else a driver has to make and keep.
+///
+/// Protocol-blind on purpose: it knows how to make a thing, how to destroy one,
+/// and how many to allow. What it cannot know is whether a returned connection
+/// is **fit to reuse** — that needs the protocol, so the driver says so on
+/// release, and anything not explicitly clean is destroyed rather than handed
+/// to the next caller. Getting that backwards is how an aborted transaction or
+/// an open portal leaks from one request into the next, which is a correctness
+/// bug wearing a performance bug's clothes.
+///
+///     const pool = new Pool({
+///       create: () => openConnection(url),
+///       destroy: (c) => c.close(),
+///       max: 10,
+///     });
+///     const c = await pool.acquire();
+///     try { … } finally { pool.release(c, { clean: c.status === "idle" }); }
+///
+/// **Idle resources are swept on use, not on a timer.** A repeating timer would
+/// keep the event loop alive for as long as the pool existed, so a program that
+/// had finished its work would not exit — a poor trade for reaping a socket a
+/// few seconds earlier. Call `close()` when done.
+class Pool {
+  constructor({
+    create,
+    destroy,
+    validate,
+    max = 10,
+    idleTimeout = 30_000,
+    acquireTimeout = 10_000,
+  } = {}) {
+    if (typeof create !== "function" || typeof destroy !== "function") {
+      throw dbError("a pool needs create() and destroy()", DbErrorCode.Unsupported);
+    }
+    this._create = create;
+    this._destroy = destroy;
+    this._validate = validate;
+    this._max = Math.max(1, max);
+    this._idleTimeout = idleTimeout;
+    this._acquireTimeout = acquireTimeout;
+    // Idle entries, oldest first: `{ resource, since }`.
+    this._idle = [];
+    // Everything handed out and not yet returned.
+    this._borrowed = new Set();
+    this._waiting = [];
+    this._closed = false;
+  }
+
+  /** How many resources exist, borrowed and idle together. */
+  get size() {
+    return this._idle.length + this._borrowed.size;
+  }
+
+  get idle() {
+    return this._idle.length;
+  }
+
+  /** Callers queued behind a full pool. */
+  get pending() {
+    return this._waiting.length;
+  }
+
+  /** Destroys idle resources that have sat longer than the idle timeout. */
+  _sweep() {
+    if (this._idleTimeout <= 0) return;
+    const cutoff = Date.now() - this._idleTimeout;
+    while (this._idle.length > 0 && this._idle[0].since <= cutoff) {
+      this._discard(this._idle.shift().resource);
+    }
+  }
+
+  _discard(resource) {
+    // A destroy that throws must not take the pool with it: the resource is
+    // gone either way, and the caller asked for a release rather than a report.
+    try {
+      const result = this._destroy(resource);
+      if (result && typeof result.catch === "function") result.catch(() => {});
+    } catch {
+      /* already being thrown away */
+    }
+  }
+
+  async acquire() {
+    if (this._closed) throw dbError("the pool is closed", DbErrorCode.Closed);
+    this._sweep();
+
+    for (;;) {
+      const entry = this._idle.pop();
+      if (entry === undefined) break;
+      if (this._validate === undefined || (await this._validate(entry.resource))) {
+        this._borrowed.add(entry.resource);
+        return entry.resource;
+      }
+      this._discard(entry.resource);
+    }
+
+    if (this.size < this._max) {
+      // The slot is taken before the resource exists, so a burst of callers
+      // cannot each look, each see room, and together overshoot the maximum.
+      const slot = Symbol("opening");
+      this._borrowed.add(slot);
+      try {
+        const resource = await this._create();
+        this._borrowed.delete(slot);
+        this._borrowed.add(resource);
+        return resource;
+      } catch (e) {
+        this._borrowed.delete(slot);
+        // A failed create still has to wake someone, or a pool whose
+        // connections all fail leaves every waiter parked on a slot that was
+        // freed and never offered.
+        this._wake();
+        throw e;
+      }
+    }
+
+    return this._wait();
+  }
+
+  _wait() {
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timer: undefined };
+      if (this._acquireTimeout > 0) {
+        waiter.timer = setTimeout(() => {
+          const at = this._waiting.indexOf(waiter);
+          if (at !== -1) this._waiting.splice(at, 1);
+          reject(
+            dbError(
+              `waited ${this._acquireTimeout}ms for a connection and the pool stayed full (max ${this._max})`,
+              DbErrorCode.Timeout,
+            ),
+          );
+        }, this._acquireTimeout);
+      }
+      this._waiting.push(waiter);
+    });
+  }
+
+  /** Hands the next waiter a slot, if anyone is queued. */
+  _wake() {
+    const waiter = this._waiting.shift();
+    if (waiter === undefined) return false;
+    clearTimeout(waiter.timer);
+    // Through acquire() rather than straight at the resource: a waiter should
+    // take the same route a fresh caller would, validation included.
+    this.acquire().then(waiter.resolve, waiter.reject);
+    return true;
+  }
+
+  /**
+   * Returns a resource.
+   *
+   * `clean` is the driver's assertion that this resource is fit for the next
+   * caller. It defaults to **false**, because the safe answer when nobody
+   * checked is to throw the resource away.
+   */
+  release(resource, { clean = false } = {}) {
+    if (!this._borrowed.delete(resource)) return;
+    if (!clean || this._closed) {
+      this._discard(resource);
+      this._wake();
+      return;
+    }
+    this._idle.push({ resource, since: Date.now() });
+    this._wake();
+  }
+
+  /** Destroys every idle resource and refuses everyone still waiting. */
+  async close() {
+    this._closed = true;
+    for (const waiter of this._waiting.splice(0)) {
+      clearTimeout(waiter.timer);
+      waiter.reject(dbError("the pool was closed", DbErrorCode.Closed));
+    }
+    for (const { resource } of this._idle.splice(0)) this._discard(resource);
+    // Borrowed resources are left alone: their holders are still using them,
+    // and will find the pool closed when they release.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Backend conformance
 // ---------------------------------------------------------------------------
 
@@ -1428,6 +1612,7 @@ export {
   registerBackend,
   backendSchemes,
   BaseConnection,
+  Pool,
   Dialect,
   ByteWriter,
   defineRowShape,

@@ -28,6 +28,14 @@ namespace) is unstable and may change between minor releases until the API freez
   `startTls()` as well, which is what a `postgres://` connection needs. There is
   no option to skip verification.
 
+- **`Pool`** in `runtime:db`'s driver tier — a protocol-blind resource pool with
+  a bounded size, a waiter queue, lazy idle sweeping (not a timer, which would
+  keep the loop alive and stop a finished program exiting), and the
+  `release(clean)` contract D56 specified: the driver asserts whether a
+  connection is fit to reuse, and anything not explicitly clean is destroyed.
+  `@opentf/esrun-postgres` is its first consumer, which is what D56 said would
+  justify shipping it.
+
 - **`ERR_DB_CONNECTION_BUSY`** joins the portable error codes: the connection is
   already streaming a result set. Distinct from `ERR_DB_BUSY`, which is the
   database refusing — this one is the client's own connection, and only the

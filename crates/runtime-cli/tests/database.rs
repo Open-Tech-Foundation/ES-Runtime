@@ -345,6 +345,139 @@ big rows: 4000"
     );
 }
 
+/// The pool is protocol-blind: it knows how to make a thing and how to destroy
+/// one, and it cannot know whether a returned one is fit to reuse. So the driver
+/// says, and anything not explicitly clean is thrown away — which is the rule
+/// that stops an aborted transaction leaking from one request into the next.
+#[test]
+fn a_pool_reuses_what_is_clean_and_discards_everything_else() {
+    let out = run(
+        "pool",
+        r#"
+        import { Pool, DbErrorCode } from "runtime:db";
+
+        let made = 0;
+        const destroyed = [];
+        const pool = new Pool({
+          create: async () => ({ id: ++made }),
+          destroy: (r) => destroyed.push(r.id),
+          max: 2,
+          acquireTimeout: 200,
+        });
+
+        // Clean goes back to the pool; the next caller gets that very one.
+        const a = await pool.acquire();
+        pool.release(a, { clean: true });
+        const again = await pool.acquire();
+        console.log("reused:", again.id === a.id, "| made:", made);
+
+        // Not clean is destroyed, and the caller after that gets a new one.
+        pool.release(again, { clean: false });
+        console.log("destroyed:", destroyed.join(","));
+        const fresh = await pool.acquire();
+        console.log("fresh:", fresh.id !== a.id);
+
+        // The default is destroy: when nobody said it was clean, it is not.
+        pool.release(fresh);
+        console.log("default discards:", destroyed.length === 2);
+
+        // A full pool queues, and a release lets the queued caller through.
+        const one = await pool.acquire();
+        const two = await pool.acquire();
+        let third = "waiting";
+        const queued = pool.acquire().then((r) => { third = "got it"; return r; });
+        console.log("pending:", pool.pending, "| size:", pool.size);
+        pool.release(one, { clean: true });
+        const got = await queued;
+        console.log("queued through:", third);
+
+        // A pool that stays full refuses rather than waiting forever. `two` is
+        // still borrowed, so taking the one just released fills it again.
+        pool.release(got, { clean: true });
+        const hold = await pool.acquire();
+        try {
+          await pool.acquire();
+          console.log("timeout: none (should not happen)");
+        } catch (e) {
+          console.log("timeout:", e.code === DbErrorCode.Timeout);
+        }
+
+        // Closing refuses everyone still waiting rather than leaving them parked.
+        const parked = pool.acquire().then(() => "resolved", (e) => e.code);
+        await pool.close();
+        console.log("closed waiter:", await parked === DbErrorCode.Closed);
+        void two; void hold;
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "reused: true | made: 1
+destroyed: 1
+fresh: true
+default discards: true
+pending: 1 | size: 2
+queued through: got it
+timeout: true
+closed waiter: true"
+    );
+}
+
+/// A resource the driver rejects on the way out is not handed to the next
+/// caller, and a create that fails must still wake whoever was queued behind
+/// the slot it freed — otherwise a pool whose connections all fail parks every
+/// caller forever.
+#[test]
+fn a_pool_validates_on_the_way_out_and_recovers_from_a_failed_create() {
+    let out = run(
+        "pool-validate",
+        r#"
+        import { Pool } from "runtime:db";
+
+        let made = 0;
+        const pool = new Pool({
+          create: async () => ({ id: ++made, ok: true }),
+          destroy: () => {},
+          validate: (r) => r.ok,
+          max: 4,
+        });
+
+        const a = await pool.acquire();
+        a.ok = false;                      // it went bad while borrowed
+        pool.release(a, { clean: true });  // the driver still thought it fine
+        const b = await pool.acquire();
+        console.log("stale one not reused:", b.id !== a.id);
+        pool.release(b, { clean: true });
+
+        let failing = 0;
+        const broken = new Pool({
+          create: async () => {
+            failing++;
+            throw new Error("refused");
+          },
+          destroy: () => {},
+          max: 1,
+          acquireTimeout: 500,
+        });
+        const first = broken.acquire().then(() => "ok", () => "failed");
+        const second = broken.acquire().then(() => "ok", () => "failed");
+        console.log("both fail:", (await first) === "failed", (await second) === "failed");
+        console.log("attempts:", failing >= 2);
+        await pool.close();
+        await broken.close();
+        "#,
+        &[],
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "stale one not reused: true
+both fail: true true
+attempts: true"
+    );
+}
+
 /// The suite a third-party driver runs to show it behaves like the built-ins.
 /// The built-ins run it too — a conformance suite the reference backend does
 /// not pass is a description of nothing.

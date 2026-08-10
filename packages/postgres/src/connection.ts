@@ -111,6 +111,17 @@ export class PgConnection extends BaseConnection {
   readonly parameters: Record<string, string> = {};
   /** The last `ReadyForQuery` status: `I` idle, `T` in a transaction, `E` failed. */
   status = "I";
+
+  /**
+   * Whether this connection is still worth handing to anyone.
+   *
+   * False once a transport failure has been latched — a pool needs to ask
+   * before offering one, because a connection can die while nobody is holding
+   * it and the first anyone hears of that is otherwise the next caller's error.
+   */
+  get usable(): boolean {
+    return this.#fatal === null && this.#socket !== null;
+  }
   /**
    * One exchange at a time: a connection is a single conversation.
    *

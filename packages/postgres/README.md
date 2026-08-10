@@ -113,6 +113,54 @@ await db.execute("SET TIME ZONE 'Asia/Kolkata'");
 db.parameters.TimeZone;   // "Asia/Kolkata"
 ```
 
+## Pooling
+
+One connection is one conversation, so concurrent work on a single connection is
+not concurrent — it queues. A pool is how you get parallelism:
+
+```js
+import { createPool } from "@opentf/esrun-postgres";
+
+const db = createPool(url, { max: 10 });
+
+await Promise.all([db.query(a), db.query(b), db.query(c)]);   // actually parallel
+await db.close();
+```
+
+It presents the same surface as a connection — `query`, `execute`,
+`executeMany`, `transaction`, `executeScript` — and borrows one per operation.
+Nothing is opened until something asks for work.
+
+| Option | Default |
+| --- | --- |
+| `max` | 10 |
+| `idleTimeout` (ms) | 30 000 |
+| `acquireTimeout` (ms) | 10 000 |
+
+It also works through `runtime:db` itself, so a pool is not something only this
+package's own entry point can give you:
+
+```js
+const db = await connect("postgres://…", { pool: { max: 10 } });
+```
+
+**What is returned to the pool, and what is thrown away.** A connection goes
+back only when PostgreSQL's own `ReadyForQuery` last said `I` — idle, outside
+any transaction. `T` means a transaction is still open and `E` means one failed
+and was never rolled back; either would leak into whoever borrowed it next, so
+both are destroyed. A connection that died while nobody held it is checked for
+on the way out too, because the first anyone hears of that is otherwise the next
+caller's error.
+
+`transaction()` holds one connection for the whole callback — a transaction
+spread across connections is not a transaction. A streaming result holds its
+connection until the rows run out; a result small enough to arrive in one batch
+releases immediately, before the caller has read a row.
+
+Idle connections are swept **on use, not on a timer**: a repeating timer would
+keep the event loop alive for as long as the pool existed, so a program that had
+finished its work would not exit. Call `close()` when you are done.
+
 ## One result set at a time
 
 A PostgreSQL connection is a single conversation, so a connection can have one
