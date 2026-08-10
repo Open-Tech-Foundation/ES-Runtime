@@ -377,9 +377,26 @@ it names the host and the port.
 | `bool` | `boolean` |
 | `bytea` | `Uint8Array` |
 | `json` `jsonb` | parsed |
-| `timestamptz` `timestamp` | `Date` |
+| `timestamptz` | `Temporal.Instant` |
+| `timestamp` | `Temporal.PlainDateTime` |
+| `date` | `Temporal.PlainDate` |
+| `time` | `Temporal.PlainTime` |
+| `interval` | `Temporal.Duration` |
 | arrays of the above | JS arrays, nested and null-aware |
 | everything else | `string` |
+
+**Dates and times are Temporal**, not `Date`. A `Date` is an instant with
+millisecond resolution, which makes it the wrong type for three of these at
+once: it cannot hold the microseconds a `timestamp` has, it can only express
+`timestamp without time zone` by inventing a zone (and drivers disagree about
+which — `postgres.js` uses the client's, so the same column reads differently on
+different machines), and a `date` is a calendar day rather than an instant.
+
+`connect(url, { temporal: false })` restores `Date` and strings for code that
+has to hand a `Date` to something else.
+
+A full table, including how Node, Bun and Deno's drivers map the same columns,
+is at <https://es-runtime.opentechf.org/docs/db/postgres>.
 
 An array of a type not in that list comes back as its raw literal
 (`{"(1,2)"}`), because the wire does not say a column is an array — a column of

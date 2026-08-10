@@ -28,6 +28,7 @@ const NAV = [
       { title: "Process & Env", path: "/docs/process" },
       { title: "Path handling", path: "/docs/path" },
       { title: "Databases", path: "/docs/db" },
+      { title: "PostgreSQL types", path: "/docs/db/postgres" },
       { title: "Sockets", path: "/docs/guides/networking" },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "Workers", path: "/docs/guides/workers" },

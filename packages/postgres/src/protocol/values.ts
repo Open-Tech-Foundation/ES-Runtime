@@ -34,6 +34,7 @@ export const OID = {
   numeric: 1700,
   uuid: 2950,
   jsonb: 3802,
+  interval: 1186,
 } as const;
 
 export type Decoder = (
@@ -76,6 +77,8 @@ const fromText: Record<number, (text: string) => unknown> = {
   [OID.jsonb]: JSON.parse,
   [OID.timestamptz]: (t) => new Date(t),
   [OID.timestamp]: (t) => new Date(`${t}Z`),
+  [OID.date]: (t) => t,
+  [OID.time]: (t) => t,
   [OID.bytea]: (t) => {
     // `\x` hex is the modern output format; the legacy escape format is not
     // produced by any supported server version.
@@ -179,6 +182,31 @@ export function parseArray(literal: string, element: (text: string) => unknown):
 
 /** PostgreSQL counts time from 2000-01-01, not 1970. */
 const PG_EPOCH_MS = 946_684_800_000;
+const PG_EPOCH_US = 946_684_800_000_000n;
+const PG_EPOCH_DATE = "2000-01-01";
+
+/**
+ * Temporal, or the legacy `Date`.
+ *
+ * Temporal is the default because it can say what these columns actually are.
+ * A `Date` is an instant with millisecond resolution, which makes it wrong for
+ * three PostgreSQL types at once: it cannot hold the microseconds a `timestamp`
+ * has, it has no way to represent a `timestamp without time zone` other than by
+ * inventing a zone — drivers disagree on which, so the same column reads
+ * differently depending on the machine — and a `date` is a calendar day rather
+ * than an instant at all.
+ *
+ * `{ temporal: false }` restores the older mapping for code that needs to hand
+ * a `Date` to something else.
+ */
+export interface DecodeOptions {
+  temporal?: boolean;
+}
+
+/** Microseconds since the PostgreSQL epoch → an exact instant. */
+function instantFromMicros(micros: bigint): unknown {
+  return Temporal.Instant.fromEpochNanoseconds((micros + PG_EPOCH_US) * 1000n);
+}
 
 /**
  * Decoders for the binary wire format, by OID.
@@ -230,30 +258,97 @@ const binary: Record<number, Decoder> = {
     new Date(view.getInt32(start) * 86_400_000 + PG_EPOCH_MS).toISOString().slice(0, 10),
 };
 
+/**
+ * Text decoders that produce Temporal values.
+ *
+ * PostgreSQL writes `2026-01-02 03:04:05.123456`; ISO wants a `T`. The offset
+ * it appends is `+00`, which ISO wants as `+00:00`. Both are one substitution,
+ * and after them the strings are exactly what `Temporal` parses.
+ */
+const fromTextTemporal: Record<number, (text: string) => unknown> = {
+  [OID.date]: (t) => Temporal.PlainDate.from(t),
+  [OID.time]: (t) => Temporal.PlainTime.from(t),
+  [OID.timestamp]: (t) => Temporal.PlainDateTime.from(t.replace(" ", "T")),
+  [OID.timestamptz]: (t) => {
+    const iso = t.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
+    return Temporal.Instant.from(iso);
+  },
+  // Read as ISO-8601 because the connection asks the server for that style —
+  // parsing `3 mons 4 days 05:00:00` would be inventing a second format to
+  // maintain when the server will simply write the first.
+  [OID.interval]: (t) => Temporal.Duration.from(t),
+};
+
+/** Binary decoders that produce Temporal values. */
+const binaryTemporal: Record<number, Decoder> = {
+  [OID.date]: (_b, view, start) =>
+    Temporal.PlainDate.from(PG_EPOCH_DATE).add({ days: view.getInt32(start) }),
+  [OID.time]: (_b, view, start) =>
+    Temporal.PlainTime.from("00:00:00").add({ microseconds: Number(view.getBigInt64(start)) }),
+  [OID.timestamp]: (_b, view, start) =>
+    (instantFromMicros(view.getBigInt64(start)) as Temporal.Instant)
+      .toZonedDateTimeISO("UTC")
+      .toPlainDateTime(),
+  [OID.timestamptz]: (_b, view, start) => instantFromMicros(view.getBigInt64(start)),
+  // months, days and microseconds are stored separately because they are not
+  // interchangeable — a month is not thirty days — and Duration keeps them
+  // separate for the same reason.
+  [OID.interval]: (_b, view, start) => {
+    const total = view.getBigInt64(start);
+    const days = view.getInt32(start + 8);
+    const months = view.getInt32(start + 12);
+    // Split into hours, minutes and seconds rather than handed over as one
+    // microsecond count. Temporal does not normalise on construction, so the
+    // undivided form would print as `PT18000S` where the text path prints
+    // `PT5H` — the same duration, and a difference that would make the two wire
+    // formats disagree about a value neither of them changed.
+    //
+    // In BigInt, because an interval of a few centuries is more microseconds
+    // than a double counts exactly.
+    const hours = Number(total / 3_600_000_000n);
+    const afterHours = total % 3_600_000_000n;
+    const minutes = Number(afterHours / 60_000_000n);
+    const afterMinutes = afterHours % 60_000_000n;
+    const seconds = Number(afterMinutes / 1_000_000n);
+    const microseconds = Number(afterMinutes % 1_000_000n);
+    return Temporal.Duration.from({ months, days, hours, minutes, seconds, microseconds });
+  },
+};
+
 /** Whether this column is worth asking for in binary. */
-export function prefersBinary(oid: number): boolean {
+export function prefersBinary(oid: number, options: DecodeOptions = {}): boolean {
+  if (options.temporal !== false && binaryTemporal[oid] !== undefined) return true;
   return binary[oid] !== undefined;
 }
 
 /** The decoder for a column of type `oid` in the given wire format. */
-export function decoderForFormat(oid: number, format: number): Decoder {
+export function decoderForFormat(
+  oid: number,
+  format: number,
+  options: DecodeOptions = {},
+): Decoder {
   if (format === 1) {
-    const decode = binary[oid];
+    const decode =
+      (options.temporal !== false ? binaryTemporal[oid] : undefined) ?? binary[oid];
     if (decode !== undefined) return decode;
   }
-  return decoderFor(oid);
+  return decoderFor(oid, options);
 }
 
 /** The decoder for a column of type `oid`. */
-export function decoderFor(oid: number): Decoder {
+export function decoderFor(oid: number, options: DecodeOptions = {}): Decoder {
+  const temporal = options.temporal !== false;
   const elementOid = ARRAY_ELEMENT[oid];
   if (elementOid !== undefined) {
-    const element = fromText[elementOid] ?? ((t: string) => t);
+    const element =
+      (temporal ? fromTextTemporal[elementOid] : undefined) ??
+      fromText[elementOid] ??
+      ((t: string) => t);
     return (b, v, s, l) => parseArray(text(b, v, s, l), element);
   }
   // `bool` is one byte and the answer is in it, so it skips the string.
   if (oid === OID.bool) return (bytes, _v, start) => bytes[start] === 0x74;
-  const decode = fromText[oid];
+  const decode = (temporal ? fromTextTemporal[oid] : undefined) ?? fromText[oid];
   return decode === undefined ? text : (b, v, s, l) => decode(text(b, v, s, l));
 }
 

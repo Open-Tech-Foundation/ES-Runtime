@@ -27,7 +27,13 @@ import * as msg from "./protocol/messages.js";
 import { AUTH, B } from "./protocol/messages.js";
 import { scram } from "./protocol/scram.js";
 import { portableCode, type ServerMessage } from "./protocol/errors.js";
-import { decoderFor, decoderForFormat, encodeParam, prefersBinary } from "./protocol/values.js";
+import {
+  decoderFor,
+  decoderForFormat,
+  encodeParam,
+  prefersBinary,
+  type DecodeOptions,
+} from "./protocol/values.js";
 
 /** A result set's shape, as `RowDescription` reports it. */
 interface Columns {
@@ -119,6 +125,14 @@ export interface PgOptions {
    * time — would otherwise accumulate them until the backend ran out of memory.
    */
   preparedStatementCacheSize?: number;
+  /**
+   * Decode date and time columns to **Temporal** values. Default `true`.
+   *
+   * `false` restores the older mapping — `Date` for timestamps, strings for
+   * dates, times and intervals — for code that has to hand a `Date` to
+   * something else. See the type table in the README for what changes.
+   */
+  temporal?: boolean;
   /**
    * A certificate authority to trust in addition to the public roots, as PEM.
    *
@@ -232,6 +246,14 @@ export class PgConnection extends BaseConnection {
     };
     if (options.preparedStatementCacheSize !== undefined) {
       this.#cacheLimit = Math.max(0, Math.trunc(options.preparedStatementCacheSize));
+    }
+    this.#decode = { temporal: options.temporal !== false };
+    if (this.#decode.temporal) {
+      // ISO-8601 intervals, so the text path reads what `Temporal.Duration`
+      // parses. The alternative is a parser for `3 mons 4 days 05:00:00`,
+      // which is a second format to maintain when the server will write the
+      // first on request.
+      params["IntervalStyle"] = "iso_8601";
     }
     if (options.statementTimeout !== undefined && options.statementTimeout > 0) {
       // A GUC in the startup packet: in force from the first statement, with no
@@ -497,6 +519,8 @@ export class PgConnection extends BaseConnection {
   #statements = new Map<string, Prepared>();
   #nextStatement = 0;
   #cacheLimit = 100;
+  /** How values are turned into JavaScript — chosen once, at connect. */
+  #decode: DecodeOptions = { temporal: true };
 
   /**
    * Prepares `text`, learning its shape once.
@@ -531,7 +555,8 @@ export class PgConnection extends BaseConnection {
     // Binary where it is simpler and cheaper to read than text, and text where
     // it is not. An all-text statement sends no format list at all, which is
     // both shorter and exactly what the server assumes.
-    const formats = columns === null ? [] : columns.oids.map((oid) => (prefersBinary(oid) ? 1 : 0));
+    const formats =
+      columns === null ? [] : columns.oids.map((oid) => (prefersBinary(oid, this.#decode) ? 1 : 0));
     const entry: Prepared = {
       name,
       columns,
@@ -784,7 +809,9 @@ export class PgConnection extends BaseConnection {
       }));
       const formats = this.#statements.get(q.text)?.formats ?? [];
       const shape = defineRowShape(columns, {
-        decoders: described.oids.map((oid, i) => decoderForFormat(oid, formats[i] ?? 0)),
+        decoders: described.oids.map((oid, i) =>
+          decoderForFormat(oid, formats[i] ?? 0, this.#decode),
+        ),
       });
 
       let first: Batch | null = await this.#batch(columns.length);
