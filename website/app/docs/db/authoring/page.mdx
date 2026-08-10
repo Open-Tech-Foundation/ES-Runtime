@@ -1,0 +1,305 @@
+---
+title: Writing a database driver or an ORM
+description: For anyone building a database backend or an ORM on runtime:db — what the kit gives you, what you supply, the type mappings the ecosystem disagrees on, and the things that went wrong building the first driver.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Writing a database driver or an ORM
+
+This is for two audiences with mostly the same problems. If you are **writing a
+database driver**, the first half is the contract you implement and the second
+half is the list of things that went wrong when I implemented it. If you are
+**writing an ORM or a query builder**, the same material tells you what you may
+rely on across every backend, what is a backend's own choice, and which sharp
+edges will reach your users before they reach you.
+
+Everything below came out of writing [`@opentf/esrun-postgres`](/docs/db) — the
+first backend built on `runtime:db` from outside the runtime. Where something is
+stated flatly it is because getting it wrong cost a day; where a number appears
+it was measured, and the script that measured it is committed.
+
+## The shape of it
+
+`runtime:db` is one module with two tiers. The **application tier** —
+`connect`, `sql`, `Connection`, `Rows`, transactions — is what your users call.
+The **driver tier** is what you build on: the scheme registry, the row decoder,
+the parameter encoder, `Dialect`, `Pool`, the portable error codes,
+`BaseConnection`, and the conformance suite.
+
+A backend for a networked database needs **no runtime code at all**. The
+transport is [`runtime:net`](/docs/guides/networking) — a TLS socket, a
+mid-connection `startTls()` upgrade, and reads that arrive in 64 KiB batches.
+The PostgreSQL driver added not one line of Rust, which is the property the
+whole design exists to preserve.
+
+## Writing a backend
+
+Subclass `BaseConnection` and implement five things:
+
+```js
+import { registerBackend, BaseConnection, Dialect } from "runtime:db";
+
+const dialect = new Dialect({ name: "mydb", placeholder: (i) => `$${i}` });
+
+class MyConnection extends BaseConnection {
+  constructor(socket) {
+    super({ dialect, backend: "mydb" });
+    this.socket = socket;
+  }
+  async _query({ text, positional, named }) { /* → Rows */ }
+  async _execute({ text, positional, named }) { /* → { changes, lastInsertRowid } */ }
+  async _close() {}
+
+  // Optional, and the defaults are real behaviour rather than stubs.
+  async _executeMany(text, sets) { /* one round trip instead of N */ }
+  async _cancel() { /* stop what is running */ }
+}
+
+registerBackend("mydb", async (url, options) => new MyConnection(await open(url)));
+```
+
+Transactions, savepoints, the closed-connection check, the `sql` tag, the
+abandoned-result discipline and `AbortSignal` handling all come from the base
+class. You do not reimplement them, and — more to the point — you do not get to
+implement them *differently*, which is what makes an ORM able to rely on them.
+
+<Callout type="info" title="Optional means optional, not absent">
+  `_executeMany` defaults to a loop over `_execute` inside the same transaction:
+  correct, and no faster than the loop it replaces. `_cancel` defaults to doing
+  nothing, so a signal still rejects your caller while the work runs on.
+  Overriding either buys speed or reach — never the feature itself. That way an
+  ORM can call them on day one of a backend's existence.
+</Callout>
+
+### Run the conformance suite
+
+```js
+import { runBackendConformance } from "runtime:db";
+
+const report = await runBackendConformance(() => connect(url));
+if (!report.ok) console.error(report.failures);
+```
+
+Fifteen checks: column order, parameter binding and the injection it prevents,
+null against no-row, empty results, streaming with an early exit, transactions
+and savepoints, batched execution and its atomicity, the portable error codes,
+signals, and the forms a backend refuses. The built-in `sqlite:` backend runs
+it too — a conformance suite the reference backend does not pass is a
+description of nothing.
+
+## Rows
+
+Rows cross as **one byte buffer per batch**, in the layout PostgreSQL already
+uses for `DataRow`: per column an `int32` length (`-1` for NULL) then the bytes.
+Both backends use it, which means a `DataRow` frame is copied into a batch as it
+arrives and **never transcoded**. If you are writing a wire driver, transcode
+into that layout and you inherit the decoder.
+
+`defineRowShape(columns, { decoders })` generates the accessor class;
+`decodeBatch(bytes, shape, count)` walks a batch. Rows are **lazy** — one pass
+records each column's span and nothing is decoded until it is read, so a query
+selecting more columns than it uses pays only for the ones it touches.
+
+<Callout type="warning" title="The cost of lazy rows">
+  The getters live on the prototype, so `{ ...row }` yields an **empty object**.
+  `row.toObject()` is how a row is materialized. If you build an ORM, this is
+  the sharp edge your users will meet first — `JSON.stringify(row)` works,
+  spreading does not.
+</Callout>
+
+The row's own state is in private fields, not properties. A row holds a
+reference to its whole batch, and anything reachable from the instance is
+reachable by a caller who spreads it — including symbol keys. Private fields are
+copied by nothing.
+
+## Types, and where the ecosystem disagrees
+
+Every cell below was produced by running one query through each driver
+(`bench/db/pg/types-*.mjs`), so it can be regenerated rather than trusted.
+
+| PostgreSQL | esrun | node + postgres.js | bun:sql | deno + postgres.js |
+| --- | --- | --- | --- | --- |
+| `bool` `int2` `int4` `float4` `float8` | `boolean` / `number` | same | same | same |
+| `text` `uuid` `numeric` | `string` | same | same | same |
+| `json` `jsonb` | parsed object | same | same | same |
+| `bytea` | `Uint8Array` | same | same | same |
+| arrays | JS array | same | same | same |
+| `NULL` | `null` | same | same | same |
+| **`int8` (small)** | `number 42` | `"42"` | `"42"` | `"42"` |
+| **`int8` (> 2⁵³)** | `bigint` | `"9007…"` | `"9007…"` | `"9007…"` |
+| **`date`** | `Temporal.PlainDate` | `Date` midnight UTC | `Date` | `Date` |
+| **`time`** | `Temporal.PlainTime` | `string` | `string` | `string` |
+| **`timestamp`** | `Temporal.PlainDateTime` | `Date` in **client zone** | `Date` UTC | `Date` in **client zone** |
+| **`timestamptz`** | `Temporal.Instant` | `Date` | `Date` | `Date` |
+| **`interval`** | `Temporal.Duration` | `string` | `string` | `string` |
+
+Three lessons in that table, and they generalise past PostgreSQL.
+
+**Pick a type that can say what the column is.** A `Date` is an instant with
+millisecond resolution. That makes it wrong for three columns at once: it cannot
+hold the microseconds a `timestamp` has (every driver above except this one
+answers `.123` for a column containing `.123456`), it can only express
+`timestamp without time zone` by inventing a zone — and the drivers disagree
+about which, so `postgres.js` returns a different value depending on the
+machine's offset — and a `date` is a calendar day rather than an instant at all.
+`Temporal` has a type for each of those and loses nothing.
+
+**Exactness that costs usability is not a gift.** The other drivers return
+`int8` as a string: exact, and unusable until you convert it — with `Number()`,
+which is the precision loss the string was avoiding. Returning a `number` when
+the value fits one and a `bigint` when it does not is exact *and* arithmetic
+works.
+
+**Know which conversions are lossy and refuse those.** `numeric` stays a string
+in every driver here, and should: it is arbitrary precision by definition, and a
+double is the one representation guaranteed to lose it.
+
+<Callout type="info" title="Verify both wire formats agree">
+  A driver that requests binary for some columns and text for others has two
+  decoders per type and one contract. Read the same row through both paths and
+  require every column to match. That test caught a `date` decoding as a string
+  through text and a `Date` through binary — a column whose *type* changed
+  depending on whether the statement cache happened to be warm.
+</Callout>
+
+## Things that will bite you
+
+### A connection is one conversation
+
+Querying while another result is still streaming deadlocked the first version —
+two readers taking turns on one socket, each waiting for the other's message.
+
+Queueing is the obvious fix and the wrong one. An `execute` in flight finishes
+on its own, so waiting for it is finite; an open result set finishes only when
+the caller drains it, and a caller stuck on the queue never will. So
+`for await (row of a) { await query(b) }` goes from a hang to a slower hang.
+Refuse it instead, immediately, with `ERR_DB_CONNECTION_BUSY` and the fix in the
+message. A pool is what makes the pattern work.
+
+### `release(clean)` defaults to false
+
+`Pool` is protocol-blind: it cannot know whether a returned connection is fit to
+reuse, because that needs the protocol. You assert it. Anything not explicitly
+clean is destroyed, and the default is `false` — when nobody checked, the safe
+answer is to throw the resource away. For PostgreSQL the assertion is
+`status === "I"`: idle, outside any transaction. `T` or `E` would leak an open
+or failed transaction into the next borrower.
+
+### A crossing costs about 20 µs — so batch, or lose
+
+Measured, and in line with Node's own async I/O. It follows that any API doing
+one crossing per row spends its time on the boundary rather than in the
+database. Rows come back 64 KiB at a time; a result that fits one batch comes
+back *with* its query and opens no cursor; `executeMany` crosses once for a
+whole batch and took 50 000 inserts from 1832 ms to 312 ms.
+
+### Do not generalise one measurement to a different shape
+
+The statement cache bought **6%**, because a point query is one round trip and
+parsing was never its dominant term. I concluded the round trip dominates and
+predicted binary result formats would not pay. Then I measured: on a 10 000-row
+scan, **decoding was 54% of the query**, and binary took it to 8% — the scan
+from 72 ms to 51.6 ms, past every other driver.
+
+Both measurements were right. A round trip is a *fixed* cost per query, so it is
+the whole cost of a point query and negligible against ten thousand rows, where
+decoding is what scales. Applying one where the other belonged was the mistake.
+
+<Callout type="info" title="How to measure decoding without guessing">
+  Lazy rows make this exact. Run the same query touching a different number of
+  columns: the network and the protocol are held constant, and only the decoding
+  varies. `bench/db/pg/decode-share.mjs` does it in twenty lines.
+</Callout>
+
+### Cancellation is a request, not an instruction
+
+Aborting should ask the backend to cancel and then **wait** for it to answer.
+Rejecting the caller the instant the signal fires leaves a statement running and
+a connection mid-exchange; waiting a moment leaves both in a known state and the
+connection usable — which is the whole difference between cancelling and hanging
+up.
+
+Report the caller's own `reason`, not the backend's word for a cancelled
+statement. And note that the failure from an **abandoned stream** arrives out of
+the iterator, not out of the call that started it: translate it in both places,
+or `execute` and `query` will report the same act differently.
+
+### Latch a lost connection
+
+Once a message has been half-read off a socket, nothing later on it can be
+trusted to start on a boundary. Keep the first transport failure and answer
+every later call with it, rather than letting each caller meet a different
+symptom of one dead connection — a hang, a length that makes no sense, a message
+tag nobody sent.
+
+### A statement cache needs a bound and an invalidation story
+
+Each entry is a plan the *server* holds. An ORM inlining a literal per query
+would accumulate them until the backend ran out of memory, so bound it and evict
+least-recently-used. And handle the plan going stale underneath you —
+`0A000` after a migration, `26000` after a pooler reset or `DISCARD ALL` —
+by dropping the cache and preparing again, once. Neither is the caller's mistake
+and neither should surface as one.
+
+### Test the default path, not the one you configured
+
+Reading the server's answer to `SSLRequest` takes a stream reader, and a reader
+**locks the stream**. Building a second one after the server declined threw — so
+`postgres://host/db` with no `sslmode` failed against every server without TLS,
+which is most development setups. Every test had specified `sslmode`, so nothing
+caught it until a test finally did not.
+
+## Errors
+
+Map your backend's vocabulary onto the portable codes so an application can
+branch on what happened without knowing who said it. PostgreSQL's SQLSTATE is a
+far better source than a message — stable across versions and locales, where a
+message is neither.
+
+Layer the classification: your own table first, then any stable host code, then
+`ERR_DB_BACKEND`. A denied capability must stay `ERR_CAPABILITY_DENIED` — an
+application testing for it should not have to know the call went through a
+database. The first version swallowed both into `ERR_DB_BACKEND`, and only the
+end-to-end capability test noticed.
+
+## What an ORM may rely on
+
+Across every backend that passes the conformance suite, and regardless of who
+wrote it:
+
+- `sql\`\`` binds every interpolation as a parameter, rendering placeholders
+  through the backend's own `Dialect` — one template targets `$1`, `?` and
+  `:name` backends unchanged.
+- `Dialect.placeholder(i)` and `quoteIdent(name)` are how you build SQL for a
+  backend you were not written for. Quote identifiers with `quoteIdent`; never
+  interpolate a name.
+- `transaction(fn)` commits on return and rolls back on throw, and **nests via
+  savepoints** where the backend has them, so a helper that opens a transaction
+  composes with a caller that already did.
+- `executeMany` exists everywhere and is atomic.
+- The portable `DbErrorCode` values mean the same thing everywhere, and
+  `e.backendCode` still carries the original.
+- `{ signal }` rejects with your reason and leaves the connection usable.
+- `Rows` streams; `rows.exhausted` tells you whether a connection is still tied
+  up by it, which is what a pool needs to know.
+
+What is **not** portable, and should be behind a capability check rather than an
+assumption: named parameters (`dialect.supports.namedParameters` —
+PostgreSQL binds by position and refuses them), `RETURNING`
+(`supports.returning`), savepoints (`supports.savepoints`), multi-statement
+scripts, and `lastInsertRowid`, which PostgreSQL has no equivalent of and
+always reports as `null`.
+
+## A checklist
+
+- [ ] `registerBackend` on import, so `connect()` finds you
+- [ ] `_query`, `_execute`, `_close`; override `_executeMany` and `_cancel` if you can
+- [ ] Transcode rows into the shared batch layout — do not write a decoder
+- [ ] Both wire formats, if you have two, decode to identical values
+- [ ] SQLSTATE or equivalent mapped onto the portable codes, host codes preserved
+- [ ] One open result set per connection, enforced rather than hoped
+- [ ] `release(clean)` asserted from the protocol's own idea of idle
+- [ ] Timeouts on connect; let the server bound the statement if it can
+- [ ] Transport failures latched
+- [ ] `runBackendConformance()` passing, in CI, against a real server

@@ -396,7 +396,8 @@ different machines), and a `date` is a calendar day rather than an instant.
 has to hand a `Date` to something else.
 
 A full table, including how Node, Bun and Deno's drivers map the same columns,
-is at <https://es-runtime.opentechf.org/docs/db/postgres>.
+is at <https://es-runtime.opentechf.org/docs/db/authoring>, in a guide for
+anyone writing a database driver or an ORM on `runtime:db`.
 
 An array of a type not in that list comes back as its raw literal
 (`{"(1,2)"}`), because the wire does not say a column is an array — a column of
