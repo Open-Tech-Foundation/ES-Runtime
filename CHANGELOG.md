@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-10
+
 ### Added
 
 - **Temporal by default in `@opentf/esrun-postgres`.** `timestamptz` arrives as a
