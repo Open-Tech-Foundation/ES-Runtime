@@ -18,8 +18,21 @@ export PG_URL="${PG_URL:-postgres://postgres:esrun@127.0.0.1:5433/esrun_test?ssl
 printf "\n== unit ==\n"
 "$here/unit/run.sh" || exit 1
 
+# The PG* variables, derived from PG_URL, so the environment test exercises the
+# path libpq tools take rather than only the parsing around it.
+pg_no_scheme="${PG_URL#*://}"
+pg_creds="${pg_no_scheme%%@*}"
+pg_hostpart="${pg_no_scheme#*@}"
+export PGUSER="${pg_creds%%:*}"
+export PGPASSWORD="${pg_creds#*:}"
+export PGHOST="$(printf '%s' "${pg_hostpart%%/*}" | cut -d: -f1)"
+export PGPORT="$(printf '%s' "${pg_hostpart%%/*}" | cut -d: -f2)"
+pg_dbpart="${pg_hostpart#*/}"
+export PGDATABASE="${pg_dbpart%%\?*}"
+export PGSSLMODE=disable
+
 status=0
-for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool; do
+for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool environment; do
   printf '\n== %s ==\n' "$test"
   "$esrun" "$here/$test.mjs" || status=1
 done

@@ -16,11 +16,55 @@
  * database to this runtime does not mean adding anything to the runtime.
  */
 import { registerBackend } from "runtime:db";
+import { env, unmask } from "runtime:process";
 
 import { PgConnection, POSTGRES_DIALECT, type PgOptions } from "./connection.js";
 import { PgPool, type PgPoolOptions } from "./pool.js";
 
 export { PgConnection, PgPool, POSTGRES_DIALECT, type PgOptions, type PgPoolOptions };
+
+/**
+ * The `PG*` environment variables, which every libpq tool reads.
+ *
+ * Below the URL and below explicit options, so they are defaults rather than
+ * overrides — `psql` behaves the same way, and a program that spelled out a
+ * host should get that host whatever the shell exported.
+ *
+ * **Reading the environment needs the `Env` capability**, and a program running
+ * without it is not asking for libpq's defaults. So a refusal here is not an
+ * error: it means no defaults, and the connection string stands on its own.
+ */
+export function environmentDefaults(): PgOptions {
+  const options: PgOptions = {};
+  try {
+    if (env.PGHOST) options.host = String(env.PGHOST);
+    if (env.PGPORT) options.port = Number(env.PGPORT);
+    if (env.PGUSER) options.user = String(env.PGUSER);
+    if (env.PGDATABASE) options.database = String(env.PGDATABASE);
+    if (env.PGAPPNAME) options.applicationName = String(env.PGAPPNAME);
+    if (env.PGPASSWORD) {
+      // `unmask` through, always. It returns a plain string unchanged, so this
+      // is correct whether or not the runtime decides PGPASSWORD is a name
+      // worth masking — and being wrong about that would put "[secret]" in a
+      // startup packet.
+      options.password = String(unmask(env.PGPASSWORD));
+    }
+    const sslmode = env.PGSSLMODE ? String(env.PGSSLMODE) : "";
+    if (sslmode === "require" || sslmode === "prefer" || sslmode === "disable") {
+      options.sslmode = sslmode;
+    }
+    if (env.PGCONNECT_TIMEOUT) {
+      // libpq's spelling: seconds.
+      const seconds = Number(env.PGCONNECT_TIMEOUT);
+      if (Number.isFinite(seconds) && seconds >= 0) options.connectTimeout = seconds * 1000;
+    }
+  } catch {
+    // The `Env` capability was not granted. Not an error, and not a reason to
+    // fail a connection that named everything it needed.
+    return {};
+  }
+  return options;
+}
 
 /**
  * Turns a connection string into options.
@@ -29,13 +73,17 @@ export { PgConnection, PgPool, POSTGRES_DIALECT, type PgOptions, type PgPoolOpti
  * part optional. A password in the URL is honoured because libpq's format has
  * always allowed it and every tool emits it — unlike an encryption key, it is
  * the credential the URL exists to carry.
+ *
+ * Precedence, highest first: explicit options, the URL, the `PG*` environment,
+ * then the defaults. Only what the URL actually carried counts as the URL
+ * having said anything — `postgres://` names no host, so `PGHOST` still
+ * applies.
  */
 export function parseConnectionString(url: string, overrides: PgOptions = {}): PgOptions {
   const parsed = new URL(url);
-  const options: PgOptions = {
-    host: decodeURIComponent(parsed.hostname || "localhost"),
-    port: parsed.port === "" ? 5432 : Number(parsed.port),
-  };
+  const options: PgOptions = {};
+  if (parsed.hostname !== "") options.host = decodeURIComponent(parsed.hostname);
+  if (parsed.port !== "") options.port = Number(parsed.port);
   const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
   if (database !== "") options.database = database;
   if (parsed.username !== "") options.user = decodeURIComponent(parsed.username);
@@ -66,7 +114,13 @@ export function parseConnectionString(url: string, overrides: PgOptions = {}): P
   }
   const application = parsed.searchParams.get("application_name");
   if (application !== null) options.applicationName = application;
-  return { ...stripUndefined(options), ...stripUndefined(overrides) };
+  return {
+    host: "localhost",
+    port: 5432,
+    ...environmentDefaults(),
+    ...stripUndefined(options),
+    ...stripUndefined(overrides),
+  };
 }
 
 function stripUndefined<T extends object>(value: T): T {
