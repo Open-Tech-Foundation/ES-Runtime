@@ -108,6 +108,12 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`@opentf/esrun-types` published an incomplete package.** `globals.d.ts` and
+  `runtime-websocket.d.ts` were referenced by `index.d.ts` and absent from the
+  `files` list, so an installed copy could not resolve its own references. The
+  list is a glob now — it cannot fall behind a new module — and a test asserts
+  every declaration file is publishable.
+
 - **`types/runtime-db.d.ts`**: `DbError` and `Rows` are declared constructible,
   and `ColumnDecoder` returns `unknown` rather than the built-in backend's value
   set. All three were found by writing a driver against the declarations rather

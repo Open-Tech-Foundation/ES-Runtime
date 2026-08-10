@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@opentf/esrun-types": "file:../../types",
-    "typescript": "^5.7.0"
+    "typescript": "^7.0.2"
   },
   "keywords": ["esrun", "es-runtime", "opentf", "postgres", "postgresql", "database", "driver"],
   "license": "Apache-2.0",

@@ -42,6 +42,14 @@ not just per-file:
 }
 ```
 
+<Callout type="note" title="Leave `lib` unset">
+  With no `lib`, TypeScript uses the default for your `target` — `lib.esnext.full`
+  for `ESNext` — which already includes the web APIs this runtime provides:
+  `fetch`, `URL`, `crypto`, the streams, `TextEncoder`, and `Temporal` from
+  TypeScript 7. Setting `lib` explicitly *replaces* that default, so a config
+  naming only `["ESNext"]` loses all of them.
+</Callout>
+
 <Callout type="note" title="Manual alternative">
   If you'd rather not let the CLI edit your config, run `esrun types >
   runtime.d.ts` and add that file to your `include`.

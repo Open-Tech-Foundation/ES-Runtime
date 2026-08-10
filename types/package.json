@@ -3,17 +3,10 @@
   "version": "0.1.0",
   "description": "TypeScript type definitions for ES Runtime (esrun) — the runtime: standard modules (process, path, fs, db, net, http).",
   "types": "index.d.ts",
+  "_files": "A glob, not a list. The list had drifted: globals.d.ts and runtime-websocket.d.ts were referenced by index.d.ts and not published, so an installed package could not resolve its own references. A glob cannot fall behind a new module.",
   "files": [
-    "index.d.ts",
-    "runtime-process.d.ts",
-    "runtime-path.d.ts",
-    "runtime-fs.d.ts",
-    "runtime-db.d.ts",
-    "runtime-net.d.ts",
-    "runtime-http.d.ts",
-    "runtime-serialization.d.ts",
-    "runtime-wasi.d.ts",
-    "runtime-system.d.ts"
+    "*.d.ts",
+    "README.md"
   ],
   "keywords": ["esrun", "es-runtime", "opentf", "types", "runtime"],
   "license": "Apache-2.0",

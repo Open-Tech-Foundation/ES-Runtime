@@ -9,6 +9,6 @@
   },
   "devDependencies": {
     "@bufbuild/protobuf": "^2.12.1",
-    "typescript": "^5.7.0"
+    "typescript": "^7.0.2"
   }
 }

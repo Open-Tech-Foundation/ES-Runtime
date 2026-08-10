@@ -1645,6 +1645,45 @@ mod tests {
     /// `types/` does not add it here — and the symptom is silent: the module
     /// simply has no types, in an editor, for whoever installed them. This walks
     /// the directory instead of trusting the list.
+    /// Every declaration file must actually be published.
+    ///
+    /// `index.d.ts` references its siblings, so one missing from the npm
+    /// package is not a gap — it is an installed package that cannot resolve
+    /// itself. The list in `package.json` had drifted twice; it is a glob now,
+    /// and this asserts the glob still covers everything.
+    #[test]
+    fn every_types_file_is_publishable() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../types");
+        let manifest =
+            std::fs::read_to_string(format!("{dir}/package.json")).expect("read manifest");
+        let files: Vec<&str> = manifest
+            .split("\"files\"")
+            .nth(1)
+            .expect("a files list")
+            .split(']')
+            .next()
+            .expect("a closing bracket")
+            .split('"')
+            .filter(|s| s.ends_with(".d.ts") || s.ends_with(".md"))
+            .collect();
+        let covers_declarations = files.contains(&"*.d.ts");
+        for entry in std::fs::read_dir(dir).expect("read types dir") {
+            let name = entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned();
+            if !name.ends_with(".d.ts") {
+                continue;
+            }
+            assert!(
+                covers_declarations || files.contains(&name.as_str()),
+                "{name} is not in the published file list, so an installed \
+                 @opentf/esrun-types could not resolve it"
+            );
+        }
+    }
+
     #[test]
     fn every_types_file_is_bundled() {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../types");

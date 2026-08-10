@@ -123,6 +123,7 @@ jobs:
       - run: cargo build -p es-runtime-cli
         working-directory: .
       - run: bun install --frozen-lockfile
+      - run: bun run typecheck
       - run: bun run build
       - run: ./test/unit/run.sh
         env:
