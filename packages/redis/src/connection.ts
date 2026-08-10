@@ -106,7 +106,7 @@ export interface RedisOptions extends DecodeOptions {
    * this is the caller saying that tying *this* connection up is the point,
    * which is exactly how a queue worker is deployed.
    *
-   * `createPool` strips it: a pool's premise is that its connections come back.
+   * A pool strips it: a pool's premise is that its connections come back.
    */
   blocking?: boolean;
   /**

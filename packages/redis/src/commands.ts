@@ -2,10 +2,12 @@
  * The command surface: Redis as Redis, rather than Redis pretending to be a
  * database with rows in it.
  *
- * This is the half of the package most people will use. `runtime:db`'s
- * `connect()` / `query()` still reaches Redis — that is what makes it a
- * backend, and what an ORM or a portable tool would target — but nobody wants
- * to write `db.query(queryAst(["HGETALL", key]))` when they mean `hgetall`.
+ * This is the half of the package most people will use. `query()` still
+ * reaches Redis — that is what makes it a `runtime:db` backend, and what an ORM
+ * or a portable tool would target — but nobody wants to write
+ * `db.query(queryAst(["HGETALL", key]))` when they mean `hgetall`, and both are
+ * on the same connection so nobody has to choose one at the point of opening
+ * it.
  *
  * Everything is `call()` underneath, so there is exactly one place a command
  * turns into bytes, and anything without a helper here is still reachable:
@@ -14,8 +16,9 @@
  * this release omits — streams, geo, bitmaps, HyperLogLog — cost a caller
  * nothing but a little typing.
  *
- * It is abstract so that a single connection and a pool present the same
- * methods without either of them reimplementing eighty of them.
+ * It is abstract, and mixed in rather than extended: a connection and a pool
+ * present the same methods without either of them reimplementing eighty, even
+ * though each already has a base class of its own. See `mixinCommands` below.
  */
 import type { CommandArg } from "./protocol/resp.js";
 import type { RedisPipeline, RedisTransaction } from "./batch.js";
@@ -1083,7 +1086,7 @@ export abstract class RedisCommands {
    * The loop a blocking pop exists for, written once:
    *
    * ```js
-   * const worker = await Redis.connect(url, { blocking: true });
+   * const worker = await connect(url, { driver: redis, blocking: true });
    * for await (const job of worker.consume("jobs")) await handle(job.value);
    * ```
    *
