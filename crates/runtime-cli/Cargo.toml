@@ -13,14 +13,12 @@ name = "esrun"
 path = "src/main.rs"
 
 [dependencies]
+# The shared plumbing: prelude snapshot, permission-flag grammar, provider
+# wiring, drive loop, graceful shutdown, error block. Everything that decides
+# how a *run* behaves lives there so `esrun` and `esdev` cannot disagree.
+es-runtime-cli-common.workspace = true
 es-runtime-common.workspace = true
-es-runtime-providers.workspace = true
-es-runtime.workspace = true
-es-runtime-default-providers.workspace = true
-tokio = { workspace = true, features = ["rt", "macros", "time", "signal"] }
-# Canonicalizing the entry path / inline-snippet base into a file: module
-# specifier (the referrer the entry's imports resolve against).
-url.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
 # `esrun upgrade` — self-update from GitHub releases.
 self_update.workspace = true
 # `esrun types --install` — merge the type package into tsconfig.json.
@@ -30,12 +28,6 @@ serde_json.workspace = true
 # Test-only: a self-signed cert, so the telemetry e2e can stand up a TLS
 # listener and fail a handshake against it hermetically.
 rcgen.workspace = true
-
-# build.rs runs V8 to bake the prelude snapshot into the binary (see build.rs;
-# host-arch only — cross-compilation would need a target-run step).
-[build-dependencies]
-es-runtime.workspace = true
-es-runtime-default-providers.workspace = true
 
 [lints]
 workspace = true

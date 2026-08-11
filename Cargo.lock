@@ -1184,13 +1184,22 @@ dependencies = [
 name = "es-runtime-cli"
 version = "0.23.0"
 dependencies = [
+ "es-runtime-cli-common",
+ "es-runtime-common",
+ "rcgen",
+ "self_update",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "es-runtime-cli-common"
+version = "0.23.0"
+dependencies = [
  "es-runtime",
  "es-runtime-common",
  "es-runtime-default-providers",
  "es-runtime-providers",
- "rcgen",
- "self_update",
- "serde_json",
  "tokio",
  "url",
 ]
@@ -1237,6 +1246,15 @@ dependencies = [
  "url",
  "walkdir",
  "webpki-roots",
+]
+
+[[package]]
+name = "es-runtime-dev-cli"
+version = "0.23.0"
+dependencies = [
+ "es-runtime-cli-common",
+ "es-runtime-common",
+ "tokio",
 ]
 
 [[package]]

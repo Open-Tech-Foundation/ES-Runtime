@@ -4,5 +4,7 @@
 [alias]
 # Build the standalone esrun binary (optimized) → target/release/esrun
 build-cli = "build --release -p es-runtime-cli"
+# Build the esdev development binary (optimized) → target/release/esdev
+build-dev = "build --release -p es-runtime-dev-cli"
 # Build the whole workspace (library + CLI), optimized
 build-all = "build --release --workspace"

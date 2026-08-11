@@ -1,0 +1,29 @@
+[package]
+name = "es-runtime-cli-common"
+description = "Shared plumbing for the ES-Runtime binaries (esrun, esdev): the prelude snapshot, permission-flag grammar, provider wiring and the drive loop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+es-runtime-common.workspace = true
+es-runtime-providers.workspace = true
+es-runtime.workspace = true
+es-runtime-default-providers.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "signal"] }
+# Canonicalizing the entry path / inline-snippet base into a file: module
+# specifier (the referrer the entry's imports resolve against).
+url.workspace = true
+
+# build.rs runs V8 to bake the prelude snapshot once, here, so that both
+# binaries share one blob instead of each paying for its own snapshot build
+# (host-arch only — cross-compilation would need a target-run step).
+[build-dependencies]
+es-runtime.workspace = true
+es-runtime-default-providers.workspace = true
+
+[lints]
+workspace = true

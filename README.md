@@ -96,6 +96,7 @@ Build, test, and benchmark from source:
 | --- | --- |
 | Build everything (lib + CLI) | `cargo build-all` |
 | Build just the `esrun` binary | `cargo build-cli` |
+| Build the `esdev` binary (local development) | `cargo build-dev` |
 | Run tests | `cargo test --workspace` |
 | Lints + format check | `cargo clippy --workspace --all-targets -- -D warnings` · `cargo fmt --check` |
 | Supply-chain gates | `cargo deny check` · `cargo audit` |

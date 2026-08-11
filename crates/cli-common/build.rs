@@ -1,7 +1,11 @@
-//! Builds the V8 startup snapshot at compile time and hands it to `main.rs`
-//! via `include_bytes!` — so every `esrun` launch restores the prelude instead
-//! of compiling and evaluating it (DECISIONS.md D8; ~2.3× cheaper runtime
+//! Builds the V8 startup snapshot at compile time and hands it to `lib.rs`
+//! via `include_bytes!` — so every launch restores the prelude instead of
+//! compiling and evaluating it (DECISIONS.md D8; ~2.3× cheaper runtime
 //! construction, measured a few ms off process startup).
+//!
+//! It lives in `cli-common` rather than in a binary crate so that both `esrun`
+//! and `esdev` share one build of the blob: it is expensive to produce and
+//! identical for either, so building it twice would only cost compile time.
 //!
 //! The providers passed here are deterministic stand-ins: `build_snapshot`
 //! consumes them only to register ops while snapshotting — Rust closures are

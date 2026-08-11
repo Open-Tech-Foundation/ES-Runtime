@@ -1,0 +1,23 @@
+[package]
+name = "es-runtime-dev-cli"
+description = "esdev: the local development binary for the ES-Runtime — everything needed to get a service to production, and nothing that ships with it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "esdev"
+path = "src/main.rs"
+
+[dependencies]
+# The same plumbing `esrun` runs on. A program must behave identically under
+# either binary, so nothing that shapes a run is reimplemented here.
+es-runtime-cli-common.workspace = true
+es-runtime-common.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[lints]
+workspace = true

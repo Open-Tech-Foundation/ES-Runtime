@@ -658,6 +658,34 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D59 — `esdev`: a second binary, because the production one earns its narrowness · *Proposed (2026-08-11)*
+
+**Context:** `esrun` grants every capability by default and can be narrowed to nothing (D38), loads ES modules only (D22), and has no development surface whatsoever — no inspector, no REPL, no watch, no test runner, no transform. That is not an oversight; it is what makes the deploy line (`--deny-all --allow-listen=8080`) a statement rather than a hope. An inspector port in particular is a total bypass of the capability model: attach and you own the isolate regardless of every flag.
+
+But the bill for that narrowness lands entirely on the developer's inner loop, and it is large. Measured against a real project this session: React ships pure CJS, so `import "react-dom/server.edge"` is a hard stop; there is no debugger, so `console.log` is the whole toolkit; there is no watch, so every change is a manual restart; and there is no tool that helps a developer arrive at the right capability flags, which means in practice they ship the default and the differentiator evaporates in the last mile.
+
+Three options were considered:
+
+1. **Add the development features to `esrun` behind flags.** Rejected: it puts an inspector, a watcher and test discovery in the binary that runs in production, and makes "esrun has no way to undo its permission model" false.
+2. **Ship no development binary; document external tooling.** Rejected: the CJS wall and the missing capability-discovery tool are not things an external tool can solve, because both need the runtime's own resolver and its own capability vocabulary.
+3. **A second binary, `esdev`.** Chosen.
+
+**Decision (maintainer sign-off pending):**
+
+- **`esdev` may change what happens *around* a run — never what the JS sees.** Watching, restarting, attaching, discovering, reporting, building are its scope. Same prelude, same snapshot, same providers, same capability enforcement. The one sanctioned exception is a future `esdev test`, since a test file is never a production artifact.
+- **The shared half is a crate, not a convention.** Everything that decides how a run behaves moved into `es-runtime-cli-common`: the baked prelude snapshot, the D38 permission grammar, the provider wiring, the drive loop, graceful shutdown, and the error block. Neither binary keeps a second copy of any of it. A convention ("keep them in sync") would have drifted within two releases, and the failure mode is the worst available — a permission flag that means something different in the binary you test with than in the one you deploy.
+- **The dependency order absorbs it cleanly**: `common → engine → providers → runtime → default-providers → cli-common → {runtime-cli, dev-cli}`. `cli-common` sits above `default-providers`, so `dev-cli` can later pull development-only dependencies (a file watcher, a line editor, a transformer) without any of them touching the library or the production binary. That is what makes the split cheap rather than merely tidy.
+- **The snapshot is built once**, in `cli-common`, and shared. A second binary therefore costs no second V8 snapshot build.
+- **`esdev` is not a deployment target**, and its `--help` says so rather than leaving it to documentation.
+
+**Deferred to their own increments, in this order:** the TS/JSX transform (`oxc_transformer` — the load-bearing one, since a TypeScript-and-JSX-first framework needs nothing else from a bundler); `build` (bundling, which is what makes CJS packages reachable *without* weakening D22 — the conversion happens on the developer's machine, at build time, and never in the runtime); `--watch` with drain-restart over the Phase 14 shutdown machinery; `--inspect` (needs a default-off `inspector` cargo feature on `engine`, since `v8::inspector` lives there — the only cross-cutting change left); `test` over the D48 worker seam, one isolate per file; and `--trace-permissions`, which records what a run actually touched and prints the `esrun` command line for it.
+
+**Rejected, not deferred:** a formatter and a linter. Neither `oxc_formatter` nor `oxc_linter` is published as a usable library crate (the former's versions are yanked, the latter has never been published), so embedding either means a git dependency — which would be the first exception to D7's pinned-crates-io supply-chain rule, in the binary developers run on their own machines. `oxlint` and `oxfmt` are npm binaries that already work; a shim around them would add a version matrix for no gain. Also rejected: a package installer (D22 already resolves an existing `node_modules` and installs nothing, which is correct), a task runner (`tsr` covers it, polyglot and repo-aware), and a browser-facing dev server with HMR (`@opentf/web-cli` covers it; a server runtime's bundling need is one deployable file, not an asset graph).
+
+**Consequences:** `esrun` is unchanged — same flags, same messages, same behaviour, verified by its existing 290-test suite passing untouched against the extracted core. `esdev` runs a module or a snippet with the whole flag vocabulary today, and 15 end-to-end tests assert *parity* rather than coverage: the capability model, both D38 rules, the single grammar rule, the flag-after-source rejection, the watchdog and the error block are checked to be the same ones `esrun` presents. Nothing new is published: `esdev` is deliberately absent from the release manifest until it has features worth shipping. The cost this accepts is a second binary for anyone who wants both — V8 dominates at ~63 MB stripped — which is the reason `esdev` stays development-only rather than becoming a superset of `esrun`.
+
+---
+
 ### D58 — UDP in `runtime:net`: messages, not streams — and two grants, because a socket is both ends · *Proposed (2026-08-11)*
 
 **Context:** `runtime:net` spoke TCP and nothing else. Everything the runtime could reach was therefore connection-oriented, which rules out a family of things a server does routinely and cannot do any other way: DNS resolution, StatsD/DogStatsD metrics, syslog, NTP, SNMP, QUIC-adjacent protocols, mDNS/SSDP discovery, game and telemetry protocols, and any local agent that listens on a datagram socket. There is no polyfill for it — a datagram is not a framing you can put on top of a stream, it is a different service from the OS — so the gap was total rather than inconvenient. Deno answers with `listenDatagram`, Node with `dgram`, Bun with `udpSocket`; no standards body has one, because the WinterTC Sockets proposal is explicitly TCP-shaped and the web platform has no UDP at all.

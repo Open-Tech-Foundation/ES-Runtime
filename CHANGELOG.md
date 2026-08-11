@@ -10,6 +10,36 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`esdev`, a second binary for local development** (DECISIONS D59). `esrun` is
+  the production server runtime and stays narrow on purpose — no inspector port,
+  no file watcher, no test discovery, nothing that could weaken the capability
+  model it exists to enforce. That narrowness bills the developer's inner loop,
+  and `esdev` is the binary that pays it.
+
+  ```sh
+  cargo build-dev          # → target/release/esdev
+  esdev app.mjs            # the same run esrun gives, same flags, same grants
+  ```
+
+  This first increment is the foundation rather than the features: `esdev` runs
+  a module or an inline snippet with `esrun`'s entire flag vocabulary, and does
+  it by *sharing* the code rather than copying it. Watching, the inspector, the
+  REPL, `test` and `build` land on top of this.
+
+  **A program cannot behave differently under the two.** Everything that decides
+  how a run behaves — the baked prelude snapshot, the D38 permission grammar,
+  the provider wiring, the drive loop, graceful shutdown, the error block — moved
+  into a new internal crate, `es-runtime-cli-common`, which both binaries sit on.
+  Neither has a second copy of any of it, so they cannot drift; the dependency
+  order is now `… → default-providers → cli-common → {runtime-cli, dev-cli}`.
+  The snapshot is built once there too, so a second binary costs no second V8
+  snapshot build.
+
+  `esrun` is unchanged — same flags, same messages, same behaviour, verified by
+  its existing 290-test suite passing untouched. `esdev` is **not** a deployment
+  target and its `--help` says so; it is deliberately absent from the release
+  manifest, so nothing new is published yet.
+
 - **UDP in `runtime:net`** (DECISIONS D58) — `bind()` returns a
   `DatagramSocket`. Messages, not a byte stream: a datagram arrives whole and
   carries its own sender, which is what a stream would erase.

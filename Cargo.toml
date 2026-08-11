@@ -2,7 +2,7 @@
 #
 # Crate layout and dependency direction are fixed by ARCHITECTURE.md §2 / DECISIONS.md D11:
 #
-#   common → engine → providers → runtime → default-providers → runtime-cli
+#   common → engine → providers → runtime → default-providers → cli-common → {runtime-cli, dev-cli}
 #
 # Each crate may depend only on crates to its left. The `v8` crate appears *only*
 # in `engine`; real I/O appears *only* in `default-providers`. Phase 1 introduces
@@ -16,7 +16,9 @@ members = [
     "crates/providers",
     "crates/runtime",
     "crates/default-providers",
+    "crates/cli-common",
     "crates/runtime-cli",
+    "crates/dev-cli",
 ]
 
 # Shared package metadata. Individual crates inherit via `field.workspace = true`.
@@ -258,6 +260,7 @@ es-runtime-engine = { path = "crates/engine", version = "0.23.0" }
 es-runtime-providers = { path = "crates/providers", version = "0.23.0" }
 es-runtime = { path = "crates/runtime", version = "0.23.0" }
 es-runtime-default-providers = { path = "crates/default-providers", version = "0.23.0" }
+es-runtime-cli-common = { path = "crates/cli-common", version = "0.23.0" }
 # Debug info dominates `target/` disk on a V8-sized dependency graph (tens of
 # GB). Keep it lean: our own crates keep line tables so panic backtraces still
 # resolve to file:line; dependencies — the bulk, rarely stepped through — carry

@@ -1,0 +1,33 @@
+//! Shared plumbing for the ES-Runtime binaries.
+//!
+//! Two binaries ship from this workspace — `esrun`, the production server
+//! runtime, and `esdev`, the local development tool — and a program must behave
+//! identically under both. Everything that decides *how a run behaves* therefore
+//! lives here once: the baked prelude snapshot, the permission-flag grammar
+//! (D38), the provider wiring, the drive loop, graceful shutdown, and the error
+//! block. Each binary owns only its own command line and its own subcommands.
+//!
+//! This crate sits above `default-providers` in the dependency order fixed by
+//! ARCHITECTURE.md §2 / DECISIONS D11, and below the two binary crates. It is
+//! internal: it is published only because the binaries depend on it, and carries
+//! no stability promise of its own.
+
+// These crates' whole job is to talk to the terminal.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
+pub mod args;
+pub mod console;
+pub mod diagnostics;
+pub mod dotenv;
+pub mod permissions;
+pub mod run;
+pub mod shutdown;
+
+pub use run::{Config, Source, run};
+
+/// The V8 startup snapshot, baked at build time by `build.rs`.
+///
+/// Both binaries restore this same blob rather than compiling and evaluating the
+/// prelude (D8), and both share one build of it — the snapshot is expensive to
+/// produce and identical for either, so it is made once here.
+pub static SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prelude.snapshot.bin"));
