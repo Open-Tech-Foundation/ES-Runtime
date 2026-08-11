@@ -28,6 +28,9 @@ use es_runtime_cli_common::diagnostics::print_error;
 use es_runtime_cli_common::permissions::Permissions;
 use es_runtime_cli_common::{Config, Source};
 
+mod transform;
+use transform::TypeStripper;
+
 const USAGE: &str = "\
 esdev — the local development binary for the ES-Runtime
 
@@ -36,10 +39,24 @@ Every flag is either `--flag` or `--flag=value`. A value is never a separate
 argument: `--timeout=500`, not `--timeout 500`.
 
 USAGE:
-    esdev <file>                Run a JavaScript module file
-    esdev -e=<code>             Run an inline module snippet
+    esdev <file>                Run a module file — .js, .mjs, or .ts/.tsx/.jsx
+    esdev -e=<code>             Run an inline module snippet (JavaScript)
     esdev -h, --help            Show this help
     esdev -v, --version         Show the version
+
+TYPESCRIPT & JSX:
+    .ts, .tsx, .mts, .cts and .jsx files are stripped to JavaScript as they
+    load — types erased, never checked (that is your editor's job, and
+    `tsc --noEmit`'s). A .js file is passed through untouched.
+
+    Import specifiers are left exactly as written, so a specifier must name the
+    file that exists: `import './app.ts'`, not './app.js'. Resolution is the
+    same as esrun's, because it is esrun's.
+
+    JSX compiles to the automatic runtime, `react/jsx-runtime` by default.
+    Point it elsewhere per file with a pragma:
+
+        /** @jsxImportSource remix/ui */
 
 RUN OPTIONS (identical to esrun — a program behaves the same under both):
     --deny-all                  Run with no host access at all
@@ -102,6 +119,7 @@ fn parse_args() -> Result<Config, String> {
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     options,
+                    transform: Some(std::sync::Arc::new(TypeStripper)),
                 });
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -130,6 +148,7 @@ fn parse_args() -> Result<Config, String> {
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     options,
+                    transform: Some(std::sync::Arc::new(TypeStripper)),
                 });
             }
         }

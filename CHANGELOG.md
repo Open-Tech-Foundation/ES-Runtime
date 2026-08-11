@@ -40,6 +40,39 @@ namespace) is unstable and may change between minor releases until the API freez
   target and its `--help` says so; it is deliberately absent from the release
   manifest, so nothing new is published yet.
 
+- **TypeScript and JSX in `esdev`** (DECISIONS D59) — `.ts`, `.tsx`, `.mts`,
+  `.cts` and `.jsx` are stripped to JavaScript as they load, via
+  `oxc_transformer`.
+
+  ```sh
+  esdev app.ts        # types erased on the way in
+  esdev app.tsx       # …and JSX compiled
+  ```
+
+  It applies to the **entry file and everything it imports** — two different
+  code paths, since the entry is read directly and imports come through the
+  loader, and a transform wired into only one of them works on a hello-world
+  and fails on every real program.
+
+  **Types are erased, never checked**, the same contract Node's
+  `--experimental-strip-types` and Bun have: a type error is your editor's job
+  and `tsc --noEmit`'s, not something to put on the critical path of every run.
+
+  **Import specifiers are left exactly as written.** `import './app.ts'` names
+  the file that exists; there is no extension guessing, and `./app.js` does not
+  resolve to `app.ts`. Resolution stays the loader's contract (D21/D40) — a
+  transform that widened it would make `esdev` resolve differently from
+  `esrun`, which is the one thing these two binaries must never do.
+
+  JSX targets the automatic runtime, `react/jsx-runtime` by default, redirected
+  per file with `/** @jsxImportSource remix/ui */`. A `.js` file is passed
+  through untouched rather than reprinted, so its stack traces keep their own
+  line numbers.
+
+  **`esrun` is unaffected and still refuses the same file** — a test asserts
+  exactly that, because the moment it passes, TypeScript has leaked into the
+  production binary. `oxc` is a dependency of `dev-cli` alone.
+
 - **UDP in `runtime:net`** (DECISIONS D58) — `bind()` returns a
   `DatagramSocket`. Messages, not a byte stream: a datagram arrives whole and
   carries its own sender, which is what a stream would erase.

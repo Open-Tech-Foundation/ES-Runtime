@@ -394,6 +394,9 @@ fn parse_args() -> Result<Config, String> {
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     options,
+                    // esrun runs JavaScript. Turning a `.ts` into that is
+                    // `esdev`'s job, on a developer's machine.
+                    transform: None,
                 });
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -423,6 +426,9 @@ fn parse_args() -> Result<Config, String> {
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     options,
+                    // esrun runs JavaScript. Turning a `.ts` into that is
+                    // `esdev`'s job, on a developer's machine.
+                    transform: None,
                 });
             }
         }
@@ -640,7 +646,8 @@ mod tests {
     /// from it is invisible to anyone consuming the package.
     #[test]
     fn every_types_file_is_referenced_by_the_index() {
-        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types"));
+        let dir =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types"));
         let index = std::fs::read_to_string(dir.join("index.d.ts")).expect("read index.d.ts");
         for entry in std::fs::read_dir(dir).expect("read types dir") {
             let path = entry.expect("dir entry").path();

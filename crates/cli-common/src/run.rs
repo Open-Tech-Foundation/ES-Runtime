@@ -19,7 +19,7 @@ use es_runtime_default_providers::{
     SystemHttpServer, SystemNet, SystemProcess, SystemSignals, SystemSyncFileSystem,
     SystemWebSocket, ThreadWorkerHost, TokioTimers, WorkerProcess, path,
 };
-use es_runtime_providers::{ProviderError, WorkerScope, WorkerSpec};
+use es_runtime_providers::{ModuleSource, ProviderError, WorkerScope, WorkerSpec};
 use url::Url;
 
 use crate::SNAPSHOT;
@@ -55,6 +55,76 @@ pub struct Config {
     pub scopes: Scopes,
     /// The shared flags that shape the run.
     pub options: RunOptions,
+    /// An optional rewrite applied to every module's source before the engine
+    /// sees it — how `esdev` strips TypeScript and compiles JSX.
+    ///
+    /// `esrun` passes `None` and therefore carries neither the dependency nor
+    /// the behaviour: the code that turns a `.ts` into JavaScript belongs on the
+    /// developer's machine, not in the binary that serves production. The seam
+    /// is here rather than in each binary because the **entry** file is read
+    /// directly (before a loader exists), so a transform that only wrapped the
+    /// loader would silently miss the one file the user named.
+    pub transform: Option<Arc<dyn SourceTransform>>,
+}
+
+/// Rewrites a module's source before it reaches the engine.
+///
+/// Implementations must be pure and deterministic: the same specifier and text
+/// produce the same output, because a module is loaded once per realm and the
+/// result is what `import.meta.url` and every stack frame will refer to.
+pub trait SourceTransform: Send + Sync {
+    /// Rewrites `source` for the module at `specifier` (a `file:` URL), or
+    /// reports why it could not. Returning `source` unchanged is the correct
+    /// answer for a file this transform has nothing to do with.
+    fn transform(&self, specifier: &str, source: String) -> Result<String, String>;
+}
+
+/// Wraps a [`ModuleLoader`] so every module it returns passes through a
+/// [`SourceTransform`] on the way out.
+///
+/// Resolution is delegated untouched — including `resolve_sync`, so
+/// `import.meta.resolve` and `import()` cannot disagree (D41). Only
+/// [`ModuleSource::Text`] is rewritten; a `.wasm` module is bytes and has no
+/// source to strip.
+struct TransformingLoader {
+    inner: Arc<dyn ModuleLoader>,
+    transform: Arc<dyn SourceTransform>,
+}
+
+impl ModuleLoader for TransformingLoader {
+    fn resolve(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<String, ProviderError>> {
+        self.inner.resolve(specifier, referrer)
+    }
+
+    fn resolve_sync(
+        &self,
+        specifier: &str,
+        referrer: &str,
+    ) -> Option<Result<String, ProviderError>> {
+        self.inner.resolve_sync(specifier, referrer)
+    }
+
+    fn load(
+        &self,
+        specifier: &str,
+    ) -> es_runtime_providers::BoxFuture<Result<ModuleSource, ProviderError>> {
+        let inner = self.inner.clone();
+        let transform = self.transform.clone();
+        let specifier = specifier.to_string();
+        Box::pin(async move {
+            match inner.load(&specifier).await? {
+                ModuleSource::Text(text) => transform
+                    .transform(&specifier, text)
+                    .map(ModuleSource::Text)
+                    .map_err(ProviderError::Other),
+                wasm => Ok(wasm),
+            }
+        })
+    }
 }
 
 /// Runs `config` to completion. `bin` names the calling binary in the messages
@@ -94,6 +164,16 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
                 .map_err(|e| format!("cannot derive eval specifier: {e}"))?;
             (url.to_string(), code, "<eval>".to_string(), cwd)
         }
+    };
+
+    // The entry is read directly rather than through the loader, so it needs the
+    // transform applied here — otherwise `esdev app.ts` would strip every file
+    // the program imports and choke on the one the user actually named.
+    let source = match &config.transform {
+        Some(transform) => transform
+            .transform(&specifier, source)
+            .map_err(|e| format!("{label}: {e}"))?,
+        None => source,
     };
 
     let options = config.options;
@@ -237,7 +317,13 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     if let Some(file) = &options.import_policy {
         loader_impl = loader_impl.with_policy(ImportPolicy::from_file(std::path::Path::new(file))?);
     }
-    let loader: Arc<dyn ModuleLoader> = Arc::new(loader_impl);
+    let loader: Arc<dyn ModuleLoader> = match &config.transform {
+        Some(transform) => Arc::new(TransformingLoader {
+            inner: Arc::new(loader_impl),
+            transform: transform.clone(),
+        }),
+        None => Arc::new(loader_impl),
+    };
 
     // Workers. Each gets its own thread and its own isolate, built by this
     // factory *on that thread* — `V8Engine` is `!Send`, so it cannot be built

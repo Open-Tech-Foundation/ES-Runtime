@@ -261,6 +261,24 @@ es-runtime-providers = { path = "crates/providers", version = "0.23.0" }
 es-runtime = { path = "crates/runtime", version = "0.23.0" }
 es-runtime-default-providers = { path = "crates/default-providers", version = "0.23.0" }
 es-runtime-cli-common = { path = "crates/cli-common", version = "0.23.0" }
+# TypeScript/JSX type-stripping for `esdev` (DECISIONS D59). Confined to
+# `dev-cli`: the transform runs on the developer's machine, never in `esrun`,
+# so the production binary gains neither the dependency nor the surface.
+#
+# The umbrella crate rather than the six pieces separately — it exists to keep
+# their versions in step, and they are released together. Three optional
+# features are on and the rest deliberately off: `transformer` (the TS/JSX
+# stripping itself), `semantic` (the transformer needs scoping information),
+# and `codegen` (printing the stripped AST back to JavaScript). `minifier`,
+# `mangler`, `cfg` and `isolated_declarations` stay off — none is needed to run
+# a file, and the minifier belongs to a `build` command that does not exist yet.
+#
+# Deliberately *not* here: `oxc_linter` and `oxc_formatter`. Neither is
+# published as a usable library (the formatter's versions are yanked, the
+# linter has never been published), so either would mean a git dependency —
+# the first exception to D7's pinned-crates.io rule. `oxlint` and `oxfmt` are
+# npm binaries that already work.
+oxc = { version = "0.144.0", features = ["transformer", "semantic", "codegen"] }
 # Debug info dominates `target/` disk on a V8-sized dependency graph (tens of
 # GB). Keep it lean: our own crates keep line tables so panic backtraces still
 # resolve to file:line; dependencies — the bulk, rarely stepped through — carry
