@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-11
+
 ### Added
 
 - **`runtime:hashing`** (DECISIONS D57) — digests, checksums, MACs and password
