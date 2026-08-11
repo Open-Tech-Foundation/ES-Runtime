@@ -11,12 +11,17 @@
 //! **The v4/v6 split is not cosmetic.** IPv4 and IPv6 carry the same three
 //! concepts under different socket options, and setting the wrong one is not an
 //! error the OS reports — it silently does nothing. So the address family
-//! decides, once, which of each pair is set.
+//! decides, once, which of each pair is set — at the bind from the resolved
+//! address, and afterwards from the socket's own local address rather than from
+//! a guess about the value it was handed.
+//!
+//! Multicast membership and the post-bind options live here too, for the same
+//! reason: they are the other half of the same v4/v6 problem.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use es_runtime_common::ErrorCode;
-use es_runtime_providers::{DatagramOptions, ProviderError};
+use es_runtime_providers::{DatagramOption, DatagramOptions, MulticastMembership, ProviderError};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::UdpSocket;
 
@@ -42,6 +47,13 @@ pub(crate) async fn bind(
     }
     if opts.reuse_port {
         set_reuse_port(&socket, &context)?;
+    }
+    // Also before the bind: on most systems `IPV6_V6ONLY` cannot be changed
+    // once the socket is bound.
+    if let Some(only) = opts.ipv6_only
+        && addr.is_ipv6()
+    {
+        socket.set_only_v6(only).map_err(&io)?;
     }
     socket.set_nonblocking(true).map_err(&io)?;
     socket.bind(&addr.into()).map_err(&io)?;
@@ -83,18 +95,28 @@ pub(crate) async fn bind(
     UdpSocket::from_std(std::net::UdpSocket::from(socket)).map_err(&io)
 }
 
-/// Joins or leaves multicast `group` on `socket`.
+/// Joins or leaves a multicast group on `socket`.
 ///
 /// `interface` is an IPv4 local address for a v4 group and an interface index
 /// for a v6 one; empty means "let the OS choose" (`0.0.0.0` / index `0`). The
 /// group's family decides, so a v6 group with an IPv4 interface is refused
 /// rather than quietly joined on the default one.
+///
+/// With a `source`, this is **source-specific** multicast (RFC 4607): the
+/// network delivers that sender's traffic to this group and nobody else's, so
+/// the filter costs the receiver nothing and cannot be talked past. IPv4 only —
+/// `IP_ADD_SOURCE_MEMBERSHIP` has no portable v6 twin in socket2, and the
+/// deployed protocols that use SSM are v4.
 pub(crate) fn set_membership(
     socket: &UdpSocket,
-    group: &str,
-    interface: &str,
+    membership: &MulticastMembership,
     join: bool,
 ) -> Result<(), ProviderError> {
+    let MulticastMembership {
+        group,
+        interface,
+        source,
+    } = membership;
     let action = if join { "join" } else { "leave" };
     let address: IpAddr = group.parse().map_err(|_| {
         invalid(format!(
@@ -118,13 +140,36 @@ pub(crate) fn set_membership(
                     ))
                 })?
             };
-            if join {
-                socket.join_multicast_v4(group, iface)
-            } else {
-                socket.leave_multicast_v4(group, iface)
+            match source {
+                None => {
+                    if join {
+                        socket.join_multicast_v4(group, iface)
+                    } else {
+                        socket.leave_multicast_v4(group, iface)
+                    }
+                }
+                Some(source) => {
+                    let source: Ipv4Addr = source.parse().map_err(|_| {
+                        invalid(format!("{context}: source {source} is not an IPv4 address"))
+                    })?;
+                    // socket2 rather than tokio: source-specific membership has
+                    // no `UdpSocket` method. `SockRef` borrows the fd, so the
+                    // socket keeps owning it.
+                    let raw = socket2::SockRef::from(socket);
+                    if join {
+                        raw.join_ssm_v4(&source, &group, &iface)
+                    } else {
+                        raw.leave_ssm_v4(&source, &group, &iface)
+                    }
+                }
             }
         }
         IpAddr::V6(group) => {
+            if source.is_some() {
+                return Err(invalid(format!(
+                    "{context}: source-specific multicast is IPv4-only here"
+                )));
+            }
             let index: u32 = if interface.is_empty() {
                 0
             } else {
@@ -142,6 +187,76 @@ pub(crate) fn set_membership(
         }
     };
     result.map_err(|e| ProviderError::from_io(context, &e))
+}
+
+/// Applies one post-bind socket option.
+///
+/// The v4/v6 split is made the same way as at the bind, and from the same
+/// evidence: the socket's own local address, not a guess from the option's
+/// value.
+pub(crate) fn set_option(socket: &UdpSocket, option: DatagramOption) -> Result<(), ProviderError> {
+    let v6 = socket
+        .local_addr()
+        .map(|addr| addr.is_ipv6())
+        .map_err(|e| ProviderError::from_io("socket option", &e))?;
+    let raw = socket2::SockRef::from(socket);
+    let result = match &option {
+        DatagramOption::Ttl(ttl) => {
+            if v6 {
+                raw.set_unicast_hops_v6(*ttl)
+            } else {
+                raw.set_ttl_v4(*ttl)
+            }
+        }
+        DatagramOption::Broadcast(on) => {
+            if v6 {
+                return Err(invalid(
+                    "broadcast is IPv4-only (IPv6 has no broadcast address; use multicast)".into(),
+                ));
+            }
+            raw.set_broadcast(*on)
+        }
+        DatagramOption::MulticastTtl(ttl) => {
+            if v6 {
+                raw.set_multicast_hops_v6(*ttl)
+            } else {
+                raw.set_multicast_ttl_v4(*ttl)
+            }
+        }
+        DatagramOption::MulticastLoopback(on) => {
+            if v6 {
+                raw.set_multicast_loop_v6(*on)
+            } else {
+                raw.set_multicast_loop_v4(*on)
+            }
+        }
+        DatagramOption::MulticastInterface(interface) => {
+            if v6 {
+                let index: u32 = if interface.is_empty() {
+                    0
+                } else {
+                    interface.parse().map_err(|_| {
+                        invalid(format!(
+                            "multicast interface {interface} is not an interface index (an IPv6 socket names it by index, not by address)"
+                        ))
+                    })?
+                };
+                raw.set_multicast_if_v6(index)
+            } else {
+                let address: Ipv4Addr = if interface.is_empty() {
+                    Ipv4Addr::UNSPECIFIED
+                } else {
+                    interface.parse().map_err(|_| {
+                        invalid(format!(
+                            "multicast interface {interface} is not an IPv4 address (an IPv4 socket names it by address)"
+                        ))
+                    })?
+                };
+                raw.set_multicast_if_v4(&address)
+            }
+        }
+    };
+    result.map_err(|e| ProviderError::from_io("socket option", &e))
 }
 
 /// A malformed argument. Uncoded, like the other "that is not a valid X"
@@ -185,6 +300,15 @@ fn set_reuse_port(_socket: &Socket, context: &str) -> Result<(), ProviderError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plain (any-source) membership, which is what most of these want.
+    fn group(group: &str, interface: &str) -> MulticastMembership {
+        MulticastMembership {
+            group: group.to_string(),
+            interface: interface.to_string(),
+            source: None,
+        }
+    }
 
     #[tokio::test]
     async fn a_plain_bind_takes_an_ephemeral_port() {
@@ -295,10 +419,10 @@ mod tests {
         let socket = bind("0.0.0.0", 0, &DatagramOptions::default())
             .await
             .expect("bind");
-        let err = set_membership(&socket, "127.0.0.1", "", true)
+        let err = set_membership(&socket, &group("127.0.0.1", ""), true)
             .expect_err("a unicast address is not a group");
         assert!(err.to_string().contains("not a multicast address"), "{err}");
-        let err = set_membership(&socket, "all-hosts.local", "", true)
+        let err = set_membership(&socket, &group("all-hosts.local", ""), true)
             .expect_err("a name is not a group");
         assert!(err.to_string().contains("not an IP address"), "{err}");
     }
@@ -308,8 +432,8 @@ mod tests {
         let socket = bind("0.0.0.0", 0, &DatagramOptions::default())
             .await
             .expect("bind");
-        set_membership(&socket, "224.0.0.251", "", true).expect("join");
-        set_membership(&socket, "224.0.0.251", "", false).expect("leave");
+        set_membership(&socket, &group("224.0.0.251", ""), true).expect("join");
+        set_membership(&socket, &group("224.0.0.251", ""), false).expect("leave");
     }
 
     /// An IPv6 membership names its interface by index. An address there is a
@@ -319,7 +443,7 @@ mod tests {
         let socket = bind("0.0.0.0", 0, &DatagramOptions::default())
             .await
             .expect("bind");
-        let err = set_membership(&socket, "ff02::fb", "192.168.1.1", true)
+        let err = set_membership(&socket, &group("ff02::fb", "192.168.1.1"), true)
             .expect_err("an IPv6 membership takes an index");
         assert!(err.to_string().contains("interface index"), "{err}");
     }

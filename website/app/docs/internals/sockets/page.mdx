@@ -206,27 +206,65 @@ request/response round trips over loopback with 64-byte payloads, `udp_send` is
 
 | | esrun | Node.js | Bun | Deno | LLRT |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Round trip (µs each) | 34.9 | 31.0 | **16.0** | 46.7 | 39.1 |
-| Send (µs each) | 4.1 | 5.0 | **3.7** | 5.0 | 14.5 |
+| Round trip (µs each) | 30.9 | 28.8 | **15.7** | 41.6 | 37.1 |
+| Send (µs each) | 4.0 | 4.7 | **3.5** | 4.9 | 13.9 |
 
 Two different results, and the difference between them is the interesting part.
 
-**Sending is cheap** — 4.1 µs per datagram, second of the five and ahead of both
+**Sending is cheap** — 4.0 µs per datagram, second of the five and ahead of both
 Node and Deno. A send is one op crossing and one `send_to`, with nothing between
 the guest and the syscall.
 
-**A round trip is not**, and it is our own shape that costs it: four op crossings
-and two loop wakeups per exchange, with a promise resolved for every one of them.
-Node delivers a received datagram to a callback with no promise involved, which
-is most of the 3.9 µs between us; Bun's socket is native down to the same
-callback. The receive path is where a promise-per-datagram API is paid for, and
-it is paid on the row that matters to a DNS resolver or a game server.
+**A round trip costs more**, and it is our own shape that costs it: four op
+crossings and two loop wakeups per exchange, with a promise resolved for every
+one of them. Node delivers a received datagram to a callback with no promise
+involved, which is most of the 2 µs between us; Bun's socket is native down to
+the same callback.
 
-That is a design consequence rather than a defect — `receive()` returning a
-promise is what makes datagram handling composable with `await`, timeouts and
-`Promise.race`, which the callback shape does not give without adapting it back.
-But it is the honest number, and a batched receive is the thing to reach for if
-it ever needs closing.
+Pooling the receive buffers took that row from 34.9 µs to 30.9 — the 64 KiB
+allocation per datagram was worth more than a tenth of a round trip. What is left
+is the promise-per-datagram shape, and it is a design consequence rather than a
+defect: `receive()` returning a promise is what makes datagram handling composable
+with `await`, timeouts and `Promise.race`, which a callback does not give without
+adapting it back. `receiveMany` does **not** close it — a strict request/response
+exchange has only ever one datagram to take — so closing it further would mean
+making the op crossing itself cheaper, which is a change to the runtime rather
+than to this module.
+
+### Receive buffers are pooled
+
+A datagram socket receives small datagrams by the thousand, and a 64 KiB
+allocation per datagram was most of the cost of receiving one. Buffers are
+borrowed from a small per-socket pool for the length of one receive and returned
+by a destructor — so an abandoned receive gives its buffer back too — while the
+datagram that leaves is a fresh, exactly-sized copy. The pool keeps four; a burst
+of concurrent receives may take more, and the surplus is dropped rather than
+retained.
+
+The buffer is deliberately **one byte longer** than the largest datagram IPv4 can
+deliver. That is what makes truncation observable: a datagram that fills the
+buffer exactly is one that did not fit, because no real IPv4 datagram is that
+long. It surfaces as `truncated: true` rather than being fixed — the rest of the
+message is gone at the OS, and a program parsing a prefix as a whole message is
+the failure worth naming.
+
+### What keeps the loop alive
+
+A pending `receive()` is **not** what keeps the process running; a counter is.
+The receive op is registered `unref`'d, and a per-agent counter — shared with
+workers, since "referenced host handles" is one question — is incremented while a
+referenced socket has a receive in flight.
+
+The split exists because a parked receive cannot be taken back. If the receive
+itself were the reason the loop runs, `unref()` would not take effect until a
+datagram arrived — and on the socket a program is unref'ing, none ever does. The
+counter is asked afresh every time the loop wonders whether to stop, so the answer
+changes immediately. It is the same design `worker_recv` uses, for the same
+reason.
+
+One consequence differs from Node: **a bound socket with nothing in flight is
+already not a reason to stay alive.** That matches `listen()` here, and it is the
+answer that hangs less rather than more.
 
 ### The v4/v6 split
 

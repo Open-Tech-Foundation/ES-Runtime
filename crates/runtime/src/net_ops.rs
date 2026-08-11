@@ -20,13 +20,18 @@ use std::sync::Arc;
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
 use es_runtime_providers::{
-    ConnectOptions, DatagramOptions, ListenOptions, NetProvider, ProviderError, SocketInfo,
+    ConnectOptions, Datagram, DatagramOption, DatagramOptions, ListenOptions, MulticastMembership,
+    NetProvider, ProviderError, SocketInfo,
 };
 
 use crate::Result;
 use crate::handles::Handles;
 
-pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>) -> Result<()> {
+pub(crate) fn install(
+    engine: &mut dyn Engine,
+    net: Option<Arc<dyn NetProvider>>,
+    handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
+) -> Result<()> {
     // This agent's sockets and listeners. Separate registries because they are
     // separate namespaces in the provider: a socket id and a listener id may
     // collide, and `accept` on a socket is not a request worth honouring.
@@ -222,7 +227,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
         })
     }))?;
 
-    install_datagram(engine, net, datagrams)?;
+    install_datagram(engine, net, datagrams, handle_refs)?;
 
     Ok(())
 }
@@ -243,6 +248,7 @@ fn install_datagram(
     engine: &mut dyn Engine,
     net: Option<Arc<dyn NetProvider>>,
     datagrams: Handles,
+    handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<()> {
     let n = net.clone();
     let owned = datagrams.clone();
@@ -260,10 +266,10 @@ fn install_datagram(
                 // number this layer could pick.
                 ttl: arg_opt_u32(&args, 5),
                 multicast_ttl: arg_opt_u32(&args, 6),
-                multicast_loopback: match args.get(7) {
-                    Some(Value::Bool(on)) => Some(*on),
-                    _ => None,
-                },
+                multicast_loopback: arg_opt_bool(&args, 7),
+                // Absent ⇒ the platform's default, which differs between them;
+                // a program that needs one answer says which.
+                ipv6_only: arg_opt_bool(&args, 8),
             };
             Box::pin(async move {
                 let (id, info) = require(&n)?
@@ -278,26 +284,75 @@ fn install_datagram(
 
     // No capability of its own: receiving is what the bind was authorized for,
     // and the ownership check is what stops another agent naming this socket.
+    //
+    // `.unref()`, with `net_datagram_ref` holding the loop open instead — the
+    // same split `worker_recv` makes, and for the same reason. A parked receive
+    // cannot be taken back, so if *it* were the reason the loop keeps running,
+    // an `unref()` would not take effect until a datagram arrived — and on the
+    // socket a program is unref'ing, none ever does.
     let n = net.clone();
     let owned = datagrams.clone();
-    engine.register_op(OpDecl::r#async("net_datagram_receive", move |args| {
-        let n = n.clone();
-        let owned = owned.clone();
-        let id = arg_u64(&args, 0);
-        Box::pin(async move {
-            match require(&n)?
-                .receive(owned.check(id)?)
-                .await
-                .map_err(map_err)?
-            {
-                Some(datagram) => Ok(Value::Object(vec![
-                    ("data".to_string(), Value::Bytes(datagram.data)),
-                    ("address".to_string(), Value::String(datagram.address)),
-                    ("port".to_string(), Value::Number(datagram.port as f64)),
-                ])),
-                None => Ok(Value::Null),
-            }
+    engine.register_op(
+        OpDecl::r#async("net_datagram_receive", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            Box::pin(async move {
+                match require(&n)?
+                    .receive(owned.check(id)?)
+                    .await
+                    .map_err(map_err)?
+                {
+                    Some(datagram) => Ok(datagram_value(datagram)),
+                    None => Ok(Value::Null),
+                }
+            })
         })
+        .unref(),
+    )?;
+
+    // A batch: one crossing for a datagram plus whatever was already queued
+    // behind it. Same gating and same keep-alive story as the single receive.
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_datagram_receive_many", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            let max = arg_opt_u32(&args, 1).unwrap_or(32) as usize;
+            Box::pin(async move {
+                match require(&n)?
+                    .receive_many(owned.check(id)?, max)
+                    .await
+                    .map_err(map_err)?
+                {
+                    Some(batch) => Ok(Value::Array(
+                        batch.into_iter().map(datagram_value).collect(),
+                    )),
+                    None => Ok(Value::Null),
+                }
+            })
+        })
+        .unref(),
+    )?;
+
+    // The keep-alive counter for datagram sockets, moved by `ref()`/`unref()`
+    // and by a receive starting and ending. Saturating both ways: a forged or
+    // unbalanced call from guest code must not wrap it, and the worst it can do
+    // is keep this agent alive rather than end it with work outstanding.
+    let refs = handle_refs;
+    engine.register_op(OpDecl::sync("net_datagram_ref", move |args| {
+        let delta = args.first().and_then(Value::as_number).unwrap_or(0.0);
+        let current = refs.get();
+        refs.set(if delta > 0.0 {
+            current.saturating_add(1)
+        } else if delta < 0.0 {
+            current.saturating_sub(1)
+        } else {
+            current
+        });
+        Ok(Value::Undefined)
     }))?;
 
     // `Net`, and checked on **every** send: the destination is an argument here
@@ -326,6 +381,75 @@ fn install_datagram(
             })
         })
         .requires(Capability::Net),
+    )?;
+
+    // A batch of sends: one crossing, and one `Net` check *per destination*.
+    // The messages arrive flattened — (bytes, host, port) triples — because a
+    // flat array is one marshaling shape rather than an object per message.
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_datagram_send_many", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            let mut messages = Vec::new();
+            let mut i = 1;
+            while i + 2 < args.len() {
+                let data = arg_bytes(&args, i);
+                let host = arg_str(&args, i + 1);
+                let port = arg_u16(&args, i + 2);
+                messages.push((data, (!host.is_empty()).then_some((host, port))));
+                i += 3;
+            }
+            Box::pin(async move {
+                let sent = require(&n)?
+                    .send_many(owned.check(id)?, messages)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Number(sent as f64))
+            })
+        })
+        .requires(Capability::Net),
+    )?;
+
+    // Post-bind socket options. `NetListen`, like the bind that made the socket:
+    // none of them reach a peer, they change how this socket behaves.
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_datagram_option", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            let name = arg_str(&args, 1);
+            let option = match name.as_str() {
+                "ttl" => arg_opt_u32(&args, 2).map(DatagramOption::Ttl),
+                "multicastTtl" => arg_opt_u32(&args, 2).map(DatagramOption::MulticastTtl),
+                "broadcast" => arg_opt_bool(&args, 2).map(DatagramOption::Broadcast),
+                "multicastLoopback" => {
+                    arg_opt_bool(&args, 2).map(DatagramOption::MulticastLoopback)
+                }
+                "multicastInterface" => Some(DatagramOption::MulticastInterface(arg_str(&args, 2))),
+                _ => None,
+            };
+            Box::pin(async move {
+                // A name the prelude never sends, or a value of the wrong type:
+                // refused here rather than passed on as a silent no-op.
+                let option = option.ok_or_else(|| {
+                    OpError::new(
+                        ExceptionClass::TypeError,
+                        format!("{name} is not a settable datagram socket option"),
+                    )
+                })?;
+                require(&n)?
+                    .set_datagram_option(owned.check(id)?, option)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Undefined)
+            })
+        })
+        .requires(Capability::NetListen),
     )?;
 
     let n = net.clone();
@@ -360,12 +484,18 @@ fn install_datagram(
             let n = n.clone();
             let owned = owned.clone();
             let id = arg_u64(&args, 0);
-            let group = arg_str(&args, 1);
-            let interface = arg_str(&args, 2);
-            let join = arg_bool(&args, 3);
+            let source = arg_str(&args, 3);
+            let membership = MulticastMembership {
+                group: arg_str(&args, 1),
+                interface: arg_str(&args, 2),
+                // Empty ⇒ any sender; a source makes this source-specific
+                // multicast, where the network does the filtering.
+                source: (!source.is_empty()).then_some(source),
+            };
+            let join = arg_bool(&args, 4);
             Box::pin(async move {
                 require(&n)?
-                    .set_multicast_membership(owned.check(id)?, group, interface, join)
+                    .set_multicast_membership(owned.check(id)?, membership, join)
                     .await
                     .map_err(map_err)?;
                 Ok(Value::Undefined)
@@ -416,6 +546,26 @@ fn arg_bytes(args: &[Value], i: usize) -> Vec<u8> {
 
 fn arg_bool(args: &[Value], i: usize) -> bool {
     matches!(args.get(i), Some(Value::Bool(true)))
+}
+
+/// A boolean argument, or `None` when the guest said nothing — which is how an
+/// option asks for the OS default rather than for `false`.
+fn arg_opt_bool(args: &[Value], i: usize) -> Option<bool> {
+    match args.get(i) {
+        Some(Value::Bool(on)) => Some(*on),
+        _ => None,
+    }
+}
+
+/// The shape a datagram crosses in: the payload, who sent it, and whether it
+/// arrived whole.
+fn datagram_value(datagram: Datagram) -> Value {
+    Value::Object(vec![
+        ("data".to_string(), Value::Bytes(datagram.data)),
+        ("address".to_string(), Value::String(datagram.address)),
+        ("port".to_string(), Value::Number(datagram.port as f64)),
+        ("truncated".to_string(), Value::Bool(datagram.truncated)),
+    ])
 }
 
 /// A non-negative integer argument, or `None` when the guest said nothing —

@@ -315,6 +315,24 @@ class DatagramSocket {
     let done;
     this.closed = new Promise((resolve) => (done = resolve));
     this._done = done;
+    // Node's handle ref-counting. A referenced socket with a receive in flight
+    // is a reason for this agent's loop to keep running; `unref()` says it is
+    // not. The receive op does not keep the loop alive by itself — it cannot be
+    // taken back once parked, so an `unref()` would not take effect until a
+    // datagram arrived, and on the socket a program is unref'ing, none does.
+    this._refed = true;
+    this._waiting = 0; // receives in flight
+    this._counted = 0; // ref units this socket currently holds
+  }
+
+  // Brings the host counter in step with what this socket should be holding:
+  // one unit per in-flight receive while referenced, none while not. Called
+  // whenever either half changes, so an `unref()` during a parked receive takes
+  // effect immediately rather than at the next datagram.
+  _sync() {
+    const want = this._refed ? this._waiting : 0;
+    for (; this._counted < want; this._counted++) ops.net_datagram_ref(1);
+    for (; this._counted > want; this._counted--) ops.net_datagram_ref(-1);
   }
 
   // Sends one datagram, resolving with the number of bytes sent. `address` is
@@ -322,24 +340,87 @@ class DatagramSocket {
   async send(data, address) {
     if (this._closing) throw socketError("the socket is closed");
     const bytes = toBytes(data);
-    let hostname = "";
-    let port = 0;
-    if (address !== undefined && address !== null) {
-      const parsed = parseAddress(address);
-      hostname = parsed.hostname;
-      port = validPort(parsed.port, { allowZero: false });
-    }
+    const { hostname, port } = destination(address);
     const { id } = await this._ready;
     return socketOp(ops.net_datagram_send(id, bytes, hostname, port));
   }
 
-  // The next datagram: `{ data, address, port }`, or null once closed. One call
-  // is one message — including a zero-length one, which is a message and not an
-  // end of stream.
-  async receive() {
+  // Sends a batch in one host crossing, resolving with how many datagrams left.
+  // Each entry is a payload, or `{ data, address }` when they do not all go to
+  // the same peer. What this saves is the crossing, not the syscalls — the OS
+  // still sees one send per datagram.
+  async sendMany(messages, address) {
+    if (this._closing) throw socketError("the socket is closed");
+    if (!Array.isArray(messages)) {
+      throw socketError("sendMany expects an array of messages");
+    }
+    // Flattened to (bytes, host, port) triples: one marshaling shape rather
+    // than an object per message.
+    const flat = [];
+    for (const message of messages) {
+      const isEnvelope =
+        message != null &&
+        typeof message === "object" &&
+        !ArrayBuffer.isView(message) &&
+        !(message instanceof ArrayBuffer) &&
+        "data" in message;
+      const { hostname, port } = destination(isEnvelope ? (message.address ?? address) : address);
+      flat.push(toBytes(isEnvelope ? message.data : message), hostname, port);
+    }
+    if (flat.length === 0) return 0;
+    const { id } = await this._ready;
+    return socketOp(ops.net_datagram_send_many(id, ...flat));
+  }
+
+  // The next datagram: `{ data, address, port, truncated }`, or null once
+  // closed. One call is one message — including a zero-length one, which is a
+  // message and not an end of stream.
+  receive() {
+    return this._receiving(() => ops.net_datagram_receive(this._id));
+  }
+
+  // A datagram, plus up to `max - 1` more that had *already* arrived. Never
+  // waits for a full batch: a server draining a busy socket pays one crossing
+  // per batch instead of one per datagram, and the first datagram's latency is
+  // unchanged. `null` once closed.
+  receiveMany(max = 32) {
+    const limit = optionalInt(max, "receiveMany max", 1024) ?? 32;
+    if (limit < 1) throw socketError(`invalid receiveMany max: ${String(max)}`);
+    return this._receiving(() => ops.net_datagram_receive_many(this._id, limit));
+  }
+
+  // The shared body of both receives: the closed guard, the keep-alive
+  // bookkeeping, and unwrapping the host error. The counter is released in a
+  // `finally`, so an abandoned or failed receive does not leave the loop pinned.
+  async _receiving(call) {
     if (this._closing) return null;
     const { id } = await this._ready;
-    return socketOp(ops.net_datagram_receive(id));
+    this._id = id;
+    this._waiting++;
+    this._sync();
+    try {
+      return await socketOp(call());
+    } finally {
+      this._waiting--;
+      this._sync();
+    }
+  }
+
+  // Node's `unref()`: stop being a reason for the process to stay alive. A
+  // receive already parked keeps working — this changes what the loop counts,
+  // not what the socket does.
+  unref() {
+    this._refed = false;
+    this._sync();
+    return this;
+  }
+
+  // Undoes `unref()`. A socket starts referenced, so this only matters after
+  // one.
+  ref() {
+    this._refed = true;
+    this._sync();
+    return this;
   }
 
   // Fixes the peer: later sends need no address, and datagrams from anyone else
@@ -361,11 +442,16 @@ class DatagramSocket {
   // Multicast membership. `interface` names which local interface carries it —
   // an IPv4 address for a v4 group, an interface index for a v6 one — and
   // defaults to the OS's choice, which is only unambiguous on a host with one
-  // interface.
+  // interface. `source` narrows the membership to one sender (source-specific
+  // multicast, IPv4): the network drops everyone else's traffic, so the filter
+  // costs this program nothing and cannot be talked past.
   joinMulticast(group, options = {}) {
     return this._multicast(group, options, true);
   }
 
+  // Leaves a membership. A membership taken with a `source` must be left with
+  // the same one — to the OS they are different memberships, not one with a
+  // filter hung off it.
   leaveMulticast(group, options = {}) {
     return this._multicast(group, options, false);
   }
@@ -375,8 +461,43 @@ class DatagramSocket {
       throw socketError("a multicast group is required");
     }
     const iface = options?.interface == null ? "" : String(options.interface);
+    const source = options?.source == null ? "" : String(options.source);
     const { id } = await this._ready;
-    return socketOp(ops.net_datagram_multicast(id, group, iface, join));
+    return socketOp(ops.net_datagram_multicast(id, group, iface, source, join));
+  }
+
+  // The options that can change after the bind. The rest (`reusePort`,
+  // `reuseAddress`, `ipv6Only`) have to be set between socket() and bind(), so
+  // they are bind options only — a setter for them would be one that quietly
+  // did nothing.
+  setTtl(ttl) {
+    return this._option("ttl", optionalInt(ttl, "ttl", 255));
+  }
+
+  setMulticastTtl(ttl) {
+    return this._option("multicastTtl", optionalInt(ttl, "multicastTtl", 255));
+  }
+
+  setBroadcast(on) {
+    return this._option("broadcast", boolOption(on, "broadcast"));
+  }
+
+  setMulticastLoopback(on) {
+    return this._option("multicastLoopback", boolOption(on, "multicastLoopback"));
+  }
+
+  // Which local interface carries **outgoing** multicast — an IPv4 address on a
+  // v4 socket, an interface index on a v6 one. The one option with no bind-time
+  // twin, because on a multi-homed host it is the one that may need to change
+  // per announcement.
+  setMulticastInterface(iface) {
+    return this._option("multicastInterface", iface == null ? "" : String(iface));
+  }
+
+  async _option(name, value) {
+    if (value === undefined) throw socketError(`${name} requires a value`);
+    const { id } = await this._ready;
+    return socketOp(ops.net_datagram_option(id, name, value));
   }
 
   // Closed once, however many ways it is reached — the id is given back on the
@@ -402,6 +523,17 @@ class DatagramSocket {
       yield datagram;
     }
   }
+}
+
+// A send destination: `{ hostname: "", port: 0 }` means "the connected peer",
+// which is the only way to send without naming one.
+function destination(address) {
+  if (address === undefined || address === null) return { hostname: "", port: 0 };
+  const parsed = parseAddress(address);
+  return {
+    hostname: parsed.hostname,
+    port: validPort(parsed.port, { allowZero: false }),
+  };
 }
 
 // An integer socket option in an inclusive range, or undefined when the guest
@@ -444,6 +576,9 @@ function bind(options = {}) {
     optionalInt(options.ttl, "ttl", 255) ?? null,
     optionalInt(options.multicastTtl, "multicastTtl", 255) ?? null,
     multicastLoopback,
+    // IPv6 only, and only meaningful before the bind. Absent leaves the
+    // platform's default, which differs between them.
+    options.ipv6Only === undefined ? null : boolOption(options.ipv6Only, "ipv6Only"),
   );
   return new DatagramSocket(ready);
 }

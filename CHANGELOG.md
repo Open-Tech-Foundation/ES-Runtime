@@ -62,10 +62,58 @@ namespace) is unstable and may change between minor releases until the API freez
   hashing rows already are — and Deno's needs `--unstable-net`, which the runner
   now passes rather than recording a runtime that has UDP as one that does not.
 
-  Sending is where we land well (4.1 µs per datagram, second of five, ahead of
+  Sending is where we land well (4.0 µs per datagram, second of five, ahead of
   Node and Deno); a round trip is where the promise-per-datagram shape is paid
-  for (34.9 µs against Node's 31.0 and Bun's 16.0). Both halves ship, and the
+  for (30.9 µs against Node's 28.8 and Bun's 15.7). Both halves ship, and the
   internals page says which part of the design costs the second number.
+
+- **The rest of the UDP surface** (DECISIONS D58, amended) — seven gaps closed
+  in a second pass:
+
+  ```js
+  sock.unref();                                   // stop holding the process open
+  await sock.sendMany(["a", "b"], "10.0.0.1:514");// one crossing, many datagrams
+  const batch = await sock.receiveMany();         // …and the same in reverse
+  await sock.joinMulticast(group, { source });    // source-specific (RFC 4607)
+  await sock.setTtl(64);                          // the options that can change
+  bind({ hostname: "::", port: 0, ipv6Only: true });
+  ```
+
+  **`ref()`/`unref()`** is the one that mattered most: a pending `receive()` kept
+  the process alive with nothing to say otherwise, so a program that binds a
+  socket and stops caring never exited. The receive no longer keeps the loop
+  alive by itself — a counter does, the same split `worker_recv` makes — so an
+  `unref()` takes effect immediately rather than at the next datagram. Unlike
+  Node, a bound socket with **nothing in flight** was already not a reason to
+  stay alive, which matches `listen()` here.
+
+  **`sendMany`/`receiveMany`** save the host crossing, not the syscalls, and the
+  docs say so. `receiveMany` takes one datagram it waits for plus whatever had
+  already queued behind it, and never waits to fill a batch.
+
+  **`datagram.truncated`** reports a datagram that did not fit rather than
+  handing back a prefix that looks whole. The receive buffer is now a byte past
+  what IPv4 can deliver, which is what makes "filled it exactly" mean anything.
+  Buffers are also **pooled per socket** now — a 64 KiB allocation per datagram
+  was most of the cost of receiving a small one, and dropping it took the
+  round-trip benchmark from 34.9 µs to 30.9.
+
+  **Post-bind setters** for the five options that can change, and deliberately
+  none for `reusePort`, `reuseAddress` or `ipv6Only`, which must be set before
+  the bind — a setter for those would be one that quietly did nothing.
+  `setMulticastInterface` closes the multi-homed gap: the outgoing interface for
+  a multicast send had no override.
+
+  Not closed: the round-trip cost of a promise per datagram (`receiveMany` does
+  not help a strict request/response exchange, where there is only ever one
+  datagram to take), source-specific multicast over IPv6, and a receive rate
+  limit.
+
+- The end-to-end multicast test now compiles two platform facts into itself
+  rather than assuming Linux: `SO_REUSEPORT` where sharing a port needs it (the
+  BSDs, macOS included, where `SO_REUSEADDR` covers multicast addresses only),
+  and a tolerated "skipped" where loopback multicast delivery is not something a
+  CI runner has. The delivery assertion stays strict on Linux.
 
 ## [0.23.0] - 2026-08-11
 

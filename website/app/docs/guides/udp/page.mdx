@@ -86,6 +86,35 @@ const answer = await Promise.race([
 its own: a lost datagram is silent, and only the program knows how long an answer
 is worth waiting for.
 
+### Batches
+
+`sendMany` and `receiveMany` move many datagrams per host crossing. They save the
+crossing, not the syscalls — the OS still sees one send per datagram — so they
+pay off on a busy socket, not on a single exchange.
+
+```js
+// One crossing, three datagrams, one destination.
+await sock.sendMany(["a", "b", "c"], "127.0.0.1:8125");
+
+// …or a destination each.
+await sock.sendMany([
+  { data: metric, address: "10.0.0.1:8125" },
+  { data: log, address: "10.0.0.2:514" },
+]);
+
+// A datagram, plus whatever had already queued behind it.
+for (;;) {
+  const batch = await sock.receiveMany();      // default: up to 32
+  if (batch === null) break;                   // closed
+  for (const d of batch) handle(d);
+}
+```
+
+`receiveMany` never waits for a batch to fill: it waits for the first datagram
+exactly as `receive()` does, then takes what is already in the kernel. A batch is
+never empty, and a partly-sent `sendMany` reports how many datagrams left before
+it failed.
+
 ## Multicast
 
 Membership is dynamic; the socket options are set at the bind. `interface` names
@@ -113,6 +142,17 @@ for await (const { data, address } of sock) {
 await sock.leaveMulticast("224.0.0.251");
 ```
 
+Naming a `source` makes it **source-specific** multicast (RFC 4607, IPv4): the
+network delivers that sender's traffic and drops everyone else's, so the filter
+costs this program nothing and cannot be talked past.
+
+```js
+await sock.joinMulticast("232.1.1.1", { source: "198.51.100.7" });
+// …and left with the source named again — to the OS these are two different
+// memberships, not one with a filter attached.
+await sock.leaveMulticast("232.1.1.1", { source: "198.51.100.7" });
+```
+
 `reuseAddress` is what lets a second process on the same machine receive the same
 group — without it the second bind fails with `ERR_ADDRESS_IN_USE`, which is the
 usual reason an mDNS or SSDP responder works alone and stops working next to
@@ -131,9 +171,9 @@ asking for it on a v6 socket is an error rather than a flag that sets nothing.
 
 ## Socket options
 
-Set once, at the bind, because two of them (`reusePort`, `reuseAddress`) mean
-nothing afterwards and the rest are configuration a program decides once. An
-omitted option leaves the OS default rather than a value chosen for you.
+Set at the bind, because three of them (`reusePort`, `reuseAddress`, `ipv6Only`)
+mean nothing afterwards. An omitted option leaves the OS default rather than a
+value chosen for you.
 
 | Option | What it does |
 | --- | --- |
@@ -143,9 +183,24 @@ omitted option leaves the OS default rather than a value chosen for you.
 | `ttl` | Hop limit for unicast datagrams (0–255). |
 | `multicastTtl` | Hop limit for multicast datagrams. The OS default is `1` — the local segment. |
 | `multicastLoopback` | Whether your own multicast sends come back to this host. |
+| `ipv6Only` | For a v6 bind: IPv6 only, or also IPv4 through v4-mapped addresses. The platform default differs, so say which if it matters. |
 
 The address family picks the v4 or v6 spelling of each, so a `::1` socket gets
 the IPv6 option and not a v4 one that would silently set nothing.
+
+Five of them can also change **after** the bind:
+
+```js
+await sock.setTtl(64);
+await sock.setMulticastTtl(4);
+await sock.setBroadcast(true);
+await sock.setMulticastLoopback(false);
+await sock.setMulticastInterface("192.168.1.10");   // outgoing multicast
+```
+
+`reusePort`, `reuseAddress` and `ipv6Only` have no setters on purpose: they must
+be set between `socket()` and `bind()`, so a setter would be one that quietly did
+nothing.
 
 ## What UDP does not promise
 
@@ -159,10 +214,28 @@ runtime's to fix:
   datagrams; the send keeps succeeding.
 - **A size that always fits.** Stay at or under **1200 bytes** of payload to
   cross the internet without IP fragmentation (what QUIC and DNS assume); the
-  hard ceiling is 65,507, and anything larger is truncated by the OS.
+  hard ceiling is 65,507. A datagram that does not fit arrives with
+  `truncated: true` and the rest gone — impossible over IPv4, which cannot carry
+  one that large, so it is an IPv6 jumbogram that reaches it.
 - **Who sent it.** A source address is trivially forged. Treat `address` as a
   hint, not an identity, and never send a large answer to a small unverified
   request — that is the shape of a [reflection attack](/docs/security#udp).
+
+## Keeping the process alive
+
+A pending `receive()` is a reason for the process to stay running — which is what
+a server wants, and what a background listener does not. `unref()` says so:
+
+```js
+const control = bind({ hostname: "127.0.0.1", port: 0 });
+control.receive().then(handleControlPacket);
+control.unref();          // …but don't hold the process open for it
+```
+
+`ref()` undoes it. A parked receive keeps working either way — this changes what
+the event loop counts, not what the socket does. Note the difference from Node:
+here a **bound socket with nothing in flight is already not a reason to stay
+alive**, matching `listen()`; only a receive in flight is.
 
 ## Two capabilities
 
@@ -190,7 +263,11 @@ to as many peers as it likes.
 | Send | `await sock.send(data, addr)` | `.send(buf, port, host, cb)` | `sock.send(buf, port, host)` | `await conn.send(data, addr)` |
 | Connected socket | `await sock.connect(addr)` | `.connect(port, host)` | `{ connect: { port, hostname } }` | — |
 | Multicast | `joinMulticast` / `leaveMulticast` | `addMembership` / `dropMembership` | `addMembership` / `dropMembership` | `joinMulticastV4` / `.leave()` |
-| Batch send | — | — | `sendMany()` | — |
+| Batch send | `sendMany()` | — | `sendMany()` | — |
+| Batch receive | `receiveMany()` | — | — | — |
+| Source-specific multicast | `{ source }` | `addSourceSpecificMembership` | `addSourceSpecificMembership` | — |
+| `ref()` / `unref()` | ✓ | ✓ | ✓ | ✓ |
+| Truncation reported | ✓ | — | — | — |
 | Availability | stable (pre-1.0) | stable | stable | **unstable** (`--unstable-net`) |
 | Permission model | `listen` **and** `net` | none | none | `--allow-net` |
 

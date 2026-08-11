@@ -1646,10 +1646,16 @@ for await (const { data, address, port } of sock) {
 | Member | Type | Description |
 | --- | --- | --- |
 | `send(data, address?)` | `Promise<number>` | Send one datagram; resolves with the bytes sent. `address` is `"host:port"` or `{ hostname, port }`, and is required unless the socket is connected. Requires `Net`, checked **per destination**. |
-| `receive()` | `Promise<Datagram \| null>` | The next `{ data, address, port }`, or `null` once closed. One call is one message — a zero-length datagram is a message, not an EOF. |
+| `sendMany(messages, address?)` | `Promise<number>` | Send a batch in one crossing; resolves with how many left. Each entry is a payload or `{ data, address }`. Saves the crossing, not the syscalls; a failure part-way reports how many had gone. Requires `Net`, still checked per destination. |
+| `receive()` | `Promise<Datagram \| null>` | The next `{ data, address, port, truncated }`, or `null` once closed. One call is one message — a zero-length datagram is a message, not an EOF. |
+| `receiveMany(max?)` | `Promise<Datagram[] \| null>` | A datagram plus up to `max - 1` more that had **already** arrived (default 32). Never waits for a full batch, so latency is unchanged and a busy socket costs one crossing per batch. |
 | `connect(address)` | `Promise<SocketInfo>` | Fix the peer: sends need no address, and datagrams from anyone else are discarded. No packet is sent, so this succeeds against a host that is not listening. Requires `Net`. |
-| `joinMulticast(group, { interface? })` | `Promise<void>` | Join a group. `interface` is an IPv4 address for a v4 group, an interface **index** for a v6 one. |
-| `leaveMulticast(group, { interface? })` | `Promise<void>` | Leave a group. |
+| `joinMulticast(group, { interface?, source? })` | `Promise<void>` | Join a group. `interface` is an IPv4 address for a v4 group, an interface **index** for a v6 one. `source` makes it source-specific (RFC 4607, IPv4 only) — the network filters, so nobody else's traffic arrives. |
+| `leaveMulticast(group, { interface?, source? })` | `Promise<void>` | Leave a group. A membership taken with a `source` must be left with the same one. |
+| `setTtl(n)` / `setMulticastTtl(n)` | `Promise<void>` | Hop limits, after the bind. |
+| `setBroadcast(on)` / `setMulticastLoopback(on)` | `Promise<void>` | The two toggles, after the bind. `setBroadcast` is IPv4 only. |
+| `setMulticastInterface(iface)` | `Promise<void>` | Which local interface carries **outgoing** multicast — an IPv4 address on a v4 socket, an interface index on a v6 one. The one option with no bind-time twin. |
+| `ref()` / `unref()` | `this` | Node's handle ref-counting: `unref()` stops a pending `receive()` from keeping the process alive. A parked receive keeps working either way. |
 | `addr` | `Promise<{ hostname, port }>` | The bound address. |
 | `close()` | `Promise<void>` | Close the socket; a parked `receive()` resolves to `null`. |
 | `closed` | `Promise<void>` | Resolves once closed. |
@@ -1658,11 +1664,21 @@ for await (const { data, address, port } of sock) {
 **Bind options** — `reusePort` (share the address across processes; Unix only),
 `reuseAddress` (share it with another socket — what two processes receiving one
 multicast group need), `broadcast` (permit sending to the broadcast address;
-IPv4 only), `ttl`, `multicastTtl` and `multicastLoopback`. Each is set once, at
-the bind, and an omitted one leaves the OS default rather than a value chosen
-here. The address family decides which spelling of each option is used, so an
-IPv6 socket asking for `broadcast` is an error rather than a flag that sets
-nothing.
+IPv4 only), `ttl`, `multicastTtl`, `multicastLoopback`, and `ipv6Only` (whether a
+v6 bind also accepts v4-mapped traffic; omitted leaves the platform default,
+which differs between platforms). An omitted option leaves the OS default rather
+than a value chosen here. The address family decides which spelling of each is
+used, so an IPv6 socket asking for `broadcast` is an error rather than a flag
+that sets nothing.
+
+`reusePort`, `reuseAddress` and `ipv6Only` are **bind-time only** — they have to
+be set between `socket()` and `bind()`, so a setter for them would be one that
+quietly did nothing. The rest have setters (`setTtl`, `setBroadcast`, …) for the
+cases where they change while a program runs.
+
+**Truncation** — `datagram.truncated` is `true` when the message did not fit the
+receive buffer, so `data` is a prefix and the rest is gone. It cannot happen over
+IPv4, whose largest datagram fits; an IPv6 jumbogram is what reaches it.
 
 **Two capabilities, not one.** `bind` requires `NetListen` — it takes a port,
 and a port is how a process is reached, ephemeral or not — while `send` and

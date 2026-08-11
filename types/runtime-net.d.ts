@@ -118,6 +118,20 @@ declare module "runtime:net" {
     address: string;
     /** The sender's port. */
     port: number;
+    /**
+     * Whether the datagram was **cut off** because it did not fit the receive
+     * buffer: `data` is a prefix and the rest is gone. Impossible over IPv4,
+     * whose largest datagram fits; an IPv6 jumbogram is what reaches it.
+     */
+    truncated: boolean;
+  }
+
+  /** One message in a {@link DatagramSocket.sendMany} batch. */
+  export interface OutgoingDatagram {
+    data: string | Uint8Array | ArrayBuffer | ArrayBufferView;
+    /** Where it goes; defaults to `sendMany`'s second argument, then the
+     * connected peer. */
+    address?: Address;
   }
 
   /** Options for {@link bind}. */
@@ -161,6 +175,13 @@ declare module "runtime:net" {
      * announcements.
      */
     multicastLoopback?: boolean;
+    /**
+     * For an IPv6 bind: accept IPv6 only, or also IPv4 through v4-mapped
+     * addresses. Omitted ⇒ the platform's default, which differs between them —
+     * Linux usually allows both, the BSDs usually do not — so a program that
+     * needs one answer has to say which. Ignored on an IPv4 bind.
+     */
+    ipv6Only?: boolean;
   }
 
   /** Options for {@link DatagramSocket.joinMulticast}. */
@@ -171,6 +192,15 @@ declare module "runtime:net" {
      * which is only unambiguous on a host with one interface.
      */
     interface?: string | number;
+    /**
+     * Accept traffic from this sender only — source-specific multicast
+     * (RFC 4607), IPv4 only. The network does the filtering, so an unwanted
+     * sender's traffic never arrives at all.
+     *
+     * A membership taken with a source must be left with the same one: they are
+     * different memberships to the OS, not one with a filter attached.
+     */
+    source?: string;
   }
 
   /**
@@ -191,10 +221,39 @@ declare module "runtime:net" {
       address?: Address,
     ): Promise<number>;
     /**
+     * Send a batch in one host crossing, resolving with how many datagrams
+     * left. Each entry is a payload, or an {@link OutgoingDatagram} when they do
+     * not all go to the same peer; `address` is the default destination for the
+     * plain ones.
+     *
+     * What this saves is the **crossing**, not the syscalls — the OS still sees
+     * one send per datagram. A failure part-way reports how many had already
+     * gone.
+     */
+    sendMany(
+      messages: readonly (
+        | string
+        | Uint8Array
+        | ArrayBuffer
+        | ArrayBufferView
+        | OutgoingDatagram
+      )[],
+      address?: Address,
+    ): Promise<number>;
+    /**
      * The next datagram, or `null` once closed. One call is one message —
      * including a zero-length one, which is a message and not an end of stream.
      */
     receive(): Promise<Datagram | null>;
+    /**
+     * A datagram, plus up to `max - 1` more that had **already** arrived;
+     * `null` once closed. Never waits for a full batch, so the first datagram's
+     * latency is unchanged and a busy socket costs one crossing per batch
+     * instead of one per datagram.
+     *
+     * @defaultValue `max` = 32
+     */
+    receiveMany(max?: number): Promise<Datagram[] | null>;
     /**
      * Fix the peer: later sends need no address, and datagrams from anyone else
      * are discarded. No packet is sent (UDP has no handshake), so this succeeds
@@ -205,6 +264,29 @@ declare module "runtime:net" {
     joinMulticast(group: string, options?: MulticastOptions): Promise<void>;
     /** Leave a multicast group. */
     leaveMulticast(group: string, options?: MulticastOptions): Promise<void>;
+    /** Hop limit for unicast datagrams (0–255). */
+    setTtl(ttl: number): Promise<void>;
+    /** Hop limit for multicast datagrams (0–255). */
+    setMulticastTtl(ttl: number): Promise<void>;
+    /** Permit sending to the broadcast address. IPv4 only. */
+    setBroadcast(on: boolean): Promise<void>;
+    /** Whether multicast sends come back to this host. */
+    setMulticastLoopback(on: boolean): Promise<void>;
+    /**
+     * Which local interface carries **outgoing** multicast: an IPv4 address on
+     * a v4 socket, an interface index on a v6 one. The one option with no
+     * bind-time twin, because on a multi-homed host it may need to change per
+     * announcement.
+     */
+    setMulticastInterface(iface: string | number): Promise<void>;
+    /**
+     * Stop being a reason for the process to stay alive, as Node's `unref()`
+     * does. A parked {@link receive} keeps working — this changes what the event
+     * loop counts, not what the socket does.
+     */
+    unref(): this;
+    /** Undoes {@link unref}. A socket starts referenced. */
+    ref(): this;
     /** Close the socket. A parked {@link receive} resolves to `null`. */
     close(): Promise<void>;
   }

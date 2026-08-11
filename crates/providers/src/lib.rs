@@ -998,6 +998,61 @@ pub struct DatagramOptions {
     /// (`IP_MULTICAST_LOOP`). `None` ⇒ the OS default (on). Turning it off is
     /// how a sender avoids receiving its own announcements.
     pub multicast_loopback: Option<bool>,
+    /// For an IPv6 socket: whether it accepts IPv6 only (`IPV6_V6ONLY`), or also
+    /// IPv4 traffic through v4-mapped addresses. `None` ⇒ the OS default, which
+    /// differs between platforms — Linux usually allows both, the BSDs usually
+    /// do not — so a program that needs one answer has to say which.
+    ///
+    /// Ignored for an IPv4 socket, where the option does not exist.
+    pub ipv6_only: Option<bool>,
+}
+
+/// One socket option settable **after** the bind, from
+/// [`NetProvider::set_datagram_option`].
+///
+/// The bind-time options in [`DatagramOptions`] that cannot meaningfully change
+/// later (`SO_REUSEPORT`, `SO_REUSEADDR`, `IPV6_V6ONLY`) are deliberately absent:
+/// they have to be set between `socket()` and `bind()`, so an API that accepted
+/// them here would be one that quietly did nothing.
+pub enum DatagramOption {
+    /// Hop limit for unicast datagrams.
+    Ttl(u32),
+    /// Permit sending to the broadcast address.
+    Broadcast(bool),
+    /// Hop limit for multicast datagrams.
+    MulticastTtl(u32),
+    /// Whether multicast sends come back to this host.
+    MulticastLoopback(bool),
+    /// Which local interface carries **outgoing** multicast: an IPv4 address for
+    /// a v4 socket, an interface index for a v6 one, or empty for the OS's
+    /// choice (`IP_MULTICAST_IF` / `IPV6_MULTICAST_IF`).
+    ///
+    /// The one option with no bind-time equivalent, because it is the one a
+    /// program on a multi-homed host may need to change per announcement.
+    MulticastInterface(String),
+}
+
+/// One outgoing datagram in a [`NetProvider::send_many`] batch: the payload, and
+/// where it goes — or `None` for the connected peer, exactly as
+/// [`NetProvider::send_to`] reads it.
+pub type OutgoingDatagram = (Vec<u8>, Option<(String, u16)>);
+
+/// A multicast group to join or leave, from
+/// [`NetProvider::set_multicast_membership`].
+pub struct MulticastMembership {
+    /// The group address.
+    pub group: String,
+    /// Which local interface carries the membership: an IPv4 address for a v4
+    /// group, an interface index for a v6 one, or empty for the OS's choice.
+    pub interface: String,
+    /// Accept traffic **only** from this source (source-specific multicast,
+    /// RFC 4607). `None` ⇒ any sender.
+    ///
+    /// SSM is what makes a shared group usable without trusting everyone who can
+    /// reach it: the filter is applied by the network rather than by the
+    /// receiver, so an unwanted sender's traffic never arrives at all. IPv4 only
+    /// here, which is where the deployed protocols that use it live.
+    pub source: Option<String>,
 }
 
 /// One received datagram, from [`NetProvider::receive`].
@@ -1014,6 +1069,14 @@ pub struct Datagram {
     pub address: String,
     /// The sender's port.
     pub port: u16,
+    /// Whether the datagram was **cut off** because it did not fit the receive
+    /// buffer. `data` is then a prefix, and the rest is gone — the OS discards
+    /// it rather than holding it for a second read.
+    ///
+    /// Reported because the alternative is a program that silently parses a
+    /// truncated message as a whole one. It cannot happen over IPv4, whose
+    /// largest possible payload fits; an IPv6 jumbogram is what reaches it.
+    pub truncated: bool,
 }
 
 /// Raw TCP sockets and UDP datagram sockets backing `runtime:net` (SPEC §12 —
@@ -1150,20 +1213,70 @@ pub trait NetProvider: Send + Sync {
         Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
     }
 
-    /// Joins (`join`) or leaves multicast `group` on socket `id`.
+    /// Sends several datagrams from socket `id` in one call; resolves to how
+    /// many were sent.
     ///
-    /// `interface` names which local interface carries the membership: an IPv4
-    /// local address for a v4 group, an interface *index* for a v6 one, or
-    /// empty to let the OS choose. A machine with more than one interface has
-    /// no obvious answer, which is why the argument exists.
+    /// What this saves is the **crossing**, not the syscalls: one call instead
+    /// of one per datagram, for a sender that already has a batch in hand. Each
+    /// message is still one datagram, and each destination is still checked
+    /// against whatever policy the implementation applies to
+    /// [`send_to`](Self::send_to).
+    ///
+    /// A failure part-way through is reported with the count that did leave, so
+    /// a caller can tell "none of it" from "the first three of five" rather than
+    /// having to guess.
+    fn send_many(
+        &self,
+        id: u64,
+        messages: Vec<OutgoingDatagram>,
+    ) -> BoxFuture<Result<usize, ProviderError>> {
+        let _ = (id, messages);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Waits for a datagram on socket `id`, then takes up to `max` more that
+    /// have **already arrived**, without waiting for any of them; `None` once
+    /// the socket is closed.
+    ///
+    /// The receive-side counterpart to [`send_many`](Self::send_many), and the
+    /// answer to a busy socket: a server draining a queue pays one crossing per
+    /// batch rather than one per datagram. It never blocks for a full batch —
+    /// that would trade throughput for latency, and a datagram already in the
+    /// kernel is the only thing worth adding to the first.
+    fn receive_many(
+        &self,
+        id: u64,
+        max: usize,
+    ) -> BoxFuture<Result<Option<Vec<Datagram>>, ProviderError>> {
+        let _ = (id, max);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Sets one socket option on datagram socket `id` after the bind.
+    ///
+    /// Only the options that *can* change later are here; see
+    /// [`DatagramOption`].
+    fn set_datagram_option(
+        &self,
+        id: u64,
+        option: DatagramOption,
+    ) -> BoxFuture<Result<(), ProviderError>> {
+        let _ = (id, option);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Joins (`join`) or leaves a multicast group on socket `id`.
+    ///
+    /// See [`MulticastMembership`] for what the interface and source mean. A
+    /// membership taken with a source must be dropped with the same source —
+    /// they are different memberships to the OS, not one with a filter attached.
     fn set_multicast_membership(
         &self,
         id: u64,
-        group: String,
-        interface: String,
+        membership: MulticastMembership,
         join: bool,
     ) -> BoxFuture<Result<(), ProviderError>> {
-        let _ = (id, group, interface, join);
+        let _ = (id, membership, join);
         Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
     }
 

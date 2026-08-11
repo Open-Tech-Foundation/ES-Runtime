@@ -1294,18 +1294,18 @@ export default {
       "esrun": 120
     },
     "udp_echo": {
-      "node": 309.8,
-      "bun": 160.3,
-      "deno": 466.5,
-      "llrt": 390.5,
-      "esrun": 349
+      "node": 288.4,
+      "bun": 156.8,
+      "deno": 415.9,
+      "llrt": 371,
+      "esrun": 308.7
     },
     "udp_send": {
-      "node": 249.2,
-      "bun": 183.2,
-      "deno": 249.4,
-      "llrt": 723,
-      "esrun": 206.2
+      "node": 237.2,
+      "bun": 176.7,
+      "deno": 245.3,
+      "llrt": 696.9,
+      "esrun": 199.9
     }
   },
   "results_rss": {
@@ -1773,10 +1773,10 @@ export default {
     },
     "udp_echo": {
       "node": 57,
-      "bun": 38,
-      "deno": 88,
+      "bun": 39,
+      "deno": 90,
       "llrt": 11,
-      "esrun": 55
+      "esrun": 37
     },
     "udp_send": {
       "node": 57,
@@ -2250,18 +2250,18 @@ export default {
       "esrun": null
     },
     "udp_echo": {
-      "node": 3.4,
-      "bun": 2,
-      "deno": 3.1,
-      "llrt": 2.2,
-      "esrun": 2.1
+      "node": 2.2,
+      "bun": 1.2,
+      "deno": 5.3,
+      "llrt": 6.1,
+      "esrun": 2.2
     },
     "udp_send": {
-      "node": 3,
-      "bun": 1.3,
-      "deno": 2,
-      "llrt": 5,
-      "esrun": 2.2
+      "node": 1.3,
+      "bun": 1.9,
+      "deno": 1.2,
+      "llrt": 1.1,
+      "esrun": 1
     }
   },
   "results_n": {
@@ -2728,11 +2728,11 @@ export default {
       "esrun": null
     },
     "udp_echo": {
-      "node": 3,
-      "bun": 3,
-      "deno": 3,
-      "llrt": 3,
-      "esrun": 3
+      "node": 5,
+      "bun": 5,
+      "deno": 5,
+      "llrt": 5,
+      "esrun": 5
     },
     "udp_send": {
       "node": 3,
@@ -3206,18 +3206,18 @@ export default {
       "esrun": null
     },
     "udp_echo": {
-      "node": 3.4,
-      "bun": 3.4,
-      "deno": 4.2,
-      "llrt": 0.5,
-      "esrun": 1.3
+      "node": 1.5,
+      "bun": 0.1,
+      "deno": 6.7,
+      "llrt": 3.2,
+      "esrun": 2.1
     },
     "udp_send": {
-      "node": 1.8,
-      "bun": 0.9,
-      "deno": 2,
-      "llrt": 2.9,
-      "esrun": 2
+      "node": 2,
+      "bun": 0.8,
+      "deno": 1.1,
+      "llrt": 0,
+      "esrun": 0.2
     }
   },
   "status": {

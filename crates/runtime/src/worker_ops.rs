@@ -33,11 +33,11 @@ pub(crate) fn install(
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
     loader: crate::module_ops::LoaderSlot,
     entry: crate::EntrySlot,
-    worker_refs: std::rc::Rc<std::cell::Cell<u32>>,
+    handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<()> {
     install_entry_reader(engine, loader)?;
     install_base(engine, entry)?;
-    install_parent(engine, workers, capabilities, worker_refs)?;
+    install_parent(engine, workers, capabilities, handle_refs)?;
     install_scope(engine, scope)
 }
 
@@ -121,7 +121,7 @@ fn install_parent(
     engine: &mut dyn Engine,
     workers: Option<Arc<dyn WorkerHost>>,
     capabilities: std::rc::Rc<std::cell::Cell<CapabilitySet>>,
-    worker_refs: std::rc::Rc<std::cell::Cell<u32>>,
+    handle_refs: std::rc::Rc<std::cell::Cell<u32>>,
 ) -> Result<()> {
     // This agent's own ceilings, read once: they are fixed for the isolate's
     // life, and every worker it starts derives from them.
@@ -211,7 +211,7 @@ fn install_parent(
     // Saturating both ways: a forged or unbalanced call from guest code must not
     // wrap it. The worst it can do is keep this agent alive, never end it while
     // work is outstanding.
-    let refs = worker_refs;
+    let refs = handle_refs;
     engine.register_op(OpDecl::sync("worker_ref", move |args| {
         let delta = args.first().and_then(Value::as_number).unwrap_or(0.0);
         let current = refs.get();

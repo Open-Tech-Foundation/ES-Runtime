@@ -28,8 +28,8 @@ use std::task::{Context, Poll};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, ConnectOptions, Datagram, DatagramOptions, ListenOptions, NetProvider,
-    ProviderError, SocketInfo,
+    BoxFuture, ConnectOptions, Datagram, DatagramOption, DatagramOptions, ListenOptions,
+    MulticastMembership, NetProvider, OutgoingDatagram, ProviderError, SocketInfo,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -95,6 +95,8 @@ struct Slot {
 struct DatagramSlot {
     socket: Arc<UdpSocket>,
     closed: Arc<Closed>,
+    /// Receive buffers, reused across calls — see [`BufferPool`].
+    buffers: Arc<BufferPool>,
 }
 
 /// The close signal for one datagram socket: a flag to read and a bell to ring.
@@ -867,6 +869,7 @@ impl NetProvider for SystemNet {
                 DatagramSlot {
                     socket: Arc::new(socket),
                     closed: Arc::new(Closed::default()),
+                    buffers: Arc::new(BufferPool::default()),
                 },
             );
             Ok((id, info))
@@ -876,7 +879,7 @@ impl NetProvider for SystemNet {
     fn receive(&self, id: u64) -> BoxFuture<Result<Option<Datagram>, ProviderError>> {
         let datagrams = self.datagrams.clone();
         Box::pin(async move {
-            let Some((socket, closed)) = lookup(&datagrams, id) else {
+            let Some((socket, closed, pool)) = lookup(&datagrams, id) else {
                 return Ok(None); // closed
             };
             // Registered *before* the flag is read, so a close landing between
@@ -887,24 +890,62 @@ impl NetProvider for SystemNet {
             if closed.flag.load(Ordering::Acquire) {
                 return Ok(None);
             }
-            // One buffer per receive, sized for the largest datagram IPv4 can
-            // carry (65,535 less the 20-byte header and the 8-byte UDP header).
-            // A datagram longer than this is truncated by the OS, exactly as it
-            // would be for any other receiver.
-            let mut buf = vec![0u8; MAX_DATAGRAM];
-            tokio::select! {
+            // Borrowed from the socket's pool rather than allocated: a 64 KiB
+            // buffer per datagram is most of the cost of receiving a small one.
+            // Returned however this call ends (`Scratch` gives it back in its
+            // destructor), so an abandoned receive does not drain the pool.
+            let mut scratch = pool.take();
+            let (n, from) = tokio::select! {
                 biased;
-                () = &mut bell => Ok(None),
-                received = socket.recv_from(&mut buf) => {
-                    let (n, from) = received.map_err(|e| io_err("receive", e))?;
-                    buf.truncate(n);
-                    Ok(Some(Datagram {
-                        data: buf,
-                        address: from.ip().to_string(),
-                        port: from.port(),
-                    }))
+                () = &mut bell => return Ok(None),
+                received = socket.recv_from(scratch.buf()) => {
+                    received.map_err(|e| io_err("receive", e))?
+                }
+            };
+            Ok(Some(datagram_from(scratch.buf(), n, from)))
+        })
+    }
+
+    fn receive_many(
+        &self,
+        id: u64,
+        max: usize,
+    ) -> BoxFuture<Result<Option<Vec<Datagram>>, ProviderError>> {
+        let datagrams = self.datagrams.clone();
+        Box::pin(async move {
+            let Some((socket, closed, pool)) = lookup(&datagrams, id) else {
+                return Ok(None);
+            };
+            let bell = closed.bell.notified();
+            tokio::pin!(bell);
+            bell.as_mut().enable();
+            if closed.flag.load(Ordering::Acquire) {
+                return Ok(None);
+            }
+            let mut scratch = pool.take();
+            let mut batch = Vec::new();
+            let (n, from) = tokio::select! {
+                biased;
+                () = &mut bell => return Ok(None),
+                received = socket.recv_from(scratch.buf()) => {
+                    received.map_err(|e| io_err("receive", e))?
+                }
+            };
+            batch.push(datagram_from(scratch.buf(), n, from));
+            // Then whatever is *already* queued, and not one datagram more: a
+            // batch that waits to fill trades the first datagram's latency for
+            // throughput nobody asked for.
+            while batch.len() < max.max(1) {
+                match socket.try_recv_from(scratch.buf()) {
+                    Ok((n, from)) => batch.push(datagram_from(scratch.buf(), n, from)),
+                    // Empty queue, or a datagram that arrived and errored. The
+                    // batch already in hand is worth more than the error on a
+                    // datagram nobody has seen, so it is returned and the error
+                    // surfaces on the next call.
+                    Err(_) => break,
                 }
             }
+            Ok(Some(batch))
         })
     }
 
@@ -916,7 +957,7 @@ impl NetProvider for SystemNet {
     ) -> BoxFuture<Result<usize, ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            let (socket, _) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
+            let (socket, ..) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
             let Some((host, port)) = to else {
                 // No destination: the connected peer, which `connect_datagram`
                 // already checked against the allowlist.
@@ -935,6 +976,72 @@ impl NetProvider for SystemNet {
         })
     }
 
+    fn send_many(
+        &self,
+        id: u64,
+        messages: Vec<OutgoingDatagram>,
+    ) -> BoxFuture<Result<usize, ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            let (socket, ..) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
+            let mut sent = 0usize;
+            for (data, to) in messages {
+                let result = match &to {
+                    None => socket.send(&data).await.map_err(|e| io_err("send", e)),
+                    Some((host, port)) => {
+                        // Per destination, exactly as `send_to` does it — a batch
+                        // is a saved crossing, never a saved check.
+                        //
+                        // Collected rather than `?`-propagated: a denial is a
+                        // failure *of this message*, and it has to carry the
+                        // count of the ones that already went, like any other.
+                        let denied = this
+                            .allow_connect
+                            .as_ref()
+                            .and_then(|allow| allow.check(host, *port, "send").err());
+                        match denied {
+                            Some(e) => Err(e),
+                            None => socket
+                                .send_to(&data, (host.as_str(), *port))
+                                .await
+                                .map_err(|e| io_err(format!("send to {host}:{port}"), e)),
+                        }
+                    }
+                };
+                match result {
+                    Ok(_) => sent += 1,
+                    // The count so far travels with the error: "none of them"
+                    // and "the first three of five" are different facts, and a
+                    // caller that retries needs to know which.
+                    Err(e) => {
+                        return Err(match e {
+                            ProviderError::Coded { code, message } => ProviderError::Coded {
+                                code,
+                                message: format!("{message} (after {sent} of the batch)"),
+                            },
+                            other => {
+                                ProviderError::Other(format!("{other} (after {sent} of the batch)"))
+                            }
+                        });
+                    }
+                }
+            }
+            Ok(sent)
+        })
+    }
+
+    fn set_datagram_option(
+        &self,
+        id: u64,
+        option: DatagramOption,
+    ) -> BoxFuture<Result<(), ProviderError>> {
+        let datagrams = self.datagrams.clone();
+        Box::pin(async move {
+            let (socket, ..) = lookup(&datagrams, id).ok_or_else(closed_socket)?;
+            crate::datagram::set_option(&socket, option)
+        })
+    }
+
     fn connect_datagram(
         &self,
         id: u64,
@@ -943,7 +1050,7 @@ impl NetProvider for SystemNet {
     ) -> BoxFuture<Result<SocketInfo, ProviderError>> {
         let this = self.clone();
         Box::pin(async move {
-            let (socket, _) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
+            let (socket, ..) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
             if let Some(allow) = &this.allow_connect {
                 allow.check(&host, port, "connect")?;
             }
@@ -958,14 +1065,13 @@ impl NetProvider for SystemNet {
     fn set_multicast_membership(
         &self,
         id: u64,
-        group: String,
-        interface: String,
+        membership: MulticastMembership,
         join: bool,
     ) -> BoxFuture<Result<(), ProviderError>> {
         let datagrams = self.datagrams.clone();
         Box::pin(async move {
-            let (socket, _) = lookup(&datagrams, id).ok_or_else(closed_socket)?;
-            crate::datagram::set_membership(&socket, &group, &interface, join)
+            let (socket, ..) = lookup(&datagrams, id).ok_or_else(closed_socket)?;
+            crate::datagram::set_membership(&socket, &membership, join)
         })
     }
 
@@ -986,15 +1092,97 @@ impl NetProvider for SystemNet {
 /// The largest payload a UDP datagram can carry over IPv4 (65,535 − 20 − 8).
 const MAX_DATAGRAM: usize = 65_507;
 
-/// The socket and close signal for datagram `id`, or `None` if it is closed.
-/// The lock is released before the caller awaits anything.
+/// The receive buffer, **one byte past** the largest datagram IPv4 can deliver.
+///
+/// That extra byte is the whole truncation test: a datagram that fills the
+/// buffer exactly is one the buffer could not hold, because no IPv4 datagram is
+/// this long. Without it, a full buffer and a perfectly-sized datagram are the
+/// same observation and the guest is told nothing.
+const RECV_BUFFER: usize = MAX_DATAGRAM + 1;
+
+/// How many receive buffers one socket keeps for reuse. Concurrent receives may
+/// take more; the surplus is dropped rather than pooled, so a burst of parallel
+/// receives cannot leave the socket holding megabytes it will never need again.
+const POOL_LIMIT: usize = 4;
+
+/// Receive buffers for one datagram socket.
+///
+/// A 64 KiB allocation per datagram is most of the cost of receiving a small
+/// one, and a datagram socket receives small ones by the thousand. The buffer is
+/// borrowed for the length of one receive and given back afterwards; the
+/// datagram that leaves is a fresh, exactly-sized copy, so nothing here is
+/// retained past the call that made it.
+#[derive(Default)]
+struct BufferPool {
+    free: Mutex<Vec<Vec<u8>>>,
+}
+
+impl BufferPool {
+    fn take(self: &Arc<Self>) -> Scratch {
+        let buf = self
+            .free
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or_else(|| vec![0u8; RECV_BUFFER]);
+        Scratch {
+            buf: Some(buf),
+            pool: self.clone(),
+        }
+    }
+}
+
+/// A borrowed receive buffer, returned to its pool on drop — including when the
+/// receive holding it is abandoned mid-await, which is the case a `return` in
+/// the happy path would have missed.
+struct Scratch {
+    buf: Option<Vec<u8>>,
+    pool: Arc<BufferPool>,
+}
+
+impl Scratch {
+    fn buf(&mut self) -> &mut [u8] {
+        self.buf
+            .as_mut()
+            .expect("scratch buffer is live until drop")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if let Some(buf) = self.buf.take() {
+            let mut free = self.pool.free.lock().unwrap();
+            if free.len() < POOL_LIMIT {
+                free.push(buf);
+            }
+        }
+    }
+}
+
+/// Copies `n` bytes out of a receive buffer into the datagram that leaves.
+fn datagram_from(buf: &[u8], n: usize, from: SocketAddr) -> Datagram {
+    Datagram {
+        data: buf[..n].to_vec(),
+        address: from.ip().to_string(),
+        port: from.port(),
+        // See [`RECV_BUFFER`]: a datagram this long did not fit.
+        truncated: n == RECV_BUFFER,
+    }
+}
+
+/// The socket, close signal and buffer pool for datagram `id`, or `None` if it
+/// is closed. The lock is released before the caller awaits anything.
 fn lookup(
     datagrams: &Mutex<HashMap<u64, DatagramSlot>>,
     id: u64,
-) -> Option<(Arc<UdpSocket>, Arc<Closed>)> {
+) -> Option<(Arc<UdpSocket>, Arc<Closed>, Arc<BufferPool>)> {
     let slots = datagrams.lock().unwrap();
     let slot = slots.get(&id)?;
-    Some((slot.socket.clone(), slot.closed.clone()))
+    Some((
+        slot.socket.clone(),
+        slot.closed.clone(),
+        slot.buffers.clone(),
+    ))
 }
 
 fn closed_socket() -> ProviderError {
@@ -1601,6 +1789,15 @@ mod datagram_tests {
     use crate::HostAllowlist;
     use std::time::Duration;
 
+    /// An any-source membership on the loopback interface.
+    fn group(group: &str) -> MulticastMembership {
+        MulticastMembership {
+            group: group.to_string(),
+            interface: "127.0.0.1".to_string(),
+            source: None,
+        }
+    }
+
     /// Binds a loopback datagram socket and returns (id, port).
     async fn udp(net: &SystemNet) -> (u64, u16) {
         let (id, info) = net
@@ -1813,7 +2010,7 @@ mod datagram_tests {
         let (second, _) = member(port).await.expect("a second member on one port");
         for id in [first, second] {
             if net
-                .set_multicast_membership(id, GROUP.to_string(), "127.0.0.1".to_string(), true)
+                .set_multicast_membership(id, group(GROUP), true)
                 .await
                 .is_err()
             {
@@ -1843,7 +2040,7 @@ mod datagram_tests {
         // default, so a socket bound to the port keeps receiving a group any
         // socket on the host is still joined to.
         for id in [first, second] {
-            net.set_multicast_membership(id, GROUP.to_string(), "127.0.0.1".to_string(), false)
+            net.set_multicast_membership(id, group(GROUP), false)
                 .await
                 .expect("leave");
         }
@@ -1913,6 +2110,213 @@ mod datagram_tests {
             .bind_datagram("127.0.0.1".to_string(), 7070, DatagramOptions::default())
             .await
             .expect("the allowed address binds");
+        net.close_datagram(id).await.unwrap();
+    }
+
+    /// Truncation is reported by the one observation that can distinguish it:
+    /// a datagram that filled the buffer exactly. The buffer is deliberately a
+    /// byte longer than IPv4 can deliver, so a full one means the message did
+    /// not fit — there is no size of real datagram that reaches this.
+    ///
+    /// Tested on the classifier rather than over a socket: producing a truncated
+    /// datagram needs an IPv6 jumbogram, which loopback will not carry.
+    #[test]
+    fn a_datagram_that_fills_the_buffer_is_reported_as_truncated() {
+        let from: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        let buf = vec![0u8; RECV_BUFFER];
+        assert!(datagram_from(&buf, RECV_BUFFER, from).truncated);
+        // The largest datagram IPv4 can actually deliver is *not* truncated.
+        let whole = datagram_from(&buf, MAX_DATAGRAM, from);
+        assert!(!whole.truncated);
+        assert_eq!(whole.data.len(), MAX_DATAGRAM);
+    }
+
+    /// The pool hands a buffer back after each receive and keeps a bounded
+    /// number of them, so a burst of concurrent receives cannot leave the socket
+    /// holding megabytes it will never need again.
+    #[test]
+    fn the_buffer_pool_reuses_and_stays_bounded() {
+        let pool = Arc::new(BufferPool::default());
+        {
+            let mut first = pool.take();
+            assert_eq!(first.buf().len(), RECV_BUFFER);
+        }
+        assert_eq!(pool.free.lock().unwrap().len(), 1, "returned on drop");
+        {
+            // More at once than the pool retains.
+            let _held: Vec<Scratch> = (0..POOL_LIMIT + 3).map(|_| pool.take()).collect();
+        }
+        assert_eq!(
+            pool.free.lock().unwrap().len(),
+            POOL_LIMIT,
+            "the surplus is dropped rather than pooled"
+        );
+    }
+
+    /// A batch is one call and many datagrams — each still whole, each still
+    /// its own message on the wire.
+    #[tokio::test]
+    async fn send_many_and_receive_many_move_a_batch() {
+        let net = SystemNet::new();
+        let (server, port) = udp(&net).await;
+        let (client, _) = udp(&net).await;
+        let to = || Some(("127.0.0.1".to_string(), port));
+
+        let sent = net
+            .send_many(
+                client,
+                vec![
+                    (b"one".to_vec(), to()),
+                    (b"two".to_vec(), to()),
+                    (b"three".to_vec(), to()),
+                ],
+            )
+            .await
+            .expect("send the batch");
+        assert_eq!(sent, 3);
+
+        // The first receive waits; the rest are taken without waiting, so one
+        // call can return all three.
+        let mut bodies = Vec::new();
+        while bodies.len() < 3 {
+            let batch = net
+                .receive_many(server, 16)
+                .await
+                .expect("receive")
+                .expect("a batch");
+            assert!(!batch.is_empty(), "a batch is never empty");
+            bodies.extend(batch.into_iter().map(|d| d.data));
+        }
+        assert_eq!(
+            bodies,
+            vec![b"one".to_vec(), b"two".to_vec(), b"three".to_vec()]
+        );
+
+        net.close_datagram(server).await.unwrap();
+        net.close_datagram(client).await.unwrap();
+    }
+
+    /// `max` is honoured, so a caller can bound how much one crossing hands
+    /// back — the rest stays in the kernel for the next call.
+    #[tokio::test]
+    async fn receive_many_stops_at_max() {
+        let net = SystemNet::new();
+        let (server, port) = udp(&net).await;
+        let (client, _) = udp(&net).await;
+        for _ in 0..4 {
+            net.send_to(client, b"x".to_vec(), Some(("127.0.0.1".to_string(), port)))
+                .await
+                .expect("send");
+        }
+        let batch = net.receive_many(server, 2).await.unwrap().expect("a batch");
+        assert!(batch.len() <= 2, "got {} datagrams", batch.len());
+        net.close_datagram(server).await.unwrap();
+        net.close_datagram(client).await.unwrap();
+    }
+
+    /// A batch that fails part-way says how much of it left — "none of them"
+    /// and "the first two of three" call for different recovery.
+    #[tokio::test]
+    async fn a_refused_destination_reports_how_much_of_the_batch_went() {
+        let net =
+            SystemNet::new().with_allowlist(HostAllowlist::parse(["127.0.0.1:9999"]).unwrap());
+        let (id, _) = udp(&net).await;
+        let allowed = || Some(("127.0.0.1".to_string(), 9999));
+        let Err(err) = net
+            .send_many(
+                id,
+                vec![
+                    (b"a".to_vec(), allowed()),
+                    (b"b".to_vec(), allowed()),
+                    (b"c".to_vec(), Some(("127.0.0.1".to_string(), 53))),
+                ],
+            )
+            .await
+        else {
+            panic!("the third destination is outside the list");
+        };
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+        assert!(err.to_string().contains("after 2 of the batch"), "{err}");
+        net.close_datagram(id).await.unwrap();
+    }
+
+    /// Post-bind options reach the socket, and the ones that are IPv4-only are
+    /// refused on a v6 socket rather than silently setting nothing.
+    #[tokio::test]
+    async fn options_can_be_set_after_the_bind() {
+        let net = SystemNet::new();
+        let (id, _) = udp(&net).await;
+        for option in [
+            DatagramOption::Ttl(7),
+            DatagramOption::MulticastTtl(3),
+            DatagramOption::Broadcast(true),
+            DatagramOption::MulticastLoopback(false),
+            DatagramOption::MulticastInterface("127.0.0.1".to_string()),
+        ] {
+            net.set_datagram_option(id, option)
+                .await
+                .expect("the option applies");
+        }
+        net.close_datagram(id).await.unwrap();
+
+        let bound = net
+            .bind_datagram("::1".to_string(), 0, DatagramOptions::default())
+            .await;
+        let Ok((v6, _)) = bound else { return }; // no IPv6 on this host
+        let refused = net
+            .set_datagram_option(v6, DatagramOption::Broadcast(true))
+            .await;
+        assert!(refused.is_err(), "IPv6 has no broadcast");
+        // …while the v6 spelling of a shared option still applies.
+        net.set_datagram_option(v6, DatagramOption::MulticastLoopback(false))
+            .await
+            .expect("the v6 option applies");
+        net.close_datagram(v6).await.unwrap();
+    }
+
+    /// Source-specific multicast is a different membership, not a filter on the
+    /// ordinary one — so it is joined and left with the source named both times.
+    #[tokio::test]
+    async fn a_source_specific_membership_is_joined_and_left() {
+        let net = SystemNet::new();
+        let (id, _) = udp(&net).await;
+        let ssm = |source: &str| MulticastMembership {
+            group: "239.255.42.97".to_string(),
+            interface: "127.0.0.1".to_string(),
+            source: Some(source.to_string()),
+        };
+        // A host with no multicast-capable loopback cannot run this.
+        if net
+            .set_multicast_membership(id, ssm("127.0.0.1"), true)
+            .await
+            .is_err()
+        {
+            net.close_datagram(id).await.unwrap();
+            return;
+        }
+        net.set_multicast_membership(id, ssm("127.0.0.1"), false)
+            .await
+            .expect("leave the same membership");
+
+        // A malformed source is refused before any syscall.
+        let Err(err) = net
+            .set_multicast_membership(id, ssm("not-an-address"), true)
+            .await
+        else {
+            panic!("a source is an address");
+        };
+        assert!(err.to_string().contains("source"), "{err}");
+
+        // IPv6 has no source-specific membership here, and says so.
+        let v6 = MulticastMembership {
+            group: "ff02::fb".to_string(),
+            interface: String::new(),
+            source: Some("::1".to_string()),
+        };
+        let Err(err) = net.set_multicast_membership(id, v6, true).await else {
+            panic!("v6 SSM is not supported here");
+        };
+        assert!(err.to_string().contains("IPv4-only"), "{err}");
         net.close_datagram(id).await.unwrap();
     }
 

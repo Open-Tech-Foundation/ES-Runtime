@@ -1256,34 +1256,79 @@ fn runtime_net_udp_connect_and_validation() {
 
 #[test]
 fn runtime_net_udp_multicast_and_socket_options() {
-    // The options that only exist on a datagram socket: reuseAddress (two
-    // sockets on one port), broadcast, the two TTLs, and a multicast group
-    // joined and left on the loopback interface. An administratively scoped
-    // group (RFC 2365), so nothing else on the machine is a member.
-    let script = "import { bind } from 'runtime:net';\
+    // The options that only exist on a datagram socket: two sockets sharing one
+    // port, broadcast, the two TTLs, and a multicast group joined and left on
+    // the loopback interface. An administratively scoped group (RFC 2365), so
+    // nothing else on the machine is a member.
+    //
+    // **Two platform facts are compiled into the script rather than assumed.**
+    // Sharing a port needs `SO_REUSEADDR` on Linux and Windows but
+    // `SO_REUSEPORT` on the BSDs (macOS included), where `SO_REUSEADDR` covers
+    // multicast addresses only — so `reusePort` is asked for exactly where it
+    // exists. And loopback multicast delivery is a property of the host's
+    // network stack: guaranteed on Linux, not on a macOS or Windows CI runner
+    // with no multicast-capable interface. The delivery assertion is therefore
+    // strict on Linux and allows a clean "skipped" elsewhere, which is a real
+    // result rather than a silently weakened one.
+    let script = format!(
+        "import {{ bind }} from 'runtime:net';\
         const enc = new TextEncoder(); const dec = new TextDecoder();\
-        const opts = { hostname: '0.0.0.0', reuseAddress: true, broadcast: true,\
-          ttl: 4, multicastTtl: 1, multicastLoopback: true };\
-        const first = bind({ ...opts, port: 0 });\
-        const { port } = await first.addr;\
-        const second = bind({ ...opts, port });\
+        const opts = {{ hostname: '0.0.0.0', reuseAddress: true, reusePort: {reuse_port},\
+          broadcast: true, ttl: 4, multicastTtl: 1, multicastLoopback: true }};\
+        const first = bind({{ ...opts, port: 0 }});\
+        const {{ port }} = await first.addr;\
+        const second = bind({{ ...opts, port }});\
         await second.addr;\
-        await first.joinMulticast('239.255.42.98', { interface: '127.0.0.1' });\
-        await second.joinMulticast('239.255.42.98', { interface: '127.0.0.1' });\
-        const sender = bind({ hostname: '127.0.0.1', port: 0 });\
-        await sender.send(enc.encode('announce'), `239.255.42.98:${port}`);\
-        const heard = [dec.decode((await first.receive()).data), dec.decode((await second.receive()).data)];\
-        await first.leaveMulticast('239.255.42.98', { interface: '127.0.0.1' });\
-        await second.leaveMulticast('239.255.42.98', { interface: '127.0.0.1' });\
+        const group = '239.255.42.98';\
+        for (const s of [first, second]) await s.joinMulticast(group, {{ interface: '127.0.0.1' }});\
+        const sender = bind({{ hostname: '127.0.0.1', port: 0 }});\
+        await sender.send(enc.encode('announce'), `${{group}}:${{port}}`);\
+        const heard = await Promise.race([\
+          Promise.all([first.receive(), second.receive()])\
+            .then((ds) => ds.map((d) => dec.decode(d.data)).join('|')),\
+          new Promise((r) => setTimeout(() => r('skipped'), 3000)),\
+        ]);\
+        for (const s of [first, second]) await s.leaveMulticast(group, {{ interface: '127.0.0.1' }});\
         await first.close(); await second.close(); await sender.close();\
-        console.log('MCAST:' + (port > 0) + ':' + heard.join('|'));";
+        console.log('MCAST:' + (port > 0) + ':' + heard);",
+        reuse_port = cfg!(unix)
+    );
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let s = stdout(&out);
+    // The bind half is asserted everywhere: two sockets on one port is the
+    // option doing its job, and it works on all three platforms.
+    assert!(s.contains("MCAST:true:"), "{s}");
+    if cfg!(target_os = "linux") {
+        assert!(s.contains("MCAST:true:announce|announce"), "{s}");
+    } else {
+        assert!(
+            s.contains("MCAST:true:announce|announce") || s.contains("MCAST:true:skipped"),
+            "{s}"
+        );
+    }
+}
+
+#[test]
+fn runtime_net_udp_batches_options_and_unref() {
+    // The surface added after the first UDP pass: `sendMany`/`receiveMany` (one
+    // crossing for many datagrams), the post-bind setters, `truncated` on a
+    // received datagram, and `unref()`.
+    //
+    // The unref half is the one worth spelling out: a receive is parked and
+    // never answered, so if the socket still counted as a reason to live this
+    // process would hang and the test would time out rather than fail.
+    let script = "import { bind } from 'runtime:net';        const enc = new TextEncoder(); const dec = new TextDecoder();        const server = bind({ hostname: '127.0.0.1', port: 0 });        const { port } = await server.addr;        const client = bind({ hostname: '127.0.0.1', port: 0 });        const sent = await client.sendMany(['a', 'b', 'c'], `127.0.0.1:${port}`);        const batch = await server.receiveMany();        const bodies = batch.map((d) => dec.decode(d.data)).join('');        await client.sendMany([          { data: enc.encode('x'), address: `127.0.0.1:${port}` },          { data: enc.encode('y'), address: `127.0.0.1:${port}` },        ]);        const capped = await server.receiveMany(1);        await server.setTtl(9); await server.setMulticastTtl(2);        await server.setBroadcast(true); await server.setMulticastLoopback(false);        await server.setMulticastInterface('127.0.0.1');        const tag = (e) => e.constructor.name + (e.message.startsWith('SocketError: ') ? '+SE' : '');        let bad = 'none';        try { await server.setTtl(999); } catch (e) { bad = tag(e); }        let notArray = 'none';        try { await client.sendMany('nope'); } catch (e) { notArray = tag(e); }        server.receive();        server.unref();        await client.close();        console.log('BATCH:' + sent + ':' + bodies + ':' + batch[0].truncated          + ':' + capped.length + ':' + bad + ':' + notArray);";
     let out = esrun()
         .arg(format!("-e={}", script))
         .output()
         .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
-        stdout(&out).contains("MCAST:true:announce|announce"),
+        stdout(&out).contains("BATCH:3:abc:false:1:TypeError+SE:TypeError+SE"),
         "{}",
         stdout(&out)
     );

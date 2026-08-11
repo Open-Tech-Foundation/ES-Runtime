@@ -143,10 +143,16 @@ await mdns.joinMulticast("224.0.0.251", { interface: "192.168.1.10" });
 | Member | Type | Description |
 | --- | --- | --- |
 | `send(data, address?)` | `Promise<number>` | Send one datagram; resolves with the bytes sent. `address` is `"host:port"` or `{ hostname, port }`, required unless connected. Net, checked per destination. |
-| `receive()` | `Promise<Datagram \| null>` | The next `{ data, address, port }`, or `null` once closed. One call is one message — a zero-length datagram is a message, not an EOF. |
+| `sendMany(messages, address?)` | `Promise<number>` | Send a batch in one crossing; resolves with how many left. Entries are payloads or `{ data, address }`. Saves the crossing, not the syscalls. |
+| `receive()` | `Promise<Datagram \| null>` | The next `{ data, address, port, truncated }`, or `null` once closed. One call is one message — a zero-length datagram is a message, not an EOF. |
+| `receiveMany(max?)` | `Promise<Datagram[] \| null>` | A datagram plus up to `max - 1` more already queued (default 32). Never waits to fill a batch. |
 | `connect(address)` | `Promise<SocketInfo>` | Fix the peer: sends need no address, datagrams from anyone else are discarded. No packet is sent, so it succeeds against a host that is not listening. |
-| `joinMulticast(group, options?)` | `Promise<void>` | Join a group. `options.interface` is an IPv4 address for a v4 group, an interface index for a v6 one. |
-| `leaveMulticast(group, options?)` | `Promise<void>` | Leave a group. |
+| `joinMulticast(group, options?)` | `Promise<void>` | Join a group. `options.interface` is an IPv4 address for a v4 group, an interface index for a v6 one; `options.source` makes it source-specific (RFC 4607, IPv4) so the network filters everyone else out. |
+| `leaveMulticast(group, options?)` | `Promise<void>` | Leave a group — with the same `source`, if it had one. |
+| `setTtl(n)` / `setMulticastTtl(n)` | `Promise<void>` | Hop limits, after the bind. |
+| `setBroadcast(on)` / `setMulticastLoopback(on)` | `Promise<void>` | The two toggles, after the bind. |
+| `setMulticastInterface(iface)` | `Promise<void>` | Which local interface carries outgoing multicast. No bind-time twin. |
+| `ref()` / `unref()` | `this` | Whether a pending `receive()` keeps the process alive. |
 | `addr` | `Promise<{ hostname, port }>` | The bound address. |
 | `close()` | `Promise<void>` | Close; a parked `receive()` resolves to `null`. |
 | `closed` | `Promise<void>` | Resolves once closed. |
@@ -162,6 +168,10 @@ await mdns.joinMulticast("224.0.0.251", { interface: "192.168.1.10" });
 | `ttl` | `number` | Hop limit for unicast datagrams, 0–255. |
 | `multicastTtl` | `number` | Hop limit for multicast datagrams, 0–255. The OS default is `1`: the local segment. |
 | `multicastLoopback` | `boolean` | Whether multicast sends come back to this host. Off means a sender does not hear its own announcements. |
+| `ipv6Only` | `boolean` | For a v6 bind: IPv6 only, or also IPv4 through v4-mapped addresses. Omitted leaves the platform default, which differs between platforms. |
+
+`reusePort`, `reuseAddress` and `ipv6Only` are bind-time only — they must be set
+between `socket()` and `bind()`. The rest have setters.
 
 ## Errors
 

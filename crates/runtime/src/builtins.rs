@@ -27,7 +27,7 @@ pub(crate) fn install(
     capabilities: Rc<Cell<CapabilitySet>>,
     module_loader: crate::module_ops::LoaderSlot,
     entry_specifier: crate::EntrySlot,
-    worker_refs: Rc<Cell<u32>>,
+    handle_refs: Rc<Cell<u32>>,
 ) -> Result<()> {
     install_console(engine, providers.console())?;
     install_performance(engine, providers.clock())?;
@@ -71,7 +71,7 @@ pub(crate) fn install(
     // await); same FileRead / FileWrite gates as the async ops above.
     crate::sync_fs_ops::install(engine, providers.sync_file_system())?;
     // runtime:net ops: connect (Net), listen (NetListen); read/write/accept by id.
-    crate::net_ops::install(engine, providers.net_provider())?;
+    crate::net_ops::install(engine, providers.net_provider(), handle_refs.clone())?;
     // The in-flight requests this agent has been handed (D50). Built here
     // rather than inside `http_ops` because `ws_ops` needs the same registry:
     // upgrading a request to a WebSocket is a use of that request, so it is
@@ -104,7 +104,7 @@ pub(crate) fn install(
         capabilities,
         module_loader,
         entry_specifier,
-        worker_refs,
+        handle_refs,
     )?;
     // BroadcastChannel's cross-agent delivery. Ungated; absent hub means the
     // prelude keeps agent-local delivery.
