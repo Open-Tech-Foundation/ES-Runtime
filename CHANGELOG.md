@@ -73,6 +73,48 @@ namespace) is unstable and may change between minor releases until the API freez
   exactly that, because the moment it passes, TypeScript has leaked into the
   production binary. `oxc` is a dependency of `dev-cli` alone.
 
+- **`esdev build`** (DECISIONS D59) — a server entry and its dependencies, as
+  one ES module, via `rolldown`.
+
+  ```sh
+  esdev build server.mjs                 # → dist/server.js
+  esdev build src/app.ts --out=dist/app.js --minify
+  ```
+
+  **This is what makes the npm ecosystem reachable without weakening `esrun`.**
+  The runtime loads ES modules only (D22) and much of the registry — React
+  among it — still ships CommonJS. The conversion happens here, at build time,
+  on the developer's machine; what `esrun` receives is ordinary ESM and the
+  non-goal holds completely.
+
+  **And it shortens the production command line.** An unbundled program needs
+  `--allow-imports`, because the loader must walk `node_modules` at runtime. A
+  bundle has no imports left to resolve:
+
+  ```sh
+  esrun --deny-all --allow-imports --allow-listen=8080 app.js    # unbundled
+  esrun --deny-all --allow-listen=8080 dist/app.js               # bundled
+  ```
+
+  Four settings are why this is a command rather than a note telling you which
+  flags to pass, and each fails *silently* when wrong: `runtime:*` stays
+  **external** (it is served by the runtime and has no file behind it —
+  inlining it yields a bundle that dies on its first import); output is
+  **ESM**; `process.env.NODE_ENV` is **defined** to `"production"` (packages
+  branch on it before doing anything, and this runtime has no `process`
+  global); and the **`worker` condition** is asserted, which is how a package
+  hands over its Web-API build instead of its `node:` one.
+
+  `--conditions=<list>` adds to the defaults rather than replacing them, and
+  `--define=<name>=<value>` overrides or extends the replacements. The runtime's
+  own condition set stays standards-only (D40) — a condition changes which code
+  runs, so it is chosen in a build you ran on purpose, not by a server resolving
+  imports under load.
+
+  Verified end-to-end: React 19 streaming SSR behind Hono, from CommonJS npm
+  packages, bundled and then served by `esrun --deny-all --allow-listen` — one
+  capability, and none of the four settings passed by hand.
+
 - **UDP in `runtime:net`** (DECISIONS D58) — `bind()` returns a
   `DatagramSocket`. Messages, not a byte stream: a datagram arrives whole and
   carries its own sender, which is what a stream would erase.
@@ -186,6 +228,32 @@ namespace) is unstable and may change between minor releases until the API freez
   in what it publishes — 15 files, verified by packing it — but its
   `repository.directory` now points at the new path, and the two sibling
   packages that depend on it by `file:` path were repointed with it.
+
+### Fixed
+
+- **`YAML.build` and `TOML.build` no longer route through `serde_json::Value`.**
+  Both converted the guest value to a `serde_json::Value` and handed that to the
+  target format's serializer — which is only correct while `serde_json` has no
+  private representation of its own. Under its `arbitrary_precision` feature it
+  does: every number serializes as a one-key map named
+  `$serde_json::private::Number`, so `YAML.build({ a: 1 })` produced
+  `a:\n  $serde_json::private::Number: '1'`.
+
+  Nothing in the runtime asks for that feature, and that is the point — Cargo
+  unifies features across everything built together, so **another crate anywhere
+  in the workspace enabling it silently changed what the runtime emitted**. It
+  was found exactly that way, when `esdev`'s bundler (which depends on it) was
+  added and the conformance suite failed only under `cargo test --workspace`.
+
+  Both builders now construct `serde_yaml::Value` and `toml::Value` directly, so
+  there is no third format's private representation to leak. This is the same
+  lesson the file already recorded twice — `toml_to_value` avoids the `toml`
+  crate's `$__toml_private_datetime` sentinel, and `msgpack_build` encodes
+  straight from the value tree so a `Uint8Array` is not flattened to `null` —
+  now applied to the last two paths that did not follow it.
+
+  `TOML.build({ a: null })` still throws, and now says *why* ("TOML has no
+  null") instead of relying on the JSON serializer to refuse it by accident.
 
 ## [0.23.0] - 2026-08-11
 

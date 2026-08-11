@@ -22,6 +22,9 @@ tokio = { workspace = true, features = ["rt", "macros"] }
 # TypeScript/JSX type-stripping. Lives here and nowhere else: `esrun` runs
 # JavaScript, and what turns a `.ts` into that runs on the developer's machine.
 oxc.workspace = true
+# `esdev build`. Same confinement as oxc: the production binary runs bundles, it
+# does not make them.
+rolldown.workspace = true
 
 [lints]
 workspace = true

@@ -279,6 +279,19 @@ es-runtime-cli-common = { path = "crates/cli-common", version = "0.23.0" }
 # the first exception to D7's pinned-crates.io rule. `oxlint` and `oxfmt` are
 # npm binaries that already work.
 oxc = { version = "0.144.0", features = ["transformer", "semantic", "codegen"] }
+# The bundler behind `esdev build` (DECISIONS D59), and confined to `dev-cli`
+# for the same reason `oxc` is: bundling happens on the developer's machine, and
+# `esrun` runs the artifact rather than producing it.
+#
+# Rolldown rather than a hand-rolled linker over `oxc`: CommonJS-to-ESM
+# conversion, `exports`-condition resolution and tree-shaking are each a project
+# in their own right, and this is the same bundler Vite 8 uses — so the output
+# shape is one the ecosystem already targets. It is published to crates.io under
+# MIT and sits on the same `oxc` generation already in the tree.
+#
+# The Rust API is the less-travelled path (rolldown's supported surface is its
+# napi binding), so it is pinned exactly rather than floated.
+rolldown = "=1.2.3"
 # Debug info dominates `target/` disk on a V8-sized dependency graph (tens of
 # GB). Keep it lean: our own crates keep line tables so panic backtraces still
 # resolve to file:line; dependencies — the bulk, rarely stepped through — carry

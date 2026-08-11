@@ -28,8 +28,19 @@ use es_runtime_cli_common::diagnostics::print_error;
 use es_runtime_cli_common::permissions::Permissions;
 use es_runtime_cli_common::{Config, Source};
 
+mod build;
 mod transform;
+use build::BuildConfig;
 use transform::TypeStripper;
+
+/// What the command line asked for.
+enum Command {
+    /// Run a module. `Config` is large, so it is boxed rather than making the
+    /// build variant carry its weight.
+    Run(Box<Config>),
+    /// Bundle a module and its dependencies.
+    Build(BuildConfig),
+}
 
 const USAGE: &str = "\
 esdev — the local development binary for the ES-Runtime
@@ -41,6 +52,8 @@ argument: `--timeout=500`, not `--timeout 500`.
 USAGE:
     esdev <file>                Run a module file — .js, .mjs, or .ts/.tsx/.jsx
     esdev -e=<code>             Run an inline module snippet (JavaScript)
+    esdev build <entry>         Bundle an entry into one deployable ES module
+                                (`esdev build --help` for its options)
     esdev -h, --help            Show this help
     esdev -v, --version         Show the version
 
@@ -77,12 +90,51 @@ esdev is for your machine. It is not a deployment target: ship the artifact and
 run it under esrun, which has no development surface to attack.
 ";
 
+const BUILD_USAGE: &str = "\
+esdev build — bundle a server entry and its dependencies into one ES module
+
+USAGE:
+    esdev build <entry> [options]
+
+OPTIONS:
+    --out=<file>                Where to write it (default: dist/<entry>.js)
+    --minify                    Minify the output
+    --conditions=<list>         Extra `exports` conditions, comma-separated.
+                                These add to the defaults (import, default,
+                                worker)
+    --define=<name>=<value>     Replace <name> with <value> at build time.
+                                process.env.NODE_ENV defaults to \"production\"
+    -h, --help                  Show this help
+
+The bundle is ES modules, `runtime:*` imports are left for the runtime to
+serve, and CommonJS dependencies are converted on the way in — which is how a
+package that ships CJS becomes runnable without esrun learning `require`.
+
+It also shortens what production must be granted. An unbundled program needs
+--allow-imports so the loader can walk node_modules; a bundle has no imports
+left to resolve:
+
+    esrun --deny-all --allow-imports --allow-listen=8080 app.js   # unbundled
+    esrun --deny-all --allow-listen=8080 dist/app.js              # bundled
+";
+
 /// Parses `esdev`'s command line.
 ///
 /// The shared flags go to `cli-common` — the same code `esrun` parses them with,
 /// so the two cannot drift on what `--allow-net=…` or `--max-heap=…` means.
 /// Matched below is what only `esdev` has.
-fn parse_args() -> Result<Config, String> {
+fn parse_args() -> Result<Command, String> {
+    // `build` is a subcommand, not a flag, and everything after it is its own.
+    // Requiring it first keeps that unambiguous: there is no reading to be done
+    // about whether `--deny-all` before it was meant to shape a bundle (it
+    // cannot — a bundle does not run) or the run that is not happening.
+    let mut argv = std::env::args().skip(1);
+    if let Some(first) = argv.next()
+        && first == "build"
+    {
+        return parse_build(argv).map(Command::Build);
+    }
+
     let mut options = RunOptions::default();
     let mut permissions = Permissions::default();
     // The flag the previous argument was, so a bare word following it can be
@@ -113,14 +165,14 @@ fn parse_args() -> Result<Config, String> {
                 let code = require_value(flag, value)?.to_string();
                 let rest: Vec<String> = args.collect();
                 reject_esdev_flags_after_source(&rest, "the -e code")?;
-                return Ok(Config {
+                return Ok(Command::Run(Box::new(Config {
                     source: Source::Inline(code),
                     args: rest,
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     options,
                     transform: Some(std::sync::Arc::new(TypeStripper)),
-                });
+                })));
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
@@ -142,14 +194,14 @@ fn parse_args() -> Result<Config, String> {
                 }
                 let rest: Vec<String> = args.collect();
                 reject_esdev_flags_after_source(&rest, path)?;
-                return Ok(Config {
+                return Ok(Command::Run(Box::new(Config {
                     source: Source::File(path.to_string()),
                     args: rest,
                     capabilities: permissions.resolve()?,
                     scopes: permissions.scopes()?,
                     options,
                     transform: Some(std::sync::Arc::new(TypeStripper)),
-                });
+                })));
             }
         }
     }
@@ -204,6 +256,74 @@ fn reject_esdev_flags_after_source(args: &[String], source: &str) -> Result<(), 
     Ok(())
 }
 
+/// Parses `esdev build <entry> [options]`.
+fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String> {
+    let mut entry: Option<String> = None;
+    let mut out = None;
+    let mut minify = false;
+    let mut conditions = Vec::new();
+    let mut defines = Vec::new();
+    for arg in args {
+        let (flag, value) = split_flag_value(&arg);
+        match flag {
+            "-h" | "--help" => {
+                reject_value(flag, value)?;
+                println!("{BUILD_USAGE}");
+                std::process::exit(0);
+            }
+            "--out" => out = Some(require_value(flag, value)?.to_string()),
+            "--minify" => {
+                reject_value(flag, value)?;
+                minify = true;
+            }
+            "--conditions" => {
+                for name in require_value(flag, value)?.split(',') {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err(format!(
+                            "{flag}={} has an empty entry — a stray comma is a typo, and a \
+                             condition decides which code a package hands over.",
+                            value.unwrap_or_default()
+                        ));
+                    }
+                    conditions.push(name.to_string());
+                }
+            }
+            "--define" => {
+                let pair = require_value(flag, value)?;
+                let (name, replacement) = pair.split_once('=').ok_or_else(|| {
+                    format!(
+                        "{flag}={pair} is not a replacement — write \
+                         --define=<name>=<value>, e.g. \
+                         --define=process.env.NODE_ENV=\\\"development\\\"."
+                    )
+                })?;
+                defines.push((name.to_string(), replacement.to_string()));
+            }
+            flag if flag.starts_with('-') && flag.len() > 1 => {
+                return Err(format!("unknown option: {flag}\n\n{BUILD_USAGE}"));
+            }
+            path => {
+                if entry.is_some() {
+                    return Err(format!(
+                        "esdev build takes one entry; got a second ({path}).\n\n\
+                         A bundle has one root — that is what makes it one file."
+                    ));
+                }
+                entry = Some(path.to_string());
+            }
+        }
+    }
+    let entry = entry.ok_or_else(|| format!("missing entry argument\n\n{BUILD_USAGE}"))?;
+    Ok(BuildConfig {
+        entry,
+        out,
+        minify,
+        conditions,
+        defines,
+    })
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     // Before anything that could log. Installing a subscriber is a
@@ -211,7 +331,14 @@ async fn main() -> ExitCode {
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.
     es_runtime_common::telemetry::init_tracing();
     let result = match parse_args() {
-        Ok(config) => es_runtime_cli_common::run("esdev", config).await,
+        Ok(Command::Run(config)) => es_runtime_cli_common::run("esdev", *config).await,
+        Ok(Command::Build(config)) => match build::build(config).await {
+            Ok(written) => {
+                println!("bundled → {written}");
+                Ok(())
+            }
+            Err(err) => Err(err),
+        },
         Err(err) => Err(err),
     };
     match result {

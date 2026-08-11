@@ -108,6 +108,91 @@ fn value_to_json(v: Value) -> serde_json::Value {
     }
 }
 
+/// Whether an engine number should be written as an integer.
+///
+/// Engine numbers are always `f64`, so `1` and `1.0` are the same value. Every
+/// builder here emits the integer form for an integral one, so a round trip does
+/// not turn `1` into `1.0` (YAML/TOML) or spend nine bytes on it (MessagePack).
+fn as_integer(n: f64) -> Option<i64> {
+    (n.fract() == 0.0 && n >= i64::MIN as f64 && n <= i64::MAX as f64).then_some(n as i64)
+}
+
+/// Converts an engine `Value` into a `serde_yaml::Value`.
+///
+/// Built directly rather than transcoded through `serde_json::Value`, for the
+/// same reason [`toml_to_value`] is: a foreign `Value` type is free to use
+/// private sentinels in its `Serialize` implementation, and those land in the
+/// user's document. `serde_json` does exactly that under its
+/// `arbitrary_precision` feature — every number becomes a one-key map named
+/// `$serde_json::private::Number` — and a feature is not ours to control,
+/// because Cargo unifies it across everything in the build. Nothing in this
+/// crate asks for it; another crate in the same workspace enabling it silently
+/// changed what `YAML.build` produced. Going straight to the target type means
+/// there is no third format's private representation to leak.
+///
+/// Non-finite numbers become null, which is what the JSON path did.
+fn value_to_yaml(v: Value) -> serde_yaml::Value {
+    match v {
+        Value::Null => serde_yaml::Value::Null,
+        Value::Bool(b) => serde_yaml::Value::Bool(b),
+        Value::Number(n) => match as_integer(n) {
+            Some(i) => serde_yaml::Value::Number(i.into()),
+            None if n.is_finite() => serde_yaml::Value::Number(n.into()),
+            None => serde_yaml::Value::Null,
+        },
+        Value::String(s) => serde_yaml::Value::String(s),
+        Value::Array(arr) => {
+            serde_yaml::Value::Sequence(arr.into_iter().map(value_to_yaml).collect())
+        }
+        Value::Object(map) => {
+            let mut out = serde_yaml::Mapping::with_capacity(map.len());
+            for (k, v) in map {
+                out.insert(serde_yaml::Value::String(k), value_to_yaml(v));
+            }
+            serde_yaml::Value::Mapping(out)
+        }
+        _ => serde_yaml::Value::Null,
+    }
+}
+
+/// Converts an engine `Value` into a `toml::Value`, or reports what TOML cannot
+/// represent.
+///
+/// Same reasoning as [`value_to_yaml`] for going direct. The fallible signature
+/// is TOML's own: **there is no null**, so a null has to be refused rather than
+/// written as something else. Routing through `serde_json::Value` used to get
+/// that right by accident — the serializer rejected `Value::Null` — and this
+/// says it deliberately, with a message that names the problem.
+fn value_to_toml(v: Value) -> Result<toml::Value, OpError> {
+    match v {
+        Value::Bool(b) => Ok(toml::Value::Boolean(b)),
+        Value::Number(n) => match as_integer(n) {
+            Some(i) => Ok(toml::Value::Integer(i)),
+            None if n.is_finite() => Ok(toml::Value::Float(n)),
+            None => Err(OpError::type_error(
+                "TOML has no representation for NaN or Infinity",
+            )),
+        },
+        Value::String(s) => Ok(toml::Value::String(s)),
+        Value::Array(arr) => Ok(toml::Value::Array(
+            arr.into_iter()
+                .map(value_to_toml)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Value::Object(map) => {
+            let mut out = toml::map::Map::new();
+            for (k, v) in map {
+                out.insert(k, value_to_toml(v)?);
+            }
+            Ok(toml::Value::Table(out))
+        }
+        // TOML has no null, and nothing sensible to put in its place: dropping
+        // the key would silently change the document.
+        Value::Null => Err(OpError::type_error("TOML has no null")),
+        _ => Err(OpError::type_error("value cannot be represented in TOML")),
+    }
+}
+
 /// Converts a parsed `toml::Value` into an engine `Value`. TOML datetimes become
 /// their RFC3339 string form — building Values directly (rather than transcoding
 /// to JSON) avoids the `toml` crate leaking its `$__toml_private_datetime`
@@ -520,9 +605,9 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
     engine.register_op(OpDecl::sync("yaml_build", |mut args| {
         let val = args.drain(..).next().unwrap_or(Value::Null);
-        let json_val = value_to_json(val);
+        let yaml_val = value_to_yaml(val);
 
-        match serde_yaml::to_string(&json_val) {
+        match serde_yaml::to_string(&yaml_val) {
             Ok(yaml_str) => Ok(Value::String(yaml_str)),
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }
@@ -557,16 +642,16 @@ pub(crate) fn install(engine: &mut dyn Engine) -> crate::Result<()> {
 
     engine.register_op(OpDecl::sync("toml_build", |mut args| {
         let val = args.drain(..).next().unwrap_or(Value::Null);
-        let json_val = value_to_json(val);
+        let toml_val = value_to_toml(val)?;
 
         // TOML requires the root to be an object (table)
-        if !json_val.is_object() {
+        if !toml_val.is_table() {
             return Err(OpError::type_error(
                 "TOML build requires the root to be an object",
             ));
         }
 
-        match toml::to_string(&json_val) {
+        match toml::to_string(&toml_val) {
             Ok(toml_str) => Ok(Value::String(toml_str)),
             Err(e) => Err(OpError::type_error(format!("Build failed: {e}"))),
         }

@@ -11,7 +11,7 @@
 // A test reporting why it skipped is talking to whoever reads the run.
 #![allow(clippy::print_stderr)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn temp(name: &str) -> PathBuf {
@@ -401,4 +401,365 @@ fn a_javascript_file_keeps_its_own_line_numbers() {
     assert!(!out.status.success());
     // The throw is on line 5 of the file as written.
     assert!(stderr(&out).contains(":5:"), "{}", stderr(&out));
+}
+
+// ---------------------------------------------------------------------------
+// `esdev build` (DECISIONS D59)
+//
+// The property worth testing is not "a bundler bundles" — rolldown has its own
+// suite for that. It is the four settings that make this a command rather than
+// a note telling people which flags to pass, each of which fails *silently*
+// when wrong.
+// ---------------------------------------------------------------------------
+
+/// A directory of its own per test: `build` writes files, and two tests sharing
+/// `dist/` would race.
+fn build_dir(name: &str) -> PathBuf {
+    let dir = temp(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create build dir");
+    dir
+}
+
+fn write_in(dir: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = dir.join(name);
+    std::fs::write(&path, contents).expect("write file");
+    path
+}
+
+fn esdev_in(dir: &Path) -> Command {
+    let mut cmd = esdev();
+    cmd.current_dir(dir);
+    cmd
+}
+
+#[test]
+fn build_bundles_a_graph_into_one_file() {
+    let dir = build_dir("b_graph");
+    write_in(&dir, "dep.mjs", "export const answer = 42;\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { answer } from './dep.mjs';\nconsole.log(answer);\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Default output location, stated in the help.
+    let bundle = dir.join("dist/app.js");
+    assert!(bundle.exists(), "{}", stdout(&out));
+    let text = std::fs::read_to_string(&bundle).expect("read bundle");
+    assert!(!text.contains("./dep.mjs"), "the import survived:\n{text}");
+
+    // And it runs — under esrun, which is the only audience a bundle has.
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let ran = Command::new(esrun)
+        .arg(&bundle)
+        .output()
+        .expect("spawn esrun");
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran).trim(), "42");
+}
+
+/// The setting a hand-written bundler config gets wrong, and the failure is not
+/// at build time — it is an artifact that dies on its first import.
+#[test]
+fn build_leaves_runtime_modules_for_the_runtime_to_serve() {
+    let dir = build_dir("b_external");
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { join } from 'runtime:path';\nconsole.log(join('a', 'b'));\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let text = std::fs::read_to_string(dir.join("dist/app.js")).expect("read bundle");
+    assert!(
+        text.contains("runtime:path"),
+        "runtime:path was inlined instead of left external:\n{text}"
+    );
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let ran = Command::new(esrun)
+        .arg(dir.join("dist/app.js"))
+        .output()
+        .expect("spawn esrun");
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert!(stdout(&ran).contains("a"), "{}", stdout(&ran));
+}
+
+/// Packages branch on `process.env.NODE_ENV` before doing anything, and there is
+/// no `process` global on this runtime — so an undefined one is a crash, not a
+/// missing optimisation.
+#[test]
+fn build_defines_node_env_and_an_explicit_define_wins() {
+    let dir = build_dir("b_define");
+    write_in(
+        &dir,
+        "app.mjs",
+        "console.log('env:', process.env.NODE_ENV);\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = std::fs::read_to_string(dir.join("dist/app.js")).expect("read bundle");
+    assert!(text.contains("production"), "{text}");
+    assert!(!text.contains("process.env"), "process survived:\n{text}");
+
+    // An explicit --define overrides the default rather than colliding with it.
+    let out = esdev_in(&dir)
+        .args([
+            "build",
+            "app.mjs",
+            "--out=dist/dev.js",
+            "--define=process.env.NODE_ENV=\"development\"",
+        ])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = std::fs::read_to_string(dir.join("dist/dev.js")).expect("read bundle");
+    assert!(text.contains("development"), "{text}");
+}
+
+/// The condition that decides whether a package hands over its Web-API build or
+/// its `node:` one. Getting it wrong builds cleanly and fails at runtime.
+#[test]
+fn build_asserts_the_worker_condition() {
+    let dir = build_dir("b_conditions");
+    std::fs::create_dir_all(dir.join("node_modules/two-faced")).expect("mkdir");
+    write_in(
+        &dir.join("node_modules/two-faced"),
+        "package.json",
+        r#"{"name":"two-faced","version":"1.0.0","type":"module",
+            "exports":{".":{"worker":"./worker.js","default":"./default.js"}}}"#,
+    );
+    write_in(
+        &dir.join("node_modules/two-faced"),
+        "worker.js",
+        "export const which = 'worker';\n",
+    );
+    write_in(
+        &dir.join("node_modules/two-faced"),
+        "default.js",
+        "export const which = 'default';\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { which } from 'two-faced';\nconsole.log(which);\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = std::fs::read_to_string(dir.join("dist/app.js")).expect("read bundle");
+    assert!(
+        text.contains("worker"),
+        "the worker branch was not taken:\n{text}"
+    );
+}
+
+/// `--conditions` adds to the defaults rather than replacing them: a user asking
+/// for one more must not silently lose `worker`.
+#[test]
+fn extra_conditions_add_rather_than_replace() {
+    let dir = build_dir("b_extra_conditions");
+    std::fs::create_dir_all(dir.join("node_modules/three-faced")).expect("mkdir");
+    write_in(
+        &dir.join("node_modules/three-faced"),
+        "package.json",
+        r#"{"name":"three-faced","version":"1.0.0","type":"module",
+            "exports":{".":{"custom":"./custom.js","worker":"./worker.js","default":"./default.js"}}}"#,
+    );
+    for (file, value) in [
+        ("custom.js", "custom"),
+        ("worker.js", "worker"),
+        ("default.js", "default"),
+    ] {
+        write_in(
+            &dir.join("node_modules/three-faced"),
+            file,
+            &format!("export const which = '{value}';\n"),
+        );
+    }
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { which } from 'three-faced';\nconsole.log(which);\n",
+    );
+
+    // Asking for `custom` must not cost `worker`; the manifest's own key order
+    // decides between them (D40), and `custom` is first here.
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs", "--conditions=custom"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = std::fs::read_to_string(dir.join("dist/app.js")).expect("read bundle");
+    assert!(text.contains("custom"), "{text}");
+}
+
+#[test]
+fn a_commonjs_dependency_is_converted_rather_than_refused() {
+    let dir = build_dir("b_cjs");
+    std::fs::create_dir_all(dir.join("node_modules/old-school")).expect("mkdir");
+    write_in(
+        &dir.join("node_modules/old-school"),
+        "package.json",
+        r#"{"name":"old-school","version":"1.0.0","main":"index.js"}"#,
+    );
+    write_in(
+        &dir.join("node_modules/old-school"),
+        "index.js",
+        "module.exports = { greet: () => 'from cjs' };\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        "import pkg from 'old-school';\nconsole.log(pkg.greet());\n",
+    );
+
+    // esrun refuses this package unbundled — that is D22, and it stays true.
+    if let Some(esrun) = sibling_binary("esrun") {
+        let refused = Command::new(esrun)
+            .arg(dir.join("app.mjs"))
+            .output()
+            .expect("spawn esrun");
+        assert!(!refused.status.success());
+        assert!(
+            stderr(&refused).contains("CommonJS"),
+            "{}",
+            stderr(&refused)
+        );
+    }
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Bundled, it runs — the conversion happened here, not in the runtime.
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let ran = Command::new(esrun)
+        .arg(dir.join("dist/app.js"))
+        .output()
+        .expect("spawn esrun");
+    assert!(ran.status.success(), "{}", stderr(&ran));
+    assert_eq!(stdout(&ran).trim(), "from cjs");
+}
+
+/// The claim the help makes, asserted: a bundle needs no `imports` grant,
+/// because it has no imports left to resolve.
+#[test]
+fn a_bundle_runs_without_the_imports_capability() {
+    let dir = build_dir("b_caps");
+    write_in(&dir, "dep.mjs", "export const n = 7;\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { n } from './dep.mjs';\nconsole.log('n =', n);\n",
+    );
+
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    // Unbundled under --deny-all: the loader cannot run.
+    let unbundled = Command::new(&esrun)
+        .arg("--deny-all")
+        .arg(dir.join("app.mjs"))
+        .output()
+        .expect("spawn esrun");
+    assert!(!unbundled.status.success());
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // Bundled under the same --deny-all: nothing left to import.
+    let bundled = Command::new(&esrun)
+        .arg("--deny-all")
+        .arg(dir.join("dist/app.js"))
+        .output()
+        .expect("spawn esrun");
+    assert!(bundled.status.success(), "{}", stderr(&bundled));
+    assert_eq!(stdout(&bundled).trim(), "n = 7");
+}
+
+#[test]
+fn build_writes_where_out_says_and_minify_shrinks_it() {
+    let dir = build_dir("b_out");
+    write_in(
+        &dir,
+        "app.mjs",
+        "export function aLonglyNamedHelper(someArgument) {\n  return someArgument + 1;\n}\n\
+         console.log(aLonglyNamedHelper(1));\n",
+    );
+
+    let plain = esdev_in(&dir)
+        .args(["build", "app.mjs", "--out=out/plain.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    assert!(dir.join("out/plain.js").exists());
+
+    let small = esdev_in(&dir)
+        .args(["build", "app.mjs", "--out=out/small.js", "--minify"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(small.status.success(), "{}", stderr(&small));
+
+    let plain_len = std::fs::metadata(dir.join("out/plain.js")).unwrap().len();
+    let small_len = std::fs::metadata(dir.join("out/small.js")).unwrap().len();
+    assert!(small_len < plain_len, "{small_len} !< {plain_len}");
+}
+
+#[test]
+fn build_rejects_a_missing_entry_and_a_second_one() {
+    let dir = build_dir("b_args");
+    write_in(&dir, "app.mjs", "console.log(1);\n");
+
+    let none = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!none.status.success());
+    assert!(stderr(&none).contains("missing entry"), "{}", stderr(&none));
+
+    let two = esdev_in(&dir)
+        .args(["build", "app.mjs", "app.mjs"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!two.status.success());
+    assert!(stderr(&two).contains("one entry"), "{}", stderr(&two));
+
+    let absent = esdev_in(&dir)
+        .args(["build", "nope.mjs"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!absent.status.success());
+    assert!(
+        stderr(&absent).contains("cannot read"),
+        "{}",
+        stderr(&absent)
+    );
 }
