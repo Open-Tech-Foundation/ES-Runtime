@@ -134,30 +134,30 @@ Everything after <file> (or the -e code) belongs to the script, readable as
 /// `esrun types` (`esrun types > esrun.d.ts`) and also shipped in the release
 /// archive. This is a static `&str` baked into the binary — it is read only
 /// when `types` is invoked, so it adds nothing to startup or runtime cost
-/// (just a few KB of binary size). The canonical source is `types/` (published
+/// (just a few KB of binary size). The canonical source is `packages/types/` (published
 /// as `@opentf/esrun-types`); kept byte-identical.
 const TYPES: &str = concat!(
-    include_str!("../../../types/runtime-process.d.ts"),
+    include_str!("../../../packages/types/runtime-process.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-path.d.ts"),
+    include_str!("../../../packages/types/runtime-path.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-fs.d.ts"),
+    include_str!("../../../packages/types/runtime-fs.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-db.d.ts"),
+    include_str!("../../../packages/types/runtime-db.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-net.d.ts"),
+    include_str!("../../../packages/types/runtime-net.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-http.d.ts"),
+    include_str!("../../../packages/types/runtime-http.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-websocket.d.ts"),
+    include_str!("../../../packages/types/runtime-websocket.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-serialization.d.ts"),
+    include_str!("../../../packages/types/runtime-serialization.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-hashing.d.ts"),
+    include_str!("../../../packages/types/runtime-hashing.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-wasi.d.ts"),
+    include_str!("../../../packages/types/runtime-wasi.d.ts"),
     "\n",
-    include_str!("../../../types/runtime-system.d.ts"),
+    include_str!("../../../packages/types/runtime-system.d.ts"),
 );
 
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
@@ -507,7 +507,7 @@ mod tests {
     /// `esrun types` must ship definitions for *every* `runtime:` module.
     ///
     /// The bundle is a hand-written `concat!`, so adding a module's `.d.ts` to
-    /// `types/` does not add it here — and the symptom is silent: the module
+    /// `packages/types/` does not add it here — and the symptom is silent: the module
     /// simply has no types, in an editor, for whoever installed them. This walks
     /// the directory instead of trusting the list.
     /// Every declaration file must actually be published.
@@ -518,7 +518,7 @@ mod tests {
     /// and this asserts the glob still covers everything.
     #[test]
     fn every_types_file_is_publishable() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../types");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types");
         let manifest =
             std::fs::read_to_string(format!("{dir}/package.json")).expect("read manifest");
         let files: Vec<&str> = manifest
@@ -551,7 +551,7 @@ mod tests {
 
     #[test]
     fn every_types_file_is_bundled() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../types");
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types");
         let mut checked = 0;
         for entry in std::fs::read_dir(dir).expect("read types dir") {
             let path = entry.expect("dir entry").path();
@@ -583,7 +583,7 @@ mod tests {
     fn the_permission_union_matches_the_capabilities() {
         let source = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../types/runtime-process.d.ts"
+            "/../../packages/types/runtime-process.d.ts"
         ))
         .expect("read runtime-process.d.ts");
         let union = source
@@ -605,7 +605,7 @@ mod tests {
             .collect();
         assert_eq!(
             listed, expected,
-            "types/runtime-process.d.ts is out of date"
+            "packages/types/runtime-process.d.ts is out of date"
         );
     }
 
@@ -615,7 +615,7 @@ mod tests {
     fn worker_options_are_typed() {
         let source = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../types/globals.d.ts"
+            "/../../packages/types/globals.d.ts"
         ))
         .expect("read globals.d.ts");
         for member in [
@@ -627,7 +627,7 @@ mod tests {
         ] {
             assert!(
                 source.contains(member),
-                "types/globals.d.ts does not declare WorkerOptions {member}"
+                "packages/types/globals.d.ts does not declare WorkerOptions {member}"
             );
         }
         assert!(
@@ -640,7 +640,7 @@ mod tests {
     /// from it is invisible to anyone consuming the package.
     #[test]
     fn every_types_file_is_referenced_by_the_index() {
-        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../types"));
+        let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types"));
         let index = std::fs::read_to_string(dir.join("index.d.ts")).expect("read index.d.ts");
         for entry in std::fs::read_dir(dir).expect("read types dir") {
             let path = entry.expect("dir entry").path();
@@ -650,7 +650,7 @@ mod tests {
             }
             assert!(
                 index.contains(name),
-                "{name} is not referenced by types/index.d.ts"
+                "{name} is not referenced by packages/types/index.d.ts"
             );
         }
     }

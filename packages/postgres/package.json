@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@opentf/esrun-types": "file:../../types",
+    "@opentf/esrun-types": "file:../types",
     "typescript": "^7.0.2"
   },
   "keywords": ["esrun", "es-runtime", "opentf", "postgres", "postgresql", "database", "driver"],

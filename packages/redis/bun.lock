@@ -5,13 +5,13 @@
     "": {
       "name": "@opentf/esrun-redis",
       "devDependencies": {
-        "@opentf/esrun-types": "file:../../types",
+        "@opentf/esrun-types": "file:../types",
         "typescript": "^7.0.2",
       },
     },
   },
   "packages": {
-    "@opentf/esrun-types": ["@opentf/esrun-types@file:../../types", {}],
+    "@opentf/esrun-types": ["@opentf/esrun-types@file:../types", {}],
 
     "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
 

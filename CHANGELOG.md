@@ -145,6 +145,15 @@ namespace) is unstable and may change between minor releases until the API freez
   and a tolerated "skipped" where loopback multicast delivery is not something a
   CI runner has. The delivery assertion stays strict on Linux.
 
+### Changed
+
+- **`types/` moved to `packages/types/`**, alongside the other npm packages
+  (`@opentf/esrun-postgres`, `@opentf/esrun-redis`) rather than sitting on its
+  own at the repository root. `@opentf/esrun-types` is unchanged in content and
+  in what it publishes — 15 files, verified by packing it — but its
+  `repository.directory` now points at the new path, and the two sibling
+  packages that depend on it by `file:` path were repointed with it.
+
 ## [0.23.0] - 2026-08-11
 
 ### Added
