@@ -51,6 +51,22 @@ namespace) is unstable and may change between minor releases until the API freez
   For embedders: `NetProvider` gains six methods, all defaulted to a refusal, so
   an existing implementation compiles unchanged and simply has no UDP.
 
+  Documented in a [UDP guide](https://es-runtime.opentechf.org/docs/guides/udp)
+  — including a call-by-call mapping from `node:dgram`, `Bun.udpSocket` and
+  `Deno.listenDatagram` — with the design in the sockets internals page and what
+  a forged source address means in the security model.
+
+- **Two UDP benchmark rows**, `udp_echo` (10 000 request/response round trips)
+  and `udp_send` (50 000 fire-and-forget datagrams), measured across all five
+  runtimes. UDP is not a Web API, so each is measured on its own surface, as the
+  hashing rows already are — and Deno's needs `--unstable-net`, which the runner
+  now passes rather than recording a runtime that has UDP as one that does not.
+
+  Sending is where we land well (4.1 µs per datagram, second of five, ahead of
+  Node and Deno); a round trip is where the promise-per-datagram shape is paid
+  for (34.9 µs against Node's 31.0 and Bun's 16.0). Both halves ship, and the
+  internals page says which part of the design costs the second number.
+
 ## [0.23.0] - 2026-08-11
 
 ### Added

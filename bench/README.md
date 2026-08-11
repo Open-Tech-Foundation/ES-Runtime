@@ -161,7 +161,7 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 | `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `buffers`, `headers`, `formdata`, `date_intl`, `streams`, `compression` |
 | `crypto` | `sha256`, `crypto`, `crypto_asym`, `crypto_kdf` |
 | `hashing` | `hash_hex`, `hash_chunks`, `hash_fast` |
-| `net` | `fetch`, `fetch_upload`, `http`, `websocket` |
+| `net` | `fetch`, `fetch_upload`, `http`, `websocket`, `udp_echo`, `udp_send` |
 | `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
 | `system` | `spawn` |
 | `serialization` | `jsonl_stream`, `xml_*`, `yaml_*`, `toml_*`, `msgpack_*` |
@@ -242,6 +242,8 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **fetch_upload** | 200 sequential POSTs each streaming an 8 KiB `ReadableStream` request body (chunked upload) to the same local server — the request-body streaming path: building the body stream, the per-chunk host channel with backpressure, and chunked transfer-encoding. The server echoes the bytes it received and the workload **verifies** them, so a runtime that doesn't truly stream the body (e.g. LLRT, which coerces the stream) is recorded **n/a** rather than posting a misleadingly fast time. |
 | **http** | Client and server in the **same process**, so it measures the server together with that runtime's `fetch` — `bench/rps.sh` is the server-alone number. 2 000 requests (batches of 100 concurrent) against each runtime's **own** HTTP server on loopback — `fetch` → handler → 64-byte response (esrun: `runtime:http` `serve` on hyper; Node `http`, `Bun.serve`, `Deno.serve` elsewhere). Server throughput on the warm request/response path. |
 | **websocket** | 20 000 serial message round-trips over one `WebSocket` to a local echo server — the WebSocket *client* seam: opening handshake then per-message `send` + event dispatch (esrun: the `ws_send` op + the receive-pump's `MessageEvent` per tick). Server is whichever built-in WS server is present (Bun/Deno, or Node + `ws`); LLRT has no `WebSocket`, hence n/a. |
+| **udp_echo** | 10 000 UDP request/response round trips over loopback, 64-byte payloads — the DNS / game-tick / acked-telemetry shape, where the per-datagram cost of the API is not hidden behind pipelining. UDP is not a Web API, so each runtime uses its own surface: `runtime:net` `bind()`, `Bun.udpSocket`, `Deno.listenDatagram` (needs `--unstable-net`, which is why the runner passes it), and `node:dgram` for Node and LLRT. The echo side is idiomatic per runtime (a callback where the API is callback-based, a loop where it is promise-based); the client always awaits its reply, because that is the program's requirement rather than one API's style. |
+| **udp_send** | 50 000 fire-and-forget datagrams of 512 bytes — the StatsD / syslog / telemetry shape, where nothing is waited for. Each runtime pays what its API charges to hand one datagram to the OS: esrun, Deno and Node await it (Node's callback promisified), while Bun's `send` is synchronous and returns `false` under pressure, so it waits for `drain` and retries — its documented backpressure path. The destination is a real socket nothing reads, so the kernel drops what it cannot buffer and the row stays a measurement of the *send* path; every send is still awaited or retried, so all 50 000 leave the process. |
 | **fsread_small / _large** | 2 000 reads of a 4 KB file / 20 reads of a 2 MB file. |
 | **fswrite_small / _large** | The same shape for whole-file writes. |
 | **fsappend_small / _large** | 2 000 × 4 KB appends / 60 × 256 KB appends to a growing file. See the sizing note in `fsappend_large.js`: this row is squeezed between the kernel's dirty-page threshold above and the measurement floor below. |
@@ -410,6 +412,8 @@ fetch         |     82.8 |     17.5 |     32.9 |     17.1 |     39.1
 fetch_upload  |    106.0 |     38.7 |     34.8 |      n/a |     37.9
 http          |    374.0 |     50.0 |     97.3 |      n/a |    112.0
 websocket     |    581.5 |    388.3 |    526.0 |      n/a |    707.6
+udp_echo      |    309.8 |    160.3 |    466.5 |    390.5 |    349.0
+udp_send      |    249.2 |    183.2 |    249.4 |    723.0 |    206.2
 fsread_small  |    111.2 |     35.5 |     38.1 |     26.0 |     38.8
 fsread_large  |     56.5 |     23.5 |     61.2 |     12.5 |     42.4
 fswrite_small |    154.9 |     12.2 |     84.5 |     96.2 |     72.4
@@ -444,7 +448,7 @@ rss_loaded    |    131.0 |    160.0 |    147.0 |    156.0 |    120.0
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.14.0, bun 1.4.0-canary.1, deno 2.8.3, llrt v0.8.0-beta, esrun 0.22.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.14.0, bun 1.4.0-canary.1, deno 2.8.3, llrt v0.8.0-beta, esrun 0.23.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 

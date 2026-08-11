@@ -28,6 +28,9 @@ makes the trade-offs explicit.
 | HTTP/2 server (cleartext h2c + ALPN) | <Yes /> | <Yes /> | <Partial /> | <Yes /> |
 | HTTP/3 server (QUIC) | <No /> | <No /> | <Yes /> | <No /> |
 | Stalled-connection timeouts by default | <Yes /> | <Partial /> | <Yes /> | <No /> |
+| UDP datagram sockets | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
+| UDP multicast join/leave | <Yes /> | <Yes /> | <Yes /> | <Partial /> |
+| Connected UDP sockets | <Yes /> | <Yes /> | <Yes /> | <No /> |
 | Temporal API | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | WebAssembly | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | `.wasm` ES module imports | <Yes /> | <Yes /> | <No /> | <Yes /> |
@@ -51,6 +54,16 @@ makes the trade-offs explicit.
 | Embeddable as a library | <Yes /> | <No /> | <No /> | <Partial /> |
 
 **Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental · <No /> Not supported
+
+**On the UDP rows.** Deno is <Partial /> because `Deno.listenDatagram` is still
+behind `--unstable-net` — the API exists and works, it is simply not stable — and
+it has no connected-socket mode, so a client cannot make the OS filter replies or
+report an ICMP port-unreachable. Bun's surface is the widest of the four
+(source-specific membership, batch `sendMany`); ours is the only one where
+binding and sending are **separate grants**, which is what makes a receive-only
+service expressible. See the [UDP guide](/docs/guides/udp#coming-from-node-deno-or-bun)
+for the call-by-call mapping, and [the benchmarks](/docs/benchmarks) for the two
+UDP rows.
 
 **On the database client rows.** esrun is <Partial /> because the drivers are
 first-party *packages* rather than runtime API — `@opentf/esrun-postgres` and

@@ -1,0 +1,238 @@
+---
+title: UDP
+description: Datagrams with runtime:net bind() — clients, servers, multicast, and what UDP does not promise.
+---
+
+# UDP
+
+`bind()` in [`runtime:net`](/api/net) is a UDP socket. It has `send`/`receive`
+rather than the web streams [TCP](/docs/guides/networking) uses, because a
+datagram arrives whole and carries its own sender — the two things a byte stream
+erases.
+
+Everything here needs **NetListen** to bind, and **Net** to send.
+[Why both.](#two-capabilities)
+
+## Bind
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({ hostname: "0.0.0.0", port: 5353 });
+const { port } = await sock.addr;          // port 0 picks an ephemeral one
+```
+
+## Receive
+
+`receive()` gives one datagram. The async iterator is the same thing in a loop,
+and it ends when the socket closes.
+
+```js
+for await (const { data, address, port } of sock) {
+  await sock.send(data, { hostname: address, port });   // echo to the sender
+}
+```
+
+A zero-length datagram is a **message**, not an end of stream — `receive()`
+returns `{ data: Uint8Array(0), … }`, and only `null` means closed.
+
+## Send
+
+```js
+await sock.send(bytes, "203.0.113.7:5353");             // "host:port"
+await sock.send("hello", { hostname: "203.0.113.7", port: 5353 });
+```
+
+A string is UTF-8 encoded. One call is one datagram: it is never split, and it
+resolves with the number of bytes sent.
+
+### A client that only sends
+
+StatsD, syslog and most telemetry never wait for anything. `connect()` fixes the
+peer, so sends need no address — and datagrams from anyone else are discarded,
+which is what makes it more than a shortcut.
+
+```js
+import { bind } from "runtime:net";
+
+const statsd = bind({ hostname: "0.0.0.0", port: 0 });
+await statsd.connect("127.0.0.1:8125");
+
+await statsd.send("page.view:1|c");
+await statsd.send("render.ms:12|ms");
+```
+
+No packet is sent by `connect()` — UDP has no handshake — so it succeeds against
+a host that is not listening. What it buys is the OS reporting *later* failures
+(an ICMP port-unreachable surfaces as an error on a subsequent send or receive),
+which an unconnected socket never learns about.
+
+### Request and response
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({ hostname: "0.0.0.0", port: 0 });
+await sock.connect("1.1.1.1:53");
+await sock.send(query);                                  // a DNS query
+
+const answer = await Promise.race([
+  sock.receive(),
+  new Promise((r) => setTimeout(() => r(null), 2000)),    // your own timeout
+]);
+```
+
+**The timeout is yours to write.** Nothing here retries and nothing times out on
+its own: a lost datagram is silent, and only the program knows how long an answer
+is worth waiting for.
+
+## Multicast
+
+Membership is dynamic; the socket options are set at the bind. `interface` names
+which local interface carries the membership — an IPv4 address for a v4 group, an
+interface **index** for a v6 one — and the OS chooses if you omit it, which is
+only unambiguous on a host with one interface.
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({
+  hostname: "0.0.0.0", port: 5353,
+  reuseAddress: true,          // another process may hold this port too
+  multicastTtl: 1,             // stay on the local segment
+  multicastLoopback: false,    // don't hear your own announcements
+});
+
+await sock.joinMulticast("224.0.0.251");                 // mDNS
+await sock.send(query, "224.0.0.251:5353");
+
+for await (const { data, address } of sock) {
+  console.log("responder", address);
+}
+
+await sock.leaveMulticast("224.0.0.251");
+```
+
+`reuseAddress` is what lets a second process on the same machine receive the same
+group — without it the second bind fails with `ERR_ADDRESS_IN_USE`, which is the
+usual reason an mDNS or SSDP responder works alone and stops working next to
+avahi or a system service.
+
+## Broadcast
+
+```js
+const sock = bind({ hostname: "0.0.0.0", port: 0, broadcast: true });
+await sock.send(payload, "255.255.255.255:9");           // wake-on-LAN, discovery
+```
+
+Off by default: the OS refuses a broadcast send without it, and addressing every
+host on a segment is worth saying out loud. IPv4 only — IPv6 has no broadcast, so
+asking for it on a v6 socket is an error rather than a flag that sets nothing.
+
+## Socket options
+
+Set once, at the bind, because two of them (`reusePort`, `reuseAddress`) mean
+nothing afterwards and the rest are configuration a program decides once. An
+omitted option leaves the OS default rather than a value chosen for you.
+
+| Option | What it does |
+| --- | --- |
+| `reusePort` | Share the address across **processes**; the kernel distributes datagrams. Unix only. |
+| `reuseAddress` | Share it with another socket — what two processes on one multicast group need. |
+| `broadcast` | Permit sending to the broadcast address. IPv4 only. |
+| `ttl` | Hop limit for unicast datagrams (0–255). |
+| `multicastTtl` | Hop limit for multicast datagrams. The OS default is `1` — the local segment. |
+| `multicastLoopback` | Whether your own multicast sends come back to this host. |
+
+The address family picks the v4 or v6 spelling of each, so a `::1` socket gets
+the IPv6 option and not a v4 one that would silently set nothing.
+
+## What UDP does not promise
+
+Worth reading once before shipping a UDP service, because none of it is the
+runtime's to fix:
+
+- **Delivery.** A datagram may be dropped by any hop, including this host's own
+  socket buffer when a program stops calling `receive()`. Nothing reports it.
+- **Order.** Two datagrams may arrive in either order, or twice.
+- **Backpressure.** There is none. A sender that outruns a receiver simply loses
+  datagrams; the send keeps succeeding.
+- **A size that always fits.** Stay at or under **1200 bytes** of payload to
+  cross the internet without IP fragmentation (what QUIC and DNS assume); the
+  hard ceiling is 65,507, and anything larger is truncated by the OS.
+- **Who sent it.** A source address is trivially forged. Treat `address` as a
+  hint, not an identity, and never send a large answer to a small unverified
+  request — that is the shape of a [reflection attack](/docs/security#udp).
+
+## Two capabilities
+
+Binding takes a port — **NetListen** — and sending reaches a peer — **Net**. A
+UDP socket is a server and a client at once, so it is checked against both rather
+than whichever one it was created under:
+
+```sh
+esrun --deny-all --allow-listen=5353 responder.js          # receive only
+esrun --deny-all --allow-listen=127.0.0.1:0 \
+      --allow-net=127.0.0.1:8125 statsd.js                 # send to one collector
+```
+
+A program that only sends still needs `listen`: its ephemeral source port is a
+port, and the replies that come back to it are inbound traffic. `--allow-net` is
+checked on **every** destination, not once at the bind, because one socket sends
+to as many peers as it likes.
+
+## Coming from Node, Deno or Bun
+
+| | esrun | Node.js | Bun | Deno |
+| --- | --- | --- | --- | --- |
+| Bind | `bind({ port })` | `dgram.createSocket("udp4")` + `.bind(port)` | `await Bun.udpSocket({ port })` | `Deno.listenDatagram({ port, transport: "udp" })` |
+| Receive | `await sock.receive()` | `.on("message", (msg, rinfo) => …)` | `socket: { data(sock, buf, port, addr) {} }` | `await conn.receive()` |
+| Send | `await sock.send(data, addr)` | `.send(buf, port, host, cb)` | `sock.send(buf, port, host)` | `await conn.send(data, addr)` |
+| Connected socket | `await sock.connect(addr)` | `.connect(port, host)` | `{ connect: { port, hostname } }` | — |
+| Multicast | `joinMulticast` / `leaveMulticast` | `addMembership` / `dropMembership` | `addMembership` / `dropMembership` | `joinMulticastV4` / `.leave()` |
+| Batch send | — | — | `sendMany()` | — |
+| Availability | stable (pre-1.0) | stable | stable | **unstable** (`--unstable-net`) |
+| Permission model | `listen` **and** `net` | none | none | `--allow-net` |
+
+The same echo server, four ways:
+
+```js
+// esrun — a promise per datagram
+import { bind } from "runtime:net";
+const sock = bind({ hostname: "0.0.0.0", port: 5353 });
+for await (const { data, address, port } of sock) {
+  await sock.send(data, { hostname: address, port });
+}
+```
+
+```js
+// Node.js — an event per datagram
+import dgram from "node:dgram";
+const sock = dgram.createSocket("udp4");
+sock.on("message", (msg, rinfo) => sock.send(msg, rinfo.port, rinfo.address));
+sock.bind(5353);
+```
+
+```js
+// Bun — a callback on the socket options
+const sock = await Bun.udpSocket({
+  port: 5353,
+  socket: { data(socket, buf, port, addr) { socket.send(buf, port, addr); } },
+});
+```
+
+```js
+// Deno — a promise per datagram, behind --unstable-net
+const conn = Deno.listenDatagram({ port: 5353, transport: "udp" });
+for await (const [data, from] of conn) {
+  await conn.send(data, from);
+}
+```
+
+## See also
+
+- [`runtime:net` API reference](/api/net) — signatures, options, errors
+- [Sockets guide](/docs/guides/networking) — TCP and TLS
+- [Internals: sockets](/docs/internals/sockets#udp-no-tasks-no-channels) — why UDP has no forwarding task, and what it costs
+- [Benchmarks](/docs/benchmarks) — `udp_echo` and `udp_send` across five runtimes
+- [Security model](/docs/security#udp) — what binding a UDP port exposes

@@ -146,6 +146,8 @@ ROW_DEFS=(
   "net|fetch_upload|ms|chart|fetch (streamed upload)"
   "net|http|ms|chart|HTTP server (concurrent)"
   "net|websocket|ms|chart|WebSocket round trips"
+  "net|udp_echo|ms|chart|UDP round trips (10 000 datagrams)"
+  "net|udp_send|ms|chart|UDP send throughput (50 000 datagrams)"
 
   "fs|fsread_small|ms|card|File read (small)"
   "fs|fsread_large|ms|card|File read (large)"
@@ -329,7 +331,11 @@ DENO="$(command -v deno 2>/dev/null)"
 [ -z "$DENO" ] && for d in "$HOME/.deno/bin/deno" /tmp/deno/bin/deno; do
   [ -x "$d" ] && { DENO="$d"; break; }
 done
-[ -n "$DENO" ] && { add deno "$DENO run -A --quiet" "$DENO --version"; ORDER+=(deno); }
+# `--unstable-net` is what puts `Deno.listenDatagram` on the object: Deno has
+# UDP, it is simply not stable yet. Recording Deno as having no UDP because a
+# flag was missing would be a fact about this runner, not about Deno — and the
+# flag only *adds* unstable APIs, so no other row can see a difference.
+[ -n "$DENO" ] && { add deno "$DENO run -A --quiet --unstable-net" "$DENO --version"; ORDER+=(deno); }
 # LLRT (AWS Low Latency Runtime): QuickJS-based, cold-start/memory focused. Runs
 # the engine + Web-API workloads it supports; the fs/streams/glob/http workloads
 # fall through to n/a (it has no general HTTP server and only partial fs). Looked

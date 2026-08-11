@@ -45,6 +45,7 @@ Before refactoring specific APIs, keep these structural rules in mind:
 | **Module Path** | `__filename` / `__dirname` | `import.meta.filename` | `import.meta.filename` | `import { dirname, fromFileURL } from "runtime:path";`<br />`const __filename = fromFileURL(import.meta.url);` |
 | **Join Paths** | `path.join(...)` | `path.join(...)` | `path.join(...)` | `import { join } from "runtime:path";`<br />`join(...)` |
 | **Subprocesses** | `child_process.spawn()` | `Bun.spawn()` | `new Deno.Command()` | `import { Command } from "runtime:system";`<br />`new Command(...)` |
+| **UDP datagrams** | `dgram.createSocket("udp4")` | `Bun.udpSocket()` | `Deno.listenDatagram()` | `import { bind } from "runtime:net";`<br />`bind({ port })` — [mapping](/docs/guides/udp#coming-from-node-deno-or-bun) |
 | **WASI Guest** | `node:wasi` | `node:wasi` | `node:wasi` | `import { WASI } from "runtime:wasi"` |
 | **YAML / Serialization** | `js-yaml` (npm) | `js-yaml` (npm) | `js-yaml` (npm) | `import { YAML } from "runtime:serialization"` |
 

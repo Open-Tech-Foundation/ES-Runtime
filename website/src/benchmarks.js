@@ -189,7 +189,7 @@ export default {
     "bun": "1.4.0-canary.1+095eb31ae",
     "deno": "deno 2.8.3 (stable, release, x86_64-unknown-linux-gnu)",
     "llrt": "LLRT v0.8.0-beta (linux, x64)",
-    "esrun": "esrun 0.22.0"
+    "esrun": "esrun 0.23.0"
   },
   "method": {
     "aggregate": "min",
@@ -197,7 +197,7 @@ export default {
     "shuffled": true,
     "warmup_reps_discarded": 1,
     "min_reps": 3,
-    "max_workload_reps": 12,
+    "max_workload_reps": 5,
     "max_startup_reps": 15,
     "noise_threshold_cov_pct": 5,
     "quiet": false,
@@ -459,6 +459,20 @@ export default {
     },
     "websocket": {
       "label": "WebSocket round trips",
+      "unit": "ms",
+      "group": "net",
+      "display": "chart",
+      "better": "lower"
+    },
+    "udp_echo": {
+      "label": "UDP round trips (10 000 datagrams)",
+      "unit": "ms",
+      "group": "net",
+      "display": "chart",
+      "better": "lower"
+    },
+    "udp_send": {
+      "label": "UDP send throughput (50 000 datagrams)",
       "unit": "ms",
       "group": "net",
       "display": "chart",
@@ -746,7 +760,9 @@ export default {
         "fetch",
         "fetch_upload",
         "http",
-        "websocket"
+        "websocket",
+        "udp_echo",
+        "udp_send"
       ]
     },
     {
@@ -1276,6 +1292,20 @@ export default {
       "deno": 147,
       "llrt": 156,
       "esrun": 120
+    },
+    "udp_echo": {
+      "node": 309.8,
+      "bun": 160.3,
+      "deno": 466.5,
+      "llrt": 390.5,
+      "esrun": 349
+    },
+    "udp_send": {
+      "node": 249.2,
+      "bun": 183.2,
+      "deno": 249.4,
+      "llrt": 723,
+      "esrun": 206.2
     }
   },
   "results_rss": {
@@ -1740,6 +1770,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "udp_echo": {
+      "node": 57,
+      "bun": 38,
+      "deno": 88,
+      "llrt": 11,
+      "esrun": 55
+    },
+    "udp_send": {
+      "node": 57,
+      "bun": 37,
+      "deno": 65,
+      "llrt": 11,
+      "esrun": 36
     }
   },
   "results_cov": {
@@ -2204,6 +2248,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "udp_echo": {
+      "node": 3.4,
+      "bun": 2,
+      "deno": 3.1,
+      "llrt": 2.2,
+      "esrun": 2.1
+    },
+    "udp_send": {
+      "node": 3,
+      "bun": 1.3,
+      "deno": 2,
+      "llrt": 5,
+      "esrun": 2.2
     }
   },
   "results_n": {
@@ -2668,6 +2726,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "udp_echo": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
+    },
+    "udp_send": {
+      "node": 3,
+      "bun": 3,
+      "deno": 3,
+      "llrt": 3,
+      "esrun": 3
     }
   },
   "results_floor_gap": {
@@ -3132,6 +3204,20 @@ export default {
       "deno": null,
       "llrt": null,
       "esrun": null
+    },
+    "udp_echo": {
+      "node": 3.4,
+      "bun": 3.4,
+      "deno": 4.2,
+      "llrt": 0.5,
+      "esrun": 1.3
+    },
+    "udp_send": {
+      "node": 1.8,
+      "bun": 0.9,
+      "deno": 2,
+      "llrt": 2.9,
+      "esrun": 2
     }
   },
   "status": {
@@ -3591,6 +3677,20 @@ export default {
       "esrun": "ok"
     },
     "rss_loaded": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
+    "udp_echo": {
+      "node": "ok",
+      "bun": "ok",
+      "deno": "ok",
+      "llrt": "ok",
+      "esrun": "ok"
+    },
+    "udp_send": {
       "node": "ok",
       "bun": "ok",
       "deno": "ok",

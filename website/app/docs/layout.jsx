@@ -31,6 +31,7 @@ const NAV = [
       { title: "Redis", path: "/docs/db/redis" },
       { title: "Drivers & ORMs", path: "/docs/db/authoring" },
       { title: "Sockets", path: "/docs/guides/networking" },
+      { title: "UDP", path: "/docs/guides/udp" },
       { title: "Subprocesses", path: "/docs/guides/subprocess" },
       { title: "Workers", path: "/docs/guides/workers" },
       { title: "HTTP server", path: "/docs/http" },

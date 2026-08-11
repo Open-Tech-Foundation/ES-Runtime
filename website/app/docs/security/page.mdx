@@ -233,6 +233,42 @@ path.
   in Rust. Children still running at shutdown are killed, not orphaned.
 </Callout>
 
+## UDP
+
+A UDP socket is a client and a server at the same time, and the capability model
+says so: `bind()` needs **NetListen**, `send()` and `connect()` need **Net**, and
+a socket is checked against both rather than whichever grant created it.
+
+<Callout type="note" title="A sender is reachable too">
+  A program that only sends still needs `listen`. Its ephemeral source port is a
+  port, and anything that learns it can send datagrams back — so calling a
+  send-only socket "outbound only" would be a claim the transport does not
+  support.
+</Callout>
+
+<Callout type="tip" title="The destination list is checked per datagram">
+  `--allow-net` is consulted on **every** `send` and `connect`, not once at the
+  bind, because the destination is an argument rather than a property of the
+  socket. `--allow-listen` covers the bind, before the port is claimed.
+</Callout>
+
+<Callout type="danger" title="A source address is not an identity">
+  UDP has no handshake, so a source address is trivially forged and `address` on
+  a received datagram is a hint at best. Two consequences worth designing for:
+  never authenticate on it, and never answer an unverified request with a
+  substantially larger reply — that asymmetry is what turns a service into a
+  **reflection and amplification** tool aimed at whoever the attacker names as
+  the source. `connect()` makes the OS drop datagrams from anyone but the peer,
+  which closes the ordinary case rather than the spoofing one.
+</Callout>
+
+<Callout type="warning" title="No backpressure, and no report">
+  Nothing here queues datagrams for you: the kernel's receive buffer is the only
+  one, and it drops silently once full. A program that stops calling `receive()`
+  loses traffic without an error, and a flood is bounded by the OS rather than by
+  a limit this runtime could apply.
+</Callout>
+
 ## The filesystem root jail
 
 Filesystem access — including module resolution — is confined to a single

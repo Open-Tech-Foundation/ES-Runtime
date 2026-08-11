@@ -64,6 +64,11 @@ through host-registered, capability-gated ops.
 | | A nested worker outliving the parent that could reach it | `terminate()` takes the subtree; so does a worker ending on its own | ☑ tested |
 | | One agent's failure taking down unrelated agents | A failure ends its own worker and is reported to the parent; an unclaimed `error` on a `Worker` goes to the console rather than escalating | ☑ tested |
 | | Unbounded inter-agent queues | Not bounded — advisory `worker.queued` only, as in Node/Deno/Bun | ◐ |
+| Networking (UDP) | A `Net`-only guest binding a port and receiving inbound traffic | `bind_datagram` gates on `NetListen`; a datagram socket is checked against **both** grants, not the one that created it | ☑ tested |
+| | A `NetListen`-only guest reaching an arbitrary host by datagram | `send_to`/`connect_datagram` gate on `Net`, and the `--allow-net` list is checked **per destination** rather than once at the bind | ☑ tested |
+| | A guest naming another agent's datagram socket by guessing a small integer | Per-agent handle ownership (D50), in a registry separate from stream sockets | ☑ tested |
+| | A forged source address used as an identity, or for reflection/amplification | Not defended, and not defensible at this layer — the transport has no handshake. Documented as a design constraint (site `/docs/security#udp`, UDP guide); `connect()` makes the OS drop non-peer datagrams, which covers the ordinary case only | ◐ documented |
+| | A datagram flood exhausting memory | Bounded by the kernel's receive buffer: no host-side queue is added in front of it, so excess is dropped by the OS rather than accumulated (D58) | ☑ by construction |
 | Providers | A provider returns an error (e.g. entropy fails) | Typed `ProviderError` → JS exception; no partial effect | ☑ |
 | | A provider **panics** | Contained as a host-op panic (above), unless `panic = "abort"` | ◐ |
 | V8 / FFI | Use-after-free of handles/scopes | Pinned-scope API; handles never outlive their scope; isolate `!Send` | ☑ by construction |
@@ -128,7 +133,16 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    is unjailed by design, so an embedder choosing it must add its own confinement.
    An embedder sandboxing untrusted code should still withhold `FileSystem`/`Net`
    outright rather than rely on the jail alone.
-8. **Engine after `Terminated` is "spent."** The embedder should discard a
+8. **UDP exposes what UDP exposes.** A bound datagram socket has no
+   connection state, so a source address is forgeable and there is no
+   backpressure to apply: the kernel's receive buffer is the only bound, and it
+   drops silently once full. Both are properties of the transport rather than
+   gaps in this implementation, and the guest-facing docs say so — but an
+   embedder granting `NetListen` to untrusted code should understand that it can
+   be made to answer whoever an attacker names, which is the reflection shape.
+   Not addressed here: a per-socket receive rate limit, and source-address
+   validation of any kind.
+9. **Engine after `Terminated` is "spent."** The embedder should discard a
    runtime whose `eval`/tick returned `Error::Terminated` rather than reuse it.
 
 ## 7. Guidance for embedders

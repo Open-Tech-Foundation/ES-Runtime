@@ -196,6 +196,38 @@ is for any other receiver, and nothing here reports how much was lost.
 `receive()` calls share the socket and whichever is polled first takes the next
 datagram. There is no checked-out receiver to lose, because there is no channel.
 
+### What a datagram costs
+
+Release build, five runtimes, from `bench/run.sh` — `udp_echo` is 10 000
+request/response round trips over loopback with 64-byte payloads, `udp_send` is
+50 000 fire-and-forget datagrams of 512 bytes. Reproduce with
+`WORKLOADS="udp_echo udp_send" bench/run.sh`; the charts are on
+[Benchmarks](/docs/benchmarks).
+
+| | esrun | Node.js | Bun | Deno | LLRT |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Round trip (µs each) | 34.9 | 31.0 | **16.0** | 46.7 | 39.1 |
+| Send (µs each) | 4.1 | 5.0 | **3.7** | 5.0 | 14.5 |
+
+Two different results, and the difference between them is the interesting part.
+
+**Sending is cheap** — 4.1 µs per datagram, second of the five and ahead of both
+Node and Deno. A send is one op crossing and one `send_to`, with nothing between
+the guest and the syscall.
+
+**A round trip is not**, and it is our own shape that costs it: four op crossings
+and two loop wakeups per exchange, with a promise resolved for every one of them.
+Node delivers a received datagram to a callback with no promise involved, which
+is most of the 3.9 µs between us; Bun's socket is native down to the same
+callback. The receive path is where a promise-per-datagram API is paid for, and
+it is paid on the row that matters to a DNS resolver or a game server.
+
+That is a design consequence rather than a defect — `receive()` returning a
+promise is what makes datagram handling composable with `await`, timeouts and
+`Promise.race`, which the callback shape does not give without adapting it back.
+But it is the honest number, and a batched receive is the thing to reach for if
+it ever needs closing.
+
 ### The v4/v6 split
 
 `ttl`, `multicastTtl` and `multicastLoopback` are carried by different socket
