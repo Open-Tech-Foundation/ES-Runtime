@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::Duration;
 
 fn temp(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
@@ -761,5 +762,137 @@ fn build_rejects_a_missing_entry_and_a_second_one() {
         stderr(&absent).contains("cannot read"),
         "{}",
         stderr(&absent)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `--watch` (DECISIONS D59)
+//
+// The unit tests in `watch.rs` cover the two filters. This covers the loop:
+// that a change actually reruns the program, and — the part a filter test
+// cannot see — that it reruns it *once* rather than restarting because it
+// restarted.
+// ---------------------------------------------------------------------------
+
+/// A scratch directory for watch tests, deliberately **not** under
+/// `CARGO_TARGET_TMPDIR`.
+///
+/// That lives inside `target/`, which the watcher ignores on purpose — machine
+/// output is not a reason to restart. A watch test staged there watches nothing
+/// and passes for the wrong reason.
+fn watch_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("esdev-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create watch dir");
+    dir
+}
+
+/// Polls `path` until it satisfies `done`, or gives up. Watch tests are about
+/// timing, so they wait for a condition rather than for a duration.
+fn wait_for_file(path: &Path, timeout: Duration, done: impl Fn(&str) -> bool) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        last = std::fs::read_to_string(path).unwrap_or_default();
+        if done(&last) {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    last
+}
+
+#[test]
+fn watch_reruns_the_program_when_a_file_changes() {
+    let dir = watch_dir("w_rerun");
+    // A `.txt` sink: not a watched extension, so the program's own output
+    // cannot be what triggers the next run.
+    let sink = dir.join("runs.txt");
+    let app = dir.join("app.mjs");
+    let program = |marker: &str| {
+        format!(
+            "import {{ write }} from 'runtime:fs';\n\
+             await write({:?}, '{marker}\\n', {{ append: true }});\n",
+            sink.to_string_lossy()
+        )
+    };
+    std::fs::write(&app, program("FIRST")).expect("write app");
+
+    let mut child = esdev_in(&dir)
+        .args(["--watch", "app.mjs"])
+        .spawn()
+        .expect("spawn esdev --watch");
+
+    let first = wait_for_file(&sink, Duration::from_secs(20), |s| s.contains("FIRST"));
+    assert!(
+        first.contains("FIRST"),
+        "first run never happened: {first:?}"
+    );
+
+    std::fs::write(&app, program("SECOND")).expect("rewrite app");
+    let both = wait_for_file(&sink, Duration::from_secs(20), |s| s.contains("SECOND"));
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(both.contains("FIRST"), "{both:?}");
+    assert!(
+        both.contains("SECOND"),
+        "the change did not rerun it: {both:?}"
+    );
+}
+
+/// The regression that matters: `inotify` reports reads, so the child *loading*
+/// its entry raises an event on a watched file. A watcher that treats that as a
+/// change restarts forever with nobody touching anything.
+#[test]
+fn watch_does_not_restart_because_it_restarted() {
+    let dir = watch_dir("w_no_loop");
+    let sink = dir.join("runs.txt");
+    let app = dir.join("app.mjs");
+    std::fs::write(
+        &app,
+        format!(
+            "import {{ write }} from 'runtime:fs';\n\
+             await write({:?}, 'x', {{ append: true }});\n",
+            sink.to_string_lossy()
+        ),
+    )
+    .expect("write app");
+
+    let mut child = esdev_in(&dir)
+        .args(["--watch", "app.mjs"])
+        .spawn()
+        .expect("spawn esdev --watch");
+
+    // One run, then nothing — no edits are made after this point.
+    wait_for_file(&sink, Duration::from_secs(20), |s| !s.is_empty());
+    std::thread::sleep(Duration::from_secs(3));
+    let settled = std::fs::read_to_string(&sink).unwrap_or_default();
+
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        settled.len(),
+        1,
+        "ran {} times with no edit — the watcher is retriggering itself",
+        settled.len()
+    );
+}
+
+#[test]
+fn watch_needs_a_file_to_watch() {
+    let out = esdev()
+        .args(["--watch", "-e=console.log(1)"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("needs a file to watch"),
+        "{}",
+        stderr(&out)
     );
 }

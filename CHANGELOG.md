@@ -115,6 +115,30 @@ namespace) is unstable and may change between minor releases until the API freez
   packages, bundled and then served by `esrun --deny-all --allow-listen` — one
   capability, and none of the four settings passed by hand.
 
+- **`esdev --watch`** (DECISIONS D59) — rerun the program when its source
+  changes.
+
+  ```sh
+  esdev --watch --deny-all --allow-listen=8080 server.mjs
+  ```
+
+  **A restart drains rather than drops.** The program runs in a child process
+  and a restart is a `SIGTERM` — the same graceful stop production gets, so the
+  Phase 14 shutdown path stops accepting, answers the requests already in
+  flight, and only then exits. Saving a file while a request is open does not
+  kill that request; verified with a two-second handler edited mid-request,
+  which still returned its response. `--shutdown-grace` bounds the wait, after
+  which the process is killed.
+
+  A child process rather than an in-place teardown, because a fresh process
+  cannot carry anything forward — no leaked socket, no wedged isolate poisoning
+  the next run — and the prelude snapshot makes starting one cheap.
+
+  Watched: the project root (nearest `package.json`, the same root the loader
+  detects) or the entry's directory, minus `node_modules`, `.git`, `dist`,
+  `target` and `.cache`, and only for source extensions. A program that exits
+  leaves the watcher up, waiting for the next change.
+
 - **UDP in `runtime:net`** (DECISIONS D58) — `bind()` returns a
   `DatagramSocket`. Messages, not a byte stream: a datagram arrives whole and
   carries its own sender, which is what a stream would erase.

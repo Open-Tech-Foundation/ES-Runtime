@@ -18,13 +18,30 @@ path = "src/main.rs"
 es-runtime-cli-common.workspace = true
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = [
+    "rt",
+    "macros",
+    # `--watch` supervises a child process, waits on it, and races that against
+    # file events and ^C.
+    "process",
+    "signal",
+    "time",
+    "sync",
+] }
 # TypeScript/JSX type-stripping. Lives here and nowhere else: `esrun` runs
 # JavaScript, and what turns a `.ts` into that runs on the developer's machine.
 oxc.workspace = true
 # `esdev build`. Same confinement as oxc: the production binary runs bundles, it
 # does not make them.
 rolldown.workspace = true
+# `--watch`. The events only; the restart policy is ours.
+notify.workspace = true
+
+# Sending a child the signal that starts its graceful drain. The same crate and
+# the same reason `default-providers` uses it for `runtime:system` — a typed
+# `kill` without reaching for `libc`.
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process"] }
 
 [lints]
 workspace = true

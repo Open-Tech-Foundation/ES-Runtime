@@ -292,6 +292,11 @@ oxc = { version = "0.144.0", features = ["transformer", "semantic", "codegen"] }
 # The Rust API is the less-travelled path (rolldown's supported surface is its
 # napi binding), so it is pinned exactly rather than floated.
 rolldown = "=1.2.3"
+# Filesystem events for `esdev --watch` (DECISIONS D59). Confined to `dev-cli`:
+# nothing in production watches anything. 8.2.0 rather than the 9.0 release
+# candidates, per D7 — a pre-release is taken only when it is the only option
+# (as `turso_core` is), and here it is not.
+notify = "8.2.0"
 # Debug info dominates `target/` disk on a V8-sized dependency graph (tens of
 # GB). Keep it lean: our own crates keep line tables so panic backtraces still
 # resolve to file:line; dependencies — the bulk, rarely stepped through — carry

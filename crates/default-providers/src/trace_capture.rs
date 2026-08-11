@@ -58,6 +58,20 @@ impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> Layer<S> for CaptureLayer 
     }
 
     fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+        // Only *our* instrumentation. `tracing-subscriber` bridges the `log`
+        // crate, so a dependency's `log::trace!` arrives here as an event with
+        // the target `"log"` — and because it is emitted on our task, it lands
+        // inside our connection span and carries its `peer` field. A test
+        // asserting "a healthy connection logged nothing" then fails on
+        // `mio::poll` saying it deregistered an event source.
+        //
+        // Whether that bridge is active is not this crate's decision: it turns
+        // on when anything else in the workspace pulls in `tracing-subscriber`,
+        // which `esdev`'s bundler does. These tests are about what the runtime
+        // reports, so a record it did not emit is noise by definition.
+        if event.metadata().target() == "log" {
+            return;
+        }
         let mut line = format!(
             "[{}] {}",
             event.metadata().level(),

@@ -30,8 +30,10 @@ use es_runtime_cli_common::{Config, Source};
 
 mod build;
 mod transform;
+mod watch;
 use build::BuildConfig;
 use transform::TypeStripper;
+use watch::WatchConfig;
 
 /// What the command line asked for.
 enum Command {
@@ -40,6 +42,8 @@ enum Command {
     Run(Box<Config>),
     /// Bundle a module and its dependencies.
     Build(BuildConfig),
+    /// Run a module, restarting it when its source changes.
+    Watch(WatchConfig),
 }
 
 const USAGE: &str = "\
@@ -52,10 +56,24 @@ argument: `--timeout=500`, not `--timeout 500`.
 USAGE:
     esdev <file>                Run a module file — .js, .mjs, or .ts/.tsx/.jsx
     esdev -e=<code>             Run an inline module snippet (JavaScript)
+    esdev --watch <file>        Run it, and rerun it when its source changes
     esdev build <entry>         Bundle an entry into one deployable ES module
                                 (`esdev build --help` for its options)
     esdev -h, --help            Show this help
     esdev -v, --version         Show the version
+
+WATCH:
+    --watch reruns the program in a fresh process on every change, so nothing
+    leaks between runs. A restart is a SIGTERM, which is the same graceful stop
+    production gets: a server stops accepting, answers the requests already in
+    flight, and only then exits — so a save while a request is open does not
+    drop it. --shutdown-grace bounds that wait, after which the process is
+    killed.
+
+    Watched: the project root (nearest package.json) or the entry's directory,
+    minus node_modules, .git, dist, target and .cache, and only for source
+    extensions. A program that exits leaves the watcher up, waiting for the
+    next change.
 
 TYPESCRIPT & JSX:
     .ts, .tsx, .mts, .cts and .jsx files are stripped to JavaScript as they
@@ -137,6 +155,7 @@ fn parse_args() -> Result<Command, String> {
 
     let mut options = RunOptions::default();
     let mut permissions = Permissions::default();
+    let mut watching = false;
     // The flag the previous argument was, so a bare word following it can be
     // diagnosed as an attempted value rather than silently becoming the script.
     let mut previous_flag: Option<String> = None;
@@ -151,6 +170,10 @@ fn parse_args() -> Result<Command, String> {
             continue;
         }
         match flag {
+            "--watch" => {
+                reject_value(flag, value)?;
+                watching = true;
+            }
             "-h" | "--help" => {
                 reject_value(flag, value)?;
                 println!("{USAGE}");
@@ -163,6 +186,11 @@ fn parse_args() -> Result<Command, String> {
             }
             "-e" | "--eval" => {
                 let code = require_value(flag, value)?.to_string();
+                if watching {
+                    return Err("--watch needs a file to watch; -e code has none.\n\n\
+                         Put the snippet in a file and watch that."
+                        .to_string());
+                }
                 let rest: Vec<String> = args.collect();
                 reject_esdev_flags_after_source(&rest, "the -e code")?;
                 return Ok(Command::Run(Box::new(Config {
@@ -194,6 +222,19 @@ fn parse_args() -> Result<Command, String> {
                 }
                 let rest: Vec<String> = args.collect();
                 reject_esdev_flags_after_source(&rest, path)?;
+                if watching {
+                    return Ok(Command::Watch(WatchConfig {
+                        // The same command line, minus the flag that put us
+                        // here — so the child runs exactly the program the user
+                        // described, under the same grants.
+                        child_args: std::env::args()
+                            .skip(1)
+                            .filter(|a| a != "--watch")
+                            .collect(),
+                        entry: std::path::PathBuf::from(path),
+                        grace: options.shutdown_grace,
+                    }));
+                }
                 return Ok(Command::Run(Box::new(Config {
                     source: Source::File(path.to_string()),
                     args: rest,
@@ -221,6 +262,7 @@ fn is_esdev_flag(flag: &str) -> bool {
             | "--version"
             | "-e"
             | "--eval"
+            | "--watch"
             | "--deny-all"
             | "--allow-all"
             | "-A"
@@ -332,6 +374,7 @@ async fn main() -> ExitCode {
     es_runtime_common::telemetry::init_tracing();
     let result = match parse_args() {
         Ok(Command::Run(config)) => es_runtime_cli_common::run("esdev", *config).await,
+        Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Build(config)) => match build::build(config).await {
             Ok(written) => {
                 println!("bundled → {written}");
