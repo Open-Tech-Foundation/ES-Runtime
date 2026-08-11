@@ -1,4 +1,7 @@
-adapters = ["crates.io"]
+adapters = [
+    "npm",
+    "crates.io",
+]
 skip_publish = [
     "es-runtime",
     "es-runtime-common",
@@ -18,10 +21,17 @@ github_release_notes = "curated-changelog"
 [publish.ignore_paths]
 es-runtime = []
 es-runtime-cli = []
-es-runtime-engine = []
+es-runtime-common = []
 es-runtime-providers = []
 es-runtime-default-providers = []
-es-runtime-common = []
+es-runtime-engine = []
+
+[discovery]
+npm = [
+    "packages/postgres",
+    "packages/redis",
+    "packages/types",
+]
 
 [[package]]
 name = "es-runtime-cli"

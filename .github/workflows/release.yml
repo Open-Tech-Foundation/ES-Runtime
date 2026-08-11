@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write  # create tags and GitHub Releases
+  id-token: write
 
 concurrency:
   group: release
@@ -24,8 +25,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.26.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.31.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.31.0/install.sh | bash
       - id: check
         run: |
           echo "should_release=$(otf-release check --exclude-package es-runtime-cli)" >> "$GITHUB_OUTPUT"
@@ -42,8 +43,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.26.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.31.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.31.0/install.sh | bash
       - id: set
         run: echo "matrix=$(otf-release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
 
@@ -68,20 +69,44 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.26.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.31.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.31.0/install.sh | bash
       - name: Install otf-release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.26.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.31.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.31.0/install.ps1 | iex
       - name: Build es-runtime-cli
         run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
         with:
           name: es-runtime-cli-${{ matrix.name }}-${{ matrix.arch }}
           path: .artifacts/es-runtime-cli
+
+  publish:
+    needs: [check-release]
+    if: needs.check-release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.31.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.31.0/install.sh | bash
+      - name: Publish
+        run: otf-release publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   github-release-es-runtime-cli:
     needs: [check-release, build-es-runtime-cli]
@@ -97,8 +122,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.26.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.26.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.31.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.31.0/install.sh | bash
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
