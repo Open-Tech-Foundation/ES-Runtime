@@ -896,3 +896,156 @@ fn watch_needs_a_file_to_watch() {
         stderr(&out)
     );
 }
+
+// ---------------------------------------------------------------------------
+// `esdev test` (DECISIONS D59)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_runs_discovered_files_and_reports_failures() {
+    let dir = build_dir("t_run");
+    write_in(&dir, "ok.test.mjs", "test('passes', () => assert(true));\n");
+    write_in(
+        &dir,
+        "bad.test.mjs",
+        "test('fails', () => assertEquals(1, 2));\n",
+    );
+    // Not a test file: discovery must not sweep in ordinary source.
+    write_in(&dir, "helper.mjs", "export const x = 1;\n");
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+
+    assert!(!out.status.success(), "a failing suite must exit non-zero");
+    assert!(text.contains("ok.test.mjs"), "{text}");
+    assert!(text.contains("bad.test.mjs"), "{text}");
+    assert!(!text.contains("helper.mjs"), "{text}");
+    assert!(text.contains("1 of 2 files failed"), "{text}");
+}
+
+#[test]
+fn a_passing_suite_exits_zero() {
+    let dir = build_dir("t_pass");
+    write_in(
+        &dir,
+        "a.test.mjs",
+        "test('sync', () => assert(true));\n\
+         test('async', async () => { const v = await Promise.resolve(1); assert(v === 1); });\n\
+         test('throws', () => assertThrows(() => { throw new Error('x'); }));\n\
+         test('rejects', async () => await assertRejects(async () => { throw new Error('x'); }));\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("4 passed"), "{}", stdout(&out));
+}
+
+/// A `.test.ts` file is the ordinary case: it must be stripped like any other,
+/// and its relative imports must resolve from its own directory.
+#[test]
+fn a_typescript_test_file_runs_with_its_imports() {
+    let dir = build_dir("t_ts");
+    write_in(
+        &dir,
+        "math.ts",
+        "export const add = (a: number, b: number): number => a + b;\n",
+    );
+    write_in(
+        &dir,
+        "math.test.ts",
+        "import { add } from './math.ts';\n\
+         interface Case { a: number; b: number; want: number }\n\
+         test('adds', () => {\n\
+         \x20 const c: Case = { a: 2, b: 3, want: 5 };\n\
+         \x20 assertEquals(add(c.a, c.b), c.want);\n\
+         });\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+}
+
+/// The property that makes a failure actionable: the frame names the line the
+/// developer wrote, not a line the injected harness moved it to.
+#[test]
+fn a_failure_names_the_line_the_developer_wrote() {
+    let dir = build_dir("t_lines");
+    write_in(
+        &dir,
+        "lines.test.mjs",
+        "test('fails on line three', () => {\n  const x = 1;\n  assert(x === 2, 'nope');\n});\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success());
+    assert!(
+        text.contains("lines.test.mjs:3:"),
+        "the harness renumbered the file:\n{text}"
+    );
+}
+
+/// One process per file: a file that exits must not take the run with it, and
+/// the others must still be reported.
+#[test]
+fn a_file_that_exits_does_not_end_the_run() {
+    let dir = build_dir("t_isolation");
+    write_in(
+        &dir,
+        "a_exits.test.mjs",
+        "import { exit } from 'runtime:process';\ntest('bails', () => exit(3));\n",
+    );
+    write_in(
+        &dir,
+        "b_fine.test.mjs",
+        "test('fine', () => assert(true));\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("b_fine.test.mjs"), "{text}");
+    assert!(text.contains("a_exits.test.mjs"), "{text}");
+}
+
+#[test]
+fn a_filter_selects_by_path() {
+    let dir = build_dir("t_filter");
+    write_in(&dir, "alpha.test.mjs", "test('a', () => assert(true));\n");
+    write_in(&dir, "beta.test.mjs", "test('b', () => assert(true));\n");
+
+    let out = esdev_in(&dir)
+        .args(["test", "alpha"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("alpha.test.mjs"), "{}", stdout(&out));
+    assert!(!stdout(&out).contains("beta.test.mjs"), "{}", stdout(&out));
+}
+
+#[test]
+fn no_test_files_is_an_error_rather_than_a_silent_pass() {
+    let dir = build_dir("t_empty");
+    write_in(&dir, "notatest.mjs", "export const x = 1;\n");
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        !out.status.success(),
+        "an empty run must not look like success"
+    );
+    assert!(stderr(&out).contains("no test files"), "{}", stderr(&out));
+}

@@ -29,9 +29,11 @@ use es_runtime_cli_common::permissions::Permissions;
 use es_runtime_cli_common::{Config, Source};
 
 mod build;
+mod test;
 mod transform;
 mod watch;
 use build::BuildConfig;
+use test::TestConfig;
 use transform::TypeStripper;
 use watch::WatchConfig;
 
@@ -44,6 +46,8 @@ enum Command {
     Build(BuildConfig),
     /// Run a module, restarting it when its source changes.
     Watch(WatchConfig),
+    /// Discover and run test files.
+    Test(TestConfig),
 }
 
 const USAGE: &str = "\
@@ -57,6 +61,7 @@ USAGE:
     esdev <file>                Run a module file — .js, .mjs, or .ts/.tsx/.jsx
     esdev -e=<code>             Run an inline module snippet (JavaScript)
     esdev --watch <file>        Run it, and rerun it when its source changes
+    esdev test [filter...]      Run the test files (`esdev test --help`)
     esdev build <entry>         Bundle an entry into one deployable ES module
                                 (`esdev build --help` for its options)
     esdev -h, --help            Show this help
@@ -108,6 +113,32 @@ esdev is for your machine. It is not a deployment target: ship the artifact and
 run it under esrun, which has no development surface to attack.
 ";
 
+const TEST_USAGE: &str = "\
+esdev test — run the test files
+
+USAGE:
+    esdev test [filter...]      Run every *.test.{js,mjs,ts,tsx,jsx} found
+    esdev test <filter>         ...whose path contains <filter>
+    esdev test --file=<path>    Run exactly one file
+    esdev test -h, --help       Show this help
+
+Each file runs in its own process, so one that wedges, exhausts its heap or
+calls exit() cannot decide the fate of the others, and a global left behind by
+one file is not visible to the next.
+
+The file itself is the entry — it keeps its own path, its module resolution and
+its TypeScript — and arrives with the globals already defined:
+
+    test(name, fn)              fn may be async; failures are collected
+    assert(cond, msg?)
+    assertEquals(actual, expected, msg?)
+    assertThrows(fn, msg?)
+    assertRejects(fn, msg?)
+
+The same vocabulary the runtime's own conformance suite uses. Exits non-zero if
+any file fails.
+";
+
 const BUILD_USAGE: &str = "\
 esdev build — bundle a server entry and its dependencies into one ES module
 
@@ -147,10 +178,13 @@ fn parse_args() -> Result<Command, String> {
     // about whether `--deny-all` before it was meant to shape a bundle (it
     // cannot — a bundle does not run) or the run that is not happening.
     let mut argv = std::env::args().skip(1);
-    if let Some(first) = argv.next()
-        && first == "build"
-    {
-        return parse_build(argv).map(Command::Build);
+    if let Some(first) = argv.next() {
+        if first == "build" {
+            return parse_build(argv).map(Command::Build);
+        }
+        if first == "test" {
+            return parse_test(argv).map(Command::Test);
+        }
     }
 
     let mut options = RunOptions::default();
@@ -366,6 +400,94 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
     })
 }
 
+/// Parses `esdev test [--file=<path>] [filter...]`.
+fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> {
+    let mut file = None;
+    let mut filters = Vec::new();
+    for arg in args {
+        let (flag, value) = split_flag_value(&arg);
+        match flag {
+            "-h" | "--help" => {
+                reject_value(flag, value)?;
+                println!("{TEST_USAGE}");
+                std::process::exit(0);
+            }
+            "--file" => file = Some(require_value(flag, value)?.to_string()),
+            flag if flag.starts_with('-') && flag.len() > 1 => {
+                return Err(format!("unknown option: {flag}\n\n{TEST_USAGE}"));
+            }
+            filter => filters.push(filter.to_string()),
+        }
+    }
+    Ok(TestConfig { file, filters })
+}
+
+/// Runs one test file, or discovers and runs them all.
+///
+/// The parent spawns a child per file rather than looping in-process, so a file
+/// that hangs or exits takes only itself down. `--file` is what a child is
+/// invoked with, and is equally a supported way to run one file by hand.
+async fn run_tests(config: TestConfig) -> ExitCode {
+    if let Some(file) = config.file {
+        let path = std::path::PathBuf::from(&file);
+        let run = Config {
+            source: Source::File(file.clone()),
+            args: Vec::new(),
+            capabilities: es_runtime_common::CapabilitySet::all(),
+            scopes: std::collections::HashMap::new(),
+            options: RunOptions::default(),
+            transform: Some(std::sync::Arc::new(test::TestTransform::new(&path))),
+        };
+        return match es_runtime_cli_common::run("esdev", run).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                print_error(&err);
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let files = test::discover(&root, &config.filters);
+    if files.is_empty() {
+        eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
+        return ExitCode::FAILURE;
+    }
+
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("error: cannot find the esdev binary");
+        return ExitCode::FAILURE;
+    };
+    let mut failed = 0usize;
+    for file in &files {
+        println!("{}", file.strip_prefix(&root).unwrap_or(file).display());
+        let status = tokio::process::Command::new(&exe)
+            .arg("test")
+            .arg(format!("--file={}", file.display()))
+            .status()
+            .await;
+        match status {
+            Ok(status) if status.success() => {}
+            Ok(_) => failed += 1,
+            Err(e) => {
+                eprintln!("  cannot run it: {e}");
+                failed += 1;
+            }
+        }
+    }
+    let total = files.len();
+    if failed == 0 {
+        println!("\n{total} file{} passed", if total == 1 { "" } else { "s" });
+        ExitCode::SUCCESS
+    } else {
+        println!(
+            "\n{failed} of {total} file{} failed",
+            if total == 1 { "" } else { "s" }
+        );
+        ExitCode::FAILURE
+    }
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     // Before anything that could log. Installing a subscriber is a
@@ -375,6 +497,7 @@ async fn main() -> ExitCode {
     let result = match parse_args() {
         Ok(Command::Run(config)) => es_runtime_cli_common::run("esdev", *config).await,
         Ok(Command::Watch(config)) => watch::supervise(config).await,
+        Ok(Command::Test(config)) => return run_tests(config).await,
         Ok(Command::Build(config)) => match build::build(config).await {
             Ok(written) => {
                 println!("bundled → {written}");

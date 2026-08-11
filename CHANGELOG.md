@@ -115,6 +115,36 @@ namespace) is unstable and may change between minor releases until the API freez
   packages, bundled and then served by `esrun --deny-all --allow-listen` — one
   capability, and none of the four settings passed by hand.
 
+- **`esdev test`** (DECISIONS D59) — find the test files, run each in its own
+  process, report.
+
+  ```sh
+  esdev test              # every *.test.{js,mjs,ts,tsx,jsx}
+  esdev test math         # ...whose path contains "math"
+  esdev test --file=x.test.ts
+  ```
+
+  **One process per file.** A file that wedges, exhausts its heap or calls
+  `exit()` cannot decide the fate of the others, and a global one file leaves
+  behind is not visible to the next.
+
+  **The test file is the entry**, not something a generated driver imports —
+  which is not a stylistic choice: module resolution is jailed to the project
+  root detected from the entry's own directory (D25), so a driver in a temp
+  directory could not import a test file in the project at all. The harness is
+  prepended to the file's own source through the same `SourceTransform` seam
+  that strips TypeScript, so the file keeps its path, its jail, its relative
+  imports and its `.ts` handling.
+
+  The globals are the ones this repository's own conformance suite uses —
+  `test`, `assert`, `assertEquals`, `assertThrows`, `assertRejects` — so a
+  developer reading the runtime's tests and writing their own does not learn two
+  vocabularies. `test` accepts async functions; failures are collected rather
+  than aborting the file.
+
+  The harness is injected as a **single line**, so a failing assertion still
+  names the line the developer wrote rather than one thirty lines further down.
+
 - **`esdev --watch`** (DECISIONS D59) — rerun the program when its source
   changes.
 
