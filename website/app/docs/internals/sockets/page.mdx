@@ -1,12 +1,13 @@
 ---
 title: "Internals: sockets"
-description: How runtime:net moves bytes — the task-per-socket model, TLS, in-place upgrades, and what is deliberately unbounded.
+description: How runtime:net moves bytes — the task-per-socket model, TLS, in-place upgrades, UDP, and what is deliberately unbounded.
 ---
 
 # Internals: sockets
 
 How `runtime:net` gets bytes on and off a TCP socket, what each socket costs
-while it is open, and where the sharp edges are.
+while it is open, where the sharp edges are — and why the UDP half of the module
+is built the opposite way.
 
 This page explains behaviour rather than listing signatures — for those, see the
 [`runtime:net` reference](/api/net) — and it covers raw sockets only. The
@@ -162,6 +163,54 @@ The accept channel holds **8** connections. Unlike the HTTP server, there is no
 `maxConnections`: a `runtime:net` listener accepts as fast as the guest calls
 `accept()`, and the guest's own loop is the backpressure.
 
+## UDP: no tasks, no channels
+
+`bind()` is the other half of the module and it is built the opposite way. There
+are no reader and writer tasks, no `mpsc` in the middle: a datagram socket is
+held as a shared `UdpSocket`, and each `receive()` awaits `recv_from` on it
+directly.
+
+The task-per-socket design exists because a TCP stream delivers bytes whether or
+not anyone is asking, so something has to be reading. A datagram socket already
+has that buffer — it is the kernel's receive queue — and a second queue in front
+of it would only add a place for datagrams to be dropped that the program cannot
+see. So there is exactly one queue, and it is the one the OS bounds.
+
+That choice costs one thing, and it is worth stating because it is the only
+non-obvious piece of machinery here: **a parked `receive()` holds the socket
+alive itself**, so dropping the registry's handle is not enough to end it.
+`close()` therefore sets a flag *and* rings a `Notify`, and a receive registers
+for the bell **before** it reads the flag. A close landing between those two
+steps is then seen by one or the other, and never by neither. Without that
+ordering, a receive on a socket nobody is sending to would wait forever for a
+datagram that can no longer arrive.
+
+Two more things fall out of the shape:
+
+**Message boundaries are the API.** One `receive()` is one datagram, whatever its
+length — including a zero-length one, which is a message and not an end of
+stream. A datagram longer than 65,507 bytes is truncated by the OS exactly as it
+is for any other receiver, and nothing here reports how much was lost.
+
+**Concurrent receives race, and that is correct.** Several outstanding
+`receive()` calls share the socket and whichever is polled first takes the next
+datagram. There is no checked-out receiver to lose, because there is no channel.
+
+### The v4/v6 split
+
+`ttl`, `multicastTtl` and `multicastLoopback` are carried by different socket
+options on IPv4 and IPv6, and setting the wrong one is not an error the OS
+reports — it silently does nothing. The address family therefore decides, once,
+at the bind. Asking for `broadcast` on an IPv6 socket is an error rather than a
+flag that sets nothing, because IPv6 has no broadcast at all, and an IPv6
+multicast membership names its interface by **index** while an IPv4 one names it
+by **address**.
+
+Options are set at the bind, not later: `SO_REUSEPORT` and `SO_REUSEADDR` are
+meaningless after it, and the rest are configuration a program decides once.
+Group membership is the exception, and is a method, because a responder joins and
+leaves groups while it runs.
+
 ## Capabilities
 
 Reaching out and being reachable are separate privileges, so they are separate
@@ -171,9 +220,20 @@ capabilities with separate allowlists:
 | --- | --- | --- |
 | `connect()` | `Net` | `--allow-net=<hosts>` |
 | `listen()` | `NetListen` | `--allow-listen=<addresses>` |
+| `bind()` (UDP) | `NetListen` | `--allow-listen=<addresses>` |
+| `send()` / `connect()` on a datagram socket | `Net` | `--allow-net=<hosts>` |
 
 The check happens **before** the socket is created — a denied `listen` claims no
 port and leaves nothing behind.
+
+**A UDP socket is checked against both.** It is a server and a client at once, so
+gating it on one grant would be a hole in whichever was chosen: under `Net` alone
+a program could bind a port and receive inbound traffic, and under `NetListen`
+alone it could reach any host on the internet. The consequence is that a program
+which only sends still needs `listen` — an ephemeral source port is a port, and
+the replies that come back to it are inbound. And because the destination is an
+argument rather than a property of the socket, `--allow-net` is consulted on
+**every** send, not once at the bind.
 
 A host is judged **as written, before resolution**. That is deliberate: a name is
 a name, so a denied name cannot be smuggled past the list by an
@@ -197,6 +257,9 @@ Worth knowing before putting a `runtime:net` service on a public port:
   none either — unlike the HTTP server, which bounds it at 10s.
 - **No connection cap on a listener**, and no per-peer limit.
 - **No socket count limit.** The descriptor limit is the ceiling.
+- **Nothing bounds a UDP socket's queue but the OS.** The kernel's receive
+  buffer is the only backpressure; a guest that stops calling `receive()` has
+  datagrams dropped by the OS, silently, because that is what UDP is.
 
 None of these are oversights in the sense of being unnoticed; they are the gap
 between a raw socket API and a server framework. Most are things a guest can

@@ -8,6 +8,49 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **UDP in `runtime:net`** (DECISIONS D58) — `bind()` returns a
+  `DatagramSocket`. Messages, not a byte stream: a datagram arrives whole and
+  carries its own sender, which is what a stream would erase.
+
+  ```js
+  import { bind } from "runtime:net";
+
+  const sock = bind({ hostname: "0.0.0.0", port: 5353 });
+  const { port } = await sock.addr;              // port 0 ⇒ ephemeral
+
+  for await (const { data, address, port } of sock) {
+    await sock.send(data, { hostname: address, port });
+  }
+
+  await sock.joinMulticast("224.0.0.251");       // mDNS, SSDP, discovery
+  ```
+
+  `send`/`receive`, `connect()` to fix a peer (sends need no address, and
+  datagrams from anyone else are discarded), `joinMulticast`/`leaveMulticast`,
+  `addr`, `close()`, and an async iterator that ends at the close. Socket
+  options — `reusePort`, `reuseAddress`, `broadcast`, `ttl`, `multicastTtl`,
+  `multicastLoopback` — are set at the bind, and an omitted one leaves the OS
+  default rather than a value chosen for you. The address family picks the v4 or
+  v6 spelling of each, so an IPv6 socket asking for `broadcast` is an error
+  rather than a flag that quietly sets nothing.
+
+  This closes the whole category that needs datagrams and has no workaround:
+  DNS, StatsD, syslog, NTP, SNMP, mDNS/SSDP discovery, game and telemetry
+  protocols, and any local agent listening on a UDP port.
+
+  **Two capabilities, and this is deliberate.** Binding takes a port —
+  `NetListen` — while sending reaches a peer — `Net`. A UDP socket is a server
+  and a client at once, so gating it on one grant would be a hole in whichever
+  was chosen. A program that only receives needs `listen` alone; one that sends
+  needs both, because it cannot send without holding a port that answers.
+  `--allow-listen` scopes the bind, and `--allow-net` is checked on **every**
+  destination, since one socket sends to as many peers as it likes.
+
+  For embedders: `NetProvider` gains six methods, all defaulted to a refusal, so
+  an existing implementation compiles unchanged and simply has no UDP.
+
 ## [0.23.0] - 2026-08-11
 
 ### Added

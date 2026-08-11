@@ -859,8 +859,8 @@ capability — only its operations do.
 | `Env`       | Environment, arguments, cwd, platform — backs `runtime:process`.    |
 | `FileRead`  | Read files within the configured root jail.                         |
 | `FileWrite` | Write files within the configured root jail.                        |
-| `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`). |
-| `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen`, `runtime:http` `serve`). |
+| `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`, a UDP `send`). |
+| `NetListen` | Bind a listening socket and accept inbound connections (`runtime:net` `listen` and `bind`, `runtime:http` `serve`). |
 | `Signals`   | Watch OS signals — `runtime:process` `onSignal`. Separate from `Env` because a watch **suppresses the signal's default action**: it is the privilege to decline to die on request, not a read of process state. |
 | `Run`       | Spawn a child process — `runtime:system`. Never implied by another capability: a child runs **outside** every confinement here (no capability check, no root jail, no execution deadline), so granting it to guest code grants everything the host user can do. |
 | `HrTime`    | Access high-resolution timing.                                      |
@@ -894,8 +894,8 @@ another**: read the list top to bottom and that is the answer.
 | `--deny-read` | `FileRead` | `runtime:fs` / `runtime:wasi` reads |
 | `--deny-write` | `FileWrite` | `runtime:fs` / `runtime:wasi` mutations |
 | `--deny-imports` | `FileSystem` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `--deny-net` | `Net` | `fetch`, `WebSocket`, `runtime:net` `connect` |
-| `--deny-listen` | `NetListen` | `runtime:net` `listen`, `runtime:http` `serve` |
+| `--deny-net` | `Net` | `fetch`, `WebSocket`, `runtime:net` `connect`, a UDP `send` |
+| `--deny-listen` | `NetListen` | `runtime:net` `listen` and `bind`, `runtime:http` `serve` |
 | `--deny-env` | `Env` | `runtime:process` `env` / `args` / `cwd()` |
 | `--deny-run` | `Run` | `runtime:system` child processes |
 | `--deny-signals` | `Signals` | `runtime:process` `onSignal` |
@@ -922,8 +922,8 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 | ---- | ------ | --------------- |
 | `--allow-read=<paths>` | reading those paths and their subtrees | fails with `ERR_PERMISSION_DENIED` |
 | `--allow-write=<paths>` | writing those paths and their subtrees | fails before anything is created |
-| `--allow-net=<hosts>` | reaching those addresses (`fetch`, `runtime:net` `connect`, `WebSocket`) | fails with `ERR_PERMISSION_DENIED`, before any packet |
-| `--allow-listen=<addresses>` | binding those addresses (`runtime:net` `listen`, `runtime:http` `serve`) | fails before the port is claimed |
+| `--allow-net=<hosts>` | reaching those addresses (`fetch`, `runtime:net` `connect`, `WebSocket`, every UDP destination) | fails with `ERR_PERMISSION_DENIED`, before any packet |
+| `--allow-listen=<addresses>` | binding those addresses (`runtime:net` `listen` and `bind`, `runtime:http` `serve`) | fails before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails with `ERR_PERMISSION_DENIED` |
 | `--allow-signals=<names>` | watching those signals | refused, and absent from `signals()` |
@@ -1551,7 +1551,7 @@ and MySQL drivers are JS over [`runtime:net`](#runtimenet).
 
 ## `runtime:net`
 
-TCP sockets (SPEC §12). `connect()` follows the **WinterTC Sockets API**:
+TCP sockets and UDP datagrams (SPEC §12). `connect()` follows the **WinterTC Sockets API**:
 outbound TCP with web-stream `readable`/`writable`. `listen()` returns an
 async-iterable of inbound sockets. `connect` requires `Net`; `listen` requires
 `NetListen`. All I/O is async — nothing blocks. **TLS** client connections are
@@ -1602,6 +1602,7 @@ const tlsServer = listen({
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
 | `connect(address, options?)` | `(addr, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP (or TLS) connection; returns a `Socket` immediately (`opened` settles on connect). `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` is the offered protocol list; `allowHalfOpen` keeps writing after the peer's FIN. `Net`. |
 | `listen(options)`            | `({ hostname?, port, secureTransport?, cert?, key?, alpn?, reusePort? }) => Listener` | Bind a listening socket. `secureTransport: "on"` terminates TLS on each accept — requires a PEM `cert` + `key`; `alpn` advertises protocols; `reusePort` shares the port with other processes (see below). `NetListen`. |
+| `bind(options)`              | `({ hostname?, port, reusePort?, reuseAddress?, broadcast?, ttl?, multicastTtl?, multicastLoopback? }) => DatagramSocket` | Bind a UDP socket (see [UDP](#udp)). `NetListen` to bind, `Net` to send. |
 
 **`Socket`** — `readable`/`writable` (web streams), `opened: Promise<SocketInfo>`,
 `closed: Promise<void>`, `close(reason?)`, `upgraded`, and `startTls(): Socket`
@@ -1624,6 +1625,50 @@ the call: it must be an integer in `0`–`65535`, and `connect` additionally
 rejects `0` — a port that is not a port used to be coerced to `0`, so a typo
 connected somewhere else rather than failing. `listen({ port: 0 })` remains the
 way to ask for an ephemeral port.
+
+### UDP
+
+`bind()` returns a `DatagramSocket` — messages, not a byte stream, so it has
+`send`/`receive` rather than `readable`/`writable`. A datagram arrives whole or
+not at all and carries its own sender, which is what a stream would erase.
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({ hostname: "0.0.0.0", port: 5353 });
+const { port } = await sock.addr;          // port 0 ⇒ ephemeral
+
+for await (const { data, address, port } of sock) {
+  await sock.send(data, { hostname: address, port }); // echo to the sender
+}
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `send(data, address?)` | `Promise<number>` | Send one datagram; resolves with the bytes sent. `address` is `"host:port"` or `{ hostname, port }`, and is required unless the socket is connected. Requires `Net`, checked **per destination**. |
+| `receive()` | `Promise<Datagram \| null>` | The next `{ data, address, port }`, or `null` once closed. One call is one message — a zero-length datagram is a message, not an EOF. |
+| `connect(address)` | `Promise<SocketInfo>` | Fix the peer: sends need no address, and datagrams from anyone else are discarded. No packet is sent, so this succeeds against a host that is not listening. Requires `Net`. |
+| `joinMulticast(group, { interface? })` | `Promise<void>` | Join a group. `interface` is an IPv4 address for a v4 group, an interface **index** for a v6 one. |
+| `leaveMulticast(group, { interface? })` | `Promise<void>` | Leave a group. |
+| `addr` | `Promise<{ hostname, port }>` | The bound address. |
+| `close()` | `Promise<void>` | Close the socket; a parked `receive()` resolves to `null`. |
+| `closed` | `Promise<void>` | Resolves once closed. |
+| `[Symbol.asyncIterator]` | `AsyncIterable<Datagram>` | `for await (const d of sock) { … }`, ending at `close()`. |
+
+**Bind options** — `reusePort` (share the address across processes; Unix only),
+`reuseAddress` (share it with another socket — what two processes receiving one
+multicast group need), `broadcast` (permit sending to the broadcast address;
+IPv4 only), `ttl`, `multicastTtl` and `multicastLoopback`. Each is set once, at
+the bind, and an omitted one leaves the OS default rather than a value chosen
+here. The address family decides which spelling of each option is used, so an
+IPv6 socket asking for `broadcast` is an error rather than a flag that sets
+nothing.
+
+**Two capabilities, not one.** `bind` requires `NetListen` — it takes a port,
+and a port is how a process is reached, ephemeral or not — while `send` and
+`connect` require `Net`. A UDP socket is a server and a client at once, so a
+program that only receives needs `listen` alone, and one that sends needs both.
+`--allow-listen` scopes the bind; `--allow-net` scopes every destination.
 
 One failure reaches **every** surface of the socket it belongs to: a refused
 connect rejects `opened`, the streams, `close()` and a later `startTls()` alike,

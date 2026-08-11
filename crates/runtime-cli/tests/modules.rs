@@ -1176,6 +1176,120 @@ VXKwlHaaiSsPtueuWJ1GwC4Pm9kbriVs1/9YTXpKdjsPga00am7iwK7c
 }
 
 #[test]
+fn runtime_net_udp_datagram_roundtrip() {
+    // Loopback UDP: bind/send/receive, the sender's address arriving with the
+    // datagram (nothing told the server that port in advance), a reply to it,
+    // message boundaries kept across three sends — including a zero-length one,
+    // which is a message and not an EOF — and a `for await` loop that ends at
+    // close() so the process exits rather than hanging.
+    let script = "import { bind } from 'runtime:net';\
+        const enc = new TextEncoder(); const dec = new TextDecoder();\
+        const server = bind({ hostname: '127.0.0.1', port: 0 });\
+        const { port } = await server.addr;\
+        const client = bind({ hostname: '127.0.0.1', port: 0 });\
+        const sent = await client.send(enc.encode('ping'), { hostname: '127.0.0.1', port });\
+        const first = await server.receive();\
+        await server.send(enc.encode('pong'), `${first.address}:${first.port}`);\
+        const back = await client.receive();\
+        for (const body of ['one', '', 'three'])\
+          await client.send(enc.encode(body), `127.0.0.1:${port}`);\
+        let parts = [];\
+        for (let i = 0; i < 3; i++) parts.push(dec.decode((await server.receive()).data));\
+        const loop = (async () => { for await (const _ of server) {} return 'ended'; })();\
+        await server.close(); await client.close();\
+        console.log('UDP:' + sent + ':' + dec.decode(first.data) + ':' + first.address\
+          + ':' + dec.decode(back.data) + ':' + parts.join('|') + ':' + (await loop)\
+          + ':' + (await server.receive()));";
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("UDP:4:ping:127.0.0.1:pong:one||three:ended:null"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn runtime_net_udp_connect_and_validation() {
+    // A connected socket sends with no address and hears only its peer; an
+    // unconnected one refuses a send with no destination. Plus the option and
+    // port validation, all in the WinterTC SocketError shape ("+SE").
+    let script = "import { bind } from 'runtime:net';\
+        const enc = new TextEncoder(); const dec = new TextDecoder();\
+        const tag = (e) => e.constructor.name + (e.message.startsWith('SocketError: ') ? '+SE' : '');\
+        const server = bind({ hostname: '127.0.0.1', port: 0 });\
+        const { port } = await server.addr;\
+        const client = bind({ hostname: '127.0.0.1', port: 0 });\
+        let r = '';\
+        try { await client.send(enc.encode('nowhere')); r += 'NOPEER:no-throw'; }\
+        catch (e) { r += 'NOPEER:' + tag(e); }\
+        const info = await client.connect({ hostname: '127.0.0.1', port });\
+        await client.send(enc.encode('connected'));\
+        r += ':GOT:' + dec.decode((await server.receive()).data);\
+        r += ':PEER:' + (info.remoteAddress === `127.0.0.1:${port}`);\
+        try { bind({ port: 70000 }); r += ':PORT:no-throw'; } catch (e) { r += ':PORT:' + tag(e); }\
+        try { bind({ port: 0, ttl: 999 }); r += ':TTL:no-throw'; } catch (e) { r += ':TTL:' + tag(e); }\
+        try { bind({ port: 0, broadcast: 'yes' }); r += ':OPT:no-throw'; } catch (e) { r += ':OPT:' + tag(e); }\
+        try { await client.joinMulticast('127.0.0.1'); r += ':GROUP:no-throw'; }\
+        catch (e) { r += ':GROUP:' + tag(e); }\
+        await server.close(); await client.close();\
+        try { await client.send(enc.encode('after')); r += ':CLOSED:no-throw'; }\
+        catch (e) { r += ':CLOSED:' + tag(e); }\
+        console.log(r);";
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "NOPEER:TypeError+SE:GOT:connected:PEER:true:PORT:TypeError+SE:TTL:TypeError+SE\
+             :OPT:TypeError+SE:GROUP:TypeError+SE:CLOSED:TypeError+SE"
+        ),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn runtime_net_udp_multicast_and_socket_options() {
+    // The options that only exist on a datagram socket: reuseAddress (two
+    // sockets on one port), broadcast, the two TTLs, and a multicast group
+    // joined and left on the loopback interface. An administratively scoped
+    // group (RFC 2365), so nothing else on the machine is a member.
+    let script = "import { bind } from 'runtime:net';\
+        const enc = new TextEncoder(); const dec = new TextDecoder();\
+        const opts = { hostname: '0.0.0.0', reuseAddress: true, broadcast: true,\
+          ttl: 4, multicastTtl: 1, multicastLoopback: true };\
+        const first = bind({ ...opts, port: 0 });\
+        const { port } = await first.addr;\
+        const second = bind({ ...opts, port });\
+        await second.addr;\
+        await first.joinMulticast('239.255.42.98', { interface: '127.0.0.1' });\
+        await second.joinMulticast('239.255.42.98', { interface: '127.0.0.1' });\
+        const sender = bind({ hostname: '127.0.0.1', port: 0 });\
+        await sender.send(enc.encode('announce'), `239.255.42.98:${port}`);\
+        const heard = [dec.decode((await first.receive()).data), dec.decode((await second.receive()).data)];\
+        await first.leaveMulticast('239.255.42.98', { interface: '127.0.0.1' });\
+        await second.leaveMulticast('239.255.42.98', { interface: '127.0.0.1' });\
+        await first.close(); await second.close(); await sender.close();\
+        console.log('MCAST:' + (port > 0) + ':' + heard.join('|'));";
+    let out = esrun()
+        .arg(format!("-e={}", script))
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("MCAST:true:announce|announce"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+#[test]
 fn runtime_http_serve_and_fetch_roundtrip() {
     // Loopback: serve() an echo-ish handler, fetch() it through the real HTTP
     // client, read body + a custom header, then stop the server so the process

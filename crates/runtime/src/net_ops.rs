@@ -9,12 +9,19 @@
 //! capability at all could read and write another agent's sockets by naming
 //! small integers. All ops are async. `connect`/`listen`/`accept` return JSON
 //! the prelude `JSON.parse`s; `read` returns bytes or null (EOF/closed).
+//!
+//! The UDP ops ([`install_datagram`], D58) are the one place two capabilities
+//! meet on one resource: `net_bind_datagram` is gated on `NetListen` and
+//! `net_datagram_send`/`net_datagram_connect` on `Net`, because a datagram
+//! socket is a server and a client at once.
 
 use std::sync::Arc;
 
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{ConnectOptions, ListenOptions, NetProvider, ProviderError, SocketInfo};
+use es_runtime_providers::{
+    ConnectOptions, DatagramOptions, ListenOptions, NetProvider, ProviderError, SocketInfo,
+};
 
 use crate::Result;
 use crate::handles::Handles;
@@ -25,6 +32,7 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
     // collide, and `accept` on a socket is not a request worth honouring.
     let sockets = Handles::new("socket");
     let listeners = Handles::new("listener");
+    let datagrams = Handles::new("datagram socket");
 
     let n = net.clone();
     let owned = sockets.clone();
@@ -200,13 +208,180 @@ pub(crate) fn install(engine: &mut dyn Engine, net: Option<Arc<dyn NetProvider>>
     // a different mistake. The high-cardinality handles (sockets, requests,
     // children) are the ones that must give their ids back.
     let owned = listeners;
+    let n = net.clone();
     engine.register_op(OpDecl::r#async("net_close_listener", move |args| {
-        let n = net.clone();
+        let n = n.clone();
         let owned = owned.clone();
         let id = arg_u64(&args, 0);
         Box::pin(async move {
             require(&n)?
                 .close_listener(owned.check(id)?)
+                .await
+                .map_err(map_err)?;
+            Ok(Value::Undefined)
+        })
+    }))?;
+
+    install_datagram(engine, net, datagrams)?;
+
+    Ok(())
+}
+
+/// The UDP half (DECISIONS D58), in its own registry: a datagram socket is not
+/// a stream socket, and an id from one namespace must not name a resource in
+/// the other.
+///
+/// The gating is the decision worth reading twice. `bind` requires
+/// `NetListen` — it takes a port, and a process holding a port is reachable,
+/// ephemeral or not — while `send` requires `Net`, because a datagram leaving
+/// this host is reaching out. A UDP socket is both things at once, so it is
+/// checked against both grants rather than whichever one it was created under.
+/// The consequence is deliberate: a program that only receives needs `listen`
+/// alone, and one that sends needs `net` *and* `listen`, since it cannot send
+/// without first holding a port that answers.
+fn install_datagram(
+    engine: &mut dyn Engine,
+    net: Option<Arc<dyn NetProvider>>,
+    datagrams: Handles,
+) -> Result<()> {
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_bind_datagram", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let host = arg_str(&args, 0);
+            let port = arg_u16(&args, 1);
+            let opts = DatagramOptions {
+                reuse_port: arg_bool(&args, 2),
+                reuse_address: arg_bool(&args, 3),
+                broadcast: arg_bool(&args, 4),
+                // Absent ⇒ the OS default, which is a different thing from any
+                // number this layer could pick.
+                ttl: arg_opt_u32(&args, 5),
+                multicast_ttl: arg_opt_u32(&args, 6),
+                multicast_loopback: match args.get(7) {
+                    Some(Value::Bool(on)) => Some(*on),
+                    _ => None,
+                },
+            };
+            Box::pin(async move {
+                let (id, info) = require(&n)?
+                    .bind_datagram(host, port, opts)
+                    .await
+                    .map_err(map_err)?;
+                Ok(socket_value(owned.own(id), &info))
+            })
+        })
+        .requires(Capability::NetListen),
+    )?;
+
+    // No capability of its own: receiving is what the bind was authorized for,
+    // and the ownership check is what stops another agent naming this socket.
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(OpDecl::r#async("net_datagram_receive", move |args| {
+        let n = n.clone();
+        let owned = owned.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            match require(&n)?
+                .receive(owned.check(id)?)
+                .await
+                .map_err(map_err)?
+            {
+                Some(datagram) => Ok(Value::Object(vec![
+                    ("data".to_string(), Value::Bytes(datagram.data)),
+                    ("address".to_string(), Value::String(datagram.address)),
+                    ("port".to_string(), Value::Number(datagram.port as f64)),
+                ])),
+                None => Ok(Value::Null),
+            }
+        })
+    }))?;
+
+    // `Net`, and checked on **every** send: the destination is an argument here
+    // rather than a property of the socket, so a single grant at bind time
+    // would authorize reaching anywhere for the socket's whole life.
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_datagram_send", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            let data = arg_bytes(&args, 1);
+            let host = arg_str(&args, 2);
+            let port = arg_u16(&args, 3);
+            // An empty host is the guest saying "the connected peer" — the only
+            // way to send without naming a destination, and the provider
+            // refuses it on a socket that has none.
+            let to = (!host.is_empty()).then_some((host, port));
+            Box::pin(async move {
+                let sent = require(&n)?
+                    .send_to(owned.check(id)?, data, to)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Number(sent as f64))
+            })
+        })
+        .requires(Capability::Net),
+    )?;
+
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_datagram_connect", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            let host = arg_str(&args, 1);
+            let port = arg_u16(&args, 2);
+            Box::pin(async move {
+                let id = owned.check(id)?;
+                let info = require(&n)?
+                    .connect_datagram(id, host, port)
+                    .await
+                    .map_err(map_err)?;
+                // The same id: fixing a peer changes where the socket sends,
+                // not which socket it is.
+                Ok(socket_value(id, &info))
+            })
+        })
+        .requires(Capability::Net),
+    )?;
+
+    // Membership is `NetListen`: joining a group is a subscription to traffic
+    // addressed to this host, which is the inbound half of the grant.
+    let n = net.clone();
+    let owned = datagrams.clone();
+    engine.register_op(
+        OpDecl::r#async("net_datagram_multicast", move |args| {
+            let n = n.clone();
+            let owned = owned.clone();
+            let id = arg_u64(&args, 0);
+            let group = arg_str(&args, 1);
+            let interface = arg_str(&args, 2);
+            let join = arg_bool(&args, 3);
+            Box::pin(async move {
+                require(&n)?
+                    .set_multicast_membership(owned.check(id)?, group, interface, join)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Undefined)
+            })
+        })
+        .requires(Capability::NetListen),
+    )?;
+
+    let owned = datagrams;
+    engine.register_op(OpDecl::r#async("net_datagram_close", move |args| {
+        let n = net.clone();
+        let owned = owned.clone();
+        let id = arg_u64(&args, 0);
+        Box::pin(async move {
+            require(&n)?
+                .close_datagram(owned.check_and_release(id)?)
                 .await
                 .map_err(map_err)?;
             Ok(Value::Undefined)
@@ -241,6 +416,16 @@ fn arg_bytes(args: &[Value], i: usize) -> Vec<u8> {
 
 fn arg_bool(args: &[Value], i: usize) -> bool {
     matches!(args.get(i), Some(Value::Bool(true)))
+}
+
+/// A non-negative integer argument, or `None` when the guest said nothing —
+/// which is how a socket option asks for the OS default rather than a number
+/// chosen here.
+fn arg_opt_u32(args: &[Value], i: usize) -> Option<u32> {
+    args.get(i)
+        .and_then(Value::as_number)
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= f64::from(u32::MAX))
+        .map(|n| n as u32)
 }
 
 /// Collects a JS string array argument (non-strings skipped); `[]` if absent.

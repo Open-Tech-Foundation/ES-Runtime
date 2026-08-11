@@ -1,8 +1,10 @@
-// runtime:net — TCP sockets (SPEC §12). `connect()` follows the WinterTC Sockets
-// API: it returns a Socket synchronously whose `.readable`/`.writable` are web
-// streams and whose `.opened` resolves once connected. `listen()` returns an
-// async-iterable Listener of the same Socket shape. Backed by async ops, gated
-// on Net (connect) / NetListen (listen).
+// runtime:net — TCP sockets and UDP datagrams (SPEC §12). `connect()` follows
+// the WinterTC Sockets API: it returns a Socket synchronously whose
+// `.readable`/`.writable` are web streams and whose `.opened` resolves once
+// connected. `listen()` returns an async-iterable Listener of the same Socket
+// shape. `bind()` returns a DatagramSocket — messages, not a byte stream, so it
+// has `send`/`receive` rather than streams (DECISIONS D58). Backed by async ops,
+// gated on Net (connect, send) / NetListen (listen, bind).
 
 const ops = globalThis.__ops;
 const encoder = new TextEncoder();
@@ -295,5 +297,156 @@ function listen(options = {}) {
   return new Listener(ready);
 }
 
-export { connect, listen };
-export default { connect, listen };
+// A bound UDP socket. Not a stream: UDP delivers whole messages from whoever
+// sent them, so a datagram carries its own sender and `receive()` hands back one
+// message at a time. Building a ReadableStream over that would have to invent a
+// queue in front of the kernel's, and would lose the message boundary that is
+// the only thing UDP guarantees.
+class DatagramSocket {
+  constructor(ready) {
+    // Wrapped once, like Socket._conn: a failed bind must reach `addr`, a
+    // `send`, a `receive` and `close()` as the same SocketError.
+    this._ready = socketOp(ready);
+    this.addr = this._ready.then((s) => ({ hostname: s.localAddress, port: s.localPort }));
+    // Same reasoning as Listener.addr: built eagerly, so a bind that fails
+    // rejects it whether or not anyone asked for the address, and a program
+    // that handled the failure elsewhere is not ended by the leftover.
+    this.addr.catch(() => {});
+    let done;
+    this.closed = new Promise((resolve) => (done = resolve));
+    this._done = done;
+  }
+
+  // Sends one datagram, resolving with the number of bytes sent. `address` is
+  // required unless the socket is connected, where it is the peer's.
+  async send(data, address) {
+    if (this._closing) throw socketError("the socket is closed");
+    const bytes = toBytes(data);
+    let hostname = "";
+    let port = 0;
+    if (address !== undefined && address !== null) {
+      const parsed = parseAddress(address);
+      hostname = parsed.hostname;
+      port = validPort(parsed.port, { allowZero: false });
+    }
+    const { id } = await this._ready;
+    return socketOp(ops.net_datagram_send(id, bytes, hostname, port));
+  }
+
+  // The next datagram: `{ data, address, port }`, or null once closed. One call
+  // is one message — including a zero-length one, which is a message and not an
+  // end of stream.
+  async receive() {
+    if (this._closing) return null;
+    const { id } = await this._ready;
+    return socketOp(ops.net_datagram_receive(id));
+  }
+
+  // Fixes the peer: later sends need no address, and datagrams from anyone else
+  // are discarded. Nothing is sent — UDP has no handshake — so this resolves
+  // against a host that may not be listening at all.
+  async connect(address) {
+    const parsed = parseAddress(address);
+    const port = validPort(parsed.port, { allowZero: false });
+    const { id } = await this._ready;
+    const info = await socketOp(ops.net_datagram_connect(id, parsed.hostname, port));
+    return {
+      remoteAddress: hostPort(info.remoteAddress, info.remotePort),
+      remotePort: info.remotePort,
+      localAddress: hostPort(info.localAddress, info.localPort),
+      localPort: info.localPort,
+    };
+  }
+
+  // Multicast membership. `interface` names which local interface carries it —
+  // an IPv4 address for a v4 group, an interface index for a v6 one — and
+  // defaults to the OS's choice, which is only unambiguous on a host with one
+  // interface.
+  joinMulticast(group, options = {}) {
+    return this._multicast(group, options, true);
+  }
+
+  leaveMulticast(group, options = {}) {
+    return this._multicast(group, options, false);
+  }
+
+  async _multicast(group, options, join) {
+    if (typeof group !== "string" || group === "") {
+      throw socketError("a multicast group is required");
+    }
+    const iface = options?.interface == null ? "" : String(options.interface);
+    const { id } = await this._ready;
+    return socketOp(ops.net_datagram_multicast(id, group, iface, join));
+  }
+
+  // Closed once, however many ways it is reached — the id is given back on the
+  // first, and naming it again is a request to act on a socket this agent no
+  // longer has. A parked `receive()` resolves to null rather than waiting for a
+  // datagram that can no longer arrive.
+  close() {
+    this._closing ??= (async () => {
+      const { id } = await this._ready;
+      await socketOp(ops.net_datagram_close(id));
+      if (this._done) {
+        this._done();
+        this._done = null;
+      }
+    })();
+    return this._closing;
+  }
+
+  async *[Symbol.asyncIterator]() {
+    for (;;) {
+      const datagram = await this.receive();
+      if (datagram === null) return;
+      yield datagram;
+    }
+  }
+}
+
+// An integer socket option in an inclusive range, or undefined when the guest
+// said nothing — which leaves the OS default in place rather than substituting
+// a number chosen here.
+function optionalInt(value, name, max) {
+  if (value == null) return undefined;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > max) {
+    throw socketError(`invalid ${name}: ${String(value)}`);
+  }
+  return n;
+}
+
+function boolOption(value, name) {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw socketError(`${name} must be a boolean, got ${typeof value}`);
+  }
+  return value;
+}
+
+// Binds a UDP socket (capability: NetListen — this takes a port, and a port is
+// how a process is reached). Sending needs Net as well, checked per datagram.
+function bind(options = {}) {
+  const hostname = options.hostname ?? options.host ?? "0.0.0.0";
+  const port = validPort(options.port, { allowZero: true });
+  const multicastLoopback =
+    options.multicastLoopback === undefined
+      ? null
+      : boolOption(options.multicastLoopback, "multicastLoopback");
+  const ready = ops.net_bind_datagram(
+    hostname,
+    port,
+    boolOption(options.reusePort, "reusePort"),
+    boolOption(options.reuseAddress, "reuseAddress"),
+    boolOption(options.broadcast, "broadcast"),
+    // 255 is the width of the IPv4 TTL field and of the IPv6 hop limit; a
+    // larger number is a mistake, not a longer reach.
+    optionalInt(options.ttl, "ttl", 255) ?? null,
+    optionalInt(options.multicastTtl, "multicastTtl", 255) ?? null,
+    multicastLoopback,
+  );
+  return new DatagramSocket(ready);
+}
+
+export { connect, listen, bind };
+export default { connect, listen, bind };

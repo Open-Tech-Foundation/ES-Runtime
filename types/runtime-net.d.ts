@@ -109,12 +109,119 @@ declare module "runtime:net" {
     close(): Promise<void>;
   }
 
+  /** One received datagram. The sender travels with the message, because on an
+   * unconnected socket it differs for every one. */
+  export interface Datagram {
+    /** The payload, exactly as one datagram carried it. */
+    data: Uint8Array;
+    /** The sender's address (an IP literal). */
+    address: string;
+    /** The sender's port. */
+    port: number;
+  }
+
+  /** Options for {@link bind}. */
+  export interface BindOptions {
+    hostname?: string;
+    host?: string;
+    /** `0` binds an ephemeral port (read it back from `addr`). */
+    port: number;
+    /**
+     * Bind with `SO_REUSEPORT`, so several **processes** can share this address
+     * and the kernel distributes datagrams across them. **Unix only.**
+     *
+     * @defaultValue `false`
+     */
+    reusePort?: boolean;
+    /**
+     * Bind with `SO_REUSEADDR`, so another socket may hold this address too —
+     * what lets two processes on one machine both receive a multicast group
+     * (mDNS, SSDP).
+     *
+     * @defaultValue `false`
+     */
+    reuseAddress?: boolean;
+    /**
+     * Permit sending to the broadcast address (`SO_BROADCAST`). IPv4 only —
+     * IPv6 has no broadcast, and asking for it on a v6 socket is an error.
+     *
+     * @defaultValue `false`
+     */
+    broadcast?: boolean;
+    /** Hop limit for unicast datagrams (0–255). Omitted ⇒ the OS default. */
+    ttl?: number;
+    /**
+     * Hop limit for multicast datagrams (0–255). Omitted ⇒ the OS default,
+     * which is `1`: a datagram that does not leave the local segment.
+     */
+    multicastTtl?: number;
+    /**
+     * Whether multicast sends are also delivered back to this host. Omitted ⇒
+     * the OS default (on). Turn it off so a sender does not receive its own
+     * announcements.
+     */
+    multicastLoopback?: boolean;
+  }
+
+  /** Options for {@link DatagramSocket.joinMulticast}. */
+  export interface MulticastOptions {
+    /**
+     * Which local interface carries the membership: an IPv4 address for a v4
+     * group, an interface **index** for a v6 one. Omitted ⇒ the OS chooses,
+     * which is only unambiguous on a host with one interface.
+     */
+    interface?: string | number;
+  }
+
+  /**
+   * A bound UDP socket — messages, not a byte stream, so it has `send`/`receive`
+   * rather than `readable`/`writable`.
+   */
+  export interface DatagramSocket extends AsyncIterable<Datagram> {
+    /** The bound address (resolves after the bind completes). */
+    readonly addr: Promise<{ hostname: string; port: number }>;
+    /** Resolves when the socket is closed. */
+    readonly closed: Promise<void>;
+    /**
+     * Send one datagram, resolving with the number of bytes sent. `address` is
+     * required unless the socket is {@link connect}ed.
+     */
+    send(
+      data: string | Uint8Array | ArrayBuffer | ArrayBufferView,
+      address?: Address,
+    ): Promise<number>;
+    /**
+     * The next datagram, or `null` once closed. One call is one message —
+     * including a zero-length one, which is a message and not an end of stream.
+     */
+    receive(): Promise<Datagram | null>;
+    /**
+     * Fix the peer: later sends need no address, and datagrams from anyone else
+     * are discarded. No packet is sent (UDP has no handshake), so this succeeds
+     * against a host that is not listening.
+     */
+    connect(address: Address): Promise<Omit<SocketInfo, "alpn">>;
+    /** Join a multicast group. */
+    joinMulticast(group: string, options?: MulticastOptions): Promise<void>;
+    /** Leave a multicast group. */
+    leaveMulticast(group: string, options?: MulticastOptions): Promise<void>;
+    /** Close the socket. A parked {@link receive} resolves to `null`. */
+    close(): Promise<void>;
+  }
+
   /** Open an outbound TCP connection (capability: `Net`). Returns immediately. */
   export function connect(address: Address, options?: ConnectOptions): Socket;
 
   /** Bind a listening socket (capability: `NetListen`). */
   export function listen(options: ListenOptions): Listener;
 
-  const net: { connect: typeof connect; listen: typeof listen };
+  /**
+   * Bind a UDP socket (capability: `NetListen` — this takes a port, and a port
+   * is how a process is reached). Sending needs `Net` as well, checked per
+   * datagram.
+   */
+  export function bind(options: BindOptions): DatagramSocket;
+
+  const net: { connect: typeof connect; listen: typeof listen; bind: typeof bind };
   export default net;
 }

@@ -1,6 +1,6 @@
 ---
 title: runtime:net
-description: TCP and TLS sockets — the WinterTC Sockets API. Bytes move over web streams.
+description: TCP, TLS and UDP sockets — the WinterTC Sockets API. Bytes move over web streams; datagrams move as messages.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -8,9 +8,10 @@ import { Callout } from "@opentf/web-docs";
 # runtime:net
 
 TCP sockets. `connect()` follows the WinterTC Sockets API; `listen()` yields
-inbound connections. Bytes move over web streams.
+inbound connections. Bytes move over web streams. `bind()` is UDP — messages,
+not streams.
 
-<Callout type="info" title="Capability: Net (connect) / NetListen (listen)">
+<Callout type="info" title="Capability: Net (connect, send) / NetListen (listen, bind)">
   Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
 </Callout>
 
@@ -25,6 +26,7 @@ inbound connections. Bytes move over web streams.
 | --- | --- | --- | --- |
 | `connect(address, options?)` | `(Address, { secureTransport?, sni?, alpn?, allowHalfOpen? }) => Socket` | Open an outbound TCP or TLS connection (the WinterTC Sockets API). Returns a `Socket` synchronously; `.opened` settles once connected. `address` is `"host:port"` or `{ hostname, port }`. `secureTransport: "on"` negotiates TLS, `"starttls"` opens plaintext for a later `startTls()`; `sni` overrides the server name (default: the host); `alpn` offers protocols (the negotiated one is `SocketInfo.alpn`); `allowHalfOpen` keeps writing after the peer's FIN. | `const sock = connect({ hostname: "db.internal", port: 5432 })` |
 | `listen(options)` | `({ hostname?, port, secureTransport?, cert?, key?, alpn?, reusePort? }) => Listener` | Bind a listening socket. `port 0` picks an ephemeral port (read it from `listener.addr`). Returns an async-iterable `Listener` of inbound `Socket`s. `secureTransport: "on"` terminates TLS on each accept — pass a PEM `cert` + `key` (and optional `alpn`); the cert/key are inline, so server TLS needs no capability beyond NetListen. `reusePort` shares the port across processes (`SO_REUSEPORT`, Unix only). | `const server = listen({ hostname: "127.0.0.1", port: 8080 })` |
+| `bind(options)` | `({ hostname?, port, reusePort?, reuseAddress?, broadcast?, ttl?, multicastTtl?, multicastLoopback? }) => DatagramSocket` | Bind a UDP socket. `port 0` picks an ephemeral port (read it from `sock.addr`). Returns a `DatagramSocket` — `send`/`receive`, and async-iterable of datagrams. Binding needs NetListen; sending needs Net, checked per destination. Options are set at the bind and an omitted one leaves the OS default. | `const sock = bind({ hostname: "0.0.0.0", port: 5353 })` |
 
 ## Client
 
@@ -107,9 +109,63 @@ for await (const conn of server) {
 | `close()` | `Promise<void>` | Stop listening. |
 | `[Symbol.asyncIterator]` | `AsyncIterable<Socket>` | `for await (const conn of server) { … }` |
 
+## UDP
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({ hostname: "0.0.0.0", port: 5353 });
+const { port } = await sock.addr;
+
+for await (const { data, address, port } of sock) {
+  await sock.send(data, { hostname: address, port }); // echo to the sender
+}
+```
+
+```js
+import { bind } from "runtime:net";
+
+// A connected socket: sends need no address, and only the peer is heard.
+const statsd = bind({ hostname: "0.0.0.0", port: 0 });
+await statsd.connect("127.0.0.1:8125");
+await statsd.send("page.view:1|c");
+
+// Multicast: membership is dynamic, the socket options are set at the bind.
+const mdns = bind({
+  hostname: "0.0.0.0", port: 5353,
+  reuseAddress: true, multicastTtl: 1, multicastLoopback: false,
+});
+await mdns.joinMulticast("224.0.0.251", { interface: "192.168.1.10" });
+```
+
+### DatagramSocket
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `send(data, address?)` | `Promise<number>` | Send one datagram; resolves with the bytes sent. `address` is `"host:port"` or `{ hostname, port }`, required unless connected. Net, checked per destination. |
+| `receive()` | `Promise<Datagram \| null>` | The next `{ data, address, port }`, or `null` once closed. One call is one message — a zero-length datagram is a message, not an EOF. |
+| `connect(address)` | `Promise<SocketInfo>` | Fix the peer: sends need no address, datagrams from anyone else are discarded. No packet is sent, so it succeeds against a host that is not listening. |
+| `joinMulticast(group, options?)` | `Promise<void>` | Join a group. `options.interface` is an IPv4 address for a v4 group, an interface index for a v6 one. |
+| `leaveMulticast(group, options?)` | `Promise<void>` | Leave a group. |
+| `addr` | `Promise<{ hostname, port }>` | The bound address. |
+| `close()` | `Promise<void>` | Close; a parked `receive()` resolves to `null`. |
+| `closed` | `Promise<void>` | Resolves once closed. |
+| `[Symbol.asyncIterator]` | `AsyncIterable<Datagram>` | `for await (const d of sock) { … }`, ending at `close()`. |
+
+### Bind options
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `reusePort` | `boolean` | Share the address across **processes** (`SO_REUSEPORT`). Unix only — refused elsewhere. |
+| `reuseAddress` | `boolean` | Share it with another socket (`SO_REUSEADDR`) — what two processes receiving one multicast group need. |
+| `broadcast` | `boolean` | Permit sending to the broadcast address. IPv4 only; on a v6 socket it is an error. |
+| `ttl` | `number` | Hop limit for unicast datagrams, 0–255. |
+| `multicastTtl` | `number` | Hop limit for multicast datagrams, 0–255. The OS default is `1`: the local segment. |
+| `multicastLoopback` | `boolean` | Whether multicast sends come back to this host. Off means a sender does not hear its own announcements. |
+
 ## Errors
 
 | Error | When |
 | --- | --- |
 | `TypeError` | Any socket failure — invalid options, or a connect / TLS / I/O error (the latter reject `.opened` or the streams). The message is prefixed `"SocketError: "` (WinterTC SocketError). |
-| `DOMException` | name `"NotAllowedError"` — the Net (connect) or NetListen (listen) capability is not granted. |
+| `DOMException` | name `"NotAllowedError"` — the Net (connect, send) or NetListen (listen, bind) capability is not granted. |

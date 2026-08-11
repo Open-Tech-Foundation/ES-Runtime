@@ -23,6 +23,7 @@ mod broadcast;
 mod checkout;
 mod clock;
 mod console;
+mod datagram;
 mod driver;
 mod entropy;
 mod esm_resolve;

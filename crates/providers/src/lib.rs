@@ -964,12 +964,71 @@ pub struct ListenOptions {
     pub reuse_port: bool,
 }
 
-/// Raw TCP sockets backing `runtime:net` (SPEC §12, the WinterTC `connect()`
-/// shape). The implementation owns every connection and listener, keyed by an
-/// opaque id it hands back; the runtime drives reads, writes, accepts, and
-/// closes by id. `connect` is capability-checked on `Capability::Net` and
-/// `listen` on `Capability::NetListen` before these are ever called; an embedder
-/// that installs no `NetProvider` has no `runtime:net` access at all.
+/// Options for [`NetProvider::bind_datagram`] (DECISIONS D58).
+///
+/// Everything here is a property of the socket rather than of a send, so it is
+/// set once at bind time: several of these options (`SO_REUSEPORT`,
+/// `SO_REUSEADDR`) *must* be set before the bind to mean anything at all, and
+/// the rest are configuration a program decides once. Group membership is the
+/// exception and has its own method — a responder joins and leaves groups while
+/// it runs.
+#[derive(Default)]
+pub struct DatagramOptions {
+    /// Allow several **processes** to bind this same address, letting the kernel
+    /// distribute datagrams across them (`SO_REUSEPORT`). Unix-only, exactly as
+    /// in [`ListenOptions::reuse_port`].
+    pub reuse_port: bool,
+    /// Allow binding an address another socket already holds (`SO_REUSEADDR`).
+    ///
+    /// Unlike the TCP case, this is not about `TIME_WAIT`: it is what lets two
+    /// processes on one machine both receive a multicast group, which is the
+    /// ordinary shape for mDNS and SSDP. Off by default, because a silently
+    /// shared unicast port is a way to lose datagrams to another program.
+    pub reuse_address: bool,
+    /// Permit sending to the broadcast address (`SO_BROADCAST`). Off by default:
+    /// the OS refuses a broadcast send without it, and a program that means to
+    /// address every host on the segment should say so.
+    pub broadcast: bool,
+    /// Hop limit for unicast datagrams (`IP_TTL`). `None` ⇒ the OS default.
+    pub ttl: Option<u32>,
+    /// Hop limit for multicast datagrams (`IP_MULTICAST_TTL`). `None` ⇒ the OS
+    /// default, which is `1` — a datagram that does not leave the local segment.
+    pub multicast_ttl: Option<u32>,
+    /// Whether multicast sends are also delivered back to this host
+    /// (`IP_MULTICAST_LOOP`). `None` ⇒ the OS default (on). Turning it off is
+    /// how a sender avoids receiving its own announcements.
+    pub multicast_loopback: Option<bool>,
+}
+
+/// One received datagram, from [`NetProvider::receive`].
+///
+/// The sender's address travels **with the payload** rather than being a
+/// property of the socket, because on an unconnected UDP socket it is different
+/// for every datagram — which is the whole reason a datagram API cannot be a
+/// byte stream.
+pub struct Datagram {
+    /// The payload, exactly as one datagram carried it. Never split, never
+    /// coalesced with another.
+    pub data: Vec<u8>,
+    /// The sender's address (an IP literal).
+    pub address: String,
+    /// The sender's port.
+    pub port: u16,
+}
+
+/// Raw TCP sockets and UDP datagram sockets backing `runtime:net` (SPEC §12 —
+/// the WinterTC `connect()` shape for TCP, `bind()` for datagrams). The
+/// implementation owns every connection, listener and datagram socket, keyed by
+/// an opaque id it hands back; the runtime drives reads, writes, accepts, sends,
+/// receives and closes by id. `connect` is capability-checked on
+/// `Capability::Net` and `listen` on `Capability::NetListen` before these are
+/// ever called; an embedder that installs no `NetProvider` has no `runtime:net`
+/// access at all.
+///
+/// The datagram half is gated on **both**: `bind_datagram` on `NetListen`
+/// (taking a port makes this process reachable) and `send_to` on `Net` (a send
+/// reaches out). A UDP socket genuinely is both things at once, and one grant
+/// standing for the other would be a hole in whichever direction it was chosen.
 pub trait NetProvider: Send + Sync {
     /// Opens an outbound TCP connection; resolves to (socket id, info). When
     /// `opts.secure`, negotiates TLS using `opts.sni` (or `host`) as the server
@@ -1029,7 +1088,97 @@ pub trait NetProvider: Send + Sync {
         let _ = (id, server_name, alpn, ca);
         Box::pin(async { Err(ProviderError::Other("startTls is not supported".into())) })
     }
+
+    /// Binds a UDP socket; resolves to (socket id, bound-address info). `port`
+    /// `0` picks an ephemeral one, read back from the returned [`SocketInfo`]
+    /// — and an ephemeral port is still a port this process can be reached on.
+    ///
+    /// The default errors, like [`start_tls`](Self::start_tls): a provider
+    /// speaks UDP only if it says so.
+    fn bind_datagram(
+        &self,
+        host: String,
+        port: u16,
+        opts: DatagramOptions,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let _ = (host, port, opts);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Waits for the next datagram on socket `id`; `None` once the socket is
+    /// closed.
+    ///
+    /// One call yields exactly one datagram, whatever its length — including a
+    /// zero-length one, which is a real message rather than an end-of-stream.
+    /// A datagram larger than the implementation's receive buffer is
+    /// **truncated**, as the OS does, rather than split across two calls: a
+    /// datagram boundary is the unit UDP delivers and nothing may forge one.
+    fn receive(&self, id: u64) -> BoxFuture<Result<Option<Datagram>, ProviderError>> {
+        let _ = id;
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Sends `data` from socket `id` to `to`, or to the connected peer when
+    /// `to` is `None`; resolves to the number of bytes sent.
+    ///
+    /// A send is one datagram. An implementation must not fragment `data`
+    /// across two of them, and must fail rather than send a prefix.
+    fn send_to(
+        &self,
+        id: u64,
+        data: Vec<u8>,
+        to: Option<(String, u16)>,
+    ) -> BoxFuture<Result<usize, ProviderError>> {
+        let _ = (id, data, to);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Fixes socket `id`'s peer: later sends need no address, and datagrams from
+    /// anyone else are discarded by the OS. Resolves to the socket's info, whose
+    /// remote half is now the connected peer.
+    ///
+    /// No packet is sent — UDP has no handshake — so this can succeed against a
+    /// host that is not listening, and the resulting `ICMP port unreachable`
+    /// surfaces on a later send or receive instead.
+    fn connect_datagram(
+        &self,
+        id: u64,
+        host: String,
+        port: u16,
+    ) -> BoxFuture<Result<SocketInfo, ProviderError>> {
+        let _ = (id, host, port);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Joins (`join`) or leaves multicast `group` on socket `id`.
+    ///
+    /// `interface` names which local interface carries the membership: an IPv4
+    /// local address for a v4 group, an interface *index* for a v6 one, or
+    /// empty to let the OS choose. A machine with more than one interface has
+    /// no obvious answer, which is why the argument exists.
+    fn set_multicast_membership(
+        &self,
+        id: u64,
+        group: String,
+        interface: String,
+        join: bool,
+    ) -> BoxFuture<Result<(), ProviderError>> {
+        let _ = (id, group, interface, join);
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
+
+    /// Closes datagram socket `id` (idempotent). A parked
+    /// [`receive`](Self::receive) resolves to `None` rather than waiting for a
+    /// datagram that can no longer arrive.
+    fn close_datagram(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
+        let _ = id;
+        Box::pin(async { Err(ProviderError::Other(UNSUPPORTED.into())) })
+    }
 }
+
+/// What a [`NetProvider`] with no datagram support says. One spelling, so the
+/// six default methods cannot drift into six different messages.
+const UNSUPPORTED: &str = "datagram sockets are not supported by this NetProvider";
 
 /// Metadata about an opened WebSocket, from [`WebSocketProvider::connect`].
 #[derive(Default)]

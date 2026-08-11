@@ -196,6 +196,78 @@ fn deny_read_leaves_imports_working() {
     assert!(s.contains("read denied: NotAllowedError"), "{s}");
 }
 
+#[test]
+fn a_datagram_socket_is_checked_against_both_grants() {
+    // UDP is the one surface that needs two capabilities (D58): binding takes a
+    // port, which is `listen`, and sending reaches a peer, which is `net`. The
+    // two halves are asserted separately, because a socket that could send
+    // under `listen` alone — or bind under `net` alone — would be a hole in
+    // whichever grant was skipped.
+    let bind_and_send = "import { bind } from 'runtime:net';\
+        let r = '';\
+        try {\
+          const s = bind({ hostname: '127.0.0.1', port: 0 });\
+          await s.addr; r += 'BIND:ok';\
+          try { await s.send(new Uint8Array([1]), '127.0.0.1:9'); r += ':SEND:ok'; }\
+          catch (e) { r += ':SEND:' + e.name; }\
+          await s.close();\
+        } catch (e) { r += 'BIND:' + e.name; }\
+        console.log(r);";
+
+    // `net` denied: the port is still bindable, the datagram is not sendable.
+    let out = run(&["--deny-net"], bind_and_send);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "BIND:ok:SEND:NotAllowedError");
+
+    // `listen` denied: there is no socket to send from in the first place.
+    let out = run(&["--deny-listen"], bind_and_send);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "BIND:NotAllowedError");
+
+    // Both granted (the default): it works, which is what makes the two
+    // denials above evidence of the gate rather than of a broken example.
+    let out = run(&[], bind_and_send);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "BIND:ok:SEND:ok");
+}
+
+#[test]
+fn a_datagram_destination_is_scoped_by_allow_net() {
+    // …and the address lists apply too: `--allow-listen` decides where a socket
+    // may bind, `--allow-net` where each datagram may go — checked per send,
+    // since one socket sends to as many peers as it likes.
+    let code = "import { bind } from 'runtime:net';\
+        const s = bind({ hostname: '127.0.0.1', port: 0 });\
+        await s.addr;\
+        const to = async (address) => {\
+          try { await s.send(new Uint8Array([1]), address); return 'ok'; }\
+          catch (e) { return e.code; }\
+        };\
+        console.log(await to('127.0.0.1:9'), await to('127.0.0.1:53'));\
+        await s.close();";
+    let out = run(
+        &[
+            "--deny-all",
+            "--allow-listen=127.0.0.1:0",
+            "--allow-net=127.0.0.1:9",
+        ],
+        code,
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ok ERR_PERMISSION_DENIED");
+
+    // The bind is the listen list's business, and an address outside it is
+    // refused before the port is claimed.
+    let out = run(
+        &["--deny-all", "--allow-listen=127.0.0.1:7070", "--allow-net"],
+        "import { bind } from 'runtime:net';\
+         try { await bind({ hostname: '127.0.0.1', port: 0 }).addr; console.log('bound'); }\
+         catch (e) { console.log(e.code); }",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "ERR_PERMISSION_DENIED");
+}
+
 // ---- the mutual-exclusion rule -----------------------------------------------
 
 #[test]

@@ -35,8 +35,8 @@ with the `NotAllowedError` name.
 | `Env` | Read environment, arguments, cwd, platform; backs `runtime:process`. |
 | `FileRead` | Read files within the configured root jail. |
 | `FileWrite` | Write files within the configured root jail. |
-| `Net` | Open outbound network connections (`runtime:net` connect, fetch, WebSocket). |
-| `NetListen` | Bind a listening socket and accept connections (`runtime:net` listen, `runtime:http` / `runtime:websocket` serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed. |
+| `Net` | Open outbound network connections (`runtime:net` connect, a UDP send, fetch, WebSocket). |
+| `NetListen` | Bind a listening socket and accept connections (`runtime:net` listen and bind, `runtime:http` / `runtime:websocket` serve). Server-side TLS terminates under this capability — the cert/key are passed inline, so no extra grant is needed. |
 | `Signals` | Watch OS signals (`runtime:process` onSignal). Separate from `Env` because a watch **suppresses the signal's default action** — the privilege to decline to die on request, not a read of process state. |
 | `Run` | Spawn a child process (`runtime:system`). Never implied by another capability — see below. |
 | `Worker` | Start a [`Worker`](/docs/internals/workers). What the worker itself may do is a separate, narrower grant made at the spawn — it starts with nothing and can never be handed what the agent spawning it lacks. |
@@ -78,8 +78,8 @@ is nothing for it to add.
 | `read` | `runtime:fs` / `runtime:wasi` reads |
 | `write` | `runtime:fs` / `runtime:wasi` mutations |
 | `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `net` | `fetch`, `WebSocket`, `runtime:net` connect |
-| `listen` | `runtime:net` listen, `runtime:http` serve |
+| `net` | `fetch`, `WebSocket`, `runtime:net` connect, a UDP send |
+| `listen` | `runtime:net` listen and bind, `runtime:http` serve |
 | `env` | `runtime:process` env / args / cwd |
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` onSignal |

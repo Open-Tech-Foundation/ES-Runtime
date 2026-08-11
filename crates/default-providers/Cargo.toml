@@ -33,6 +33,10 @@ bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "fs", "net", "io-util", "sync", "macros", "signal", "process"] }
+# Socket options that must be set between `socket()` and `bind()` — `SO_REUSEPORT`
+# for a TCP listener, and the reuse/TTL/multicast set for a UDP socket. Already
+# in the tree (tokio, hyper-util), so no new crate in the graph (D7).
+socket2 = { workspace = true }
 tracing.workspace = true
 turso_core.workspace = true
 url.workspace = true
@@ -42,7 +46,6 @@ url.workspace = true
 # already in the tree via tempfile, so no new crate in the graph.
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
-socket2 = { workspace = true }
 
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime. `test-util`

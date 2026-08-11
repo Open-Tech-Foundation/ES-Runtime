@@ -137,8 +137,8 @@ overrides another.
 | `read` | `runtime:fs` / `runtime:wasi` reads |
 | `write` | `runtime:fs` / `runtime:wasi` mutations |
 | `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `net` | `fetch`, `WebSocket`, `runtime:net` connect |
-| `listen` | `runtime:net` listen, `runtime:http` serve |
+| `net` | `fetch`, `WebSocket`, `runtime:net` connect, a UDP send |
+| `listen` | `runtime:net` listen and bind, `runtime:http` serve |
 | `env` | `runtime:process` env / args / cwd |
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` onSignal |
@@ -171,7 +171,7 @@ esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
 | --- | --- | --- |
 | `--allow-read=<paths>` | reading those paths and their subtrees | refused |
 | `--allow-write=<paths>` | writing those paths and their subtrees | refused before anything is created |
-| `--allow-net=<hosts>` | reaching those addresses (`fetch`, `connect`, `WebSocket`) | refused before any packet |
+| `--allow-net=<hosts>` | reaching those addresses (`fetch`, `connect`, `WebSocket`, every UDP destination) | refused before any packet |
 | `--allow-listen=<addresses>` | binding those addresses (`listen`, `serve`) | refused before the port is claimed |
 | `--allow-env=<names>` | those environment variables | absent from `env` — unreadable *and* unlistable |
 | `--allow-run=<programs>` | spawning those programs | fails to spawn |

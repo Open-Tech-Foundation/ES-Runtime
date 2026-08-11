@@ -9,23 +9,32 @@
 //! `connect({ secureTransport: "on" })` negotiates TLS (rustls via tokio-rustls,
 //! the `aws-lc-rs` provider, `webpki-roots` trust anchors) with SNI + ALPN before
 //! the same reader/writer tasks take over the encrypted stream (DECISIONS D28).
+//!
+//! **UDP is the other shape and takes the other approach** (DECISIONS D58):
+//! datagram sockets are held as an `Arc<UdpSocket>` and each `receive` awaits
+//! `recv_from` directly, with no forwarding task and no channel in between. A
+//! stream needs a reader task because bytes arrive whether or not anyone is
+//! asking; a datagram queue already exists in the kernel, and a second one in
+//! front of it would only add a place for datagrams to be dropped that the
+//! program cannot see.
 
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, ConnectOptions, ListenOptions, NetProvider, ProviderError, SocketInfo,
+    BoxFuture, ConnectOptions, Datagram, DatagramOptions, ListenOptions, NetProvider,
+    ProviderError, SocketInfo,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::Instant;
 use tokio_rustls::TlsConnector;
 use tokio_rustls::rustls::crypto::aws_lc_rs;
@@ -74,12 +83,40 @@ struct Slot {
     reclaim: Option<Reclaim>,
 }
 
-/// A [`NetProvider`] over real tokio TCP sockets. The `Arc`s are cloned into each
-/// returned future so the futures stay `'static`.
+/// A bound UDP socket. The socket itself is shared rather than checked out:
+/// `recv_from` and `send_to` both take `&self`, so several receives may be
+/// outstanding at once — they race for the next datagram, which is what a
+/// datagram socket does anyway.
+///
+/// `closed` is the half that makes `close_datagram` prompt: dropping the last
+/// `Arc` would close the socket, but a **parked** receive holds one, so without
+/// a way to wake it the close would be observed only when the next datagram
+/// arrived — on a socket nobody is sending to any more, never.
+struct DatagramSlot {
+    socket: Arc<UdpSocket>,
+    closed: Arc<Closed>,
+}
+
+/// The close signal for one datagram socket: a flag to read and a bell to ring.
+/// Both, because a receive that checks only the flag can be closed a moment
+/// later and park forever, and one that waits only on the bell misses a close
+/// that already happened.
+#[derive(Default)]
+struct Closed {
+    flag: AtomicBool,
+    bell: Notify,
+}
+
+/// A [`NetProvider`] over real tokio TCP and UDP sockets. The `Arc`s are cloned
+/// into each returned future so the futures stay `'static`.
 #[derive(Clone, Default)]
 pub struct SystemNet {
     sockets: Arc<Mutex<HashMap<u64, Slot>>>,
     listeners: Arc<Mutex<HashMap<u64, AcceptRx>>>,
+    /// Bound UDP sockets, in their own namespace: a datagram socket answers
+    /// none of the stream operations, and sharing a map with them would make a
+    /// misdirected id a confusing error instead of a clean one.
+    datagrams: Arc<Mutex<HashMap<u64, DatagramSlot>>>,
     /// The accept-forwarding task per listener, kept so `close_listener` can
     /// abort it. Aborting drops the task's channel sender, which makes any
     /// **parked** `accept` (whose `recv` would otherwise wait forever, since it
@@ -807,6 +844,161 @@ impl NetProvider for SystemNet {
             Ok((new_id, info))
         })
     }
+
+    fn bind_datagram(
+        &self,
+        host: String,
+        port: u16,
+        opts: DatagramOptions,
+    ) -> BoxFuture<Result<(u64, SocketInfo), ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            // The same list `listen` consults, and for the same reason: this
+            // takes a port and makes the process reachable on it. Checked before
+            // the socket exists, so a denied bind claims nothing.
+            if let Some(allow) = &this.allow_listen {
+                allow.check(&host, port, "bind")?;
+            }
+            let socket = crate::datagram::bind(&host, port, &opts).await?;
+            let info = info_of(socket.local_addr().ok(), None);
+            let id = this.id();
+            this.datagrams.lock().unwrap().insert(
+                id,
+                DatagramSlot {
+                    socket: Arc::new(socket),
+                    closed: Arc::new(Closed::default()),
+                },
+            );
+            Ok((id, info))
+        })
+    }
+
+    fn receive(&self, id: u64) -> BoxFuture<Result<Option<Datagram>, ProviderError>> {
+        let datagrams = self.datagrams.clone();
+        Box::pin(async move {
+            let Some((socket, closed)) = lookup(&datagrams, id) else {
+                return Ok(None); // closed
+            };
+            // Registered *before* the flag is read, so a close landing between
+            // the two is seen by one or the other and never by neither.
+            let bell = closed.bell.notified();
+            tokio::pin!(bell);
+            bell.as_mut().enable();
+            if closed.flag.load(Ordering::Acquire) {
+                return Ok(None);
+            }
+            // One buffer per receive, sized for the largest datagram IPv4 can
+            // carry (65,535 less the 20-byte header and the 8-byte UDP header).
+            // A datagram longer than this is truncated by the OS, exactly as it
+            // would be for any other receiver.
+            let mut buf = vec![0u8; MAX_DATAGRAM];
+            tokio::select! {
+                biased;
+                () = &mut bell => Ok(None),
+                received = socket.recv_from(&mut buf) => {
+                    let (n, from) = received.map_err(|e| io_err("receive", e))?;
+                    buf.truncate(n);
+                    Ok(Some(Datagram {
+                        data: buf,
+                        address: from.ip().to_string(),
+                        port: from.port(),
+                    }))
+                }
+            }
+        })
+    }
+
+    fn send_to(
+        &self,
+        id: u64,
+        data: Vec<u8>,
+        to: Option<(String, u16)>,
+    ) -> BoxFuture<Result<usize, ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            let (socket, _) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
+            let Some((host, port)) = to else {
+                // No destination: the connected peer, which `connect_datagram`
+                // already checked against the allowlist.
+                return socket.send(&data).await.map_err(|e| io_err("send", e));
+            };
+            // Every destination is checked, not just the first: one socket sends
+            // to as many peers as it likes, so a per-socket check would scope
+            // nothing after the bind.
+            if let Some(allow) = &this.allow_connect {
+                allow.check(&host, port, "send")?;
+            }
+            socket
+                .send_to(&data, (host.as_str(), port))
+                .await
+                .map_err(|e| io_err(format!("send to {host}:{port}"), e))
+        })
+    }
+
+    fn connect_datagram(
+        &self,
+        id: u64,
+        host: String,
+        port: u16,
+    ) -> BoxFuture<Result<SocketInfo, ProviderError>> {
+        let this = self.clone();
+        Box::pin(async move {
+            let (socket, _) = lookup(&this.datagrams, id).ok_or_else(closed_socket)?;
+            if let Some(allow) = &this.allow_connect {
+                allow.check(&host, port, "connect")?;
+            }
+            socket
+                .connect((host.as_str(), port))
+                .await
+                .map_err(|e| io_err(format!("connect udp {host}:{port}"), e))?;
+            Ok(info_of(socket.local_addr().ok(), socket.peer_addr().ok()))
+        })
+    }
+
+    fn set_multicast_membership(
+        &self,
+        id: u64,
+        group: String,
+        interface: String,
+        join: bool,
+    ) -> BoxFuture<Result<(), ProviderError>> {
+        let datagrams = self.datagrams.clone();
+        Box::pin(async move {
+            let (socket, _) = lookup(&datagrams, id).ok_or_else(closed_socket)?;
+            crate::datagram::set_membership(&socket, &group, &interface, join)
+        })
+    }
+
+    fn close_datagram(&self, id: u64) -> BoxFuture<Result<(), ProviderError>> {
+        let datagrams = self.datagrams.clone();
+        Box::pin(async move {
+            // Dropping the slot drops this map's `Arc`; a parked receive holds
+            // another, which the bell is what ends.
+            if let Some(slot) = datagrams.lock().unwrap().remove(&id) {
+                slot.closed.flag.store(true, Ordering::Release);
+                slot.closed.bell.notify_waiters();
+            }
+            Ok(())
+        })
+    }
+}
+
+/// The largest payload a UDP datagram can carry over IPv4 (65,535 − 20 − 8).
+const MAX_DATAGRAM: usize = 65_507;
+
+/// The socket and close signal for datagram `id`, or `None` if it is closed.
+/// The lock is released before the caller awaits anything.
+fn lookup(
+    datagrams: &Mutex<HashMap<u64, DatagramSlot>>,
+    id: u64,
+) -> Option<(Arc<UdpSocket>, Arc<Closed>)> {
+    let slots = datagrams.lock().unwrap();
+    let slot = slots.get(&id)?;
+    Some((slot.socket.clone(), slot.closed.clone()))
+}
+
+fn closed_socket() -> ProviderError {
+    err("socket is closed")
 }
 
 #[cfg(test)]
@@ -1396,6 +1588,343 @@ mod cancel_safety_tests {
         let (cid, _) = connect.await.unwrap().unwrap();
         net.close(cid).await.unwrap();
         net.close_listener(lid).await.unwrap();
+    }
+}
+
+/// UDP over real loopback sockets (DECISIONS D58). Its own module because none
+/// of it shares the stream tests' TLS scaffolding — a datagram socket has no
+/// handshake, no peer until it is told one, and no stream to be cancel-safe
+/// about.
+#[cfg(test)]
+mod datagram_tests {
+    use super::*;
+    use crate::HostAllowlist;
+    use std::time::Duration;
+
+    /// Binds a loopback datagram socket and returns (id, port).
+    async fn udp(net: &SystemNet) -> (u64, u16) {
+        let (id, info) = net
+            .bind_datagram("127.0.0.1".to_string(), 0, DatagramOptions::default())
+            .await
+            .expect("bind");
+        assert!(info.local_port > 0, "port 0 must bind an ephemeral port");
+        (id, info.local_port)
+    }
+
+    #[tokio::test]
+    async fn a_datagram_round_trips_and_carries_its_sender() {
+        let net = SystemNet::new();
+        let (server, server_port) = udp(&net).await;
+        let (client, client_port) = udp(&net).await;
+
+        let sent = net
+            .send_to(
+                client,
+                b"ping".to_vec(),
+                Some(("127.0.0.1".to_string(), server_port)),
+            )
+            .await
+            .expect("send");
+        assert_eq!(sent, 4);
+
+        let got = net
+            .receive(server)
+            .await
+            .expect("receive")
+            .expect("a datagram");
+        assert_eq!(got.data, b"ping");
+        assert_eq!(got.address, "127.0.0.1");
+        // The sender's address is the datagram's, not the socket's: the reply
+        // goes back to a port nothing told the server about in advance.
+        assert_eq!(got.port, client_port);
+
+        net.send_to(
+            server,
+            b"pong".to_vec(),
+            Some((got.address.clone(), got.port)),
+        )
+        .await
+        .expect("reply");
+        let back = net.receive(client).await.unwrap().expect("the reply");
+        assert_eq!(back.data, b"pong");
+
+        net.close_datagram(server).await.unwrap();
+        net.close_datagram(client).await.unwrap();
+    }
+
+    /// Message boundaries are the point of UDP: three sends are three receives,
+    /// never one coalesced read the way a stream would deliver them.
+    #[tokio::test]
+    async fn datagram_boundaries_are_preserved_including_an_empty_one() {
+        let net = SystemNet::new();
+        let (server, port) = udp(&net).await;
+        let (client, _) = udp(&net).await;
+
+        for payload in [&b"one"[..], &b""[..], &b"three"[..]] {
+            net.send_to(
+                client,
+                payload.to_vec(),
+                Some(("127.0.0.1".to_string(), port)),
+            )
+            .await
+            .expect("send");
+        }
+
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            seen.push(net.receive(server).await.unwrap().expect("a datagram").data);
+        }
+        // A zero-length datagram is a message, not an end of stream.
+        assert_eq!(seen, vec![b"one".to_vec(), Vec::new(), b"three".to_vec()]);
+
+        net.close_datagram(server).await.unwrap();
+        net.close_datagram(client).await.unwrap();
+    }
+
+    /// A connected socket sends with no address and hears only its peer — the
+    /// second half is what makes `connect` more than a convenience.
+    #[tokio::test]
+    async fn a_connected_socket_sends_without_an_address_and_filters_the_rest() {
+        let net = SystemNet::new();
+        let (server, server_port) = udp(&net).await;
+        let (client, client_port) = udp(&net).await;
+        let (stranger, _) = udp(&net).await;
+
+        let info = net
+            .connect_datagram(client, "127.0.0.1".to_string(), server_port)
+            .await
+            .expect("connect");
+        assert_eq!(info.remote_port, server_port);
+        assert_eq!(info.local_port, client_port);
+
+        net.send_to(client, b"hello".to_vec(), None)
+            .await
+            .expect("a connected send needs no address");
+        assert_eq!(
+            net.receive(server).await.unwrap().expect("a datagram").data,
+            b"hello"
+        );
+
+        // The stranger's datagram is discarded by the OS; the peer's arrives.
+        net.send_to(
+            stranger,
+            b"not for you".to_vec(),
+            Some(("127.0.0.1".to_string(), client_port)),
+        )
+        .await
+        .expect("send");
+        net.send_to(
+            server,
+            b"for you".to_vec(),
+            Some(("127.0.0.1".to_string(), client_port)),
+        )
+        .await
+        .expect("send");
+        assert_eq!(
+            net.receive(client).await.unwrap().expect("a datagram").data,
+            b"for you"
+        );
+
+        for id in [server, client, stranger] {
+            net.close_datagram(id).await.unwrap();
+        }
+    }
+
+    /// An unconnected socket has no peer, so a send with no address is a
+    /// mistake worth reporting rather than a datagram sent nowhere.
+    #[tokio::test]
+    async fn an_unconnected_send_with_no_address_fails() {
+        let net = SystemNet::new();
+        let (id, _) = udp(&net).await;
+        assert!(net.send_to(id, b"x".to_vec(), None).await.is_err());
+        net.close_datagram(id).await.unwrap();
+    }
+
+    /// The case the close signal exists for: a receive already parked on a
+    /// socket nobody is sending to. Without the bell it would wait forever,
+    /// because the parked receive holds the socket alive itself.
+    #[tokio::test]
+    async fn closing_ends_a_parked_receive() {
+        let net = SystemNet::new();
+        let (id, _) = udp(&net).await;
+
+        let waiting = net.clone();
+        let parked = tokio::spawn(async move { waiting.receive(id).await });
+        // Long enough for the receive to be parked rather than pending.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        net.close_datagram(id).await.unwrap();
+
+        let ended = tokio::time::timeout(Duration::from_secs(5), parked)
+            .await
+            .expect("the parked receive must end at the close")
+            .unwrap()
+            .expect("close is not an error");
+        assert!(ended.is_none(), "a closed socket receives nothing");
+    }
+
+    #[tokio::test]
+    async fn a_closed_socket_receives_nothing_and_sends_nothing() {
+        let net = SystemNet::new();
+        let (id, port) = udp(&net).await;
+        net.close_datagram(id).await.unwrap();
+        // Idempotent, like every other close here.
+        net.close_datagram(id).await.unwrap();
+        assert!(net.receive(id).await.unwrap().is_none());
+        assert!(
+            net.send_to(id, b"x".to_vec(), Some(("127.0.0.1".to_string(), port)))
+                .await
+                .is_err()
+        );
+    }
+
+    /// Multicast end to end over loopback: two sockets sharing a port both
+    /// receive one send to the group.
+    #[tokio::test]
+    async fn a_multicast_send_reaches_every_member() {
+        // An administratively scoped group (RFC 2365) on the loopback
+        // interface: no network, no neighbour disturbed — and, unlike a
+        // well-known group such as mDNS's `224.0.0.251`, nothing *else* on the
+        // machine is joined to it. That matters for the leave half: Linux's
+        // `IP_MULTICAST_ALL` delivers a group to any socket bound to the port
+        // once anything on the host has joined it, so a group avahi is sitting
+        // in would keep arriving after this socket left.
+        const GROUP: &str = "239.255.42.99";
+        let net = SystemNet::new();
+        let member = |port: u16| {
+            let net = net.clone();
+            async move {
+                net.bind_datagram(
+                    "0.0.0.0".to_string(),
+                    port,
+                    DatagramOptions {
+                        reuse_address: true,
+                        reuse_port: cfg!(unix),
+                        multicast_loopback: Some(true),
+                        ..DatagramOptions::default()
+                    },
+                )
+                .await
+            }
+        };
+        let Ok((first, info)) = member(0).await else {
+            return; // no multicast-capable interface here
+        };
+        let port = info.local_port;
+        let (second, _) = member(port).await.expect("a second member on one port");
+        for id in [first, second] {
+            if net
+                .set_multicast_membership(id, GROUP.to_string(), "127.0.0.1".to_string(), true)
+                .await
+                .is_err()
+            {
+                return; // loopback multicast unavailable (some CI kernels)
+            }
+        }
+
+        let (sender, _) = udp(&net).await;
+        net.send_to(
+            sender,
+            b"announce".to_vec(),
+            Some((GROUP.to_string(), port)),
+        )
+        .await
+        .expect("send to the group");
+
+        for id in [first, second] {
+            let got = tokio::time::timeout(Duration::from_secs(2), net.receive(id)).await;
+            let Ok(Ok(Some(datagram))) = got else {
+                return; // the datagram did not loop back on this host
+            };
+            assert_eq!(datagram.data, b"announce");
+        }
+
+        // Leaving is the other half: with no member left, the same send is not
+        // delivered. *Both* have to leave — Linux's `IP_MULTICAST_ALL` is on by
+        // default, so a socket bound to the port keeps receiving a group any
+        // socket on the host is still joined to.
+        for id in [first, second] {
+            net.set_multicast_membership(id, GROUP.to_string(), "127.0.0.1".to_string(), false)
+                .await
+                .expect("leave");
+        }
+        net.send_to(
+            sender,
+            b"after leaving".to_vec(),
+            Some((GROUP.to_string(), port)),
+        )
+        .await
+        .expect("send to the group");
+        let after = tokio::time::timeout(Duration::from_millis(300), net.receive(first)).await;
+        assert!(
+            after.is_err(),
+            "a group nobody is joined to delivers nothing"
+        );
+
+        for id in [first, second, sender] {
+            net.close_datagram(id).await.unwrap();
+        }
+    }
+
+    /// The allowlist is checked per **destination**, not once per socket: one
+    /// datagram socket sends to as many peers as it likes.
+    #[tokio::test]
+    async fn a_send_outside_the_allowlist_is_refused() {
+        let net =
+            SystemNet::new().with_allowlist(HostAllowlist::parse(["127.0.0.1:9999"]).unwrap());
+        // Binding is the listen list's business, and nothing was scoped there.
+        let (id, _) = udp(&net).await;
+
+        net.send_to(
+            id,
+            b"allowed".to_vec(),
+            Some(("127.0.0.1".to_string(), 9999)),
+        )
+        .await
+        .expect("the named destination is reachable");
+
+        let err = net
+            .send_to(id, b"denied".to_vec(), Some(("127.0.0.1".to_string(), 53)))
+            .await
+            .expect_err("a destination outside the list must be refused");
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+
+        // …and so is fixing the peer to one, which is the same reach by another
+        // route.
+        let Err(err) = net.connect_datagram(id, "127.0.0.1".to_string(), 53).await else {
+            panic!("connect is a destination too");
+        };
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+        net.close_datagram(id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_bind_outside_the_listen_allowlist_is_refused() {
+        let net = SystemNet::new()
+            .with_listen_allowlist(HostAllowlist::parse(["127.0.0.1:7070"]).unwrap());
+        let Err(err) = net
+            .bind_datagram("127.0.0.1".to_string(), 7071, DatagramOptions::default())
+            .await
+        else {
+            panic!("an address outside the list must be refused");
+        };
+        assert_eq!(err.code(), Some(ErrorCode::PermissionDenied), "{err}");
+        // Nothing was claimed: the same port binds when it is allowed.
+        let (id, _) = net
+            .bind_datagram("127.0.0.1".to_string(), 7070, DatagramOptions::default())
+            .await
+            .expect("the allowed address binds");
+        net.close_datagram(id).await.unwrap();
+    }
+
+    /// A datagram id names nothing in the stream namespace, and vice versa —
+    /// the two maps are separate on purpose.
+    #[tokio::test]
+    async fn the_two_namespaces_do_not_overlap() {
+        let net = SystemNet::new();
+        let (id, _) = udp(&net).await;
+        assert!(net.read(id).await.unwrap().is_none());
+        assert!(net.receive(id + 1).await.unwrap().is_none());
+        net.close_datagram(id).await.unwrap();
     }
 }
 

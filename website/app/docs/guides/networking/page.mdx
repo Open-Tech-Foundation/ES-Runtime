@@ -1,6 +1,6 @@
 ---
 title: Sockets
-description: Raw TCP and TLS with runtime:net, following the WinterTC Sockets API.
+description: Raw TCP, TLS and UDP with runtime:net, following the WinterTC Sockets API.
 ---
 
 # Sockets
@@ -8,7 +8,8 @@ description: Raw TCP and TLS with runtime:net, following the WinterTC Sockets AP
 `runtime:net` is raw TCP following the
 [WinterTC Sockets API](https://sockets-api.proposal.wintertc.org/):
 [`connect()`](/api/net) for outbound connections, `listen()` for a server. Bytes
-move over web streams — nothing blocks.
+move over web streams — nothing blocks. `bind()` is UDP, where messages replace
+the streams.
 
 ## Client
 
@@ -112,6 +113,56 @@ for await (const conn of server) {
   const { alpn } = await conn.opened;      // negotiated protocol
   conn.readable.pipeTo(conn.writable);     // every byte is encrypted
 }
+```
+
+## UDP
+
+`bind()` returns a `DatagramSocket`: `send`/`receive` instead of streams, because
+a datagram arrives whole and carries its own sender.
+
+Two capabilities. Binding takes a port — **NetListen** — and sending reaches a
+peer — **Net** — so a receive-only program needs `listen` alone, and one that
+sends needs both.
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({ hostname: "0.0.0.0", port: 5353 });
+const { port } = await sock.addr;          // port 0 picks an ephemeral one
+
+for await (const { data, address, port } of sock) {
+  await sock.send(data, { hostname: address, port });  // echo to the sender
+}
+```
+
+`connect()` fixes the peer: sends need no address, and datagrams from anyone else
+are discarded. Nothing goes on the wire — UDP has no handshake — so it succeeds
+against a host that is not listening.
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({ hostname: "0.0.0.0", port: 0 });
+await sock.connect("127.0.0.1:8125");
+await sock.send("page.view:1|c");          // StatsD, one datagram
+```
+
+### Multicast
+
+Group membership is dynamic; the socket options are set at the bind. `interface`
+is an IPv4 address for a v4 group, an interface index for a v6 one.
+
+```js
+import { bind } from "runtime:net";
+
+const sock = bind({
+  hostname: "0.0.0.0", port: 5353,
+  reuseAddress: true,                      // another process may hold it too
+  multicastTtl: 1,                         // stay on the local segment
+  multicastLoopback: false,                // don't hear your own announcements
+});
+await sock.joinMulticast("224.0.0.251");   // mDNS
+await sock.send(query, "224.0.0.251:5353");
 ```
 
 ## See also
