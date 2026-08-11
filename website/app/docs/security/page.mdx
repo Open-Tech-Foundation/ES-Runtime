@@ -272,6 +272,35 @@ secret values resist accidental disclosure.
   call `unmask()` itself.
 </Callout>
 
+## Hashing & passwords
+
+[`runtime:hashing`](/api/hashing) carries no capability — hashing reads nothing
+and reaches nothing.
+
+<Callout type="note" title="A salt is randomness">
+  `password.hash()` draws its salt from `crypto.getRandomValues`, so it needs
+  **Entropy**. `password.verify()` needs nothing: the salt is inside the stored
+  string.
+</Callout>
+
+<Callout type="tip" title="Parameters live in the hash">
+  Verification reads the algorithm, cost and salt from the stored string, so
+  raising a default never invalidates existing hashes. `needsRehash()` replaces
+  them at login.
+</Callout>
+
+<Callout type="warning" title="bcrypt refuses what it would truncate">
+  Past 71 bytes, hashing errors rather than silently making two passwords one.
+  Verification still truncates — a stored hash may have been written by an
+  implementation that did.
+</Callout>
+
+<Callout type="danger" title="Not every algorithm is a defence">
+  `md5` and `sha1` are interop only. `xxhash*` and `crc32*` are checksums, and
+  `hmac` refuses them. Password hashing blocks the calling isolate — queue a
+  public login endpoint.
+</Callout>
+
 ## Remote modules disabled
 
 esrun intentionally drops support for downloading modules dynamically over the

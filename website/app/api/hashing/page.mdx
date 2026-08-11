@@ -1,0 +1,144 @@
+---
+title: runtime:hashing
+description: Digests, checksums, MACs and password hashing — the algorithms WebCrypto has no name for.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:hashing
+
+Digests, checksums, MACs and password hashing. `crypto.subtle` is the WebCrypto
+standard; this is the rest — the algorithms it has no name for, hashing that
+runs incrementally, encoded output, and passwords.
+
+<Callout type="note" title="Capability: none">
+  Hashing reads nothing and reaches nothing, so every function here works under
+  `--deny-all`. The exception is `password.hash()`, which draws a random salt
+  and so needs **Entropy**; `password.verify()` needs nothing. Status:
+  **Available**.
+</Callout>
+
+## Import
+
+```js
+import { hash, Hasher, hashStream, hmac, timingSafeEqual, password } from "runtime:hashing";
+
+// Or the default aggregate:
+import hashing from "runtime:hashing";
+```
+
+## Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `hash` | `function` | `hash(algorithm, data, encoding?)` — the digest, in one call. |
+| `Hasher` | `class` | `new Hasher(algorithm)` — a hash across many chunks. |
+| `hashStream` | `async function` | `hashStream(algorithm, stream, encoding?)`. |
+| `hmac` | `function` | `hmac(algorithm, key, data, encoding?)` — RFC 2104, synchronous. |
+| `timingSafeEqual` | `function` | `timingSafeEqual(a, b)` — constant-time comparison. |
+| `password` | `object` | `hash()`, `verify()`, `needsRehash()`. |
+
+`data`, `key` and the comparands are a string (hashed as UTF-8), an
+`ArrayBuffer`, or a view. `encoding` is `"hex"`, `"base64"` or `"base64url"`
+for a string; omit it for a `Uint8Array`.
+
+## Algorithms
+
+| Algorithm | Output | Notes |
+| --- | --- | --- |
+| `sha1` `sha256` `sha384` `sha512` | 20 / 32 / 48 / 64 B | Also in `crypto.subtle`. |
+| `sha3-224` `sha3-256` `sha3-384` `sha3-512` | 28 / 32 / 48 / 64 B | |
+| `blake3` | 32 B | Fast. The usual choice for large content. |
+| `md5` | 16 B | Interop only — S3 ETags, CRAM-MD5. |
+| `ripemd160` | 20 B | |
+| `xxhash64` `xxhash3` | 8 B | Not cryptographic. Cache keys, ETags, sharding. |
+| `crc32` `crc32c` | 4 B | Not cryptographic. Checksums, framing. |
+
+Names are case-insensitive, and WebCrypto's spellings work: `"SHA-256"` and
+`"sha256"` are the same algorithm. `hmac` refuses the two non-cryptographic
+rows.
+
+```js
+hash("sha256", "hello", "hex");   // "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+hash("blake3", "hello", "base64url");
+hash("xxhash3", buffer);          // Uint8Array
+```
+
+## Hasher
+
+```js
+const h = new Hasher("sha256");
+for await (const chunk of file.stream()) h.update(chunk);
+h.digest("hex");
+```
+
+| Member | Type | Description |
+| --- | --- | --- |
+| `algorithm` | `string` | Read-only. |
+| `update(data)` | `this` | Chains. |
+| `digest(encoding?)` | `Uint8Array \| string` | Ends the hasher. |
+
+`digest()` releases the host state; calling either method again throws.
+
+```js
+// The same, in one line.
+await hashStream("sha256", request.body, "hex");
+```
+
+## timingSafeEqual
+
+For anything an attacker can submit repeatedly. `===` on hex strings leaks how
+much of the prefix was right, one request at a time.
+
+```js
+const expected = hmac("sha256", secret, body, "hex");
+if (!timingSafeEqual(request.headers.get("x-signature"), expected)) {
+  return new Response("bad signature", { status: 401 });
+}
+```
+
+Lengths are compared first, in ordinary time — a digest's length is fixed by its
+algorithm and public already.
+
+## password
+
+Argon2id by default; bcrypt and scrypt for hashes that already exist.
+
+```js
+const stored = await password.hash(input);       // "$argon2id$v=19$m=19456,t=2,p=1$…"
+await password.verify(input, stored);
+```
+
+| Option | Applies to | Default |
+| --- | --- | --- |
+| `algorithm` | all | `"argon2id"` · `"argon2i"` `"argon2d"` `"bcrypt"` `"scrypt"` |
+| `memoryCost` | argon2 | `19456` KiB |
+| `timeCost` | argon2 | `2` passes |
+| `parallelism` | argon2, scrypt | `1` |
+| `cost` | bcrypt, scrypt | `12` rounds log₂ / `17` N log₂ |
+| `blockSize` | scrypt | `8` |
+| `salt` | all | 16 random bytes |
+
+Defaults follow the OWASP Password Storage Cheat Sheet.
+
+| Method | Type | Capability |
+| --- | --- | --- |
+| `hash(input, options?)` | `Promise<string>` | Entropy |
+| `verify(input, stored)` | `Promise<boolean>` | — |
+| `needsRehash(stored, options?)` | `boolean` | — |
+
+The stored string carries the algorithm, parameters and salt, and verification
+reads them from it — so raising the cost never invalidates existing hashes.
+
+```js
+if (await password.verify(input, user.hash)) {
+  if (password.needsRehash(user.hash)) user.hash = await password.hash(input);
+}
+```
+
+<Callout type="warning" title="Two things to know">
+  These are slow on the thread that calls them — that is the mechanism. Put a
+  queue in front of a login endpoint. And bcrypt **refuses** a password past 71
+  bytes rather than truncating it; verification still truncates, since a stored
+  hash may have been written by an implementation that did.
+</Callout>

@@ -38,6 +38,18 @@ p384.workspace = true
 p521.workspace = true
 rsa.workspace = true
 sha1_rsa.workspace = true
+# runtime:hashing (DECISIONS.md D57).
+sha3.workspace = true
+md-5.workspace = true
+ripemd.workspace = true
+blake3.workspace = true
+twox-hash.workspace = true
+crc32fast.workspace = true
+crc32c.workspace = true
+argon2.workspace = true
+bcrypt.workspace = true
+scrypt.workspace = true
+subtle.workspace = true
 base64 = "0.22"
 flate2 = "1.1"
 quick-xml = { version = "0.41.0", features = ["serialize"] }

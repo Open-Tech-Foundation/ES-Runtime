@@ -8,6 +8,73 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:hashing`** (DECISIONS D57) — digests, checksums, MACs and password
+  hashing. `crypto.subtle` remains the WebCrypto standard; this is the rest of
+  what a server hashes for.
+
+  ```js
+  import { hash, Hasher, hashStream, hmac, timingSafeEqual, password } from "runtime:hashing";
+
+  hash("sha256", "hello", "hex");            // encoded in the host, not by a loop at the call site
+  hash("xxhash3", buffer);                   // a cache key, at a tenth of the cost
+
+  const h = new Hasher("blake3");            // hash what you cannot hold
+  for await (const chunk of file.stream()) h.update(chunk);
+  h.digest("hex");
+
+  const stored = await password.hash(input); // "$argon2id$v=19$m=19456,t=2,p=1$…"
+  await password.verify(input, stored);
+  ```
+
+  Fifteen algorithms: SHA-1/2/3, BLAKE3, MD5, RIPEMD-160, xxHash64, XXH3 and
+  CRC-32/32C. WebCrypto's spellings work unchanged (`"SHA-256"` and `"sha256"`
+  are the same algorithm), so the two APIs do not disagree about what a hash is
+  called. Output is a `Uint8Array` by default, or `hex`/`base64`/`base64url`
+  encoded in the host.
+
+  Four gaps this closes, all of them outside WebCrypto's scope by design:
+  `subtle.digest` is one-shot, so hashing a 4 GB upload meant holding 4 GB —
+  a `Hasher` holds a few hundred bytes of state instead, and `hashStream` is the
+  same thing in the line it is usually wanted in
+  (`await hashStream("sha256", request.body, "hex")`). Encoding was a
+  byte-by-byte loop every codebase wrote once and then copied. There was no
+  password hashing beyond PBKDF2 — now Argon2id, bcrypt and scrypt, with the
+  parameters and salt travelling inside the stored string, so raising the cost
+  never invalidates existing hashes and `needsRehash()` says which to replace.
+  And a cache key or ETag no longer pays for collision resistance against an
+  adversary who does not exist.
+
+  **No capability, for any of it.** Hashing reads nothing and reaches nothing,
+  so every function works under `--deny-all` — `runtime:serialization` is the
+  precedent. The one exception is `password.hash()`, which needs a fresh salt:
+  rather than let an op help itself to entropy, the module draws it in JS from
+  `crypto.getRandomValues`, so hashing a password needs `Entropy` because it
+  genuinely needs randomness, and **verifying one needs nothing** — a service
+  that only checks passwords is granted nothing at all.
+
+  Two deliberate refusals. `hmac` rejects the checksums, because a MAC built on
+  CRC-32 is not a MAC, and rejects BLAKE3, which has its own keyed mode rather
+  than this one. And bcrypt refuses a password past 71 bytes rather than
+  truncating it — truncation quietly makes two different passwords the same
+  password — while *verification* still truncates, since a stored hash may have
+  been written by one of the many implementations that do.
+
+  Password hashing runs on the calling thread and blocks it, which is documented
+  rather than hidden: offloading it would have required the `TaskSpawn`
+  capability and made password hashing need authority that hashing does not.
+  MD5 and SHA-1 ship plainly, for the interop they are still needed for.
+
+  Verified by 14 unit tests (a published vector for each of the fifteen
+  algorithms, incremental agreeing with one-shot for all of them, the RFC
+  2202/4231 HMAC vectors, every password algorithm round-tripped, both bcrypt
+  boundaries) and 15 end-to-end CLI tests (the module surface, every encoding
+  and input type, agreement with `crypto.subtle` on the four shared digests, and
+  the capability claim under `--deny-all`). Documented per D27: DECISIONS D57,
+  `docs/API.md`, `types/runtime-hashing.d.ts`, the site's `api/hashing` page,
+  and the Node and Bun migration guides.
+
 ### Fixed
 
 - **Benchmarks tables in dark mode** — `BenchStandings` (Standings at a glance), `WsSweepTable`, `Http2Table` and `RuntimeVersions` now carry `dark:` borders, backgrounds and text (`dark:border-zinc-800`, `dark:bg-zinc-900`, `dark:text-zinc-100/400`, `dark:text-emerald-400`) matching `BenchCard`/`MemorySafetyTable`, so all tables on `/docs/benchmarks` remain readable.

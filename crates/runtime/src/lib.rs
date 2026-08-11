@@ -28,6 +28,7 @@ mod fs_ops;
 #[doc(hidden)]
 pub mod fuzz;
 mod handles;
+mod hashing_ops;
 mod http_ops;
 mod module_ops;
 mod msgpack;

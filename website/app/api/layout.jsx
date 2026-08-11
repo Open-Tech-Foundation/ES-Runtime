@@ -18,6 +18,7 @@ const NAV = [
       { title: "runtime:http", path: "/api/http" },
       { title: "runtime:websocket", path: "/api/websocket" },
       { title: "runtime:serialization", path: "/api/serialization" },
+      { title: "runtime:hashing", path: "/api/hashing" },
       { title: "runtime:system", path: "/api/system" },
       { title: "runtime:wasi", path: "/api/wasi" },
     ],

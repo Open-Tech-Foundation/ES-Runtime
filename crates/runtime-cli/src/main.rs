@@ -168,6 +168,8 @@ const TYPES: &str = concat!(
     "\n",
     include_str!("../../../types/runtime-serialization.d.ts"),
     "\n",
+    include_str!("../../../types/runtime-hashing.d.ts"),
+    "\n",
     include_str!("../../../types/runtime-wasi.d.ts"),
     "\n",
     include_str!("../../../types/runtime-system.d.ts"),

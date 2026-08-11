@@ -269,6 +269,35 @@ the environment is an explicit host decision**, and so that secret values resist
   code, which can call `unmask` itself (the guest is already trusted with the
   value). Parser errors never include a variable's value.
 
+## Hashing & passwords (`runtime:hashing`)
+
+`runtime:hashing` (DECISIONS D57) carries **no capability**: hashing reads
+nothing and reaches nothing, so what it tells a caller is a fact about data they
+already hold. Three things about it are security-relevant.
+
+- **A salt is randomness, and randomness is granted.** `password.hash()` draws
+  its salt in JavaScript from `crypto.getRandomValues`, so it needs `Entropy`
+  like every other random byte here — no op helps itself to entropy.
+  `password.verify()` needs **nothing**: the salt is inside the stored string,
+  so a service that only checks passwords is granted nothing at all.
+- **The parameters live in the stored hash, not in the configuration.**
+  Verification reads the algorithm, cost and salt from the string it is given,
+  so raising a default never invalidates existing hashes. `needsRehash()` is how
+  they are replaced, at the one moment the plaintext is in hand.
+- **bcrypt refuses what it would truncate.** bcrypt hashes at most 72 bytes
+  including its own NUL, and most implementations silently ignore the rest —
+  quietly making two different passwords the same password. Hashing past 71
+  bytes is an error here. **Verification still truncates**, deliberately: a
+  stored hash may have been written by one of those implementations, and
+  verifying it must compute what *that* implementation computed.
+
+`md5` and `sha1` are available for interop (S3 ETags, CRAM-MD5, legacy
+protocols) and are broken for signatures; `xxhash*` and `crc32*` are checksums,
+are not collision-resistant against an adversary, and are refused by `hmac`.
+Password hashing runs on the calling thread and blocks it for the duration — a
+public login endpoint wants a queue in front of it, since concurrent calls
+compete for the same isolate.
+
 ## Intrinsic integrity (prototype pollution / global tampering)
 
 **The security boundary is in Rust, not in JavaScript.** The op table and the

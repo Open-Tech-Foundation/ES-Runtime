@@ -487,7 +487,8 @@ fn runtime_modules_import_even_under_deny_all() {
         &["--deny-all"],
         "import 'runtime:process'; import 'runtime:path'; import 'runtime:fs'; \
          import 'runtime:net'; import 'runtime:http'; import 'runtime:websocket'; \
-         import 'runtime:serialization'; import 'runtime:system'; import 'runtime:wasi'; \
+         import 'runtime:serialization'; import 'runtime:hashing'; \
+         import 'runtime:system'; import 'runtime:wasi'; \
          console.log('all imported');",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));

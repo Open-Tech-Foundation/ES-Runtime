@@ -169,22 +169,47 @@ const back = decoder.decode(encoder.encode(atob(b64)));
 
 ### 6. Cryptography & Hashing (`node:crypto`)
 
-Replace `node:crypto` hash streams with standard `crypto.subtle` or `crypto.randomUUID()`.
+`createHash`, `createHmac` and `timingSafeEqual` become
+[`runtime:hashing`](/api/hashing); keys, signatures and ciphers become
+`crypto.subtle`; `randomUUID` and `randomBytes` become `crypto`.
 
 ```js
 // ❌ Node.js
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 const id = randomUUID();
-const hash = createHash("sha256").update("data").digest("hex");
+const digest = createHash("sha256").update("data").digest("hex");
+const mac = createHmac("sha256", secret).update(body).digest("hex");
 
 // ✅ esrun
+import { hash, Hasher, hmac, timingSafeEqual } from "runtime:hashing";
 const id = crypto.randomUUID();
+const digest = hash("sha256", "data", "hex");
+const mac = hmac("sha256", secret, body, "hex");
 
-const data = new TextEncoder().encode("data");
-const buffer = await crypto.subtle.digest("SHA-256", data);
-const hashHex = Array.from(new Uint8Array(buffer))
-  .map((b) => b.toString(16).padStart(2, "0"))
-  .join("");
+// Chunked, for anything too large to hold at once.
+const h = new Hasher("sha256");
+for await (const chunk of stream) h.update(chunk);
+h.digest("hex");
+```
+
+| Node | esrun |
+| --- | --- |
+| `createHash(alg)` | `hash(alg, data, "hex")` or `new Hasher(alg)` |
+| `createHmac(alg, key)` | `hmac(alg, key, data, "hex")` |
+| `timingSafeEqual(a, b)` | `timingSafeEqual(a, b)` |
+| `scrypt`, `pbkdf2` | `password.hash()` / `crypto.subtle.deriveBits` |
+| `bcrypt`, `argon2` (npm) | `password.hash()` / `password.verify()` |
+| `randomUUID`, `randomBytes` | `crypto.randomUUID()`, `crypto.getRandomValues()` |
+| `createSign`, `createCipheriv`, `generateKeyPair` | `crypto.subtle` |
+
+```js
+// Passwords: no npm package, and the parameters travel with the hash.
+import { password } from "runtime:hashing";
+
+const stored = await password.hash(input);   // argon2id
+if (await password.verify(input, user.hash) && password.needsRehash(user.hash)) {
+  user.hash = await password.hash(input);
+}
 ```
 
 ---
@@ -224,6 +249,22 @@ const { stdout } = await new Command("git", {
 }).output();
 
 const text = new TextDecoder().decode(stdout).trim();
+```
+
+### 3. Hashing & Passwords (`Bun.hash`, `Bun.CryptoHasher`, `Bun.password`)
+
+```js
+// ❌ Bun
+const key = Bun.hash(data);
+const digest = new Bun.CryptoHasher("sha256").update("data").digest("hex");
+const stored = await Bun.password.hash(input);
+
+// ✅ esrun
+import { hash, Hasher, password } from "runtime:hashing";
+
+const key = hash("xxhash64", data);
+const digest = new Hasher("sha256").update("data").digest("hex");
+const stored = await password.hash(input);
 ```
 
 ---

@@ -237,3 +237,11 @@ test("runtime:system exposes no implementation details on its prototypes", async
   assertEquals(own(Command.prototype).sort().join(","), "output,spawn");
   assertEquals(own(ChildProcess.prototype).sort().join(","), "kill,status,stderr,stdin,stdout");
 });
+
+test("runtime:hashing exposes no implementation details on its prototypes", async () => {
+  const { Hasher } = await import("runtime:hashing");
+  // The host id a hasher holds is a `#private` field, not a member: a caller
+  // who could read it could finish another hasher's digest.
+  const own = (o) => Object.getOwnPropertyNames(o).filter((k) => k !== "constructor");
+  assertEquals(own(Hasher.prototype).sort().join(","), "algorithm,digest,update");
+});

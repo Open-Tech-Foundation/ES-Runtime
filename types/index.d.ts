@@ -17,5 +17,6 @@
 /// <reference path="./runtime-http.d.ts" />
 /// <reference path="./runtime-websocket.d.ts" />
 /// <reference path="./runtime-serialization.d.ts" />
+/// <reference path="./runtime-hashing.d.ts" />
 /// <reference path="./runtime-wasi.d.ts" />
 /// <reference path="./runtime-system.d.ts" />

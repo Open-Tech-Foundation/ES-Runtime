@@ -24,6 +24,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:http`](#runtimehttp)
 - [`runtime:websocket`](#runtimewebsocket)
 - [`runtime:serialization`](#runtimeserialization)
+- [`runtime:hashing`](#runtimehashing)
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
 - [Error codes](#error-codes)
@@ -839,6 +840,7 @@ the required capability has been granted.
 | `runtime:http`    | Available   | `NetListen` | [↓](#runtimehttp)               |
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
+| `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
 
 ---
 
@@ -2199,6 +2201,108 @@ In the proto3-JSON form, 64-bit integers and `bytes` become strings (base64 for 
 
 <!-- Reference links -->
 [D27]: ./DECISIONS.md
+
+## `runtime:hashing`
+
+Digests, checksums, MACs and password hashing (DECISIONS D57). `crypto.subtle`
+is the WebCrypto standard and stays exactly that; this is the rest of what a
+server hashes for — the algorithms WebCrypto has no name for, hashing that runs
+incrementally instead of all at once, encoded output, and passwords.
+
+- **Capability:** None. Hashing reads nothing and reaches nothing, so every
+  function works under `--deny-all`. The one exception is `password.hash()`,
+  which draws a random salt from `crypto.getRandomValues` and therefore needs
+  `Entropy`; `password.verify()` needs nothing, because the salt is inside the
+  stored string.
+- **Status:** Available
+
+```js
+import { hash, Hasher, hashStream, hmac, timingSafeEqual, password } from "runtime:hashing";
+
+hash("sha256", "hello", "hex");            // "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+hash("xxhash3", buffer);                   // Uint8Array — a cache key, at a tenth of the cost
+
+const h = new Hasher("blake3");            // hash what you cannot hold
+for await (const chunk of file.stream()) h.update(chunk);
+h.digest("hex");
+
+const stored = await password.hash(input); // "$argon2id$v=19$m=19456,t=2,p=1$…"
+await password.verify(input, stored);
+```
+
+### Algorithms
+
+| Algorithm | Output | Notes |
+| --- | --- | --- |
+| `sha1`, `sha256`, `sha384`, `sha512` | 20/32/48/64 bytes | Also in `crypto.subtle`. WebCrypto's spellings (`SHA-256`) are accepted too. |
+| `sha3-224`, `sha3-256`, `sha3-384`, `sha3-512` | 28/32/48/64 bytes | |
+| `blake3` | 32 bytes | Fast, and the usual choice for hashing large content. |
+| `md5` | 16 bytes | Broken for signatures. Present for interop — S3 ETags, CRAM-MD5. |
+| `ripemd160` | 20 bytes | |
+| `xxhash64`, `xxhash3` | 8 bytes | Not cryptographic. Cache keys, ETags, shard selection. |
+| `crc32`, `crc32c` | 4 bytes | Not cryptographic. Checksums and framing. |
+
+Names are case-insensitive. Checksums are refused by `hmac`, which needs a
+cryptographic hash.
+
+### Exports
+
+| Export | Description |
+| --- | --- |
+| `hash(algorithm, data, encoding?)` | The digest of `data`, in one call. `data` is a string (hashed as UTF-8), an `ArrayBuffer`, or a view. |
+| `new Hasher(algorithm)` | A hash computed across many chunks. `.update(data)` chains; `.digest(encoding?)` ends it. `.algorithm` reads it back. |
+| `hashStream(algorithm, stream, encoding?)` | The digest of a `ReadableStream`, read to the end. Async. |
+| `hmac(algorithm, key, data, encoding?)` | HMAC (RFC 2104), synchronous and in one call. For a `CryptoKey` or a JWK you already hold, use `crypto.subtle` — it is the same construction. |
+| `timingSafeEqual(a, b)` | Constant-time comparison. Lengths are compared first, in ordinary time. |
+| `password.hash(input, options?)` | Hashes a password, returning the string to store. Async. Needs `Entropy`. |
+| `password.verify(input, stored)` | Whether `input` is the password `stored` was made from. Async. Needs nothing. |
+| `password.needsRehash(stored, options?)` | Whether `stored` was written with weaker settings than `options` asks for. |
+
+`encoding` is `"hex"`, `"base64"` or `"base64url"` for a string; omit it (or
+pass `"bytes"`) for a `Uint8Array`. Encoding happens in the host, which is why
+it is offered here rather than left to a loop at the call site.
+
+A `Hasher` ends at its `digest()`: the host state is released, and calling
+either method again throws rather than silently starting a second hash.
+
+### Passwords
+
+Argon2id by default; `bcrypt` and `scrypt` for hashes that already exist.
+
+| Option | Applies to | Default |
+| --- | --- | --- |
+| `algorithm` | all | `"argon2id"` (also `"argon2i"`, `"argon2d"`, `"bcrypt"`, `"scrypt"`) |
+| `memoryCost` | argon2 | `19456` (KiB) |
+| `timeCost` | argon2 | `2` passes (`3` for argon2i) |
+| `parallelism` | argon2, scrypt | `1` |
+| `cost` | bcrypt, scrypt | `12` (bcrypt rounds, log₂) / `17` (scrypt N, log₂) |
+| `blockSize` | scrypt | `8` |
+| `salt` | all | 16 random bytes. Supply one only to reproduce a specific hash in a test. |
+
+The defaults follow the OWASP Password Storage Cheat Sheet and live in the
+module's source, in the open, because raising them is a decision to make
+deliberately.
+
+The stored string carries the algorithm, the parameters and the salt, so
+nothing else has to be kept beside it — and verification reads them from the
+string rather than from today's configuration. A hash written under weaker
+settings therefore keeps verifying, which is what makes raising the settings
+possible at all. `needsRehash()` is the companion: a correct login is the one
+moment the plaintext is in hand, and so the only moment an old hash can be
+replaced.
+
+```js
+if (await password.verify(input, user.hash)) {
+  if (password.needsRehash(user.hash)) user.hash = await password.hash(input);
+}
+```
+
+Two things to know. **These are slow on the thread that calls them** — that is
+the entire mechanism — so a login endpoint under load wants a queue in front of
+it, not a hundred concurrent calls. And **bcrypt refuses a password longer than
+71 bytes** rather than truncating it, because truncating quietly makes two
+different passwords the same password; verification still truncates, since a
+stored hash may have been written by an implementation that did.
 
 ## `runtime:wasi`
 

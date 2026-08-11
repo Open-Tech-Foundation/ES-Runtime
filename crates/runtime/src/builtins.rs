@@ -90,6 +90,9 @@ pub(crate) fn install(
     // runtime:system ops: spawn (Run); read/write/wait/kill by child id.
     crate::system_ops::install(engine, providers.commands())?;
     crate::serialization_ops::install(engine)?;
+    // runtime:hashing ops: digests, incremental hashers, HMAC, password
+    // hashing. Pure computation, so no capability and no provider (D57).
+    crate::hashing_ops::install(engine)?;
     // Worker ops: spawn (Worker capability); post/recv/terminate by worker id.
     // The scope half is installed unconditionally but only *works* on a runtime
     // a WorkerHost built — that asymmetry is what tells the prelude which agent
