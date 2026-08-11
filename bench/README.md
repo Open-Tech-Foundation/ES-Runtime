@@ -160,6 +160,7 @@ WORKLOADS="regex strings" bench/run.sh    # or name rows directly
 | `engine` | `compute`, `json`, `jsonbig`, `regex`, `strings`, `structured`, `errors`, `async`, `timers` |
 | `webapi` | `url`, `url_setter`, `urlpattern`, `encoding`, `base64`, `buffers`, `headers`, `formdata`, `date_intl`, `streams`, `compression` |
 | `crypto` | `sha256`, `crypto`, `crypto_asym`, `crypto_kdf` |
+| `hashing` | `hash_hex`, `hash_chunks`, `hash_fast` |
 | `net` | `fetch`, `fetch_upload`, `http`, `websocket` |
 | `fs` | `fsread_*`, `fswrite_*`, `fsappend_*`, `fsstat_small`, `fsstat_many`, `fsexists_small`, `fsexists_many`, `glob` |
 | `system` | `spawn` |
@@ -226,6 +227,9 @@ and `/tmp/deno/bin/deno`, and LLRT at `~/.llrt/bin/llrt`, `~/.local/bin/llrt`, o
 | **jsonbig** | parse+stringify of one ~5 MB document — allocation/GC throughput rather than per-call overhead. |
 | **sha256** | 20 000 × SHA-256 of a 4 KiB buffer via `crypto.subtle.digest` — crypto backend + per-call async overhead. |
 | **crypto** | 2 000 × (HMAC-SHA-256 sign + AES-256-GCM encrypt/decrypt of 1 KiB, fresh IV) — the key-based `subtle` surface + `getRandomValues`. |
+| **hash_hex** | 20 000 × SHA-256 of a 4 KiB buffer **to a hex string**, synchronously — the shape `sha256` measures asynchronously and without the encoding. Each runtime uses its own surface: `runtime:hashing` `hash()`, `Bun.CryptoHasher`, `node:crypto` `createHash` for Node/Deno/LLRT. |
+| **hash_chunks** | 200 × SHA-256 over 4 MiB fed in 64 KiB chunks — the incremental path, which `crypto.subtle.digest` cannot express at all (its signature takes the whole input). Measures the `update` path: per-chunk call overhead on top of the compression function. |
+| **hash_fast** | 20 000 × a non-cryptographic hash of a 64 KiB buffer — the cache key / ETag / shard selector a server computes on a hot path. Only esrun (`xxhash3`) and Bun (`Bun.hash`, Wyhash) have one in the standard library; Node, Deno and LLRT are **n/a**, which is the finding rather than a gap in the measurement. |
 | **url** | 100 000 × `new URL(...)` + component reads — for esrun one JS↔Rust op per parse; the others parse natively. |
 | **urlpattern** | 50 000 × `new URLPattern(...)` + `.test()` matches — polyfilled inside V8 vs native. |
 | **encoding** | 100 000 × `TextEncoder`/`TextDecoder` UTF-8 round trips — op crossings riding V8's native transcoding. |
@@ -371,73 +375,76 @@ same run that feeds the site. One machine; re-run locally for your own numbers.
 ```
 workload      |     node |      bun |     deno |     llrt |    esrun
 --------------+----------+----------+----------+----------+----------
-startup       |     17.2 |     10.9 |     23.2 |      3.4 |      7.8
-bigscript     |     28.5 |     22.8 |     32.1 |     11.1 |     18.7
-modules       |     77.0 |     27.5 |     40.8 |     13.8 |     23.7
-compute       |    193.2 |    109.2 |    213.1 |   2041.1 |    233.8
-json          |    261.2 |    178.4 |    192.7 |    630.4 |    183.7
-jsonbig       |    653.7 |    449.4 |    502.3 |   1666.1 |    564.3
-regex         |     65.2 |     19.4 |     62.1 |   1151.3 |     61.0
-strings       |     59.7 |     76.2 |     58.1 |    147.4 |     56.9
-structured    |    209.0 |    263.5 |    250.2 |    313.7 |    295.1
-errors        |   1393.3 |    353.7 |   4171.7 |    307.0 |    380.5
-async         |     57.0 |     49.5 |     32.1 |    675.9 |     28.9
-timers        |     43.4 |     30.4 |    199.1 |     46.5 |     52.1
-url           |     48.6 |     70.0 |     98.2 |    110.6 |     86.7
-url_setter    |    123.2 |    251.1 |    186.5 |    109.6 |    178.8
-urlpattern    |    387.2 |    690.9 |   4812.4 |      n/a |    831.1
-encoding      |     68.5 |     22.8 |     69.5 |     70.9 |     80.2
-encoding_large|    301.6 |     67.9 |    234.3 |    213.4 |    276.1
-base64        |      7.0 |     13.7 |      7.4 |     32.7 |     22.4
-buffers       |     13.6 |     20.0 |     12.4 |     73.3 |     12.3
-headers       |    440.3 |    268.8 |   1501.6 |    724.6 |    420.5
-formdata      |    297.6 |     19.0 |    383.0 |   1345.0 |     86.4
-date_intl     |    131.1 |     76.7 |    136.4 |      n/a |    144.0
-streams       |     22.2 |      8.2 |     15.3 |      n/a |     10.0
-compression   |    645.7 |    240.1 |    220.3 |      n/a |     70.5
-sha256        |    530.0 |    419.4 |    475.5 |    328.3 |    335.6
-crypto        |    173.1 |     82.9 |    131.8 |     24.8 |     32.7
-crypto_asym   |    331.8 |    198.1 |   2159.7 |   1029.2 |   1109.2
-crypto_kdf    |     71.3 |     64.8 |     71.0 |    100.5 |     97.9
-fetch         |     89.3 |     19.0 |     34.2 |     18.5 |     42.7
-fetch_upload  |    107.7 |     41.2 |     35.0 |      n/a |     39.7
-http          |    379.7 |     51.2 |    103.3 |      n/a |    108.1
-websocket     |    609.9 |    417.8 |    583.0 |      n/a |    743.3
-fsread_small  |    115.4 |     36.5 |     40.6 |     26.3 |     39.2
-fsread_large  |     61.9 |     24.1 |     64.9 |     13.6 |     67.8
-fswrite_small |    159.9 |     12.6 |     83.7 |     90.3 |     68.5
-fswrite_large |     57.2 |     18.6 |     40.6 |     52.7 |     20.8
-fsappend_small|    105.5 |     30.2 |     39.2 |      n/a |     30.0
-fsappend_large|     22.2 |      6.6 |     15.6 |      n/a |      5.8
-fsstat_small  |     69.2 |     49.4 |     90.2 |     42.2 |     65.4
-fsstat_many   |    271.7 |    200.5 |    374.5 |    171.0 |    289.1
-fsexists_small|     69.3 |      7.3 |     91.3 |     49.3 |     52.0
-fsexists_many |    265.9 |     30.9 |    371.7 |    203.4 |    227.2
-glob          |    204.5 |     29.7 |      n/a |      n/a |     49.6
-spawn         |    198.0 |     97.8 |    104.1 |     89.0 |     79.2
-jsonl_stream  |    618.7 |    800.9 |    674.1 |      n/a |    609.1
-xml_small     |    483.9 |    452.9 |    486.3 |     60.4 |    159.0
-xml_large     |    988.7 |    860.4 |    968.5 |    125.3 |    338.5
-yaml_small    |    186.0 |     96.6 |    179.1 |   4323.3 |    221.5
-yaml_large    |    384.5 |    192.3 |    363.9 |   8672.4 |    440.5
-toml_small    |    203.5 |     53.4 |    211.2 |   4114.8 |    158.0
-toml_large    |    419.9 |    105.9 |    439.0 |   8351.1 |    325.2
-msgpack_small |     40.6 |     62.3 |     38.4 |   1098.8 |     47.4
-msgpack_large |     42.2 |     57.0 |     39.5 |   1105.5 |     51.8
-protobuf_small|    115.9 |    109.3 |    180.6 |   1795.5 |     75.4
-protobuf_large|    568.6 |    504.3 |    939.7 |   8846.3 |    414.8
-wasm_compile  |     45.9 |     65.8 |     35.2 |      n/a |     38.4
-wasm_call     |     88.3 |    147.1 |     77.7 |      n/a |     78.9
-wasm_mem      |    201.9 |    361.4 |    236.1 |      n/a |    238.7
-wasi_start    |    268.6 |    591.9 |     43.9 |      n/a |     46.0
-wasi_syscall  |     43.7 |   4683.2 |     16.9 |      n/a |     51.3
-rss           |     41.0 |     22.0 |     54.0 |     11.0 |     23.0
-rss_loaded    |    132.0 |    162.0 |    147.0 |    156.0 |    103.0
+startup       |     17.9 |     11.2 |     24.5 |      3.4 |      8.1
+bigscript     |     29.5 |     24.2 |     33.9 |     11.7 |     20.3
+modules       |     82.3 |     28.2 |     41.9 |     14.2 |     25.2
+compute       |    199.1 |    112.9 |    218.1 |   2283.1 |    244.6
+json          |    286.6 |    195.7 |    210.3 |    682.8 |    191.3
+jsonbig       |    710.7 |    514.3 |    542.2 |   1799.9 |    542.7
+regex         |     67.3 |     22.0 |     64.2 |   1296.2 |     63.2
+strings       |     60.7 |     79.2 |     61.2 |    156.1 |     59.0
+structured    |    224.2 |    283.3 |    265.0 |    335.3 |    279.1
+errors        |   1472.5 |    359.5 |   4373.1 |    323.9 |    385.1
+async         |     58.3 |     51.6 |     32.8 |    687.9 |     30.0
+timers        |     40.1 |     30.4 |    205.5 |     47.1 |     54.4
+url           |     48.7 |     72.5 |    103.7 |    112.3 |     87.3
+url_setter    |    130.2 |    258.6 |    196.4 |    112.8 |    182.8
+urlpattern    |    374.1 |    683.5 |   4729.2 |      n/a |    842.3
+encoding      |     65.0 |     21.5 |     65.5 |     69.3 |     76.9
+encoding_large|    296.0 |     65.1 |    226.3 |    207.9 |    277.8
+base64        |      6.7 |     13.3 |      7.4 |     32.5 |     22.3
+buffers       |     13.7 |     19.7 |     12.5 |     70.1 |     12.2
+headers       |    425.3 |    261.1 |   1504.5 |    713.0 |    409.8
+formdata      |    291.2 |     18.8 |    366.9 |   1331.2 |     83.9
+date_intl     |    122.7 |     74.7 |    132.2 |      n/a |    131.1
+streams       |     21.9 |      8.1 |     13.7 |      n/a |     10.0
+compression   |    606.2 |    228.5 |    209.4 |      n/a |     68.8
+sha256        |    503.5 |    422.4 |    487.5 |    324.4 |    327.2
+crypto        |    147.6 |     77.4 |    129.0 |     24.5 |     33.6
+crypto_asym   |    306.1 |    188.8 |   2170.6 |   1012.8 |   1092.2
+crypto_kdf    |     71.1 |     64.2 |     70.4 |     97.7 |     96.8
+hash_hex      |    158.2 |    173.2 |    180.5 |    311.8 |    308.2
+hash_chunks   |   1446.3 |   1626.6 |   1625.3 |   2998.3 |   3027.2
+hash_fast     |      n/a |     44.9 |      n/a |      n/a |     63.7
+fetch         |     82.8 |     17.5 |     32.9 |     17.1 |     39.1
+fetch_upload  |    106.0 |     38.7 |     34.8 |      n/a |     37.9
+http          |    374.0 |     50.0 |     97.3 |      n/a |    112.0
+websocket     |    581.5 |    388.3 |    526.0 |      n/a |    707.6
+fsread_small  |    111.2 |     35.5 |     38.1 |     26.0 |     38.8
+fsread_large  |     56.5 |     23.5 |     61.2 |     12.5 |     42.4
+fswrite_small |    154.9 |     12.2 |     84.5 |     96.2 |     72.4
+fswrite_large |     57.2 |     18.9 |     40.2 |     50.4 |     57.8
+fsappend_small|    100.2 |     29.8 |     38.7 |      n/a |     30.0
+fsappend_large|     22.7 |      6.7 |     15.7 |      n/a |     18.2
+fsstat_small  |     68.9 |     49.7 |     85.8 |     41.5 |     65.3
+fsstat_many   |    268.4 |    195.7 |    361.0 |    173.8 |    283.6
+fsexists_small|     64.8 |      7.1 |     87.9 |     48.0 |     51.1
+fsexists_many |    253.1 |     30.5 |    356.1 |    195.5 |    224.7
+glob          |    182.0 |     28.8 |      n/a |      n/a |     49.0
+spawn         |    197.1 |     95.3 |    103.2 |     89.4 |     75.6
+jsonl_stream  |    603.4 |    812.0 |    663.7 |      n/a |    558.8
+xml_small     |    473.1 |    447.5 |    472.2 |     60.0 |    153.9
+xml_large     |    952.8 |    848.1 |    933.0 |    120.6 |    308.2
+yaml_small    |    184.7 |     95.6 |    174.7 |   4222.7 |    217.5
+yaml_large    |    375.5 |    186.6 |    354.4 |   8348.1 |    430.2
+toml_small    |    198.6 |     52.6 |    208.6 |   4038.7 |    156.2
+toml_large    |    407.8 |     99.4 |    434.4 |   8150.6 |    315.9
+msgpack_small |     42.4 |     63.0 |     40.5 |   1124.7 |     57.2
+msgpack_large |     43.1 |     58.6 |     40.6 |   1168.8 |     63.0
+protobuf_small|    115.0 |    113.2 |    184.5 |   1780.3 |     75.4
+protobuf_large|    588.5 |    538.1 |    976.6 |   9014.9 |    417.4
+wasm_compile  |     47.9 |     67.3 |     36.2 |      n/a |     38.3
+wasm_call     |     90.7 |    149.9 |     81.3 |      n/a |     80.1
+wasm_mem      |    211.1 |    380.2 |    244.2 |      n/a |    248.5
+wasi_start    |    284.6 |    634.9 |     46.6 |      n/a |     44.1
+wasi_syscall  |     45.5 |   4844.4 |     17.2 |      n/a |     55.8
+rss           |     41.0 |     22.0 |     54.0 |     11.0 |     24.0
+rss_loaded    |    131.0 |    160.0 |    147.0 |    156.0 |    120.0
 ```
 
 Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz, 12 cores, Linux 6.12.74+deb13+1-amd64 x86_64, ext2/ext3.
 
-Measured: node v24.14.0, bun 1.4.0-canary.1, deno 2.8.3, llrt v0.8.0-beta, esrun 0.17.0. `n/a` = an API the runtime lacks, or a row it timed out on.
+Measured: node v24.14.0, bun 1.4.0-canary.1, deno 2.8.3, llrt v0.8.0-beta, esrun 0.22.0. `n/a` = an API the runtime lacks, or a row it timed out on.
 
 <!-- /generated -->
 
@@ -466,12 +473,13 @@ WinterTC surface**, not "fastest at everything."
   streams prelude all hold up; LLRT's QuickJS microtask path is ~20× slower on
   `async`, and it has no streams.
 - **crypto, sha256 — fastest among the JIT runtimes, by a wide margin on crypto**
-  (40 ms vs Bun's 112). `crypto.subtle.*` is a synchronous RustCrypto op wrapped
+  (34 ms vs Bun's 77). `crypto.subtle.*` is a synchronous RustCrypto op wrapped
   in an already-resolved promise, so the `await`s drain in microtask checkpoints
   with little scheduling cost; Node/Deno/Bun run genuinely-async WebCrypto that
   pays per-call scheduling. LLRT (also a native synchronous crypto path) lands
   alongside. A real win **for this access pattern** — not a claim that RustCrypto
-  beats BoringSSL raw.
+  beats BoringSSL raw, which the `hashing` rows below measure directly and where
+  esrun trails.
 - **http — ahead of Node, behind Bun/Deno** (and LLRT has no HTTP server). See
   the **HTTP requests/sec** section below for the server-throughput story
   (per-request CPU cost) — the in-process `http` micro-workload here just exercises
@@ -518,6 +526,55 @@ WinterTC surface**, not "fastest at everything."
   which go through host ops, not this path.
 - **wasm_mem — mid-pack** (244 ms, level with Deno, ahead of Bun). The work is
   V8's; nothing here is ours to win.
+- **hash_hex, hash_chunks — ~2× behind Node/Bun/Deno, level with LLRT.** This is
+  the caveat on the `sha256` bullet above, measured — and the two rows together
+  separate the two effects cleanly, because **they are the same work**: 20 000 ×
+  SHA-256 of the same 4 KiB buffer, `sha256` through async `crypto.subtle`,
+  `hash_hex` through a synchronous call.
+
+  | | `sha256` (async) | `hash_hex` (sync) | ratio |
+  | --- | --- | --- | --- |
+  | esrun | 327.2 | 308.2 | 1.06× |
+  | Node | 503.5 | 158.2 | 3.18× |
+
+  esrun's two numbers are 6% apart because `crypto.subtle` here *is* the
+  synchronous op with a resolved promise around it — there is no second
+  implementation and almost no scheduling. Node's are 3.2× apart, which is what
+  genuinely-async WebCrypto costs per call. So esrun wins the async row and loses
+  the sync one, and neither result is about the hash function.
+
+  What *is* about the hash function is the remaining ~2×: RustCrypto's portable
+  Rust against the hand-written AVX2/BMI2 assembly in OpenSSL and BoringSSL —
+  277 MB/s to Node's 580, measured on `hash_chunks`, which pushes 839 MB through
+  12 800 `update` calls so the crossing is amortized to nothing.
+
+  **The reference machine has no SHA-NI** (i7-8700K, Coffee Lake), so both sides
+  are running software SHA-256 here. `sha2` carries an x86 SHA-NI backend it
+  selects at runtime via `cpufeatures`, so on hardware that has the instructions
+  — Ice Lake and later, every Zen — this is a different measurement, and not one
+  we can take on this box. Read it as "esrun's software SHA-256 is half of
+  OpenSSL's", which is true, rather than as a figure for your server.
+
+  `hash_fast` is the row that says what the module is actually for: 63.7 ms where
+  `hash_hex` takes 308, on sixteen times the data — a checksum-grade hash for the
+  cache keys and ETags that do not need a cryptographic one, which Node, Deno and
+  LLRT have no standard-library answer for at all.
+- **fswrite_large, fsappend_large — 2.8× and 3.1× slower than the numbers
+  published for 0.17.0, and the old ones were wrong.** `write()` above 64 KiB
+  takes an async path where `tokio::fs::File` dispatches to the blocking pool;
+  `write_all` returned before those writes landed and the file was dropped
+  without a flush, so the call resolved over a file that had not been written
+  (fixed in `9c629ba`, which is a correctness fix — a read straight after a
+  260 KB write saw a prefix, or nothing, in 18 of 25 attempts). The old 20.8 ms
+  was therefore timing a write that had not finished. 57.8 ms is the first
+  honest measurement of one that has, and it puts esrun level with Node rather
+  than ahead of it.
+
+  Two things corroborate the reading rather than leaving it as a story: every
+  other runtime's fs cells are stable to within ~2% across the two runs, so the
+  machine is not the variable; and the **small** write/append rows did not move
+  at all (+6%, 0%), which is exactly what the fix predicts — the sub-64 KiB
+  branch is a synchronous `std::fs` write and was never affected.
 - **url, encoding — competitive but behind the native parsers.** This surface
   crosses the JS↔Rust op boundary per call. It got here through three rounds:
   (1) op *dispatch* is cheap (~49 ns/call) — the cost was always per-call *work*;

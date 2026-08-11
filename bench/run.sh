@@ -138,6 +138,10 @@ ROW_DEFS=(
   "crypto|crypto_asym|ms|card|ECDSA P-256 sign + verify"
   "crypto|crypto_kdf|ms|card|PBKDF2 (10k iterations)"
 
+  "hashing|hash_hex|ms|chart|SHA-256 to hex (one-shot)"
+  "hashing|hash_chunks|ms|chart|SHA-256 over 64 KiB chunks (4 MiB)"
+  "hashing|hash_fast|ms|chart|Non-cryptographic hash (64 KiB)"
+
   "net|fetch|ms|card|fetch (local server)"
   "net|fetch_upload|ms|chart|fetch (streamed upload)"
   "net|http|ms|chart|HTTP server (concurrent)"
@@ -193,6 +197,7 @@ GROUP_TITLE[memory]="Memory"
 GROUP_TITLE[engine]="Engine"
 GROUP_TITLE[webapi]="Web APIs"
 GROUP_TITLE[crypto]="Crypto"
+GROUP_TITLE[hashing]="Hashing"
 GROUP_TITLE[net]="Network"
 GROUP_TITLE[fs]="Filesystem"
 GROUP_TITLE[system]="System"

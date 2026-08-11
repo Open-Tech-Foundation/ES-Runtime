@@ -1,0 +1,211 @@
+---
+title: Hashing
+description: Digests, checksums, MACs and password hashing with runtime:hashing — encoded output, incremental input, and no capability.
+---
+
+import { Callout } from "@opentf/web-docs";
+import StatusIcon from "../../../../components/StatusIcon.jsx";
+
+export const Yes = () => <StatusIcon status="yes" className="size-4 shrink-0 text-emerald-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const No = () => <StatusIcon status="no" className="size-4 shrink-0 text-rose-500 align-middle inline-block mr-1.5 last:mr-0" />;
+export const Partial = () => <StatusIcon status="partial" className="size-4 shrink-0 text-amber-500 align-middle inline-block mr-1.5 last:mr-0" />;
+
+# Hashing
+
+[`runtime:hashing`](/api/hashing) is digests, checksums, MACs and passwords.
+`crypto.subtle` stays the WebCrypto standard; this is the rest — the algorithms
+it has no name for, hashing that runs incrementally, encoded output, and
+passwords.
+
+## A digest
+
+```js
+import { hash } from "runtime:hashing";
+
+hash("sha256", "hello", "hex");        // "2cf24dba5fb0a30e…"
+hash("sha256", "hello", "base64url");  // "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"
+hash("sha256", "hello");               // Uint8Array(32)
+```
+
+`data` is a string (hashed as UTF-8), an `ArrayBuffer`, or a view. Encoding
+happens in the host, so `"hex"` costs one allocation rather than one string per
+byte.
+
+WebCrypto's spellings work unchanged, which matters when you are moving code:
+
+```js
+hash("SHA-256", data, "hex") === hash("sha256", data, "hex");   // true
+```
+
+## Input too large to hold
+
+`crypto.subtle.digest` takes the whole input at once — a 4 GB upload means 4 GB
+of memory. A `Hasher` holds a few hundred bytes of state instead.
+
+```js
+import { Hasher } from "runtime:hashing";
+
+const h = new Hasher("blake3");
+for await (const chunk of file.stream()) h.update(chunk);
+const digest = h.digest("hex");
+```
+
+`update()` chains, and `digest()` ends the hasher — calling either again throws
+rather than quietly starting a second hash.
+
+For a stream you already have, that whole block is one call:
+
+```js
+import { hashStream } from "runtime:hashing";
+
+const etag = await hashStream("xxhash3", response.body, "hex");
+```
+
+## Choosing an algorithm
+
+| Want | Use | Why |
+| --- | --- | --- |
+| A content hash, integrity, addressing | `blake3` | 32 bytes, and many times SHA-256's throughput. |
+| Interop with something that says SHA-256 | `sha256` | The one everything speaks. |
+| A cache key, ETag, shard selector | `xxhash3` | An order of magnitude faster. Nobody is attacking a cache key. |
+| A checksum in a frame or record | `crc32c` | 4 bytes. What S3, Parquet and iSCSI checksum with. |
+| An S3 ETag, CRAM-MD5, a legacy protocol | `md5` | Interop only. |
+
+<Callout type="warning" title="Checksums are not digests">
+  `xxhash*` and `crc32*` are trivially collidable on purpose. Never use one to
+  compare secrets, deduplicate untrusted uploads, or key a cache an attacker can
+  write to. `hmac` refuses them for this reason.
+</Callout>
+
+## Signatures and tokens
+
+```js
+import { hmac, timingSafeEqual } from "runtime:hashing";
+
+const expected = hmac("sha256", secret, body, "hex");
+if (!timingSafeEqual(request.headers.get("x-signature") ?? "", expected)) {
+  return new Response("bad signature", { status: 401 });
+}
+```
+
+`hmac` is synchronous and takes the key directly — no `importKey` step. When you
+already hold a `CryptoKey` or a JWK, use `crypto.subtle`; it is the same
+construction.
+
+<Callout type="danger" title="Never compare a secret with ===">
+  `===` on hex strings returns as soon as two characters differ, so the time it
+  takes reveals how much of the prefix was right — one request at a time, until
+  the whole signature is known. `timingSafeEqual` does not.
+</Callout>
+
+## Passwords
+
+Argon2id by default. The stored string carries the algorithm, its parameters and
+the salt, so nothing else has to be kept beside it.
+
+```js
+import { password } from "runtime:hashing";
+
+// Signup.
+user.hash = await password.hash(input);
+// "$argon2id$v=19$m=19456,t=2,p=1$…"
+
+// Login.
+if (!(await password.verify(input, user.hash))) return unauthorized();
+```
+
+### Raising the cost later
+
+Verification reads the parameters from the stored string, not from today's
+configuration — so raising a default never invalidates existing hashes. A
+correct login is the one moment you hold the plaintext, and therefore the only
+moment an old hash can be replaced:
+
+```js
+if (await password.verify(input, user.hash)) {
+  if (password.needsRehash(user.hash)) {
+    user.hash = await password.hash(input);
+    await users.save(user);
+  }
+}
+```
+
+### Existing hashes
+
+bcrypt and scrypt are here so a database you already have keeps working —
+`verify()` dispatches on what the stored string says it is, with no configuration:
+
+```js
+await password.verify(input, "$2b$12$…");     // bcrypt, from your old app
+await password.verify(input, "$scrypt$ln=17,r=8,p=1$…");
+```
+
+New hashes take Argon2id unless you ask otherwise:
+
+```js
+await password.hash(input, { algorithm: "bcrypt", cost: 12 });
+```
+
+<Callout type="warning" title="These block the calling isolate">
+  Password hashing is slow by design — that is the entire mechanism — and it is
+  slow on the thread that calls it. Put a queue in front of a public login
+  endpoint rather than letting a hundred requests hash concurrently.
+</Callout>
+
+<Callout type="note" title="bcrypt refuses past 71 bytes">
+  bcrypt hashes at most 72 bytes including its own NUL, and most implementations
+  silently ignore the rest — quietly making two different passwords the same
+  password. Hashing a longer one throws here. Verification still truncates, since
+  a stored hash may have been written by one that did.
+</Callout>
+
+## Capability
+
+<Callout type="tip" title="Hashing needs nothing">
+  Hashing reads nothing and reaches nothing, so every function here works under
+  `--deny-all`. The one exception is `password.hash()`, which draws a random salt
+  and so needs **Entropy** — `password.verify()` needs nothing, because the salt
+  is inside the stored string. A service that only checks passwords is granted
+  nothing at all.
+</Callout>
+
+## How this compares
+
+| | esrun<br />`runtime:hashing` | Node<br />`node:crypto` | Bun | Deno | WebCrypto<br />(everywhere) |
+| --- | --- | --- | --- | --- | --- |
+| One-shot digest | `hash()` | `createHash().digest()` | `Bun.CryptoHasher` | `node:crypto` | `subtle.digest` |
+| Synchronous | <Yes /> | <Yes /> | <Yes /> | <Yes /> | <No /> async only |
+| Hex / base64 output | <Yes /> built in | <Yes /> | <Yes /> | <Yes /> | <No /> encode it yourself |
+| Incremental | <Yes /> `Hasher` | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| Hash a stream in one call | <Yes /> `hashStream` | <Partial /> pipe it | <No /> | <Partial /> pipe it | <No /> |
+| SHA-3 | <Yes /> | <Yes /> | <Yes /> | <Yes /> | <No /> |
+| BLAKE3 | <Yes /> | <No /> | <No /> BLAKE2 only | <Partial /> `@std/crypto` | <No /> |
+| Non-cryptographic hash | <Yes /> xxHash, CRC-32 | <No /> | <Yes /> `Bun.hash` | <No /> | <No /> |
+| Argon2id | <Yes /> | <No /> npm | <Yes /> | <No /> npm | <No /> |
+| bcrypt | <Yes /> | <No /> npm | <Yes /> | <No /> npm | <No /> |
+| `needsRehash` | <Yes /> | <No /> | <No /> | <No /> | <No /> |
+| Constant-time compare | <Yes /> | <Yes /> | <Partial /> via `node:crypto` | <Yes /> | <No /> |
+| Needs a capability | <No /> — except the salt | ambient | ambient | ambient | <No /> |
+
+**Legend:** <Yes /> Supported · <Partial /> Partial / via another module · <No /> Not supported
+
+<br />
+
+> **Why not just `crypto.subtle`.** It is the WebCrypto standard and it is
+> complete for what it covers — keys, signatures, ciphers, KDFs. What it does not
+> cover is a server hashing a 4 GB upload, wanting hex, reaching for a cache key,
+> or storing a password. Those four gaps are what sent everyone to `node:crypto`.
+
+> **Why the checksums are in the same module.** Because the question is the same
+> question — "what is the hash of this" — and a second import path would not have
+> stopped anyone choosing wrongly. The place it actually matters is `hmac`, which
+> refuses them.
+
+> **Why the salt comes from JavaScript.** A password hash needs randomness, and
+> randomness here is the Entropy provider's to give. Rather than let a host op
+> help itself, the module calls `crypto.getRandomValues` — so hashing a password
+> needs Entropy because it genuinely needs randomness, and verifying one needs
+> nothing at all.
+
+See the [API reference](/api/hashing) for every option, and the
+[benchmarks](/docs/benchmarks) for what the encoded and incremental paths cost.

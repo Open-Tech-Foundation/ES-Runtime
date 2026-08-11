@@ -73,13 +73,55 @@ namespace) is unstable and may change between minor releases until the API freez
   and input type, agreement with `crypto.subtle` on the four shared digests, and
   the capability claim under `--deny-all`). Documented per D27: DECISIONS D57,
   `docs/API.md`, `types/runtime-hashing.d.ts`, the site's `api/hashing` page,
-  and the Node and Bun migration guides.
+  the [Hashing guide](https://es-runtime.opentechf.org/docs/guides/hashing), and
+  the Node and Bun migration guides.
+
+- **A `hashing` benchmark group** — three rows, each runtime measured on its own
+  surface (`runtime:hashing`, `Bun.CryptoHasher`, `node:crypto` `createHash`):
+  `hash_hex` (20 000 × SHA-256 of 4 KiB to a hex string, synchronously),
+  `hash_chunks` (200 × SHA-256 over 4 MiB in 64 KiB chunks — the incremental
+  path `crypto.subtle.digest` cannot express at all), and `hash_fast` (20 000 ×
+  a non-cryptographic hash of 64 KiB, which Node, Deno and LLRT have no
+  standard-library answer for and record as n/a).
+
+  `hash_hex` and the existing `sha256` row are the **same work** — 20 000 ×
+  SHA-256 of the same 4 KiB buffer — one asynchronous through `crypto.subtle`,
+  one synchronous. Together they separate access pattern from hash speed: esrun's
+  two numbers are 6% apart (327 / 308 ms), Node's are 3.2× apart (504 / 158),
+  because `crypto.subtle` here *is* the synchronous op with a resolved promise
+  around it. So esrun wins the async row and loses the sync one, and neither
+  result is about the hash function.
+
+  What is about the hash function is the remaining ~2×, and **esrun trails**:
+  277 MB/s against Node's 580 on the SHA-256 compression function, level with
+  LLRT. The README has always caveated `sha256` as "not a claim that RustCrypto
+  beats BoringSSL raw"; this measures it. The reference machine has no SHA-NI, so
+  both sides run software SHA-256 and OpenSSL's hand-written AVX2 assembly wins —
+  `sha2` selects an SHA-NI backend at runtime on hardware that has the
+  instructions, which this one does not. `hash_fast` is the row that says what
+  the module is for: 16× the data in a fifth of `hash_hex`'s time.
 
 ### Fixed
 
 - **Benchmarks tables in dark mode** — `BenchStandings` (Standings at a glance), `WsSweepTable`, `Http2Table` and `RuntimeVersions` now carry `dark:` borders, backgrounds and text (`dark:border-zinc-800`, `dark:bg-zinc-900`, `dark:text-zinc-100/400`, `dark:text-emerald-400`) matching `BenchCard`/`MemorySafetyTable`, so all tables on `/docs/benchmarks` remain readable.
 
 ### Changed
+
+- **Published benchmark data re-measured on 0.22.0.** The module carried numbers
+  taken on 0.17.0; every charted row is now measured on the shipping build, at
+  `WORKLOAD_RUNS=12` (recorded in `method.max_workload_reps`) rather than 5,
+  because `fsread_large` needed more samples to corroborate its floor and the
+  publish gate refused the run until it did.
+
+  Three cells moved more than 25%, all esrun's large-file fs rows.
+  `fswrite_large` (20.8 → 57.8 ms) and `fsappend_large` (5.8 → 18.2) are **not a
+  regression**: `9c629ba` fixed `write()` resolving before its bytes landed above
+  64 KiB, so the old figures were timing a write that had not finished. Every
+  other runtime's fs cells are stable to within ~2% across the two runs, and the
+  *small* write/append rows did not move at all — which is what that fix
+  predicts, since the sub-64 KiB branch is a synchronous `std::fs` write. The
+  third, `fsread_large` (67.8 → 42.4), is an improvement; reads were not touched
+  by that fix and the peers moved ~9% too, so part of it is environmental.
 
 - **Standings ordered by total medal count** — “Standings at a glance” now sorts by 🥇+🥈+🥉 descending (tie-break golds then silvers, stable fallback to `ORDER`), so `Bun → esrun → Deno → Node → LLRT`.
 

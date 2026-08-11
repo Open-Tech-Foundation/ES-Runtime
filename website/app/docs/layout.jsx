@@ -37,6 +37,7 @@ const NAV = [
       { title: "WebSockets", path: "/docs/guides/websocket" },
       { title: "URLPattern", path: "/docs/urlpattern" },
       { title: "WebAssembly & WASI", path: "/docs/wasm" },
+      { title: "Hashing", path: "/docs/guides/hashing" },
       { title: "Securing Runtime", path: "/docs/guides/securing-runtime" },
       {
         title: "Text serialization",
