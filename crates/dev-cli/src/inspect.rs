@@ -320,8 +320,10 @@ async fn handle(mut stream: TcpStream, shared: Arc<Shared>, target: Arc<Target>)
     let (status, body) = match path.as_str() {
         "/json/version" => (
             "200 OK",
+            // `esdev`, not the runtime: this names the binary the client is
+            // attached to, and the two are versioned separately.
             format!(
-                r#"{{"Browser":"ES-Runtime/{}","Protocol-Version":"1.3"}}"#,
+                r#"{{"Browser":"esdev/{}","Protocol-Version":"1.3"}}"#,
                 env!("CARGO_PKG_VERSION")
             ),
         ),

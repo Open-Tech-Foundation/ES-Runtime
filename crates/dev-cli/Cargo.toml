@@ -1,7 +1,13 @@
 [package]
 name = "es-runtime-dev-cli"
 description = "esdev: the local development binary for the ES-Runtime — everything needed to get a service to production, and nothing that ships with it."
-version.workspace = true
+# Versioned on its own, not with the workspace. `esdev` is a tool rather than a
+# contract: the versioned promises of this project are the Rust crates and the
+# `runtime:` namespace (D24), and neither is anything `esdev` exposes. Tying it
+# to them would mean a major bump here for a change in the engine nobody running
+# `esdev` can see, and no way to ship a fix to `esdev test` without releasing the
+# runtime. Its own changelog is CHANGELOG.md beside this file.
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
