@@ -1,0 +1,74 @@
+---
+title: Tracing permissions
+description: Run the program once and be told the esrun command line to deploy it with.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Tracing permissions
+
+`esrun` grants every capability by default and can be narrowed to nothing. The
+hard part was never the flags — it was knowing which ones you need. Run the
+program once:
+
+```sh
+esdev --trace-permissions app.mjs
+```
+
+```text
+esdev: the permissions this run used
+
+  read      fs_read
+  imports   import
+  net       fetch
+  env       process_env
+
+  esrun --deny-all --allow-read --allow-imports --allow-net --allow-env app.mjs
+```
+
+That last line is the one to deploy with.
+
+## It reports what was used, not what was granted
+
+The trace watches the capability check itself — the only place that knows what a
+program *reached for*, as opposed to what it was handed. So a run under the
+default full grant still tells you the minimum.
+
+**Refusals are reported too, and left out of the line:**
+
+```sh
+esdev --trace-permissions --deny-all app.mjs
+```
+```text
+  imports   import  (denied — the program asked and was refused)
+
+  esrun --deny-all app.mjs
+```
+
+The program asked and did not get it; whether that was the right answer is your
+call, not a trace's. The report is printed however the run ended — including a
+`process.exit()` and a `^C` drain, which for a server is every run.
+
+## Workers are in the same report
+
+A worker runs on its own thread in its own isolate, and its grants are set at the
+spawn — the place they are hardest to get right. Anything it reaches for appears
+in the report alongside the main agent's.
+
+<Callout type="note" title="Scopes are not traced">
+  The line grants each capability unnarrowed. Narrowing it — `--allow-read=./data`,
+  `--allow-net=api.example.com` — is still yours, and a scope is enforced
+  provider-side rather than at the capability bit. See
+  [Securing the runtime](/docs/guides/securing-runtime).
+</Callout>
+
+## Then shorten it further
+
+Bundling removes a capability outright: an unbundled program needs
+`--allow-imports` so the loader can walk `node_modules`, and a bundle has no
+imports left to resolve.
+
+```sh
+esdev build app.mjs
+esrun --deny-all --allow-read --allow-net --allow-env dist/app.js
+```

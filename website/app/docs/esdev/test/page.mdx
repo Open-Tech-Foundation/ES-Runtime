@@ -1,0 +1,67 @@
+---
+title: esdev test
+description: Find the test files and run each in its own process, with the assertion vocabulary the runtime's own suite uses.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# esdev test
+
+```sh
+esdev test                    # every *.test.{js,mjs,ts,tsx,jsx}
+esdev test math               # ...whose path contains "math"
+esdev test --file=x.test.ts   # exactly one file
+```
+
+Exits non-zero if any file fails.
+
+## Write one
+
+The globals are already defined — there is nothing to import.
+
+```ts
+test("adds", () => {
+  assertEquals(1 + 1, 2);
+});
+
+test("rejects", async () => {
+  await assertRejects(() => fetch("http://127.0.0.1:1/"));
+});
+```
+
+| | |
+| --- | --- |
+| `test(name, fn)` | `fn` may be async; failures are collected |
+| `assert(cond, msg?)` | |
+| `assertEquals(actual, expected, msg?)` | |
+| `assertThrows(fn, msg?)` | |
+| `assertRejects(fn, msg?)` | |
+
+The same vocabulary the runtime's own conformance suite uses: reading its tests
+and writing your own should not mean learning two.
+
+## One process per file
+
+A test suite is where isolation matters most. A file that wedges, exhausts its
+heap or calls `exit()` must not decide the fate of the others, and a global left
+behind by one must not be visible to the next. Each file gets its own process —
+the prelude snapshot makes that cheap.
+
+`--file=<path>` is what a child is invoked with, and is equally a supported way
+to run one file by hand.
+
+## The file is the entry
+
+It keeps its own path, its module resolution, its relative imports and its
+TypeScript, and simply arrives with `test()` already defined. Nothing wraps it
+and nothing imports it.
+
+That matters for line numbers: the harness is injected as a **single physical
+line**, so a failing assertion names the line you wrote. Only line 1's columns
+shift.
+
+<Callout type="note" title="Not yet">
+  Parallelism across files, `describe` nesting, per-file timeouts, and a
+  machine-readable reporter. A reported stack also still includes the harness's
+  own frames, all at line 1 — noise rather than wrong.
+</Callout>

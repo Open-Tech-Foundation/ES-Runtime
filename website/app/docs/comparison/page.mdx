@@ -19,9 +19,9 @@ makes the trade-offs explicit.
 | Capability | esrun | Node.js | Bun | Deno |
 | --- | :---: | :---: | :---: | :---: |
 | ES Modules | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
-| CommonJS (require) | <No /> | <Yes /> | <Yes /> | <Partial /> |
-| TypeScript (built-in) | <No /> | <Yes /> | <Yes /> | <Yes /> |
-| JSX (built-in) | <No /> | <No /> | <Yes /> | <Yes /> |
+| CommonJS (require) | <Partial /> | <Yes /> | <Yes /> | <Partial /> |
+| TypeScript (built-in) | <Partial /> | <Yes /> | <Yes /> | <Yes /> |
+| JSX (built-in) | <Partial /> | <No /> | <Yes /> | <Yes /> |
 | JSON module imports | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Web APIs (fetch/URL/streams/WebCrypto) | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Built-in HTTP server | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
@@ -50,10 +50,21 @@ makes the trade-offs explicit.
 | FFI (dlopen) | <No /> | <No /> | <Yes /> | <Yes /> |
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
-| Bundler / test runner | <No /> | <Partial /> | <Yes /> | <Yes /> |
+| Bundler / test runner | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
 | Embeddable as a library | <Yes /> | <No /> | <No /> | <Partial /> |
 
-**Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental · <No /> Not supported
+**Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental / dev-binary only · <No /> Not supported
+
+**On the TypeScript, JSX, CommonJS and toolchain rows.** esrun does none of them,
+deliberately: it is the binary that runs in production, and a transform, a
+watcher or a test discoverer in there is surface that cannot pay for itself.
+[`esdev`](/docs/esdev) — a second binary, for your machine only — runs `.ts` and
+`.tsx` directly, bundles (which is how a CommonJS dependency becomes runnable),
+runs tests, watches, and debugs over the Chrome DevTools Protocol. It shares
+every line that decides how a run behaves, so a program cannot behave one way
+there and another in production. Marked <Partial /> rather than <Yes /> because
+the answer is "in the toolchain, not in the runtime", which is a real difference
+from the other three.
 
 **On the UDP rows.** Deno is <Partial /> because `Deno.listenDatagram` is still
 behind `--unstable-net` — the API exists and works, it is simply not stable — and

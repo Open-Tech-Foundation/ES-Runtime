@@ -1,0 +1,85 @@
+---
+title: esdev build
+description: Bundle a server entry and its dependencies into one deployable ES module — which is also how a CommonJS package becomes runnable.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# esdev build
+
+```sh
+esdev build server.ts                          # → dist/server.js
+esdev build src/app.ts --out=dist/app.js --minify
+```
+
+One entry, one file, ES modules out. `runtime:*` imports are left for the
+runtime to serve, and **CommonJS dependencies are converted on the way in**.
+
+## The CommonJS answer
+
+`esrun` runs ES modules only, and a large share of npm — React included — still
+ships CommonJS. There were two ways out: teach the runtime `require`, or convert
+on the developer's machine.
+
+Teaching the runtime `require` would break the property that a deployed artifact
+is the text that was reviewed. So the bundler absorbs CJS→ESM at build time and
+`esrun` receives ordinary ESM. The non-goal holds completely rather than being
+narrowed:
+
+```sh
+esdev build server.js         # a CJS dependency goes in
+esrun dist/server.js          # ordinary ESM comes out
+```
+
+## It also shortens the deploy line
+
+An unbundled program needs `--allow-imports`, because the loader walks
+`node_modules` at runtime. A bundle has **no imports left to resolve**:
+
+```sh
+esrun --deny-all --allow-imports --allow-listen=8080 app.js   # unbundled
+esrun --deny-all --allow-listen=8080 dist/app.js              # bundled
+```
+
+The build is a security step, not only a packaging one.
+
+## Options
+
+| Flag | |
+| --- | --- |
+| `--out=<file>` | Where to write it (default `dist/<entry>.js`) |
+| `--minify` | Minify the output |
+| `--conditions=<list>` | Extra `exports` conditions, comma-separated. These **add** to the defaults (`import`, `default`, `worker`) |
+| `--define=<name>=<value>` | Replace `<name>` at build time. `process.env.NODE_ENV` defaults to `"production"` |
+
+## What it gets right for you
+
+Four settings are the actual product, and each is silent when wrong — which is
+why this is a command rather than documentation telling you to run a bundler.
+
+| | |
+| --- | --- |
+| **`runtime:*` stays external** | It is served by the runtime and has no file behind it. Inlining it produces a bundle that fails at its first import. |
+| **ESM output** | The runtime has no other module system. |
+| **`process.env.NODE_ENV` is defined** | Packages branch on it before doing anything, and there is no `process` global here — undefined is a crash, not a missed optimisation. |
+| **The `worker` condition is asserted** | It is how a package hands over its Web-API build: `react-dom/server` resolves to a Web Streams implementation under it, and a `node:stream` one without it. |
+
+`--conditions` adds rather than replaces, so asking for one more cannot silently
+cost you `worker`. The **runtime's** condition set stays standards-only; the
+escape hatch belongs to the bundler, where you chose to run it, not to a server
+resolving imports under load.
+
+<Callout type="note" title="Not yet">
+  Source maps, watching a build, code splitting, and any output format but ESM.
+  A minified bundle's stack traces are currently unmapped.
+</Callout>
+
+## End to end
+
+React 19 streaming SSR behind Hono, from CommonJS packages, served by `esrun`
+with no filesystem or import access at all:
+
+```sh
+esdev build server.tsx --out=dist/server.js --minify
+esrun --deny-all --allow-listen=8080 dist/server.js
+```

@@ -11,6 +11,11 @@ esrun is a secure, standards-based runtime for running server-side JavaScript �
 and nothing more. Its scope is deliberately narrow. Knowing what it does _not_
 do is as important as knowing what it does.
 
+Some of that narrowness is a **division of labour, not an absence**: TypeScript,
+bundling, testing, watching and debugging live in a second binary,
+[`esdev`](/docs/esdev), which never reaches production. The rest below are
+durable boundaries for the whole project.
+
 <Callout type="info" title="In scope">
   Executing standard ES Modules on V8 with a Web-standard API surface,
   deny-by-default capabilities for embedders, a sandboxed module system, and host
@@ -27,25 +32,19 @@ implementation.
   `node:` builtin namespace, no Node.js globals (no `process` global, no
   `Buffer`, no `require`), and no npm lifecycle. Code targets Web standards plus
   the `runtime:` modules, not the Node.js API.
-- **No CommonJS.** Modules are real ES Modules only. There is no `require()`, no
-  `module.exports`, and no CJS↔ESM interop. A CommonJS-only package is rejected
-  with a clear error.
-- **No TypeScript.** esrun runs JavaScript. It does not strip or compile types —
-  transpile TypeScript ahead of time with your own toolchain and run the emitted
-  JS.
-- **No JSX.** JSX is not a JavaScript standard; esrun does not transform it.
-  Compile it ahead of time if you need it.
+- **No CommonJS at runtime.** Modules are real ES Modules only. There is no
+  `require()`, no `module.exports`, and no CJS↔ESM interop; a CommonJS-only
+  package is rejected with a clear error. It is converted **at build time**
+  instead — [`esdev build`](/docs/esdev/build) absorbs CJS→ESM and esrun receives
+  ordinary ESM, so a deployed artifact stays the text that was reviewed.
 - **No remote module imports.** `import "https://..."` is explicitly rejected.
   Load data through a `runtime:net` API instead, keeping code locally verified
   and safe from supply-chain hijacking.
 - **No package installer.** esrun resolves an existing `node_modules` tree but
   does not install anything. Use your package manager (npm, pnpm, bun) to
   populate dependencies.
-- **No bundler, linter, formatter, or test runner.** esrun is a runtime, not a
-  toolchain. Bundling, linting, formatting, and testing are left to dedicated
-  tools.
-- **No watch mode.** There is no built-in file watcher or auto-restart. Wrap
-  esrun in your own watcher if you want one.
+- **No linter or formatter.** `oxlint` and `oxfmt` are npm binaries that already
+  do this well; a shim around them would add a version matrix for no gain.
 - **No FFI or native addons.** There is no foreign-function interface and no
   native addon ABI. The host extends the runtime through injected providers and
   capability-gated ops, in Rust.
@@ -53,6 +52,25 @@ implementation.
   `Worker` ships (see [Workers](/docs/internals/workers)); the shared one exists
   to share a worker between documents, and there are none. A worker's URL names
   a file.
+
+## Not in esrun — in esdev
+
+These are development tooling, and the binary that serves production is the one
+that should have none of it. An inspector port in particular is a total bypass of
+the capability model: attach and you own the isolate, whatever `--deny-all` said.
+
+| | |
+| --- | --- |
+| **TypeScript & JSX** | [`esdev app.ts`](/docs/esdev) strips types as files load — erased, never checked |
+| **A bundler** | [`esdev build`](/docs/esdev/build) — one deployable ES module, and how CommonJS becomes runnable |
+| **A test runner** | [`esdev test`](/docs/esdev/test) — one process per file |
+| **Watch mode** | `esdev --watch` — a restart is a SIGTERM, so it drains |
+| **A debugger** | [`esdev --inspect`](/docs/esdev/debugging) — and even there, only in a build that asked for it |
+| **Permission discovery** | [`esdev --trace-permissions`](/docs/esdev/permissions) — prints the esrun line to deploy with |
+
+`esdev` shares every line that decides how a run behaves, so a program cannot
+behave one way there and another in production. It is **not a deployment
+target**.
 
 ## Two layers, one core
 

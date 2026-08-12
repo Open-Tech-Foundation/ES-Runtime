@@ -36,7 +36,9 @@ on V8 in Rust. It runs standard ES Modules with a sandboxed module system.
 <Callout type="info">
   Ships in two shapes from one core: an **embeddable library**, which is
   deny-by-default, and the **standalone CLI** (`esrun`), which grants all
-  capabilities.
+  capabilities. A second binary, [`esdev`](/docs/esdev), carries the development
+  toolchain — TypeScript, bundling, tests, watch, a debugger — and never reaches
+  production.
 </Callout>
 
 <Callout type="warning">
@@ -46,8 +48,10 @@ on V8 in Rust. It runs standard ES Modules with a sandboxed module system.
 
 ## Principles
 
-- **ESM only.** There is no CommonJS interop. Modules are real ES Modules and
-  packages must expose an ESM entry point.
+- **ESM only.** There is no CommonJS interop at runtime; modules are real ES
+  Modules. A CommonJS dependency is converted at build time by
+  [`esdev build`](/docs/esdev/build), so what runs in production is the text that
+  was reviewed.
 - **Capabilities are explicit.** Host powers — environment, filesystem, network
   — are granted one at a time. Nothing is ambient.
 - **Standard surface.** Host functionality is exposed through `runtime:` module
@@ -74,6 +78,9 @@ esrun -e='console.log(await Promise.resolve(42))'
 # Pass arguments through to the script
 esrun app.js --name Ada
 ```
+
+On your own machine, `esdev` takes the same file and the same flags — plus
+TypeScript, `--watch`, tests, bundling and a debugger. See [esdev](/docs/esdev).
 
 Two rules cover every flag:
 

@@ -22,7 +22,7 @@ const features = [
   },
   {
     title: "ESM everywhere",
-    body: "Static imports, dynamic import(), top-level await, import.meta, and JSON modules. One module system, no CommonJS interop rules to learn.",
+    body: "Static imports, dynamic import(), top-level await, import.meta, and JSON modules. One module system, no CommonJS interop rules to learn — esdev's bundler converts a CJS dependency at build time.",
   },
   {
     title: "Written in Rust",
@@ -38,17 +38,26 @@ const features = [
   },
 ];
 
-const scopeItems = [
-  "Node.js compatibility",
-  "CommonJS",
-  "TypeScript",
-  "JSX",
-  "Package installer",
-  "Bundler / linter / formatter",
+// What the *production* binary deliberately lacks — each one available in esdev,
+// on your machine. These used to sit in the red list below, which read as "you
+// cannot", when the truth is "not in the binary you deploy".
+const devItems = [
+  "TypeScript & JSX",
+  "CommonJS (converted at build)",
+  "Bundler",
   "Test runner",
   "Watch mode",
+  "Debugger",
+];
+
+// Non-goals for the whole project, not a division of labour between binaries.
+const scopeItems = [
+  "Node.js compatibility",
+  "Package installer",
+  "Linter / formatter",
   "FFI",
   "Native addons",
+  "Remote module imports",
 ];
 
 export default function HomePage() {
@@ -207,29 +216,65 @@ export default function HomePage() {
           <div className="grid gap-12 lg:grid-cols-2 lg:items-center lg:gap-16">
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                A focused scope.
+                Two binaries.
               </h2>
               <p className="mt-4 text-zinc-600 dark:text-zinc-400">
-                A runtime, not a toolchain — and not a Node.js drop-in. Package
-                management, building, and testing are left to other tools.
+                <code className="font-mono text-sm text-zinc-900 dark:text-zinc-100">esrun</code>{" "}
+                runs your service and nothing else — no watcher, no debugger port,
+                no transform. That narrowness is what a capability flag is worth.
               </p>
-              <a
-                href="/docs/scope"
-                className="mt-6 inline-block text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
-              >
-                Read the scope &amp; non-goals →
-              </a>
+              <p className="mt-3 text-zinc-600 dark:text-zinc-400">
+                <code className="font-mono text-sm text-zinc-900 dark:text-zinc-100">esdev</code>{" "}
+                pays for it on your machine: same runtime, same flags, plus the
+                toolchain to get there.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2">
+                <a
+                  href="/docs/esdev"
+                  className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+                >
+                  esdev docs →
+                </a>
+                <a
+                  href="/docs/scope"
+                  className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+                >
+                  Scope &amp; non-goals →
+                </a>
+              </div>
             </div>
-            <ul className="grid grid-cols-2 gap-x-8 gap-y-3.5 text-sm leading-snug text-zinc-600 dark:text-zinc-400">
-              {scopeItems.map((label) => (
-                <li className="flex min-h-7 items-center gap-3 py-1">
-                  <span className="flex size-[18px] shrink-0 items-center justify-center">
-                    <StatusIcon status="no" className="block size-[18px] text-rose-500" />
-                  </span>
-                  <span>{label}</span>
-                </li>
-              ))}
-            </ul>
+            <div className="grid gap-8 sm:grid-cols-2">
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+                  In esdev, not in production
+                </h3>
+                <ul className="mt-4 space-y-3.5 text-sm leading-snug text-zinc-600 dark:text-zinc-400">
+                  {devItems.map((label) => (
+                    <li className="flex min-h-7 items-center gap-3 py-1">
+                      <span className="flex size-[18px] shrink-0 items-center justify-center">
+                        <StatusIcon status="yes" className="block size-[18px] text-emerald-500" />
+                      </span>
+                      <span>{label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
+                  Not goals at all
+                </h3>
+                <ul className="mt-4 space-y-3.5 text-sm leading-snug text-zinc-600 dark:text-zinc-400">
+                  {scopeItems.map((label) => (
+                    <li className="flex min-h-7 items-center gap-3 py-1">
+                      <span className="flex size-[18px] shrink-0 items-center justify-center">
+                        <StatusIcon status="no" className="block size-[18px] text-rose-500" />
+                      </span>
+                      <span>{label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
       </section>

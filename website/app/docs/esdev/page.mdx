@@ -1,0 +1,128 @@
+---
+title: esdev
+description: The local development binary — TypeScript, bundling, watch, tests, a debugger, and permission tracing. None of it ships to production.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# esdev
+
+Two binaries. `esrun` runs a service in production and has no development
+surface at all — no inspector port, no file watcher, no test discovery, no
+transform. That narrowness is what makes `--deny-all --allow-listen=8080` a
+statement rather than a hope, and it bills your inner loop. `esdev` is the
+binary that pays it.
+
+```sh
+esdev app.ts                  # TypeScript, JSX, run
+esdev --watch server.ts       # rerun on change, drain on restart
+esdev test                    # run the test files
+esdev build server.ts         # one deployable ES module
+esdev --inspect app.ts        # attach a debugger
+esdev --trace-permissions app.ts   # print the esrun line to deploy with
+```
+
+<Callout type="warn" title="Not a deployment target">
+  Ship the artifact and run it under `esrun`. `esdev` has a debugger port and a
+  file watcher in it; `esrun` cannot be built with either.
+</Callout>
+
+## It never changes what the JS sees
+
+Same prelude, same snapshot, same providers, same capability enforcement — all
+shared with `esrun`, in one crate both binaries sit on. A program cannot behave
+one way here and another in production. What `esdev` changes is everything
+*around* a run: watching, restarting, attaching, discovering, reporting,
+building.
+
+The permission flags are the same ones, and mean the same thing:
+
+```sh
+esdev --deny-all --allow-listen=8080 server.ts
+```
+
+## Get it
+
+```sh
+cargo build-dev                          # → target/release/esdev
+ES_RUNTIME_INSPECTOR=1 cargo build-dev   # ...with the debugger
+```
+
+`esdev` is a separate binary; the `esrun` install script does not place it. The
+debugger is a compile-time opt-in — see [Debugging](/docs/esdev/debugging).
+
+## TypeScript & JSX
+
+`.ts`, `.tsx`, `.mts`, `.cts` and `.jsx` are stripped to JavaScript as they
+load. A `.js` file is passed through untouched.
+
+```sh
+esdev app.ts
+esdev app.tsx
+```
+
+Three rules fix the shape:
+
+| | |
+| --- | --- |
+| **Types are erased, never checked** | A type error is your editor's job, and `tsc --noEmit`'s — not something on the critical path of every run. Same call Node and Bun make. |
+| **Specifiers are left exactly as written** | `import './app.ts'`, not `./app.js`. Resolution is `esrun`'s, unchanged; extension guessing would make the two binaries disagree about which file a program is. |
+| **`.js` is not reprinted** | Round-tripping it through a parser and printer would move every line in its stack traces for no gain. |
+
+JSX compiles to the automatic runtime, `react/jsx-runtime` by default. Point it
+elsewhere per file:
+
+```ts
+/** @jsxImportSource remix/ui */
+```
+
+For editor types, see [TypeScript setup](/docs/typescript).
+
+## Watch
+
+```sh
+esdev --watch --deny-all --allow-listen=8080 server.ts
+```
+
+**A restart drains.** It is a `SIGTERM`, the same graceful stop production gets:
+the server stops accepting, answers the requests already in flight, and only
+then exits. Saving a file while a request is open does not drop that request.
+`--shutdown-grace=<ms>` bounds the wait, after which the process is killed.
+
+The program runs in a **child process**, so nothing leaks between runs — no
+listening socket, no wedged isolate, no global left behind. Watched: the project
+root (nearest `package.json`) or the entry's directory, minus `node_modules`,
+`.git`, `dist`, `target` and `.cache`, and only source extensions. A program
+that exits leaves the watcher up.
+
+<Callout type="note" title="Windows">
+  There is no `SIGTERM` and no console-independent way to ask another process to
+  stop cleanly, so a restart there kills rather than drains.
+</Callout>
+
+## Flags
+
+Everything `esrun` takes, plus these. Every flag is `--flag` or `--flag=value` —
+a value is never a separate argument — and they come **before** the script.
+
+| Flag | |
+| --- | --- |
+| `--watch` | Rerun the program when its source changes |
+| `--inspect[=<addr>]` | Serve the Chrome DevTools Protocol (default `127.0.0.1:9229`) |
+| `--inspect-brk[=<addr>]` | ...and stop before the first statement |
+| `--trace-permissions` | Print the permissions the run used |
+| `--install-types` | Add `@opentf/esrun-types` and wire up `tsconfig.json` |
+
+| Subcommand | |
+| --- | --- |
+| `esdev test [filter...]` | [Run the test files](/docs/esdev/test) |
+| `esdev build <entry>` | [Bundle into one ES module](/docs/esdev/build) |
+
+## What it deliberately is not
+
+No formatter and no linter: `oxlint` and `oxfmt` are npm binaries that already
+work, and neither `oxc_formatter` nor `oxc_linter` is published as a usable
+library crate. No package installer — `esrun` resolves an existing
+`node_modules` and installs nothing, which is correct. No task runner, and no
+browser dev server with HMR: a server runtime's bundling need is one deployable
+file, not an asset graph.
