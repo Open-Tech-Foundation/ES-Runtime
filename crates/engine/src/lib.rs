@@ -40,6 +40,7 @@ pub mod op;
 mod serialize;
 pub mod snapshot;
 mod sysmem;
+pub mod trace;
 mod value;
 
 pub use engine::{Engine, InterruptHandle, V8Engine, WasmModuleInfo};
@@ -47,6 +48,7 @@ pub use error::{Error, Result};
 pub use inspector::{InspectorOptions, InspectorTransport};
 pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
+pub use trace::{CapabilityObserver, SharedObserver};
 pub use value::Value;
 
 use std::sync::{Once, OnceLock};

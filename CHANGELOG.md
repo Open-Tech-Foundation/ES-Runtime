@@ -8,6 +8,29 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **`esrun types` moved to `esdev --install-types`** (DECISIONS D59), and was
+  rewritten around the published package.
+
+  ```sh
+  esdev --install-types   # adds @opentf/esrun-types + wires tsconfig.json
+  ```
+
+  The definitions are on npm as
+  [`@opentf/esrun-types`](https://www.npmjs.com/package/@opentf/esrun-types), so
+  nothing fabricates a package under `node_modules/@opentf/esrun` any more: the
+  command adds the real one as a dev dependency — with the package manager your
+  lockfile names (bun, pnpm, yarn, npm) — and adds it to `compilerOptions.types`,
+  creating a `tsconfig.json` or merging into an existing one. A JSONC config is
+  left untouched with the two lines to add printed instead.
+
+  `esrun` loses the subcommand, the `serde_json` dependency, and every `.d.ts`
+  that was baked into it. A command whose entire effect is to write into
+  `node_modules` and rewrite a `tsconfig.json` is development tooling, and the
+  production binary is the one that should have none. `esrun types` now says so
+  and names its replacement rather than failing as an unreadable script path.
+
 ### Added
 
 - **`esdev`, a second binary for local development** (DECISIONS D59). `esrun` is
@@ -144,6 +167,40 @@ namespace) is unstable and may change between minor releases until the API freez
 
   The harness is injected as a **single line**, so a failing assertion still
   names the line the developer wrote rather than one thirty lines further down.
+
+- **`esdev --trace-permissions`** (DECISIONS D59) — run the program once, and be
+  told the `esrun` line to deploy it with.
+
+  ```sh
+  esdev --trace-permissions app.mjs
+  ```
+  ```text
+  esdev: the permissions this run used
+
+    read      fs_read
+    imports   import
+    net       fetch
+    env       process_env
+
+    esrun --deny-all --allow-read --allow-imports --allow-net --allow-env app.mjs
+  ```
+
+  This is the gap D59 was written about: `esrun` grants everything by default and
+  can be narrowed to nothing, but **nothing helped a developer arrive at the
+  right flags**, so in practice they shipped the default.
+
+  What it records is the capability check itself, at op dispatch — the only place
+  that knows what a program *reached for* rather than what it was handed. So it
+  reports the ones it asked for and **was refused** too, which are listed and
+  deliberately left out of the line: whether a refusal was correct is not a
+  trace's call. Workers are traced into the same report, on their own threads and
+  their own isolates — their grants are set at the spawn, which is where they are
+  hardest to get right. The report is printed however the run ended, including
+  the `process.exit()` and `^C` paths, which for a server is every run.
+
+  Scopes are not traced: the line grants each capability unnarrowed, and narrowing
+  it (`--allow-read=./data`) is still yours. The hook is an `Option` read once per
+  dispatch and `None` in every `esrun` run.
 
 - **`esdev --inspect`** (DECISIONS D59) — a debugger, over the Chrome DevTools
   Protocol, in the binary that is not a deployment target.

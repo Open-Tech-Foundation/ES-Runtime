@@ -1379,7 +1379,6 @@ dependencies = [
  "es-runtime-common",
  "rcgen",
  "self_update",
- "serde_json",
  "tokio",
 ]
 
@@ -1451,6 +1450,7 @@ dependencies = [
  "oxc 0.144.0",
  "rolldown",
  "rustix 1.1.4",
+ "serde_json",
  "tokio",
  "tokio-tungstenite",
 ]

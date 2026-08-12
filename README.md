@@ -78,15 +78,14 @@ JSON with `"allow"` and/or `"deny"` lists of package names and paths. See
 
 ## TypeScript
 
-`esrun` doesn't execute TypeScript, but it ships editor types for the `runtime:*`
-modules:
+`esrun` doesn't execute TypeScript, but the `runtime:*` modules have editor types
+on npm — [`@opentf/esrun-types`](https://www.npmjs.com/package/@opentf/esrun-types):
 
 ```sh
-esrun types --install   # writes the defs into node_modules/@opentf/esrun and wires tsconfig.json
+esdev --install-types   # adds the package and wires up tsconfig.json
 ```
 
-`esrun types` alone prints them to stdout. See
-[esrun.opentechf.org/docs/typescript](https://esrun.opentechf.org/docs/typescript).
+See [esrun.opentechf.org/docs/typescript](https://esrun.opentechf.org/docs/typescript).
 
 ## Development
 

@@ -31,11 +31,14 @@ use es_runtime_cli_common::{Config, Source};
 mod build;
 mod inspect;
 mod test;
+mod trace;
 mod transform;
+mod types;
 mod watch;
 use build::BuildConfig;
 use inspect::InspectConfig;
 use test::TestConfig;
+use trace::PermissionTrace;
 use transform::TypeStripper;
 use watch::WatchConfig;
 
@@ -67,6 +70,10 @@ USAGE:
     esdev -e=<code>             Run an inline module snippet (JavaScript)
     esdev --watch <file>        Run it, and rerun it when its source changes
     esdev --inspect <file>      Run it with a debugger attached
+    esdev --trace-permissions <file>
+                                Run it, then print the permissions it used
+    esdev --install-types       Add the runtime: TypeScript definitions to this
+                                project and wire up tsconfig.json
     esdev test [filter...]      Run the test files (`esdev test --help`)
     esdev build <entry>         Bundle an entry into one deployable ES module
                                 (`esdev build --help` for its options)
@@ -105,6 +112,21 @@ DEBUGGER:
     A build without it accepts the flag and fails with that line, rather than
     listening on nothing.
 
+PERMISSIONS:
+    --trace-permissions         Watch every capability the run reaches for, and
+                                print the esrun line that grants exactly those:
+
+                                  esrun --deny-all --allow-read --allow-net app.js
+
+    What it records is the check itself, so it reports what the program *used*
+    rather than what it was given — including the ones it asked for and was
+    refused, which are listed and deliberately left out of the line. Workers are
+    traced into the same report; their grants are set at the spawn, which is
+    where they are hardest to get right.
+
+    Scopes are not traced: the line grants each capability unnarrowed. Narrow it
+    by hand (--allow-read=./data) once the trace has told you which you need.
+
 TYPESCRIPT & JSX:
     .ts, .tsx, .mts, .cts and .jsx files are stripped to JavaScript as they
     load — types erased, never checked (that is your editor's job, and
@@ -118,6 +140,12 @@ TYPESCRIPT & JSX:
     Point it elsewhere per file with a pragma:
 
         /** @jsxImportSource remix/ui */
+
+    --install-types adds @opentf/esrun-types (the runtime: definitions, on npm)
+    as a dev dependency with the package manager your lockfile names, and adds
+    it to compilerOptions.types so an editor resolves `import … from
+    \"runtime:fs\"`. Types are for your editor and `tsc --noEmit`; esdev never
+    checks them.
 
 RUN OPTIONS (identical to esrun — a program behaves the same under both):
     --deny-all                  Run with no host access at all
@@ -216,6 +244,7 @@ fn parse_args() -> Result<Command, String> {
     let mut permissions = Permissions::default();
     let mut watching = false;
     let mut inspect: Option<InspectConfig> = None;
+    let mut tracing_permissions = false;
     // The flag the previous argument was, so a bare word following it can be
     // diagnosed as an attempted value rather than silently becoming the script.
     let mut previous_flag: Option<String> = None;
@@ -233,6 +262,19 @@ fn parse_args() -> Result<Command, String> {
             "--watch" => {
                 reject_value(flag, value)?;
                 watching = true;
+            }
+            "--install-types" => {
+                reject_value(flag, value)?;
+                let outcome = types::install()?;
+                print!("{}", outcome.report);
+                // Non-zero when the package did not get installed, even though
+                // the tsconfig half did: a setup script that carried on from
+                // here would be building against types that are not there.
+                std::process::exit(i32::from(!outcome.installed));
+            }
+            "--trace-permissions" => {
+                reject_value(flag, value)?;
+                tracing_permissions = true;
             }
             "--inspect" | "--inspect-brk" => {
                 inspect = Some(InspectConfig {
@@ -267,6 +309,10 @@ fn parse_args() -> Result<Command, String> {
                         scopes: permissions.scopes()?,
                         options,
                         transform: Some(std::sync::Arc::new(TypeStripper)),
+                        // The deploy line is printed with the entry as it was
+                        // named, so it is one a reader can copy. For `-e` there
+                        // is nothing to name, and the placeholder says so.
+                        observer: permission_trace(tracing_permissions, "-e=<code>"),
                         inspector: None,
                     }),
                     inspect,
@@ -317,6 +363,7 @@ fn parse_args() -> Result<Command, String> {
                         scopes: permissions.scopes()?,
                         options,
                         transform: Some(std::sync::Arc::new(TypeStripper)),
+                        observer: permission_trace(tracing_permissions, path),
                         inspector: None,
                     }),
                     inspect,
@@ -325,6 +372,14 @@ fn parse_args() -> Result<Command, String> {
         }
     }
     Err(format!("missing script argument\n\n{USAGE}"))
+}
+
+/// The capability observer for a run, when `--trace-permissions` asked for one.
+fn permission_trace(tracing: bool, entry: &str) -> Option<es_runtime_cli_common::SharedObserver> {
+    tracing.then(|| {
+        std::sync::Arc::new(PermissionTrace::new(entry.to_string()))
+            as es_runtime_cli_common::SharedObserver
+    })
 }
 
 /// Whether `flag` is one esdev itself understands.
@@ -343,6 +398,8 @@ fn is_esdev_flag(flag: &str) -> bool {
             | "--watch"
             | "--inspect"
             | "--inspect-brk"
+            | "--trace-permissions"
+            | "--install-types"
             | "--deny-all"
             | "--allow-all"
             | "-A"
@@ -483,6 +540,7 @@ async fn run_tests(config: TestConfig) -> ExitCode {
             scopes: std::collections::HashMap::new(),
             options: RunOptions::default(),
             transform: Some(std::sync::Arc::new(test::TestTransform::new(&path))),
+            observer: None,
             inspector: None,
         };
         return match es_runtime_cli_common::run("esdev", run).await {

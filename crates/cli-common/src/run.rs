@@ -65,6 +65,15 @@ pub struct Config {
     /// directly (before a loader exists), so a transform that only wrapped the
     /// loader would silently miss the one file the user named.
     pub transform: Option<Arc<dyn SourceTransform>>,
+    /// Watches what the run actually reaches for — how `esdev` serves
+    /// `--trace-permissions` (D59).
+    ///
+    /// `esrun` passes `None`. Unlike the inspector this can only observe, so
+    /// what is kept out of the production binary is not the hook (a single
+    /// `Option` read per op dispatch) but the report: turning a set of
+    /// capabilities into the `esrun` command line that would grant exactly them
+    /// is `esdev`'s job, and lives there.
+    pub observer: Option<es_runtime::SharedObserver>,
     /// A debugger to attach before the entry module is loaded — how `esdev`
     /// serves `--inspect` (D59).
     ///
@@ -151,6 +160,19 @@ impl ModuleLoader for TransformingLoader {
 /// Runs `config` to completion. `bin` names the calling binary in the messages
 /// only it can be responsible for (the shutdown drain notice).
 pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
+    // The capability trace is summarised however the run ends, which is why this
+    // wrapper exists rather than a call at the bottom of the function below: the
+    // run a developer most wants a report from is the one that *failed* for want
+    // of a permission, and that one leaves through an early `return Err`.
+    let observer = config.observer.clone();
+    let result = execute(bin, config).await;
+    finish_trace(observer.as_ref());
+    result
+}
+
+/// The run itself. Everything that can end it early lives in here, so its one
+/// caller above can be the single place that reports afterwards.
+async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // Returns the module's canonical specifier (a file: URL — also
     // import.meta.url and the referrer its imports resolve against), its source,
     // a short diagnostic label, and the **base directory** (the entry's own
@@ -357,6 +379,7 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     let worker_providers = providers.clone();
     let worker_process = process.clone();
     let worker_loader = loader.clone();
+    let worker_observer = config.observer.clone();
     // Late-bound, because the host and the runtimes it builds each need the
     // other: a worker must itself be able to start workers (the spec allows
     // nesting, and the capability chain is what bounds it), so the bundle its
@@ -381,8 +404,15 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
             if let Some(host) = factory_slot.get() {
                 providers = providers.with_workers(host.clone());
             }
-            let runtime = Runtime::with_snapshot_and_limits(SNAPSHOT, spec.limits, providers)
+            let mut runtime = Runtime::with_snapshot_and_limits(SNAPSHOT, spec.limits, providers)
                 .map_err(|e| ProviderError::Other(e.to_string()))?;
+            // A worker is traced too, into the same report. Its grants are set
+            // at the spawn rather than on the command line, which is exactly
+            // where they are hardest to get right — leaving them out would make
+            // the trace confidently wrong about a program that uses workers.
+            if let Some(observer) = &worker_observer {
+                runtime.set_capability_observer(observer.clone());
+            }
             Ok((runtime, worker_loader.clone()))
         },
     )));
@@ -399,6 +429,9 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     // narrow it (D38); the entry file has already been read by this point, so a
     // fully denied run still executes what the user named.
     runtime.set_capabilities(config.capabilities);
+    if let Some(observer) = &config.observer {
+        runtime.set_capability_observer(observer.clone());
+    }
 
     // Attach the debugger before the entry module is loaded: V8 announces each
     // script to a session as it is compiled, so a debugger that arrives later
@@ -459,6 +492,7 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     // A guest `process.exit(code)` during the synchronous top level halts the
     // load via the interrupt; exit with that code (not as an error).
     if let Some(code) = process.requested_exit_code() {
+        finish_trace(config.observer.as_ref());
         std::process::exit(code);
     }
     if let Err(err) = loaded {
@@ -543,6 +577,7 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     // A guest `process.exit(code)` from async code halts the drive via the
     // interrupt; exit with that code rather than reporting the termination.
     if let Some(code) = process.requested_exit_code() {
+        finish_trace(config.observer.as_ref());
         std::process::exit(code);
     }
 
@@ -556,6 +591,7 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
         if !http_server.wait_for_idle(options.shutdown_grace).await {
             eprintln!("{bin}: shutdown grace expired with requests still in flight");
         }
+        finish_trace(config.observer.as_ref());
         std::process::exit(shutdown_code);
     }
 
@@ -580,6 +616,18 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     }
     let _ = &outcome;
     Ok(())
+}
+
+/// Tells the capability observer, if there is one, that the run is over.
+///
+/// Called once by [`run`] for every ordinary way out, and explicitly at the
+/// three that leave through `process::exit` — which no wrapper can catch, and
+/// which for a server stopped with ^C is *every* run of the thing this exists to
+/// help with. Implementations report at most once, so both paths firing is safe.
+fn finish_trace(observer: Option<&es_runtime::SharedObserver>) {
+    if let Some(observer) = observer {
+        observer.run_finished();
+    }
 }
 
 /// The ceilings this run's agents are built with.

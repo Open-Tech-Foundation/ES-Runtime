@@ -263,6 +263,15 @@ pub trait Engine {
         ))
     }
 
+    /// Watches every capability check this engine makes (DECISIONS.md D59).
+    ///
+    /// Unlike the inspector this can only observe, so it is a plain runtime hook
+    /// with no build-time switch behind it — `esrun` carries the `Option` and
+    /// never sets it. See [`crate::trace`].
+    fn set_capability_observer(&mut self, observer: crate::trace::SharedObserver) {
+        let _ = observer;
+    }
+
     /// Delivers whatever an attached debugger has sent since the last tick.
     ///
     /// A no-op when nothing is attached, which is every run of the production
@@ -785,6 +794,7 @@ impl Engine for V8Engine {
 
     fn register_op(&mut self, op: OpDecl) -> Result<()> {
         let op_id = self.op_state.borrow_mut().add_op(
+            op.name.clone(),
             op.required_capabilities,
             op.handler,
             op.keeps_loop_alive,
@@ -807,6 +817,10 @@ impl Engine for V8Engine {
 
     fn poll_async_ops(&mut self) -> usize {
         crate::op::poll_async_ops(&mut self.isolate, &self.context, &self.op_state)
+    }
+
+    fn set_capability_observer(&mut self, observer: crate::trace::SharedObserver) {
+        self.op_state.borrow_mut().observer = Some(observer);
     }
 
     fn set_async_waker(&mut self, waker: std::task::Waker) {

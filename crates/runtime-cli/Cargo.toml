@@ -21,8 +21,6 @@ es-runtime-common.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 # `esrun upgrade` — self-update from GitHub releases.
 self_update.workspace = true
-# `esrun types --install` — merge the type package into tsconfig.json.
-serde_json.workspace = true
 
 [dev-dependencies]
 # Test-only: a self-signed cert, so the telemetry e2e can stand up a TLS

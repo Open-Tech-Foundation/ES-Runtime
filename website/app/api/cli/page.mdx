@@ -31,8 +31,6 @@ esrun --env-override        Let --env-file values override the OS environment
 esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
                             ^C/SIGTERM (default 10000)
 esrun upgrade               Update esrun to the latest release
-esrun types                 Print the runtime: TypeScript definitions
-esrun types --install       Install the definitions + wire up tsconfig.json
 esrun -h, --help            Show this help
 esrun -v, --version         Show the version
 ```
@@ -73,8 +71,6 @@ script that genuinely wants a flag esrun also knows.
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
 | `upgrade` | Download the latest release for your platform, verify its checksum, and replace the running binary in place. |
-| `types` | Print the `runtime:` TypeScript definitions to stdout (`esrun types > runtime.d.ts`) — version-matched and offline. |
-| `types --install` | Install the definitions into `node_modules/@opentf/esrun` and wire up `tsconfig.json` (`typeRoots` + `types`) so editors resolve the `runtime:*` modules automatically. |
 | `-h, --help` | Print usage and exit. |
 | `-v, --version` | Print the esrun version and exit. |
 

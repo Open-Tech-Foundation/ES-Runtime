@@ -4,8 +4,10 @@
 //! The wiring itself — the default tokio providers, the [`Runtime`], the module
 //! load and the drive loop — lives in `es-runtime-cli-common` and is shared with
 //! `esdev`, so a program behaves identically under either binary (SPEC.md §8).
-//! What remains here is `esrun`'s own command line: its flags, its `types` and
-//! `upgrade` subcommands, and the bundled type definitions they print.
+//! What remains here is `esrun`'s own command line: its flags and its `upgrade`
+//! subcommand. Nothing here is for development — the TypeScript definitions used
+//! to be installed from this binary and now belong to `esdev`, which is the one
+//! a developer runs (D59).
 //!
 //! Every input runs as an ES module: `import`/`export` and top-level `await`
 //! work. Imports resolve via `NodeModuleLoader`: relative/absolute paths and
@@ -70,8 +72,6 @@ USAGE:
     esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
                                 ^C/SIGTERM (default 10000)
     esrun upgrade               Update esrun to the latest release
-    esrun types                 Print the runtime: TypeScript definitions
-    esrun types --install       Install the definitions + wire up tsconfig.json
     esrun -h, --help            Show this help
     esrun -v, --version         Show the version
 
@@ -130,36 +130,6 @@ script's own arguments.
 Everything after <file> (or the -e code) belongs to the script, readable as
 `args` from runtime:process.";
 
-/// Bundled TypeScript definitions for the `runtime:` modules, printed by
-/// `esrun types` (`esrun types > esrun.d.ts`) and also shipped in the release
-/// archive. This is a static `&str` baked into the binary — it is read only
-/// when `types` is invoked, so it adds nothing to startup or runtime cost
-/// (just a few KB of binary size). The canonical source is `packages/types/` (published
-/// as `@opentf/esrun-types`); kept byte-identical.
-const TYPES: &str = concat!(
-    include_str!("../../../packages/types/runtime-process.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-path.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-fs.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-db.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-net.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-http.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-websocket.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-serialization.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-hashing.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-wasi.d.ts"),
-    "\n",
-    include_str!("../../../packages/types/runtime-system.d.ts"),
-);
-
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
 /// extract it, and replace the running binary in place (the same outcome as
 /// re-running install.sh / install.ps1, but built in). HTTPS via rustls.
@@ -209,112 +179,6 @@ fn upgrade() -> Result<String, String> {
     })
 }
 
-/// `esrun types --install` — write the bundled definitions into
-/// `node_modules/@opentf/esrun` as a type package and wire them into
-/// `tsconfig.json`, so editors and `tsc` resolve the `runtime:*` modules with no
-/// manual steps. (TypeScript only auto-loads ambient module declarations that a
-/// `tsconfig` actually references, so we set `typeRoots` + `types` — the form
-/// language servers honor globally — rather than leaving a loose `.d.ts`.)
-fn install_types() -> Result<String, Box<dyn std::error::Error>> {
-    use std::fs;
-    use std::path::Path;
-
-    let pkg_dir = Path::new("node_modules").join("@opentf").join("esrun");
-    fs::create_dir_all(&pkg_dir)?;
-    // index.d.ts (so typeRoots resolves the package by convention) + a minimal
-    // package.json pointing at it.
-    fs::write(pkg_dir.join("index.d.ts"), TYPES)?;
-    fs::write(
-        pkg_dir.join("package.json"),
-        format!(
-            "{{\n  \"name\": \"@opentf/esrun\",\n  \"version\": \"{}\",\n  \"types\": \"index.d.ts\"\n}}\n",
-            env!("CARGO_PKG_VERSION")
-        ),
-    )?;
-
-    let mut out = String::from("Installed runtime: types → node_modules/@opentf/esrun\n");
-    out.push_str(&update_tsconfig()?);
-    out.push('\n');
-    Ok(out)
-}
-
-/// Ensures `tsconfig.json` resolves the installed type package: adds
-/// `node_modules/@opentf` to `typeRoots` and `esrun` to `types`, preserving any
-/// existing entries. Creates a sensible config if none exists; if the file is
-/// JSONC (comments / trailing commas) it can't be parsed safely, so the lines to
-/// add are printed instead of clobbering it.
-fn update_tsconfig() -> Result<String, Box<dyn std::error::Error>> {
-    use serde_json::{Value, json};
-    use std::fs;
-    use std::path::Path;
-
-    let path = Path::new("tsconfig.json");
-    let manual = "  add to compilerOptions:\n    \"typeRoots\": [\"node_modules/@types\", \"node_modules/@opentf\"],\n    \"types\": [\"esrun\"]";
-
-    if !path.exists() {
-        let cfg = json!({
-            "compilerOptions": {
-                "target": "ESNext",
-                "module": "ESNext",
-                "moduleResolution": "bundler",
-                "strict": true,
-                "typeRoots": ["node_modules/@types", "node_modules/@opentf"],
-                "types": ["esrun"]
-            },
-            "include": ["**/*.ts"]
-        });
-        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&cfg)?))?;
-        return Ok("Created tsconfig.json (typeRoots + types).".into());
-    }
-
-    let text = fs::read_to_string(path)?;
-    let mut cfg: Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(_) => {
-            return Ok(format!(
-                "tsconfig.json looks like JSONC (comments/trailing commas) — left it untouched.\n{manual}"
-            ));
-        }
-    };
-    let Some(obj) = cfg.as_object_mut() else {
-        return Ok(format!(
-            "tsconfig.json is not a JSON object — left it untouched.\n{manual}"
-        ));
-    };
-    let co = obj.entry("compilerOptions").or_insert_with(|| json!({}));
-    let Some(co) = co.as_object_mut() else {
-        return Ok(format!(
-            "tsconfig.json compilerOptions is not an object — left it untouched.\n{manual}"
-        ));
-    };
-    merge_str_array(
-        co,
-        "typeRoots",
-        &["node_modules/@types", "node_modules/@opentf"],
-    );
-    merge_str_array(co, "types", &["esrun"]);
-    fs::write(path, format!("{}\n", serde_json::to_string_pretty(&cfg)?))?;
-    Ok("Updated tsconfig.json (typeRoots + types).".into())
-}
-
-/// Appends any missing `values` to the string array at `key`, creating it if
-/// absent. Existing entries (e.g. other `@types` packages) are preserved.
-fn merge_str_array(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
-    key: &str,
-    values: &[&str],
-) {
-    use serde_json::Value;
-    let arr = obj.entry(key).or_insert_with(|| Value::Array(vec![]));
-    if let Value::Array(items) = arr {
-        for v in values {
-            if !items.iter().any(|x| x.as_str() == Some(*v)) {
-                items.push(Value::String((*v).to_string()));
-            }
-        }
-    }
-}
-
 /// Parses `esrun`'s command line.
 ///
 /// The shared flags (`--timeout`, `--env-file`, `--max-heap`, the permission
@@ -346,20 +210,18 @@ fn parse_args() -> Result<Config, String> {
                 println!("{USAGE}");
                 std::process::exit(0);
             }
+            // A shipped command that moved. Without this the word is taken for a
+            // script path and the answer is "cannot read types", which explains
+            // nothing to someone with the old command in their fingers.
             "types" => {
-                reject_value(flag, value)?;
-                if args.next().as_deref() == Some("--install") {
-                    match install_types() {
-                        Ok(msg) => print!("{msg}"),
-                        Err(e) => {
-                            eprintln!("error: types --install failed: {e}");
-                            std::process::exit(1);
-                        }
-                    }
-                } else {
-                    print!("{TYPES}");
-                }
-                std::process::exit(0);
+                return Err(
+                    "esrun no longer installs TypeScript definitions: they are on npm as \
+                     @opentf/esrun-types, and wiring them into a project is development \
+                     tooling.\n\n\
+                     Use `esdev --install-types`, or add the package yourself:\n  \
+                     npm install --save-dev @opentf/esrun-types"
+                        .to_string(),
+                );
             }
             "upgrade" => {
                 reject_value(flag, value)?;
@@ -397,6 +259,7 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    observer: None,
                     // esrun has no inspector and no flag that could ask for
                     // one: a debugger port would undo every --deny-* the
                     // deployment was started with (D59).
@@ -433,6 +296,7 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    observer: None,
                     // esrun has no inspector and no flag that could ask for
                     // one: a debugger port would undo every --deny-* the
                     // deployment was started with (D59).
@@ -509,164 +373,6 @@ async fn main() -> ExitCode {
         Err(err) => {
             print_error(&err);
             ExitCode::FAILURE
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::TYPES;
-    use es_runtime_common::Capability;
-
-    /// `esrun types` must ship definitions for *every* `runtime:` module.
-    ///
-    /// The bundle is a hand-written `concat!`, so adding a module's `.d.ts` to
-    /// `packages/types/` does not add it here — and the symptom is silent: the module
-    /// simply has no types, in an editor, for whoever installed them. This walks
-    /// the directory instead of trusting the list.
-    /// Every declaration file must actually be published.
-    ///
-    /// `index.d.ts` references its siblings, so one missing from the npm
-    /// package is not a gap — it is an installed package that cannot resolve
-    /// itself. The list in `package.json` had drifted twice; it is a glob now,
-    /// and this asserts the glob still covers everything.
-    #[test]
-    fn every_types_file_is_publishable() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types");
-        let manifest =
-            std::fs::read_to_string(format!("{dir}/package.json")).expect("read manifest");
-        let files: Vec<&str> = manifest
-            .split("\"files\"")
-            .nth(1)
-            .expect("a files list")
-            .split(']')
-            .next()
-            .expect("a closing bracket")
-            .split('"')
-            .filter(|s| s.ends_with(".d.ts") || s.ends_with(".md"))
-            .collect();
-        let covers_declarations = files.contains(&"*.d.ts");
-        for entry in std::fs::read_dir(dir).expect("read types dir") {
-            let name = entry
-                .expect("entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned();
-            if !name.ends_with(".d.ts") {
-                continue;
-            }
-            assert!(
-                covers_declarations || files.contains(&name.as_str()),
-                "{name} is not in the published file list, so an installed \
-                 @opentf/esrun-types could not resolve it"
-            );
-        }
-    }
-
-    #[test]
-    fn every_types_file_is_bundled() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types");
-        let mut checked = 0;
-        for entry in std::fs::read_dir(dir).expect("read types dir") {
-            let path = entry.expect("dir entry").path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            // `index.d.ts` is the reference list for the npm package, not a
-            // module declaration, and carries no `declare module` of its own.
-            if !name.starts_with("runtime-") || !name.ends_with(".d.ts") {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).expect("read types file");
-            let declaration = source
-                .lines()
-                .find(|line| line.starts_with("declare module "))
-                .unwrap_or_else(|| panic!("{name} has no `declare module` line"));
-            assert!(
-                TYPES.contains(declaration),
-                "{name} is not bundled into `esrun types` (missing {declaration})"
-            );
-            checked += 1;
-        }
-        assert!(checked >= 8, "only found {checked} module definitions");
-    }
-
-    /// The TypeScript `PermissionName` union is the last hand-written copy of
-    /// the denial vocabulary — Rust owns it, and the two JS readers now ask the
-    /// host for it — so this is where it can silently fall behind. An editor
-    /// would then reject a name the runtime accepts, or accept one it does not.
-    #[test]
-    fn the_permission_union_matches_the_capabilities() {
-        let source = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../packages/types/runtime-process.d.ts"
-        ))
-        .expect("read runtime-process.d.ts");
-        let union = source
-            .split_once("export type PermissionName =")
-            .expect("PermissionName union")
-            .1
-            .split_once(';')
-            .expect("union terminator")
-            .0;
-        let listed: Vec<&str> = union
-            .split('|')
-            .map(str::trim)
-            .filter(|part| !part.is_empty())
-            .map(|part| part.trim_matches('"'))
-            .collect();
-        let expected: Vec<&str> = Capability::HOST_FACING
-            .iter()
-            .filter_map(|capability| capability.flag_name())
-            .collect();
-        assert_eq!(
-            listed, expected,
-            "packages/types/runtime-process.d.ts is out of date"
-        );
-    }
-
-    /// Every non-standard `WorkerOptions` member has to be described where an
-    /// editor will find it. `memory` shipped without types once already.
-    #[test]
-    fn worker_options_are_typed() {
-        let source = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../packages/types/globals.d.ts"
-        ))
-        .expect("read globals.d.ts");
-        for member in [
-            "permissions?:",
-            "env?:",
-            "memory?:",
-            "unref(): void",
-            "ref(): void",
-        ] {
-            assert!(
-                source.contains(member),
-                "packages/types/globals.d.ts does not declare WorkerOptions {member}"
-            );
-        }
-        assert!(
-            source.contains(r#""inherit" | readonly import("runtime:process").PermissionName[]"#),
-            "permissions should be typed as \"inherit\" or the shared name union"
-        );
-    }
-
-    /// `index.d.ts` is what the published npm package loads, so a file missing
-    /// from it is invisible to anyone consuming the package.
-    #[test]
-    fn every_types_file_is_referenced_by_the_index() {
-        let dir =
-            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../packages/types"));
-        let index = std::fs::read_to_string(dir.join("index.d.ts")).expect("read index.d.ts");
-        for entry in std::fs::read_dir(dir).expect("read types dir") {
-            let path = entry.expect("dir entry").path();
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.starts_with("runtime-") || !name.ends_with(".d.ts") {
-                continue;
-            }
-            assert!(
-                index.contains(name),
-                "{name} is not referenced by packages/types/index.d.ts"
-            );
         }
     }
 }

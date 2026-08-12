@@ -30,6 +30,12 @@ pub use run::{Config, Inspector, Source, run};
 /// only implementation there is).
 pub use es_runtime::InspectorTransport;
 
+/// The capability vocabulary and the hook that watches it, re-exported for the
+/// same reason: `esdev --trace-permissions` implements the observer and writes
+/// its report in these names, and should reach for one crate to do it.
+pub use es_runtime::{CapabilityObserver, SharedObserver};
+pub use es_runtime_common::Capability;
+
 /// The V8 startup snapshot, baked at build time by `build.rs`.
 ///
 /// Both binaries restore this same blob rather than compiling and evaluating the

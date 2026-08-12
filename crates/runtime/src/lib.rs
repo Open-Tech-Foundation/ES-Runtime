@@ -57,8 +57,8 @@ use crate::timer::TimerQueue;
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet, UncaughtError};
 pub use es_runtime_engine::{
-    AsyncOp, Engine, InspectorOptions, InspectorTransport, InterruptHandle, ModuleEvalState,
-    ModuleId, OpDecl, OpError, OpResult, V8Engine, Value,
+    AsyncOp, CapabilityObserver, Engine, InspectorOptions, InspectorTransport, InterruptHandle,
+    ModuleEvalState, ModuleId, OpDecl, OpError, OpResult, SharedObserver, V8Engine, Value,
 };
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
@@ -443,6 +443,12 @@ pub(crate) type EntrySlot = Rc<RefCell<Option<String>>>;
 /// The embeddable runtime: an engine plus the driven loop's scheduling state.
 pub struct Runtime {
     engine: Box<dyn Engine>,
+    /// Watching capability checks, when something asked to (D59). Held here as
+    /// well as in the engine because one gated decision is made *above* the op
+    /// boundary — whether a module may be loaded — and a trace that missed it
+    /// would print a deploy line without `--allow-imports`, which is a line that
+    /// does not run.
+    observer: Option<es_runtime_engine::SharedObserver>,
     timers: TimerQueue,
     /// The runtime's current notion of time (embedder ms), last set by
     /// [`tick`](Self::tick). Timers created by [`eval`](Self::eval) between ticks
@@ -512,6 +518,7 @@ impl Runtime {
     pub fn new(engine: Box<dyn Engine>, providers: HostProviders) -> Result<Self> {
         let mut runtime = Runtime {
             engine,
+            observer: None,
             timers: TimerQueue::default(),
             now_ms: 0,
             module_eval_pending: false,
@@ -614,6 +621,7 @@ impl Runtime {
         let engine = V8Engine::with_snapshot_baked_ops(limits, snapshot)?;
         let mut runtime = Runtime {
             engine: Box::new(engine),
+            observer: None,
             timers: TimerQueue::default(),
             now_ms: 0,
             module_eval_pending: false,
@@ -677,6 +685,18 @@ impl Runtime {
     pub fn set_capabilities(&mut self, capabilities: CapabilitySet) {
         self.engine.set_capabilities(capabilities);
         self.capabilities.set(capabilities);
+    }
+
+    /// Watches every capability check this runtime makes, in the engine and at
+    /// the module loader (DECISIONS.md D59) — how `esdev --trace-permissions`
+    /// learns what a run actually reached for.
+    ///
+    /// Observation only: an observer cannot grant, refuse or alter anything, so
+    /// unlike the inspector there is nothing here to keep out of a production
+    /// build. `esrun` simply never calls it.
+    pub fn set_capability_observer(&mut self, observer: es_runtime_engine::SharedObserver) {
+        self.engine.set_capability_observer(observer.clone());
+        self.observer = Some(observer);
     }
 
     /// Attaches a debugger to this runtime, speaking the Chrome DevTools
@@ -1065,7 +1085,13 @@ impl Runtime {
     /// this is most likely to be hit — a worker's static graph is resolved by
     /// its parent up front, so `import` works and `import()` does not.
     fn require_module_capability(&self, specifier: &str) -> Result<()> {
-        if self.engine.capabilities().contains(Capability::FileSystem) {
+        let granted = self.engine.capabilities().contains(Capability::FileSystem);
+        if let Some(observer) = &self.observer {
+            // Named `import` rather than an op name: this check has no op behind
+            // it, and `import` is the word the developer wrote.
+            observer.observed("import", Capability::FileSystem, granted);
+        }
+        if granted {
             return Ok(());
         }
         let remedy = if self.is_worker {

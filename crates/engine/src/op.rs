@@ -203,6 +203,10 @@ impl OpDecl {
 }
 
 struct OpEntry {
+    /// The name the op is registered under. Kept rather than dropped after the
+    /// JS shell is installed, because a capability trace has to be able to say
+    /// *what* asked for a grant, and this is the only place that knows.
+    name: String,
     required_capabilities: Vec<Capability>,
     handler: OpHandler,
     keeps_loop_alive: bool,
@@ -271,6 +275,10 @@ pub(crate) struct OpState {
     pub wasm_modules: HashMap<u32, v8::Global<v8::WasmModuleObject>>,
     /// Next handle handed out by [`Engine::compile_wasm`](crate::Engine::compile_wasm).
     pub next_wasm_handle: u32,
+    /// Told about every capability check, when something asked to watch them
+    /// (`esdev --trace-permissions`). `None` in every production run, which is
+    /// what the check below costs then: one `Option` read per dispatch.
+    pub(crate) observer: Option<crate::trace::SharedObserver>,
 }
 
 impl OpState {
@@ -291,6 +299,7 @@ impl OpState {
             pending_wasm: 0,
             wasm_modules: HashMap::new(),
             next_wasm_handle: 1,
+            observer: None,
         }
     }
 
@@ -307,12 +316,14 @@ impl OpState {
     /// Adds an op to the table and returns its id (its index).
     pub(crate) fn add_op(
         &mut self,
+        name: String,
         required_capabilities: Vec<Capability>,
         handler: OpHandler,
         keeps_loop_alive: bool,
     ) -> i32 {
         let id = self.ops.len() as i32;
         self.ops.push(OpEntry {
+            name,
             required_capabilities,
             handler,
             keeps_loop_alive,
@@ -406,6 +417,21 @@ fn op_dispatch_inner(
             &OpError::new(ExceptionClass::Error, format!("unknown op id {op_id}")),
         );
         return;
+    }
+
+    // Anything watching capability checks hears about them here, before the
+    // refusal below rather than after it: a denial is the most interesting thing
+    // a trace can record, and reporting only the first missing one would hide
+    // the rest of what the op wanted (D59).
+    if let Some(observer) = &state.observer {
+        let entry = &state.ops[idx];
+        for capability in &entry.required_capabilities {
+            observer.observed(
+                &entry.name,
+                *capability,
+                state.capabilities.contains(*capability),
+            );
+        }
     }
 
     // Capability check first: a denial is a clean exception, never a partial

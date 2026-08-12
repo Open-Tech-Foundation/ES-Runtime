@@ -7,26 +7,23 @@ import { Callout } from "@opentf/web-docs";
 
 # TypeScript setup
 
-esrun does not execute TypeScript natively, nor does it inject ambient globals
-like `Bun` or `process`. But you can get full editor autocompletion and type
-checking for the `runtime:*` modules in one command.
+esrun does not execute TypeScript, nor does it inject ambient globals like `Bun`
+or `process`. `esdev` runs TypeScript directly — types erased, never checked —
+and the definitions below are what your editor and `tsc --noEmit` use.
 
 ## One-command setup
 
-`esrun types --install` writes the bundled definitions into
-`node_modules/@opentf/esrun` (as a type package, so your project tree stays
-clean) and wires them into your `tsconfig.json` — creating one if you don't have
-it, or merging into an existing one without touching your other settings.
-
 ```sh
-esrun types --install
+esdev --install-types
 ```
 
-## What it configures
+It adds [`@opentf/esrun-types`](https://www.npmjs.com/package/@opentf/esrun-types)
+as a dev dependency, using the package manager your lockfile names (bun, pnpm,
+yarn, npm), and adds it to `compilerOptions.types` — creating a `tsconfig.json`
+if you don't have one, or merging into an existing one without touching your
+other settings.
 
-The types are registered through `typeRoots` + `types` — the form editors and
-language servers load globally, so the `runtime:*` modules resolve everywhere,
-not just per-file:
+## What it configures
 
 ```json
 {
@@ -35,12 +32,14 @@ not just per-file:
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
-    "typeRoots": ["node_modules/@types", "node_modules/@opentf"],
-    "types": ["esrun"]
+    "types": ["@opentf/esrun-types"]
   },
   "include": ["**/*.ts"]
 }
 ```
+
+`types` is what editors and language servers load globally, so the `runtime:*`
+modules resolve everywhere, not just per-file.
 
 <Callout type="note" title="Leave `lib` unset">
   With no `lib`, TypeScript uses the default for your `target` — `lib.esnext.full`
@@ -50,9 +49,12 @@ not just per-file:
   naming only `["ESNext"]` loses all of them.
 </Callout>
 
-<Callout type="note" title="Manual alternative">
-  If you'd rather not let the CLI edit your config, run `esrun types >
-  runtime.d.ts` and add that file to your `include`.
+<Callout type="note" title="By hand">
+  ```sh
+  npm install --save-dev @opentf/esrun-types
+  ```
+  Then add `"types": ["@opentf/esrun-types"]` to `compilerOptions`, or put
+  `/// <reference types="@opentf/esrun-types" />` in one file.
 </Callout>
 
 ## Use it
