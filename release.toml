@@ -20,11 +20,11 @@ github_release_notes = "curated-changelog"
 
 [publish.ignore_paths]
 es-runtime = []
-es-runtime-cli = []
 es-runtime-common = []
 es-runtime-providers = []
 es-runtime-default-providers = []
 es-runtime-engine = []
+es-runtime-cli = []
 
 [discovery]
 npm = [

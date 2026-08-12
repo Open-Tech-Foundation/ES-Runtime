@@ -48,8 +48,10 @@ cargo build-dev                          # → target/release/esdev
 ES_RUNTIME_INSPECTOR=1 cargo build-dev   # ...with the debugger
 ```
 
-`esdev` is a separate binary; the `esrun` install script does not place it. The
-debugger is a compile-time opt-in — see [Debugging](/docs/esdev/debugging).
+`esdev` is a separate binary; the `esrun` install script does not place it.
+`--inspect` needs the second line — the debugger is compiled in only when the
+build asks for it, and a build without it says so instead of listening on
+nothing.
 
 ## TypeScript & JSX
 
