@@ -96,13 +96,16 @@ theirs to make and `--lib` makes none of them.
 | | |
 | --- | --- |
 | **A directory, not an entry** | Every module under it is built, the way `tsc` builds a `rootDir`. Your `exports` map decides what a consumer may import, not what an entry reaches. |
+| **The output is emptied first** | The build owns it. A stale file in `dist` is a file `"files": ["dist"]` publishes. |
 | **Nothing is tree-shaken** | An export no current caller uses is not dead code — it is the API. |
 | **Dependencies stay external** | Only relative and absolute imports are emitted, so a consumer can still dedupe, override or patch. |
 | **Module structure preserved** | A subpath in `exports` is a real file, and a stack trace names a module. |
 | **Nothing defined, no condition asserted** | `NODE_ENV` and `worker` belong to the build that consumes this. |
 | **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
 
-Skipped: `*.test.*` and `.d.ts` files.
+Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
+your project is refused rather than emptied; an application build never cleans,
+since its `--out` is one file in a directory that may hold other things.
 
 ## Declarations
 

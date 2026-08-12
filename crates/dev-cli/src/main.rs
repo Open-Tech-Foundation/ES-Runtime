@@ -242,6 +242,11 @@ LIBRARY (--lib)
       decided by your `exports` map, not by what an entry happens to reach.
       Nothing is tree-shaken away: an export no current caller uses is not
       dead code here, it is the API. Skipped: *.test.* and .d.ts files.
+    * The output directory is emptied first, because the build owns it: a
+      stale file left in dist is a file your package publishes. An --out that
+      holds your source or your project is refused rather than emptied. An
+      application build does not clean — its --out is one file, in a directory
+      that may hold other things.
     * Dependencies stay external, so a consumer can still dedupe, override or
       patch one. Only relative and absolute imports are emitted.
     * Module structure is preserved, file for file, so a subpath in your

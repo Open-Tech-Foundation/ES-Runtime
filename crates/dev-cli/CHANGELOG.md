@@ -53,6 +53,15 @@ providers, same capability enforcement — so what changes here is everything
   Skipped: `*.test.*` and `.d.ts` files. `--out=<dir>` moves the tree
   (default `dist`).
 
+  **The output directory is emptied first**, because the build owns it. Delete a
+  module from `src` and without this its `.js` and `.d.ts` stay in `dist` for
+  ever — and `"files": ["dist"]` puts them in the tarball, where a consumer can
+  still import a module the library no longer has. An `--out` that holds your
+  source or your project is *refused* rather than emptied: it is a path off a
+  command line, and `--out=src` is one keystroke from `--out=dist`. An
+  application build does not clean — its `--out` names one file, in a directory
+  that may hold other builds and other people's files.
+
 - **Declarations, derived from the source's own annotations** (DECISIONS D59) —
   emitted by `--lib` unless `--no-types` says otherwise.
 

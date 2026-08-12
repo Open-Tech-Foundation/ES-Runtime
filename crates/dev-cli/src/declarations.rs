@@ -35,7 +35,8 @@ use oxc::span::SourceType;
 ///
 /// TypeScript only: a `.js` or `.mjs` module has no annotations to derive
 /// anything from, so it is not an error to find one — there is simply nothing
-/// to emit, and a JavaScript library that hand-writes its `.d.ts` keeps it.
+/// to emit. A JavaScript library that hand-writes its declarations keeps them
+/// in its source tree, not in the output, which the build empties.
 const TYPED_EXTENSIONS: &[&str] = &["ts", "mts", "cts", "tsx"];
 
 /// Every `.js` file under `dir`, as paths relative to it.

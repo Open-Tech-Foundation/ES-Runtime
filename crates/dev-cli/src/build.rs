@@ -183,6 +183,68 @@ fn is_local(specifier: &str) -> bool {
     specifier.starts_with('.') || Path::new(specifier).is_absolute()
 }
 
+/// Empties the output directory before a library build writes into it.
+///
+/// **A library build owns its output tree, so a stale file in it is a published
+/// file.** Delete a module from `src` and without this its `.js` and `.d.ts`
+/// stay in `dist` for ever — and `"files": ["dist"]` puts them in the tarball,
+/// where a consumer can still import a module the library no longer has. This is
+/// the `rm -rf dist` a hand-written build script always ends up growing, and the
+/// reason it grows it.
+///
+/// Only `--lib` cleans. An application build's `--out` names a *file*, in a
+/// directory that may hold other builds and other people's files; emptying it
+/// would be a surprise with no upside, since the one file is overwritten anyway.
+///
+/// The refusals are the point of the function. `--out` is a path off a command
+/// line, and the difference between emptying `dist` and emptying `src` is one
+/// keystroke.
+fn clean_output(out_dir: &Path, source_root: &Path) -> Result<(), String> {
+    if !out_dir.exists() {
+        return Ok(());
+    }
+    if !out_dir.is_dir() {
+        return Err(format!(
+            "--out={} is a file, and --lib writes a directory of them.",
+            out_dir.display()
+        ));
+    }
+    // Resolved rather than compared as written: `dist`, `./dist` and an absolute
+    // path to it are one directory, and a symlink is whatever it points at.
+    // Every question below is about that real directory.
+    let resolved = out_dir
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", out_dir.display()))?;
+    let source = source_root
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", source_root.display()))?;
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
+
+    // Emptying the output would empty the input. `--out=src` is the whole
+    // library, one keystroke away from `--out=dist`.
+    if source.starts_with(&resolved) {
+        return Err(format!(
+            "--out={} holds the source ({}), and a library build empties its \
+             output directory first.\n\n\
+             That would delete what it is about to build. Write somewhere the \
+             build owns: --out=dist.",
+            out_dir.display(),
+            source_root.display()
+        ));
+    }
+    // …and emptying the project would take everything else in it too.
+    if cwd.starts_with(&resolved) {
+        return Err(format!(
+            "--out={} holds the working directory, and a library build empties \
+             its output directory first.\n\n\
+             Name a directory the build owns: --out=dist.",
+            out_dir.display()
+        ));
+    }
+    std::fs::remove_dir_all(&resolved)
+        .map_err(|e| format!("cannot clear {}: {e}", out_dir.display()))
+}
+
 /// Bundles `config` and reports what was written.
 pub async fn build(config: BuildConfig) -> Result<String, String> {
     if !Path::new(&config.source).exists() {
@@ -248,6 +310,13 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             }],
         )
     };
+
+    // Before anything is written, and only for `--lib`. It is also what makes
+    // the count below honest: the emitted modules are read back off disk, so a
+    // stale file left in place would be reported as one of them.
+    if let Some(root) = &preserve_root {
+        clean_output(&out_dir, root)?;
+    }
 
     // `process.env.NODE_ENV` first, so an explicit --define of the same name
     // overrides it rather than fighting it. A library defines nothing by
@@ -384,6 +453,64 @@ mod tests {
     fn the_output_defaults_to_dist_beside_the_entry_name() {
         assert_eq!(default_out("server.mjs"), PathBuf::from("dist/server.js"));
         assert_eq!(default_out("src/app.ts"), PathBuf::from("dist/app.js"));
+    }
+
+    /// A directory of its own per test: these delete things.
+    fn clean_fixture(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("esdev_clean_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).expect("create src");
+        std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+        std::fs::write(dir.join("src/index.ts"), "export const x: number = 1;").expect("write");
+        dir
+    }
+
+    #[test]
+    fn cleaning_empties_the_output_and_leaves_the_source() {
+        let dir = clean_fixture("ok");
+        std::fs::write(dir.join("dist/stale.js"), "gone").expect("write");
+
+        clean_output(&dir.join("dist"), &dir.join("src")).expect("clean");
+        assert!(!dir.join("dist/stale.js").exists());
+        assert!(dir.join("src/index.ts").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nothing to clean is not an error — the first build of a project has no
+    /// output directory yet.
+    #[test]
+    fn cleaning_a_directory_that_is_not_there_is_fine() {
+        let dir = clean_fixture("absent");
+        clean_output(&dir.join("nowhere"), &dir.join("src")).expect("clean");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The refusal that matters: `--out=src` differs from `--out=dist` by one
+    /// keystroke, and would delete the library rather than build it.
+    #[test]
+    fn cleaning_refuses_to_empty_anything_holding_the_source() {
+        let dir = clean_fixture("source");
+
+        let onto_itself = clean_output(&dir.join("src"), &dir.join("src")).expect_err("refused");
+        assert!(onto_itself.contains("holds the source"), "{onto_itself}");
+
+        // …and the parent of the source, which takes it with everything else.
+        let onto_parent = clean_output(&dir, &dir.join("src")).expect_err("refused");
+        assert!(onto_parent.contains("holds the source"), "{onto_parent}");
+
+        assert!(dir.join("src/index.ts").exists(), "the source was deleted");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleaning_refuses_a_path_that_is_a_file() {
+        let dir = clean_fixture("file");
+        std::fs::write(dir.join("bundle.js"), "x").expect("write");
+
+        let err = clean_output(&dir.join("bundle.js"), &dir.join("src")).expect_err("refused");
+        assert!(err.contains("is a file"), "{err}");
+        assert!(dir.join("bundle.js").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The condition that decides whether a package hands over its Web-API build

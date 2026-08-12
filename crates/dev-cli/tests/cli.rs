@@ -970,6 +970,95 @@ fn lib_refuses_to_guess_a_declaration_it_cannot_derive() {
     assert!(skipped.status.success(), "{}", stderr(&skipped));
 }
 
+/// A stale file in a library's output is a **published** file: `"files":
+/// ["dist"]` puts it in the tarball, where a consumer can still import a module
+/// the library no longer has.
+#[test]
+fn lib_empties_its_output_so_a_deleted_module_stops_shipping() {
+    let dir = lib_project("l_clean");
+
+    write_in(&dir, "src/dropped.ts", "export const old: number = 1;\n");
+    let first = esdev_in(&dir)
+        .args(["build", "--lib", "src"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(first.status.success(), "{}", stderr(&first));
+    assert!(dir.join("dist/dropped.js").exists());
+    assert!(dir.join("dist/dropped.d.ts").exists());
+
+    std::fs::remove_file(dir.join("src/dropped.ts")).expect("remove source");
+    // Something that never had a source at all, which is the other half of the
+    // problem: without a clean it is published for ever.
+    write_in(
+        &dir,
+        "dist/never-had-a-source.js",
+        "export const junk = 1;\n",
+    );
+
+    let second = esdev_in(&dir)
+        .args(["build", "--lib", "src"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(second.status.success(), "{}", stderr(&second));
+    assert!(!dir.join("dist/dropped.js").exists(), "{}", stdout(&second));
+    assert!(!dir.join("dist/dropped.d.ts").exists());
+    assert!(!dir.join("dist/never-had-a-source.js").exists());
+    // Still built what it should have.
+    assert!(dir.join("dist/index.js").exists());
+    assert!(dir.join("dist/protocol/codec.js").exists());
+
+    // And the count is the build's, not the directory's leftovers — the same
+    // clean is what makes reading the modules back off disk honest.
+    assert!(stdout(&second).contains("2 modules"), "{}", stdout(&second));
+}
+
+/// `--out=src` is one keystroke from `--out=dist`, and a build that empties its
+/// output first would delete the library rather than build it.
+#[test]
+fn lib_refuses_to_empty_a_directory_holding_the_source() {
+    let dir = lib_project("l_clean_guard");
+
+    let onto_source = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--out=src"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!onto_source.status.success(), "{}", stdout(&onto_source));
+    assert!(
+        stderr(&onto_source).contains("holds the source"),
+        "{}",
+        stderr(&onto_source)
+    );
+
+    let onto_project = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--out=."])
+        .output()
+        .expect("spawn esdev");
+    assert!(!onto_project.status.success(), "{}", stdout(&onto_project));
+
+    // Nothing was deleted on the way to either refusal.
+    assert!(dir.join("src/index.ts").exists());
+    assert!(dir.join("src/protocol/codec.ts").exists());
+}
+
+/// An application build's `--out` names a file, in a directory that may hold
+/// other builds and other people's files. Emptying it would be a surprise with
+/// no upside, since the one file is overwritten anyway.
+#[test]
+fn an_application_build_leaves_the_rest_of_the_directory_alone() {
+    let dir = build_dir("b_no_clean");
+    write_in(&dir, "app.mjs", "console.log(1);\n");
+    std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+    write_in(&dir, "dist/keep-me.txt", "not the build's to delete\n");
+
+    let out = esdev_in(&dir)
+        .args(["build", "app.mjs"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(dir.join("dist/app.js").exists());
+    assert!(dir.join("dist/keep-me.txt").exists(), "{}", stdout(&out));
+}
+
 /// The two shapes are different enough that guessing between them would be
 /// worse than saying so: a file to `--lib` would silently drop every module the
 /// entry does not import.
