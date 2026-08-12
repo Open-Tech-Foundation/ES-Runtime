@@ -85,7 +85,7 @@ on npm — [`@opentf/esrun-types`](https://www.npmjs.com/package/@opentf/esrun-t
 esdev --install-types   # adds the package and wires up tsconfig.json
 ```
 
-See [esrun.opentechf.org/docs/typescript](https://esrun.opentechf.org/docs/typescript).
+See [esrun.opentechf.org/docs/esdev/typescript](https://esrun.opentechf.org/docs/esdev/typescript).
 
 ## Development
 

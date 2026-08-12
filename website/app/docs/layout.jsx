@@ -17,7 +17,6 @@ const NAV = [
       { title: "Installation", path: "/docs/install" },
       { title: "Scope & non-goals", path: "/docs/scope" },
       { title: "Migration guide", path: "/docs/migration" },
-      { title: "TypeScript setup", path: "/docs/typescript" },
     ],
   },
   {
@@ -26,6 +25,7 @@ const NAV = [
     title: "Development",
     items: [
       { title: "esdev", path: "/docs/esdev" },
+      { title: "TypeScript setup", path: "/docs/esdev/typescript" },
       { title: "Bundling", path: "/docs/esdev/build" },
       { title: "Testing", path: "/docs/esdev/test" },
       { title: "Debugging", path: "/docs/esdev/debugging" },
