@@ -91,6 +91,9 @@ pub struct BuildConfig {
     pub lib: bool,
     /// Whether a `--lib` build emits `.d.ts` files. On unless `--no-types`.
     pub types: bool,
+    /// The entry whose declarations are linked into one file, from
+    /// `--dts-bundle[=<entry>]`. `None` leaves a `.d.ts` beside each module.
+    pub dts_bundle: Option<String>,
 }
 
 /// The `exports` conditions a build asserts before the user adds any.
@@ -434,15 +437,53 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         if modules.len() == 1 { "" } else { "s" }
     );
     if config.types {
-        let declared = crate::declarations::emit(&modules, &out_dir, &root)?;
-        if declared > 0 {
-            counted.push_str(&format!(
-                ", {declared} declaration{}",
-                if declared == 1 { "" } else { "s" }
-            ));
-        }
+        counted.push_str(&match &config.dts_bundle {
+            Some(entry) => {
+                let written = bundle_declarations(entry, &modules, &out_dir, &root)?;
+                format!(", 1 declaration ({written})")
+            }
+            None => {
+                let declared = crate::declarations::emit(&modules, &out_dir, &root)?;
+                format!(
+                    ", {declared} declaration{}",
+                    if declared == 1 { "" } else { "s" }
+                )
+            }
+        });
     }
     Ok(format!("{}/ ({counted})", out_dir.display()))
+}
+
+/// Links every declaration reachable from `entry` into one file, and reports
+/// where it went.
+///
+/// The output is named after the entry, so `src/index.ts` becomes
+/// `dist/index.d.ts` — the path a package's `types` field already points at,
+/// and the same one the per-module build would have written for that module.
+fn bundle_declarations(
+    entry: &str,
+    modules: &[PathBuf],
+    out_dir: &Path,
+    root: &Path,
+) -> Result<String, String> {
+    let entry_path = Path::new(entry);
+    if !entry_path.is_file() {
+        return Err(format!(
+            "--dts-bundle={entry} does not name a file.\n\n\
+             One declaration file is built from one entry — the module a consumer \
+             importing your package arrives at."
+        ));
+    }
+    let generated = crate::declarations::generate(modules, root)?;
+    let text = crate::dts::bundle(entry_path, &generated)?;
+
+    let stem = entry_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("index");
+    let target = out_dir.join(format!("{stem}.d.ts"));
+    std::fs::write(&target, text).map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+    Ok(target.display().to_string())
 }
 
 #[cfg(test)]

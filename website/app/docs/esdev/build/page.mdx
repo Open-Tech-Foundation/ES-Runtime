@@ -131,12 +131,43 @@ error: 2 declarations could not be derived:
 
 `--no-types` skips them.
 
+## One declaration file
+
+A package whose `exports` map has a single entry wants one `index.d.ts`, not a
+mirror of a source layout nobody outside it should have to know:
+
+```sh
+esdev build --lib src --dts-bundle    # → dist/index.d.ts
+```
+
+| | |
+| --- | --- |
+| **Reachable, not everything** | Everything the entry's exports name, transitively. |
+| **Inlined but not exported** | A type reachable only *through* a public one is present — the public type needs it — without widening your surface. |
+| **Collisions renamed** | Two modules with `Options` become `Options` and `Options$1`, and every site is rewritten. |
+| **Dependencies stay imports** | The same line `--lib` draws for JavaScript. |
+| **JSDoc byte for byte** | It is what an editor shows on hover. |
+
+Keep the per-module `.d.ts` if your `exports` map has subpaths — `@you/pkg/pool`
+has to find a real `pool.d.ts`.
+
+A construct that cannot be linked into one file — a namespace import, `export =`,
+a module augmentation — stops the build and names itself. A `.d.ts` is believed:
+nothing runs it and no test covers it, so a wrong one is worse than none.
+
+<Callout type="note" title="Written here, not borrowed">
+  Neither `tsc` nor rolldown can do this — `tsc` has no declaration-bundling
+  mode, and rolldown's Rust crates have no `.d.ts` support. The linker is
+  ours, over oxc's parser and semantic analysis.
+</Callout>
+
 ## Options
 
 | Flag | |
 | --- | --- |
 | `--lib` | Build a library |
 | `--no-types` | `--lib` only: skip the `.d.ts` |
+| `--dts-bundle[=<entry>]` | `--lib` only: one `.d.ts` instead of one per module. Default entry `<srcdir>/index.ts` |
 | `--out=<dir>` | Where to write it (default `dist`) |
 
 <Callout type="note" title="Types are never checked">

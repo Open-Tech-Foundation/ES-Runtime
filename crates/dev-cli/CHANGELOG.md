@@ -86,6 +86,61 @@ providers, same capability enforcement — so what changes here is everything
   them, and their unit suites pass unchanged under `esrun` against the
   `esdev`-built `dist/`.
 
+- **`esdev build --lib --dts-bundle`** (DECISIONS D59) — every declaration in
+  the library, linked into one `.d.ts`.
+
+  ```sh
+  esdev build --lib src --dts-bundle    # → dist/index.d.ts
+  ```
+
+  A package whose `exports` map has a single entry wants one declaration file,
+  not a mirror of a source layout nobody outside the package should have to know
+  about. **Nothing off the shelf does this**: `tsc` emits one `.d.ts` per source
+  file and has no declaration-bundling mode (`--outFile` is a legacy
+  `module: none/amd/system` feature), and rolldown's Rust crates have no `.d.ts`
+  support at all — `rolldown-plugin-dts`, which its ecosystem uses, is an npm
+  package rather than a crate. So the linker is written here, over the `oxc`
+  parser and semantic analysis already in the tree.
+
+  What it does, and each is a property a test pins against real output:
+
+  | | |
+  | --- | --- |
+  | **Reachable, not everything** | Everything the entry's exports name, transitively |
+  | **Inlined but not exported** | A type reachable only *through* a public one is present without widening your surface |
+  | **Collisions renamed** | Two modules with `Options` become `Options` and `Options$1`, every site rewritten |
+  | **Cycles followed** | `Tree` ↔ `Leaf` is ordinary in a type graph |
+  | **Dependencies stay imports** | The same line `--lib` draws for JavaScript, and `import type` is kept |
+  | **JSDoc byte for byte** | It is what an editor shows on hover |
+
+  **Declarations travel as text, not as an AST.** Each one carries the bytes
+  that produced it plus the byte ranges where a module-scope name appears, so a
+  rename is a splice. That is what keeps JSDoc exactly as written — reprinting
+  an AST reflows it — and it means no parser arena has to outlive the module it
+  came from.
+
+  **A rename is only sound if every site was found**, so the sites come from
+  semantic analysis rather than a walk over the type syntax: `extends`, a mapped
+  type's `keyof`, both branches of a conditional type, a default type argument.
+  A hand-written walk would silently miss the corner nobody enumerated.
+
+  A construct that cannot be linked into one file — a namespace import,
+  `export =`, a module augmentation — **stops the build and names itself**,
+  rather than being dropped into output that looks fine. A `.d.ts` is believed:
+  nothing runs it and no test covers it. Build without `--dts-bundle` and the
+  construct stands as written.
+
+  Keep the per-module declarations if your `exports` map has subpaths —
+  `@you/pkg/pool` has to find a real `pool.d.ts`.
+
+  Verified against the two drivers again: `@opentf/esrun-postgres`'s 8 modules
+  link into one 253-line declaration and `@opentf/esrun-redis`'s 14 into one of
+  1269, both typecheck under `tsc --noEmit`, and consumers resolve through them
+  — including the three names redis had to rename, whose public spellings the
+  export block restores (`MessageContext$1 as MessageContext`). A deliberately
+  wrong consumer is still rejected, which is what says the renames kept their
+  identities rather than merely compiling.
+
 ## [0.1.0] - 2026-08-12
 
 The first release. Everything below landed as one increment per feature

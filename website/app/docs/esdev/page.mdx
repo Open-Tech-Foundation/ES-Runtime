@@ -19,6 +19,7 @@ esdev --watch server.ts       # rerun on change, drain on restart
 esdev test                    # run the test files
 esdev build server.ts         # one deployable ES module
 esdev build --lib src         # a publishable library, with its .d.ts
+esdev build --lib src --dts-bundle   # ...its types linked into one file
 esdev --inspect app.ts        # attach a debugger
 esdev --trace-permissions app.ts   # print the esrun line to deploy with
 ```

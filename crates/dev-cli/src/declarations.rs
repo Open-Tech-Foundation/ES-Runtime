@@ -78,14 +78,22 @@ fn source_of(module: &Path, root: &Path) -> Option<PathBuf> {
     })
 }
 
-/// Writes a `.d.ts` beside every emitted module that came from TypeScript, and
-/// reports how many were written.
+/// The declaration text for every emitted module that came from TypeScript,
+/// keyed by the **source** path it was derived from.
+///
+/// In memory rather than on disk, because both callers want it that way: the
+/// per-module writer below turns each entry into a file, and the bundler
+/// ([`crate::dts`]) links them without a round trip through a directory whose
+/// layout it would then have to resolve specifiers against.
 ///
 /// Every file is attempted before anything is reported: an author fixing
 /// annotations wants the whole list, the way `tsc` gives it, not one error per
 /// build.
-pub fn emit(modules: &[PathBuf], out_dir: &Path, root: &Path) -> Result<usize, String> {
-    let mut written = 0usize;
+pub fn generate(
+    modules: &[PathBuf],
+    root: &Path,
+) -> Result<std::collections::HashMap<PathBuf, String>, String> {
+    let mut generated = std::collections::HashMap::new();
     let mut problems: Vec<String> = Vec::new();
     for module in modules {
         let Some(source_path) = source_of(module, root) else {
@@ -95,20 +103,18 @@ pub fn emit(modules: &[PathBuf], out_dir: &Path, root: &Path) -> Result<usize, S
             .map_err(|e| format!("cannot read {}: {e}", source_path.display()))?;
         match declarations_for(&source_path, &source) {
             Ok(text) => {
-                let target = out_dir.join(module).with_extension("d.ts");
-                if let Some(parent) = target.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+                // Both spellings, so a lookup by either the path as written or
+                // the canonical one finds it.
+                if let Ok(canonical) = source_path.canonicalize() {
+                    generated.insert(canonical, text.clone());
                 }
-                std::fs::write(&target, text)
-                    .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
-                written += 1;
+                generated.insert(source_path, text);
             }
             Err(errors) => problems.extend(errors),
         }
     }
     if problems.is_empty() {
-        return Ok(written);
+        return Ok(generated);
     }
     Err(format!(
         "{} declaration{} could not be derived:\n\n{}\n\n\
@@ -123,6 +129,30 @@ pub fn emit(modules: &[PathBuf], out_dir: &Path, root: &Path) -> Result<usize, S
             .collect::<Vec<_>>()
             .join("\n")
     ))
+}
+
+/// Writes a `.d.ts` beside every emitted module that came from TypeScript, and
+/// reports how many were written.
+pub fn emit(modules: &[PathBuf], out_dir: &Path, root: &Path) -> Result<usize, String> {
+    let generated = generate(modules, root)?;
+    let mut written = 0usize;
+    for module in modules {
+        let Some(source_path) = source_of(module, root) else {
+            continue;
+        };
+        let Some(text) = generated.get(&source_path) else {
+            continue;
+        };
+        let target = out_dir.join(module).with_extension("d.ts");
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&target, text)
+            .map_err(|e| format!("cannot write {}: {e}", target.display()))?;
+        written += 1;
+    }
+    Ok(written)
 }
 
 /// The `.d.ts` text for one TypeScript source file, or the reasons it has none.

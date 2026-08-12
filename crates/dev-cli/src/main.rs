@@ -30,6 +30,7 @@ use es_runtime_cli_common::{Config, Source};
 
 mod build;
 mod declarations;
+mod dts;
 mod inspect;
 mod test;
 mod trace;
@@ -206,6 +207,9 @@ OPTIONS:
     --lib                       Build a library: keep the module structure,
                                 leave dependencies external, emit .d.ts
     --no-types                  --lib only: skip the .d.ts files
+    --dts-bundle[=<entry>]      --lib only: link every declaration into one
+                                .d.ts instead of one beside each module.
+                                Default entry: <srcdir>/index.ts
     --out=<path>                Where to write it. A file for an application
                                 (default dist/<entry>.js), a directory for --lib
                                 (default dist)
@@ -258,6 +262,27 @@ LIBRARY (--lib)
       has. An exported signature that does not state its type fails the build
       with the list, rather than getting a guessed declaration nobody can see is
       wrong. --no-types opts out.
+
+ONE DECLARATION FILE (--dts-bundle)
+    A package whose exports map has a single entry wants one index.d.ts rather
+    than a mirror of a source layout nobody outside it should have to know:
+
+        esdev build --lib src --dts-bundle    # → dist/index.d.ts
+
+    Everything reachable from the entry's exports is inlined; a colliding name
+    is renamed (Options, Options$1) and every site of it rewritten; a type
+    reachable only through a public one is inlined but not exported, so the
+    package's surface stays what you wrote; dependencies stay imports, the same
+    line --lib draws for JavaScript; and JSDoc travels byte for byte, because
+    that is what an editor shows on hover.
+
+    A construct that cannot be linked into one file — a namespace import,
+    export =, a module augmentation — stops the build and names itself. A .d.ts
+    is believed: nothing runs it and no test covers it, so a wrong one is worse
+    than none. Build without --dts-bundle and it stands as written.
+
+    Keep the per-module .d.ts if your exports map has subpaths: `@you/pkg/pool`
+    has to find a real pool.d.ts.
 ";
 
 /// Parses `esdev`'s command line.
@@ -482,6 +507,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
     let mut minify = false;
     let mut lib = false;
     let mut no_types = false;
+    let mut dts_bundle: Option<Option<String>> = None;
     let mut conditions = Vec::new();
     let mut defines = Vec::new();
     for arg in args {
@@ -501,6 +527,10 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
                 reject_value(flag, value)?;
                 no_types = true;
             }
+            // The value is optional: with none, the entry is `index` in the
+            // source directory, which is where a package's `.` export points
+            // in almost every library that has one.
+            "--dts-bundle" => dts_bundle = Some(value.map(str::to_string)),
             "--minify" => {
                 reject_value(flag, value)?;
                 minify = true;
@@ -572,6 +602,39 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
              `esdev build --lib {root}`."
         ));
     }
+    if dts_bundle.is_some() && !lib {
+        return Err("--dts-bundle only means something with --lib.\n\n\
+             An application build emits no declarations to link: a bundle is deployed \
+             and run, not imported and type-checked."
+            .to_string());
+    }
+    if dts_bundle.is_some() && no_types {
+        return Err("--dts-bundle and --no-types ask for opposite things.\n\n\
+             One links every declaration into a file; the other emits none."
+            .to_string());
+    }
+    // Resolved here rather than in the build, so a default that is not there is
+    // an argument error naming both what was looked for and the way to say it.
+    let dts_bundle = match dts_bundle {
+        None => None,
+        Some(Some(entry)) => Some(entry),
+        Some(None) => {
+            let found = ["ts", "tsx", "mts", "cts"]
+                .iter()
+                .map(|extension| std::path::Path::new(&source).join(format!("index.{extension}")))
+                .find(|candidate| candidate.is_file());
+            match found {
+                Some(entry) => Some(entry.display().to_string()),
+                None => {
+                    return Err(format!(
+                        "--dts-bundle found no index.ts in {source}.\n\n\
+                         One declaration file is built from one entry. Name it: \
+                         --dts-bundle={source}/main.ts."
+                    ));
+                }
+            }
+        }
+    };
     if no_types && !lib {
         return Err("--no-types only means something with --lib.\n\n\
              An application build emits no declarations to skip: a bundle is \
@@ -598,6 +661,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
         defines,
         lib,
         types: !no_types,
+        dts_bundle,
     })
 }
 
