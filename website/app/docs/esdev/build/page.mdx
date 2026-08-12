@@ -1,6 +1,6 @@
 ---
 title: esdev build
-description: Bundle a server entry and its dependencies into one deployable ES module — which is also how a CommonJS package becomes runnable.
+description: Bundle a server entry into one deployable ES module, or build a source tree into a publishable library with its declarations.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -83,3 +83,60 @@ with no filesystem or import access at all:
 esdev build server.tsx --out=dist/server.js --minify
 esrun --deny-all --allow-listen=8080 dist/server.js
 ```
+
+# Libraries: `--lib`
+
+```sh
+esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
+```
+
+A library is an **input to somebody else's build**, so every default above is
+theirs to make and `--lib` makes none of them.
+
+| | |
+| --- | --- |
+| **A directory, not an entry** | Every module under it is built, the way `tsc` builds a `rootDir`. Your `exports` map decides what a consumer may import, not what an entry reaches. |
+| **Nothing is tree-shaken** | An export no current caller uses is not dead code — it is the API. |
+| **Dependencies stay external** | Only relative and absolute imports are emitted, so a consumer can still dedupe, override or patch. |
+| **Module structure preserved** | A subpath in `exports` is a real file, and a stack trace names a module. |
+| **Nothing defined, no condition asserted** | `NODE_ENV` and `worker` belong to the build that consumes this. |
+| **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
+
+Skipped: `*.test.*` and `.d.ts` files.
+
+## Declarations
+
+Derived from what the source **says**, never from what a checker infers — the
+same contract type-stripping has. So an exported signature has to state its
+type:
+
+```ts
+export const driver = defineDriver({ … });                    // ✗
+export const driver: Driver<Conn, Opts> = defineDriver({ … }); // ✓
+```
+
+A signature that does not fails the build with the list, rather than getting a
+guessed declaration nobody can see is wrong. TypeScript calls this rule
+[`isolatedDeclarations`](https://www.typescriptlang.org/tsconfig/#isolatedDeclarations).
+
+```
+error: 2 declarations could not be derived:
+
+  src/index.ts:150:14  TS9010: Variable must have an explicit type annotation.
+  src/pool.ts:41:14    TS9010: Variable must have an explicit type annotation.
+```
+
+`--no-types` skips them.
+
+## Options
+
+| Flag | |
+| --- | --- |
+| `--lib` | Build a library |
+| `--no-types` | `--lib` only: skip the `.d.ts` |
+| `--out=<dir>` | Where to write it (default `dist`) |
+
+<Callout type="note" title="Types are never checked">
+  `esdev` erases and derives; it does not typecheck. That is your editor's job
+  and `tsc --noEmit`'s.
+</Callout>

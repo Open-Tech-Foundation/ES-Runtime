@@ -18,7 +18,7 @@ export class FrameReader {
   #end = 0;
   #eof = false;
 
-  constructor(stream: ReadableStream<Uint8Array>, capacity = 64 * 1024) {
+  constructor(stream: ReadableStream<Uint8Array>, capacity: number = 64 * 1024) {
     this.#reader = stream.getReader();
     this.#buf = new Uint8Array(capacity);
   }

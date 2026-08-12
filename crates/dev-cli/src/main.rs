@@ -29,6 +29,7 @@ use es_runtime_cli_common::permissions::Permissions;
 use es_runtime_cli_common::{Config, Source};
 
 mod build;
+mod declarations;
 mod inspect;
 mod test;
 mod trace;
@@ -76,6 +77,8 @@ USAGE:
                                 project and wire up tsconfig.json
     esdev test [filter...]      Run the test files (`esdev test --help`)
     esdev build <entry>         Bundle an entry into one deployable ES module
+    esdev build --lib <srcdir>  Build a publishable library instead: a module
+                                tree and its .d.ts, dependencies left external
                                 (`esdev build --help` for its options)
     esdev -h, --help            Show this help
     esdev -v, --version         Show the version
@@ -193,31 +196,63 @@ any file fails.
 ";
 
 const BUILD_USAGE: &str = "\
-esdev build — bundle a server entry and its dependencies into one ES module
+esdev build — build an application to deploy, or a library to publish
 
 USAGE:
-    esdev build <entry> [options]
+    esdev build <entry> [options]        One deployable ES module
+    esdev build --lib <srcdir> [options] A publishable library
 
 OPTIONS:
-    --out=<file>                Where to write it (default: dist/<entry>.js)
+    --lib                       Build a library: keep the module structure,
+                                leave dependencies external, emit .d.ts
+    --no-types                  --lib only: skip the .d.ts files
+    --out=<path>                Where to write it. A file for an application
+                                (default dist/<entry>.js), a directory for --lib
+                                (default dist)
     --minify                    Minify the output
     --conditions=<list>         Extra `exports` conditions, comma-separated.
                                 These add to the defaults (import, default,
-                                worker)
+                                worker — none of which --lib asserts)
     --define=<name>=<value>     Replace <name> with <value> at build time.
                                 process.env.NODE_ENV defaults to \"production\"
+                                for an application, and to nothing for --lib
     -h, --help                  Show this help
 
-The bundle is ES modules, `runtime:*` imports are left for the runtime to
-serve, and CommonJS dependencies are converted on the way in — which is how a
-package that ships CJS becomes runnable without esrun learning `require`.
+APPLICATION (the default)
+    The bundle is ES modules, `runtime:*` imports are left for the runtime to
+    serve, and CommonJS dependencies are converted on the way in — which is how
+    a package that ships CJS becomes runnable without esrun learning `require`.
 
-It also shortens what production must be granted. An unbundled program needs
---allow-imports so the loader can walk node_modules; a bundle has no imports
-left to resolve:
+    It also shortens what production must be granted. An unbundled program needs
+    --allow-imports so the loader can walk node_modules; a bundle has no imports
+    left to resolve:
 
-    esrun --deny-all --allow-imports --allow-listen=8080 app.js   # unbundled
-    esrun --deny-all --allow-listen=8080 dist/app.js              # bundled
+        esrun --deny-all --allow-imports --allow-listen=8080 app.js   # unbundled
+        esrun --deny-all --allow-listen=8080 dist/app.js              # bundled
+
+LIBRARY (--lib)
+    A library is not the end of the line — it is an input to somebody else's
+    build, so the four decisions above are theirs to make and --lib makes none
+    of them:
+
+        esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
+
+    * A directory, not an entry. Every module under it is built, the way tsc
+      builds a rootDir — because which modules a consumer may import is
+      decided by your `exports` map, not by what an entry happens to reach.
+      Nothing is tree-shaken away: an export no current caller uses is not
+      dead code here, it is the API. Skipped: *.test.* and .d.ts files.
+    * Dependencies stay external, so a consumer can still dedupe, override or
+      patch one. Only relative and absolute imports are emitted.
+    * Module structure is preserved, file for file, so a subpath in your
+      `exports` map is a real file and a stack trace names a module.
+    * Nothing is defined and no condition asserted: NODE_ENV and `worker`
+      belong to the build that consumes this, not to this one.
+    * A .d.ts is emitted beside each module, derived from the annotations the
+      source already carries — never inferred, the same contract type-stripping
+      has. An exported signature that does not state its type fails the build
+      with the list, rather than getting a guessed declaration nobody can see is
+      wrong. --no-types opts out.
 ";
 
 /// Parses `esdev`'s command line.
@@ -437,9 +472,11 @@ fn reject_esdev_flags_after_source(args: &[String], source: &str) -> Result<(), 
 
 /// Parses `esdev build <entry> [options]`.
 fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String> {
-    let mut entry: Option<String> = None;
+    let mut sources: Vec<String> = Vec::new();
     let mut out = None;
     let mut minify = false;
+    let mut lib = false;
+    let mut no_types = false;
     let mut conditions = Vec::new();
     let mut defines = Vec::new();
     for arg in args {
@@ -451,6 +488,14 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
                 std::process::exit(0);
             }
             "--out" => out = Some(require_value(flag, value)?.to_string()),
+            "--lib" => {
+                reject_value(flag, value)?;
+                lib = true;
+            }
+            "--no-types" => {
+                reject_value(flag, value)?;
+                no_types = true;
+            }
             "--minify" => {
                 reject_value(flag, value)?;
                 minify = true;
@@ -482,24 +527,72 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{BUILD_USAGE}"));
             }
-            path => {
-                if entry.is_some() {
-                    return Err(format!(
-                        "esdev build takes one entry; got a second ({path}).\n\n\
-                         A bundle has one root — that is what makes it one file."
-                    ));
-                }
-                entry = Some(path.to_string());
-            }
+            path => sources.push(path.to_string()),
         }
     }
-    let entry = entry.ok_or_else(|| format!("missing entry argument\n\n{BUILD_USAGE}"))?;
+    if sources.is_empty() {
+        return Err(format!(
+            "missing {} argument\n\n{BUILD_USAGE}",
+            if lib { "source directory" } else { "entry" }
+        ));
+    }
+    if sources.len() > 1 {
+        return Err(format!(
+            "esdev build takes one {}; got {}.\n\n{}",
+            if lib { "source directory" } else { "entry" },
+            sources.len(),
+            if lib {
+                "A library is built from its source tree, not from a list — every \
+                 module under the directory becomes a file in the output."
+            } else {
+                "A bundle has one root — that is what makes it one file."
+            }
+        ));
+    }
+    let source = sources.remove(0);
+    // The whole shape of a library build follows from its unit being a
+    // directory, so a file here is not a small mistake to guess past: it would
+    // silently produce a tree missing everything the named module happens not
+    // to import.
+    if lib && std::path::Path::new(&source).is_file() {
+        let root = std::path::Path::new(&source)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or_else(|| ".".to_string(), |p| p.display().to_string());
+        return Err(format!(
+            "--lib builds a source directory, and {source} is a file.\n\n\
+             A library publishes its whole tree — which modules a consumer may \
+             import is decided by the package's `exports` map, not by what this \
+             entry happens to reach. Build the directory: \
+             `esdev build --lib {root}`."
+        ));
+    }
+    if no_types && !lib {
+        return Err("--no-types only means something with --lib.\n\n\
+             An application build emits no declarations to skip: a bundle is \
+             deployed and run, not imported and type-checked."
+            .to_string());
+    }
+    // `--out` changes shape between the two, and getting it wrong is otherwise
+    // a directory literally named `app.js` full of modules.
+    if lib
+        && let Some(path) = &out
+        && std::path::Path::new(path).extension().is_some()
+    {
+        return Err(format!(
+            "--out={path} names a file, and --lib writes a directory of them.\n\n\
+             A library keeps its module structure, so the output is a tree: \
+             --out=dist, not --out=dist/index.js."
+        ));
+    }
     Ok(BuildConfig {
-        entry,
+        source,
         out,
         minify,
         conditions,
         defines,
+        lib,
+        types: !no_types,
     })
 }
 
@@ -629,13 +722,16 @@ async fn main() -> ExitCode {
         }
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(config).await,
-        Ok(Command::Build(config)) => match build::build(config).await {
-            Ok(written) => {
-                println!("bundled → {written}");
-                Ok(())
+        Ok(Command::Build(config)) => {
+            let verb = if config.lib { "built" } else { "bundled" };
+            match build::build(config).await {
+                Ok(written) => {
+                    println!("{verb} → {written}");
+                    Ok(())
+                }
+                Err(err) => Err(err),
             }
-            Err(err) => Err(err),
-        },
+        }
         Err(err) => Err(err),
     };
     match result {

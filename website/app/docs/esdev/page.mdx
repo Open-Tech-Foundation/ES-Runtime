@@ -18,6 +18,7 @@ esdev app.ts                  # TypeScript, JSX, run
 esdev --watch server.ts       # rerun on change, drain on restart
 esdev test                    # run the test files
 esdev build server.ts         # one deployable ES module
+esdev build --lib src         # a publishable library, with its .d.ts
 esdev --inspect app.ts        # attach a debugger
 esdev --trace-permissions app.ts   # print the esrun line to deploy with
 ```
@@ -119,6 +120,7 @@ a value is never a separate argument — and they come **before** the script.
 | --- | --- |
 | `esdev test [filter...]` | [Run the test files](/docs/esdev/test) |
 | `esdev build <entry>` | [Bundle into one ES module](/docs/esdev/build) |
+| `esdev build --lib <srcdir>` | [Build a publishable library](/docs/esdev/build#libraries-lib) |
 
 ## What it deliberately is not
 

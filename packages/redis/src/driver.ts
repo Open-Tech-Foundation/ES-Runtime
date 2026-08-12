@@ -5,7 +5,7 @@
  * open connections and `index.ts` imports both — so the two would form a cycle.
  * This is the leaf they all depend on instead.
  */
-import { defineDriver, type PoolSettings } from "runtime:db";
+import { defineDriver, type Driver, type PoolSettings } from "runtime:db";
 
 import { RedisConnection, REDIS_DIALECT, type RedisOptions } from "./connection.js";
 import { RedisPooled } from "./pool.js";
@@ -36,7 +36,11 @@ export async function openConnection(
  * `runtime:db`'s `query`/`execute` for anything portable. They are the same
  * connection, so there is nothing to choose between at the point of opening it.
  */
-export const driver = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
+export const driver: Driver<RedisConnection, RedisOptions, RedisPooled> = defineDriver<
+  RedisConnection,
+  RedisOptions,
+  RedisPooled
+>({
   name: "redis",
   schemes: ["redis", "rediss"],
   dialect: REDIS_DIALECT,

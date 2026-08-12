@@ -19,6 +19,8 @@ import {
   DbErrorCode,
   defineDriver,
   queryAst,
+  type Dialect,
+  type Driver,
   type CallOptions,
   type DbParams,
   type ExecuteResult,
@@ -265,7 +267,7 @@ export class RedisCluster extends RedisCommands {
   // the node that owns it, through the same redirect-following path the command
   // surface uses.
 
-  readonly dialect = REDIS_DIALECT;
+  readonly dialect: Dialect = REDIS_DIALECT;
   readonly backend = "redis-cluster";
 
   /** A command read as rows, on whichever node owns its key. */
@@ -668,7 +670,11 @@ export function routingKey(args: readonly CommandArg[]): string | null {
  * it returns is a `RedisCluster`. Making that a flag would mean one call whose
  * return type depended on a boolean.
  */
-export const redisCluster = defineDriver<RedisCluster, RedisClusterOptions, never>({
+export const redisCluster: Driver<RedisCluster, RedisClusterOptions, never> = defineDriver<
+  RedisCluster,
+  RedisClusterOptions,
+  never
+>({
   name: "redis-cluster",
   schemes: ["redis", "rediss"],
   dialect: REDIS_DIALECT,

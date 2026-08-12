@@ -2921,7 +2921,7 @@ dependencies = [
  "oxc_ast_visit 0.143.0",
  "oxc_codegen 0.143.0",
  "oxc_diagnostics 0.143.0",
- "oxc_isolated_declarations",
+ "oxc_isolated_declarations 0.143.0",
  "oxc_mangler",
  "oxc_minifier",
  "oxc_parser 0.143.0",
@@ -2944,6 +2944,7 @@ dependencies = [
  "oxc_ast 0.144.0",
  "oxc_codegen 0.144.0",
  "oxc_diagnostics 0.144.0",
+ "oxc_isolated_declarations 0.144.0",
  "oxc_parser 0.144.0",
  "oxc_regular_expression 0.144.0",
  "oxc_semantic 0.144.0",
@@ -3308,6 +3309,24 @@ dependencies = [
  "oxc_span 0.143.0",
  "oxc_str 0.143.0",
  "oxc_syntax 0.143.0",
+ "rustc-hash",
+]
+
+[[package]]
+name = "oxc_isolated_declarations"
+version = "0.144.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aba22c46bf2b6dc717be28b0cb5bfdd7c6dadb81b6ff47e3bee85ba0a9637733"
+dependencies = [
+ "bitflags",
+ "oxc_allocator 0.144.0",
+ "oxc_ast 0.144.0",
+ "oxc_ast_visit 0.144.0",
+ "oxc_diagnostics 0.144.0",
+ "oxc_ecmascript 0.144.0",
+ "oxc_span 0.144.0",
+ "oxc_str 0.144.0",
+ "oxc_syntax 0.144.0",
  "rustc-hash",
 ]
 

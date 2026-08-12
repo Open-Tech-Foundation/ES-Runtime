@@ -74,7 +74,7 @@ function readRowDescription(fields: Fields): Columns {
 /** How much of a result set to gather before handing it to the caller. */
 const BATCH_BYTES = 64 * 1024;
 
-export const POSTGRES_DIALECT = new Dialect({
+export const POSTGRES_DIALECT: Dialect = new Dialect({
   name: "postgres",
   placeholder: (index) => `$${index}`,
   supports: {

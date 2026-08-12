@@ -52,7 +52,7 @@ const BATCH_BYTES = 64 * 1024;
  * there is no statement to put them in, and no savepoints because there is
  * nothing to nest.
  */
-export const REDIS_DIALECT = new Dialect({
+export const REDIS_DIALECT: Dialect = new Dialect({
   name: "redis",
   // A query builder that reaches for this is building SQL for a backend that
   // has none. Failing loudly beats returning `$1` and letting it be

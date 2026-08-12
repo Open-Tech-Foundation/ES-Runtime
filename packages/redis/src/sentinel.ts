@@ -12,7 +12,13 @@
  * sentinel mid-failover will happily hand out the address of a server that has
  * just become a replica, and a client that wrote to it would lose the writes.
  */
-import { DbError, DbErrorCode, defineDriver, type PoolSettings } from "runtime:db";
+import {
+  DbError,
+  DbErrorCode,
+  defineDriver,
+  type Driver,
+  type PoolSettings,
+} from "runtime:db";
 
 import { openConnection } from "./driver.js";
 import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
@@ -208,7 +214,11 @@ function dataOptions(options: SentinelOptions): RedisOptions {
  * loss — which is the same choice reconnection makes everywhere else, for the
  * same reason.
  */
-export const redisSentinel = defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
+export const redisSentinel: Driver<
+  RedisConnection,
+  SentinelDriverOptions,
+  RedisPooled
+> = defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
   name: "redis-sentinel",
   schemes: ["redis", "rediss"],
   dialect: REDIS_DIALECT,

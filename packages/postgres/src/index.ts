@@ -25,7 +25,7 @@
  * which is the arrangement `runtime:db` exists to make possible: adding a
  * database to this runtime does not mean adding anything to the runtime.
  */
-import { defineDriver, type PoolSettings } from "runtime:db";
+import { defineDriver, type Driver, type PoolSettings } from "runtime:db";
 import { env, unmask } from "runtime:process";
 
 import { PgConnection, POSTGRES_DIALECT, type PgOptions } from "./connection.js";
@@ -147,7 +147,11 @@ function stripUndefined<T extends object>(value: T): T {
  * everything a connection string can carry is also accepted as an option, with
  * explicit options winning over the URL and the URL winning over `PG*`.
  */
-export const driver = defineDriver<PgConnection, PgOptions, PgPooled>({
+export const driver: Driver<PgConnection, PgOptions, PgPooled> = defineDriver<
+  PgConnection,
+  PgOptions,
+  PgPooled
+>({
   name: "postgres",
   schemes: ["postgres", "postgresql"],
   dialect: POSTGRES_DIALECT,

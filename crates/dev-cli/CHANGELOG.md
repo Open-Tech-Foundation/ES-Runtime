@@ -16,6 +16,67 @@ providers, same capability enforcement — so what changes here is everything
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev build --lib`** (DECISIONS D59) — a source tree in, a publishable
+  library out.
+
+  ```sh
+  esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
+  ```
+
+  `esdev build` was written for the artifact that gets *deployed*, and all four
+  of its settings are right for that and wrong for a **library** — which is why
+  this repository's own two drivers were built by `tsc` rather than by their own
+  runtime's tool. A library is not the end of the line; it is an input to
+  somebody else's build, so each of those decisions belongs to *them*:
+
+  | | |
+  | --- | --- |
+  | Dependencies stay **external** | Inlining one publishes a private copy nobody can dedupe, override or patch |
+  | Module structure **preserved** | A subpath in your `exports` map has to *be* a file |
+  | **Nothing** defined, **no** condition asserted | `NODE_ENV` and `worker` freeze the consumer's environment into your package |
+  | **`.d.ts`** beside each module | A library is a typed contract |
+
+  **It takes a directory, not an entry, and that is the decision the rest
+  follows from.** A bundle has one root — that is what makes it one file. A
+  library has none: which modules a consumer may import is decided by your
+  `exports` map, long after this build ran. So every module under the directory
+  is built, and built as an *entry*, which is what keeps an export that no
+  current caller uses. Found the hard way — an earlier version that took an
+  entry shook `BLOCKING_COMMANDS` out of the Redis driver because only a test
+  imported it, and the failure was a `SyntaxError` in the consumer rather than
+  anything the build said. **An export nothing uses yet is not dead code in a
+  library; it is the API.** Whatever really is dead, the consumer's build
+  removes.
+
+  Skipped: `*.test.*` and `.d.ts` files. `--out=<dir>` moves the tree
+  (default `dist`).
+
+- **Declarations, derived from the source's own annotations** (DECISIONS D59) —
+  emitted by `--lib` unless `--no-types` says otherwise.
+
+  They are read off what the source *says*, never worked out by a checker: the
+  same "erased, never checked" contract type-stripping has, and microseconds per
+  file rather than a typechecker's pass. The price is TypeScript's
+  `isolatedDeclarations` rule — an exported signature has to state its type:
+
+  ```ts
+  export const driver = defineDriver({ … });                     // ✗
+  export const driver: Driver<Conn, Opts> = defineDriver({ … });  // ✓
+  ```
+
+  One that does not **fails the build with the whole list**, rather than getting
+  a declaration that had to be guessed — a wrong `.d.ts` is worse than none,
+  because it is believed. Measured before it was committed to: this
+  repository's two drivers needed **nine annotations between them**.
+
+  Verified against those packages, which is the only validation of a library
+  builder worth having: both build into the tree `tsc` produced, their
+  declarations typecheck under `tsc --noEmit` and a consumer resolves through
+  them, and their unit suites pass unchanged under `esrun` against the
+  `esdev`-built `dist/`.
+
 ## [0.1.0] - 2026-08-12
 
 The first release. Everything below landed as one increment per feature
