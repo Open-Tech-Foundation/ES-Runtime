@@ -11,6 +11,13 @@ import bench from "../src/benchmarks.js";
 const startupMs = bench.results_ms?.startup?.esrun;
 const startupPhrase = typeof startupMs === "number" ? `about ${Math.round(startupMs)} ms` : "milliseconds";
 
+// The two binaries are names, not prose. A tinted chip keeps them readable as
+// identifiers without shouting — the site's <code> rule only sets a font, which
+// left them looking like ordinary words in a sentence.
+const BIN = "rounded-md bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[0.9em] font-semibold text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100";
+// Incidental mentions inside running text: the monospace alone is enough.
+const BIN_INLINE = "font-mono font-semibold text-zinc-900 dark:text-zinc-100";
+
 const features = [
   {
     title: "Standard web APIs",
@@ -22,7 +29,14 @@ const features = [
   },
   {
     title: "ESM everywhere",
-    body: "Static imports, dynamic import(), top-level await, import.meta, and JSON modules. One module system, no CommonJS interop rules to learn — esdev's bundler converts a CJS dependency at build time.",
+    body: (
+      <span>
+        Static imports, dynamic import(), top-level await, import.meta, and JSON
+        modules. One module system, no CommonJS interop rules to learn —{" "}
+        <code className={BIN_INLINE}>esdev</code>'s bundler converts a CJS
+        dependency at build time.
+      </span>
+    ),
   },
   {
     title: "Written in Rust",
@@ -219,12 +233,12 @@ export default function HomePage() {
                 Two binaries.
               </h2>
               <p className="mt-4 text-zinc-600 dark:text-zinc-400">
-                <code className="font-mono text-sm text-zinc-900 dark:text-zinc-100">esrun</code>{" "}
+                <code className={BIN}>esrun</code>{" "}
                 runs your service and nothing else — no watcher, no debugger port,
                 no transform. That narrowness is what a capability flag is worth.
               </p>
               <p className="mt-3 text-zinc-600 dark:text-zinc-400">
-                <code className="font-mono text-sm text-zinc-900 dark:text-zinc-100">esdev</code>{" "}
+                <code className={BIN}>esdev</code>{" "}
                 pays for it on your machine: same runtime, same flags, plus the
                 toolchain to get there.
               </p>
@@ -233,7 +247,7 @@ export default function HomePage() {
                   href="/docs/esdev"
                   className="text-sm font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
                 >
-                  esdev docs →
+                  <code className="font-mono font-semibold">esdev</code> docs →
                 </a>
                 <a
                   href="/docs/scope"
@@ -246,7 +260,7 @@ export default function HomePage() {
             <div className="grid gap-8 sm:grid-cols-2">
               <div>
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-500">
-                  In esdev, not in production
+                  In <code className="font-mono normal-case text-zinc-700 dark:text-zinc-300">esdev</code>, not in production
                 </h3>
                 <ul className="mt-4 space-y-3.5 text-sm leading-snug text-zinc-600 dark:text-zinc-400">
                   {devItems.map((label) => (
