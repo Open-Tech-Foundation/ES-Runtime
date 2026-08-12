@@ -34,6 +34,7 @@
 mod convert;
 mod engine;
 pub mod error;
+pub mod inspector;
 mod module;
 pub mod op;
 mod serialize;
@@ -43,6 +44,7 @@ mod value;
 
 pub use engine::{Engine, InterruptHandle, V8Engine, WasmModuleInfo};
 pub use error::{Error, Result};
+pub use inspector::{InspectorOptions, InspectorTransport};
 pub use module::{ModuleEvalState, ModuleId, ModuleRequest};
 pub use op::{AsyncOp, OpDecl, OpError, OpHandler, OpResult, TimerId};
 pub use value::Value;

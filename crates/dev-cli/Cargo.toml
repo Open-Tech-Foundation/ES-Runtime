@@ -27,7 +27,16 @@ tokio = { workspace = true, features = [
     "signal",
     "time",
     "sync",
+    # `--inspect` serves the debugger endpoint on a thread of its own.
+    "net",
+    "io-util",
 ] }
+# `--inspect`. The WebSocket half of the Chrome DevTools Protocol endpoint —
+# the same crate `runtime:ws` already uses, in its server role. Confined here for
+# the same reason as everything else in this file: `esrun` has no debugger and
+# must carry no code that could become one.
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
 # TypeScript/JSX type-stripping. Lives here and nowhere else: `esrun` runs
 # JavaScript, and what turns a `.ts` into that runs on the developer's machine.
 oxc.workspace = true
@@ -41,7 +50,20 @@ notify.workspace = true
 # the same reason `default-providers` uses it for `runtime:system` — a typed
 # `kill` without reaching for `libc`.
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = [
+    "process",
+    # `--inspect` binds its port with SO_REUSEADDR, so a `--watch` restart can
+    # take it back while the last debugger's connections are still in TIME_WAIT.
+    "net",
+] }
+
+[dev-dependencies]
+# The `--inspect` tests drive the real binary the way a debugger would: attach
+# over the WebSocket, speak CDP, assert what comes back. Nothing new in the tree
+# — the same crates the feature itself uses.
+tokio = { workspace = true, features = ["rt", "macros", "net", "time", "io-util"] }
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
 
 [lints]
 workspace = true

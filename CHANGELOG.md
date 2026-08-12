@@ -145,6 +145,39 @@ namespace) is unstable and may change between minor releases until the API freez
   The harness is injected as a **single line**, so a failing assertion still
   names the line the developer wrote rather than one thirty lines further down.
 
+- **`esdev --inspect`** (DECISIONS D59) — a debugger, over the Chrome DevTools
+  Protocol, in the binary that is not a deployment target.
+
+  ```sh
+  ES_RUNTIME_INSPECTOR=1 cargo build-dev     # the build that has one
+
+  esdev --inspect app.ts            # 127.0.0.1:9229; attach and set breakpoints
+  esdev --inspect-brk app.ts        # ...and stop before the first statement
+  esdev --inspect=9300 app.ts       # a port, an address, or both
+  ```
+
+  Chrome's `chrome://inspect`, VS Code and any other CDP client attach to it:
+  the `/json/version` and `/json/list` endpoints describe the target, sources
+  arrive with their real `file:` URLs so breakpoints set by URL land in the file
+  you are looking at, and a paused program is genuinely stopped — locals read
+  through `Debugger.evaluateOnCallFrame`, nothing else running meanwhile.
+
+  **Off unless the build asked for it, and `esrun` cannot have it at all.** An
+  inspector port is a total bypass of the capability model: attach and you own
+  the isolate, whatever `--deny-all` said. So the V8 half is compiled only when
+  `ES_RUNTIME_INSPECTOR=1` is set for the build — an environment variable read
+  by a build script rather than a Cargo feature, because Cargo unifies features
+  across everything built in one invocation and a feature declared by `esdev`
+  would also be on in the `esrun` beside it. `esrun`'s build script now *refuses
+  to build* while that variable is set, so one invocation can never produce
+  both. A build without it accepts `--inspect` and fails with the line telling
+  you how to get one, rather than listening on nothing.
+
+  The endpoint binds loopback by default and warns — rather than refuses — when
+  told to bind elsewhere, and `esdev --watch --inspect` reclaims its port across
+  a restart. **Known limitation:** `console.log` still goes to the terminal, not
+  the debugger's console pane.
+
 - **`esdev --watch`** (DECISIONS D59) — rerun the program when its source
   changes.
 

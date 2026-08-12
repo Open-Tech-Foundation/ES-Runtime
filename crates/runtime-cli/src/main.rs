@@ -397,6 +397,10 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    // esrun has no inspector and no flag that could ask for
+                    // one: a debugger port would undo every --deny-* the
+                    // deployment was started with (D59).
+                    inspector: None,
                 });
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
@@ -429,6 +433,10 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    // esrun has no inspector and no flag that could ask for
+                    // one: a debugger port would undo every --deny-* the
+                    // deployment was started with (D59).
+                    inspector: None,
                 });
             }
         }

@@ -5,6 +5,13 @@
 # Build the standalone esrun binary (optimized) → target/release/esrun
 build-cli = "build --release -p es-runtime-cli"
 # Build the esdev development binary (optimized) → target/release/esdev
+#
+# For a build with the debugger, set the switch on the command line:
+#   ES_RUNTIME_INSPECTOR=1 cargo build-dev
+# It cannot live in `[env]` here, because that would apply to `build-cli` too —
+# and an inspector port in esrun is the one thing D59 exists to prevent. esrun's
+# build script refuses to build at all while it is set, so the two can never come
+# out of one invocation.
 build-dev = "build --release -p es-runtime-dev-cli"
 # Build the whole workspace (library + CLI), optimized
 build-all = "build --release --workspace"

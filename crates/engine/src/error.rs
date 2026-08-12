@@ -38,6 +38,13 @@ pub enum Error {
     #[error("engine internal error: {0}")]
     Internal(String),
 
+    /// Something the engine can express but this build cannot do. Today there
+    /// is one: the inspector, which is compiled in only when the build was
+    /// asked for it (`ES_RUNTIME_INSPECTOR=1`, see `crate::inspector`). The
+    /// binary says so rather than accepting the flag and ignoring it.
+    #[error("{0}")]
+    Unsupported(String),
+
     /// Execution was terminated before completing — by the watchdog
     /// (`InterruptHandle::terminate`) or the near-heap-limit guard. The script
     /// is stopped cleanly, never an OOM or a hang (ARCHITECTURE.md §7, SPEC §4).
@@ -58,6 +65,7 @@ impl IntoException for Error {
             // surfaced as a generic Error for now (see D3a).
             Error::Execution { .. } => ExceptionClass::Error,
             Error::Internal(_) => ExceptionClass::Error,
+            Error::Unsupported(_) => ExceptionClass::Error,
             Error::Terminated { .. } => ExceptionClass::Error,
         }
     }

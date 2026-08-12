@@ -29,10 +29,12 @@ use es_runtime_cli_common::permissions::Permissions;
 use es_runtime_cli_common::{Config, Source};
 
 mod build;
+mod inspect;
 mod test;
 mod transform;
 mod watch;
 use build::BuildConfig;
+use inspect::InspectConfig;
 use test::TestConfig;
 use transform::TypeStripper;
 use watch::WatchConfig;
@@ -40,8 +42,11 @@ use watch::WatchConfig;
 /// What the command line asked for.
 enum Command {
     /// Run a module. `Config` is large, so it is boxed rather than making the
-    /// build variant carry its weight.
-    Run(Box<Config>),
+    /// build variant carry its weight. The debugger endpoint travels beside it
+    /// rather than in it: parsing decides *what* was asked for, and binding a
+    /// port is something `main` does once, after the whole command line has been
+    /// found to make sense.
+    Run(Box<Config>, Option<InspectConfig>),
     /// Bundle a module and its dependencies.
     Build(BuildConfig),
     /// Run a module, restarting it when its source changes.
@@ -61,6 +66,7 @@ USAGE:
     esdev <file>                Run a module file — .js, .mjs, or .ts/.tsx/.jsx
     esdev -e=<code>             Run an inline module snippet (JavaScript)
     esdev --watch <file>        Run it, and rerun it when its source changes
+    esdev --inspect <file>      Run it with a debugger attached
     esdev test [filter...]      Run the test files (`esdev test --help`)
     esdev build <entry>         Bundle an entry into one deployable ES module
                                 (`esdev build --help` for its options)
@@ -79,6 +85,25 @@ WATCH:
     minus node_modules, .git, dist, target and .cache, and only for source
     extensions. A program that exits leaves the watcher up, waiting for the
     next change.
+
+DEBUGGER:
+    --inspect[=<addr>]          Serve the Chrome DevTools Protocol, default
+                                127.0.0.1:9229. Attach with chrome://inspect,
+                                VS Code, or any CDP client
+    --inspect-brk[=<addr>]      ...and stop before the first statement, so a
+                                program that ends quickly can still be debugged
+
+    <addr> is a port (9229), an address (127.0.0.1) or both. Binding anywhere
+    but loopback is allowed and warned about: a debugger port is a way to run
+    code in this process regardless of what it was denied.
+
+    This is why there is a second binary at all. esrun has no --inspect and no
+    code that could serve one, and esdev only has it when the build asked:
+
+        ES_RUNTIME_INSPECTOR=1 cargo build --release -p es-runtime-dev-cli
+
+    A build without it accepts the flag and fails with that line, rather than
+    listening on nothing.
 
 TYPESCRIPT & JSX:
     .ts, .tsx, .mts, .cts and .jsx files are stripped to JavaScript as they
@@ -190,6 +215,7 @@ fn parse_args() -> Result<Command, String> {
     let mut options = RunOptions::default();
     let mut permissions = Permissions::default();
     let mut watching = false;
+    let mut inspect: Option<InspectConfig> = None;
     // The flag the previous argument was, so a bare word following it can be
     // diagnosed as an attempted value rather than silently becoming the script.
     let mut previous_flag: Option<String> = None;
@@ -207,6 +233,12 @@ fn parse_args() -> Result<Command, String> {
             "--watch" => {
                 reject_value(flag, value)?;
                 watching = true;
+            }
+            "--inspect" | "--inspect-brk" => {
+                inspect = Some(InspectConfig {
+                    address: inspect::parse_address(value)?,
+                    wait: flag == "--inspect-brk",
+                });
             }
             "-h" | "--help" => {
                 reject_value(flag, value)?;
@@ -227,14 +259,18 @@ fn parse_args() -> Result<Command, String> {
                 }
                 let rest: Vec<String> = args.collect();
                 reject_esdev_flags_after_source(&rest, "the -e code")?;
-                return Ok(Command::Run(Box::new(Config {
-                    source: Source::Inline(code),
-                    args: rest,
-                    capabilities: permissions.resolve()?,
-                    scopes: permissions.scopes()?,
-                    options,
-                    transform: Some(std::sync::Arc::new(TypeStripper)),
-                })));
+                return Ok(Command::Run(
+                    Box::new(Config {
+                        source: Source::Inline(code),
+                        args: rest,
+                        capabilities: permissions.resolve()?,
+                        scopes: permissions.scopes()?,
+                        options,
+                        transform: Some(std::sync::Arc::new(TypeStripper)),
+                        inspector: None,
+                    }),
+                    inspect,
+                ));
             }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{USAGE}"));
@@ -260,7 +296,11 @@ fn parse_args() -> Result<Command, String> {
                     return Ok(Command::Watch(WatchConfig {
                         // The same command line, minus the flag that put us
                         // here — so the child runs exactly the program the user
-                        // described, under the same grants.
+                        // described, under the same grants. `--inspect` travels
+                        // with it and is served by the child, which is why the
+                        // supervisor drops what it parsed: the debugger belongs
+                        // to the process being debugged, and its port is bound
+                        // and released with each run.
                         child_args: std::env::args()
                             .skip(1)
                             .filter(|a| a != "--watch")
@@ -269,14 +309,18 @@ fn parse_args() -> Result<Command, String> {
                         grace: options.shutdown_grace,
                     }));
                 }
-                return Ok(Command::Run(Box::new(Config {
-                    source: Source::File(path.to_string()),
-                    args: rest,
-                    capabilities: permissions.resolve()?,
-                    scopes: permissions.scopes()?,
-                    options,
-                    transform: Some(std::sync::Arc::new(TypeStripper)),
-                })));
+                return Ok(Command::Run(
+                    Box::new(Config {
+                        source: Source::File(path.to_string()),
+                        args: rest,
+                        capabilities: permissions.resolve()?,
+                        scopes: permissions.scopes()?,
+                        options,
+                        transform: Some(std::sync::Arc::new(TypeStripper)),
+                        inspector: None,
+                    }),
+                    inspect,
+                ));
             }
         }
     }
@@ -297,6 +341,8 @@ fn is_esdev_flag(flag: &str) -> bool {
             | "-e"
             | "--eval"
             | "--watch"
+            | "--inspect"
+            | "--inspect-brk"
             | "--deny-all"
             | "--allow-all"
             | "-A"
@@ -437,6 +483,7 @@ async fn run_tests(config: TestConfig) -> ExitCode {
             scopes: std::collections::HashMap::new(),
             options: RunOptions::default(),
             transform: Some(std::sync::Arc::new(test::TestTransform::new(&path))),
+            inspector: None,
         };
         return match es_runtime_cli_common::run("esdev", run).await {
             Ok(()) => ExitCode::SUCCESS,
@@ -488,6 +535,27 @@ async fn run_tests(config: TestConfig) -> ExitCode {
     }
 }
 
+/// Starts the debugger endpoint asked for on the command line and puts it in the
+/// run's config.
+///
+/// Bound here rather than during parsing, and before the program is loaded: a
+/// port already taken should be an error the user sees instead of the program
+/// starting and the debugger never arriving.
+fn attach_debugger(config: &mut Config, inspect: Option<&InspectConfig>) -> Result<(), String> {
+    let Some(inspect) = inspect else {
+        return Ok(());
+    };
+    let entry = match &config.source {
+        Source::File(path) => path.clone(),
+        Source::Inline(_) => "[eval]".to_string(),
+    };
+    config.inspector = Some(es_runtime_cli_common::Inspector {
+        transport: inspect::start(inspect, &entry)?,
+        wait: inspect.wait,
+    });
+    Ok(())
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     // Before anything that could log. Installing a subscriber is a
@@ -495,7 +563,12 @@ async fn main() -> ExitCode {
     // (`warn`); `RUST_LOG` opens it up, e.g. `RUST_LOG=runtime::http=debug`.
     es_runtime_common::telemetry::init_tracing();
     let result = match parse_args() {
-        Ok(Command::Run(config)) => es_runtime_cli_common::run("esdev", *config).await,
+        Ok(Command::Run(mut config, inspect)) => {
+            match attach_debugger(&mut config, inspect.as_ref()) {
+                Ok(()) => es_runtime_cli_common::run("esdev", *config).await,
+                Err(err) => Err(err),
+            }
+        }
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(config).await,
         Ok(Command::Build(config)) => match build::build(config).await {

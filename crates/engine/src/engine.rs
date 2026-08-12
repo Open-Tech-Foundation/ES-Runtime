@@ -239,6 +239,38 @@ pub trait Engine {
     /// Whether any async op is still awaiting completion.
     fn has_pending_async_ops(&self) -> bool;
 
+    /// Attaches a debugger to this isolate, speaking the Chrome DevTools
+    /// Protocol over `transport` (DECISIONS.md D59).
+    ///
+    /// Off by default and unavailable unless the build asked for it: an
+    /// inspector port is a total bypass of the capability model, so the default
+    /// answer — and the only answer a binary built without
+    /// `ES_RUNTIME_INSPECTOR=1` can give — is
+    /// [`Error::Unsupported`](crate::Error::Unsupported). See
+    /// [`crate::inspector`].
+    ///
+    /// With [`InspectorOptions::wait_for_debugger`] set, this **blocks** until a
+    /// client has attached and released the program, and arranges for it to stop
+    /// on the first statement that runs.
+    fn attach_inspector(
+        &mut self,
+        transport: std::rc::Rc<dyn crate::InspectorTransport>,
+        options: &crate::InspectorOptions,
+    ) -> Result<()> {
+        let _ = (transport, options);
+        Err(Error::Unsupported(
+            "this build has no inspector: rebuild with ES_RUNTIME_INSPECTOR=1".into(),
+        ))
+    }
+
+    /// Delivers whatever an attached debugger has sent since the last tick.
+    ///
+    /// A no-op when nothing is attached, which is every run of the production
+    /// binary. Called once per tick by the driver, so a debugger's commands are
+    /// answered between the program's own work rather than only when it happens
+    /// to stop.
+    fn poll_inspector(&mut self) {}
+
     /// Runs the V8 microtask checkpoint (drains the microtask queue, e.g.
     /// promise reactions). Microtasks are explicit, never auto-run mid-eval.
     fn run_microtasks(&mut self);
@@ -387,6 +419,12 @@ pub trait Engine {
 /// by a single thread, which is exactly the embedder's drive model
 /// (ARCHITECTURE.md §5).
 pub struct V8Engine {
+    /// The attached debugger, if this build has one at all and something asked
+    /// for it (DECISIONS.md D59). **Declared before `isolate` on purpose**: V8's
+    /// inspector and its sessions must be torn down while the isolate they
+    /// belong to is still alive, and fields drop in declaration order.
+    #[cfg(inspector)]
+    inspector: Option<crate::inspector::Inspector>,
     isolate: v8::OwnedIsolate,
     /// The persistent context evaluations run in, held across the isolate's life.
     context: v8::Global<v8::Context>,
@@ -646,6 +684,8 @@ impl V8Engine {
         };
 
         Ok(V8Engine {
+            #[cfg(inspector)]
+            inspector: None,
             isolate,
             context,
             op_state,
@@ -770,7 +810,39 @@ impl Engine for V8Engine {
     }
 
     fn set_async_waker(&mut self, waker: std::task::Waker) {
+        // The debugger's transport gets one too. Its messages arrive on another
+        // thread, and without a way to wake the loop a breakpoint set on an idle
+        // server would sit undelivered until the next request happened to arrive.
+        #[cfg(inspector)]
+        if let Some(inspector) = &self.inspector {
+            inspector.transport().set_waker(waker.clone());
+        }
         self.op_state.borrow_mut().set_async_waker(waker);
+    }
+
+    #[cfg(inspector)]
+    fn attach_inspector(
+        &mut self,
+        transport: std::rc::Rc<dyn crate::InspectorTransport>,
+        options: &crate::InspectorOptions,
+    ) -> Result<()> {
+        if self.inspector.is_some() {
+            return Err(Error::Internal("an inspector is already attached".into()));
+        }
+        let mut inspector =
+            crate::inspector::Inspector::new(&mut self.isolate, &self.context, transport, options);
+        if options.wait_for_debugger {
+            inspector.wait_for_debugger();
+        }
+        self.inspector = Some(inspector);
+        Ok(())
+    }
+
+    #[cfg(inspector)]
+    fn poll_inspector(&mut self) {
+        if let Some(inspector) = &mut self.inspector {
+            inspector.poll();
+        }
     }
 
     fn has_pending_async_ops(&self) -> bool {

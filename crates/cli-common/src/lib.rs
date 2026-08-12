@@ -23,7 +23,12 @@ pub mod permissions;
 pub mod run;
 pub mod shutdown;
 
-pub use run::{Config, Source, run};
+pub use run::{Config, Inspector, Source, run};
+
+/// The debugger transport, re-exported so a binary that implements one does not
+/// have to name the engine crate to do it (`esdev`'s `--inspect` server is the
+/// only implementation there is).
+pub use es_runtime::InspectorTransport;
 
 /// The V8 startup snapshot, baked at build time by `build.rs`.
 ///

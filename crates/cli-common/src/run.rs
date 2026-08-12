@@ -65,6 +65,27 @@ pub struct Config {
     /// directly (before a loader exists), so a transform that only wrapped the
     /// loader would silently miss the one file the user named.
     pub transform: Option<Arc<dyn SourceTransform>>,
+    /// A debugger to attach before the entry module is loaded — how `esdev`
+    /// serves `--inspect` (D59).
+    ///
+    /// `esrun` passes `None` and could not pass anything else: an inspector port
+    /// is a total bypass of the capability model, so the code that speaks the
+    /// protocol is compiled only into a build that asked for it, and the server
+    /// that carries it lives in `esdev`. What crosses this seam is a transport
+    /// and a flag — the same shape, and for the same reason, as `transform`
+    /// above.
+    pub inspector: Option<Inspector>,
+}
+
+/// A debugger session waiting for the runtime it will be attached to.
+pub struct Inspector {
+    /// The channel the Chrome DevTools Protocol is spoken over. Not `Send`
+    /// because it never leaves this thread: the isolate's thread is the one that
+    /// answers a debugger, and blocks on it while paused.
+    pub transport: std::rc::Rc<dyn es_runtime::InspectorTransport>,
+    /// Hold the program before its first statement until a client attaches and
+    /// releases it (`--inspect-brk`).
+    pub wait: bool,
 }
 
 /// Rewrites a module's source before it reaches the engine.
@@ -378,6 +399,22 @@ pub async fn run(bin: &'static str, config: Config) -> Result<(), String> {
     // narrow it (D38); the entry file has already been read by this point, so a
     // fully denied run still executes what the user named.
     runtime.set_capabilities(config.capabilities);
+
+    // Attach the debugger before the entry module is loaded: V8 announces each
+    // script to a session as it is compiled, so a debugger that arrives later
+    // sees an empty Sources pane. With `--inspect-brk` this blocks here, which
+    // is the point — the program has not run a statement yet.
+    if let Some(inspector) = config.inspector {
+        runtime
+            .attach_inspector(
+                inspector.transport,
+                &es_runtime::InspectorOptions {
+                    wait_for_debugger: inspector.wait,
+                    context_name: label.clone(),
+                },
+            )
+            .map_err(|e| e.to_string())?;
+    }
 
     // Graceful shutdown on ^C / SIGTERM. Installed before the module runs, so a
     // server that binds immediately is covered from its first request.

@@ -57,8 +57,8 @@ use crate::timer::TimerQueue;
 // types, values, capabilities, and the provider traits — all reachable here.
 pub use es_runtime_common::{Capability, CapabilitySet, UncaughtError};
 pub use es_runtime_engine::{
-    AsyncOp, Engine, InterruptHandle, ModuleEvalState, ModuleId, OpDecl, OpError, OpResult,
-    V8Engine, Value,
+    AsyncOp, Engine, InspectorOptions, InspectorTransport, InterruptHandle, ModuleEvalState,
+    ModuleId, OpDecl, OpError, OpResult, V8Engine, Value,
 };
 pub use es_runtime_providers::{
     BroadcastHub, ChildStatus, ChildStream, Clock, CommandProvider, CommandSpec, Console,
@@ -679,6 +679,27 @@ impl Runtime {
         self.capabilities.set(capabilities);
     }
 
+    /// Attaches a debugger to this runtime, speaking the Chrome DevTools
+    /// Protocol over `transport` (DECISIONS.md D59).
+    ///
+    /// Forwarded to [`Engine::attach_inspector`], which is where the whole story
+    /// is: an inspector is a bypass of the capability model, so it exists only in
+    /// a binary built with `ES_RUNTIME_INSPECTOR=1` and otherwise reports that it
+    /// does not. With [`InspectorOptions::wait_for_debugger`] set this blocks
+    /// until a client attaches and releases the program.
+    ///
+    /// Call it before loading the entry module: V8 announces a script to the
+    /// debugger as it is compiled, so a session opened afterwards sees none of
+    /// the program's own sources.
+    pub fn attach_inspector(
+        &mut self,
+        transport: std::rc::Rc<dyn InspectorTransport>,
+        options: &InspectorOptions,
+    ) -> Result<()> {
+        self.engine.attach_inspector(transport, options)?;
+        Ok(())
+    }
+
     /// Returns a thread-safe handle for interrupting this runtime's execution —
     /// e.g. for a watchdog thread that bounds execution time (SPEC §4). Calling
     /// [`InterruptHandle::terminate`] stops the running script; the in-flight
@@ -1072,6 +1093,11 @@ impl Runtime {
     /// time; the runtime holds no clock of its own.
     pub fn tick(&mut self, now_ms: u64) -> TickStatus {
         self.now_ms = now_ms;
+        // 0. Anything an attached debugger asked for since the last tick — set a
+        // breakpoint, read a source, resume. Before the guest's own work, so a
+        // breakpoint set a moment ago is in place for the code about to run. A
+        // no-op unless a debugger is attached, which is every production run.
+        self.engine.poll_inspector();
         // Schedule timers created since the last drain (e.g. during `eval`).
         self.drain_new_timers(now_ms);
 
