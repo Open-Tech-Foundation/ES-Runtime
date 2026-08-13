@@ -47,13 +47,17 @@ providers, same capability enforcement — so what changes here is everything
   | Both | **Content-hashed** into `<outdir>/assets`, so a deployment can cache the whole directory immutably |
   | Everything else in the file | **Untouched, byte for byte** — the title, the meta tags, the Open Graph block, the inline analytics snippet |
 
-  That last row is the reason for the dependency. `lol-html` rewrites a stream
-  in place, so bytes no handler touched come out exactly as the author wrote
-  them; parsing to a DOM and re-serialising would reformat quotes, entities and
-  self-closing tags in a file the developer owns. It brings four MPL-2.0 crates
-  (Servo's selector engine) with it — allowed **by name** in `deny.toml`, so a
-  new MPL dependency still fails the gate, and confined to `esdev`: not in
-  `esrun`, not in any library crate. See `NOTICE` and `docs/LICENSING.md`.
+  That last row is literally true, and it is why the parser is a tokenizer that
+  reports **byte spans** (`html5gum`, MIT). The rewrite is a splice into the
+  original text, so the doctype's casing, the author's single quotes, their
+  `&mdash;` and their stray whitespace inside a tag are never read, let alone
+  rewritten — only the attributes being changed move. A tree-based parser would
+  print the whole document back and normalise all of it.
+
+  It is also a real tokenizer rather than a search for `src=`, which matters
+  more than it sounds: a URL inside a `<script>` string, a CSS comment, an HTML
+  comment or a `<textarea>` is **text**, and a build that treated one as a
+  reference would fail on a page that is perfectly correct.
 
   **A relative path is an input; anything else is a URL.** `/assets/vendor.js`,
   `https://…`, `//cdn…` and `data:` are left exactly as written — one line of

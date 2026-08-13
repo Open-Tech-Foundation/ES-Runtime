@@ -20,10 +20,13 @@
 //! <link rel="stylesheet" href="/assets/styles-9dfa03c1.css" />
 //! ```
 //!
-//! Everything else in the file is untouched, and that is the point of it: the
-//! title, the meta tags, the Open Graph block, the inline analytics snippet and
-//! the favicon are the author's, and a tool that generated the document instead
-//! would own all of them.
+//! Everything else in the file is untouched — *byte for byte*, because that is
+//! literally what happens: the tokenizer reports the byte span of each
+//! attribute it found, and what is written out is the original text with those
+//! spans spliced. Nothing is re-serialised, so the title, the meta tags, the
+//! Open Graph block, the inline analytics snippet, the author's choice of
+//! quoting and their trailing whitespace all survive. A tool that parsed this to
+//! a tree and printed it back would own every one of those.
 //!
 //! # A relative path is an input; anything else is a URL
 //!
@@ -43,12 +46,11 @@
 //! because there is no CSS pipeline here yet, and pretending otherwise would
 //! produce a file that silently lost its `@import`s.
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::ops::Range;
 use std::path::Path;
 
-use lol_html::html_content::Element;
-use lol_html::{RewriteStrSettings, element, rewrite_str};
+use html5gum::emitters::default::DefaultEmitter;
+use html5gum::{Token, Tokenizer};
 
 use crate::config::Target;
 
@@ -72,11 +74,16 @@ enum Kind {
 
 /// One reference found in the document.
 struct Reference {
-    /// The attribute value exactly as written — the key the rewrite pass looks
-    /// itself up by, so a document that names the same file two ways gets both
-    /// rewritten.
+    /// The attribute value, entity references already decoded — so
+    /// `href="./a&amp;b.css"` names the file `a&b.css`, which is the one on
+    /// disk.
     url: String,
     kind: Kind,
+    /// The attribute this came from, to write back: `src` or `href`.
+    attribute: &'static str,
+    /// Where the whole attribute sits in the source, so the rewrite is a splice
+    /// rather than a re-serialisation.
+    span: Range<usize>,
 }
 
 /// Whether an attribute value names a file in this project.
@@ -99,69 +106,106 @@ fn is_local(url: &str) -> bool {
     })
 }
 
-/// Reads an element's reference, if it has one worth following.
-fn reference(element: &Element<'_, '_>) -> Option<Reference> {
-    let (attribute, kind) = match element.tag_name().as_str() {
-        "script" => (
-            "src",
-            // The `type` is what decides whether this is a graph or a file.
-            // Anything but `module` — a classic script, an import map, a JSON
-            // block — is copied as it stands.
-            match element.get_attribute("type").as_deref() {
-                Some("module") => Kind::Module,
-                _ => Kind::Asset,
-            },
-        ),
-        "link" => ("href", Kind::Asset),
-        "img" | "source" | "video" | "audio" => ("src", Kind::Asset),
-        _ => return None,
-    };
-    let url = element.get_attribute(attribute)?;
-    is_local(&url).then_some(Reference { url, kind })
-}
-
-/// The selector every handler is registered under.
+/// The attribute a tag carries a reference in, and what that reference is.
 ///
-/// One list, used by both passes, so what is *found* and what is *rewritten*
-/// cannot drift apart.
-const SELECTOR: &str = "script[src], link[href], img[src], source[src], video[src], audio[src]";
-
-/// The attribute a tag carries its reference in.
-fn attribute_of(tag: &str) -> &'static str {
-    if tag == "link" { "href" } else { "src" }
+/// `<script type="module">` is the only entry: a classic script has no imports
+/// to follow, so it is a file like any other.
+fn interesting(tag: &str, is_module: bool) -> Option<(&'static str, Kind)> {
+    match tag {
+        "script" => Some(("src", if is_module { Kind::Module } else { Kind::Asset })),
+        "link" => Some(("href", Kind::Asset)),
+        "img" | "source" | "video" | "audio" => Some(("src", Kind::Asset)),
+        _ => None,
+    }
 }
 
-/// Everything `html` references that this build is responsible for.
-fn discover(html: &str) -> Result<Vec<Reference>, String> {
-    let found = RefCell::new(Vec::new());
-    rewrite_str(
-        html,
-        RewriteStrSettings::new().append_element_content_handler(element!(SELECTOR, |element| {
-            if let Some(reference) = reference(element) {
-                found.borrow_mut().push(reference);
-            }
-            Ok(())
-        })),
-    )
-    .map_err(|e| format!("cannot parse the HTML: {e}"))?;
-    Ok(found.into_inner())
+/// Everything `html` references that this build is responsible for, with where
+/// each reference sits in the text.
+///
+/// **The tokenizer switches states for raw-text elements**, which is what keeps
+/// this from finding references that are not references: a URL inside a
+/// `<script>` string, inside a CSS comment in a `<style>`, or inside a
+/// `<textarea>` is text, and a scan that treated it as markup would try to build
+/// a file the page never asked for. Comments are skipped for the same reason —
+/// commented-out markup is not markup.
+///
+/// Parse errors are ignored rather than fatal. They are the spec's own
+/// recoverable ones (an unescaped `&`, a stray `<`), every browser renders such
+/// a page, and a build tool that refused it would be stricter than the thing the
+/// page is written for.
+fn discover(html: &str) -> Vec<Reference> {
+    let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
+    emitter.naively_switch_states(true);
+    let mut found = Vec::new();
+
+    for token in Tokenizer::new_with_emitter(html, emitter).flatten() {
+        let Token::StartTag(tag) = token else {
+            continue;
+        };
+        let name = String::from_utf8_lossy(&tag.name).into_owned();
+        let is_module = tag
+            .attributes
+            .get(b"type".as_slice())
+            .is_some_and(|value| value.value.as_slice() == b"module");
+        let Some((attribute, kind)) = interesting(&name, is_module) else {
+            continue;
+        };
+        let Some(value) = tag.attributes.get(attribute.as_bytes()) else {
+            continue;
+        };
+        let url = String::from_utf8_lossy(&value.value).into_owned();
+        if !is_local(&url) {
+            continue;
+        }
+        found.push(Reference {
+            url,
+            kind,
+            attribute,
+            // An unquoted value's span runs to whatever ended it — the `>` or
+            // the space before the next attribute — because that is the byte
+            // the tokenizer learned it was over on. Trimmed here so the splice
+            // replaces the attribute and not the character after it.
+            span: value.span.start..trim_terminator(html, value.span.start..value.span.end),
+        });
+    }
+    found
 }
 
-/// Writes `html` back with every reference in `rewritten` replaced.
-fn rewrite(html: &str, rewritten: &BTreeMap<String, String>) -> Result<String, String> {
-    rewrite_str(
-        html,
-        RewriteStrSettings::new().append_element_content_handler(element!(SELECTOR, |element| {
-            let attribute = attribute_of(element.tag_name().as_str());
-            if let Some(url) = element.get_attribute(attribute)
-                && let Some(replacement) = rewritten.get(&url)
-            {
-                element.set_attribute(attribute, replacement)?;
-            }
-            Ok(())
-        })),
-    )
-    .map_err(|e| format!("cannot rewrite the HTML: {e}"))
+/// The end of an attribute, given a span that may run one character past it.
+fn trim_terminator(html: &str, span: Range<usize>) -> usize {
+    let text = &html[span.clone()];
+    span.start
+        + text
+            .trim_end_matches(['>', '/', ' ', '\t', '\n', '\r'])
+            .len()
+}
+
+/// Writes `html` back with each reference's attribute replaced.
+///
+/// Applied last-first so that every span still describes the text it was found
+/// in: a replacement changes the offsets of everything after it and nothing
+/// before it.
+fn splice(html: &str, replacements: &[(&Reference, String)]) -> String {
+    let mut ordered: Vec<&(&Reference, String)> = replacements.iter().collect();
+    ordered.sort_by_key(|(reference, _)| std::cmp::Reverse(reference.span.start));
+
+    let mut document = html.to_string();
+    for (reference, url) in ordered {
+        document.replace_range(
+            reference.span.clone(),
+            &format!("{}=\"{}\"", reference.attribute, escape(url)),
+        );
+    }
+    document
+}
+
+/// An attribute value, safe to write between double quotes.
+///
+/// The URLs this writes are built from a filename and a hash, so in practice
+/// there is nothing to escape — but "in practice" is not a reason to emit a
+/// document that a stylesheet called `a"b.css` would break.
+fn escape(url: &str) -> String {
+    url.replace('&', "&amp;").replace('"', "&quot;")
 }
 
 /// A short content hash, for cache-busting a filename.
@@ -215,9 +259,12 @@ pub async fn build(
         .parent()
         .map_or_else(|| root.to_path_buf(), Path::to_path_buf);
 
-    let references = discover(&html)?;
+    let references = discover(&html);
     let assets = out_dir.join(ASSET_DIR);
-    let mut rewritten: BTreeMap<String, String> = BTreeMap::new();
+    // Keyed by where the reference sits, so a document naming the same file
+    // twice gets both occurrences rewritten and neither is looked up by a URL
+    // string that two tags might spell differently.
+    let mut rewritten: Vec<(&Reference, String)> = Vec::new();
     let mut modules: Vec<(String, String)> = Vec::new();
 
     for reference in &references {
@@ -265,7 +312,7 @@ pub async fn build(
                     .map_err(|e| format!("cannot create {}: {e}", assets.display()))?;
                 std::fs::write(assets.join(&name), &bytes)
                     .map_err(|e| format!("cannot write {name}: {e}"))?;
-                rewritten.insert(reference.url.clone(), format!("/{ASSET_DIR}/{name}"));
+                rewritten.push((reference, format!("/{ASSET_DIR}/{name}")));
             }
         }
     }
@@ -279,21 +326,21 @@ pub async fn build(
         .await?
     };
     for (name, filename) in &bundled {
-        // Back to the URL that named it. The reference is found again by its
+        // Back to the tag that named it. The reference is found again by its
         // entry name rather than kept alongside, because the bundler is what
         // decides the output filename and it only speaks in entry names.
-        if let Some(reference) = references.iter().find(|reference| {
+        for reference in references.iter().filter(|reference| {
             reference.kind == Kind::Module
                 && Path::new(&reference.url)
                     .file_stem()
                     .and_then(|s| s.to_str())
-                    == Some(name)
+                    == Some(name.as_str())
         }) {
-            rewritten.insert(reference.url.clone(), format!("/{ASSET_DIR}/{filename}"));
+            rewritten.push((reference, format!("/{ASSET_DIR}/{filename}")));
         }
     }
 
-    let document = rewrite(&html, &rewritten)?;
+    let document = splice(&html, &rewritten);
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     let name = entry
@@ -346,8 +393,7 @@ mod tests {
                  <script src="https://cdn.example.com/a.js"></script>
                  <script>console.log("inline")</script>
                </head><body><img src="./logo.png"></body></html>"#,
-        )
-        .expect("parsed");
+        );
 
         let urls: Vec<&str> = found.iter().map(|r| r.url.as_str()).collect();
         assert_eq!(
@@ -364,29 +410,89 @@ mod tests {
         assert_eq!(found[2].kind, Kind::Asset);
     }
 
-    /// Everything that is not a reference is the author's, and survives byte
-    /// for byte — the title, the meta tags, the inline script.
+    /// The reason this is a real tokenizer and not a search for `src=`. Each of
+    /// these looks exactly like a reference and is text, and treating one as
+    /// markup would fail the build on a page that is perfectly correct.
     #[test]
-    fn rewriting_touches_only_the_references() {
-        let html = r#"<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<title>My App</title>
-<script>window.__EARLY__ = 1;</script>
-<link rel="stylesheet" href="./styles.css">
-</head><body><div id="root"></div>
-<script type="module" src="./src/main.tsx"></script>
-</body></html>"#;
-        let mut rewritten = BTreeMap::new();
-        rewritten.insert("./styles.css".to_string(), "/assets/styles-abc.css".into());
-        rewritten.insert("./src/main.tsx".to_string(), "/assets/main-def.js".into());
+    fn a_url_that_is_text_rather_than_markup_is_not_a_reference() {
+        let found = discover(
+            r#"<script>var s = '<img src="./inside-a-string.png">';</script>
+               <style>/* <link href="./inside-css.css"> */</style>
+               <!-- <script src="./commented-out.js"></script> -->
+               <textarea><img src="./inside-textarea.png"></textarea>
+               <img src="./real.png" alt="a > b">"#,
+        );
+        let urls: Vec<&str> = found.iter().map(|r| r.url.as_str()).collect();
+        assert_eq!(urls, ["./real.png"], "{urls:?}");
+    }
 
-        let out = rewrite(html, &rewritten).expect("rewritten");
-        assert!(out.contains(r#"href="/assets/styles-abc.css""#), "{out}");
-        assert!(out.contains(r#"src="/assets/main-def.js""#), "{out}");
-        assert!(out.contains("<title>My App</title>"), "{out}");
-        assert!(out.contains("window.__EARLY__ = 1;"), "{out}");
-        assert!(out.contains(r#"<html lang="en">"#), "{out}");
+    /// Everything that is not a reference is the author's, and survives byte
+    /// for byte — because the rewrite is a splice, not a re-serialisation.
+    #[test]
+    fn rewriting_touches_only_the_attributes_it_replaces() {
+        let html = r#"<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset='utf-8'>
+<title>My App &mdash; home</title>
+<script>window.__EARLY__ = 1 < 2;</script>
+<link rel=stylesheet href=./styles.css>
+</head><body><div id="root"   ></div>
+<script type="module" src='./src/main.tsx'></script>
+</body></html>"#;
+        let found = discover(html);
+        let replacements: Vec<(&Reference, String)> = found
+            .iter()
+            .map(|reference| {
+                let url = if reference.kind == Kind::Module {
+                    "/assets/main-def.js".to_string()
+                } else {
+                    "/assets/styles-abc.css".to_string()
+                };
+                (reference, url)
+            })
+            .collect();
+
+        let out = splice(html, &replacements);
+        assert!(
+            out.contains(r#"<link rel=stylesheet href="/assets/styles-abc.css">"#),
+            "{out}"
+        );
+        assert!(out.contains(r#"src="/assets/main-def.js">"#), "{out}");
+
+        // The author's document, unchanged: their doctype casing, their single
+        // quotes, their entity, their stray whitespace.
+        assert!(out.contains("<!DOCTYPE html>"), "{out}");
+        assert!(out.contains("<meta charset='utf-8'>"), "{out}");
+        assert!(out.contains("<title>My App &mdash; home</title>"), "{out}");
+        assert!(out.contains("window.__EARLY__ = 1 < 2;"), "{out}");
+        assert!(out.contains(r#"<div id="root"   ></div>"#), "{out}");
+    }
+
+    /// An unquoted value's span runs to whatever ended it, so the splice would
+    /// otherwise eat the `>` and weld two tags together.
+    #[test]
+    fn an_unquoted_attribute_keeps_what_followed_it() {
+        for (html, expected) in [
+            (
+                r#"<link href=./a.css rel=stylesheet>"#,
+                r#"<link href="/x.css" rel=stylesheet>"#,
+            ),
+            (r#"<link href=./a.css>"#, r#"<link href="/x.css">"#),
+            (r#"<img src=./a.css/>"#, r#"<img src="/x.css"/>"#),
+        ] {
+            let found = discover(html);
+            assert_eq!(found.len(), 1, "{html}");
+            let out = splice(html, &[(&found[0], "/x.css".to_string())]);
+            assert_eq!(out, expected);
+        }
+    }
+
+    /// The URLs this writes come from a filename and a hash, so there is
+    /// normally nothing to escape — which is not a reason to emit a document a
+    /// file called `a"b.css` would break.
+    #[test]
+    fn a_replacement_is_safe_between_quotes() {
+        assert_eq!(escape(r#"/assets/a"b&c.css"#), "/assets/a&quot;b&amp;c.css");
     }
 
     #[test]

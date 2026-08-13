@@ -14,12 +14,3 @@ statically linked via the `v8` crate.
 Rust dependencies are distributed under OSI-approved permissive licenses
 (Apache-2.0, MIT, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0); the set is enforced
 by cargo-deny (see deny.toml). See docs/LICENSING.md for details.
-
-The `esdev` development binary additionally links four crates licensed under the
-Mozilla Public License 2.0, used unmodified and reached through `lol-html`:
-`cssparser`, `cssparser-macros`, `selectors` and `dtoa-short`. Their source is
-available at https://crates.io under those names, and a copy of the MPL-2.0 is
-at https://mozilla.org/MPL/2.0/. MPL-2.0 reciprocity applies to those files
-alone (MPL-2.0 §3.3); ES-Runtime's own code remains under Apache-2.0. None of
-these crates is part of the `esrun` production binary or of any library crate an
-embedder links.

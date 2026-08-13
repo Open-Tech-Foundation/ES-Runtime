@@ -45,42 +45,7 @@ allow = [
     # (webpki-root-certs), pulled in transitively via reqwest's TLS (D20).
     "CDLA-Permissive-2.0",
 ]
-# Per-crate exceptions. Named one by one rather than added to `allow` above, so
-# a *new* dependency under one of these licenses still fails the gate: what is
-# permitted here is these four crates, not this license.
-#
-# **MPL-2.0 — Servo's CSS selector machinery, reached through `lol-html`**
-# (DECISIONS D61), which is how `esdev` reads an `index.html` for the script and
-# link tags that name a build's inputs and writes it back pointing at what was
-# built. Three things make this a deliberate yes rather than a slippery one:
-#
-#  * MPL-2.0 is **file-level** copyleft. Its reciprocity covers modifications to
-#    the covered files themselves; §3.3 expressly permits combining them into a
-#    Larger Work under another license. These crates are used unmodified, so the
-#    obligation is attribution and pointing at their source — recorded in NOTICE
-#    — and nothing propagates to ES-Runtime's own Apache-2.0 code.
-#  * They are in **`dev-cli` only**. Neither the library crates, nor `esrun`,
-#    nor anything an embedder links carries them; the graph is checked by the
-#    crate layout, not by intention (D11).
-#  * There is no permissive substitute that keeps the property that matters: a
-#    rewriter that leaves every byte it did not touch exactly as the author
-#    wrote it. Parsing to a DOM and re-serialising would reformat quotes,
-#    entities and self-closing tags in a file the developer owns.
-[[licenses.exceptions]]
-name = "cssparser"
-allow = ["MPL-2.0"]
-
-[[licenses.exceptions]]
-name = "cssparser-macros"
-allow = ["MPL-2.0"]
-
-[[licenses.exceptions]]
-name = "selectors"
-allow = ["MPL-2.0"]
-
-[[licenses.exceptions]]
-name = "dtoa-short"
-allow = ["MPL-2.0"]
+exceptions = []
 
 [bans]
 # Surface duplicate versions (bloat / audit-surface) without failing the build
