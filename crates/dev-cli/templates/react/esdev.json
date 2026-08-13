@@ -1,0 +1,28 @@
+{
+  "targets": {
+    "server": {
+      "entry": "src/server.tsx",
+      "out": "dist/server.js"
+    },
+    "web": {
+      "entry": "index.html",
+      "outdir": "dist"
+    },
+    "prerender": {
+      "entry": "src/prerender.tsx",
+      "out": "dist/prerender.js",
+      "then": "run"
+    }
+  },
+  "start": {
+    "run": "server",
+    "watch": ["server", "web"]
+  },
+  "permissions": {
+    "deny": ["all"],
+    "allow": {
+      "read": ["./dist"],
+      "listen": ["8080"]
+    }
+  }
+}

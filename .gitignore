@@ -43,3 +43,13 @@ packages/*/node_modules/
 
 # Staged driver build for the postgres benchmark.
 bench/db/pg/.driver/
+
+# The templates `esdev create` scaffolds are real, runnable projects, developed
+# and tested in place (crates/dev-cli/templates). What running them leaves
+# behind is not part of the template: a scaffolded project resolves and builds
+# its own.
+crates/dev-cli/templates/*/dist/
+crates/dev-cli/templates/*/bun.lock
+crates/dev-cli/templates/*/package-lock.json
+crates/dev-cli/templates/*/yarn.lock
+crates/dev-cli/templates/*/pnpm-lock.yaml

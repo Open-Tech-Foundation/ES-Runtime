@@ -1,0 +1,15 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esdev start",
+    "build": "esdev build",
+    "start": "esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js",
+    "test": "esdev test"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

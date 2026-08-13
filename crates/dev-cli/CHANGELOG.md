@@ -18,6 +18,41 @@ providers, same capability enforcement — so what changes here is everything
 
 ### Added
 
+- **A React template** (DECISIONS D63) — server-rendered, hydrated, and
+  prerenderable to static HTML, from one project and one build.
+
+  ```sh
+  esdev build       # → dist/
+  ```
+
+  | Deploy | Run |
+  | --- | --- |
+  | `dist/` | `esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js` |
+  | `dist/static/` | any static host |
+  | `dist/index.html` + `dist/assets/` | any static host, with a fallback to `index.html` |
+
+  **One build produces all three, and one client bundle serves them**, because
+  the browser entry hydrates what it finds and renders from scratch when it
+  finds an empty root. The prerendered pages go to `dist/static/` rather than
+  over `dist/index.html`, which is the *template* the server splices into — a
+  rendered page is not a template.
+
+  What makes it one project rather than three is that the render is one
+  function: `src/render.tsx` streams a document, and the server and the
+  prerender step both call it. A page cannot come out one way live and another
+  way static.
+
+  It is deliberately short of a framework. Navigation is `<a href>`; the route
+  table is three fields (path, component, loader) and no dependency; the loader
+  runs on the server and its result reaches the browser in a `<script>` that
+  escapes `<`, so a string in your data cannot close the tag it is inside.
+
+  Two constraints it works within rather than around, both `esdev`'s and both
+  documented in its README: there is **no CSS pipeline**, so `styles.css` is
+  linked from `index.html` and copied by the build; and **component tests
+  cannot run**, because `esdev test` runs each file unbundled and React ships
+  CommonJS — the one test it ships covers a module that imports nothing.
+
 - **`esdev start`** (DECISIONS D62) — the dev loop: build, run, rebuild, reload.
 
   ```sh
