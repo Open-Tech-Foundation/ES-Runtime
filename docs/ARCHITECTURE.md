@@ -1,8 +1,8 @@
 # ARCHITECTURE
 
-Embeddable JavaScript runtime built on V8, exposing the **WinterTC Minimum Common Web API**, with **all I/O injectable**. Written in Rust, from scratch. This document describes *how* the system is built; see `SPEC.md` for *what* it implements and `DECISIONS.md` for *why*.
+A secure, standards-based JavaScript runtime for the server, built on V8 and exposing the **WinterTC Minimum Common Web API**, with **all I/O behind provider traits**. Written in Rust, from scratch. This document describes *how* the system is built; see `SPEC.md` for *what* it implements and `DECISIONS.md` for *why*.
 
-This is **Layer A**. A future actor-model VM (**Layer B**, separate repo) will embed this runtime by supplying its scheduler as the I/O provider. Every boundary here is designed for that future embedding, but no VM/process/scheduler/supervisor logic exists in this repo.
+**Scope: the runtime, and nothing above it.** The actor-model VM this repo once described as a second layer is a separate project with different goals and is not built here (DECISIONS D66). No VM, process model, scheduler or supervisor logic exists in this repo, and none is planned for it.
 
 ---
 
@@ -76,13 +76,13 @@ The runtime exposes a tick/poll API; the embedder decides when to advance it. On
 3. a **microtask checkpoint**,
 4. **unhandled-rejection** processing.
 
-The API reports whether work remains so the embedder can park when idle. `default-providers` drives ticking on tokio for standalone use. **`runtime` never spawns a loop** — this is the exact seam Layer B replaces with its scheduler.
+The API reports whether work remains so the caller can park when idle. `default-providers` drives ticking on tokio, which is what the binaries use. **`runtime` never spawns a loop** — owning no thread is what keeps the loop testable and the ordering above deterministic.
 
 ---
 
 ## 6. I/O providers (the integration seam)
 
-Traits in `providers/`; concrete impls only in `default-providers/` (or, later, Layer B).
+Traits in `providers/`; concrete impls only in `default-providers/`.
 
 | Provider | Backs |
 |---|---|
@@ -138,8 +138,6 @@ JS: fetch(url)
        └▶ promise resolved at microtask checkpoint → JS Response
 ```
 
-Layer B later replaces the `NetTransport` impl with its scheduler-routed transport — `runtime` is unchanged.
-
 ## 11. Data flow (ES module graph)
 
 Because V8 resolves a graph synchronously, the whole graph is loaded *before* instantiation:
@@ -155,7 +153,5 @@ runtime.load_module_source(entry, src, loader)
   └▶ engine.evaluate_module(entry)                      (returns a promise; top-level await)
        └▶ driven loop ticks until module_eval_state() settles (Completed / Failed)
 ```
-
-Layer B can supply its own `ModuleLoader` (e.g. scheduler-routed or content-addressed) — `runtime` and `engine` are unchanged.
 
 **Dynamic `import()`** runs the same loader, but *during* evaluation: V8's host-import callback records the request and hands back a promise; the runtime's `process_dynamic_imports()` (driven each loop iteration, since loading is async) resolves + loads + instantiates the graph — deduped against the realm module map, so it shares instances with static imports — then settles the promise with the module namespace once the module's own evaluation (incl. top-level await) completes.

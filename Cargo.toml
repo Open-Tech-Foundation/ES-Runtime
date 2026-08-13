@@ -1,4 +1,4 @@
-# Virtual workspace root for ES-Runtime (Layer A).
+# Virtual workspace root for ES-Runtime.
 #
 # Crate layout and dependency direction are fixed by ARCHITECTURE.md §2 / DECISIONS.md D11:
 #

@@ -1,7 +1,7 @@
 //! Startup-snapshot build/load scaffolding (DECISIONS.md D8, ARCHITECTURE.md §9).
 //!
 //! Baking the pure-JS prelude into a V8 startup snapshot makes context creation
-//! cheap, which directly serves Layer B's density goals. Phase 1 stands up the
+//! cheap, which is what keeps startup in single-digit milliseconds. Phase 1 stands up the
 //! mechanism end-to-end — build a blob (optionally running prelude source into
 //! its default context) and restore a [`V8Engine`](crate::V8Engine) from it via
 //! [`V8Engine::with_snapshot`](crate::V8Engine::with_snapshot). The actual

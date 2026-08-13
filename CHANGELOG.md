@@ -8,6 +8,33 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **The project's goal is narrowed to a secure server runtime, and the embedding
+  API is no longer offered** (DECISIONS D66). This repo opened as "Layer A", an
+  embeddable runtime built so a future actor-model VM ("Layer B") could embed
+  it. The binary became the product instead — an HTTP/2 and WebSocket server, a
+  database module, a build system, a scaffolder, a deny-by-default deploy line —
+  while the embedding API never shipped and nobody asked for it.
+
+  **Nothing is withdrawn.** No crate here was ever published to crates.io, so
+  there is no consumer to break; what changes is what the documentation claims
+  is on offer. The actor-model VM is a separate project with different goals,
+  and the non-goal it implies — no process model, scheduler, preemption,
+  mailboxes or supervisors — is unchanged.
+
+  **The architecture is unchanged.** The provider seam, the driven loop that
+  owns no thread, the engine abstraction that names no V8 type and the
+  capability model all stay: they were justified by testability, determinism and
+  a security boundary in Rust rather than in JavaScript, and those hold
+  regardless.
+
+  `/docs/embed` and the site's "Embeddable Engine" call-to-action are gone, and
+  "Layer A" / "Layer B" is removed from `README.md`, `SECURITY.md`,
+  `ARCHITECTURE.md`, `SPEC.md`, `SECURITY-REVIEW.md`, `Cargo.toml` and five
+  crate rustdocs. Locked `DECISIONS.md` entries keep their original wording —
+  an ADR that edits its own history is not a record.
+
 ### Fixed
 
 - **The install one-liner was broken and 404ing.** `install.sh` and

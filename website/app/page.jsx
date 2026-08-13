@@ -47,8 +47,8 @@ const features = [
     body: `The engine behind Chrome and Node.js, embedded from Rust. A baked startup snapshot opens a full realm in ${startupPhrase}.`,
   },
   {
-    title: "Embeddable & capability-gated",
-    body: "Deny-by-default in both forms: the binary grants what the command line names, the library what the host grants. The library's event loop has no owned thread — tick it from your own.",
+    title: "Capability-gated",
+    body: "Deny-by-default: a run reaches what the command line that started it named, and nothing else. Every host operation is gated on an explicit capability, checked in Rust rather than in JavaScript.",
   },
 ];
 
@@ -91,8 +91,8 @@ export default function HomePage() {
               <span className="text-brand-600 dark:text-brand-400"> server runtime.</span>
             </h1>
             <p className="mt-6 max-w-xl text-lg leading-relaxed text-zinc-600 dark:text-zinc-400">
-              V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable,
-              capability-secured.
+              V8-based ECMAScript runtime for the server. WinterTC-compliant,
+              deny-by-default, and everything a service needs in one binary.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-3">
               <a
@@ -301,30 +301,30 @@ export default function HomePage() {
           </h2>
           <div className="mt-12 grid gap-10 sm:grid-cols-2 text-left">
             <div className="rounded-2xl border border-zinc-200 bg-white p-8 dark:border-zinc-800 dark:bg-zinc-900">
-              <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Standard Server Runtime</h3>
+              <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Start building</h3>
               <p className="mt-3 text-zinc-600 dark:text-zinc-400">
-                A standard-based, full-capability, fast and optimal runtime for general workloads.
+                Install both binaries with one command, and run your first module. Standards-based, fast, ESM-only.
               </p>
               <div className="mt-6">
                 <a
                   href="/docs"
                   className="inline-flex items-center rounded-lg bg-zinc-900 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
                 >
-                  Read ESRun Docs
+                  Read the docs
                 </a>
               </div>
             </div>
             <div className="rounded-2xl border border-zinc-200 bg-white p-8 dark:border-zinc-800 dark:bg-zinc-900">
-              <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Embeddable Engine</h3>
+              <h3 className="text-xl font-bold text-zinc-900 dark:text-zinc-100">Ship it locked down</h3>
               <p className="mt-3 text-zinc-600 dark:text-zinc-400">
-                Embedded for ultimate control & untrusted code execution. Inject standard APIs or create your own custom capabilities from Rust.
+                Nothing is granted unless the command line says so. Build the deploy line that states exactly what your service may touch.
               </p>
               <div className="mt-6">
                 <a
-                  href="/docs/embed"
+                  href="/docs/guides/securing-runtime"
                   className="inline-flex items-center rounded-lg border border-zinc-300 bg-transparent px-5 py-3 text-sm font-semibold text-zinc-900 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-100 dark:hover:bg-zinc-800"
                 >
-                  Embeddable Guide
+                  Securing a deployment
                 </a>
               </div>
             </div>

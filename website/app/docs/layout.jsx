@@ -105,7 +105,6 @@ const NAV = [
   {
     title: "Runtime",
     items: [
-      { title: "Embedding (preview)", path: "/docs/embed" },
       { title: "Module system", path: "/docs/modules" },
       { title: "Security model", path: "/docs/security" },
       { title: "Error diagnostics", path: "/docs/errors" },

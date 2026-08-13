@@ -4,7 +4,7 @@
 //! The runtime owns no I/O and carries no ambient authority: time, entropy,
 //! timers, and offloaded work all arrive through the traits defined here. This
 //! crate holds **only the trait definitions** — concrete implementations live in
-//! `default-providers` (tokio-backed, for standalone use) or, later, in Layer B.
+//! `default-providers` (tokio-backed), which is what the binaries wire up.
 //!
 //! Because clock and entropy are providers, a run is **fully reproducible** under
 //! a deterministic provider set (DECISIONS.md D5): the same inputs and the same

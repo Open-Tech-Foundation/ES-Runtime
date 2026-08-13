@@ -1,7 +1,7 @@
 # Security review (internal)
 
 A consolidated threat model, attack-surface enumeration, and residual-risk
-register for ES-Runtime (Layer A). This is an **internal** review by the
+register for ES-Runtime. This is an **internal** review by the
 implementers; it is **not** a substitute for an external audit (which is an
 outstanding pre-`1.0` item — see §6). The user-facing posture and reporting
 channel live in the top-level [`SECURITY.md`](../SECURITY.md).
@@ -104,7 +104,7 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
 3. **SES-style primordial hardening deferred.** A guest can pollute `Object`/
    `Array.prototype` and break the *prelude's own* JS behaviour for itself; it
    **cannot** escalate privilege past the Rust boundary. Full primordial
-   freezing is an embedder/Layer-B policy, not baked into Layer A.
+   freezing is a policy with real guest-compatibility cost and no privilege-escalation benefit; see SECURITY.md.
 4. **`panic = "abort"` builds.** Panic containment assumes `panic = "unwind"`.
    Under `abort`, a host-op (or provider) panic aborts the process — the chosen
    policy for that build, but worth stating.

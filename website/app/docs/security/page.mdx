@@ -7,15 +7,9 @@ import { Callout } from "@opentf/web-docs";
 
 # Security model
 
-ES Runtime ships in two forms, and **both are deny-by-default** — they differ
-only in who does the granting:
-
-- **Embeddable library.** A runtime the host creates can compute, but cannot
-  reach the host environment, filesystem, or network until the host grants a
-  capability for it.
-- **The `esrun` CLI.** The standalone binary reaches what the command line that
-  started it named, and nothing else. Widen a run with
-  [grant flags](#granting-capabilities-in-esrun).
+**`esrun` is deny-by-default.** It can compute, but cannot reach the host
+environment, filesystem, or network until the command line that started it says
+so. Widen a run with [grant flags](#granting-capabilities-in-esrun).
 
 [`esdev`](/docs/esdev), the development binary, is the exception: it grants
 everything so an inner loop needs no flags, and never reaches production.

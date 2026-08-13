@@ -51,7 +51,6 @@ makes the trade-offs explicit.
 | Native addons (N-API) | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Package installer | <No /> | <Yes /> | <Yes /> | <Yes /> |
 | Bundler / test runner | <Partial /> | <Partial /> | <Yes /> | <Yes /> |
-| Embeddable as a library | <Yes /> | <No /> | <No /> | <Partial /> |
 
 **Legend:** <Yes /> Supported · <Partial /> Partial / flagged / experimental / dev-binary only · <No /> Not supported
 
@@ -196,13 +195,11 @@ a policy for what the module loader may resolve).
 
 <br />
 
-> **Note on the esrun sandbox column.** Both entry points are deny-by-default.
-> The **embeddable library** starts a `Runtime` with an empty capability set and
-> a host grants each one explicitly, so an embedder cannot forget to sandbox —
-> there is nothing to forget. The **CLI** is the same: `esrun app.js` holds
-> nothing, and `--allow-<name>` names what a run may reach. `esdev`, the
-> development binary, is the one that grants everything, so an inner loop needs
-> no flags. See [Permission models](#permission-models).
+> **Note on the esrun sandbox column.** `esrun app.js` holds nothing;
+> `--allow-<name>` names what a run may reach, so a deployment cannot forget to
+> sandbox — there is nothing to forget. `esdev`, the development binary, is the
+> one that grants everything, so an inner loop needs no flags. See
+> [Permission models](#permission-models).
 
 ## Permission models
 

@@ -100,7 +100,7 @@ All calls: async-friendly, cancellable, capability-checked, typed errors. No pro
 - ☑ **`esrun` permission flags** → **nothing is granted by default** (D65); `--allow-<name>` from `read, write, imports, net, listen, env, run, signals, workers` adds, optionally narrowed by `=<list>`. `--allow-all` grants everything, and is the only thing `--deny-<name>` may subtract from — never both directions on one line (D38, D65). `--deny-all` restates the default. `esdev` runs the same grammar from the opposite baseline. A denial is a `NotAllowedError` / `ERR_CAPABILITY_DENIED` thrown before the effect, never a partial one.
 - ☑ **Importing a `runtime:` module never needs a capability** → the gate is the op, so a built-in imports with nothing granted and only its operations throw (D26/D38, tested against `CapabilitySet::none()` for every built-in).
 - ☑ **No Rust panic** crosses the FFI boundary → op/timer/reject callbacks are `catch_unwind`-wrapped (Phase 9, resolves D15; assumes `panic = "unwind"`).
-- ◐ **Intrinsic integrity** against prototype pollution / global tampering → **the load-bearing guarantee holds (☑): the op table and the capability set live in Rust `OpState`, not in JS, so no guest tampering (prototype pollution, global reassignment, forging `__ops`) can escalate privilege or dispatch an ungated op** (tested). JS-surface defense-in-depth: the `__ops` binding is locked and namespace objects (`console`/`crypto`/`performance`) frozen (`harden.js`). **Deferred:** SES-style primordial freezing (hardening the *prelude's own* correctness against `Object`/`Array.prototype` pollution) is left to the embedder / Layer B rather than baked into a general-purpose Layer A (SECURITY.md).
+- ◐ **Intrinsic integrity** against prototype pollution / global tampering → **the load-bearing guarantee holds (☑): the op table and the capability set live in Rust `OpState`, not in JS, so no guest tampering (prototype pollution, global reassignment, forging `__ops`) can escalate privilege or dispatch an ungated op** (tested). JS-surface defense-in-depth: the `__ops` binding is locked and namespace objects (`console`/`crypto`/`performance`) frozen (`harden.js`). **Deferred:** SES-style primordial freezing (hardening the *prelude's own* correctness against `Object`/`Array.prototype` pollution) buys no privilege-escalation defence, since the capability check is in Rust; it is deferred against its guest-compatibility cost (SECURITY.md).
 - ☑ **Reproducibility** under deterministic providers (Phase 3 test providers).
 
 ---
@@ -148,11 +148,11 @@ Productionizing the standalone runtime *and* stabilizing the embeddable API. ESM
 ## 7. Non-goals & deferrals
 
 **Non-goals (this repo):**
-- No actor/process model, scheduler, preemption, mailboxes, supervisors (Layer B).
+- No actor/process model, scheduler, preemption, mailboxes, supervisors — a separate project, not this one (D66).
 - No Node.js compatibility, CommonJS, or `node:` modules. **(Amended, D22:** bare specifiers resolve against an existing `node_modules` tree for **ES module** packages only — CommonJS packages and `node:` builtins are rejected, and nothing is installed. No CJS interop, no `node:` builtins, no npm client.**)**
 - No self-owned event loop or thread management in `runtime`.
 - No second engine yet (boundary kept clean for later JSC).
-- No HTTP *server* — only the `fetch` client. Serving belongs to the embedder/Layer B. **(Superseded:** `runtime:http` `serve()` shipped as a capability-gated standard module over the `HttpServerProvider` seam — the embedder still owns the transport; DECISIONS D31.**)**
+- No HTTP *server* — only the `fetch` client. Serving is out of scope. **(Superseded:** `runtime:http` `serve()` shipped as a capability-gated standard module over the `HttpServerProvider` seam — the embedder still owns the transport; DECISIONS D31.**)**
 - No `deno_core` or any pre-built runtime framework.
 
 **Deferrals:**

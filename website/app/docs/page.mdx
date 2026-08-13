@@ -34,12 +34,11 @@ ES Runtime is a secure, standards-based JavaScript runtime for the server, built
 on V8 in Rust. It runs standard ES Modules with a sandboxed module system.
 
 <Callout type="info">
-  Ships in two shapes from one core, **both deny-by-default**: an **embeddable
-  library**, where the host grants each capability, and the **standalone CLI**
-  (`esrun`), where the command line does. A third binary,
-  [`esdev`](/docs/esdev), carries the development toolchain — TypeScript,
-  bundling, tests, watch, a debugger — grants everything so the inner loop needs
-  no flags, and never reaches production.
+  Two binaries. **`esrun`** runs your service and is **deny-by-default** — it
+  reaches only what the command line names. **[`esdev`](/docs/esdev)** carries
+  the development toolchain — TypeScript, bundling, tests, watch, a debugger —
+  grants everything so the inner loop needs no flags, and never reaches
+  production.
 </Callout>
 
 <Callout type="warning">

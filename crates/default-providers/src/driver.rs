@@ -37,7 +37,7 @@ const ASYNC_FALLBACK_MS: u64 = 1;
 /// Each iteration reads the current time from the [`Clock`], advances the
 /// runtime one [`tick`](Runtime::tick), then parks on the [`Timers`] source
 /// until the next deadline (or yields if only async work is pending). This is
-/// the seam Layer B replaces with its scheduler: the runtime is unchanged; only
+/// the seam a different driver substitutes at: the runtime is unchanged; only
 /// the driver differs.
 pub struct Driver {
     clock: Arc<dyn Clock>,

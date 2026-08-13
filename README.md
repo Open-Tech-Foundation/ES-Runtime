@@ -7,17 +7,17 @@
 *Part of the <img src="https://raw.githubusercontent.com/Open-Tech-Foundation/website/3ed7ac70ec44465eec0f94e5185cb28a9b11ed07/static/img/OTF-Logo.svg" width="24" align="center" /> [Open Tech Foundation](https://github.com/Open-Tech-Foundation) ecosystem.*
 </div>
 
-> ### V8-based ECMAScript runtime, WinterTC-compliant, I/O-injectable, capability-secured.
+> ### A secure, standards-based JavaScript runtime for the server. V8-based, WinterTC-compliant, deny-by-default.
 
 
-## Shapes
+## Two binaries
 
-It ships in two shapes from the same core:
-
-- **Embeddable library** (`es-runtime`) — a driven (tick/poll) runtime with
-  all I/O injected via provider traits and V8 kept behind an engine abstraction.
-- **Standalone CLI** (`esrun`) — a thin binary that wires the default tokio
-  providers and runs JavaScript files end-to-end.
+- **`esrun`** — the server runtime. Runs your service and does nothing else: no
+  inspector port, no watcher, no test runner, nothing that could weaken the
+  capability model it exists to enforce. Deny-by-default.
+- **`esdev`** — the development toolchain: TypeScript, bundling, tests, watch,
+  a debugger. It runs your program on exactly `esrun`'s runtime, and is **not a
+  deployment target**.
 
 ## Install
 

@@ -17,10 +17,10 @@ bundling, testing, watching and debugging live in a second binary,
 durable boundaries for the whole project.
 
 <Callout type="info" title="In scope">
-  Executing standard ES Modules on V8 with a Web-standard API surface,
-  deny-by-default capabilities for embedders, a sandboxed module system, and host
-  functionality exposed through `runtime:` modules. esrun ships as an embeddable
-  Rust library and a standalone CLI.
+  Running standard ES Modules on V8 with a Web-standard API surface,
+  deny-by-default capabilities, a sandboxed module system, and host
+  functionality exposed through `runtime:` modules — as a **server runtime**,
+  shipped as the `esrun` binary.
 </Callout>
 
 ## Non-goals
@@ -72,15 +72,18 @@ the capability model: attach and you own the isolate, whatever the flags said.
 behave one way there and another in production. It is **not a deployment
 target**.
 
-## Two layers, one core
+## One runtime, not a platform
 
-esrun is **Layer A**: a single driven runtime that the host ticks. **Layer B** —
-the embeddable "es-vm" — is the path to multiple isolates under host control.
-Both ship from the same core; the Web-standard surface and capability model are
-shared.
+**A server runtime is the whole goal.** There is no embedding API on offer: the
+Rust crates this is built from are not published, and running JavaScript inside
+somebody else's process is a different product with different goals — it is not
+part of this project. If you need it, open an issue and say what for; until
+somebody does, shipping an API nobody asked for would fix its shape before its
+requirements are known.
 
-Workers were once listed here as belonging to Layer B. They ship in Layer A now,
-and the principle behind that boundary held: `runtime` still owns no thread. A
-worker arrives as an injected `WorkerHost`, like every other reach outside the
-isolate, and a scheduler-backed host substitutes for it without anything above
-the seam changing.
+Multiple isolates under host control — the "es-vm" idea that used to be listed
+here as a second layer — went with it.
+
+Workers are the part that stayed, and they ship: a `Worker` is a real second
+agent on a real thread, spawned through the same provider seam as every other
+reach outside the isolate.

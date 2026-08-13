@@ -29,7 +29,7 @@ Before refactoring specific APIs, keep these structural rules in mind:
    - Node-specific native C++ addons (N-API) and `node:` built-in modules (`node:fs`, `node:child_process`, `node:os`, `node:http`) are not provided. Use the equivalent `runtime:` modules.
 
 3. **Capability & Sandboxing Model**:
-   - The esrun embeddable engine is **deny-by-default**. In embedded environments, host capabilities (`FileRead`, `FileWrite`, `NetConnect`, `Env`, `Run`) must be explicitly granted by the Rust host.
+   - esrun is **deny-by-default**: a run reaches only what the command line named. `--allow-read`, `--allow-net`, `--allow-env`, `--allow-run` and the rest are how a service states what it may touch — see [Securing Runtime](/docs/guides/securing-runtime).
 
 ---
 

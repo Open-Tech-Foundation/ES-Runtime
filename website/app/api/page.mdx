@@ -5,11 +5,10 @@ description: The runtime: standard modules and the esrun CLI — ESM-only, capab
 
 # API reference
 
-ES Runtime is ESM-only and deny-by-default in both shapes: the embeddable
-library grants what the host threads in, the `esrun` CLI what the command line
-names. Host functionality is exposed as ES modules under the `runtime:` scheme —
-never as ambient globals — and every operation is gated on an explicit
-capability.
+ES Runtime is ESM-only and deny-by-default: a run reaches what the command line
+that started it named, and nothing else. Host functionality is exposed as ES
+modules under the `runtime:` scheme — never as ambient globals — and every
+operation is gated on an explicit capability.
 
 ## The `runtime:` scheme
 

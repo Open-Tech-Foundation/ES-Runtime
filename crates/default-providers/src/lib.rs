@@ -2,7 +2,7 @@
 //! plus a standalone [`Driver`] (ARCHITECTURE.md §2/§5, DECISIONS.md D5).
 //!
 //! This is the **only** crate that owns a real loop, a real clock, and real OS
-//! entropy. It exists for standalone use and tests; an embedder (or Layer B)
+//! entropy. It is what the binaries wire up, and what the tests use; a caller
 //! supplies its own providers instead. Two families live here:
 //!
 //! - **Production** ([`SystemClock`], [`OsEntropy`], [`TokioTimers`],

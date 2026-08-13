@@ -3,8 +3,8 @@
 //! [`Runtime`] wires host ops into the engine and exposes the **tick/poll** API
 //! the embedder drives. It owns no thread and no loop of its own: one
 //! [`Runtime::tick`] advances the world by one step and returns; the embedder
-//! decides when to call it again. This is the exact seam Layer B replaces with
-//! its scheduler.
+//! decides when to call it again — owning no thread is what keeps the loop
+//! testable and its ordering deterministic.
 //!
 //! The runtime is built on the [`Engine`](es_runtime_engine::Engine) abstraction
 //! and names **no** V8 type (DECISIONS.md D3): a second engine could be slotted

@@ -1,6 +1,6 @@
 # Security
 
-ES-Runtime is a security-hardened, embeddable JavaScript runtime (Layer A). This
+ES-Runtime is a security-hardened JavaScript runtime for the server. This
 document records the project's security posture and any **known, accepted gaps**
 that are tracked for revisit. Architectural guarantees are specified in
 `docs/SPEC.md` §4 and the rationale in `docs/DECISIONS.md`. A full threat model,
@@ -324,10 +324,12 @@ at definition).
 **Deliberately deferred — SES-style primordial hardening.** Freezing the JS
 primordials (`Object.prototype`, `Array.prototype`, …) would protect the
 *prelude's own* correctness against pollution, but it is an opinionated policy
-with real guest-compatibility cost. It is left to the embedder / Layer B rather
-than baked into a general-purpose Layer A. Until an embedder opts in, a guest
-that pollutes primordials can break the *prelude's* JS behaviour for itself — it
-still cannot escalate privilege past the Rust boundary.
+with real guest-compatibility cost, and it buys nothing against the threat this
+runtime is built for: a guest that pollutes primordials can break the
+*prelude's* JS behaviour **for itself**, and still cannot escalate privilege
+past the Rust boundary, because the capability check is on the op and not in
+JavaScript. Revisit if a use case appears where guests in one realm must be
+protected from each other.
 
 ## Supply-chain gates
 

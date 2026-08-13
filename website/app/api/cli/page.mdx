@@ -336,10 +336,6 @@ esrun --max-heap=512 app.js    # pin it
 | A worker may | lower it with `new Worker(url, { memory: 64 })` — never raise it |
 | Reaching it | ends that agent; a worker's parent gets `ERR_WORKER_OUT_OF_MEMORY` |
 
-The embeddable library is different on purpose: it keeps a fixed 256 MiB, since
-a library that is one part of somebody else's process should not decide how much
-of it to take. See [Embedding](/docs/embed).
-
 ## Graceful shutdown
 
 `^C` and `SIGTERM` are handled for you when a `runtime:http` server is running:
