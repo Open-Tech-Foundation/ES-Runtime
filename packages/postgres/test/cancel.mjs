@@ -1,6 +1,6 @@
+import { connect } from "runtime:db";
 import { env } from "runtime:process";
 import { driver as postgres } from "../dist/index.js";
-import { connect } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 const db = await connect(url, { driver: postgres });
@@ -18,7 +18,13 @@ try {
   seen = e.message;
 }
 const elapsed = performance.now() - started;
-console.log("aborted:", seen === "changed my mind", "| promptly:", elapsed < 3000, `(${elapsed.toFixed(0)}ms)`);
+console.log(
+  "aborted:",
+  seen === "changed my mind",
+  "| promptly:",
+  elapsed < 3000,
+  `(${elapsed.toFixed(0)}ms)`,
+);
 
 // The connection survives its own statement being cancelled — that is the whole
 // difference between cancelling and hanging up.
@@ -36,7 +42,10 @@ console.log("pre-aborted:", early === "too late");
 
 // A signal that never fires costs nothing and changes nothing.
 const quiet = new AbortController();
-console.log("unaborted:", (await (await db.query("SELECT 2 AS n", [], { signal: quiet.signal })).first()).n);
+console.log(
+  "unaborted:",
+  (await (await db.query("SELECT 2 AS n", [], { signal: quiet.signal })).first()).n,
+);
 
 // Cancelling a streaming result mid-iteration: the signal stays attached until
 // the rows end, because a streaming result is still the query running.

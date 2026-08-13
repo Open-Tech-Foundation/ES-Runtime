@@ -1,8 +1,8 @@
 // The command families added beyond the core: streams, geo, bitmaps,
 // HyperLogLog, hash-field TTLs, and the odds and ends.
-import { exit, env } from "runtime:process";
 
 import { connect } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -127,7 +127,8 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
 
 {
   await r.del("capped");
-  for (let i = 0; i < 100; i++) await r.xadd("capped", { i: String(i) }, { maxlen: 10, approximate: false });
+  for (let i = 0; i < 100; i++)
+    await r.xadd("capped", { i: String(i) }, { maxlen: 10, approximate: false });
   is(await r.xlen("capped"), 10, "MAXLEN keeps a stream bounded");
   is(await r.xtrim("capped", { maxlen: 5, approximate: false }), 5, "XTRIM removes the excess");
   is(await r.xlen("capped"), 5, "leaving the newest");
@@ -137,10 +138,14 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
 
 {
   await r.del("cities");
-  is(await r.geoadd("cities", {
-    Palermo: [13.361389, 38.115556],
-    Catania: [15.087269, 37.502669],
-  }), 2, "GEOADD adds points");
+  is(
+    await r.geoadd("cities", {
+      Palermo: [13.361389, 38.115556],
+      Catania: [15.087269, 37.502669],
+    }),
+    2,
+    "GEOADD adds points",
+  );
 
   const distance = await r.geodist("cities", "Palermo", "Catania", "km");
   ok(Math.abs(distance - 166.27) < 1, `GEODIST in km (${distance})`);
@@ -170,7 +175,8 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
   await seed.exec();
 
   const fields = {};
-  for await (const [field, value] of r.hscanIterator("bighash", { count: 10 })) fields[field] = value;
+  for await (const [field, value] of r.hscanIterator("bighash", { count: 10 }))
+    fields[field] = value;
   is(Object.keys(fields).length, 300, "hscanIterator walks every field");
   is(fields.f299, "299", "with the right values");
 
@@ -179,7 +185,8 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
   is(members.size, 300, "sscanIterator walks every member");
 
   const scores = new Map();
-  for await (const [member, score] of r.zscanIterator("bigzset", { count: 10 })) scores.set(member, score);
+  for await (const [member, score] of r.zscanIterator("bigzset", { count: 10 }))
+    scores.set(member, score);
   is(scores.size, 300, "zscanIterator walks every member");
   is(scores.get("z42"), 42, "with numeric scores");
 
@@ -221,7 +228,11 @@ const version = Number((await r.info("server")).match(/redis_version:(\d+)/)?.[1
 {
   await r.del("z", "zdest");
   await r.zadd("z", { a: 1, b: 2, c: 3 });
-  is(await r.zmscore("z", "a", "c", "nope"), [1, 3, null], "ZMSCORE, with null for a missing member");
+  is(
+    await r.zmscore("z", "a", "c", "nope"),
+    [1, 3, null],
+    "ZMSCORE, with null for a missing member",
+  );
   is(await r.zrangestore("zdest", "z", 0, 1), 2, "ZRANGESTORE answers how many it stored");
   is(await r.zrange("zdest", 0, -1), ["a", "b"], "and stored the right ones");
 }

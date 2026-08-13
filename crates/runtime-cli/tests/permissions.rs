@@ -868,6 +868,13 @@ fn scoped_tree(name: &str) -> PathBuf {
     std::fs::create_dir_all(root.join("out")).expect("mkdir");
     std::fs::write(root.join("data/ok.txt"), "fine").expect("write");
     std::fs::write(root.join("secrets.env"), "TOKEN=1").expect("write");
+    // A `package.json` makes this fixture a *project*, which is what stops the
+    // root-jail detection (D25) walking further up. Without it the detected
+    // root is whichever ancestor happens to have one — this repo's own, once it
+    // grew a root package.json for tooling — and the sibling directory these
+    // tests use as "outside the jail" is then inside it. The fixture describing
+    // itself is also what a real project looks like.
+    std::fs::write(root.join("package.json"), "{}").expect("write");
     std::fs::canonicalize(&root).expect("canonicalize")
 }
 

@@ -7,36 +7,36 @@
  * extended query protocol, row decoding — is here, which is the arrangement
  * `runtime:db` exists to make possible (DECISIONS D56).
  */
-import { connect as netConnect } from "runtime:net";
+
 import {
+  asDbError,
   BaseConnection,
   DbError,
   DbErrorCode,
-  Dialect,
-  Rows,
-  asDbError,
-  defineRowShape,
-  decodeBatch,
   type DbOutput,
+  Dialect,
+  defineRowShape,
   type MessageHandler,
   type NormalizedQuery,
   type Row,
+  Rows,
 } from "runtime:db";
+import { connect as netConnect } from "runtime:net";
 
 import { Fields, FrameReader } from "./protocol/frame.js";
 
 /** What `runtime:net`'s `connect()` hands back. */
 type PgSocket = ReturnType<typeof netConnect>;
+
+import { portableCode, type ServerMessage } from "./protocol/errors.js";
 import * as msg from "./protocol/messages.js";
 import { AUTH, B } from "./protocol/messages.js";
 import { scram } from "./protocol/scram.js";
-import { portableCode, type ServerMessage } from "./protocol/errors.js";
 import {
-  decoderFor,
+  type DecodeOptions,
   decoderForFormat,
   encodeParam,
   prefersBinary,
-  type DecodeOptions,
 } from "./protocol/values.js";
 
 /** A result set's shape, as `RowDescription` reports it. */
@@ -397,7 +397,8 @@ export class PgConnection extends BaseConnection {
   async #send(bytes: Uint8Array): Promise<void> {
     if (this.#fatal !== null) throw this.#fatal;
     const writer = this.#writer;
-    if (writer === null) throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
+    if (writer === null)
+      throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
     try {
       await writer.write(bytes);
     } catch (e) {
@@ -408,7 +409,8 @@ export class PgConnection extends BaseConnection {
   async #next(): Promise<{ tag: number; frame: Uint8Array }> {
     if (this.#fatal !== null) throw this.#fatal;
     const frames = this.#frames;
-    if (frames === null) throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
+    if (frames === null)
+      throw new DbError("the connection is closed", { code: DbErrorCode.Closed });
     try {
       return await frames.message();
     } catch (e) {
@@ -902,7 +904,9 @@ export class PgConnection extends BaseConnection {
     }
   }
 
-  protected async _execute(query: NormalizedQuery): Promise<{ changes: number; lastInsertRowid: number | null }> {
+  protected async _execute(
+    query: NormalizedQuery,
+  ): Promise<{ changes: number; lastInsertRowid: number | null }> {
     const q = this.#sql(query);
     this.#rejectNamed(q.named);
     const release = await this.#acquire();
@@ -1030,10 +1034,7 @@ export class PgConnection extends BaseConnection {
    * rather than hope: a misspelled channel fails here, instead of silently
    * never firing.
    */
-  protected override async _subscribe(
-    channels: string[],
-    handler?: MessageHandler,
-  ): Promise<void> {
+  protected override async _subscribe(channels: string[], handler?: MessageHandler): Promise<void> {
     this.#startPump();
     for (const channel of channels) {
       // Confirmed before it resolves — the `ReadyForQuery` for this `LISTEN` —

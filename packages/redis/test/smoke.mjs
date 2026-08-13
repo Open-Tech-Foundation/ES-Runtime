@@ -1,7 +1,7 @@
 // The client surface, against a real server.
-import { exit, env } from "runtime:process";
 
 import { connect } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -21,7 +21,11 @@ is(await r.get("absent"), null, "a missing key is null, not an empty string");
 is(await r.setnx("k", "other"), false, "SETNX declines an existing key");
 is(await r.get("k"), "v", "and did not overwrite it");
 is(await r.set("k", "new", { xx: true }), "OK", "XX applies to an existing key");
-is(await r.set("absent", "x", { nx: false, xx: true }), null, "XX on a missing key answers null rather than throwing");
+is(
+  await r.set("absent", "x", { nx: false, xx: true }),
+  null,
+  "XX on a missing key answers null rather than throwing",
+);
 
 is(await r.set("old", "1", { get: true }), null, "SET GET on a missing key answers null");
 is(await r.set("old", "2", { get: true }), "1", "and the previous value once there is one");
@@ -36,7 +40,10 @@ is(await r.mget("a", "b", "absent"), ["1", "2", null], "MGET keeps the holes");
 is(await r.incr("n"), 1, "INCR answers the new value");
 is(await r.incrBy("n", 41), 42, "INCRBY too");
 is(await r.decr("n"), 41, "DECR");
-ok((await r.incrBy("huge", 9007199254740993n)) === 9007199254740993n, "a counter past 2^53 stays exact as a bigint");
+ok(
+  (await r.incrBy("huge", 9007199254740993n)) === 9007199254740993n,
+  "a counter past 2^53 stays exact as a bigint",
+);
 is(await r.incrByFloat("f", 1.5), 1.5, "INCRBYFLOAT answers a number");
 
 // -- expiry -----------------------------------------------------------------
@@ -96,8 +103,15 @@ is(await r.srem("s", "x"), 1, "SREM");
 
 is(await r.zadd("z", { one: 1, two: 2, three: 3 }), 3, "ZADD takes { member: score }");
 is(await r.zrange("z", 0, -1), ["one", "two", "three"], "ZRANGE is in score order");
-is(await r.zrange("z", 0, -1, { withScores: true }), [["one", 1], ["two", 2], ["three", 3]],
-  "WITHSCORES pairs them, whatever the protocol interleaved");
+is(
+  await r.zrange("z", 0, -1, { withScores: true }),
+  [
+    ["one", 1],
+    ["two", 2],
+    ["three", 3],
+  ],
+  "WITHSCORES pairs them, whatever the protocol interleaved",
+);
 is(await r.zscore("z", "two"), 2, "ZSCORE is a number");
 is(await r.zscore("z", "absent"), null, "and null for a member that is not there");
 is(await r.zcard("z"), 3, "ZCARD");
@@ -114,7 +128,10 @@ is(await r.zrange("z", 0, -1, { rev: true }), ["three", "two", "one"], "REV reve
   for await (const key of r.scanIterator({ count: 3 })) seen.add(key);
   const keys = new Set(await r.keys("*"));
   is(seen.size, keys.size, `SCAN saw every key KEYS did (${keys.size})`);
-  ok([...keys].every((key) => seen.has(key)), "and the same ones");
+  ok(
+    [...keys].every((key) => seen.has(key)),
+    "and the same ones",
+  );
 }
 
 // -- scripting --------------------------------------------------------------
@@ -146,12 +163,20 @@ is(await r.call(["OBJECT", "ENCODING", "list"]), "listpack", "an unwrapped comma
   // Bounded is allowed: the connection is held for the timeout, and that is a
   // cost the caller chose knowingly.
   const started = Date.now();
-  is(await r.call(["BLPOP", "empty-queue", "1"]), null, "a bounded BLPOP times out and answers null");
+  is(
+    await r.call(["BLPOP", "empty-queue", "1"]),
+    null,
+    "a bounded BLPOP times out and answers null",
+  );
   ok(Date.now() - started >= 900, "having actually waited");
 
   // And it does return a value when there is one.
   await r.rpush("queue", "job");
-  is(await r.call(["BLPOP", "queue", "1"]), ["queue", "job"], "and pops when the list has something");
+  is(
+    await r.call(["BLPOP", "queue", "1"]),
+    ["queue", "job"],
+    "and pops when the list has something",
+  );
 
   // Unbounded is refused, because it would never give the connection back.
   let refused = null;
@@ -160,7 +185,7 @@ is(await r.call(["OBJECT", "ENCODING", "list"]), "listpack", "an unwrapped comma
   } catch (e) {
     refused = e.message;
   }
-  ok(refused !== null && refused.includes("BLPOP"), "an unbounded BLPOP is refused by name");
+  ok(refused?.includes("BLPOP"), "an unbounded BLPOP is refused by name");
   is(await r.ping(), "PONG", "and the connection still works afterwards");
 }
 

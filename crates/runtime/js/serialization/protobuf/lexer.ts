@@ -62,12 +62,15 @@ export class Lexer {
   private scanNumber(): string {
     const start = this.pos;
     // hex / octal / decimal / float — keep it permissive; parse() interprets.
-    if (this.src[this.pos] === "0" && (this.src[this.pos + 1] === "x" || this.src[this.pos + 1] === "X")) {
+    if (
+      this.src[this.pos] === "0" &&
+      (this.src[this.pos + 1] === "x" || this.src[this.pos + 1] === "X")
+    ) {
       this.pos += 2;
       while (this.pos < this.src.length && /[0-9a-fA-F]/.test(this.src[this.pos]!)) this.pos++;
       return this.src.slice(start, this.pos);
     }
-    while (this.pos < this.src.length && /[0-9.eE+\-]/.test(this.src[this.pos]!)) {
+    while (this.pos < this.src.length && /[0-9.eE+-]/.test(this.src[this.pos]!)) {
       // stop a trailing sign that isn't part of an exponent
       const c = this.src[this.pos]!;
       if ((c === "+" || c === "-") && !/[eE]/.test(this.src[this.pos - 1] ?? "")) break;
@@ -85,14 +88,30 @@ export class Lexer {
       if (c === "\\") {
         const e = this.src[this.pos++]!;
         switch (e) {
-          case "n": out += "\n"; break;
-          case "r": out += "\r"; break;
-          case "t": out += "\t"; break;
-          case "\\": out += "\\"; break;
-          case '"': out += '"'; break;
-          case "'": out += "'"; break;
-          case "0": out += "\0"; break;
-          default: out += e; break;
+          case "n":
+            out += "\n";
+            break;
+          case "r":
+            out += "\r";
+            break;
+          case "t":
+            out += "\t";
+            break;
+          case "\\":
+            out += "\\";
+            break;
+          case '"':
+            out += '"';
+            break;
+          case "'":
+            out += "'";
+            break;
+          case "0":
+            out += "\0";
+            break;
+          default:
+            out += e;
+            break;
         }
       } else {
         if (c === "\n") this.line++;
@@ -114,7 +133,10 @@ export class Lexer {
         while (this.pos < this.src.length && this.src[this.pos] !== "\n") this.pos++;
       } else if (c === "/" && this.src[this.pos + 1] === "*") {
         this.pos += 2;
-        while (this.pos < this.src.length && !(this.src[this.pos] === "*" && this.src[this.pos + 1] === "/")) {
+        while (
+          this.pos < this.src.length &&
+          !(this.src[this.pos] === "*" && this.src[this.pos + 1] === "/")
+        ) {
           if (this.src[this.pos] === "\n") this.line++;
           this.pos++;
         }

@@ -23,10 +23,22 @@ test("all scalar types round-trip (proto3)", () => {
     }
   `);
   const input = {
-    i32: -7, i64: 9007199254740993n, u32: 7, u64: 18446744073709551615n,
-    s32: -123, s64: -9007199254740993n, f32: 4294967295, f64: 18446744073709551615n,
-    sf32: -42, sf64: -99n, fl: 1.5, db: 44.95,
-    b: true, s: 'héllo 𐍈 "q"', by: new Uint8Array([1, 2, 3, 255]), c: "BLUE",
+    i32: -7,
+    i64: 9007199254740993n,
+    u32: 7,
+    u64: 18446744073709551615n,
+    s32: -123,
+    s64: -9007199254740993n,
+    f32: 4294967295,
+    f64: 18446744073709551615n,
+    sf32: -42,
+    sf64: -99n,
+    fl: 1.5,
+    db: 44.95,
+    b: true,
+    s: 'héllo 𐍈 "q"',
+    by: new Uint8Array([1, 2, 3, 255]),
+    c: "BLUE",
     inner: { v: "x" },
   };
   expect(s.decode("t.All", s.encode("t.All", input))).toEqual(input);
@@ -85,7 +97,9 @@ test("edition 2024 parses and shares 2023 wire defaults (explicit presence)", ()
 });
 
 test("unsupported editions are rejected with a clear error", () => {
-  expect(() => new Schema(`edition = "2025"; message M { int32 a = 1; }`)).toThrow(/unsupported edition "2025"/);
+  expect(() => new Schema(`edition = "2025"; message M { int32 a = 1; }`)).toThrow(
+    /unsupported edition "2025"/,
+  );
 });
 
 test("unknown fields are preserved across re-encode", () => {
@@ -110,7 +124,11 @@ test("decodeStream yields repeated message elements across chunk boundaries", as
   const s = new Schema(`syntax="proto3";
     message Book { string title = 1; uint64 isbn = 2; }
     message Catalog { string name = 1; repeated Book books = 2; uint32 count = 3; }`);
-  const books = [{ title: "A", isbn: 1n }, { title: "Bigger title", isbn: 2n }, { title: "C", isbn: 3n }];
+  const books = [
+    { title: "A", isbn: 1n },
+    { title: "Bigger title", isbn: 2n },
+    { title: "C", isbn: 3n },
+  ];
   // `name` precedes the repeated field and `count` follows — both must be skipped.
   const bytes = s.encode("Catalog", { name: "lib", books, count: 3 });
 
@@ -124,11 +142,18 @@ test("decodeStream yields repeated message elements across chunk boundaries", as
 });
 
 test("decodeStream accepts a ReadableStream and rejects non-repeated-message fields", async () => {
-  const s = new Schema(`syntax="proto3"; message M { repeated int32 ns = 1; message Sub { int32 a = 1; } repeated Sub subs = 2; }`);
+  const s = new Schema(
+    `syntax="proto3"; message M { repeated int32 ns = 1; message Sub { int32 a = 1; } repeated Sub subs = 2; }`,
+  );
   expect(() => s.decodeStream("M", "ns", [])).toThrow(/repeated message field/);
 
   const bytes = s.encode("M", { subs: [{ a: 1 }, { a: 2 }] });
-  const stream = new ReadableStream({ start(c) { c.enqueue(bytes); c.close(); } });
+  const stream = new ReadableStream({
+    start(c) {
+      c.enqueue(bytes);
+      c.close();
+    },
+  });
   const out = [];
   for await (const sub of s.decodeStream("M", "subs", stream)) out.push(sub);
   expect(out).toEqual([{ a: 1 }, { a: 2 }]);
@@ -136,14 +161,21 @@ test("decodeStream accepts a ReadableStream and rejects non-repeated-message fie
 
 test("encodeDelimited / decodeDelimited round-trips a stream of messages", async () => {
   const s = new Schema(`syntax="proto3"; message Event { string kind = 1; uint64 at = 2; }`);
-  const events = [{ kind: "a", at: 1n }, { kind: "longer kind", at: 2n }, { kind: "c", at: 3n }];
+  const events = [
+    { kind: "a", at: 1n },
+    { kind: "longer kind", at: 2n },
+    { kind: "c", at: 3n },
+  ];
 
   // Frame each independently and concatenate — the writeDelimitedTo wire form.
   const framed = events.map((e) => s.encodeDelimited("Event", e));
   const total = framed.reduce((n, f) => n + f.length, 0);
   const buf = new Uint8Array(total);
   let off = 0;
-  for (const f of framed) { buf.set(f, off); off += f.length; }
+  for (const f of framed) {
+    buf.set(f, off);
+    off += f.length;
+  }
 
   // Decode from a Uint8Array directly.
   const direct = [];
@@ -151,7 +183,9 @@ test("encodeDelimited / decodeDelimited round-trips a stream of messages", async
   expect(direct).toEqual(events);
 
   // And from a one-byte-at-a-time stream (straddles every length prefix).
-  async function* dribble() { for (const b of buf) yield new Uint8Array([b]); }
+  async function* dribble() {
+    for (const b of buf) yield new Uint8Array([b]);
+  }
   const streamed = [];
   for await (const e of s.decodeDelimited("Event", dribble())) streamed.push(e);
   expect(streamed).toEqual(events);
@@ -171,7 +205,9 @@ test("editions delimited (group) message encoding round-trips", () => {
 });
 
 test("singular message fields merge across repeated occurrences", () => {
-  const s = new Schema(`syntax="proto3"; message Inner { int32 a = 1; int32 b = 2; } message M { Inner inner = 1; }`);
+  const s = new Schema(
+    `syntax="proto3"; message Inner { int32 a = 1; int32 b = 2; } message M { Inner inner = 1; }`,
+  );
   const a = s.encode("M", { inner: { a: 1 } });
   const b = s.encode("M", { inner: { b: 2 } });
   const concat = new Uint8Array([...a, ...b]);
@@ -195,8 +231,12 @@ test("rejects truncated, overlong, and field-0 inputs", () => {
 });
 
 test("proto2-only constructs are rejected outside proto2", () => {
-  expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(/required/);
-  expect(() => new Schema(`syntax="proto3"; message M { optional group G = 1 { } }`)).toThrow(/group/);
+  expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(
+    /required/,
+  );
+  expect(() => new Schema(`syntax="proto3"; message M { optional group G = 1 { } }`)).toThrow(
+    /group/,
+  );
 });
 
 test("proto2: required + optional presence, unpacked repeated, closed enum", () => {
@@ -268,23 +308,29 @@ test("decode enforces a maximum nesting depth", () => {
 
 test("CLOSED enum retains an unrecognized value as an unknown field", () => {
   const open = new Schema(`edition="2023"; package t; enum E { A=0; B=1; } message M { E e = 1; }`);
-  const closed = new Schema(`edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { E e = 1; }`);
+  const closed = new Schema(
+    `edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { E e = 1; }`,
+  );
   const wire = open.encode("t.M", { e: 5 }); // value 5 is not a declared member
   expect([...wire]).toEqual([0x08, 0x05]);
 
   const decoded = closed.decode("t.M", wire);
-  expect(decoded.e).toBeUndefined();                                   // not surfaced as the field
-  expect([...closed.encode("t.M", decoded)]).toEqual([0x08, 0x05]);    // preserved on re-encode
+  expect(decoded.e).toBeUndefined(); // not surfaced as the field
+  expect([...closed.encode("t.M", decoded)]).toEqual([0x08, 0x05]); // preserved on re-encode
   expect(closed.decode("t.M", open.encode("t.M", { e: 1 }))).toEqual({ e: "B" }); // known value still decodes
 });
 
 test("CLOSED repeated (packed) enum keeps known members, preserves unknown", () => {
-  const open = new Schema(`edition="2023"; package t; enum E { A=0; B=1; C=2; } message M { repeated E es = 2; }`);
-  const closed = new Schema(`edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { repeated E es = 2; }`);
+  const open = new Schema(
+    `edition="2023"; package t; enum E { A=0; B=1; C=2; } message M { repeated E es = 2; }`,
+  );
+  const closed = new Schema(
+    `edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { repeated E es = 2; }`,
+  );
   const wire = open.encode("t.M", { es: [1, 7, 0] }); // 7 is unknown to the closed schema
 
   const decoded = closed.decode("t.M", wire);
-  expect(decoded.es).toEqual(["B", "A"]);              // known members, in order
+  expect(decoded.es).toEqual(["B", "A"]); // known members, in order
   // re-encoding emits the known members (packed) plus the retained unknown 7.
   expect(open.decode("t.M", closed.encode("t.M", decoded)).es).toEqual(["B", "A", 7]);
 });
@@ -311,38 +357,50 @@ test("encode accepts either spelling in nested, repeated and map fields", () => 
     }
   `);
   const snake = s.encode("M", {
-    tag_list: ["a"], score_map: { x: 1 }, inner_msg: { deep_field: "z" },
+    tag_list: ["a"],
+    score_map: { x: 1 },
+    inner_msg: { deep_field: "z" },
   });
   const camel = s.encode("M", {
-    tagList: ["a"], scoreMap: { x: 1 }, innerMsg: { deepField: "z" },
+    tagList: ["a"],
+    scoreMap: { x: 1 },
+    innerMsg: { deepField: "z" },
   });
   expect([...snake]).toEqual([...camel]);
   expect(s.decode("M", snake)).toEqual({
-    tagList: ["a"], scoreMap: { x: 1 }, innerMsg: { deepField: "z" },
+    tagList: ["a"],
+    scoreMap: { x: 1 },
+    innerMsg: { deepField: "z" },
   });
 });
 
 test("encode rejects a key matching no field instead of dropping it", () => {
-  const s = new Schema(`syntax="proto3"; message Inner { string deep_field = 1; } message M { string user_name = 1; Inner inner_msg = 2; }`);
+  const s = new Schema(
+    `syntax="proto3"; message Inner { string deep_field = 1; } message M { string user_name = 1; Inner inner_msg = 2; }`,
+  );
   // A typo silently produced a short buffer, which is the failure mode that
   // makes a wrong field name impossible to notice until the far end.
   expect(() => s.encode("M", { usr_name: "ada" })).toThrow(/unknown field "usr_name" in M/);
-  expect(() => s.encode("M", { inner_msg: { deep_fld: "z" } })).toThrow(/unknown field "deep_fld" in Inner/);
+  expect(() => s.encode("M", { inner_msg: { deep_fld: "z" } })).toThrow(
+    /unknown field "deep_fld" in Inner/,
+  );
   // The opt-out skips them, and still encodes the fields it did recognize.
-  expect([...s.encode("M", { usr_name: "x", user_name: "ada" }, { ignoreUnknownFields: true })])
-    .toEqual([0x0a, 0x03, 0x61, 0x64, 0x61]);
+  expect([
+    ...s.encode("M", { usr_name: "x", user_name: "ada" }, { ignoreUnknownFields: true }),
+  ]).toEqual([0x0a, 0x03, 0x61, 0x64, 0x61]);
 });
 
 test("encode rejects a field given under both of its names", () => {
   const s = new Schema(`syntax="proto3"; message M { string user_name = 1; }`);
-  expect(() => s.encode("M", { user_name: "a", userName: "b" }))
-    .toThrow(/given twice/);
+  expect(() => s.encode("M", { user_name: "a", userName: "b" })).toThrow(/given twice/);
 });
 
 test("a decoded message re-encodes cleanly despite the unknown-field check", () => {
   // `decode` returns JSON names plus a symbol-keyed store of preserved unknown
   // fields; the symbol must not read as an unknown *key* on the way back out.
-  const full = new Schema(`syntax="proto3"; message M { string user_name = 1; int32 age_years = 2; }`);
+  const full = new Schema(
+    `syntax="proto3"; message M { string user_name = 1; int32 age_years = 2; }`,
+  );
   const old = new Schema(`syntax="proto3"; message M { string user_name = 1; }`);
   const bytes = full.encode("M", { user_name: "ada", age_years: 36 });
 

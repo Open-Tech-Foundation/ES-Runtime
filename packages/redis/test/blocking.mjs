@@ -2,8 +2,9 @@
 //
 // The unit half (test/unit/blocking.mjs) settles which commands block and where
 // each keeps its timeout. This settles what happens when one actually blocks.
-import { exit, env } from "runtime:process";
+
 import { connect, DbErrorCode } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -21,15 +22,21 @@ await r.flushdb();
   ok(Date.now() - started >= 900, "having waited its timeout");
 
   await r.rpush("q", "first", "second");
-  is(await r.blpop("q", 1), { key: "q", value: "first" },
-    "and answers { key, value } rather than a two-element array");
+  is(
+    await r.blpop("q", 1),
+    { key: "q", value: "first" },
+    "and answers { key, value } rather than a two-element array",
+  );
   is(await r.brpop("q", 1), { key: "q", value: "second" }, "BRPOP takes from the tail");
 
   // Several keys: the first with anything in it wins, which is why the reply
   // has to say which key it came from.
   await r.rpush("q2", "x");
-  is(await r.blpop(["q1", "q2", "q3"], 1), { key: "q2", value: "x" },
-    "with many keys, the reply names the one that had something");
+  is(
+    await r.blpop(["q1", "q2", "q3"], 1),
+    { key: "q2", value: "x" },
+    "with many keys, the reply names the one that had something",
+  );
 }
 
 {
@@ -43,8 +50,11 @@ await r.flushdb();
 {
   await r.del("z");
   await r.zadd("z", { low: 1, high: 9 });
-  is(await r.bzpopmin("z", 1), { key: "z", member: "low", score: 1 },
-    "BZPOPMIN answers the key, the member and a numeric score");
+  is(
+    await r.bzpopmin("z", 1),
+    { key: "z", member: "low", score: 1 },
+    "BZPOPMIN answers the key, the member and a numeric score",
+  );
   is(await r.bzpopmax("z", 1), { key: "z", member: "high", score: 9 }, "BZPOPMAX the other end");
   is(await r.bzpopmin("z", 1), null, "an empty sorted set times out");
 }
@@ -89,8 +99,11 @@ is(await r.wait(0, 100), 0, "WAIT with no replicas asked for answers 0");
   const waiting = worker.call(["BLPOP", "handoff", "0"]);
   await new Promise((resolve) => setTimeout(resolve, 150));
   await r.rpush("handoff", "delivered");
-  is(await waiting, ["handoff", "delivered"],
-    "an unbounded BLPOP is allowed there, and unblocks when something arrives");
+  is(
+    await waiting,
+    ["handoff", "delivered"],
+    "an unbounded BLPOP is allowed there, and unblocks when something arrives",
+  );
   await worker.close();
 }
 

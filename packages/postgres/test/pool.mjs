@@ -1,6 +1,5 @@
-import { env } from "runtime:process";
-
 import { connect } from "runtime:db";
+import { env } from "runtime:process";
 import { driver as postgres } from "../dist/index.js";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
@@ -25,7 +24,13 @@ await Promise.all([
   pool.execute("SELECT pg_sleep(0.2)"),
 ]);
 const elapsed = performance.now() - started;
-console.log("concurrent:", pool.size === 3, "| overlapped:", elapsed < 450, `(${elapsed.toFixed(0)}ms)`);
+console.log(
+  "concurrent:",
+  pool.size === 3,
+  "| overlapped:",
+  elapsed < 450,
+  `(${elapsed.toFixed(0)}ms)`,
+);
 
 // A streaming result holds its connection until the rows run out.
 const rows = await pool.query("SELECT g FROM generate_series(1, 20000) g");

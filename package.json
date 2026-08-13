@@ -1,0 +1,9 @@
+{
+  "name": "es-runtime-tooling",
+  "private": true,
+  "type": "module",
+  "description": "Repo tooling: Biome, pinned. The runtime itself is Rust; tasks are in tasks.toml.",
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.0"
+  }
+}

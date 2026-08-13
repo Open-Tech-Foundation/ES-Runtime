@@ -11,18 +11,23 @@
 // toJson. Parsing is strict per the proto3 JSON spec (typed/range-checked
 // scalars, well-formed UTF-16 strings, duplicate-oneof and unknown-field
 // rejection); serialization validates the WKT range/round-trip rules.
-import {
-  BIGINT_SCALARS, scalarDefault,
-  type EnumType, type Field, type FieldType, type MessageType, type ScalarType,
-} from "./descriptor.js";
-import type { Registry } from "./link.js";
+
 import { decode } from "./decode.js";
+import {
+  BIGINT_SCALARS,
+  type EnumType,
+  type Field,
+  type FieldType,
+  type MessageType,
+  type ScalarType,
+  scalarDefault,
+} from "./descriptor.js";
 import { encode } from "./encode.js";
+import type { Registry } from "./link.js";
 import { Reader } from "./reader.js";
 import { Writer } from "./writer.js";
 
-export type JsonValue =
-  | null | boolean | number | string | JsonValue[] | { [k: string]: JsonValue };
+export type JsonValue = null | boolean | number | string | JsonValue[] | { [k: string]: JsonValue };
 
 export interface FromJsonOptions {
   /** Ignore unrecognized fields and unknown enum-name strings instead of
@@ -40,28 +45,41 @@ interface Ctx {
 const DROP = Symbol("drop");
 
 const WRAPPERS: ReadonlySet<string> = new Set([
-  "google.protobuf.DoubleValue", "google.protobuf.FloatValue",
-  "google.protobuf.Int64Value", "google.protobuf.UInt64Value",
-  "google.protobuf.Int32Value", "google.protobuf.UInt32Value",
-  "google.protobuf.BoolValue", "google.protobuf.StringValue",
+  "google.protobuf.DoubleValue",
+  "google.protobuf.FloatValue",
+  "google.protobuf.Int64Value",
+  "google.protobuf.UInt64Value",
+  "google.protobuf.Int32Value",
+  "google.protobuf.UInt32Value",
+  "google.protobuf.BoolValue",
+  "google.protobuf.StringValue",
   "google.protobuf.BytesValue",
 ]);
 
 // WKTs whose JSON form is not a plain proto message object — inside an Any their
 // payload sits under a "value" member rather than being spread alongside "@type".
 const SPECIAL_JSON_WKT: ReadonlySet<string> = new Set([
-  "google.protobuf.Timestamp", "google.protobuf.Duration",
-  "google.protobuf.FieldMask", "google.protobuf.Value",
-  "google.protobuf.ListValue", "google.protobuf.Struct",
-  "google.protobuf.Any", ...WRAPPERS,
+  "google.protobuf.Timestamp",
+  "google.protobuf.Duration",
+  "google.protobuf.FieldMask",
+  "google.protobuf.Value",
+  "google.protobuf.ListValue",
+  "google.protobuf.Struct",
+  "google.protobuf.Any",
+  ...WRAPPERS,
 ]);
 
 // Scalar value ranges.
-const I32_MIN = -2147483648, I32_MAX = 2147483647, U32_MAX = 4294967295;
-const I64_MIN = -9223372036854775808n, I64_MAX = 9223372036854775807n;
+const I32_MIN = -2147483648,
+  I32_MAX = 2147483647,
+  U32_MAX = 4294967295;
+const I64_MIN = -9223372036854775808n,
+  I64_MAX = 9223372036854775807n;
 const U64_MAX = 18446744073709551615n;
 // Timestamp seconds [0001-01-01T00:00:00Z, 9999-12-31T23:59:59Z]; Duration ±10000y.
-const TS_MIN = -62135596800n, TS_MAX = 253402300799n, DUR_MAX = 315576000000n;
+const TS_MIN = -62135596800n,
+  TS_MAX = 253402300799n,
+  DUR_MAX = 315576000000n;
 // A JSON number literal (no leading zeros / spaces), optionally fractional/exponent.
 const NUM_RE = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
 
@@ -83,10 +101,10 @@ function base64Encode(bytes: Uint8Array): string {
   const rem = bytes.length - i;
   if (rem === 1) {
     const n = bytes[i]! << 16;
-    out += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]! + "==";
+    out += `${B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]!}==`;
   } else if (rem === 2) {
     const n = (bytes[i]! << 16) | (bytes[i + 1]! << 8);
-    out += B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]! + B64[(n >> 6) & 63]! + "=";
+    out += `${B64[(n >> 18) & 63]! + B64[(n >> 12) & 63]! + B64[(n >> 6) & 63]!}=`;
   }
   return out;
 }
@@ -103,7 +121,10 @@ function base64Decode(s: string): Uint8Array {
     if (v < 0) throw new Error("protobuf: invalid base64 in JSON");
     bits = (bits << 6) | v;
     nbits += 6;
-    if (nbits >= 8) { nbits -= 8; out.push((bits >> nbits) & 0xff); }
+    if (nbits >= 8) {
+      nbits -= 8;
+      out.push((bits >> nbits) & 0xff);
+    }
   }
   return new Uint8Array(out);
 }
@@ -114,13 +135,16 @@ function camelCase(s: string): string {
   let up = false;
   for (const c of s) {
     if (c === "_") up = true;
-    else { out += up ? c.toUpperCase() : c; up = false; }
+    else {
+      out += up ? c.toUpperCase() : c;
+      up = false;
+    }
   }
   return out;
 }
 
 function snakeCase(s: string): string {
-  return s.replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
+  return s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 }
 
 // ── strict scalar parsing ─────────────────────────────────────────────────────
@@ -177,7 +201,8 @@ function validateUtf16(s: string): void {
     const c = s.charCodeAt(i);
     if (c >= 0xd800 && c <= 0xdbff) {
       const next = s.charCodeAt(i + 1);
-      if (!(next >= 0xdc00 && next <= 0xdfff)) throw new Error("protobuf: unpaired UTF-16 surrogate in string");
+      if (!(next >= 0xdc00 && next <= 0xdfff))
+        throw new Error("protobuf: unpaired UTF-16 surrogate in string");
       i++;
     } else if (c >= 0xdc00 && c <= 0xdfff) {
       throw new Error("protobuf: unpaired UTF-16 surrogate in string");
@@ -196,11 +221,12 @@ function nanosFraction(nanos: number): string {
 function timestampToJson(value: Record<string, unknown>): string {
   const seconds = BigInt((value.seconds as bigint | number | undefined) ?? 0);
   const nanos = Number(value.nanos ?? 0);
-  if (seconds < TS_MIN || seconds > TS_MAX) throw new Error("protobuf: Timestamp seconds out of range");
+  if (seconds < TS_MIN || seconds > TS_MAX)
+    throw new Error("protobuf: Timestamp seconds out of range");
   if (nanos < 0 || nanos > 999999999) throw new Error("protobuf: Timestamp nanos out of range");
   const date = new Date(Number(seconds) * 1000);
   const base = date.toISOString().slice(0, 19); // YYYY-MM-DDTHH:MM:SS
-  return base + (nanos ? "." + nanosFraction(nanos) : "") + "Z";
+  return `${base + (nanos ? `.${nanosFraction(nanos)}` : "")}Z`;
 }
 
 function timestampFromJson(j: JsonValue): Record<string, unknown> {
@@ -211,7 +237,8 @@ function timestampFromJson(j: JsonValue): Record<string, unknown> {
   if (Number.isNaN(ms)) throw new Error(`protobuf: invalid Timestamp "${j}"`);
   const seconds = BigInt(Math.floor(ms / 1000));
   const nanos = m[2] ? Number(m[2].padEnd(9, "0").slice(0, 9)) : 0;
-  if (seconds < TS_MIN || seconds > TS_MAX) throw new Error(`protobuf: Timestamp "${j}" out of range`);
+  if (seconds < TS_MIN || seconds > TS_MAX)
+    throw new Error(`protobuf: Timestamp "${j}" out of range`);
   const out: Record<string, unknown> = {};
   if (seconds !== 0n) out.seconds = seconds;
   if (nanos !== 0) out.nanos = nanos;
@@ -221,15 +248,17 @@ function timestampFromJson(j: JsonValue): Record<string, unknown> {
 function durationToJson(value: Record<string, unknown>): string {
   const seconds = BigInt((value.seconds as bigint | number | undefined) ?? 0);
   const nanos = Number(value.nanos ?? 0);
-  if (seconds < -DUR_MAX || seconds > DUR_MAX) throw new Error("protobuf: Duration seconds out of range");
-  if (nanos < -999999999 || nanos > 999999999) throw new Error("protobuf: Duration nanos out of range");
+  if (seconds < -DUR_MAX || seconds > DUR_MAX)
+    throw new Error("protobuf: Duration seconds out of range");
+  if (nanos < -999999999 || nanos > 999999999)
+    throw new Error("protobuf: Duration nanos out of range");
   if (seconds !== 0n && nanos !== 0 && seconds < 0n !== nanos < 0) {
     throw new Error("protobuf: Duration seconds and nanos must share sign");
   }
   const neg = seconds < 0n || nanos < 0;
   const absSec = seconds < 0n ? -seconds : seconds;
   const absNanos = Math.abs(nanos);
-  return (neg ? "-" : "") + absSec.toString() + (absNanos ? "." + nanosFraction(absNanos) : "") + "s";
+  return `${(neg ? "-" : "") + absSec.toString() + (absNanos ? `.${nanosFraction(absNanos)}` : "")}s`;
 }
 
 function durationFromJson(j: JsonValue): Record<string, unknown> {
@@ -238,8 +267,12 @@ function durationFromJson(j: JsonValue): Record<string, unknown> {
   if (!m) throw new Error(`protobuf: invalid Duration "${j}"`);
   let seconds = BigInt(m[2]!);
   let nanos = m[3] ? Number(m[3].padEnd(9, "0").slice(0, 9)) : 0;
-  if (m[1] === "-") { seconds = -seconds; nanos = -nanos; }
-  if (seconds < -DUR_MAX || seconds > DUR_MAX) throw new Error(`protobuf: Duration "${j}" out of range`);
+  if (m[1] === "-") {
+    seconds = -seconds;
+    nanos = -nanos;
+  }
+  if (seconds < -DUR_MAX || seconds > DUR_MAX)
+    throw new Error(`protobuf: Duration "${j}" out of range`);
   const out: Record<string, unknown> = {};
   if (seconds !== 0n) out.seconds = seconds;
   if (nanos !== 0) out.nanos = nanos;
@@ -256,8 +289,10 @@ function valueToJson(value: Record<string, unknown>, registry: Registry): JsonVa
   }
   if ("stringValue" in value) return value.stringValue as string;
   if ("boolValue" in value) return value.boolValue as boolean;
-  if ("structValue" in value) return structToJson(value.structValue as Record<string, unknown>, registry);
-  if ("listValue" in value) return listValueToJson(value.listValue as Record<string, unknown>, registry);
+  if ("structValue" in value)
+    return structToJson(value.structValue as Record<string, unknown>, registry);
+  if ("listValue" in value)
+    return listValueToJson(value.listValue as Record<string, unknown>, registry);
   return null;
 }
 
@@ -267,8 +302,10 @@ function valueFromJson(j: JsonValue, ctx: Ctx): Record<string, unknown> {
     case "number":
       if (!Number.isFinite(j)) throw new Error("protobuf: Value number must be finite");
       return { numberValue: j };
-    case "string": return { stringValue: j };
-    case "boolean": return { boolValue: j };
+    case "string":
+      return { stringValue: j };
+    case "boolean":
+      return { boolValue: j };
   }
   if (Array.isArray(j)) return { listValue: { values: j.map((e) => valueFromJson(e, ctx)) } };
   return { structValue: structFromJson(j as { [k: string]: JsonValue }, ctx) };
@@ -300,14 +337,16 @@ function listValueFromJson(j: JsonValue, ctx: Ctx): Record<string, unknown> {
 // ── FieldMask ↔ comma-joined camelCase path string ───────────────────────────
 function fieldMaskToJson(value: Record<string, unknown>): string {
   const paths = (value.paths as string[] | undefined) ?? [];
-  return paths.map((p) => {
-    const camel = p.split(".").map(camelCase).join(".");
-    // A path must be lower-snake-case so it survives the camel↔snake round trip.
-    if (camel.split(".").map(snakeCase).join(".") !== p) {
-      throw new Error(`protobuf: FieldMask path "${p}" is not a valid field path`);
-    }
-    return camel;
-  }).join(",");
+  return paths
+    .map((p) => {
+      const camel = p.split(".").map(camelCase).join(".");
+      // A path must be lower-snake-case so it survives the camel↔snake round trip.
+      if (camel.split(".").map(snakeCase).join(".") !== p) {
+        throw new Error(`protobuf: FieldMask path "${p}" is not a valid field path`);
+      }
+      return camel;
+    })
+    .join(",");
 }
 
 function fieldMaskFromJson(j: JsonValue): Record<string, unknown> {
@@ -382,25 +421,40 @@ function anyFromJson(j: JsonValue, ctx: Ctx): Record<string, unknown> {
 function scalarToJson(t: ScalarType, v: unknown): JsonValue {
   if (BIGINT_SCALARS.has(t)) return String(v as bigint);
   switch (t) {
-    case "double": case "float": {
+    case "double":
+    case "float": {
       const n = v as number;
       if (Number.isFinite(n)) return n;
       if (Number.isNaN(n)) return "NaN";
       return n > 0 ? "Infinity" : "-Infinity";
     }
-    case "bytes": return base64Encode(v as Uint8Array);
-    default: return v as JsonValue; // int32/uint32/sint32/fixed32/sfixed32/bool/string
+    case "bytes":
+      return base64Encode(v as Uint8Array);
+    default:
+      return v as JsonValue; // int32/uint32/sint32/fixed32/sfixed32/bool/string
   }
 }
 
 function scalarFromJson(t: ScalarType, j: JsonValue): unknown {
   switch (t) {
-    case "int32": case "sint32": case "sfixed32": return parseIntStrict(j, I32_MIN, I32_MAX);
-    case "uint32": case "fixed32": return parseIntStrict(j, 0, U32_MAX);
-    case "int64": case "sint64": case "sfixed64": return parseBigIntStrict(j, I64_MIN, I64_MAX);
-    case "uint64": case "fixed64": return parseBigIntStrict(j, 0n, U64_MAX);
-    case "double": return parseFloatStrict(j, false);
-    case "float": return parseFloatStrict(j, true);
+    case "int32":
+    case "sint32":
+    case "sfixed32":
+      return parseIntStrict(j, I32_MIN, I32_MAX);
+    case "uint32":
+    case "fixed32":
+      return parseIntStrict(j, 0, U32_MAX);
+    case "int64":
+    case "sint64":
+    case "sfixed64":
+      return parseBigIntStrict(j, I64_MIN, I64_MAX);
+    case "uint64":
+    case "fixed64":
+      return parseBigIntStrict(j, 0n, U64_MAX);
+    case "double":
+      return parseFloatStrict(j, false);
+    case "float":
+      return parseFloatStrict(j, true);
     case "bool":
       if (typeof j !== "boolean") throw new Error("protobuf: bool field expects true or false");
       return j;
@@ -464,10 +518,14 @@ function isJsonOmittable(field: Field, v: unknown): boolean {
     const t = field.type.scalar;
     if (BIGINT_SCALARS.has(t)) return BigInt(v as bigint | number) === 0n;
     switch (t) {
-      case "bool": return v === false;
-      case "string": return v === "";
-      case "bytes": return (v as Uint8Array).length === 0;
-      default: return v === 0;
+      case "bool":
+        return v === false;
+      case "string":
+        return v === "";
+      case "bytes":
+        return (v as Uint8Array).length === 0;
+      default:
+        return v === 0;
     }
   }
   if (field.type.kind === "enum") {
@@ -477,16 +535,28 @@ function isJsonOmittable(field: Field, v: unknown): boolean {
   return false; // singular message: presence is meaningful
 }
 
-export function messageToJson(message: MessageType, value: Record<string, unknown>, registry: Registry): JsonValue {
+export function messageToJson(
+  message: MessageType,
+  value: Record<string, unknown>,
+  registry: Registry,
+): JsonValue {
   switch (message.fullName) {
-    case "google.protobuf.Timestamp": return timestampToJson(value);
-    case "google.protobuf.Duration": return durationToJson(value);
-    case "google.protobuf.FieldMask": return fieldMaskToJson(value);
-    case "google.protobuf.Struct": return structToJson(value, registry);
-    case "google.protobuf.Value": return valueToJson(value, registry);
-    case "google.protobuf.ListValue": return listValueToJson(value, registry);
-    case "google.protobuf.Any": return anyToJson(value, registry);
-    case "google.protobuf.Empty": return {};
+    case "google.protobuf.Timestamp":
+      return timestampToJson(value);
+    case "google.protobuf.Duration":
+      return durationToJson(value);
+    case "google.protobuf.FieldMask":
+      return fieldMaskToJson(value);
+    case "google.protobuf.Struct":
+      return structToJson(value, registry);
+    case "google.protobuf.Value":
+      return valueToJson(value, registry);
+    case "google.protobuf.ListValue":
+      return listValueToJson(value, registry);
+    case "google.protobuf.Any":
+      return anyToJson(value, registry);
+    case "google.protobuf.Empty":
+      return {};
   }
   if (WRAPPERS.has(message.fullName)) return wrapperToJson(message, value);
 
@@ -504,8 +574,10 @@ export function messageToJson(message: MessageType, value: Record<string, unknow
 function singleFromJson(type: FieldType, j: JsonValue, ctx: Ctx): unknown {
   if (j === null) {
     // Only Value and NullValue accept JSON null in element/value position.
-    if (type.kind === "message" && type.message.fullName === "google.protobuf.Value") return valueFromJson(null, ctx);
-    if (type.kind === "enum" && type.enum.fullName === "google.protobuf.NullValue") return "NULL_VALUE";
+    if (type.kind === "message" && type.message.fullName === "google.protobuf.Value")
+      return valueFromJson(null, ctx);
+    if (type.kind === "enum" && type.enum.fullName === "google.protobuf.NullValue")
+      return "NULL_VALUE";
     throw new Error("protobuf: null is not a valid value here");
   }
   if (type.kind === "scalar") return scalarFromJson(type.scalar, j);
@@ -526,7 +598,8 @@ function fieldFromJson(field: Field, j: JsonValue, ctx: Ctx): unknown {
     return out;
   }
   if (field.repeated) {
-    if (!Array.isArray(j)) throw new Error(`protobuf: repeated field "${field.name}" JSON must be an array`);
+    if (!Array.isArray(j))
+      throw new Error(`protobuf: repeated field "${field.name}" JSON must be an array`);
     const out: unknown[] = [];
     for (const e of j) {
       const v = singleFromJson(field.type, e, ctx);
@@ -538,22 +611,32 @@ function fieldFromJson(field: Field, j: JsonValue, ctx: Ctx): unknown {
 }
 
 function isNullableField(type: FieldType): boolean {
-  return (type.kind === "message" && type.message.fullName === "google.protobuf.Value")
-    || (type.kind === "enum" && type.enum.fullName === "google.protobuf.NullValue");
+  return (
+    (type.kind === "message" && type.message.fullName === "google.protobuf.Value") ||
+    (type.kind === "enum" && type.enum.fullName === "google.protobuf.NullValue")
+  );
 }
 
 function messageFromJsonCtx(message: MessageType, j: JsonValue, ctx: Ctx): Record<string, unknown> {
   switch (message.fullName) {
-    case "google.protobuf.Timestamp": return timestampFromJson(j);
-    case "google.protobuf.Duration": return durationFromJson(j);
-    case "google.protobuf.FieldMask": return fieldMaskFromJson(j);
+    case "google.protobuf.Timestamp":
+      return timestampFromJson(j);
+    case "google.protobuf.Duration":
+      return durationFromJson(j);
+    case "google.protobuf.FieldMask":
+      return fieldMaskFromJson(j);
     case "google.protobuf.Struct":
-      if (j === null || typeof j !== "object" || Array.isArray(j)) throw new Error("protobuf: Struct JSON must be an object");
+      if (j === null || typeof j !== "object" || Array.isArray(j))
+        throw new Error("protobuf: Struct JSON must be an object");
       return structFromJson(j, ctx);
-    case "google.protobuf.Value": return valueFromJson(j, ctx);
-    case "google.protobuf.ListValue": return listValueFromJson(j, ctx);
-    case "google.protobuf.Any": return anyFromJson(j, ctx);
-    case "google.protobuf.Empty": return {};
+    case "google.protobuf.Value":
+      return valueFromJson(j, ctx);
+    case "google.protobuf.ListValue":
+      return listValueFromJson(j, ctx);
+    case "google.protobuf.Any":
+      return anyFromJson(j, ctx);
+    case "google.protobuf.Empty":
+      return {};
   }
   if (WRAPPERS.has(message.fullName)) return wrapperFromJson(message, j);
 
@@ -574,7 +657,10 @@ function messageFromJsonCtx(message: MessageType, j: JsonValue, ctx: Ctx): Recor
     // NullValue treat null as a meaningful value.
     if (val === null && !isNullableField(field.type)) continue;
     if (field.oneofIndex >= 0) {
-      if (seenOneof.has(field.oneofIndex)) throw new Error(`protobuf: multiple values for oneof "${message.oneofs[field.oneofIndex]!.name}"`);
+      if (seenOneof.has(field.oneofIndex))
+        throw new Error(
+          `protobuf: multiple values for oneof "${message.oneofs[field.oneofIndex]!.name}"`,
+        );
       seenOneof.add(field.oneofIndex);
     }
     const v = fieldFromJson(field, val, ctx);
@@ -589,5 +675,8 @@ export function messageFromJson(
   registry: Registry,
   opts: FromJsonOptions = {},
 ): Record<string, unknown> {
-  return messageFromJsonCtx(message, j, { registry, ignoreUnknown: opts.ignoreUnknownFields ?? false });
+  return messageFromJsonCtx(message, j, {
+    registry,
+    ignoreUnknown: opts.ignoreUnknownFields ?? false,
+  });
 }

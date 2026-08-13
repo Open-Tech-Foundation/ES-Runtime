@@ -4,8 +4,9 @@
 // maps to explicit presence; `extend`/extension fields are skipped (they decode
 // as unknown), and custom field defaults (`[default = …]`) parse but are not
 // materialized (the decoded value shape stays sparse).
-import { Lexer, type Token } from "./lexer.js";
+
 import { type FeatureSet, featureFromOption } from "./features.js";
+import { Lexer, type Token } from "./lexer.js";
 
 export interface AstField {
   label: "singular" | "optional" | "repeated" | "required";
@@ -53,8 +54,21 @@ export interface ParsedFile {
 }
 
 const SCALARS = new Set([
-  "double", "float", "int32", "int64", "uint32", "uint64", "sint32", "sint64",
-  "fixed32", "fixed64", "sfixed32", "sfixed64", "bool", "string", "bytes",
+  "double",
+  "float",
+  "int32",
+  "int64",
+  "uint32",
+  "uint64",
+  "sint32",
+  "sint64",
+  "fixed32",
+  "fixed64",
+  "sfixed32",
+  "sfixed64",
+  "bool",
+  "string",
+  "bytes",
 ]);
 
 export function parseProto(source: string): ParsedFile {
@@ -132,7 +146,8 @@ class Parser {
           this.lx.next();
           this.expectSym("=");
           const v = this.expectStr();
-          if (v !== "2023" && v !== "2024") this.err(`unsupported edition "${v}" (only 2023, 2024)`, t.line);
+          if (v !== "2023" && v !== "2024")
+            this.err(`unsupported edition "${v}" (only 2023, 2024)`, t.line);
           file.syntax = v;
           this.syntax = v;
           this.expectSym(";");
@@ -316,7 +331,8 @@ class Parser {
       this.err("'required' fields are only valid in proto2", lead.line);
     }
     if (this.isKeyword(this.lx.peek(), "group")) {
-      if (this.syntax !== "proto2") this.err("groups are only valid in proto2", this.lx.peek().line);
+      if (this.syntax !== "proto2")
+        this.err("groups are only valid in proto2", this.lx.peek().line);
       this.lx.next(); // 'group'
       const groupName = this.expectIdent();
       this.expectSym("=");
@@ -324,7 +340,13 @@ class Parser {
       msg.messages.push(this.parseMessageBody(groupName));
       // The field's name is the lowercased group name; a group is wire-encoded
       // as a delimited message (the editions DELIMITED message-encoding feature).
-      msg.fields.push({ label, typeName: groupName, name: groupName.toLowerCase(), number, features: { messageEncoding: "DELIMITED" } });
+      msg.fields.push({
+        label,
+        typeName: groupName,
+        name: groupName.toLowerCase(),
+        number,
+        features: { messageEncoding: "DELIMITED" },
+      });
       return;
     }
     msg.fields.push(this.parseFieldTail(label));
@@ -340,7 +362,14 @@ class Parser {
     const name = this.expectIdent();
     this.expectSym("=");
     const number = this.parseInt32();
-    const field: AstField = { label: "repeated", typeName: "", name, number, features: {}, map: { key, value } };
+    const field: AstField = {
+      label: "repeated",
+      typeName: "",
+      name,
+      number,
+      features: {},
+      map: { key, value },
+    };
     this.parseFieldOptions(field);
     this.expectSym(";");
     return field;
@@ -374,7 +403,7 @@ class Parser {
       key = "";
     } else {
       key = this.expectIdent();
-      while (this.acceptSym(".")) key += "." + this.expectIdent();
+      while (this.acceptSym(".")) key += `.${this.expectIdent()}`;
     }
     this.expectSym("=");
     const value = this.parseOptionValue();
@@ -466,9 +495,10 @@ class Parser {
     }
     const t = this.lx.next();
     if (t.kind !== "num") this.err(`expected number, got '${t.value}'`, t.line);
-    const n = t.value.startsWith("0x") || t.value.startsWith("0X")
-      ? parseInt(t.value, 16)
-      : parseInt(t.value, 10);
+    const n =
+      t.value.startsWith("0x") || t.value.startsWith("0X")
+        ? parseInt(t.value, 16)
+        : parseInt(t.value, 10);
     if (!Number.isFinite(n)) this.err(`bad number '${t.value}'`, t.line);
     return sign * n;
   }
@@ -480,7 +510,7 @@ class Parser {
     name += this.expectIdent();
     while (this.lx.peek().kind === "sym" && this.lx.peek().value === ".") {
       this.lx.next();
-      name += "." + this.expectIdent();
+      name += `.${this.expectIdent()}`;
     }
     return name;
   }

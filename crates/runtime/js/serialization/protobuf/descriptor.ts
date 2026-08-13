@@ -3,15 +3,29 @@
 // concrete flags below), consumed by decode.ts / encode.ts.
 
 export type ScalarType =
-  | "double" | "float"
-  | "int32" | "int64" | "uint32" | "uint64"
-  | "sint32" | "sint64"
-  | "fixed32" | "fixed64" | "sfixed32" | "sfixed64"
-  | "bool" | "string" | "bytes";
+  | "double"
+  | "float"
+  | "int32"
+  | "int64"
+  | "uint32"
+  | "uint64"
+  | "sint32"
+  | "sint64"
+  | "fixed32"
+  | "fixed64"
+  | "sfixed32"
+  | "sfixed64"
+  | "bool"
+  | "string"
+  | "bytes";
 
 /** Scalar types decoded/encoded as BigInt (the 64-bit family). */
 export const BIGINT_SCALARS: ReadonlySet<ScalarType> = new Set([
-  "int64", "uint64", "sint64", "fixed64", "sfixed64",
+  "int64",
+  "uint64",
+  "sint64",
+  "fixed64",
+  "sfixed64",
 ]);
 
 export interface EnumType {
@@ -69,12 +83,19 @@ export interface MessageType {
  *  decide whether to omit it on encode and what an absent field means. */
 export function scalarDefault(t: ScalarType): unknown {
   switch (t) {
-    case "double": case "float":
-    case "int32": case "uint32": case "sint32":
-    case "fixed32": case "sfixed32":
+    case "double":
+    case "float":
+    case "int32":
+    case "uint32":
+    case "sint32":
+    case "fixed32":
+    case "sfixed32":
       return 0;
-    case "int64": case "uint64": case "sint64":
-    case "fixed64": case "sfixed64":
+    case "int64":
+    case "uint64":
+    case "sint64":
+    case "fixed64":
+    case "sfixed64":
       return 0n;
     case "bool":
       return false;

@@ -27,19 +27,24 @@ const fdset = new Uint8Array(readFileSync(new URL("./fixtures/order.fdset", impo
 const value = {
   id: "o1",
   totalCents: 9007199254740993n,
-  items: [{ sku: "a", qty: 2 }, { sku: "b", qty: 1 }],
+  items: [
+    { sku: "a", qty: 2 },
+    { sku: "b", qty: 1 },
+  ],
   counts: { a: 2, b: 1 },
-  card: "4242",            // sets the "payment" oneof
+  card: "4242", // sets the "payment" oneof
   tier: "PRO",
   createdAt: { seconds: 1704164645n },
   signature: new Uint8Array([1, 2, 3, 255]),
-  discount: 0,             // proto3 optional → explicit presence, kept at 0
+  discount: 0, // proto3 optional → explicit presence, kept at 0
 };
 
 test("fromDescriptorSet encodes byte-identically to a .proto-text schema", () => {
   const fromSet = Schema.fromDescriptorSet(fdset);
   const fromText = new Schema(ORDER_PROTO);
-  expect([...fromSet.encode("shop.Order", value)]).toEqual([...fromText.encode("shop.Order", value)]);
+  expect([...fromSet.encode("shop.Order", value)]).toEqual([
+    ...fromText.encode("shop.Order", value),
+  ]);
 });
 
 test("fromDescriptorSet round-trips binary and JSON (maps, oneofs, enums, nested, WKT)", () => {
@@ -72,22 +77,28 @@ const META = `
 test("fromDescriptorSet accepts a proto2 descriptor (unset syntax, required label)", () => {
   const meta = new Schema(META);
   const proto2Set = meta.encode("google.protobuf.FileDescriptorSet", {
-    file: [{
-      name: "person.proto",
-      package: "people",
-      // no `syntax` member → proto2
-      messageType: [{
-        name: "Person",
-        field: [
-          { name: "name", number: 1, label: "LABEL_REQUIRED", type: "TYPE_STRING" },
-          { name: "age", number: 2, label: "LABEL_OPTIONAL", type: "TYPE_INT32" },
+    file: [
+      {
+        name: "person.proto",
+        package: "people",
+        // no `syntax` member → proto2
+        messageType: [
+          {
+            name: "Person",
+            field: [
+              { name: "name", number: 1, label: "LABEL_REQUIRED", type: "TYPE_STRING" },
+              { name: "age", number: 2, label: "LABEL_OPTIONAL", type: "TYPE_INT32" },
+            ],
+          },
         ],
-      }],
-    }],
+      },
+    ],
   });
 
   const fromSet = Schema.fromDescriptorSet(proto2Set);
-  const fromText = new Schema(`syntax="proto2"; package people; message Person { required string name = 1; optional int32 age = 2; }`);
+  const fromText = new Schema(
+    `syntax="proto2"; package people; message Person { required string name = 1; optional int32 age = 2; }`,
+  );
   const v = { name: "ada", age: 0 }; // proto2 optional → explicit presence, 0 is kept
   expect([...fromSet.encode("people.Person", v)]).toEqual([...fromText.encode("people.Person", v)]);
   expect(fromSet.decode("people.Person", fromSet.encode("people.Person", v))).toEqual(v);

@@ -20,8 +20,9 @@
  * present the same methods without either of them reimplementing eighty, even
  * though each already has a base class of its own. See `mixinCommands` below.
  */
-import type { CommandArg } from "./protocol/resp.js";
+
 import type { RedisPipeline, RedisTransaction } from "./batch.js";
+import type { CommandArg } from "./protocol/resp.js";
 
 /** What can run a built transaction — a client, or a pool. */
 export interface TransactionRunner {
@@ -349,7 +350,10 @@ export abstract class RedisCommands {
    * `scan` exists: `HGETALL` builds the whole reply on the server and sends it
    * in one go, where this pays for a page at a time.
    */
-  async *hscanIterator(key: string, options: ScanOptions = {}): AsyncGenerator<[string, RedisValue]> {
+  async *hscanIterator(
+    key: string,
+    options: ScanOptions = {},
+  ): AsyncGenerator<[string, RedisValue]> {
     let cursor = "0";
     do {
       const page = await this.hscan(key, cursor, options);
@@ -369,7 +373,10 @@ export abstract class RedisCommands {
   }
 
   /** Every member of a sorted set with its score, a page at a time. */
-  async *zscanIterator(key: string, options: ScanOptions = {}): AsyncGenerator<[RedisValue, number]> {
+  async *zscanIterator(
+    key: string,
+    options: ScanOptions = {},
+  ): AsyncGenerator<[RedisValue, number]> {
     let cursor = "0";
     do {
       const page = await this.zscan(key, cursor, options);
@@ -385,7 +392,11 @@ export abstract class RedisCommands {
   }
 
   /** Sets one field, or many when given an object. Returns fields **added**. */
-  async hset(key: string, field: string | Record<string, CommandArg>, value?: CommandArg): Promise<number> {
+  async hset(
+    key: string,
+    field: string | Record<string, CommandArg>,
+    value?: CommandArg,
+  ): Promise<number> {
     const args: CommandArg[] = ["HSET", key];
     if (typeof field === "string") {
       args.push(field, value as CommandArg);
@@ -455,14 +466,24 @@ export abstract class RedisCommands {
    */
   async hexpire(key: string, seconds: number, ...fields: string[]): Promise<number[]> {
     const reply = (await this.call([
-      "HEXPIRE", key, seconds, "FIELDS", fields.length, ...fields,
+      "HEXPIRE",
+      key,
+      seconds,
+      "FIELDS",
+      fields.length,
+      ...fields,
     ])) as unknown[];
     return reply.map(count);
   }
 
   async hpexpire(key: string, milliseconds: number, ...fields: string[]): Promise<number[]> {
     const reply = (await this.call([
-      "HPEXPIRE", key, milliseconds, "FIELDS", fields.length, ...fields,
+      "HPEXPIRE",
+      key,
+      milliseconds,
+      "FIELDS",
+      fields.length,
+      ...fields,
     ])) as unknown[];
     return reply.map(count);
   }
@@ -475,7 +496,11 @@ export abstract class RedisCommands {
 
   async hpersist(key: string, ...fields: string[]): Promise<number[]> {
     const reply = (await this.call([
-      "HPERSIST", key, "FIELDS", fields.length, ...fields,
+      "HPERSIST",
+      key,
+      "FIELDS",
+      fields.length,
+      ...fields,
     ])) as unknown[];
     return reply.map(count);
   }
@@ -547,7 +572,11 @@ export abstract class RedisCommands {
   }
 
   /** The index of the first matching element, or `null`. */
-  async lpos(key: string, value: CommandArg, options: { rank?: number } = {}): Promise<number | null> {
+  async lpos(
+    key: string,
+    value: CommandArg,
+    options: { rank?: number } = {},
+  ): Promise<number | null> {
     const args: CommandArg[] = ["LPOS", key, value];
     if (options.rank !== undefined) args.push("RANK", options.rank);
     const reply = await this.call(args);
@@ -594,7 +623,8 @@ export abstract class RedisCommands {
   }
 
   async srandmember(key: string, count_?: number): Promise<RedisValue | RedisValue[] | null> {
-    const args: CommandArg[] = count_ === undefined ? ["SRANDMEMBER", key] : ["SRANDMEMBER", key, count_];
+    const args: CommandArg[] =
+      count_ === undefined ? ["SRANDMEMBER", key] : ["SRANDMEMBER", key, count_];
     return (await this.call(args)) as RedisValue | RedisValue[] | null;
   }
 
@@ -950,9 +980,7 @@ export abstract class RedisCommands {
   async geopos(key: string, ...members: string[]): Promise<(GeoPosition | null)[]> {
     const reply = (await this.call(["GEOPOS", key, ...members])) as unknown[];
     return reply.map((point) =>
-      Array.isArray(point)
-        ? { longitude: Number(point[0]), latitude: Number(point[1]) }
-        : null,
+      Array.isArray(point) ? { longitude: Number(point[0]), latitude: Number(point[1]) } : null,
     );
   }
 
@@ -1032,12 +1060,18 @@ export abstract class RedisCommands {
    * remembering which end of a two-element array is which is not a thing an API
    * should ask of anyone.
    */
-  async blpop(keys: string | string[], timeout: number): Promise<{ key: string; value: RedisValue } | null> {
+  async blpop(
+    keys: string | string[],
+    timeout: number,
+  ): Promise<{ key: string; value: RedisValue } | null> {
     return popped(await this.call(["BLPOP", ...many(keys), timeout]));
   }
 
   /** `BRPOP` — the same, from the tail. */
-  async brpop(keys: string | string[], timeout: number): Promise<{ key: string; value: RedisValue } | null> {
+  async brpop(
+    keys: string | string[],
+    timeout: number,
+  ): Promise<{ key: string; value: RedisValue } | null> {
     return popped(await this.call(["BRPOP", ...many(keys), timeout]));
   }
 
@@ -1049,7 +1083,14 @@ export abstract class RedisCommands {
     from: "LEFT" | "RIGHT" = "LEFT",
     to: "LEFT" | "RIGHT" = "RIGHT",
   ): Promise<RedisValue | null> {
-    return (await this.call(["BLMOVE", source, destination, from, to, timeout])) as RedisValue | null;
+    return (await this.call([
+      "BLMOVE",
+      source,
+      destination,
+      from,
+      to,
+      timeout,
+    ])) as RedisValue | null;
   }
 
   /** `BZPOPMIN` — pop the lowest-scored member of the first non-empty set. */
@@ -1106,7 +1147,11 @@ export abstract class RedisCommands {
     const list = many(keys);
     for (;;) {
       if (options.signal?.aborted) return;
-      const job = popped(await this.call([pop, ...list, timeout], { ...(options.signal ? { signal: options.signal } : {}) }));
+      const job = popped(
+        await this.call([pop, ...list, timeout], {
+          ...(options.signal ? { signal: options.signal } : {}),
+        }),
+      );
       // `null` is the wait expiring with nothing to show, which is ordinary and
       // not the end of the queue — go round again.
       if (job !== null) yield job;
@@ -1134,7 +1179,8 @@ export abstract class RedisCommands {
 
   /** The channels with at least one subscriber. */
   async pubsubChannels(pattern?: string): Promise<string[]> {
-    const args: CommandArg[] = pattern === undefined ? ["PUBSUB", "CHANNELS"] : ["PUBSUB", "CHANNELS", pattern];
+    const args: CommandArg[] =
+      pattern === undefined ? ["PUBSUB", "CHANNELS"] : ["PUBSUB", "CHANNELS", pattern];
     return ((await this.call(args)) as unknown[]).map(String);
   }
 

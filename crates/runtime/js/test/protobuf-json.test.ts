@@ -11,13 +11,25 @@ test("scalar JSON mapping: 64-bit as string, bytes as base64, enum as name", () 
     }
   `);
   const value = {
-    i: -7, big: 9007199254740993n, ubig: 18446744073709551615n,
-    d: 1.5, b: true, s: "hi", by: new Uint8Array([1, 2, 3, 255]), c: "GREEN",
+    i: -7,
+    big: 9007199254740993n,
+    ubig: 18446744073709551615n,
+    d: 1.5,
+    b: true,
+    s: "hi",
+    by: new Uint8Array([1, 2, 3, 255]),
+    c: "GREEN",
   };
   const json = s.toJson("M", value);
   expect(json).toEqual({
-    i: -7, big: "9007199254740993", ubig: "18446744073709551615",
-    d: 1.5, b: true, s: "hi", by: "AQID/w==", c: "GREEN",
+    i: -7,
+    big: "9007199254740993",
+    ubig: "18446744073709551615",
+    d: 1.5,
+    b: true,
+    s: "hi",
+    by: "AQID/w==",
+    c: "GREEN",
   });
   expect(s.fromJson("M", json)).toEqual(value);
 });

@@ -1,6 +1,7 @@
 // Pub/sub, on a connection given over to it.
-import { exit, env } from "runtime:process";
+
 import { connect, DbErrorCode } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -94,8 +95,11 @@ const pub = await connect(url, { driver: redis });
 
   await pub.publish("news.sport", "goal");
   await until(() => seen.length === 1, "the pattern message");
-  is(seen[0], ["news.*", "news.sport", "goal"],
-    "a pattern delivery carries the pattern and the concrete channel");
+  is(
+    seen[0],
+    ["news.*", "news.sport", "goal"],
+    "a pattern delivery carries the pattern and the concrete channel",
+  );
 
   await pub.publish("weather.today", "rain");
   await new Promise((r) => setTimeout(r, 100));
@@ -136,8 +140,11 @@ const pub = await connect(url, { driver: redis });
   } catch (e) {
     code = e.code;
   }
-  is(code, DbErrorCode.ConnectionBusy,
-    "a subscribed connection refuses ordinary commands rather than hanging");
+  is(
+    code,
+    DbErrorCode.ConnectionBusy,
+    "a subscribed connection refuses ordinary commands rather than hanging",
+  );
 
   // You cannot publish from the connection you subscribe on, which is the
   // reason a program that does both needs two.
@@ -161,7 +168,7 @@ const pub = await connect(url, { driver: redis });
   } catch (e) {
     message = e.message;
   }
-  ok(message !== null && message.includes("subscribe"), "a raw SUBSCRIBE points at the API");
+  ok(message?.includes("subscribe"), "a raw SUBSCRIBE points at the API");
   is(await r.ping(), "PONG", "and the connection is untouched by the refusal");
   await r.close();
 }

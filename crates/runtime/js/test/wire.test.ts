@@ -25,7 +25,15 @@ test("sint32 zigzag round-trip", () => {
 });
 
 test("varint64 / int64 / uint64 / sint64 BigInt round-trip", () => {
-  const cases: bigint[] = [0n, 1n, -1n, 9007199254740993n, -9007199254740993n, 18446744073709551615n, -9223372036854775808n];
+  const cases: bigint[] = [
+    0n,
+    1n,
+    -1n,
+    9007199254740993n,
+    -9007199254740993n,
+    18446744073709551615n,
+    -9223372036854775808n,
+  ];
   for (const v of cases) {
     let w = new Writer();
     w.varint64(v);

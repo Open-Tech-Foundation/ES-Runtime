@@ -1,0 +1,139 @@
+# Hardening and supply-chain gates: the MSRV build, fuzzing, and the dependency
+# audits.
+#
+# Not on every pull request, deliberately. `msrv` and `fuzz` each cost a
+# V8-linked build, and none of these four tells you anything new about a change
+# that did not touch dependencies or unsafe code — while `cargo audit` is the
+# opposite case, going stale on its own as advisories are published against code
+# that has not changed. A schedule fits all four better than a PR does.
+#
+# So: daily, on every push to main, and on a pull request that touches the
+# dependency graph or the toolchain.
+#
+# `miri` stays in ci.yml. It guards the `unsafe` in the engine's FFI seam, needs
+# no V8 build, and that is exactly what a pull request should check.
+name: Hardening
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 03:00 UTC daily — advisories land without anyone pushing.
+    - cron: "0 3 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Same always-run gate as js.yml: a required check that never arrives blocks a
+  # merge forever, so the workflow always runs and the expensive jobs skip.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      deps: ${{ steps.filter.outputs.deps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "deps=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          if git diff --name-only "$base"...HEAD \
+            | grep -qE '^(Cargo\.(toml|lock)|deny\.toml|rust-toolchain\.toml|crates/.*/Cargo\.toml|fuzz/|\.github/workflows/hardening\.yml)'; then
+            echo "deps=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deps=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  msrv:
+    name: msrv build (1.95)
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # Build with the declared MSRV explicitly, overriding rust-toolchain.toml.
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - run: cargo +1.95.0 build --workspace --all-features
+
+  # Fuzzing (SPEC §5). Each target gets a bounded run seeded from the committed
+  # corpus in `fuzz/seeds/` — which includes the inputs that have found bugs, so
+  # a regression is caught in the first seconds rather than rediscovered. This is
+  # a smoke run, not a campaign: long-running fuzzing belongs on dedicated
+  # infrastructure, and the point here is that the targets build and that no
+  # committed seed crashes.
+  fuzz:
+    name: cargo-fuzz
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target\nfuzz -> fuzz/target"
+      # cargo-fuzz builds with a sanitizer, which needs nightly.
+      - run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Run each target for 60s
+        run: |
+          set -euo pipefail
+          for target in url encoding urlpattern compression serialization keys; do
+            echo "::group::fuzz $target"
+            # New coverage-increasing inputs go to the (gitignored) corpus
+            # directory; the seeds are read-only, so a run cannot bloat them.
+            cargo +nightly fuzz run "$target" \
+              "fuzz/corpus/$target" "fuzz/seeds/$target" \
+              -- -max_total_time=60 -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+      # A crash writes its input here; keep it so the failure is reproducible
+      # from the run rather than only from whoever can rerun the fuzzer.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+
+  # Miri (SPEC §5) over the crates that do not link V8. `engine` and everything
+  # above it cannot run here: Miri interprets Rust, and V8 is a prebuilt native
+  # library it cannot execute. Checking that boundary needs ASAN over a V8 built
+  # from source with `-fsanitize=address` — see SPEC §5 for why that is not a job
+  # here yet.
+  deny:
+    name: cargo-deny
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
+  audit:
+    name: cargo-audit
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit

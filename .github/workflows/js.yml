@@ -1,0 +1,259 @@
+# CI for the JavaScript in this repo: the two database drivers
+# (packages/postgres, packages/redis) and the pure-JS half of
+# `runtime:serialization` (crates/runtime/js).
+#
+# Split out of ci.yml so it can be skipped when nothing here changed. These jobs
+# cost two V8-linked builds and four service containers, and they used to run on
+# every push — including a docs-only change, where they can tell you nothing.
+#
+# On a pull request they run only when the JavaScript, its tooling, or the
+# runtime surface they exercise actually changed. On a push to main they always
+# run, so a Rust change that breaks a driver is still caught — one job late
+# rather than never.
+name: JS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Always runs, so every check below reports a result. Filtering on the
+  # *trigger* instead would leave these checks "expected — waiting for status"
+  # on a Rust-only PR, and a required check that never arrives blocks the merge
+  # forever. A skipped job reports success; a workflow that never ran does not.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      js: ${{ steps.filter.outputs.js }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Plain git rather than a third-party action: this repo gates its own
+      # supply chain (cargo-deny, cargo-audit), so CI should not quietly grow a
+      # dependency it does not audit.
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "js=true" >> "$GITHUB_OUTPUT"   # a push to main always runs everything
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          changed="$(git diff --name-only "$base"...HEAD)"
+          if printf '%s\n' "$changed" | grep -qE '^(packages/|crates/runtime/js/|crates/runtime/src/runtime_modules/|biome\.json|package\.json|bun\.lock|tasks\.toml|\.github/workflows/js\.yml)'; then
+            echo "js=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "js=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  biome:
+    name: biome (lint + format)
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: ./node_modules/.bin/biome ci
+
+  # The PostgreSQL driver (packages/postgres). Two halves, deliberately.
+  #
+  # The unit tests need no database: a wire codec is checkable on its own, and
+  # the cases worth pinning — a message split across three chunks, a quoted NULL
+  # inside an array, RFC 7677's published SCRAM vectors — are precisely the ones
+  # a live server will not produce on demand. The integration tests need a real
+  # server, because the point of the package is that it speaks to one.
+  # The pure-JS half of `runtime:serialization` (the Protobuf implementation) is
+  # written in TypeScript under crates/runtime/js and bundled into the embedded
+  # module. Its own test suite is not reachable from `cargo test`, so without
+  # this job the largest hand-written JS subsystem in the repo gates on nothing.
+  js:
+    name: js (bun test + bundle)
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/runtime/js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun test
+      # The bundle is built by our own `esdev`, so CI needs one. The *released*
+      # binary, installed the way a user would — building it here would compile
+      # V8 for a 83 KB bundle, and this way the installer is exercised on every
+      # run too. It also states the contract for the committed artifact: it is
+      # reproducible from a released esdev, so a change to esdev's bundler needs
+      # a release before the regenerated bundle lands.
+      - name: install esdev
+        working-directory: .
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
+            | bash -s -- --only=esdev
+          echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
+      # The bundle is committed (the runtime embeds it at compile time), so it
+      # can drift from the source it was built from and nothing would notice
+      # until a behaviour bug. Rebuild and require the tree to be unchanged.
+      - run: bun run build
+      - run: git diff --exit-code -- ../src/runtime_modules/serialization.js
+
+  # Biome over the JS packages (config: biome.json). Formatting and lint in one
+  # pass — `biome check` is what `tsr lint` runs locally.
+  postgres:
+    name: postgres driver
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: esrun
+          POSTGRES_DB: esrun_test
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: packages/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: Swatinem/rust-cache@v2
+      # The debug binary, not release: these tests check behaviour rather than
+      # speed, and a release build of v8 is not worth the minutes here.
+      - run: cargo build -p es-runtime-cli
+        working-directory: .
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # `bun run build` is `esdev build --lib src` now, so this job needs esdev.
+      # The released binary rather than a source build: compiling V8 to produce a
+      # module tree would dominate this job's runtime.
+      - name: install esdev
+        working-directory: .
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
+            | bash -s -- --only=esdev
+          echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
+      - run: bun run build
+      - run: ./test/unit/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+      - run: ./test/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          PG_URL: postgres://postgres:esrun@127.0.0.1:5432/esrun_test?sslmode=disable
+
+  # The Redis driver (packages/redis). Split the same way as the PostgreSQL job
+  # above, for the same reason — but it needs three servers rather than one,
+  # because the things most likely to break are the ones a single default server
+  # cannot show: authentication, an ACL user, and TLS.
+  #
+  # Only the plaintext one is a service container. The other two need a command
+  # (`--requirepass`) or a certificate minted at run time, and a service has
+  # nowhere to put either — `services:` can set an image and options but not the
+  # arguments after it.
+  redis:
+    name: redis driver
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:8
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: packages/redis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: Swatinem/rust-cache@v2
+      # The debug binary, not release: these tests check behaviour rather than
+      # speed, and a release build of v8 is not worth the minutes here.
+      - run: cargo build -p es-runtime-cli
+        working-directory: .
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # `bun run build` is `esdev build --lib src` now, so this job needs esdev.
+      # The released binary rather than a source build: compiling V8 to produce a
+      # module tree would dominate this job's runtime.
+      - name: install esdev
+        working-directory: .
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
+            | bash -s -- --only=esdev
+          echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
+      - run: bun run build
+
+      # The password-protected server, for the handshake half. A failed `HELLO`
+      # has to be told apart from a wrong password, and only a server that wants
+      # one can show that.
+      - name: start the password-protected server
+        run: |
+          docker run -d --name esrun-redis-auth -p 6380:6379 redis:8 \
+            redis-server --requirepass esrun
+          for _ in $(seq 1 60); do
+            docker exec esrun-redis-auth redis-cli -a esrun ping 2>/dev/null | grep -q PONG && exit 0
+            sleep 0.5
+          done
+          echo "the password-protected server never answered" >&2
+          exit 1
+
+      # TLS, from a private authority — which is what an internal deployment
+      # looks like, and the case the public roots cannot cover. The script mints
+      # a CA and a certificate and prints the environment the test wants.
+      - name: start the TLS server
+        run: |
+          eval "$(./test/tls-server.sh)"
+          # `$GITHUB_ENV` takes `NAME=value`, not the `export NAME=value` the
+          # script prints for a shell — and the CA is a multi-line PEM, which
+          # needs the heredoc form or only its first line would survive.
+          {
+            echo "REDIS_TLS_URL=$REDIS_TLS_URL"
+            echo "REDIS_CA<<PEM_EOF"
+            echo "$REDIS_CA"
+            echo "PEM_EOF"
+          } >> "$GITHUB_ENV"
+
+      # A three-primary cluster, for the slot map and the redirects. All three
+      # nodes share one container so that `--cluster-announce-ip 127.0.0.1` is
+      # true for the cluster bus and for the client at the same time.
+      - name: start the cluster
+        run: ./test/cluster-server.sh >> "$GITHUB_ENV"
+
+      # A Sentinel deployment — one master, one replica, three sentinels — for
+      # the discovery and the failover. Three because quorum is the part worth
+      # testing: one sentinel can announce a failover it agreed with nobody about.
+      - name: start the sentinel deployment
+        run: ./test/sentinel-server.sh >> "$GITHUB_ENV"
+
+      - run: ./test/unit/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+      - run: ./test/run.sh
+        env:
+          ESRUN: ${{ github.workspace }}/target/debug/esrun
+          REDIS_URL: redis://127.0.0.1:6379
+          REDIS_AUTH_URL: redis://:esrun@127.0.0.1:6380

@@ -1,15 +1,14 @@
+import { connect } from "runtime:db";
 import { env } from "runtime:process";
 import { driver as postgres } from "../dist/index.js";
-import { connect } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 const db = await connect(url, { driver: postgres });
-const one = async (sql, params) => (await (await db.query(sql, params)).first());
+const one = async (sql, params) => await (await db.query(sql, params)).first();
 
 // pg_prepared_statements is the server's own view of what this session holds,
 // which is the only honest way to check a cache that lives on the other side.
-const prepared = async () =>
-  (await one("SELECT count(*)::int AS n FROM pg_prepared_statements")).n;
+const prepared = async () => (await one("SELECT count(*)::int AS n FROM pg_prepared_statements")).n;
 
 // The count query is itself cached, so it is the baseline rather than zero.
 const base = await prepared();
@@ -25,14 +24,18 @@ const small = await connect(url, { driver: postgres, preparedStatementCacheSize:
 for (let i = 0; i < 10; i++) {
   await (await small.query(`SELECT ${i}::int AS v`)).first();
 }
-const held = await (await small.query("SELECT count(*)::int AS n FROM pg_prepared_statements")).first();
+const held = await (
+  await small.query("SELECT count(*)::int AS n FROM pg_prepared_statements")
+).first();
 console.log("cache of 2 holds:", held.n <= 3, `(${held.n})`);
 await small.close();
 
 // Disabled means disabled.
 const off = await connect(url, { driver: postgres, preparedStatementCacheSize: 0 });
 for (let i = 0; i < 3; i++) await (await off.query("SELECT 1 AS v")).first();
-const none = await (await off.query("SELECT count(*)::int AS n FROM pg_prepared_statements")).first();
+const none = await (
+  await off.query("SELECT count(*)::int AS n FROM pg_prepared_statements")
+).first();
 console.log("disabled holds:", none.n);
 await off.close();
 

@@ -1,6 +1,7 @@
 // MULTI/EXEC — which is deliberately not `transaction(fn)`.
-import { exit, env } from "runtime:process";
+
 import { connect, DbError, DbErrorCode } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -77,7 +78,7 @@ await r.flushdb();
   await r.set("str", "not-a-list");
   const tx = r.multi();
   tx.set("before", "1");
-  tx.call(["LPUSH", "str", "boom"]);   // WRONGTYPE at exec time
+  tx.call(["LPUSH", "str", "boom"]); // WRONGTYPE at exec time
   tx.set("after", "1");
   const results = await tx.exec();
 
@@ -164,8 +165,11 @@ await r.flushdb();
   await tx.exec();
   const outcome = await queued;
   ok(outcome instanceof DbError, "an aborted transaction settles its queued commands too");
-  is(outcome.code, DbErrorCode.SerializationFailure,
-    "a WATCH abort is a serialization failure, which is what it is everywhere else");
+  is(
+    outcome.code,
+    DbErrorCode.SerializationFailure,
+    "a WATCH abort is a serialization failure, which is what it is everywhere else",
+  );
   await r.unwatch();
 }
 
@@ -189,7 +193,10 @@ await r.flushdb();
   const abandoned = dropped.set("never", "1");
   dropped.discard();
   is(await r.get("never"), null, "discard sends nothing");
-  ok((await abandoned) instanceof DbError, "and settles what it queued rather than leaving it pending");
+  ok(
+    (await abandoned) instanceof DbError,
+    "and settles what it queued rather than leaving it pending",
+  );
 }
 
 {

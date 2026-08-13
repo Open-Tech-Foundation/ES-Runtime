@@ -1,7 +1,8 @@
 // The frame reader, against the thing that actually happens on a socket: the
 // bytes arrive in chunks that have nothing to do with message boundaries.
-import { FrameReader } from "../../dist/protocol/frame.js";
+
 import { exit } from "runtime:process";
+import { FrameReader } from "../../dist/protocol/frame.js";
 import { is, ok, report } from "./assert.mjs";
 
 function streamOf(chunks) {

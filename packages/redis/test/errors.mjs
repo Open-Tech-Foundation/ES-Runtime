@@ -4,8 +4,9 @@
 // application must be able to branch on what happened without knowing who said
 // it, and the backend's own word must survive on `backendCode` so that the
 // cases the portable table cannot express are still reachable.
-import { exit, env } from "runtime:process";
-import { connect, queryAst, DbError, DbErrorCode } from "runtime:db";
+
+import { connect, DbError, DbErrorCode, queryAst } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -35,17 +36,37 @@ async function failure(command) {
   is(e.backendCode, "ERR", "and Redis's own word is kept");
 }
 
-is((await failure(["GET"])).code, DbErrorCode.Syntax, "the wrong number of arguments is a syntax error");
-is((await failure(["EXPIRE", "k", "soon"])).code, DbErrorCode.Syntax, "so is a value that is not an integer");
-is((await failure(["SELECT", "999"])).code, DbErrorCode.Syntax, "and a database index out of range");
+is(
+  (await failure(["GET"])).code,
+  DbErrorCode.Syntax,
+  "the wrong number of arguments is a syntax error",
+);
+is(
+  (await failure(["EXPIRE", "k", "soon"])).code,
+  DbErrorCode.Syntax,
+  "so is a value that is not an integer",
+);
+is(
+  (await failure(["SELECT", "999"])).code,
+  DbErrorCode.Syntax,
+  "and a database index out of range",
+);
 
 // -- the case the portable table deliberately does not cover ----------------
 
 {
   await db.execute(queryAst(["SET", "str", "v"]));
   const e = await failure(["LPUSH", "str", "x"]);
-  is(e.code, DbErrorCode.Backend, "WRONGTYPE is not forced into a portable code that would mean something else");
-  is(e.backendCode, "WRONGTYPE", "it is reported as itself, which is what an application needs to branch on");
+  is(
+    e.code,
+    DbErrorCode.Backend,
+    "WRONGTYPE is not forced into a portable code that would mean something else",
+  );
+  is(
+    e.backendCode,
+    "WRONGTYPE",
+    "it is reported as itself, which is what an application needs to branch on",
+  );
   ok(e.message.includes("wrong kind of value"), "and the server's prose survives");
 }
 
@@ -54,13 +75,20 @@ is((await failure(["SELECT", "999"])).code, DbErrorCode.Syntax, "and a database 
 // An error reply is a complete reply. The stream is still aligned, so the next
 // command must work — a driver that latched a fatal error here would make every
 // typo destroy a connection.
-is((await db.execute(queryAst(["SET", "after", "1"]))).changes, 1, "an error reply leaves the connection usable");
+is(
+  (await db.execute(queryAst(["SET", "after", "1"]))).changes,
+  1,
+  "an error reply leaves the connection usable",
+);
 {
   const e = await failure(["SET", { not: "a value" }]);
   ok(e !== null, "an argument that cannot be encoded fails");
   is(e.code, DbErrorCode.Unsupported, "as an unsupported parameter rather than a lost connection");
-  is((await db.execute(queryAst(["SET", "after2", "1"]))).changes, 1,
-    "and the connection survives a bad argument, which was never written to the wire");
+  is(
+    (await db.execute(queryAst(["SET", "after2", "1"]))).changes,
+    1,
+    "and the connection survives a bad argument, which was never written to the wire",
+  );
 }
 
 // -- a connection that really is gone ---------------------------------------

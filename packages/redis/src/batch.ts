@@ -45,9 +45,7 @@ export abstract class RedisBatch extends RedisCommands {
   }
 
   /** How the queue is actually sent — the one thing the two kinds differ in. */
-  protected abstract send(
-    commands: readonly (readonly CommandArg[])[],
-  ): Promise<unknown[] | null>;
+  protected abstract send(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null>;
 
   /** What to call this in an error message. */
   protected abstract get noun(): string;
@@ -177,9 +175,7 @@ export class RedisTransaction extends RedisBatch {
     return "transaction";
   }
 
-  protected override send(
-    commands: readonly (readonly CommandArg[])[],
-  ): Promise<unknown[] | null> {
+  protected override send(commands: readonly (readonly CommandArg[])[]): Promise<unknown[] | null> {
     return this.runner.execTransaction(commands);
   }
 }
@@ -200,9 +196,7 @@ export class RedisPipeline extends RedisBatch {
     return "pipeline";
   }
 
-  protected override async send(
-    commands: readonly (readonly CommandArg[])[],
-  ): Promise<unknown[]> {
+  protected override async send(commands: readonly (readonly CommandArg[])[]): Promise<unknown[]> {
     return this.runner.execPipeline(commands);
   }
 

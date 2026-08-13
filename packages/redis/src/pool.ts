@@ -7,20 +7,18 @@
  * own: the command surface, and the two batch forms that must land on a single
  * connection.
  */
-import {
-  PooledConnection,
-  type AnyDriver,
-  type Connection,
-  type PoolSettings,
-} from "runtime:db";
+import { type AnyDriver, type Connection, PooledConnection, type PoolSettings } from "runtime:db";
 
-import { RedisCommands, mixinCommands } from "./commands.js";
-import { RedisConnection, type RedisOptions } from "./connection.js";
+import { mixinCommands, type RedisCommands } from "./commands.js";
+import type { RedisConnection, RedisOptions } from "./connection.js";
 import type { CommandArg } from "./protocol/resp.js";
 
 /** Connection options, plus how big the pool is. */
 export interface RedisPoolOptions extends RedisOptions, PoolSettings {}
 
+// The interface below merges the generated RedisCommands methods onto this
+// class — the deliberate way a client types dynamically-added commands.
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: see above
 export class RedisPooled extends PooledConnection {
   constructor(
     driver: AnyDriver,

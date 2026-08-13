@@ -5,8 +5,9 @@
 // without RESP3 would quietly connect unauthenticated — and one that mistakes an
 // old server for a bad password would make Redis 5 unreachable. The fallback has
 // to tell those apart, and this is where that is checked.
-import { exit, env, unmask } from "runtime:process";
-import { connect, queryAst, DbErrorCode } from "runtime:db";
+
+import { connect, DbErrorCode, queryAst } from "runtime:db";
+import { env, exit, unmask } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -47,10 +48,16 @@ async function codeOf(target, options = {}) {
 
 // -- a password that does not ------------------------------------------------
 
-is(await codeOf("redis://:wrong@127.0.0.1:6380"), DbErrorCode.AuthFailed,
-  "a wrong password is an authentication failure");
-is(await codeOf("redis://127.0.0.1:6380"), DbErrorCode.AuthFailed,
-  "and so is no password at all against a server that wants one");
+is(
+  await codeOf("redis://:wrong@127.0.0.1:6380"),
+  DbErrorCode.AuthFailed,
+  "a wrong password is an authentication failure",
+);
+is(
+  await codeOf("redis://127.0.0.1:6380"),
+  DbErrorCode.AuthFailed,
+  "and so is no password at all against a server that wants one",
+);
 
 // The failure that matters most: a wrong password must not be mistaken for a
 // server without RESP3 and quietly downgraded into an unauthenticated session.
@@ -109,11 +116,20 @@ is(await codeOf("redis://127.0.0.1:6380"), DbErrorCode.AuthFailed,
 
   // The shapes RESP2 sends differently, which the client is what absorbs.
   await r.hset("h", { a: "1", b: "2" });
-  is(await r.hgetall("h"), { a: "1", b: "2" },
-    "HGETALL is an object over RESP2, where the server sent a flat array");
+  is(
+    await r.hgetall("h"),
+    { a: "1", b: "2" },
+    "HGETALL is an object over RESP2, where the server sent a flat array",
+  );
   await r.zadd("z", { one: 1, two: 2 });
-  is(await r.zrange("z", 0, -1, { withScores: true }), [["one", 1], ["two", 2]],
-    "WITHSCORES pairs correctly over RESP2's interleaved reply");
+  is(
+    await r.zrange("z", 0, -1, { withScores: true }),
+    [
+      ["one", 1],
+      ["two", 2],
+    ],
+    "WITHSCORES pairs correctly over RESP2's interleaved reply",
+  );
   is(await r.exists("k"), 1, "an integer reply");
   is(await r.expire("k", 100), true, "1 means yes over RESP2, as true does over RESP3");
 

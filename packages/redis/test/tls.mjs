@@ -8,9 +8,9 @@
 //
 // Needs a TLS server: eval "$(test/tls-server.sh)" first. Skipped without one,
 // because a test that quietly passes when it did not run is worse than no test.
-import { exit, env } from "runtime:process";
 
 import { connect } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";

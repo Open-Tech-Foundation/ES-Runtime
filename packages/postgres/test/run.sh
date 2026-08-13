@@ -12,8 +12,8 @@ esrun="${ESRUN:-$root/target/release/esrun}"
 export PG_URL="${PG_URL:-postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable}"
 
 [ -x "$esrun" ] || { echo "no esrun at $esrun — cargo build --release -p es-runtime-cli" >&2; exit 1; }
-[ -f "$here/../dist/index.js" ] || { echo "not built — bun run build" >&2; exit 1; }
-[ "$here/../dist/index.js" -nt "$here/../src/connection.ts" ] || echo "warning: dist is older than src — run 'bun run build'" >&2
+[ -f "$here/../dist/index.js" ] || { echo "not built — tsr build" >&2; exit 1; }
+[ "$here/../dist/index.js" -nt "$here/../src/connection.ts" ] || echo "warning: dist is older than src — run 'tsr build'" >&2
 
 printf "\n== unit ==\n"
 "$here/unit/run.sh" || exit 1
@@ -34,6 +34,10 @@ export PGSSLMODE=disable
 status=0
 for test in smoke conformance tls concurrency timeouts lost tls-ca script arrays async-messages statements pool environment cancel listen binary; do
   printf '\n== %s ==\n' "$test"
-  "$esrun" "$here/$test.mjs" || status=1
+  # esrun grants nothing by default (DECISIONS D65). These tests load the
+  # built package (imports), open a connection to the server (net) and read
+  # the URL and PG*/REDIS* variables from the environment (env). No
+  # subprocess, no filesystem: the grant stays at three.
+  "$esrun" --allow-imports --allow-net --allow-env "$here/$test.mjs" || status=1
 done
 exit $status

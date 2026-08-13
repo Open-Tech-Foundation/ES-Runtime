@@ -4,8 +4,8 @@
 // that they agree: a value must not change type depending on whether it came
 // through the client API or through `runtime:db`'s row decoder.
 import { exit } from "runtime:process";
+import { rowsOf as rowsOfReply, toValue } from "../../dist/protocol/values.js";
 import { is, ok, report } from "./assert.mjs";
-import { rowsOf as rowsOfReply, shapeOf, toValue } from "../../dist/protocol/values.js";
 
 const encoder = new TextEncoder();
 
@@ -34,14 +34,21 @@ is(
   { a: 1 },
   "a map is a plain object, which is what HGETALL is for",
 );
-is(toValue({ kind: "array", value: [bulk("a"), int(2)] }), ["a", 2], "an array keeps its element types");
+is(
+  toValue({ kind: "array", value: [bulk("a"), int(2)] }),
+  ["a", 2],
+  "an array keeps its element types",
+);
 
 // An error nested in a reply is still an error. Turning it into a string would
 // hand the caller a row that reads like data.
 {
   let threw = false;
   try {
-    toValue({ kind: "array", value: [{ kind: "error", value: { prefix: "ERR", message: "ERR bad" } }] });
+    toValue({
+      kind: "array",
+      value: [{ kind: "error", value: { prefix: "ERR", message: "ERR bad" } }],
+    });
   } catch {
     threw = true;
   }
@@ -50,8 +57,11 @@ is(toValue({ kind: "array", value: [bulk("a"), int(2)] }), ["a", 2], "an array k
 
 // -- the row layout ---------------------------------------------------------
 
-is(await rowsOf({ kind: "array", value: [bulk("a"), bulk("b")] }), [{ value: "a" }, { value: "b" }],
-  "an aggregate is one row per element");
+is(
+  await rowsOf({ kind: "array", value: [bulk("a"), bulk("b")] }),
+  [{ value: "a" }, { value: "b" }],
+  "an aggregate is one row per element",
+);
 is(await rowsOf(bulk("only")), [{ value: "only" }], "a scalar is one row");
 is(await rowsOf(NULL), [], "a null reply is no rows — GET on a missing key answers no row");
 is(await rowsOf({ kind: "array", value: [] }), [], "an empty array is also no rows");

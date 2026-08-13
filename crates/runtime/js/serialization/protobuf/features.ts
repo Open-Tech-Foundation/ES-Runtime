@@ -22,17 +22,35 @@ export interface FeatureSet {
  *  defaults for the four wire-affecting features. */
 export function baseFeatures(syntax: "proto2" | "proto3" | "2023" | "2024"): Required<FeatureSet> {
   if (syntax === "proto2") {
-    return { fieldPresence: "EXPLICIT", repeatedEncoding: "EXPANDED", enumType: "CLOSED", messageEncoding: "LENGTH_PREFIXED" };
+    return {
+      fieldPresence: "EXPLICIT",
+      repeatedEncoding: "EXPANDED",
+      enumType: "CLOSED",
+      messageEncoding: "LENGTH_PREFIXED",
+    };
   }
   if (syntax === "proto3") {
-    return { fieldPresence: "IMPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN", messageEncoding: "LENGTH_PREFIXED" };
+    return {
+      fieldPresence: "IMPLICIT",
+      repeatedEncoding: "PACKED",
+      enumType: "OPEN",
+      messageEncoding: "LENGTH_PREFIXED",
+    };
   }
   // edition 2023 / 2024 defaults
-  return { fieldPresence: "EXPLICIT", repeatedEncoding: "PACKED", enumType: "OPEN", messageEncoding: "LENGTH_PREFIXED" };
+  return {
+    fieldPresence: "EXPLICIT",
+    repeatedEncoding: "PACKED",
+    enumType: "OPEN",
+    messageEncoding: "LENGTH_PREFIXED",
+  };
 }
 
 /** Merges an override set over an inherited set (override wins per key). */
-export function mergeFeatures(base: Required<FeatureSet>, over: FeatureSet | undefined): Required<FeatureSet> {
+export function mergeFeatures(
+  base: Required<FeatureSet>,
+  over: FeatureSet | undefined,
+): Required<FeatureSet> {
   if (!over) return base;
   return {
     fieldPresence: over.fieldPresence ?? base.fieldPresence,

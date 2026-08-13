@@ -3,17 +3,14 @@
 // The exchange is a chain of HMACs and an XOR, and every step of it is a place
 // to be subtly wrong in a way that still produces plausible-looking base64. The
 // only check worth having is the one the specification publishes.
-import { scram } from "../../dist/protocol/scram.js";
+
 import { exit } from "runtime:process";
+import { scram } from "../../dist/protocol/scram.js";
 import { is, report } from "./assert.mjs";
 
 const session = scram("pencil", { username: "user", nonce: "rOprNGfwEbeRWgbNEkqO" });
 
-is(
-  session.initial,
-  "n,,n=user,r=rOprNGfwEbeRWgbNEkqO",
-  "client-first-message matches RFC 7677",
-);
+is(session.initial, "n,,n=user,r=rOprNGfwEbeRWgbNEkqO", "client-first-message matches RFC 7677");
 
 const serverFirst =
   "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";

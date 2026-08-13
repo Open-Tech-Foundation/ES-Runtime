@@ -17,7 +17,9 @@ export function utf8Read(buf: Uint8Array, start: number, end: number): string {
     } else if (t > 191 && t < 224) {
       chunk[i++] = ((t & 31) << 6) | (buf[p++]! & 63);
     } else if (t > 239 && t < 365) {
-      t = (((t & 7) << 18) | ((buf[p++]! & 63) << 12) | ((buf[p++]! & 63) << 6) | (buf[p++]! & 63)) - 0x10000;
+      t =
+        (((t & 7) << 18) | ((buf[p++]! & 63) << 12) | ((buf[p++]! & 63) << 6) | (buf[p++]! & 63)) -
+        0x10000;
       chunk[i++] = 0xd800 + (t >> 10);
       chunk[i++] = 0xdc00 + (t & 1023);
     } else {
@@ -42,7 +44,12 @@ export function utf8Length(str: string): number {
     const c = str.charCodeAt(i);
     if (c < 128) len += 1;
     else if (c < 2048) len += 2;
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length && (str.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+    else if (
+      c >= 0xd800 &&
+      c <= 0xdbff &&
+      i + 1 < str.length &&
+      (str.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+    ) {
       // surrogate pair → 4 bytes
       i++;
       len += 4;
@@ -61,7 +68,12 @@ export function utf8Write(str: string, buf: Uint8Array, offset: number): number 
     } else if (c < 2048) {
       buf[p++] = (c >> 6) | 192;
       buf[p++] = (c & 63) | 128;
-    } else if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length && (str.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
+    } else if (
+      c >= 0xd800 &&
+      c <= 0xdbff &&
+      i + 1 < str.length &&
+      (str.charCodeAt(i + 1) & 0xfc00) === 0xdc00
+    ) {
       c = 0x10000 + ((c & 0x3ff) << 10) + (str.charCodeAt(++i) & 0x3ff);
       buf[p++] = (c >> 18) | 240;
       buf[p++] = ((c >> 12) & 63) | 128;

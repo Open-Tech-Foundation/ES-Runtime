@@ -10,17 +10,17 @@
  * types that say a borrowed connection is a `PgConnection`.
  */
 import {
-  PooledConnection,
   type AnyDriver,
   type CallOptions,
   type Connection,
   type DbParams,
+  PooledConnection,
   type PoolSettings,
   type Queryable,
   type Rows,
 } from "runtime:db";
 
-import { PgConnection, type PgOptions, type PgRow } from "./connection.js";
+import type { PgConnection, PgOptions, PgRow } from "./connection.js";
 
 /** Connection options, plus how big the pool is. */
 export interface PgPoolOptions extends PgOptions, PoolSettings {}
@@ -51,11 +51,7 @@ export class PgPooled extends PooledConnection {
   }
 
   /** Rows from this backend, typed as this backend decodes them. */
-  override query(
-    q: Queryable,
-    params?: DbParams,
-    options?: CallOptions,
-  ): Promise<Rows<PgRow>> {
+  override query(q: Queryable, params?: DbParams, options?: CallOptions): Promise<Rows<PgRow>> {
     return super.query(q, params, options) as Promise<Rows<PgRow>>;
   }
 

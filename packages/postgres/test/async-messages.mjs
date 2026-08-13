@@ -1,6 +1,6 @@
+import { connect } from "runtime:db";
 import { env } from "runtime:process";
 import { driver as postgres } from "../dist/index.js";
-import { connect } from "runtime:db";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 const db = await connect(url, { driver: postgres });

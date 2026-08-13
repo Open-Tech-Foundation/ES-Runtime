@@ -10,6 +10,52 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **The JavaScript in this repo builds with our own `esdev`.** The two database
+  drivers build with `esdev build --lib src`, and the `runtime:serialization`
+  bundle with `esdev build` — replacing a `tsc` shim and `Bun.build`
+  respectively. The tool that produces the module embedded in the runtime is now
+  the one we ship.
+
+  `esdev build --lib` output is **byte-identical to what `tsc` emitted** for
+  `packages/postgres` — all 16 files. The serialization bundle exports the same
+  names and passes the full conformance suite (374/374).
+
+- **`tsr` runs the tasks** (`tasks.toml`): `tsr build`, `tsr typecheck`,
+  `tsr test:unit`, `tsr lint`, `tsr format`, `tsr ci`. Each package keeps its own
+  scripts — what a package builds is a property of that package — and tsr is what
+  runs them together.
+
+- **Biome lints and formats the JS packages** (`biome.json`), pinned at the repo
+  root. Rules that fought deliberate idioms here are off with their reasons
+  recorded: `!` answers `noUncheckedIndexedAccess` in the protocol parsers,
+  `while ((n = readVarint()))` is how a wire decoder is written, and `msg["S"]`
+  names a wire field.
+
+- **CI is split three ways**, so a change pays only for what it can break:
+  `ci.yml` (fmt, clippy, the test matrix, Miri) on every PR; `js.yml` (drivers,
+  serialization) and `hardening.yml` (MSRV, fuzz, cargo-deny, cargo-audit) only
+  when the relevant files changed — plus always on main, and daily for the
+  audits, which go stale on their own. A Rust-only pull request drops from
+  **eight V8-linked builds to four**.
+
+  Both companions always *trigger* and skip at the job level: a required check
+  that never arrives blocks a merge forever, while a skipped job reports success.
+
+### Fixed
+
+- **The driver test suites ran without permission grants.** D65 made `esrun`
+  deny-by-default and these invoke it directly, so they failed on
+  `--allow-imports`. The unit runners now grant `imports`; the integration
+  runners grant `imports`, `net` and `env`, and nothing else.
+
+- **The root-jail fixture in `permissions.rs` depended on no ancestor having a
+  `package.json`.** Adding one at the repo root for tooling moved the detected
+  project root and put the tests' "outside the jail" directory inside it. The
+  fixture now carries its own `package.json`, which is both what a real project
+  looks like and what stops the tests depending on where the repo is checked out.
+
+### Changed
+
 - **The project's goal is narrowed to a secure server runtime, and the embedding
   API is no longer offered** (DECISIONS D66). This repo opened as "Layer A", an
   embeddable runtime built so a future actor-model VM ("Layer B") could embed

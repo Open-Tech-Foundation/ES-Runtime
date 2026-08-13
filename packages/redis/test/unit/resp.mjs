@@ -5,8 +5,8 @@
 // attribute nobody asked for, RESP2's two spellings of null, a bulk string with
 // a CRLF inside it.
 import { exit } from "runtime:process";
+import { encodeCommand, RespReader } from "../../dist/protocol/resp.js";
 import { is, ok, report } from "./assert.mjs";
-import { RespReader, encodeCommand } from "../../dist/protocol/resp.js";
 
 const encoder = new TextEncoder();
 

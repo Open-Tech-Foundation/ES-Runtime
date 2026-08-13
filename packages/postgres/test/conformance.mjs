@@ -1,6 +1,7 @@
-import { driver as postgres } from "../dist/index.js";
 import { connect, runBackendConformance } from "runtime:db";
 import { env } from "runtime:process";
+import { driver as postgres } from "../dist/index.js";
+
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 const report = await runBackendConformance(() => connect(url, { driver: postgres }));
 for (const f of report.failures) console.log(`FAIL ${f.name}\n      ${f.error}`);

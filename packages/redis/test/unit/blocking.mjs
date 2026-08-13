@@ -5,9 +5,8 @@
 // argument would refuse bounded commands and admit unbounded ones, which is
 // both halves of wrong at once.
 import { exit } from "runtime:process";
-
-import { is, ok, report } from "./assert.mjs";
 import { BLOCKING_COMMANDS, blocksForever } from "../../dist/protocol/blocking.js";
+import { is, ok, report } from "./assert.mjs";
 
 const forever = (args) => blocksForever(args) !== null;
 
@@ -55,10 +54,7 @@ ok(
   forever(["XREAD", "COUNT", "10", "BLOCK", "0", "STREAMS", "s", "$"]),
   "BLOCK is found past other options",
 );
-ok(
-  forever(["XREADGROUP", "GROUP", "g", "c", "BLOCK", "0", "STREAMS", "s", ">"]),
-  "XREADGROUP too",
-);
+ok(forever(["XREADGROUP", "GROUP", "g", "c", "BLOCK", "0", "STREAMS", "s", ">"]), "XREADGROUP too");
 
 // The one that a naive scan gets wrong: a *stream named BLOCK*. Everything
 // after STREAMS is keys and IDs, so the scan has to stop there.

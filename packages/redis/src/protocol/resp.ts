@@ -17,7 +17,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /** The first byte of a reply, which is its type. */
-export const enum Type {
+export enum Type {
   SimpleString = 0x2b, // +
   Error = 0x2d, // -
   Integer = 0x3a, // :
@@ -117,7 +117,14 @@ export function encodeCommand(args: readonly CommandArg[]): Uint8Array {
 const CRLF = new Uint8Array([0x0d, 0x0a]);
 
 /** What a command argument may be. Bytes pass through; everything else is text. */
-export type CommandArg = string | number | bigint | boolean | Uint8Array | ArrayBufferView | ArrayBuffer;
+export type CommandArg =
+  | string
+  | number
+  | bigint
+  | boolean
+  | Uint8Array
+  | ArrayBufferView
+  | ArrayBuffer;
 
 export function argBytes(arg: CommandArg): Uint8Array {
   if (typeof arg === "string") return encoder.encode(arg);

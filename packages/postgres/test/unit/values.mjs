@@ -1,7 +1,8 @@
 // Array literals and parameter encoding — the two places a driver quietly
 // corrupts data rather than failing.
-import { parseArray, encodeParam, decoderFor, OID } from "../../dist/protocol/values.js";
+
 import { exit } from "runtime:process";
+import { decoderFor, encodeParam, OID, parseArray } from "../../dist/protocol/values.js";
 import { is, report } from "./assert.mjs";
 
 const text = (t) => t;
@@ -49,7 +50,11 @@ is(enc(new Uint8Array([0, 255])), "\\x00ff", "bytes bind as hex bytea");
 is(enc([1, 2]), '{"1","2"}', "an array binds as an array literal");
 is(enc([null, 1]), '{NULL,"1"}', "a null element binds as the keyword");
 is(enc({ a: 1 }), '{"a":1}', "an object binds as JSON");
-is(enc(new Date("2026-01-02T03:04:05.000Z")), "2026-01-02T03:04:05.000Z", "a Date binds as ISO-8601");
+is(
+  enc(new Date("2026-01-02T03:04:05.000Z")),
+  "2026-01-02T03:04:05.000Z",
+  "a Date binds as ISO-8601",
+);
 
 // numeric stays a string: it is arbitrary precision by definition, and a double
 // is the one representation guaranteed to lose it.

@@ -1,35 +1,67 @@
 // Reflective JS object → wire encoder. Inverse of decode.ts: honors resolved
 // presence (implicit-presence scalars at default are omitted) and packed
 // encoding, re-emits preserved unknown fields.
+
+import { UNKNOWN } from "./decode.js";
 import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.js";
 import { WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.js";
 import { Writer } from "./writer.js";
-import { UNKNOWN } from "./decode.js";
 
 function writeScalarRaw(w: Writer, t: ScalarType, v: unknown): void {
   switch (t) {
-    case "double": w.double(v as number); break;
-    case "float": w.float(v as number); break;
-    case "int32": w.int32(v as number); break;
-    case "int64": w.varint64(BigInt(v as bigint | number)); break;
-    case "uint32": w.uint32(v as number); break;
-    case "uint64": w.varint64(BigInt(v as bigint | number)); break;
-    case "sint32": w.sint32(v as number); break;
-    case "sint64": w.sint64(BigInt(v as bigint | number)); break;
-    case "fixed32": w.fixed32(v as number); break;
-    case "fixed64": w.fixed64(BigInt(v as bigint | number)); break;
-    case "sfixed32": w.sfixed32(v as number); break;
-    case "sfixed64": w.sfixed64(BigInt(v as bigint | number)); break;
-    case "bool": w.bool(v as boolean); break;
-    case "string": w.string(v as string); break;
-    case "bytes": w.bytes(v as Uint8Array); break;
+    case "double":
+      w.double(v as number);
+      break;
+    case "float":
+      w.float(v as number);
+      break;
+    case "int32":
+      w.int32(v as number);
+      break;
+    case "int64":
+      w.varint64(BigInt(v as bigint | number));
+      break;
+    case "uint32":
+      w.uint32(v as number);
+      break;
+    case "uint64":
+      w.varint64(BigInt(v as bigint | number));
+      break;
+    case "sint32":
+      w.sint32(v as number);
+      break;
+    case "sint64":
+      w.sint64(BigInt(v as bigint | number));
+      break;
+    case "fixed32":
+      w.fixed32(v as number);
+      break;
+    case "fixed64":
+      w.fixed64(BigInt(v as bigint | number));
+      break;
+    case "sfixed32":
+      w.sfixed32(v as number);
+      break;
+    case "sfixed64":
+      w.sfixed64(BigInt(v as bigint | number));
+      break;
+    case "bool":
+      w.bool(v as boolean);
+      break;
+    case "string":
+      w.string(v as string);
+      break;
+    case "bytes":
+      w.bytes(v as Uint8Array);
+      break;
   }
 }
 
 function enumNumber(e: EnumType, v: unknown): number {
   if (typeof v === "number") return v;
   const n = e.byName.get(v as string);
-  if (n === undefined) throw new Error(`protobuf: unknown enum value "${String(v)}" for ${e.fullName}`);
+  if (n === undefined)
+    throw new Error(`protobuf: unknown enum value "${String(v)}" for ${e.fullName}`);
   return n;
 }
 
@@ -37,10 +69,19 @@ function wireFor(type: FieldType): number {
   if (type.kind === "message") return 2;
   if (type.kind === "enum") return 0;
   switch (type.scalar) {
-    case "string": case "bytes": return 2;
-    case "double": case "fixed64": case "sfixed64": return 1;
-    case "float": case "fixed32": case "sfixed32": return 5;
-    default: return 0;
+    case "string":
+    case "bytes":
+      return 2;
+    case "double":
+    case "fixed64":
+    case "sfixed64":
+      return 1;
+    case "float":
+    case "fixed32":
+    case "sfixed32":
+      return 5;
+    default:
+      return 0;
   }
 }
 
@@ -72,12 +113,20 @@ function writeField(w: Writer, field: Field, v: unknown, opts?: EncodeOptions): 
 function isDefault(type: FieldType, v: unknown): boolean {
   if (type.kind === "scalar") {
     switch (type.scalar) {
-      case "int64": case "uint64": case "sint64": case "fixed64": case "sfixed64":
+      case "int64":
+      case "uint64":
+      case "sint64":
+      case "fixed64":
+      case "sfixed64":
         return BigInt(v as bigint | number) === 0n;
-      case "bool": return v === false;
-      case "string": return v === "";
-      case "bytes": return (v as Uint8Array).length === 0;
-      default: return v === 0;
+      case "bool":
+        return v === false;
+      case "string":
+        return v === "";
+      case "bytes":
+        return (v as Uint8Array).length === 0;
+      default:
+        return v === 0;
     }
   }
   if (type.kind === "enum") {
@@ -89,10 +138,18 @@ function isDefault(type: FieldType, v: unknown): boolean {
 
 function mapKeyTyped(t: ScalarType, k: string): unknown {
   switch (t) {
-    case "string": return k;
-    case "bool": return k === "true";
-    case "int64": case "uint64": case "sint64": case "fixed64": case "sfixed64": return BigInt(k);
-    default: return Number(k);
+    case "string":
+      return k;
+    case "bool":
+      return k === "true";
+    case "int64":
+    case "uint64":
+    case "sint64":
+    case "fixed64":
+    case "sfixed64":
+      return BigInt(k);
+    default:
+      return Number(k);
   }
 }
 

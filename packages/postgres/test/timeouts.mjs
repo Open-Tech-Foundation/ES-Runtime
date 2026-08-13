@@ -1,7 +1,7 @@
-import { driver as postgres } from "../dist/index.js";
-import { env } from "runtime:process";
-import { listen } from "runtime:net";
 import { connect, DbErrorCode } from "runtime:db";
+import { listen } from "runtime:net";
+import { env } from "runtime:process";
+import { driver as postgres } from "../dist/index.js";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 
@@ -45,6 +45,8 @@ console.log("still usable:", (await (await db.query("SELECT 1 AS n")).first()).n
 await db.close();
 
 // The URL spells connect_timeout in seconds, libpq-style.
-const viaUrl = await connect(`${url}&connect_timeout=5&statement_timeout=250`, { driver: postgres });
+const viaUrl = await connect(`${url}&connect_timeout=5&statement_timeout=250`, {
+  driver: postgres,
+});
 console.log("from url:", (await (await viaUrl.query("SELECT 2 AS n")).first()).n);
 await viaUrl.close();

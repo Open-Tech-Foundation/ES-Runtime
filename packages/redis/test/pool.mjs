@@ -1,6 +1,7 @@
 // The pool, and the one decision a protocol-blind pool cannot make for itself.
-import { exit, env } from "runtime:process";
-import { connect, queryAst, DbErrorCode } from "runtime:db";
+
+import { connect, DbErrorCode, queryAst } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -35,8 +36,11 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
   ok(pool.size <= 4, `and the pool never exceeded its maximum (${pool.size})`);
 
   const read = await Promise.all(Array.from({ length: 50 }, (_, i) => pool.get(`c${i}`)));
-  is(read.join(","), Array.from({ length: 50 }, (_, i) => String(i)).join(","),
-    "every reply went to the caller that asked for it");
+  is(
+    read.join(","),
+    Array.from({ length: 50 }, (_, i) => String(i)).join(","),
+    "every reply went to the caller that asked for it",
+  );
   await pool.close();
 }
 
@@ -110,7 +114,11 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
   // here: a RESP reply is complete once read, so there is no cursor holding it.
   ok(rows.exhausted, "a pooled result is exhausted");
   is(pool.idle, 1, "so the connection was returned before the rows were read");
-  is((await rows.toArray()).map((r) => r.value), ["a", "b", "c"], "and the rows are still readable");
+  is(
+    (await rows.toArray()).map((r) => r.value),
+    ["a", "b", "c"],
+    "and the rows are still readable",
+  );
   await pool.close();
 }
 

@@ -2,10 +2,16 @@
 //
 // Needs a cluster (see test/cluster-server.sh). Skipped without one, because a
 // test that quietly passes when it did not run is worse than no test.
-import { exit, env } from "runtime:process";
-import { connect, DbErrorCode } from "runtime:db";
 
-import { driver as redis, redisCluster, RedisCluster, parseConnectionString } from "../dist/index.js";
+import { connect, DbErrorCode } from "runtime:db";
+import { env, exit } from "runtime:process";
+
+import {
+  parseConnectionString,
+  RedisCluster,
+  driver as redis,
+  redisCluster,
+} from "../dist/index.js";
 import { hashSlot } from "../dist/protocol/slots.js";
 import { is, ok, report } from "./unit/assert.mjs";
 
@@ -129,8 +135,10 @@ is(cluster.nodes.length, 3, `the cluster reported its three primaries`);
   } catch (e) {
     code = e.backendCode ?? e.code;
   }
-  ok(code === "CROSSSLOT" || code === DbErrorCode.Unsupported,
-    `a cross-slot MGET is refused (${code})`);
+  ok(
+    code === "CROSSSLOT" || code === DbErrorCode.Unsupported,
+    `a cross-slot MGET is refused (${code})`,
+  );
 }
 
 {
@@ -139,8 +147,11 @@ is(cluster.nodes.length, 3, `the cluster reported its three primaries`);
   is(hashSlot("{cart:9}:items"), hashSlot("{cart:9}:total"), "tagged keys share a slot");
   await cluster.set("{cart:9}:items", "3");
   await cluster.set("{cart:9}:total", "42");
-  is(await cluster.mget("{cart:9}:items", "{cart:9}:total"), ["3", "42"],
-    "so MGET across them works");
+  is(
+    await cluster.mget("{cart:9}:items", "{cart:9}:total"),
+    ["3", "42"],
+    "so MGET across them works",
+  );
 }
 
 // -- transactions and pipelines ---------------------------------------------
@@ -175,7 +186,11 @@ is(cluster.nodes.length, 3, `the cluster reported its three primaries`);
   for (const key of keys) p.get(key);
   const results = await p.exec();
   is(results.length, keys.length, "every command in a cross-node pipeline answered");
-  is(results, keys.map((k) => `value-of-${k}`), "each with its own key's value, in order");
+  is(
+    results,
+    keys.map((k) => `value-of-${k}`),
+    "each with its own key's value, in order",
+  );
 }
 
 // -- EVAL is routed by its key, not its script ------------------------------

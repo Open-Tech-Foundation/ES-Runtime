@@ -6,8 +6,9 @@
 // The source may be a Web ReadableStream, an async iterable, or a sync iterable
 // of Uint8Array chunks. A small buffering reader handles values (varints,
 // length-delimited regions) that straddle chunk boundaries.
-import type { Field, MessageType } from "./descriptor.js";
+
 import { decode } from "./decode.js";
+import type { Field, MessageType } from "./descriptor.js";
 import { Reader, WIRE_EGROUP, WIRE_LEN } from "./reader.js";
 
 interface ReadableStreamLike {
@@ -25,7 +26,11 @@ export type StreamSource =
 function pullFrom(source: StreamSource): () => Promise<Uint8Array | null> {
   if (source instanceof Uint8Array) {
     let sent = false;
-    return async () => (sent ? null : ((sent = true), source));
+    return async () => {
+      if (sent) return null;
+      sent = true;
+      return source;
+    };
   }
   const s = source as Record<symbol | string, unknown>;
   if (typeof s.getReader === "function") {
@@ -49,7 +54,9 @@ function pullFrom(source: StreamSource): () => Promise<Uint8Array | null> {
       return done ? null : value;
     };
   }
-  throw new Error("protobuf: decodeStream source must be a ReadableStream or (async) iterable of Uint8Array");
+  throw new Error(
+    "protobuf: decodeStream source must be a ReadableStream or (async) iterable of Uint8Array",
+  );
 }
 
 /** A pull-driven byte cursor that buffers across chunk boundaries. */
@@ -64,7 +71,10 @@ class ByteStream {
   private async more(): Promise<boolean> {
     if (this.done) return false;
     const chunk = await this.pull();
-    if (chunk == null) { this.done = true; return false; }
+    if (chunk == null) {
+      this.done = true;
+      return false;
+    }
     if (chunk.length === 0) return this.more();
     const rest = this.buf.subarray(this.pos);
     const next = new Uint8Array(rest.length + chunk.length);
@@ -113,7 +123,8 @@ class ByteStream {
 
   /** Returns the next `n` bytes (a view, valid until the next pull). */
   async bytes(n: number): Promise<Uint8Array> {
-    if (!(await this.ensure(n))) throw new Error("protobuf: truncated length-delimited value in stream");
+    if (!(await this.ensure(n)))
+      throw new Error("protobuf: truncated length-delimited value in stream");
     const out = this.buf.subarray(this.pos, this.pos + n);
     this.pos += n;
     return out;
@@ -123,11 +134,20 @@ class ByteStream {
    *  nested group recursion. */
   async skip(wire: number, depth = 0): Promise<void> {
     switch (wire) {
-      case 0: await this.varint(); break;
-      case 1: await this.bytes(8); break;
-      case WIRE_LEN: await this.bytes(Number(await this.varint())); break;
-      case 5: await this.bytes(4); break;
-      case 3: { // start-group: skip until the matching end-group
+      case 0:
+        await this.varint();
+        break;
+      case 1:
+        await this.bytes(8);
+        break;
+      case WIRE_LEN:
+        await this.bytes(Number(await this.varint()));
+        break;
+      case 5:
+        await this.bytes(4);
+        break;
+      case 3: {
+        // start-group: skip until the matching end-group
         if (depth > 100) throw new Error("protobuf: group nesting exceeds maximum depth in stream");
         for (;;) {
           const t = await this.tag();
@@ -137,15 +157,20 @@ class ByteStream {
         }
         break;
       }
-      case WIRE_EGROUP: break;
-      default: throw new Error(`protobuf: cannot skip wire type ${wire} in stream`);
+      case WIRE_EGROUP:
+        break;
+      default:
+        throw new Error(`protobuf: cannot skip wire type ${wire} in stream`);
     }
   }
 }
 
 /** Yields each element of `field` (a repeated message field) decoded from the
  *  chunked `source`; all other fields of the outer message are skipped. */
-export async function* decodeStream(field: Field, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+export async function* decodeStream(
+  field: Field,
+  source: StreamSource,
+): AsyncGenerator<Record<string, unknown>> {
   if (field.type.kind !== "message") return;
   const element = field.type.message;
   const reader = new ByteStream(pullFrom(source));
@@ -163,7 +188,10 @@ export async function* decodeStream(field: Field, source: StreamSource): AsyncGe
 
 /** Yields each message of a length-delimited stream — a sequence of
  *  varint-length-prefixed messages (the `writeDelimitedTo` framing). */
-export async function* decodeDelimitedStream(message: MessageType, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+export async function* decodeDelimitedStream(
+  message: MessageType,
+  source: StreamSource,
+): AsyncGenerator<Record<string, unknown>> {
   const reader = new ByteStream(pullFrom(source));
   while (!(await reader.atEnd())) {
     const len = Number(await reader.varint());

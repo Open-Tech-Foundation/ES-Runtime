@@ -15,27 +15,27 @@
  * some keys must stay together.
  */
 import {
+  type CallOptions,
   DbError,
   DbErrorCode,
-  defineDriver,
-  queryAst,
+  type DbParams,
   type Dialect,
   type Driver,
-  type CallOptions,
-  type DbParams,
+  defineDriver,
   type ExecuteResult,
   type Queryable,
+  queryAst,
   type Row,
   type Rows,
 } from "runtime:db";
 
 import { RedisCommands } from "./commands.js";
-import { driver, openConnection } from "./driver.js";
 import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
+import { driver, openConnection } from "./driver.js";
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import type { Redirect } from "./protocol/errors.js";
 import type { CommandArg } from "./protocol/resp.js";
-import { SLOTS, hashSlot } from "./protocol/slots.js";
+import { hashSlot, SLOTS } from "./protocol/slots.js";
 import { parseConnectionString } from "./url.js";
 
 export interface RedisClusterOptions extends RedisPoolOptions {
@@ -580,12 +580,49 @@ function redirectOf(value: unknown): Redirect | null {
  * anyway. The list is here to skip a pointless hash, not to be a specification.
  */
 const NO_KEY = new Set([
-  "PING", "ECHO", "INFO", "TIME", "DBSIZE", "COMMAND", "CONFIG", "CLIENT",
-  "CLUSTER", "ACL", "MEMORY", "SCRIPT", "FUNCTION", "SELECT", "SWAPDB",
-  "FLUSHALL", "FLUSHDB", "SHUTDOWN", "LASTSAVE", "BGSAVE", "BGREWRITEAOF",
-  "SAVE", "SLOWLOG", "LATENCY", "REPLICAOF", "SLAVEOF", "DEBUG", "RESET",
-  "HELLO", "AUTH", "QUIT", "MULTI", "EXEC", "DISCARD", "UNWATCH", "ASKING",
-  "READONLY", "READWRITE", "RANDOMKEY", "SCAN", "KEYS", "WAIT", "PUBSUB",
+  "PING",
+  "ECHO",
+  "INFO",
+  "TIME",
+  "DBSIZE",
+  "COMMAND",
+  "CONFIG",
+  "CLIENT",
+  "CLUSTER",
+  "ACL",
+  "MEMORY",
+  "SCRIPT",
+  "FUNCTION",
+  "SELECT",
+  "SWAPDB",
+  "FLUSHALL",
+  "FLUSHDB",
+  "SHUTDOWN",
+  "LASTSAVE",
+  "BGSAVE",
+  "BGREWRITEAOF",
+  "SAVE",
+  "SLOWLOG",
+  "LATENCY",
+  "REPLICAOF",
+  "SLAVEOF",
+  "DEBUG",
+  "RESET",
+  "HELLO",
+  "AUTH",
+  "QUIT",
+  "MULTI",
+  "EXEC",
+  "DISCARD",
+  "UNWATCH",
+  "ASKING",
+  "READONLY",
+  "READWRITE",
+  "RANDOMKEY",
+  "SCAN",
+  "KEYS",
+  "WAIT",
+  "PUBSUB",
 ]);
 
 /**

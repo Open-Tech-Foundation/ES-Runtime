@@ -37,12 +37,7 @@ export const OID = {
   interval: 1186,
 } as const;
 
-export type Decoder = (
-  bytes: Uint8Array,
-  view: DataView,
-  start: number,
-  length: number,
-) => unknown;
+export type Decoder = (bytes: Uint8Array, view: DataView, start: number, length: number) => unknown;
 
 function text(bytes: Uint8Array, _view: DataView, start: number, length: number): string {
   return DECODER.decode(bytes.subarray(start, start + length));
@@ -328,8 +323,7 @@ export function decoderForFormat(
   options: DecodeOptions = {},
 ): Decoder {
   if (format === 1) {
-    const decode =
-      (options.temporal !== false ? binaryTemporal[oid] : undefined) ?? binary[oid];
+    const decode = (options.temporal !== false ? binaryTemporal[oid] : undefined) ?? binary[oid];
     if (decode !== undefined) return decode;
   }
   return decoderFor(oid, options);
@@ -370,9 +364,7 @@ export function encodeParam(value: unknown): Uint8Array | null {
   if (value instanceof Date) return ENCODER.encode(value.toISOString());
   if (value instanceof Uint8Array) return ENCODER.encode(toHex(value));
   if (ArrayBuffer.isView(value)) {
-    return ENCODER.encode(
-      toHex(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)),
-    );
+    return ENCODER.encode(toHex(new Uint8Array(value.buffer, value.byteOffset, value.byteLength)));
   }
   if (value instanceof ArrayBuffer) return ENCODER.encode(toHex(new Uint8Array(value)));
   if (Array.isArray(value)) return ENCODER.encode(arrayLiteral(value));

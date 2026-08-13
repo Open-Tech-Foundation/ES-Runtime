@@ -32,60 +32,30 @@
  * driver is JavaScript over `runtime:net` — the arrangement D56 committed to,
  * in the sentence that names Redis by name.
  */
-import { RedisCommands, mixinCommands } from "./commands.js";
+
+import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
+import { RedisCluster, type RedisClusterOptions, redisCluster } from "./cluster.js";
+import { mixinCommands, RedisCommands } from "./commands.js";
 import {
-  RedisConnection,
-  REDIS_DIALECT,
   type MessageContext,
   type MessageHandler,
+  REDIS_DIALECT,
   type ReconnectOptions,
+  RedisConnection,
   type RedisOptions,
   type RedisPayload,
   type ServerHello,
 } from "./connection.js";
-import { RedisPooled, type RedisPoolOptions } from "./pool.js";
-import { RedisBatch, RedisPipeline, RedisTransaction } from "./batch.js";
-import { RedisCluster, redisCluster, type RedisClusterOptions } from "./cluster.js";
 import { driver, openConnection } from "./driver.js";
+import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import {
-  SentinelResolver,
   redisSentinel,
   type SentinelDriverOptions,
   type SentinelOptions,
+  SentinelResolver,
 } from "./sentinel.js";
 import { parseConnectionString } from "./url.js";
 
-export {
-  // The drivers — what `connect` takes.
-  driver,
-  redisCluster,
-  redisSentinel,
-  // The classes they open, for typing and for extending.
-  RedisConnection,
-  RedisPooled,
-  RedisCluster,
-  RedisCommands,
-  RedisBatch,
-  RedisPipeline,
-  RedisTransaction,
-  SentinelResolver,
-  REDIS_DIALECT,
-  // For a driver built on this one.
-  mixinCommands,
-  openConnection,
-  parseConnectionString,
-  type MessageContext,
-  type MessageHandler,
-  type ReconnectOptions,
-  type RedisOptions,
-  type RedisPayload,
-  type RedisClusterOptions,
-  type RedisPoolOptions,
-  type SentinelDriverOptions,
-  type SentinelOptions,
-  type ServerHello,
-};
-export type { CommandArg, Reply } from "./protocol/resp.js";
 export type {
   GeoPosition,
   RedisValue,
@@ -95,3 +65,34 @@ export type {
   StreamEntry,
   TransactionRunner,
 } from "./commands.js";
+export type { CommandArg, Reply } from "./protocol/resp.js";
+export {
+  // The drivers — what `connect` takes.
+  driver,
+  type MessageContext,
+  type MessageHandler,
+  // For a driver built on this one.
+  mixinCommands,
+  openConnection,
+  parseConnectionString,
+  REDIS_DIALECT,
+  type ReconnectOptions,
+  RedisBatch,
+  RedisCluster,
+  type RedisClusterOptions,
+  RedisCommands,
+  // The classes they open, for typing and for extending.
+  RedisConnection,
+  type RedisOptions,
+  type RedisPayload,
+  RedisPipeline,
+  RedisPooled,
+  type RedisPoolOptions,
+  RedisTransaction,
+  redisCluster,
+  redisSentinel,
+  type SentinelDriverOptions,
+  type SentinelOptions,
+  SentinelResolver,
+  type ServerHello,
+};

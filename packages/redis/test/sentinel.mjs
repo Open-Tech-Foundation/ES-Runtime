@@ -3,8 +3,9 @@
 // Needs a Sentinel deployment (see test/sentinel-server.sh). Skipped without
 // one, because a test that quietly passes when it did not run is worse than no
 // test.
-import { exit, env } from "runtime:process";
-import { connect, DbErrorCode } from "runtime:db";
+
+import { connect } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis, redisSentinel, SentinelResolver } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -14,7 +15,7 @@ if (sentinels.length === 0) {
   console.log("skip sentinel — set REDIS_SENTINELS (see test/sentinel-server.sh)");
   exit(0);
 }
-const container = env.REDIS_SENTINEL_CONTAINER ?? "esrun-redis-sentinel";
+const _container = env.REDIS_SENTINEL_CONTAINER ?? "esrun-redis-sentinel";
 const masterName = "mymaster";
 
 async function until(check, what, budget = 30000) {
@@ -67,8 +68,10 @@ async function askSentinel() {
   ok(found.port > 0, "a dead sentinel at the front is skipped");
   // And the one that answered is moved to the front, so the next lookup does
   // not walk the dead one again.
-  ok(resolver.sentinels[0] !== "redis://127.0.0.1:1",
-    "the sentinel that answered is tried first next time");
+  ok(
+    resolver.sentinels[0] !== "redis://127.0.0.1:1",
+    "the sentinel that answered is tried first next time",
+  );
 }
 
 {
@@ -81,7 +84,7 @@ async function askSentinel() {
   } catch (e) {
     message = e.message;
   }
-  ok(message !== null && message.includes("no-such-master"), "an unknown master name is named");
+  ok(message?.includes("no-such-master"), "an unknown master name is named");
 }
 
 {
@@ -97,7 +100,11 @@ async function askSentinel() {
 // -- a client -------------------------------------------------------------
 
 {
-  const r = await connect(sentinels[0], { driver: redisSentinel, sentinels: sentinels.slice(1), masterName });
+  const r = await connect(sentinels[0], {
+    driver: redisSentinel,
+    sentinels: sentinels.slice(1),
+    masterName,
+  });
   is(await r.ping(), "PONG", "a sentinel client connects");
   await r.set("via-sentinel", "yes");
   is(await r.get("via-sentinel"), "yes", "and reads and writes the master");

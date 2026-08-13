@@ -1,16 +1,17 @@
 // Public Protobuf API. Compiles a .proto schema (a single source string, or a
 // map of filename → source for multi-file schemas with imports) at runtime and
 // decodes/encodes messages reflectively against it.
-import { type ParsedFile, parseProto } from "./parser.js";
-import { type Registry, link } from "./link.js";
+
 import { decode } from "./decode.js";
+import { parseDescriptorSet } from "./descriptor_set.js";
 import { type EncodeOptions, encode } from "./encode.js";
 import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.js";
-import { type StreamSource, decodeDelimitedStream, decodeStream } from "./stream.js";
-import { parseDescriptorSet } from "./descriptor_set.js";
+import { link, type Registry } from "./link.js";
+import { type ParsedFile, parseProto } from "./parser.js";
 import { Reader } from "./reader.js";
-import { Writer } from "./writer.js";
+import { decodeDelimitedStream, decodeStream, type StreamSource } from "./stream.js";
 import { WKT } from "./wkt.js";
+import { Writer } from "./writer.js";
 
 export interface SchemaOptions {
   /** Entry filename when `proto` is a file map (defaults to all files). */
@@ -48,7 +49,9 @@ export class Schema {
    *  are otherwise supplied from the embedded sources. */
   static fromDescriptorSet(descriptorSet: Uint8Array): Schema {
     const schema = Object.create(Schema.prototype) as Schema;
-    (schema as unknown as { registry: Registry }).registry = link(parseDescriptorSet(descriptorSet));
+    (schema as unknown as { registry: Registry }).registry = link(
+      parseDescriptorSet(descriptorSet),
+    );
     return schema;
   }
 
@@ -65,7 +68,11 @@ export class Schema {
    *  `.proto`, or the lowerCamelCase `userName` that `decode` produces. A key
    *  matching no field is an error, so a typo cannot silently encode to a short
    *  buffer; pass `{ ignoreUnknownFields: true }` to skip such keys instead. */
-  encode(messageName: string, value: Record<string, unknown>, options: EncodeOptions = {}): Uint8Array {
+  encode(
+    messageName: string,
+    value: Record<string, unknown>,
+    options: EncodeOptions = {},
+  ): Uint8Array {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     const w = new Writer();
@@ -76,7 +83,11 @@ export class Schema {
   /** Encodes `value` as a single length-delimited message — a varint length
    *  prefix followed by the encoded bytes (the `writeDelimitedTo` framing).
    *  Concatenate the results to write a stream of messages. */
-  encodeDelimited(messageName: string, value: Record<string, unknown>, options: EncodeOptions = {}): Uint8Array {
+  encodeDelimited(
+    messageName: string,
+    value: Record<string, unknown>,
+    options: EncodeOptions = {},
+  ): Uint8Array {
     const body = this.encode(messageName, value, options);
     const w = new Writer();
     w.uint32(body.length);
@@ -92,7 +103,11 @@ export class Schema {
   }
 
   /** Parses canonical proto3-JSON into the decoded value shape (`encode`-ready). */
-  fromJson(messageName: string, json: JsonValue, options: FromJsonOptions = {}): Record<string, unknown> {
+  fromJson(
+    messageName: string,
+    json: JsonValue,
+    options: FromJsonOptions = {},
+  ): Record<string, unknown> {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     return messageFromJson(m, json, this.registry, options);
@@ -101,13 +116,19 @@ export class Schema {
   /** Streams the elements of a repeated message field from a chunked byte
    *  `source` (a ReadableStream or async/sync iterable of `Uint8Array`),
    *  decoding each element as it arrives and skipping the other fields. */
-  decodeStream(messageName: string, fieldName: string, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+  decodeStream(
+    messageName: string,
+    fieldName: string,
+    source: StreamSource,
+  ): AsyncGenerator<Record<string, unknown>> {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     const field = m.fields.find((f) => f.jsonName === fieldName || f.name === fieldName);
     if (!field) throw new Error(`protobuf: unknown field "${fieldName}" in ${messageName}`);
     if (!field.repeated || field.type.kind !== "message") {
-      throw new Error(`protobuf: decodeStream requires a repeated message field; "${fieldName}" is not one`);
+      throw new Error(
+        `protobuf: decodeStream requires a repeated message field; "${fieldName}" is not one`,
+      );
     }
     if (field.delimited) {
       throw new Error(`protobuf: decodeStream does not support delimited (group) fields`);
@@ -118,7 +139,10 @@ export class Schema {
   /** Streams the messages of a length-delimited stream (varint-length-prefixed,
    *  the `writeDelimitedTo` framing) from a chunked byte `source`, decoding and
    *  yielding each message in turn. */
-  decodeDelimited(messageName: string, source: StreamSource): AsyncGenerator<Record<string, unknown>> {
+  decodeDelimited(
+    messageName: string,
+    source: StreamSource,
+  ): AsyncGenerator<Record<string, unknown>> {
     const m = this.registry.messages.get(messageName);
     if (!m) throw new Error(`protobuf: unknown message "${messageName}"`);
     return decodeDelimitedStream(m, source);

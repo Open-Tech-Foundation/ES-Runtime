@@ -25,13 +25,13 @@
  * which is the arrangement `runtime:db` exists to make possible: adding a
  * database to this runtime does not mean adding anything to the runtime.
  */
-import { defineDriver, type Driver, type PoolSettings } from "runtime:db";
+import { type Driver, defineDriver, type PoolSettings } from "runtime:db";
 import { env, unmask } from "runtime:process";
 
-import { PgConnection, POSTGRES_DIALECT, type PgOptions } from "./connection.js";
+import { PgConnection, type PgOptions, POSTGRES_DIALECT } from "./connection.js";
 import { PgPooled, type PgPoolOptions } from "./pool.js";
 
-export { PgConnection, PgPooled, POSTGRES_DIALECT, type PgOptions, type PgPoolOptions };
+export { PgConnection, type PgOptions, PgPooled, type PgPoolOptions, POSTGRES_DIALECT };
 
 /**
  * The `PG*` environment variables, which every libpq tool reads.
@@ -134,9 +134,7 @@ export function parseConnectionString(url: string, overrides: PgOptions = {}): P
 }
 
 function stripUndefined<T extends object>(value: T): T {
-  return Object.fromEntries(
-    Object.entries(value).filter(([, v]) => v !== undefined),
-  ) as T;
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as T;
 }
 
 /**

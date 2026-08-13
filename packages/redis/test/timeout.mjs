@@ -1,6 +1,7 @@
 // A per-command deadline, and the connection it has to destroy.
-import { exit, env } from "runtime:process";
+
 import { connect, DbErrorCode } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -71,7 +72,11 @@ const url = env.REDIS_URL ?? "redis://127.0.0.1:6379";
 {
   const r = await connect(url, { driver: redis });
   const started = Date.now();
-  is(await r.call(["BLPOP", "nothing-ever", "1"]), null, "with no deadline a command runs to completion");
+  is(
+    await r.call(["BLPOP", "nothing-ever", "1"]),
+    null,
+    "with no deadline a command runs to completion",
+  );
   ok(Date.now() - started >= 900, "however long it takes");
   await r.close();
 }

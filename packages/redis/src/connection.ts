@@ -13,35 +13,34 @@
  * engine which never speaks SQL could be a first-class backend rather than a
  * special case. It is the first one to use it.
  */
-import { connect as netConnect } from "runtime:net";
+
 import {
   BaseConnection,
+  type CallOptions,
   DbError,
   DbErrorCode,
-  Dialect,
-  Rows,
-  defineRowShape,
-  queryAst,
-  type CallOptions,
   type DbInput,
-  type DbParams,
-  type ExecuteResult,
   type MessageContext as DbMessageContext,
+  type DbParams,
+  Dialect,
+  type ExecuteResult,
   type NormalizedQuery,
   type Queryable,
+  queryAst,
+  type Rows,
 } from "runtime:db";
+import { connect as netConnect } from "runtime:net";
 
-import { RedisCommands, mixinCommands } from "./commands.js";
-
-import { RespReader, encodeCommand, type CommandArg, type Reply } from "./protocol/resp.js";
+import { mixinCommands, type RedisCommands } from "./commands.js";
 import { blocksForever, foreverMessage } from "./protocol/blocking.js";
-import { parseRedirect, portableCode, redirectMessage, type Redirect } from "./protocol/errors.js";
-import { rowsOf, toValue, type DecodeOptions } from "./protocol/values.js";
+import { parseRedirect, portableCode, type Redirect, redirectMessage } from "./protocol/errors.js";
+import { type CommandArg, encodeCommand, type Reply, RespReader } from "./protocol/resp.js";
+import { type DecodeOptions, rowsOf, toValue } from "./protocol/values.js";
 
 /** What `runtime:net`'s `connect()` hands back. */
 type RedisSocket = ReturnType<typeof netConnect>;
 
-const BATCH_BYTES = 64 * 1024;
+const _BATCH_BYTES = 64 * 1024;
 
 /**
  * Redis's dialect, which is mostly a list of things it is not.
@@ -215,6 +214,9 @@ export interface ServerHello {
   role: string;
 }
 
+// The interface below merges the generated RedisCommands methods onto this
+// class — the deliberate way a client types dynamically-added commands.
+// biome-ignore lint/suspicious/noUnsafeDeclarationMerging: see above
 export class RedisConnection extends BaseConnection {
   #socket: RedisSocket | null = null;
   #replies: RespReader | null = null;
@@ -441,7 +443,8 @@ export class RedisConnection extends BaseConnection {
 
   async #reopen(): Promise<void> {
     const plan = this.#reconnect;
-    if (plan === null) throw this.#fatal ?? new DbError("no connection", { code: DbErrorCode.Closed });
+    if (plan === null)
+      throw this.#fatal ?? new DbError("no connection", { code: DbErrorCode.Closed });
     const previous = this.#fatal;
     let wait = plan.delay;
 
@@ -474,9 +477,12 @@ export class RedisConnection extends BaseConnection {
       return;
     }
     this.#fatal = previous;
-    throw previous ?? new DbError("the connection could not be reopened", {
-      code: DbErrorCode.ConnectionLost,
-    });
+    throw (
+      previous ??
+      new DbError("the connection could not be reopened", {
+        code: DbErrorCode.ConnectionLost,
+      })
+    );
   }
 
   /**
@@ -946,10 +952,15 @@ export class RedisConnection extends BaseConnection {
    * — is this method with the arguments spelled out, so anything without a
    * helper is still reachable: `r.call(["OBJECT", "ENCODING", key])`.
    */
-  async call(args: readonly CommandArg[], options: { signal?: AbortSignal } = {}): Promise<unknown> {
+  async call(
+    args: readonly CommandArg[],
+    options: { signal?: AbortSignal } = {},
+  ): Promise<unknown> {
     this._open();
     const checked = guard(args, this.#blocking);
-    return this._withSignal(options.signal, async () => toValue(await this.#call(checked), this.#decode));
+    return this._withSignal(options.signal, async () =>
+      toValue(await this.#call(checked), this.#decode),
+    );
   }
 
   /**
@@ -1109,7 +1120,8 @@ export class RedisConnection extends BaseConnection {
   ): Promise<void> {
     this._open();
     if (this.#pump === null) return;
-    const list = names === undefined ? [...registry.keys()] : typeof names === "string" ? [names] : [...names];
+    const list =
+      names === undefined ? [...registry.keys()] : typeof names === "string" ? [names] : [...names];
     if (list.length === 0) return;
     await this.#confirmed(list.length, [command, ...list]);
     for (const name of list) registry.delete(name);
@@ -1267,10 +1279,9 @@ export class RedisConnection extends BaseConnection {
     }
     const ast = q.ast;
     if (!Array.isArray(ast) || ast.length === 0) {
-      throw new DbError(
-        "a redis query is a non-empty command array: queryAst([\"GET\", key])",
-        { code: DbErrorCode.QueryForm },
-      );
+      throw new DbError('a redis query is a non-empty command array: queryAst(["GET", key])', {
+        code: DbErrorCode.QueryForm,
+      });
     }
     return guard([...ast, ...q.positional] as CommandArg[], this.#blocking);
   }
@@ -1315,10 +1326,9 @@ export class RedisConnection extends BaseConnection {
     }
     const ast = query.ast;
     if (!Array.isArray(ast) || ast.length === 0) {
-      throw new DbError(
-        'a redis query is a non-empty command array: queryAst(["SET"])',
-        { code: DbErrorCode.QueryForm },
-      );
+      throw new DbError('a redis query is a non-empty command array: queryAst(["SET"])', {
+        code: DbErrorCode.QueryForm,
+      });
     }
     const commands = sets.map(([positional]) =>
       guard([...ast, ...positional] as CommandArg[], this.#blocking),
@@ -1382,7 +1392,7 @@ export class RedisConnection extends BaseConnection {
   }
 }
 
-const EMPTY = new Uint8Array(0);
+const _EMPTY = new Uint8Array(0);
 
 /**
  * Errors raised **before** anything reached the server.

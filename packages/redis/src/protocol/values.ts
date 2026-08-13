@@ -12,11 +12,11 @@
  * `decodeBatch` take it apart again was work with no reader. That layout is
  * for backends that were handed bytes; this one never was.
  */
-import { DbError, DbErrorCode, Rows, defineRecordShape } from "runtime:db";
+import { DbError, DbErrorCode, defineRecordShape, Rows } from "runtime:db";
 
 import type { Reply } from "./resp.js";
 
-const encoder = new TextEncoder();
+const _encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -106,7 +106,10 @@ export function toValue(reply: Reply, options: DecodeOptions = {}): unknown {
  * table would be a second thing to keep correct as Redis grows, and it would be
  * wrong for `EVAL`, whose shape is whatever the script returned.
  */
-export function shapeOf(reply: Reply): { columns: { name: string; declType: string | null }[]; rows: number } {
+export function shapeOf(reply: Reply): {
+  columns: { name: string; declType: string | null }[];
+  rows: number;
+} {
   switch (reply.kind) {
     case "null":
       // Distinct from an empty array, and both are zero rows. `GET` on a

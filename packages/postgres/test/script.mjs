@@ -1,6 +1,6 @@
-import { driver as postgres } from "../dist/index.js";
-import { env } from "runtime:process";
 import { connect, DbErrorCode } from "runtime:db";
+import { env } from "runtime:process";
+import { driver as postgres } from "../dist/index.js";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 const db = await connect(url, { driver: postgres });
@@ -27,7 +27,9 @@ console.log("insert changes:", results.find((r) => r.command === "INSERT")?.chan
 // PostgreSQL wraps a multi-statement string in one implicit transaction, so a
 // failure part-way undoes what came before it.
 try {
-  await db.executeScript("INSERT INTO script_a VALUES (4); INSERT INTO script_a VALUES ('not an int');");
+  await db.executeScript(
+    "INSERT INTO script_a VALUES (4); INSERT INTO script_a VALUES ('not an int');",
+  );
 } catch (e) {
   console.log("mid-script failure:", e.code !== undefined);
 }

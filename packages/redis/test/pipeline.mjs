@@ -1,6 +1,7 @@
 // Pipelining: many commands, one round trip, and no atomicity implied.
-import { exit, env } from "runtime:process";
-import { DbError, queryAst, connect } from "runtime:db";
+
+import { connect, DbError, queryAst } from "runtime:db";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -103,10 +104,16 @@ is(await r.pipeline().exec(), [], "an empty pipeline is an empty result");
       return p.exec();
     })(),
   ]);
-  is(first.slice(50).join(","), Array.from({ length: 50 }, (_, i) => `x${i}`).join(","),
-    "the first pipeline's replies are all its own");
-  is(second.slice(50).join(","), Array.from({ length: 50 }, (_, i) => `y${i}`).join(","),
-    "and so are the second's");
+  is(
+    first.slice(50).join(","),
+    Array.from({ length: 50 }, (_, i) => `x${i}`).join(","),
+    "the first pipeline's replies are all its own",
+  );
+  is(
+    second.slice(50).join(","),
+    Array.from({ length: 50 }, (_, i) => `y${i}`).join(","),
+    "and so are the second's",
+  );
 }
 
 // -- misuse -----------------------------------------------------------------
@@ -141,22 +148,34 @@ is(await r.pipeline().exec(), [], "an empty pipeline is an empty result");
     ["k3", "3"],
   ]);
   is(result.changes, 3, "executeMany reports every set");
-  is((await (await db.query(queryAst(["MGET", "k1", "k2", "k3"]))).toArray()).map((x) => x.value),
-    ["1", "2", "3"], "and all of them applied");
+  is(
+    (await (await db.query(queryAst(["MGET", "k1", "k2", "k3"]))).toArray()).map((x) => x.value),
+    ["1", "2", "3"],
+    "and all of them applied",
+  );
 
   // Every set is attempted, where the old loop stopped at the first failure —
   // a pipeline has already sent them all.
   await db.execute(queryAst(["SET", "wrong", "string"]));
   let failed = null;
   try {
-    await db.executeMany(queryAst(["LPUSH"]), [["ok-list", "a"], ["wrong", "b"], ["ok-list", "c"]]);
+    await db.executeMany(queryAst(["LPUSH"]), [
+      ["ok-list", "a"],
+      ["wrong", "b"],
+      ["ok-list", "c"],
+    ]);
   } catch (e) {
     failed = e;
   }
   ok(failed !== null, "a failing set fails the call");
   is(failed.backendCode, "WRONGTYPE", "with the reason");
-  is((await (await db.query(queryAst(["LRANGE", "ok-list", 0, -1]))).toArray()).map((x) => x.value).sort(),
-    ["a", "c"], "and the sets around it still ran — there is no transaction here");
+  is(
+    (await (await db.query(queryAst(["LRANGE", "ok-list", 0, -1]))).toArray())
+      .map((x) => x.value)
+      .sort(),
+    ["a", "c"],
+    "and the sets around it still ran — there is no transaction here",
+  );
 
   await db.close();
 }

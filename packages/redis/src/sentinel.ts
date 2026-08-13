@@ -12,16 +12,9 @@
  * sentinel mid-failover will happily hand out the address of a server that has
  * just become a replica, and a client that wrote to it would lose the writes.
  */
-import {
-  DbError,
-  DbErrorCode,
-  defineDriver,
-  type Driver,
-  type PoolSettings,
-} from "runtime:db";
-
-import { openConnection } from "./driver.js";
+import { DbError, DbErrorCode, type Driver, defineDriver, type PoolSettings } from "runtime:db";
 import { REDIS_DIALECT, type RedisConnection, type RedisOptions } from "./connection.js";
+import { openConnection } from "./driver.js";
 import { RedisPooled, type RedisPoolOptions } from "./pool.js";
 import { parseConnectionString } from "./url.js";
 
@@ -214,61 +207,63 @@ function dataOptions(options: SentinelOptions): RedisOptions {
  * loss — which is the same choice reconnection makes everywhere else, for the
  * same reason.
  */
-export const redisSentinel: Driver<
-  RedisConnection,
-  SentinelDriverOptions,
-  RedisPooled
-> = defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
-  name: "redis-sentinel",
-  schemes: ["redis", "rediss"],
-  dialect: REDIS_DIALECT,
-  async open(url: string, options: SentinelDriverOptions): Promise<RedisConnection> {
-    const resolver = new SentinelResolver(sentinelOptions(url, options));
-    const first = await resolver.resolve();
-    const address = `redis://${first.host}:${first.port}`;
-    return openConnection(address, {
-      ...parseConnectionString(address, dataOptions(sentinelOptions(url, options))),
-      resolve: () => resolver.resolve(),
-    });
-  },
-  /**
-   * A pool whose connections each find the master when they are opened.
-   *
-   * The shape that survives a failover best, and not by accident: a pool
-   * already discards connections that fail, and every replacement resolves
-   * again. So the pool converges on the new master by doing the thing it does
-   * anyway.
-   *
-   * One resolver is shared by the whole pool — it reorders the sentinels as
-   * they answer, and that is worth keeping across opens — and it resolves once
-   * up front, so a misconfiguration (a master nobody has heard of, sentinels
-   * that are all down) fails here rather than at the first command, somewhere
-   * far from the code that got it wrong.
-   */
-  async pooled(
-    url: string,
-    options: SentinelDriverOptions,
-    poolOptions: PoolSettings,
-  ): Promise<RedisPooled> {
-    const settings = sentinelOptions(url, options);
-    const resolver = new SentinelResolver(settings);
-    await resolver.resolve();
-    // A driver is a value, so the pool gets one of its own: every slot it fills
-    // resolves through *this* resolver rather than starting a lookup from
-    // scratch.
-    const perPool = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
-      name: "redis-sentinel",
-      schemes: ["redis", "rediss"],
-      dialect: REDIS_DIALECT,
-      open: (_url: string, connectionOptions: RedisOptions = {}) =>
-        openConnection("redis://sentinel-resolved", {
-          ...connectionOptions,
-          resolve: () => resolver.resolve(),
-        }),
-    });
-    return new RedisPooled(perPool, "redis://sentinel-resolved", dataOptions(settings), poolOptions);
-  },
-});
+export const redisSentinel: Driver<RedisConnection, SentinelDriverOptions, RedisPooled> =
+  defineDriver<RedisConnection, SentinelDriverOptions, RedisPooled>({
+    name: "redis-sentinel",
+    schemes: ["redis", "rediss"],
+    dialect: REDIS_DIALECT,
+    async open(url: string, options: SentinelDriverOptions): Promise<RedisConnection> {
+      const resolver = new SentinelResolver(sentinelOptions(url, options));
+      const first = await resolver.resolve();
+      const address = `redis://${first.host}:${first.port}`;
+      return openConnection(address, {
+        ...parseConnectionString(address, dataOptions(sentinelOptions(url, options))),
+        resolve: () => resolver.resolve(),
+      });
+    },
+    /**
+     * A pool whose connections each find the master when they are opened.
+     *
+     * The shape that survives a failover best, and not by accident: a pool
+     * already discards connections that fail, and every replacement resolves
+     * again. So the pool converges on the new master by doing the thing it does
+     * anyway.
+     *
+     * One resolver is shared by the whole pool — it reorders the sentinels as
+     * they answer, and that is worth keeping across opens — and it resolves once
+     * up front, so a misconfiguration (a master nobody has heard of, sentinels
+     * that are all down) fails here rather than at the first command, somewhere
+     * far from the code that got it wrong.
+     */
+    async pooled(
+      url: string,
+      options: SentinelDriverOptions,
+      poolOptions: PoolSettings,
+    ): Promise<RedisPooled> {
+      const settings = sentinelOptions(url, options);
+      const resolver = new SentinelResolver(settings);
+      await resolver.resolve();
+      // A driver is a value, so the pool gets one of its own: every slot it fills
+      // resolves through *this* resolver rather than starting a lookup from
+      // scratch.
+      const perPool = defineDriver<RedisConnection, RedisOptions, RedisPooled>({
+        name: "redis-sentinel",
+        schemes: ["redis", "rediss"],
+        dialect: REDIS_DIALECT,
+        open: (_url: string, connectionOptions: RedisOptions = {}) =>
+          openConnection("redis://sentinel-resolved", {
+            ...connectionOptions,
+            resolve: () => resolver.resolve(),
+          }),
+      });
+      return new RedisPooled(
+        perPool,
+        "redis://sentinel-resolved",
+        dataOptions(settings),
+        poolOptions,
+      );
+    },
+  });
 
 /** The URL is the first sentinel; `sentinels` names any others. */
 function sentinelOptions(url: string, options: SentinelDriverOptions): SentinelOptions {

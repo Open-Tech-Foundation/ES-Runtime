@@ -1,6 +1,6 @@
-import { driver as postgres } from "../dist/index.js";
-import { env } from "runtime:process";
 import { connect } from "runtime:db";
+import { env } from "runtime:process";
+import { driver as postgres } from "../dist/index.js";
 
 const url = env.PG_URL ?? "postgres://postgres:esrun@127.0.0.1:5433/esrun_test?sslmode=disable";
 const db = await connect(url, { driver: postgres });
@@ -21,7 +21,10 @@ console.log("bigint[]:    ", show(await one("SELECT ARRAY[9007199254740993]::int
 console.log("bool[]:      ", show(await one("SELECT ARRAY[true,false,NULL]::bool[] AS v")));
 console.log("float8[]:    ", show(await one("SELECT ARRAY[1.5,2.25]::float8[] AS v")));
 console.log("numeric[]:   ", show(await one("SELECT ARRAY[1.10,2.20]::numeric[] AS v")));
-console.log("timestamptz[]:", (await one("SELECT ARRAY['2026-01-02T03:04:05Z'::timestamptz] AS v"))[0] instanceof Date);
+console.log(
+  "timestamptz[]:",
+  (await one("SELECT ARRAY['2026-01-02T03:04:05Z'::timestamptz] AS v"))[0] instanceof Date,
+);
 console.log("jsonb[]:     ", show(await one(`SELECT ARRAY['{"a":1}'::jsonb] AS v`)));
 console.log("lower bound: ", show(await one("SELECT '[2:4]={7,8,9}'::int[] AS v")));
 console.log("unknown type:", show(await one("SELECT ARRAY['(1,2)'::point] AS v")));

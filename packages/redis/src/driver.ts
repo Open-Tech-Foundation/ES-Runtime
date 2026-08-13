@@ -5,9 +5,9 @@
  * open connections and `index.ts` imports both — so the two would form a cycle.
  * This is the leaf they all depend on instead.
  */
-import { defineDriver, type Driver, type PoolSettings } from "runtime:db";
+import { type Driver, defineDriver, type PoolSettings } from "runtime:db";
 
-import { RedisConnection, REDIS_DIALECT, type RedisOptions } from "./connection.js";
+import { REDIS_DIALECT, RedisConnection, type RedisOptions } from "./connection.js";
 import { RedisPooled } from "./pool.js";
 import { parseConnectionString } from "./url.js";
 

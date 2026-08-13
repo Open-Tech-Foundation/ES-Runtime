@@ -3,9 +3,8 @@
 // Every Redis client has to agree with the server byte for byte here, so a
 // value this file gets wrong is a key that quietly lives on the wrong node.
 import { exit } from "runtime:process";
-
+import { crc16, hashSlot, hashTag, SLOTS } from "../../dist/protocol/slots.js";
 import { is, ok, report } from "./assert.mjs";
-import { SLOTS, crc16, hashSlot, hashTag } from "../../dist/protocol/slots.js";
 
 const bytes = (text) => new TextEncoder().encode(text);
 
@@ -59,7 +58,10 @@ ok(hashSlot("héllo") >= 0 && hashSlot("héllo") < SLOTS, "inside the slot range
     if (slot < lowest) lowest = slot;
     if (slot > highest) highest = slot;
   }
-  ok(lowest < 500 && highest > SLOTS - 500, `5000 keys spread across the range (${lowest}–${highest})`);
+  ok(
+    lowest < 500 && highest > SLOTS - 500,
+    `5000 keys spread across the range (${lowest}–${highest})`,
+  );
 }
 
 if (report("slots") > 0) exit(1);

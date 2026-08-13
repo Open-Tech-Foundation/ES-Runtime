@@ -4,11 +4,12 @@
 // FileDescriptorProto onto the same AST the .proto parser produces — then the
 // usual link() builds the registry. proto2, proto3, and editions 2023/2024 are
 // accepted (matching the text parser); a missing `syntax` field means proto2.
+
+import { decode } from "./decode.js";
+import type { FeatureSet } from "./features.js";
+import { link, type Registry } from "./link.js";
 import type { AstEnum, AstField, AstMessage, AstOneof, ParsedFile } from "./parser.js";
 import { parseProto } from "./parser.js";
-import type { FeatureSet } from "./features.js";
-import { type Registry, link } from "./link.js";
-import { decode } from "./decode.js";
 import { Reader } from "./reader.js";
 import { WKT } from "./wkt.js";
 
@@ -82,10 +83,21 @@ message OneofOptions { FeatureSet features = 1; }
 `;
 
 const SCALAR_BY_TYPE: Record<string, string> = {
-  TYPE_DOUBLE: "double", TYPE_FLOAT: "float", TYPE_INT64: "int64", TYPE_UINT64: "uint64",
-  TYPE_INT32: "int32", TYPE_FIXED64: "fixed64", TYPE_FIXED32: "fixed32", TYPE_BOOL: "bool",
-  TYPE_STRING: "string", TYPE_BYTES: "bytes", TYPE_UINT32: "uint32", TYPE_SFIXED32: "sfixed32",
-  TYPE_SFIXED64: "sfixed64", TYPE_SINT32: "sint32", TYPE_SINT64: "sint64",
+  TYPE_DOUBLE: "double",
+  TYPE_FLOAT: "float",
+  TYPE_INT64: "int64",
+  TYPE_UINT64: "uint64",
+  TYPE_INT32: "int32",
+  TYPE_FIXED64: "fixed64",
+  TYPE_FIXED32: "fixed32",
+  TYPE_BOOL: "bool",
+  TYPE_STRING: "string",
+  TYPE_BYTES: "bytes",
+  TYPE_UINT32: "uint32",
+  TYPE_SFIXED32: "sfixed32",
+  TYPE_SFIXED64: "sfixed64",
+  TYPE_SINT32: "sint32",
+  TYPE_SINT64: "sint64",
 };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -99,15 +111,19 @@ function descriptorRegistry(): Registry {
 function mapFeatures(f: Obj | undefined): FeatureSet {
   const out: FeatureSet = {};
   if (!f) return out;
-  if (f.fieldPresence && f.fieldPresence !== "FIELD_PRESENCE_UNKNOWN") out.fieldPresence = f.fieldPresence;
+  if (f.fieldPresence && f.fieldPresence !== "FIELD_PRESENCE_UNKNOWN")
+    out.fieldPresence = f.fieldPresence;
   if (f.enumType && f.enumType !== "ENUM_TYPE_UNKNOWN") out.enumType = f.enumType;
-  if (f.repeatedFieldEncoding && f.repeatedFieldEncoding !== "REPEATED_FIELD_ENCODING_UNKNOWN") out.repeatedEncoding = f.repeatedFieldEncoding;
-  if (f.messageEncoding && f.messageEncoding !== "MESSAGE_ENCODING_UNKNOWN") out.messageEncoding = f.messageEncoding;
+  if (f.repeatedFieldEncoding && f.repeatedFieldEncoding !== "REPEATED_FIELD_ENCODING_UNKNOWN")
+    out.repeatedEncoding = f.repeatedFieldEncoding;
+  if (f.messageEncoding && f.messageEncoding !== "MESSAGE_ENCODING_UNKNOWN")
+    out.messageEncoding = f.messageEncoding;
   return out;
 }
 
 function typeRef(f: Obj): string {
-  if (f.type === "TYPE_MESSAGE" || f.type === "TYPE_ENUM" || f.type === "TYPE_GROUP") return f.typeName as string;
+  if (f.type === "TYPE_MESSAGE" || f.type === "TYPE_ENUM" || f.type === "TYPE_GROUP")
+    return f.typeName as string;
   const scalar = typeof f.type === "string" ? SCALAR_BY_TYPE[f.type] : undefined;
   if (!scalar) throw new Error(`protobuf: unsupported field type ${f.type} in descriptor set`);
   return scalar;
@@ -119,19 +135,33 @@ function mapField(f: Obj, mapEntries: Map<string, { key: string; value: string }
   if (repeated && f.type === "TYPE_MESSAGE" && mapEntries.has(entryName)) {
     const e = mapEntries.get(entryName)!;
     return {
-      label: "singular", typeName: "", name: f.name, number: f.number,
-      jsonName: f.jsonName, features: mapFeatures(f.options?.features), map: e,
+      label: "singular",
+      typeName: "",
+      name: f.name,
+      number: f.number,
+      jsonName: f.jsonName,
+      features: mapFeatures(f.options?.features),
+      map: e,
     };
   }
-  const label: AstField["label"] = repeated ? "repeated"
-    : f.label === "LABEL_REQUIRED" ? "required"
-    : f.proto3Optional ? "optional" : "singular";
+  const label: AstField["label"] = repeated
+    ? "repeated"
+    : f.label === "LABEL_REQUIRED"
+      ? "required"
+      : f.proto3Optional
+        ? "optional"
+        : "singular";
   const features = mapFeatures(f.options?.features);
   // A group field (proto2) is wire-encoded as a delimited message.
   if (f.type === "TYPE_GROUP") features.messageEncoding = "DELIMITED";
   return {
-    label, typeName: typeRef(f), name: f.name, number: f.number,
-    jsonName: f.jsonName, packedOption: f.options?.packed, features,
+    label,
+    typeName: typeRef(f),
+    name: f.name,
+    number: f.number,
+    jsonName: f.jsonName,
+    packedOption: f.options?.packed,
+    features,
   };
 }
 
@@ -168,7 +198,8 @@ function mapMessage(d: Obj): AstMessage {
       fields.push(af);
     }
   }
-  const oneofs: AstOneof[] = [...realOneof.keys()].sort((a, b) => a - b)
+  const oneofs: AstOneof[] = [...realOneof.keys()]
+    .sort((a, b) => a - b)
     .map((idx) => ({ name: oneofDecl[idx]?.name ?? `oneof_${idx}`, fields: realOneof.get(idx)! }));
 
   return {
@@ -185,7 +216,9 @@ function mapSyntax(syntax: string | undefined, edition: number | undefined): Par
   if (syntax === "editions") {
     if (edition === 1000) return "2023";
     if (edition === 1001) return "2024";
-    throw new Error(`protobuf: descriptor set uses an unsupported edition (${edition ?? "unknown"})`);
+    throw new Error(
+      `protobuf: descriptor set uses an unsupported edition (${edition ?? "unknown"})`,
+    );
   }
   if (syntax === "proto3") return "proto3";
   // proto2 descriptors leave the syntax field unset (or "proto2").

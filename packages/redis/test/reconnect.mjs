@@ -1,8 +1,8 @@
 // Reopening a connection the server took away — and what must not come back.
-import { exit, env } from "runtime:process";
-import { connect, DbErrorCode } from "runtime:db";
 
+import { connect, DbErrorCode } from "runtime:db";
 import { listen } from "runtime:net";
+import { env, exit } from "runtime:process";
 
 import { driver as redis } from "../dist/index.js";
 import { is, ok, report } from "./unit/assert.mjs";
@@ -66,7 +66,10 @@ async function until(check, what, budget = 4000) {
   // The database and the client name are connection configuration, so they are
   // restored — a reopened connection pointing at db 0 would silently move every
   // later key.
-  const r = await connect(`${url}/7?client_name=reconnect-test`, { driver: redis, reconnect: true });
+  const r = await connect(`${url}/7?client_name=reconnect-test`, {
+    driver: redis,
+    reconnect: true,
+  });
   await r.call(["FLUSHDB"]);
   await r.set("in-seven", "1");
   await kill(r);
@@ -84,7 +87,10 @@ async function until(check, what, budget = 4000) {
   await kill(r);
   const answers = await Promise.all(Array.from({ length: 10 }, () => r.ping()));
   is(answers.length, 10, "ten concurrent commands all completed");
-  ok(answers.every((a) => a === "PONG"), "and every one of them answered");
+  ok(
+    answers.every((a) => a === "PONG"),
+    "and every one of them answered",
+  );
   await r.close();
 }
 
@@ -132,8 +138,11 @@ async function until(check, what, budget = 4000) {
   } catch (e) {
     code = e.code;
   }
-  is(code, DbErrorCode.SerializationFailure,
-    "an EXEC after a reconnect that dropped a WATCH fails rather than succeeding");
+  is(
+    code,
+    DbErrorCode.SerializationFailure,
+    "an EXEC after a reconnect that dropped a WATCH fails rather than succeeding",
+  );
   is(await r.get("guarded"), "1", "and nothing was written");
 
   // Once acknowledged, the connection is ordinary again.
