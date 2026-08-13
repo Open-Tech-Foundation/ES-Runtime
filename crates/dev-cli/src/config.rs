@@ -1,0 +1,800 @@
+//! `esdev.json` — what a project builds, in a file rather than on a command
+//! line.
+//!
+//! Every knob in this tool has been a flag until now, and for a run that is
+//! right: a flag is typed by a person, in view, once. A **build** is not that.
+//! An application that renders on the server and hydrates in the browser is two
+//! bundles from two entries with two different output shapes, and the moment
+//! that has to be spelled out in `package.json` scripts it is spelled out
+//! twice — once for the dev loop and once for the release — where the two
+//! quietly drift apart. What a project builds is a property *of the project*,
+//! so it belongs in the project.
+//!
+//! # Why JSON, and not `esdev.config.ts`
+//!
+//! Vite and Next both take an executable config, and both are right to: their
+//! configs carry **plugins**, and a plugin is a function, which JSON cannot
+//! hold. esdev has no plugin API, no resolver hooks and no transform pipeline
+//! to configure, so an executable config here would be a program whose entire
+//! content is data.
+//!
+//! There is also an ordering problem specific to this project. This file
+//! carries `permissions`, and executing a config to learn what a run may do
+//! means running guest code *before* that has been decided. Vite has no
+//! capability model, so the question never arises for them; here it would be a
+//! hole in the one property the runtime is built around. The day esdev grows a
+//! hook that takes a function, this becomes a real question again — and the key
+//! names below are chosen so a future `esdev.config.ts` can export the same
+//! shape and leave every existing `esdev.json` valid.
+//!
+//! # `esrun` never reads this file
+//!
+//! Deliberately, and it is the line this design holds. A production binary that
+//! picks up a checked-in file granting itself capabilities is precisely what the
+//! capability model exists to prevent — the grant a service runs under must be
+//! visible on the command that deployed it, not in a file that travelled with
+//! the source. `permissions` here shapes the child that `esdev start` runs on a
+//! developer's machine, which is how you develop *under* production's grants
+//! without being able to ship them by accident.
+
+use std::path::{Path, PathBuf};
+
+use es_runtime_cli_common::args::try_permission_flag;
+use es_runtime_cli_common::permissions::Permissions;
+use serde_json::{Map, Value};
+
+/// The file looked for when `--config` did not name one.
+pub const FILE_NAME: &str = "esdev.json";
+
+/// A parsed `esdev.json`.
+#[derive(Debug)]
+pub struct Project {
+    /// The directory the file was found in.
+    ///
+    /// Every path in the file is relative to *this*, not to the working
+    /// directory — so a config describes its own project the same way whether
+    /// esdev was run from the project root or pointed at it from elsewhere.
+    pub dir: PathBuf,
+    /// The build targets, in name order.
+    ///
+    /// Sorted rather than left in the order they were written, because a JSON
+    /// object has no order worth relying on. Where sequence actually matters —
+    /// a target that runs after the build — it is expressed by the target
+    /// itself rather than by its position in the file.
+    pub targets: Vec<Target>,
+}
+
+/// One thing a project builds.
+#[derive(Debug)]
+pub struct Target {
+    /// The key this target was written under, and the name `--target=` selects
+    /// it by.
+    pub name: String,
+    /// The module the bundle is rooted at, or the HTML file that names it.
+    pub entry: String,
+    /// Where the output goes.
+    pub output: Output,
+    /// Which environment the output runs in.
+    pub platform: Platform,
+    /// Files and directories copied into the output directory verbatim.
+    pub assets: Vec<String>,
+    /// Whether to minify this target.
+    pub minify: bool,
+    /// Compile-time replacements, as `--define` makes them.
+    pub define: Vec<(String, String)>,
+    /// Extra `exports` conditions, as `--conditions` adds them.
+    pub conditions: Vec<String>,
+    /// Whether the built output is *executed* once the build finishes.
+    ///
+    /// This is how a static site gets generated without esdev knowing what a
+    /// static site is: the bundle runs, and what it writes is the build's real
+    /// output. Bundling and prerendering are the same step to everything
+    /// downstream, which is what keeps `esdev build` a single command for a
+    /// stack whose deliverable is a directory of HTML.
+    pub run_after_build: bool,
+}
+
+/// What a target's output looks like on disk.
+#[derive(Debug)]
+pub enum Output {
+    /// `out` — one file. The directory it lands in may hold other things and is
+    /// never cleaned, because the build does not own it.
+    File(String),
+    /// `outdir` — a directory this target writes into.
+    ///
+    /// What a browser target needs: a dynamic `import()` emits a hashed chunk
+    /// beside its entry, and a build whose output is one named file has nowhere
+    /// to put a second one.
+    Dir(String),
+}
+
+/// Which environment a target's output runs in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Platform {
+    /// This runtime — the default, and what every target was before there was
+    /// a browser one.
+    Server,
+    /// A browser. Changes which build of a dependency is inlined: the `browser`
+    /// condition rather than `worker`.
+    Browser,
+}
+
+/// The keys a target may carry.
+const TARGET_KEYS: &[&str] = &[
+    "entry",
+    "out",
+    "outdir",
+    "platform",
+    "assets",
+    "minify",
+    "define",
+    "conditions",
+    "then",
+];
+
+/// The keys the file may carry at the top level.
+const TOP_LEVEL_KEYS: &[&str] = &["$schema", "targets", "start", "permissions"];
+
+/// The keys `start` may carry.
+///
+/// Read in full here, and *consumed* by `esdev start`. Validating a key the
+/// command that uses it has not been written yet is deliberate: a typo in
+/// `start` should be reported by the build that read the file, not held until
+/// the day somebody runs the other command.
+const START_KEYS: &[&str] = &["run", "watch", "serve", "port"];
+
+/// Loads the project config: the one `--config` named, or `./esdev.json`.
+///
+/// `Ok(None)` means there is no config and none was asked for — the ordinary
+/// state of a project that names its entry on the command line. A `--config`
+/// that names a file which is not there is an error, never a silent fallback:
+/// building something other than what was pointed at is worse than not
+/// building.
+pub fn load(named: Option<&str>) -> Result<Option<Project>, String> {
+    let path = match named {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let default = PathBuf::from(FILE_NAME);
+            if !default.is_file() {
+                return Ok(None);
+            }
+            default
+        }
+    };
+    if !path.is_file() {
+        return Err(format!(
+            "cannot read {}\n\n\
+             --config names the file to read; drop it to use ./{FILE_NAME}.",
+            path.display()
+        ));
+    }
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    // Absolute from here on. Every path in the file is resolved against this
+    // directory, including the bundler's own working directory, and a relative
+    // one would be resolved a second time against wherever the process happens
+    // to be — which is the same place only by coincidence.
+    let dir = dir
+        .canonicalize()
+        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    parse(&text, dir, &path.display().to_string())
+}
+
+/// Parses the text of an `esdev.json`.
+///
+/// Split from [`load`] so the whole grammar is testable without a filesystem,
+/// which is what keeps the error messages under test rather than under review.
+pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, String> {
+    let root: Value = serde_json::from_str(text).map_err(|e| {
+        format!(
+            "{name} is not valid JSON: {e}\n\n\
+             It is read as data — there are no comments, no trailing commas and \
+             nothing is executed."
+        )
+    })?;
+    let root = object(&root, name, "the file")?;
+    known_keys(root, name, "", TOP_LEVEL_KEYS)?;
+
+    let targets = root.get("targets").ok_or_else(|| {
+        format!(
+            "{name} has no `targets`.\n\n\
+             A target is one thing the project builds — an entry, and where its \
+             output goes:\n\n  \
+             \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }}"
+        )
+    })?;
+    let targets = object(targets, name, "`targets`")?;
+    if targets.is_empty() {
+        return Err(format!(
+            "{name} has no targets in `targets`.\n\n\
+             An empty object builds nothing; remove the file or name what it builds."
+        ));
+    }
+    let mut targets = targets
+        .iter()
+        .map(|(target_name, value)| target(target_name, value, name))
+        .collect::<Result<Vec<_>, _>>()?;
+    // Sorted here rather than taken as they came. `serde_json` keeps insertion
+    // order only when a feature enables it, and that feature is currently on
+    // because *something else* in this workspace asked for it — an order that
+    // would change under a dependency edit nobody connected to this file.
+    targets.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if let Some(start) = root.get("start") {
+        check_start(start, &targets, name)?;
+    }
+    if let Some(permissions) = root.get("permissions") {
+        check_permissions(permissions, name)?;
+    }
+    Ok(Some(Project { dir, targets }))
+}
+
+/// Parses one entry of `targets`.
+fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
+    let at = format!("target \"{name}\"");
+    if name.trim().is_empty() || name.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "{file}: \"{name}\" is not a usable target name.\n\n\
+             A name is what `esdev build --target=<name>` selects, so it cannot be \
+             blank or carry spaces."
+        ));
+    }
+    let map = object(value, file, &at)?;
+    known_keys(map, file, &at, TARGET_KEYS)?;
+
+    let entry = match map.get("entry") {
+        Some(entry) => string(entry, file, &format!("{at}'s `entry`"))?.to_string(),
+        None => {
+            return Err(format!(
+                "{file}: {at} has no `entry`.\n\n\
+                 Every target is rooted at one: \"entry\": \"src/server.ts\"."
+            ));
+        }
+    };
+
+    let output = match (map.get("out"), map.get("outdir")) {
+        (Some(_), Some(_)) => {
+            return Err(format!(
+                "{file}: {at} sets both `out` and `outdir`, which name different \
+                 shapes of output.\n\n\
+                 `out` is one file; `outdir` is a directory the target writes into. \
+                 A browser target wants `outdir` — a dynamic import emits a chunk \
+                 beside its entry, and one named file has nowhere to put it."
+            ));
+        }
+        (Some(out), None) => {
+            let out = string(out, file, &format!("{at}'s `out`"))?;
+            if Path::new(out).extension().is_none() {
+                return Err(format!(
+                    "{file}: {at} has \"out\": \"{out}\", which names a directory.\n\n\
+                     `out` is one file (\"dist/server.js\"). For a directory, write \
+                     \"outdir\": \"{out}\"."
+                ));
+            }
+            Output::File(out.to_string())
+        }
+        (None, Some(dir)) => {
+            let dir = string(dir, file, &format!("{at}'s `outdir`"))?;
+            if Path::new(dir).extension().is_some() {
+                return Err(format!(
+                    "{file}: {at} has \"outdir\": \"{dir}\", which names a file.\n\n\
+                     `outdir` is a directory the target writes into. For one file, \
+                     write \"out\": \"{dir}\"."
+                ));
+            }
+            Output::Dir(dir.to_string())
+        }
+        (None, None) => Output::File(default_out(&entry)),
+    };
+
+    let platform = match map.get("platform") {
+        None => Platform::Server,
+        Some(value) => match string(value, file, &format!("{at}'s `platform`"))? {
+            "server" => Platform::Server,
+            "browser" => Platform::Browser,
+            other => {
+                return Err(format!(
+                    "{file}: {at} has \"platform\": \"{other}\".\n\n\
+                     It is \"server\" (this runtime, the default) or \"browser\" — \
+                     which decides whether a dependency hands over its `worker` build \
+                     or its `browser` one."
+                ));
+            }
+        },
+    };
+
+    let run_after_build = match map.get("then") {
+        None => false,
+        Some(value) => match string(value, file, &format!("{at}'s `then`"))? {
+            "run" => true,
+            other => {
+                return Err(format!(
+                    "{file}: {at} has \"then\": \"{other}\".\n\n\
+                     The only thing a build can do next is \"run\" the output it just \
+                     wrote — which is how a prerender step emits a directory of HTML."
+                ));
+            }
+        },
+    };
+    if run_after_build && platform == Platform::Browser {
+        return Err(format!(
+            "{file}: {at} is a browser target with \"then\": \"run\".\n\n\
+             A browser bundle is served, not executed here — it expects a `document` \
+             this runtime does not have. A prerender step is a server target that \
+             *writes* the HTML."
+        ));
+    }
+
+    Ok(Target {
+        name: name.to_string(),
+        entry,
+        output,
+        platform,
+        assets: string_array(map.get("assets"), file, &format!("{at}'s `assets`"))?,
+        minify: flag(map.get("minify"), file, &format!("{at}'s `minify`"))?,
+        define: defines(map.get("define"), file, &at)?,
+        conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
+        run_after_build,
+    })
+}
+
+/// Where a target's output goes when it did not say — the same default the
+/// command line has always had, so a config that omits `out` and a command line
+/// that omits `--out` write the same file.
+fn default_out(entry: &str) -> String {
+    let stem = Path::new(entry)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bundle");
+    format!("dist/{stem}.js")
+}
+
+/// Validates `start` and the target names it refers to.
+fn check_start(value: &Value, targets: &[Target], file: &str) -> Result<(), String> {
+    let map = object(value, file, "`start`")?;
+    known_keys(map, file, "`start`", START_KEYS)?;
+    let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
+
+    if let Some(run) = map.get("run") {
+        let run = string(run, file, "`start`'s `run`")?;
+        if !names.contains(&run) {
+            return Err(unknown_target(file, "`start`'s `run`", run, &names));
+        }
+    }
+    for name in string_array(map.get("watch"), file, "`start`'s `watch`")? {
+        if !names.contains(&name.as_str()) {
+            return Err(unknown_target(file, "`start`'s `watch`", &name, &names));
+        }
+    }
+    if let Some(serve) = map.get("serve") {
+        string(serve, file, "`start`'s `serve`")?;
+    }
+    if let Some(port) = map.get("port")
+        && !port
+            .as_u64()
+            .is_some_and(|p| p > 0 && p <= u64::from(u16::MAX))
+    {
+        return Err(format!(
+            "{file}: `start`'s `port` is a number from 1 to 65535, not {port}."
+        ));
+    }
+    Ok(())
+}
+
+/// The error for a `start` key naming a target that is not there.
+fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {
+    let suggestion = nearest(named, names)
+        .map(|near| format!(" Did you mean \"{near}\"?"))
+        .unwrap_or_default();
+    format!(
+        "{file}: {at} names \"{named}\", which is not a target.{suggestion}\n\n\
+         Targets in this file: {}.",
+        names.join(", ")
+    )
+}
+
+/// Validates `permissions` by translating it into the flags it stands for and
+/// handing them to the parser `esrun` uses.
+///
+/// **The translation is the point.** A second dialect of what `read` means would
+/// be a second thing to keep true, and the one that drifted would be the one
+/// granting capabilities. Here `{"allow": {"read": ["./data"]}}` becomes
+/// `--allow-read=./data` and is checked by exactly the code that checks the
+/// flag — so an unknown capability, a scope on a capability that takes none, and
+/// a grant without `--deny-all` all fail here with the message they have always
+/// had.
+fn check_permissions(value: &Value, file: &str) -> Result<(), String> {
+    let map = object(value, file, "`permissions`")?;
+    known_keys(map, file, "`permissions`", &["deny", "allow"])?;
+    let mut permissions = Permissions::default();
+
+    for name in string_array(map.get("deny"), file, "`permissions`'s `deny`")? {
+        let flag = format!("--deny-{name}");
+        try_permission_flag(&mut permissions, &flag, None)
+            .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+    }
+    if let Some(allow) = map.get("allow") {
+        let allow = object(allow, file, "`permissions`'s `allow`")?;
+        for (name, scopes) in allow {
+            let flag = format!("--allow-{name}");
+            let at = format!("`permissions`'s `allow.{name}`");
+            // `true` is the unnarrowed grant, the shape `--allow-net` has. A
+            // list narrows it. Both spellings exist because both flags do.
+            let value = match scopes {
+                Value::Bool(true) => None,
+                Value::Array(_) => Some(string_array(Some(scopes), file, &at)?.join(",")),
+                other => {
+                    return Err(format!(
+                        "{file}: {at} is {other}, which is neither a grant nor a \
+                         narrowing.\n\n\
+                         Write `true` to grant it outright, or a list to narrow it: \
+                         \"read\": [\"./data\"]."
+                    ));
+                }
+            };
+            try_permission_flag(&mut permissions, &flag, value.as_deref())
+                .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+        }
+    }
+    // Resolving is what rejects a grant that contradicts the denials around it,
+    // and it is cheap; doing it here means the file is wrong when it is read
+    // rather than when a run is finally attempted with it.
+    permissions
+        .resolve()
+        .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+    permissions
+        .scopes()
+        .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+    Ok(())
+}
+
+/// Reads a JSON object, or says what was found instead.
+fn object<'a>(value: &'a Value, file: &str, at: &str) -> Result<&'a Map<String, Value>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| format!("{file}: {at} is {}, and should be an object.", kind(value)))
+}
+
+/// Reads a JSON string.
+fn string<'a>(value: &'a Value, file: &str, at: &str) -> Result<&'a str, String> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{file}: {at} is {}, and should be a string.", kind(value)))?;
+    if text.trim().is_empty() {
+        return Err(format!("{file}: {at} is empty."));
+    }
+    Ok(text)
+}
+
+/// Reads a JSON array of strings; absent is an empty list.
+fn string_array(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<String>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let items = value
+        .as_array()
+        .ok_or_else(|| format!("{file}: {at} is {}, and should be a list.", kind(value)))?;
+    items
+        .iter()
+        .map(|item| string(item, file, at).map(str::to_string))
+        .collect()
+}
+
+/// Reads a JSON boolean; absent is `false`.
+fn flag(value: Option<&Value>, file: &str, at: &str) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some(value) => value.as_bool().ok_or_else(|| {
+            format!(
+                "{file}: {at} is {}, and should be true or false.",
+                kind(value)
+            )
+        }),
+    }
+}
+
+/// Reads a `define` object into the pairs `--define=<name>=<value>` makes.
+///
+/// The values are JSON, and what reaches the bundler is their JSON text — so
+/// `"port": 8080` replaces the name with the number `8080` and `"mode": "dev"`
+/// replaces it with the *string* `"dev"`, quotes included. That is the part a
+/// hand-written `--define` gets wrong: on a command line the quotes have to
+/// survive the shell, and here the type is simply what you wrote.
+fn defines(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<(String, String)>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let map = object(value, file, &format!("{at}'s `define`"))?;
+    map.iter()
+        .map(|(name, replacement)| match replacement {
+            Value::Object(_) | Value::Array(_) => Err(format!(
+                "{file}: {at}'s `define.{name}` is {}, and a replacement is a single \
+                 value.\n\n\
+                 What lands in the bundle is the JSON text of it, so a string, a \
+                 number or a boolean.",
+                kind(replacement)
+            )),
+            other => Ok((name.clone(), other.to_string())),
+        })
+        .collect()
+}
+
+/// Rejects a key that is not in `allowed`, naming the nearest one when the
+/// spelling is close — a mistyped key is otherwise a setting that silently does
+/// nothing, which for `minify` is a slow bundle and for `platform` is the wrong
+/// build of a dependency.
+fn known_keys(
+    map: &Map<String, Value>,
+    file: &str,
+    at: &str,
+    allowed: &[&str],
+) -> Result<(), String> {
+    for key in map.keys() {
+        if allowed.contains(&key.as_str()) {
+            continue;
+        }
+        let where_ = if at.is_empty() {
+            String::new()
+        } else {
+            format!(" in {at}")
+        };
+        let suggestion = nearest(key, allowed)
+            .map(|near| format!(" Did you mean `{near}`?"))
+            .unwrap_or_default();
+        return Err(format!(
+            "{file}: unknown key `{key}`{where_}.{suggestion}\n\n\
+             Known here: {}.",
+            allowed.join(", ")
+        ));
+    }
+    Ok(())
+}
+
+/// The closest candidate to `word`, if one is close enough to be a typo of it.
+fn nearest<'a>(word: &str, candidates: &[&'a str]) -> Option<&'a str> {
+    candidates
+        .iter()
+        .map(|candidate| (distance(word, candidate), *candidate))
+        // Two edits on a short key is the line between a typo and a different
+        // word: `outDir` reaches `outdir`, `output` does not reach `out`.
+        .filter(|(distance, _)| *distance <= 2)
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, candidate)| candidate)
+}
+
+/// Levenshtein distance, case-insensitively — `outDir` is a typo of `outdir`
+/// and the message should say so rather than list the keys and leave it there.
+fn distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.to_lowercase().chars().collect();
+    let b: Vec<char> = b.to_lowercase().chars().collect();
+    let mut previous: Vec<usize> = (0..=b.len()).collect();
+    let mut current = vec![0; b.len() + 1];
+    for (i, x) in a.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, y) in b.iter().enumerate() {
+            let cost = usize::from(x != y);
+            current[j + 1] = (previous[j] + cost)
+                .min(previous[j + 1] + 1)
+                .min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[b.len()]
+}
+
+/// What a JSON value is, for a message that has to say what was found.
+fn kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "a list",
+        Value::Object(_) => "an object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parses `text` as a config, or returns the error message.
+    fn read(text: &str) -> Result<Project, String> {
+        parse(text, PathBuf::from("."), "esdev.json").map(|p| p.expect("a config"))
+    }
+
+    #[test]
+    fn a_target_is_an_entry_and_where_its_output_goes() {
+        let project = read(
+            r#"{ "targets": { "server": { "entry": "src/server.ts", "out": "dist/server.js" } } }"#,
+        )
+        .expect("parsed");
+        let target = &project.targets[0];
+        assert_eq!(target.name, "server");
+        assert_eq!(target.entry, "src/server.ts");
+        assert!(matches!(&target.output, Output::File(out) if out == "dist/server.js"));
+        assert_eq!(target.platform, Platform::Server);
+        assert!(!target.run_after_build);
+    }
+
+    /// The same default the command line has: a config that omits `out` and a
+    /// command line that omits `--out` must write the same file.
+    #[test]
+    fn the_output_defaults_to_dist_beside_the_entry_name() {
+        let project = read(r#"{ "targets": { "app": { "entry": "src/app.ts" } } }"#).expect("ok");
+        assert!(matches!(&project.targets[0].output, Output::File(out) if out == "dist/app.js"));
+    }
+
+    #[test]
+    fn targets_come_back_in_name_order() {
+        let project = read(
+            r#"{ "targets": {
+                   "server": { "entry": "s.ts" },
+                   "browser": { "entry": "c.tsx", "outdir": "dist/client", "platform": "browser" }
+                 } }"#,
+        )
+        .expect("parsed");
+        let names: Vec<&str> = project.targets.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["browser", "server"]);
+        assert_eq!(project.targets[0].platform, Platform::Browser);
+    }
+
+    /// A mistyped key is a setting that silently does nothing, so it is an
+    /// error — and the message names the key it was nearly.
+    #[test]
+    fn a_mistyped_key_is_named_and_corrected() {
+        let err = read(r#"{ "targets": { "a": { "entry": "a.ts", "outDir": "dist" } } }"#)
+            .expect_err("refused");
+        assert!(err.contains("unknown key `outDir`"), "{err}");
+        assert!(err.contains("Did you mean `outdir`?"), "{err}");
+
+        let top = read(r#"{ "target": {} }"#).expect_err("refused");
+        assert!(top.contains("Did you mean `targets`?"), "{top}");
+    }
+
+    /// The two output shapes are different things, and a target that asks for
+    /// both has not decided which.
+    #[test]
+    fn out_and_outdir_are_not_both() {
+        let err =
+            read(r#"{ "targets": { "a": { "entry": "a.ts", "out": "d/a.js", "outdir": "d" } } }"#)
+                .expect_err("refused");
+        assert!(err.contains("both `out` and `outdir`"), "{err}");
+    }
+
+    /// `out` naming a directory would produce a directory literally called
+    /// `dist`, and `outdir` naming a file the reverse.
+    #[test]
+    fn the_output_shape_must_match_the_key() {
+        let file = read(r#"{ "targets": { "a": { "entry": "a.ts", "out": "dist" } } }"#)
+            .expect_err("refused");
+        assert!(file.contains("names a directory"), "{file}");
+
+        let dir = read(r#"{ "targets": { "a": { "entry": "a.ts", "outdir": "dist/a.js" } } }"#)
+            .expect_err("refused");
+        assert!(dir.contains("names a file"), "{dir}");
+    }
+
+    #[test]
+    fn a_target_without_an_entry_is_refused() {
+        let err = read(r#"{ "targets": { "a": { "out": "dist/a.js" } } }"#).expect_err("refused");
+        assert!(err.contains("has no `entry`"), "{err}");
+    }
+
+    #[test]
+    fn the_platform_is_one_of_two_words() {
+        let err = read(r#"{ "targets": { "a": { "entry": "a.ts", "platform": "node" } } }"#)
+            .expect_err("refused");
+        assert!(err.contains("\"server\""), "{err}");
+        assert!(err.contains("\"browser\""), "{err}");
+    }
+
+    /// A browser bundle expects a `document`; running it here is a mistake with
+    /// a confusing failure, so it is refused where it is written.
+    #[test]
+    fn a_browser_target_cannot_be_run_after_the_build() {
+        let err = read(
+            r#"{ "targets": { "a": { "entry": "a.tsx", "outdir": "d", "platform": "browser", "then": "run" } } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("browser target"), "{err}");
+    }
+
+    #[test]
+    fn then_run_is_the_only_thing_a_build_does_next() {
+        let ok = read(r#"{ "targets": { "a": { "entry": "a.ts", "then": "run" } } }"#).expect("ok");
+        assert!(ok.targets[0].run_after_build);
+
+        let err = read(r#"{ "targets": { "a": { "entry": "a.ts", "then": "deploy" } } }"#)
+            .expect_err("refused");
+        assert!(err.contains("\"run\""), "{err}");
+    }
+
+    /// The type of a replacement is what was written, which is the part a
+    /// hand-written `--define` gets wrong once the shell has eaten the quotes.
+    #[test]
+    fn a_define_keeps_the_json_type_it_was_written_with() {
+        let project = read(
+            r#"{ "targets": { "a": { "entry": "a.ts",
+                 "define": { "MODE": "dev", "PORT": 8080, "DEBUG": false } } } }"#,
+        )
+        .expect("parsed");
+        let define = &project.targets[0].define;
+        assert!(define.contains(&("MODE".to_string(), "\"dev\"".to_string())));
+        assert!(define.contains(&("PORT".to_string(), "8080".to_string())));
+        assert!(define.contains(&("DEBUG".to_string(), "false".to_string())));
+    }
+
+    #[test]
+    fn a_define_of_a_whole_object_is_refused() {
+        let err =
+            read(r#"{ "targets": { "a": { "entry": "a.ts", "define": { "X": { "y": 1 } } } } }"#)
+                .expect_err("refused");
+        assert!(err.contains("a single value"), "{err}");
+    }
+
+    /// `start` is validated by the command that reads the file, not held until
+    /// the day somebody runs `esdev start`.
+    #[test]
+    fn start_must_name_targets_that_exist() {
+        let err = read(
+            r#"{ "targets": { "server": { "entry": "s.ts" } },
+                 "start": { "run": "sever" } }"#,
+        )
+        .expect_err("refused");
+        assert!(err.contains("is not a target"), "{err}");
+        assert!(err.contains("Did you mean \"server\"?"), "{err}");
+
+        read(
+            r#"{ "targets": { "server": { "entry": "s.ts" } },
+                 "start": { "run": "server", "watch": ["server"], "port": 5173 } }"#,
+        )
+        .expect("parsed");
+    }
+
+    /// Permissions go through the flag parser, so the file cannot mean anything
+    /// the command line does not.
+    #[test]
+    fn permissions_are_checked_by_the_flag_parser() {
+        read(
+            r#"{ "targets": { "a": { "entry": "a.ts" } },
+                 "permissions": { "deny": ["all"], "allow": { "read": ["./data"], "listen": true } } }"#,
+        )
+        .expect("parsed");
+
+        let unknown = read(
+            r#"{ "targets": { "a": { "entry": "a.ts" } },
+                 "permissions": { "deny": ["all"], "allow": { "filesystem": true } } }"#,
+        )
+        .expect_err("refused");
+        assert!(unknown.contains("permissions"), "{unknown}");
+
+        // A grant with nothing denied is the flag parser's error, reported here.
+        let ungrounded = read(
+            r#"{ "targets": { "a": { "entry": "a.ts" } },
+                 "permissions": { "allow": { "read": true } } }"#,
+        )
+        .expect_err("refused");
+        assert!(!ungrounded.is_empty());
+    }
+
+    #[test]
+    fn a_file_with_no_targets_says_so() {
+        let missing = read(r#"{ "start": { "run": "a" } }"#).expect_err("refused");
+        assert!(missing.contains("no `targets`"), "{missing}");
+
+        let empty = read(r#"{ "targets": {} }"#).expect_err("refused");
+        assert!(empty.contains("no targets"), "{empty}");
+    }
+
+    #[test]
+    fn invalid_json_says_it_is_data() {
+        let err = read(r#"{ "targets": { /* a comment */ } }"#).expect_err("refused");
+        assert!(err.contains("not valid JSON"), "{err}");
+        assert!(err.contains("no comments"), "{err}");
+    }
+}

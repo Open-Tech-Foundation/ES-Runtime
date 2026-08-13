@@ -69,9 +69,82 @@ cost you `worker`. The **runtime's** condition set stays standards-only; the
 escape hatch belongs to the bundler, where you chose to run it, not to a server
 resolving imports under load.
 
+A dynamic `import()` emits a chunk beside the entry, content-hashed. That is
+what `outdir` below is for.
+
 <Callout type="note" title="Not yet">
-  Source maps, watching a build, code splitting, and any output format but ESM.
-  A minified bundle's stack traces are currently unmapped.
+  Source maps, watching a build, and any output format but ESM. A minified
+  bundle's stack traces are currently unmapped.
+</Callout>
+
+# A project: `esdev.json`
+
+A command line describes one bundle. An app that renders on the server and
+hydrates in the browser is two, from two entries, with two shapes of output —
+and the site it prerenders is a third that has to *run*.
+
+```json
+{
+  "targets": {
+    "server":    { "entry": "src/server.ts", "out": "dist/server.js",
+                   "assets": ["index.html", "public"] },
+    "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
+                   "platform": "browser" },
+    "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
+                   "then": "run" }
+  }
+}
+```
+
+```sh
+esdev build                      # every target
+esdev build --target=browser     # one
+esdev build src/app.ts           # ignores the file entirely
+```
+
+| Key | |
+| --- | --- |
+| `entry` | The module the bundle is rooted at |
+| `out` | One file |
+| `outdir` | A directory — what a browser target needs, since chunks land beside the entry |
+| `platform` | `server` (default) or `browser` |
+| `assets` | Copied into the output: a file by name, a directory by its **contents** |
+| `then` | `"run"` — execute the output once built |
+| `minify`, `define`, `conditions` | As the flags, for this target alone |
+
+`define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
+string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
+takes a release build of a project whose day to day is unminified.
+
+## The three shapes
+
+| Stack | Targets |
+| --- | --- |
+| Backend | One `out` file |
+| Frontend (SSG/SPA) | A browser `outdir`, plus a prerender target with `then: "run"` |
+| Fullstack | Both |
+
+`then: "run"` is how a static site is generated without `esdev` knowing what
+one is: the bundle runs, and what it writes is the output. It runs in a child
+process, after every target is built.
+
+## Assets and the deployment
+
+A relative path resolves against the **entry module's** directory, so a server
+bundle in `dist/` reading `index.html` reads `dist/index.html`. Assets are
+copied there by the build, which is what makes `dist/` the whole deployment —
+a directory copied by its contents, so `public/styles.css` is served at
+`/styles.css` with nothing rewriting an href.
+
+## Where the file is
+
+`./esdev.json`, or `--config=<path>` — paths inside it resolve against the
+file, not the working directory.
+
+<Callout type="note" title="esrun never reads it">
+  A production binary that picked up a checked-in file granting itself
+  capabilities is what the capability model exists to prevent. The grant a
+  service runs under belongs on the command that deployed it.
 </Callout>
 
 ## End to end

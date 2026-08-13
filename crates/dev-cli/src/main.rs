@@ -29,6 +29,7 @@ use es_runtime_cli_common::permissions::Permissions;
 use es_runtime_cli_common::{Config, Source};
 
 mod build;
+mod config;
 mod declarations;
 mod dts;
 mod inspect;
@@ -37,7 +38,7 @@ mod trace;
 mod transform;
 mod types;
 mod watch;
-use build::BuildConfig;
+use build::{BuildConfig, BuildRequest, ProjectBuild};
 use inspect::InspectConfig;
 use test::TestConfig;
 use trace::PermissionTrace;
@@ -52,8 +53,8 @@ enum Command {
     /// port is something `main` does once, after the whole command line has been
     /// found to make sense.
     Run(Box<Config>, Option<InspectConfig>),
-    /// Bundle a module and its dependencies.
-    Build(BuildConfig),
+    /// Bundle a module and its dependencies, or the targets a project describes.
+    Build(BuildRequest),
     /// Run a module, restarting it when its source changes.
     Watch(WatchConfig),
     /// Discover and run test files.
@@ -200,10 +201,13 @@ const BUILD_USAGE: &str = "\
 esdev build — build an application to deploy, or a library to publish
 
 USAGE:
+    esdev build                          Every target in esdev.json
     esdev build <entry> [options]        One deployable ES module
     esdev build --lib <srcdir> [options] A publishable library
 
 OPTIONS:
+    --config=<path>             Read this instead of ./esdev.json
+    --target=<name>             Build one target from the file, not all of them
     --lib                       Build a library: keep the module structure,
                                 leave dependencies external, emit .d.ts
     --no-types                  --lib only: skip the .d.ts files
@@ -221,6 +225,48 @@ OPTIONS:
                                 process.env.NODE_ENV defaults to \"production\"
                                 for an application, and to nothing for --lib
     -h, --help                  Show this help
+
+A PROJECT (esdev.json)
+    An application that renders on the server and hydrates in the browser is
+    two bundles from two entries with two shapes of output, and a command line
+    can only describe one of them. What a project builds is a property of the
+    project, so it lives in the project:
+
+        {
+          \"targets\": {
+            \"server\":  { \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\",
+                        \"assets\": [\"index.html\", \"public\"] },
+            \"browser\": { \"entry\": \"src/entry.client.tsx\", \"outdir\": \"dist/client\",
+                        \"platform\": \"browser\" }
+          }
+        }
+
+    `esdev build` then builds all of them, and `--target=browser` one. Each
+    target takes:
+
+      entry       The module the bundle is rooted at
+      out         One file …
+      outdir      … or a directory, which is what a browser target needs: a
+                  dynamic import() emits a chunk beside its entry
+      platform    \"server\" (this runtime, the default) or \"browser\", which
+                  decides whether a dependency hands over its `worker` build or
+                  its `browser` one
+      assets      Files and directories copied into the output. A file by name,
+                  a directory by its contents — so public/styles.css is served
+                  at /styles.css, and dist/ is the whole deployment
+      then        \"run\": execute the output once it is built. How a prerender
+                  step emits a directory of HTML without esdev knowing what a
+                  static site is
+      minify, define, conditions
+                  As the flags below, for this target alone
+
+    A flag beats the file, so `--minify` takes a release build of a project
+    whose day to day is unminified. Naming an entry ignores the file entirely.
+
+    esrun never reads esdev.json. A production binary that picked up a
+    checked-in file granting itself capabilities is the thing the capability
+    model exists to prevent: the grant a service runs under belongs on the
+    command that deployed it.
 
 APPLICATION (the default)
     The bundle is ES modules, `runtime:*` imports are left for the runtime to
@@ -500,8 +546,8 @@ fn reject_esdev_flags_after_source(args: &[String], source: &str) -> Result<(), 
     Ok(())
 }
 
-/// Parses `esdev build <entry> [options]`.
-fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String> {
+/// Parses `esdev build [entry] [options]`.
+fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, String> {
     let mut sources: Vec<String> = Vec::new();
     let mut out = None;
     let mut minify = false;
@@ -510,6 +556,8 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
     let mut dts_bundle: Option<Option<String>> = None;
     let mut conditions = Vec::new();
     let mut defines = Vec::new();
+    let mut config_path: Option<String> = None;
+    let mut target: Option<String> = None;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -518,6 +566,8 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
                 println!("{BUILD_USAGE}");
                 std::process::exit(0);
             }
+            "--config" => config_path = Some(require_value(flag, value)?.to_string()),
+            "--target" => target = Some(require_value(flag, value)?.to_string()),
             "--out" => out = Some(require_value(flag, value)?.to_string()),
             "--lib" => {
                 reject_value(flag, value)?;
@@ -565,10 +615,78 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
             path => sources.push(path.to_string()),
         }
     }
+    // A project build and a command-line build are the same build with its
+    // settings in different places, so asking for both is ambiguous rather than
+    // additive: which of the two named the entry?
+    if !sources.is_empty() {
+        if let Some(name) = &target {
+            return Err(format!(
+                "--target={name} selects a target from {}, and {} was named on the \
+                 command line.\n\n\
+                 Build the one: `esdev build --target={name}`, or `esdev build {}`.",
+                config::FILE_NAME,
+                sources[0],
+                sources[0]
+            ));
+        }
+        if let Some(path) = &config_path {
+            return Err(format!(
+                "--config={path} describes what to build, and {} was named on the \
+                 command line as well.\n\n\
+                 Drop one: `esdev build --config={path}` builds the targets in the \
+                 file, `esdev build {}` builds that entry.",
+                sources[0], sources[0]
+            ));
+        }
+    }
+    if lib && (config_path.is_some() || target.is_some()) {
+        return Err(format!(
+            "--lib builds a source directory named on the command line; {} \
+             describes applications.\n\n\
+             A library's shape is its source tree, and the four decisions --lib \
+             makes are the ones a consumer's build makes for it.",
+            config::FILE_NAME
+        ));
+    }
+
+    if sources.is_empty() && !lib {
+        // The config is only *looked* for when there is nothing to build
+        // otherwise, so a project that has one can still build a scratch entry
+        // by naming it.
+        if let Some(project) = config::load(config_path.as_deref())? {
+            if let Some(path) = &out {
+                return Err(format!(
+                    "--out={path} names one file, and a project build writes what each \
+                     of its targets says.\n\n\
+                     Where a target's output goes is `out` or `outdir` in {}.",
+                    config::FILE_NAME
+                ));
+            }
+            return Ok(BuildRequest::Project(Box::new(ProjectBuild {
+                project,
+                target,
+                minify,
+                defines,
+                conditions,
+            })));
+        }
+        if let Some(name) = target {
+            return Err(format!(
+                "--target={name} needs a {0}, and there is none here.\n\n\
+                 A target is one thing the project builds; {0} is where they are \
+                 described.",
+                config::FILE_NAME
+            ));
+        }
+    }
     if sources.is_empty() {
         return Err(format!(
             "missing {} argument\n\n{BUILD_USAGE}",
-            if lib { "source directory" } else { "entry" }
+            if lib {
+                "source directory"
+            } else {
+                "entry (or an esdev.json describing what this project builds)"
+            }
         ));
     }
     if sources.len() > 1 {
@@ -653,16 +771,20 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildConfig, String
              --out=dist, not --out=dist/index.js."
         ));
     }
-    Ok(BuildConfig {
+    Ok(BuildRequest::Single(Box::new(BuildConfig {
         source,
         out,
+        out_dir: None,
+        platform: config::Platform::Server,
+        assets: Vec::new(),
+        root: None,
         minify,
         conditions,
         defines,
         lib,
         types: !no_types,
         dts_bundle,
-    })
+    })))
 }
 
 /// Parses `esdev test [--file=<path>] [filter...]`.
@@ -791,16 +913,7 @@ async fn main() -> ExitCode {
         }
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(config).await,
-        Ok(Command::Build(config)) => {
-            let verb = if config.lib { "built" } else { "bundled" };
-            match build::build(config).await {
-                Ok(written) => {
-                    println!("{verb} → {written}");
-                    Ok(())
-                }
-                Err(err) => Err(err),
-            }
-        }
+        Ok(Command::Build(request)) => build::run(request).await,
         Err(err) => Err(err),
     };
     match result {

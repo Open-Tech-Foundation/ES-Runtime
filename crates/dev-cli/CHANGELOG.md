@@ -18,6 +18,80 @@ providers, same capability enforcement — so what changes here is everything
 
 ### Added
 
+- **`esdev.json`** (DECISIONS D60) — what a project builds, in a file rather
+  than on a command line.
+
+  ```sh
+  esdev build                      # every target
+  esdev build --target=browser     # one of them
+  ```
+
+  ```json
+  {
+    "targets": {
+      "server":    { "entry": "src/server.ts", "out": "dist/server.js",
+                     "assets": ["index.html", "public"] },
+      "browser":   { "entry": "src/entry.client.tsx", "outdir": "dist/client",
+                     "platform": "browser" },
+      "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
+                     "then": "run" }
+    }
+  }
+  ```
+
+  Every knob in this tool has been a flag until now, and for a *run* that is
+  right: a flag is typed by a person, in view, once. A **build** is not that. An
+  application that renders on the server and hydrates in the browser is two
+  bundles from two entries with two shapes of output, and the site it prerenders
+  is a third that has to *run* — none of which one command line can say. Spelled
+  out in `package.json` scripts instead, it gets spelled out twice, once for the
+  dev loop and once for the release, where the two quietly drift.
+
+  Four keys carry the difference between the stacks, and nothing else changed:
+
+  | | |
+  | --- | --- |
+  | `out` **vs** `outdir` | One file, or a directory. A dynamic `import()` emits a chunk beside its entry, and a build whose whole output is one named file has nowhere to put a second one |
+  | `platform` | `server` (default) or `browser` — see below |
+  | `assets` | Copied into the output: a file by name, a **directory by its contents**, so `public/styles.css` is served at `/styles.css` with nothing rewriting an href |
+  | `then: "run"` | Execute the output once it is built. How a static site is generated without `esdev` knowing what one is: the bundle runs, and what it writes is the build's real output |
+
+  A backend is one `out`; a frontend is a browser `outdir` plus a prerender
+  target; a fullstack app is both. `esdev build <entry>` still ignores the file
+  entirely, and a flag still beats it — `--minify` takes a release build of a
+  project whose day to day is unminified.
+
+  **`platform: "browser"` fixes a bug that was silent.** An application build
+  asserts the `worker` condition, which is how `react-dom/server` hands over its
+  Web Streams implementation rather than its `node:stream` one — correct for a
+  server bundle and wrong for a client one, which wants `browser`. Conditions
+  match in the order the *package author* wrote them (D40), so asserting
+  `worker` at all was enough to win, and the failure was not at build time but
+  in somebody's browser. A browser target now asserts `browser` instead, and
+  gets rolldown's browser platform with it — the `browser` field, which predates
+  `exports` and is still how a good deal of the registry redirects away from
+  `node:` builtins.
+
+  **The file is data, not a program.** Vite and Next both take an executable
+  config and both are right to: theirs carry plugins, and a plugin is a
+  function. `esdev` has no plugin API, no resolver hooks and no transform
+  pipeline to configure, so a `.ts` config here would be a program whose entire
+  content is data — and this file carries `permissions`, which means executing
+  it to learn what a run may do would mean running guest code before that has
+  been decided. The key names are chosen so a future `esdev.config.ts` can
+  export the same shape and leave every existing `esdev.json` valid.
+
+  **`esrun` does not read it, and will not.** A production binary that picks up
+  a checked-in file granting itself capabilities is precisely what the
+  capability model exists to prevent. `permissions` in the file shapes the child
+  a developer's machine runs, which is how you develop *under* production's
+  grants without being able to ship them by accident.
+
+  A mistyped key is an error naming the key it was nearly (`outDir` →
+  `outdir`), never a setting that silently does nothing; and `permissions` is
+  translated into the flags it stands for and handed to the parser `esrun` uses,
+  so the file cannot mean anything a command line could not.
+
 - **`esdev build --lib`** (DECISIONS D59) — a source tree in, a publishable
   library out.
 

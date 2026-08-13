@@ -1652,3 +1652,270 @@ fn no_test_files_is_an_error_rather_than_a_silent_pass() {
     );
     assert!(stderr(&out).contains("no test files"), "{}", stderr(&out));
 }
+
+// ---------------------------------------------------------------------------
+// `esdev.json` — what a project builds, in a file
+//
+// A command line describes one bundle. An application that renders on the
+// server and hydrates in the browser is two, from two entries, with two shapes
+// of output — and the site it prerenders is a third that has to *run*. These
+// tests are that whole shape reaching disk from one `esdev build`, plus the
+// refusals that keep a mistyped key from being a setting that silently does
+// nothing.
+// ---------------------------------------------------------------------------
+
+/// A project with all three kinds of target: one file, one directory, one that
+/// runs when it is built. No dependencies — what is under test is the config,
+/// not the bundler.
+fn project_dir(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::create_dir_all(dir.join("public/nested")).expect("create public");
+    write_in(&dir, "src/server.mjs", "console.log('server');\n");
+    write_in(&dir, "src/client.mjs", "console.log('client');\n");
+    write_in(
+        &dir,
+        "src/prerender.mjs",
+        "import { write } from 'runtime:fs';\n\
+         await write('about.html', '<h1>about</h1>');\n",
+    );
+    write_in(&dir, "index.html", "<!doctype html><div id=root></div>\n");
+    write_in(&dir, "public/styles.css", "body{color:red}\n");
+    write_in(&dir, "public/nested/deep.txt", "deep\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "targets": {
+            "server":    { "entry": "src/server.mjs", "out": "dist/server.js",
+                           "assets": ["index.html", "public"] },
+            "browser":   { "entry": "src/client.mjs", "outdir": "dist/client",
+                           "platform": "browser" },
+            "prerender": { "entry": "src/prerender.mjs", "out": "dist/prerender.js",
+                           "then": "run" }
+          },
+          "start": { "run": "server", "watch": ["server", "browser"] },
+          "permissions": { "deny": ["all"], "allow": { "read": ["./dist"], "listen": ["8080"] } }
+        }"#,
+    );
+    dir
+}
+
+#[test]
+fn build_with_no_entry_builds_every_target_in_the_project() {
+    let dir = project_dir("p_all");
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    assert!(dir.join("dist/server.js").exists(), "{}", stdout(&out));
+    assert!(
+        dir.join("dist/client/client.js").exists(),
+        "{}",
+        stdout(&out)
+    );
+    assert!(dir.join("dist/prerender.js").exists(), "{}", stdout(&out));
+
+    // `then: run` executed the bundle it just built, and the file that step
+    // wrote landed beside it — the runtime resolves a relative path against the
+    // entry module's directory, which is what makes `dist/` the deployment.
+    assert!(dir.join("dist/about.html").exists(), "{}", stdout(&out));
+    assert!(stdout(&out).contains("ran → "), "{}", stdout(&out));
+}
+
+/// A file is copied by name and a directory by its *contents*, so
+/// `public/styles.css` is served at `/styles.css` without anything having to
+/// rewrite an href.
+#[test]
+fn assets_are_copied_by_name_and_directories_by_their_contents() {
+    let dir = project_dir("p_assets");
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    assert!(dir.join("dist/index.html").exists(), "the named file");
+    assert!(
+        dir.join("dist/styles.css").exists(),
+        "the directory's contents"
+    );
+    assert!(dir.join("dist/nested/deep.txt").exists(), "recursively");
+    assert!(
+        !dir.join("dist/public").exists(),
+        "the directory itself was copied, so every href would need to know it"
+    );
+}
+
+/// The condition that decides which build of a dependency a client bundle gets.
+/// Conditions match in the order the *package author* wrote them, so `worker`
+/// being asserted at all is enough to win — and the failure is not here, it is
+/// in somebody's browser.
+#[test]
+fn a_browser_target_takes_the_browser_build_of_a_dependency() {
+    let dir = build_dir("p_platform");
+    let package = dir.join("node_modules/dual");
+    std::fs::create_dir_all(&package).expect("create package");
+    std::fs::write(
+        package.join("package.json"),
+        r#"{ "name": "dual", "version": "1.0.0", "type": "module",
+             "exports": { ".": { "worker": "./worker.js", "browser": "./browser.js",
+                                 "default": "./default.js" } } }"#,
+    )
+    .expect("write manifest");
+    for build in ["worker", "browser", "default"] {
+        std::fs::write(
+            package.join(format!("{build}.js")),
+            format!("export const who = '{}_BUILD';\n", build.to_uppercase()),
+        )
+        .expect("write build");
+    }
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { who } from 'dual';\nconsole.log(who);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": {
+               "web": { "entry": "app.mjs", "outdir": "out/web", "platform": "browser" },
+               "srv": { "entry": "app.mjs", "outdir": "out/srv" } } }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let web = std::fs::read_to_string(dir.join("out/web/app.js")).expect("read web bundle");
+    let srv = std::fs::read_to_string(dir.join("out/srv/app.js")).expect("read server bundle");
+    assert!(web.contains("BROWSER_BUILD"), "{web}");
+    assert!(srv.contains("WORKER_BUILD"), "{srv}");
+}
+
+#[test]
+fn target_builds_one_of_them_and_names_the_others_when_it_is_not_there() {
+    let dir = project_dir("p_target");
+    let one = esdev_in(&dir)
+        .args(["build", "--target=browser"])
+        .output()
+        .expect("spawn esdev");
+    assert!(one.status.success(), "{}{}", stdout(&one), stderr(&one));
+    assert!(dir.join("dist/client/client.js").exists());
+    assert!(
+        !dir.join("dist/server.js").exists(),
+        "--target built more than the one it named"
+    );
+
+    let missing = esdev_in(&dir)
+        .args(["build", "--target=brower"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("is not a target"),
+        "{}",
+        stderr(&missing)
+    );
+    assert!(stderr(&missing).contains("browser"), "{}", stderr(&missing));
+}
+
+/// Naming an entry ignores the file entirely — a project that has a config can
+/// still build a scratch entry — but asking for both leaves no answer to which
+/// one named the entry.
+#[test]
+fn an_entry_on_the_command_line_and_a_target_together_are_refused() {
+    let dir = project_dir("p_conflict");
+
+    let scratch = esdev_in(&dir)
+        .args(["build", "src/client.mjs", "--out=scratch.js"])
+        .output()
+        .expect("spawn esdev");
+    assert!(scratch.status.success(), "{}", stderr(&scratch));
+    assert!(dir.join("scratch.js").exists());
+    assert!(
+        !dir.join("dist/server.js").exists(),
+        "naming an entry built the project's targets as well"
+    );
+
+    let both = esdev_in(&dir)
+        .args(["build", "src/client.mjs", "--target=browser"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!both.status.success());
+    assert!(
+        stderr(&both).contains("--target=browser"),
+        "{}",
+        stderr(&both)
+    );
+
+    // `--out` names one file, and a project build writes what its targets say.
+    let out = esdev_in(&dir)
+        .args(["build", "--out=everything.js"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("--out=everything.js"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// A mistyped key is otherwise a setting that silently does nothing, which for
+/// `platform` is the wrong build of a dependency.
+#[test]
+fn a_config_error_names_the_key_and_the_one_it_was_nearly() {
+    let dir = build_dir("p_typo");
+    write_in(&dir, "app.mjs", "console.log(1);\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "app": { "entry": "app.mjs", "outDir": "dist" } } }"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("unknown key `outDir`"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(stderr(&out).contains("`outdir`"), "{}", stderr(&out));
+}
+
+/// The permissions in the file go through the same parser the flags do, so the
+/// file cannot mean anything a command line could not — and it is wrong when it
+/// is read, not when a run is finally attempted with it.
+#[test]
+fn permissions_in_the_file_are_checked_by_the_flag_parser() {
+    let dir = build_dir("p_perms");
+    write_in(&dir, "app.mjs", "console.log(1);\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "app": { "entry": "app.mjs" } },
+             "permissions": { "deny": ["all"], "allow": { "filesystem": true } } }"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("filesystem"), "{}", stderr(&out));
+}
+
+/// `--config` points at a file elsewhere, and every path in it is relative to
+/// *that* file rather than to the working directory.
+#[test]
+fn a_config_elsewhere_resolves_its_paths_against_itself() {
+    let dir = project_dir("p_elsewhere");
+    let outside = build_dir("p_elsewhere_cwd");
+    let config = dir.join("esdev.json");
+
+    let out = esdev_in(&outside)
+        .args([
+            "build",
+            &format!("--config={}", config.display()),
+            "--target=server",
+        ])
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(
+        dir.join("dist/server.js").exists(),
+        "built beside the config"
+    );
+    assert!(!outside.join("dist").exists(), "built beside the caller");
+}

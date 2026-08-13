@@ -80,6 +80,23 @@ pub struct BuildConfig {
     /// Where the output goes: a **file** for an application build (default
     /// `dist/<entry stem>.js`), a **directory** for `--lib` (default `dist`).
     pub out: Option<String>,
+    /// A **directory** for an application build — a target's `outdir`, where
+    /// `out` names one file.
+    ///
+    /// The distinction is not cosmetic: a dynamic `import()` emits a chunk
+    /// beside its entry ([`config::Output::Dir`](crate::config::Output::Dir)),
+    /// and a build whose whole output is one named file has nowhere to put a
+    /// second one.
+    pub out_dir: Option<String>,
+    /// Which environment the output runs in. Decides the conditions a
+    /// dependency's `exports` map is read under.
+    pub platform: crate::config::Platform,
+    /// Files and directories copied into the output directory verbatim.
+    pub assets: Vec<String>,
+    /// The directory the paths above are relative to, and the bundler's working
+    /// directory. `None` is the process's own — which is every command line,
+    /// since a path typed into a shell is relative to where it was typed.
+    pub root: Option<PathBuf>,
     /// Whether to minify.
     pub minify: bool,
     /// Extra `exports` conditions, from `--conditions`. These **add** to the
@@ -109,6 +126,14 @@ pub struct BuildConfig {
 /// which code runs, so the place to choose one is a build the developer ran on
 /// purpose, not a server resolving imports under load.
 const DEFAULT_CONDITIONS: &[&str] = &["worker"];
+
+/// The conditions a **browser** target asserts instead.
+///
+/// The other half of the same story: `browser` is the key a package uses for
+/// the build that expects a `document` and a `window`. A client bundle built
+/// with `worker` asserted gets the one that expects neither, and the failure is
+/// at runtime in someone's browser rather than here.
+const BROWSER_CONDITIONS: &[&str] = &["browser"];
 
 /// Where a bundle goes when `--out` did not say.
 fn default_out(entry: &str) -> PathBuf {
@@ -250,11 +275,15 @@ fn clean_output(out_dir: &Path, source_root: &Path) -> Result<(), String> {
 
 /// Bundles `config` and reports what was written.
 pub async fn build(config: BuildConfig) -> Result<String, String> {
-    if !Path::new(&config.source).exists() {
+    let cwd = match &config.root {
+        Some(root) => root.clone(),
+        None => {
+            std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?
+        }
+    };
+    if !cwd.join(&config.source).exists() {
         return Err(format!("cannot read {}", config.source));
     }
-
-    let cwd = std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
 
     // An application build names one file; a library build names a source
     // directory and mirrors it. Everything below that differs between the two
@@ -288,6 +317,25 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                     import,
                 })
                 .collect(),
+        )
+    } else if let Some(dir) = &config.out_dir {
+        // A directory output. The entry keeps its own name — `[name].js` with
+        // the stem given explicitly — so a rebuild overwrites the same file
+        // and the HTML that points at it does not have to be rewritten to
+        // follow. Chunks land beside it under rolldown's own hashed names.
+        let stem = Path::new(&config.source)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("bundle")
+            .to_string();
+        (
+            PathBuf::from(dir),
+            "[name].js".to_string(),
+            None,
+            vec![InputItem {
+                name: Some(stem),
+                import: config.source.clone(),
+            }],
         )
     } else {
         let out = config
@@ -338,20 +386,33 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
 
     // Same reasoning for conditions: `worker` picks which build of a dependency
     // is inlined, and a library inlines none of them.
+    //
+    // A **browser** target asserts `browser` instead. The two are alternatives,
+    // not additions: a package that offers both means them for different
+    // places, and asserting `worker` while bundling for a browser hands over a
+    // build written for somewhere without a `document`. Conditions match in the
+    // order the *package author* wrote them (D40), so the wrong one being
+    // present at all is enough to win.
     let mut conditions: Vec<String> = if config.lib {
         Vec::new()
     } else {
-        DEFAULT_CONDITIONS
-            .iter()
-            .map(|c| (*c).to_string())
-            .collect()
+        match config.platform {
+            crate::config::Platform::Server => DEFAULT_CONDITIONS
+                .iter()
+                .map(|c| (*c).to_string())
+                .collect(),
+            crate::config::Platform::Browser => BROWSER_CONDITIONS
+                .iter()
+                .map(|c| (*c).to_string())
+                .collect(),
+        }
     };
     conditions.extend(config.conditions);
 
     let lib = config.lib;
     let options = BundlerOptions {
         input: Some(inputs),
-        cwd: Some(cwd),
+        cwd: Some(cwd.clone()),
         dir: Some(out_dir.to_string_lossy().into_owned()),
         entry_filenames: Some(filenames.clone().into()),
         // Only meaningful for `--lib`, where a module that is not an entry is
@@ -368,7 +429,15 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         // would pull in that platform's `main` fields and aliases. The
         // conditions above are how a package's Web-API build is selected, which
         // is the part `platform` would otherwise be doing by implication.
-        platform: Some(Platform::Neutral),
+        //
+        // A browser target is the exception, because there it is simply true —
+        // and the aliases that come with it (a package's `browser` field, which
+        // predates `exports` and is still how a good deal of the registry
+        // redirects away from `node:` builtins) are the point of saying so.
+        platform: Some(match config.platform {
+            crate::config::Platform::Server => Platform::Neutral,
+            crate::config::Platform::Browser => Platform::Browser,
+        }),
         // `Platform::Neutral` leaves these empty, which breaks any package old
         // enough to have no `exports` map. ESM first, then the CommonJS entry —
         // which is fine, because converting it is the point.
@@ -420,10 +489,25 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     bundler.write().await.map_err(|e| format!("{e:?}"))?;
 
     if !config.lib {
-        let written = out_dir.join(&filenames);
-        let size = std::fs::metadata(&written).map(|m| m.len()).unwrap_or(0);
+        // `[name].js` is a pattern, not a filename, so the directory case is
+        // reported by the name the entry was given rather than by the literal
+        // it was written with.
+        let written = match &config.out_dir {
+            Some(dir) => {
+                let stem = Path::new(&config.source)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("bundle");
+                PathBuf::from(dir).join(format!("{stem}.js"))
+            }
+            None => out_dir.join(&filenames),
+        };
+        let size = std::fs::metadata(cwd.join(&written))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let copied = copy_assets(&config.assets, &cwd, &cwd.join(&out_dir))?;
         return Ok(format!(
-            "{} ({:.1} KB)",
+            "{} ({:.1} KB{copied})",
             written.display(),
             size as f64 / 1024.0
         ));
@@ -452,6 +536,224 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         });
     }
     Ok(format!("{}/ ({counted})", out_dir.display()))
+}
+
+/// Copies a target's `assets` into its output directory, and reports how many.
+///
+/// **A file is copied by name; a directory is copied by its contents.** So
+/// `"assets": ["index.html", "public"]` puts `index.html` and everything under
+/// `public/` at the root of the output — which is what makes `/styles.css` the
+/// URL of `public/styles.css` without anything having to rewrite a path. A
+/// directory copied *as* a directory would put it at `/public/styles.css`, and
+/// every href in the project would have to know that.
+///
+/// This is also what makes a deployment one directory. The runtime resolves a
+/// relative path against the **entry module's** directory, so a server bundle in
+/// `dist/` reading `index.html` reads `dist/index.html` — not the one in the
+/// source tree, which is not shipped and, on the machine that runs it, is not
+/// there at all.
+fn copy_assets(assets: &[String], root: &Path, into: &Path) -> Result<String, String> {
+    if assets.is_empty() {
+        return Ok(String::new());
+    }
+    let mut copied = 0usize;
+    for asset in assets {
+        let from = root.join(asset);
+        if !from.exists() {
+            return Err(format!(
+                "cannot read {asset}, listed in this target's assets"
+            ));
+        }
+        if from.is_dir() {
+            copied += copy_tree(&from, into)?;
+        } else {
+            let name = from
+                .file_name()
+                .ok_or_else(|| format!("{asset} does not name a file"))?;
+            std::fs::create_dir_all(into)
+                .map_err(|e| format!("cannot create {}: {e}", into.display()))?;
+            std::fs::copy(&from, into.join(name))
+                .map_err(|e| format!("cannot copy {asset}: {e}"))?;
+            copied += 1;
+        }
+    }
+    Ok(format!(
+        ", {copied} asset{}",
+        if copied == 1 { "" } else { "s" }
+    ))
+}
+
+/// Copies the contents of `from` into `into`, recursively; reports the file
+/// count.
+fn copy_tree(from: &Path, into: &Path) -> Result<usize, String> {
+    std::fs::create_dir_all(into).map_err(|e| format!("cannot create {}: {e}", into.display()))?;
+    let mut copied = 0usize;
+    let entries =
+        std::fs::read_dir(from).map_err(|e| format!("cannot read {}: {e}", from.display()))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let target = into.join(entry.file_name());
+        if path.is_dir() {
+            copied += copy_tree(&path, &target)?;
+        } else {
+            std::fs::copy(&path, &target)
+                .map_err(|e| format!("cannot copy {}: {e}", path.display()))?;
+            copied += 1;
+        }
+    }
+    Ok(copied)
+}
+
+/// What `esdev build` was asked to build: one entry named on the command line,
+/// or the targets a project describes.
+pub enum BuildRequest {
+    /// `esdev build <entry>` — one bundle, configured entirely by flags.
+    Single(Box<BuildConfig>),
+    /// `esdev build` — every target in `esdev.json`, or the one `--target` named.
+    Project(Box<ProjectBuild>),
+}
+
+/// A build of the targets in a project's config.
+pub struct ProjectBuild {
+    /// The parsed config.
+    pub project: crate::config::Project,
+    /// The single target `--target` selected, if it did.
+    pub target: Option<String>,
+    /// `--minify`, which turns it on for every target built.
+    pub minify: bool,
+    /// `--define`s, added to every target's own.
+    pub defines: Vec<(String, String)>,
+    /// `--conditions`, added to every target's own.
+    pub conditions: Vec<String>,
+}
+
+/// Where a target's bundle lands.
+fn output_path(target: &crate::config::Target) -> PathBuf {
+    match &target.output {
+        crate::config::Output::File(out) => PathBuf::from(out),
+        crate::config::Output::Dir(dir) => {
+            let stem = Path::new(&target.entry)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("bundle");
+            PathBuf::from(dir).join(format!("{stem}.js"))
+        }
+    }
+}
+
+/// Builds what was asked for, reporting each artifact as it lands.
+///
+/// A project build prints per target rather than returning one summary: a build
+/// of four entries takes long enough that silence until the end is silence
+/// about which of them is slow, and the first failure should name the target it
+/// happened in while the others are still visibly pending.
+pub async fn run(request: BuildRequest) -> Result<(), String> {
+    let project = match request {
+        BuildRequest::Single(config) => {
+            let verb = if config.lib { "built" } else { "bundled" };
+            let written = build(*config).await?;
+            println!("{verb} → {written}");
+            return Ok(());
+        }
+        BuildRequest::Project(project) => project,
+    };
+
+    let names: Vec<&str> = project
+        .project
+        .targets
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
+    let selected: Vec<&crate::config::Target> = match &project.target {
+        None => project.project.targets.iter().collect(),
+        Some(name) => {
+            let found = project
+                .project
+                .targets
+                .iter()
+                .find(|target| &target.name == name)
+                .ok_or_else(|| {
+                    format!(
+                        "--target={name} is not a target in this project.\n\n\
+                         Targets: {}.",
+                        names.join(", ")
+                    )
+                })?;
+            vec![found]
+        }
+    };
+
+    for target in &selected {
+        let (out, out_dir) = match &target.output {
+            crate::config::Output::File(out) => (Some(out.clone()), None),
+            crate::config::Output::Dir(dir) => (None, Some(dir.clone())),
+        };
+        let mut defines = target.define.clone();
+        defines.extend(project.defines.iter().cloned());
+        let mut conditions = target.conditions.clone();
+        conditions.extend(project.conditions.iter().cloned());
+        let written = build(BuildConfig {
+            source: target.entry.clone(),
+            out,
+            out_dir,
+            platform: target.platform,
+            assets: target.assets.clone(),
+            root: Some(project.project.dir.clone()),
+            // A flag beats the file: `--minify` on a config that does not ask
+            // for it is how a release build is taken of a project whose day to
+            // day is unminified.
+            minify: target.minify || project.minify,
+            conditions,
+            defines,
+            lib: false,
+            types: false,
+            dts_bundle: None,
+        })
+        .await
+        .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+        println!("bundled → {written}");
+    }
+
+    // Every bundle exists before any of them runs. A prerender step renders the
+    // pages of a site that the *browser* bundle is referenced from, so ordering
+    // it after the whole build is the difference between generating HTML that
+    // points at a file and HTML that points at one that does not exist yet.
+    for target in selected.iter().filter(|t| t.run_after_build) {
+        let output = output_path(target);
+        run_output(&project.project.dir, &output)
+            .await
+            .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+        println!("ran → {}", output.display());
+    }
+    Ok(())
+}
+
+/// Runs a built artifact as the next step of the build.
+///
+/// **In a child process, not in this one.** The same call `esdev test` makes and
+/// for the same reason: the step is somebody's program, and a program that
+/// wedges, exhausts its heap or calls `exit()` should take only itself down —
+/// not the build, and not the three artifacts already written. It runs under
+/// `esdev` with the ordinary developer-machine grant, because writing a
+/// directory of HTML is the entire point of the step.
+async fn run_output(root: &Path, output: &Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
+    let status = tokio::process::Command::new(exe)
+        .arg(output)
+        .current_dir(root)
+        .status()
+        .await
+        .map_err(|e| format!("cannot run {}: {e}", output.display()))?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} exited {}",
+        output.display(),
+        status
+            .code()
+            .map_or_else(|| "on a signal".to_string(), |code| code.to_string())
+    ))
 }
 
 /// Links every declaration reachable from `entry` into one file, and reports
