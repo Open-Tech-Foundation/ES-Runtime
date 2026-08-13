@@ -40,7 +40,7 @@ makes the trade-offs explicit.
 | Built-in Redis client | <Partial /> | <No /> | <Yes /> | <No /> |
 | Runtime-provided database driver kit | <Yes /> | <No /> | <No /> | <No /> |
 | Node.js compatibility (`node:` builtins) | <No /> | <Yes /> | <Yes /> | <Partial /> |
-| Capability sandbox (deny by default) | <Partial /> | <Partial /> | <No /> | <Yes /> |
+| Capability sandbox (deny by default) | <Yes /> | <Partial /> | <No /> | <Yes /> |
 | Runtime permission flags (allow/deny) | <Yes /> | <Yes /> | <No /> | <Yes /> |
 | Workers / multi-thread | <Yes /> | <Yes /> | <Yes /> | <Yes /> |
 | Per-worker memory limit | <Yes /> | <Yes /> | <No /> | <No /> |
@@ -186,33 +186,31 @@ option and the row is here to say so plainly rather than to imply the field has
 no answer.
 
 **On the permission row.** It is about the *CLI*, and is a different question
-from the sandbox row above it, which is about the **default**: esrun grants
-everything by default and restricts on request, where Deno denies by default and
-grants on request. Both have flags that allow or deny a capability, scopes that
-narrow one to particular paths or hosts, and a way to ask from JS — the
+from the sandbox row above it, which is about the **default**: esrun and Deno
+both deny by default and grant on request. Both have flags that allow or deny a
+capability, scopes that narrow one to particular paths or hosts, and a way to ask
+from JS — the
 [Permission models](#permission-models) table below breaks down how differently
 they get there, and where esrun goes further (an always-on filesystem jail, and
 a policy for what the module loader may resolve).
 
 <br />
 
-> **Note on the esrun sandbox column.** The answer differs by entry point, which
-> is why it is <Partial /> rather than a single icon. The **embeddable library**
-> is deny-by-default in the strongest sense available here: a `Runtime` starts
-> with an empty capability set and a host grants each one explicitly, so an
-> embedder cannot forget to sandbox — there is nothing to forget. The **CLI**
-> inverts that: it grants everything and restricts on request, because a runner
-> you have to configure before it runs anything is not a runner. `--deny-all`
-> takes it back to the library's posture; see [Permission
-> models](#permission-models).
+> **Note on the esrun sandbox column.** Both entry points are deny-by-default.
+> The **embeddable library** starts a `Runtime` with an empty capability set and
+> a host grants each one explicitly, so an embedder cannot forget to sandbox —
+> there is nothing to forget. The **CLI** is the same: `esrun app.js` holds
+> nothing, and `--allow-<name>` names what a run may reach. `esdev`, the
+> development binary, is the one that grants everything, so an inner loop needs
+> no flags. See [Permission models](#permission-models).
 
 ## Permission models
 
 | | esrun | Node.js | Bun | Deno |
 | --- | --- | --- | --- | --- |
-| Restricted by default | <No /> | <No /> | <No /> | <Yes /> |
-| Turned on by | `--deny-all` | `--permission` | — | always on (`-A` off) |
-| Direction | deny-list, or `--deny-all` + allow-list | allow-list | — | allow-list + `--deny-*` |
+| Restricted by default | <Yes /> | <No /> | <No /> | <Yes /> |
+| Turned on by | always on (`-A` off) | `--permission` | — | always on (`-A` off) |
+| Direction | allow-list, or `--allow-all` + `--deny-*` | allow-list | — | allow-list + `--deny-*` |
 | Scoped to paths / hosts | <Yes /> | <Yes /> | — | <Yes /> |
 | Interactive prompt | <No /> | <No /> | — | <Yes /> |
 | Entry file readable | <Yes /> | <Yes /> | — | <Yes /> |
@@ -223,7 +221,7 @@ a policy for what the module loader may resolve).
 | Filesystem root jail | always on | <No /> | <No /> | <No /> |
 | Status | alpha | stable (v22.13+) | [proposed](https://github.com/oven-sh/bun/issues/26637) | stable |
 
-Rows 6–7 are about the module graph: under esrun's `--deny-all` and Node's
+Rows 6–7 are about the module graph: under esrun's default and Node's
 `--permission`, the entry file still runs but a second file needs a grant. Deno
 reads statically analysable imports without one.
 
@@ -238,7 +236,7 @@ removed.
 esrun's nine denial names — `read`, `write`, `imports`, `net`, `listen`, `env`,
 `run`, `signals`, `workers` — are also what `permissions.has()` takes, and what
 `new Worker(url, { permissions })` takes. See
-[Security model](/docs/security#denying-capabilities-in-esrun).
+[Security model](/docs/security#granting-capabilities-in-esrun).
 
 ## Where the API surface differs
 

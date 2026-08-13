@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build",
-    "start": "esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js",
+    "start": "esrun --allow-read=./dist --allow-listen=8080 dist/server.js",
     "test": "esdev test"
   },
   "dependencies": {

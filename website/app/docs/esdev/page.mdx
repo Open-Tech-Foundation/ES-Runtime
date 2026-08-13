@@ -9,9 +9,9 @@ import { Callout } from "@opentf/web-docs";
 
 Two binaries. `esrun` runs a service in production and has no development
 surface at all — no inspector port, no file watcher, no test discovery, no
-transform. That narrowness is what makes `--deny-all --allow-listen=8080` a
-statement rather than a hope, and it bills your inner loop. `esdev` is the
-binary that pays it.
+transform, and it grants nothing unless the command line says so. That
+narrowness is what makes `--allow-listen=8080` a statement rather than a hope,
+and it bills your inner loop. `esdev` is the binary that pays it.
 
 ```sh
 esdev app.ts                  # TypeScript, JSX, run
@@ -37,11 +37,21 @@ one way here and another in production. What `esdev` changes is everything
 *around* a run: watching, restarting, attaching, discovering, reporting,
 building.
 
-The permission flags are the same ones, and mean the same thing:
+The permission flags are the same ones and mean the same thing, with one
+deliberate difference: **`esdev` grants everything by default, `esrun` grants
+nothing.** An inner loop should not need flags to run the program you are in the
+middle of writing; a deployment should say what it may reach. Everything else —
+the names, the scope lists, the rules, the error messages — is one
+implementation shared by both binaries.
 
 ```sh
-esdev --deny-all --allow-listen=8080 server.ts
+esdev server.ts                              # everything granted
+esdev --deny-all --allow-listen=8080 server.ts   # ...or exactly esrun's grant
 ```
+
+`esdev --trace-permissions server.ts` closes the gap: it prints the `esrun` line
+that grants exactly what a run reached for. See
+[Tracing permissions](/docs/esdev/permissions).
 
 ## Get it
 

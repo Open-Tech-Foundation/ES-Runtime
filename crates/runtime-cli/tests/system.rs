@@ -20,8 +20,15 @@ fn write(name: &str, contents: &str) -> PathBuf {
     path
 }
 
+/// esrun, granted everything.
+///
+/// The grant is fixture, not subject: esrun grants nothing on its own (D65)
+/// and these tests are about what the runtime *does*, not about what it may.
+/// The capability model has its own suite in `permissions.rs`.
 fn esrun() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    command.arg("--allow-all");
+    command
 }
 
 fn stdout(out: &Output) -> String {

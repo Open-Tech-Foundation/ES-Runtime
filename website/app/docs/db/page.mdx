@@ -41,7 +41,7 @@ await db.close();
 <Callout type="info" title="Capability: FileRead / FileWrite">
   A database file is a file, and is scoped like one — the same root jail and
   `--allow-read` / `--allow-write` lists as [file handling](/docs/guides/file-handling).
-  `esrun --deny-all --allow-read=./data --allow-write=./data app.js` is enough to
+  `esrun --allow-read=./data --allow-write=./data app.js` is enough to
   open `sqlite:./data/app.db` for writing and nothing else. See
   [Securing Runtime](/docs/guides/securing-runtime).
 </Callout>
@@ -176,7 +176,7 @@ const db = await connect("sqlite::memory:", { driver: sqlite });
 ```
 
 It touches no filesystem, so it needs **no capability**: it works under
-`esrun --deny-all`. Each connection gets its own database.
+`esrun` with nothing granted. Each connection gets its own database.
 
 ## Encryption
 

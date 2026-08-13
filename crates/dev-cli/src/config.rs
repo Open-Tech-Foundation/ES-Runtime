@@ -40,7 +40,7 @@
 use std::path::{Path, PathBuf};
 
 use es_runtime_cli_common::args::try_permission_flag;
-use es_runtime_cli_common::permissions::Permissions;
+use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use serde_json::{Map, Value};
 
 /// The file looked for when `--config` did not name one.
@@ -506,12 +506,19 @@ fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {
 /// granting capabilities. Here `{"allow": {"read": ["./data"]}}` becomes
 /// `--allow-read=./data` and is checked by exactly the code that checks the
 /// flag — so an unknown capability, a scope on a capability that takes none, and
-/// a grant without `--deny-all` all fail here with the message they have always
-/// had.
+/// a grant that moves the wrong way all fail here with the message they have
+/// always had.
+///
+/// Checked against [`Baseline::Nothing`], because this block states the grant
+/// the *deployed* program runs under — an `esrun` line — even though `esdev
+/// start` is what spawns it. The returned list is therefore pinned to its mode
+/// with an explicit `--deny-all`/`--allow-all` (D65), so it means the same thing
+/// whichever binary is handed it and a developer's `esdev start` child runs
+/// under exactly the production grant.
 fn permission_flags(value: &Value, file: &str) -> Result<Vec<String>, String> {
     let map = object(value, file, "`permissions`")?;
     known_keys(map, file, "`permissions`", &["deny", "allow"])?;
-    let mut permissions = Permissions::default();
+    let mut permissions = Permissions::new(Baseline::Nothing);
     let mut flags = Vec::new();
 
     for name in string_array(map.get("deny"), file, "`permissions`'s `deny`")? {
@@ -556,6 +563,16 @@ fn permission_flags(value: &Value, file: &str) -> Result<Vec<String>, String> {
     permissions
         .scopes()
         .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+    // Pin the mode. A file that already says `"deny": ["all"]` or
+    // `"allow": {"all": true}` has said it; anything else was checked against
+    // "nothing granted" and has to carry that with it, or `esdev start` — whose
+    // own baseline is everything — would read the same list the other way round.
+    if !flags
+        .iter()
+        .any(|f| f == "--deny-all" || f == "--allow-all")
+    {
+        flags.insert(0, "--deny-all".to_string());
+    }
     Ok(flags)
 }
 
@@ -880,13 +897,33 @@ mod tests {
         .expect_err("refused");
         assert!(unknown.contains("permissions"), "{unknown}");
 
-        // A grant with nothing denied is the flag parser's error, reported here.
-        let ungrounded = read(
+        // A bare grant is the whole point after D65: the block states a deploy
+        // grant, and a deployment starts from nothing.
+        let project = read(
             r#"{ "targets": { "a": { "entry": "a.ts" } },
                  "permissions": { "allow": { "read": true } } }"#,
         )
+        .expect("parsed");
+        // ...and it is pinned to that mode on the way out, so `esdev start` —
+        // whose own baseline is everything — spawns the child under the same
+        // grant `esrun` would.
+        assert_eq!(project.permissions, ["--deny-all", "--allow-read"]);
+
+        // A denial with nothing granted is the flag parser's error, reported here.
+        let ungrounded = read(
+            r#"{ "targets": { "a": { "entry": "a.ts" } },
+                 "permissions": { "deny": ["read"] } }"#,
+        )
         .expect_err("refused");
-        assert!(!ungrounded.is_empty());
+        assert!(ungrounded.contains("requires --allow-all"), "{ungrounded}");
+
+        // Which the file says as `"allow": {"all": true}`, the shape that means
+        // "everything, minus these".
+        read(
+            r#"{ "targets": { "a": { "entry": "a.ts" } },
+                 "permissions": { "deny": ["read"], "allow": { "all": true } } }"#,
+        )
+        .expect("parsed");
     }
 
     /// A document decides its own shape, so the keys that would decide it here

@@ -78,7 +78,9 @@ fn the_line_it_prints_is_the_line_that_runs_and_the_smallest_one() {
 
     let report = trace(&app, &[]);
     let args = grant_line(&report);
-    assert!(args.contains(&"--deny-all".to_string()), "{report}");
+    // No --deny-all: esrun grants nothing on its own (D65), so the grants are
+    // the whole line.
+    assert!(!args.contains(&"--deny-all".to_string()), "{report}");
     for expected in ["--allow-read", "--allow-imports", "--allow-env"] {
         assert!(
             args.contains(&expected.to_string()),
@@ -129,10 +131,7 @@ fn a_program_that_reaches_for_nothing_is_told_so() {
     let app = write("trace-pure.mjs", "console.log(6 * 7);\n");
     let report = trace(&app, &[]);
     assert!(report.contains("nothing at all"), "{report}");
-    assert_eq!(
-        grant_line(&report),
-        vec!["--deny-all", app.to_str().unwrap()]
-    );
+    assert_eq!(grant_line(&report), vec![app.to_str().unwrap()]);
 }
 
 #[test]

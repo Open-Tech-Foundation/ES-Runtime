@@ -1,5 +1,6 @@
-//! The `--deny-*` / `--allow-*` flag grammar (DECISIONS D38), shared by every
-//! binary on this runtime so that one command line means one thing everywhere.
+//! The `--deny-*` / `--allow-*` flag grammar (DECISIONS D38, D65), shared by
+//! every binary on this runtime so that one command line means one thing
+//! everywhere.
 
 use std::collections::HashMap;
 
@@ -70,24 +71,53 @@ pub fn address_scope(scopes: &Scopes, cap: Capability) -> Result<Option<HostAllo
     scopes.get(&cap).map(HostAllowlist::parse).transpose()
 }
 
+/// What a binary grants before a single permission flag is read (D65).
+///
+/// The only thing that differs between `esrun` and `esdev`. Everything below
+/// this line — the vocabulary, the rules, the errors — is identical for both,
+/// because the baseline is not a fourth rule: it only decides which of the two
+/// modes a command line is in when neither `--allow-all` nor `--deny-all` says
+/// so outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Baseline {
+    /// Nothing host-facing — `esrun`. A deployment states what it may reach, or
+    /// it reaches nothing.
+    Nothing,
+    /// Everything — `esdev`. The inner loop should not need flags to run the
+    /// program a developer is in the middle of writing.
+    Everything,
+}
+
 /// The permission flags accumulated while parsing, resolved into a
-/// [`CapabilitySet`] once the whole command line has been seen (D38).
+/// [`CapabilitySet`] once the whole command line has been seen (D38, D65).
 ///
-/// Three rules, and they exist so that **no flag ever overrides another** — a
-/// reader goes top to bottom and the list is the answer:
+/// A command line is in exactly one of two **modes**, and the mode decides which
+/// direction flags may move in:
 ///
-/// 1. `--deny-all` and `--deny-<name>` are mutually exclusive. `--deny-all` is
-///    precisely the union of the eight, so a combination could only be
-///    redundant.
-/// 2. `--allow-<name>` requires `--deny-all`. Against the default baseline
-///    (everything granted) an allow is either a no-op or a contradiction of its
-///    own `--deny-<name>` sibling.
-/// 3. Each mode therefore has exactly one direction: `--deny-<name>` subtracts
-///    from everything, `--deny-all --allow-<name>` adds to nothing.
-#[derive(Default)]
+/// - **Restrictive** — start from nothing; `--allow-<name>` adds. Entered by
+///   `--deny-all`, or by [`Baseline::Nothing`] with neither `--all` flag given.
+/// - **Permissive** — start from everything; `--deny-<name>` subtracts. Entered
+///   by `--allow-all`, or by [`Baseline::Everything`] likewise.
+///
+/// Three rules follow, and they exist so that **no flag ever overrides
+/// another** — a reader goes top to bottom and the list is the answer:
+///
+/// 1. `--allow-all` and `--deny-all` are mutually exclusive: one grants
+///    everything, the other nothing, and there is no reading that combines them.
+/// 2. A flag may only move in its mode's direction. `--deny-<name>` in
+///    restrictive mode subtracts from nothing, and `--allow-<name>` in permissive
+///    mode adds to everything; each is a no-op or a contradiction of its own
+///    sibling, so each is an **error** naming the `--all` flag that would make it
+///    mean something.
+/// 3. Each mode therefore has exactly one direction, whichever baseline the
+///    binary started from.
 pub struct Permissions {
+    /// What this binary grants with no flags at all.
+    baseline: Baseline,
     /// The `--deny-all` flag, if given.
-    pub all: bool,
+    deny_all: bool,
+    /// The `--allow-all` / `-A` flag, if given.
+    allow_all: bool,
     /// `--deny-<name>` flags, in the order given — so an error can quote the one
     /// the user actually typed.
     denied: Vec<(String, Capability)>,
@@ -109,6 +139,37 @@ struct Allow {
 }
 
 impl Permissions {
+    /// An empty flag set for a binary that grants `baseline` on its own.
+    pub fn new(baseline: Baseline) -> Self {
+        Self {
+            baseline,
+            deny_all: false,
+            allow_all: false,
+            denied: Vec::new(),
+            allowed: Vec::new(),
+        }
+    }
+
+    /// Records `--deny-all`.
+    pub fn deny_all(&mut self) {
+        self.deny_all = true;
+    }
+
+    /// Records `--allow-all` / `-A`.
+    pub fn allow_all(&mut self) {
+        self.allow_all = true;
+    }
+
+    /// Whether this command line starts from everything rather than nothing —
+    /// set outright by an `--all` flag, and otherwise by the binary's baseline.
+    fn permissive(&self) -> bool {
+        match (self.allow_all, self.deny_all) {
+            (true, _) => true,
+            (_, true) => false,
+            _ => self.baseline == Baseline::Everything,
+        }
+    }
+
     /// Whether `flag` is a `--deny-<name>` / `--allow-<name>` this grammar owns,
     /// so a caller's parse loop can route it here without knowing the eight
     /// names itself.
@@ -151,8 +212,7 @@ impl Permissions {
                 return Err(format!(
                     "{flag} takes no value (got {flag}={value}).\n\n\
                      A denial is all-or-nothing: scoping narrows a grant, so it is written \
-                     as --deny-all --allow-{name}=<list>, never as a denial of specific \
-                     values."
+                     as --allow-{name}=<list>, never as a denial of specific values."
                 ));
             }
             self.denied.push((flag.to_string(), cap));
@@ -274,20 +334,30 @@ impl Permissions {
     /// The capability set these flags describe, or an error naming the rule that
     /// was broken.
     pub fn resolve(&self) -> Result<CapabilitySet, String> {
-        if let (true, Some((flag, _))) = (self.all, self.denied.first()) {
-            return Err(format!(
-                "--deny-all cannot be combined with {flag}: --deny-all already denies \
-                 everything {flag} would. Use one or the other."
-            ));
+        // Rule 1.
+        if self.allow_all && self.deny_all {
+            return Err(
+                "--allow-all and --deny-all disagree: one grants every capability, the other \
+                 none.\n\n\
+                 No flag overrides another, so there is nothing to resolve this with. Pass \
+                 only one, and name the exceptions with the opposite prefix."
+                    .to_string(),
+            );
         }
-        if let (false, Some(Allow { flag, .. })) = (self.all, self.allowed.first()) {
-            return Err(format!(
-                "{flag} requires --deny-all: everything is granted by default, so there is \
-                 nothing for {flag} to add. Use --deny-all {flag} to start from nothing, or \
-                 --deny-<name> to take single capabilities away."
-            ));
-        }
-        if self.all {
+        // Rule 2, in whichever direction this command line is going.
+        if self.permissive() {
+            if let Some(Allow { flag, .. }) = self.allowed.first() {
+                return Err(self.wrong_direction(flag, true));
+            }
+            let mut caps = CapabilitySet::all();
+            for (_, cap) in &self.denied {
+                caps.revoke(*cap);
+            }
+            Ok(caps)
+        } else {
+            if let Some((flag, _)) = self.denied.first() {
+                return Err(self.wrong_direction(flag, false));
+            }
             let mut caps = CapabilitySet::all().without_host_access();
             for allow in &self.allowed {
                 // A scoped allow grants the same bit: the capability is what
@@ -298,13 +368,41 @@ impl Permissions {
                 caps.grant(allow.cap);
             }
             Ok(caps)
-        } else {
-            let mut caps = CapabilitySet::all();
-            for (_, cap) in &self.denied {
-                caps.revoke(*cap);
-            }
-            Ok(caps)
         }
+    }
+
+    /// The rule-2 error for `flag`, which moves against its mode's direction.
+    ///
+    /// Two shapes, because two things put a command line in that mode and the
+    /// fix differs: an explicit `--allow-all`/`--deny-all` is a flag the user
+    /// typed and can drop, while the binary's own baseline is not on the line at
+    /// all — so that message has to say what the default *is* before it can
+    /// explain why the flag adds nothing.
+    fn wrong_direction(&self, flag: &str, allowing: bool) -> String {
+        // The `--all` flag that would give `flag` something to move, and the one
+        // that (if typed) put the line in this mode.
+        let (needed, mode_flag) = if allowing {
+            ("--deny-all", "--allow-all")
+        } else {
+            ("--allow-all", "--deny-all")
+        };
+        if (allowing && self.allow_all) || (!allowing && self.deny_all) {
+            return format!(
+                "{mode_flag} cannot be combined with {flag}: {mode_flag} already {} everything \
+                 {flag} would. Use one or the other.",
+                if allowing { "grants" } else { "denies" }
+            );
+        }
+        let (state, direction, sibling) = if allowing {
+            ("granted", "add", "--deny-<name>")
+        } else {
+            ("denied", "take away", "--allow-<name>")
+        };
+        format!(
+            "{flag} requires {needed}: every capability is {state} by default, so there is \
+             nothing for {flag} to {direction}. Use {needed} {flag} to start from the other \
+             end, or {sibling} to name single capabilities."
+        )
     }
 }
 
@@ -367,4 +465,104 @@ fn parse_scope_list(flag: &str, value: &str) -> Result<Vec<String>, String> {
         }
     }
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The flags `line` describes, recorded as a parse loop would.
+    fn resolve(baseline: Baseline, line: &[&str]) -> Result<CapabilitySet, String> {
+        let mut permissions = Permissions::new(baseline);
+        for arg in line {
+            let (flag, value) = match arg.split_once('=') {
+                Some((flag, value)) => (flag, Some(value)),
+                None => (*arg, None),
+            };
+            match flag {
+                "--deny-all" => permissions.deny_all(),
+                "--allow-all" => permissions.allow_all(),
+                _ => {
+                    let allow = flag.starts_with("--allow-");
+                    let name = &flag[if allow { 8 } else { 7 }..];
+                    permissions.record(flag, name, allow, value)?;
+                }
+            }
+        }
+        permissions.resolve()
+    }
+
+    /// The whole of D65: the same line, read from either end.
+    #[test]
+    fn the_baseline_is_the_only_difference_between_the_binaries() {
+        let nothing = resolve(Baseline::Nothing, &[]).unwrap();
+        let everything = resolve(Baseline::Everything, &[]).unwrap();
+        assert_eq!(nothing.denied_names().len(), Capability::HOST_FACING.len());
+        assert!(everything.denied_names().is_empty());
+
+        // And an `--all` flag overrides the baseline in either direction, so a
+        // line that says which end it starts from means one thing everywhere.
+        for baseline in [Baseline::Nothing, Baseline::Everything] {
+            assert!(
+                resolve(baseline, &["--allow-all"])
+                    .unwrap()
+                    .denied_names()
+                    .is_empty()
+            );
+            assert_eq!(
+                resolve(baseline, &["--deny-all"]).unwrap().denied_names(),
+                nothing.denied_names()
+            );
+        }
+    }
+
+    /// Rule 2, in both modes and from both baselines: a flag that cannot move
+    /// its mode's direction is an error naming the `--all` flag that would let
+    /// it, never a silent no-op.
+    #[test]
+    fn a_flag_against_its_modes_direction_is_refused() {
+        // Restrictive by baseline, and by flag.
+        for line in [&["--deny-net"][..], &["--deny-all", "--deny-net"][..]] {
+            let err = resolve(Baseline::Nothing, line).unwrap_err();
+            assert!(err.contains("--deny-net"), "{err}");
+        }
+        // Permissive by baseline, and by flag.
+        for line in [&["--allow-net"][..], &["--allow-all", "--allow-net"][..]] {
+            let err = resolve(Baseline::Everything, line).unwrap_err();
+            assert!(err.contains("--allow-net"), "{err}");
+        }
+        // Which is to say: the same line is fine from the other baseline.
+        assert!(resolve(Baseline::Everything, &["--deny-net"]).is_ok());
+        assert!(resolve(Baseline::Nothing, &["--allow-net"]).is_ok());
+    }
+
+    /// Rule 1, from either baseline: the two `--all` flags cannot be combined.
+    #[test]
+    fn allow_all_and_deny_all_never_appear_together() {
+        for baseline in [Baseline::Nothing, Baseline::Everything] {
+            let err = resolve(baseline, &["--allow-all", "--deny-all"]).unwrap_err();
+            assert!(err.contains("disagree"), "{err}");
+        }
+    }
+
+    /// A scoped grant opens the same door as a bare one — the list is what the
+    /// provider then refuses to hand over, not a lesser capability.
+    #[test]
+    fn a_scoped_allow_grants_the_capability() {
+        let caps = resolve(Baseline::Nothing, &["--allow-env=HOME,PATH"]).unwrap();
+        assert!(caps.contains(Capability::Env));
+        assert!(!caps.contains(Capability::Net));
+    }
+
+    /// The error a wrong-direction flag gets depends on *why* its mode is what
+    /// it is: a flag the user typed can be dropped, a baseline cannot.
+    #[test]
+    fn the_error_names_what_the_reader_can_act_on() {
+        let typed = resolve(Baseline::Nothing, &["--allow-all", "--allow-net"]).unwrap_err();
+        assert!(typed.contains("cannot be combined with"), "{typed}");
+
+        let baseline = resolve(Baseline::Nothing, &["--deny-net"]).unwrap_err();
+        assert!(baseline.contains("requires --allow-all"), "{baseline}");
+        assert!(baseline.contains("denied by default"), "{baseline}");
+    }
 }

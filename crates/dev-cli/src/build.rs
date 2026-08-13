@@ -12,8 +12,8 @@
 //! at runtime; a bundle has no imports left to resolve, so that grant can go:
 //!
 //! ```text
-//! unbundled:  esrun --deny-all --allow-imports --allow-listen=8080 app.js
-//! bundled:    esrun --deny-all --allow-listen=8080 dist/app.js
+//! unbundled:  esrun --allow-imports --allow-listen=8080 app.js
+//! bundled:    esrun --allow-listen=8080 dist/app.js
 //! ```
 //!
 //! Four settings are what make this a command rather than a note in the README

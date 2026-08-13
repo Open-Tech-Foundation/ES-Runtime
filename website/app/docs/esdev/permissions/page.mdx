@@ -7,9 +7,10 @@ import { Callout } from "@opentf/web-docs";
 
 # Tracing permissions
 
-`esrun` grants every capability by default and can be narrowed to nothing. The
-hard part was never the flags — it was knowing which ones you need. Run the
-program once:
+`esrun` grants **nothing** by default, so a deployment has to name what it may
+reach. The hard part was never the flags — it is knowing which ones you need,
+and `esdev` grants everything, so the dev loop never tells you. Run the program
+once under a trace:
 
 ```sh
 esdev --trace-permissions app.mjs
@@ -23,7 +24,7 @@ esdev: the permissions this run used
   net       fetch
   env       process_env
 
-  esrun --deny-all --allow-read --allow-imports --allow-net --allow-env app.mjs
+  esrun --allow-read --allow-imports --allow-net --allow-env app.mjs
 ```
 
 That last line is the one to deploy with.
@@ -31,8 +32,8 @@ That last line is the one to deploy with.
 ## It reports what was used, not what was granted
 
 The trace watches the capability check itself — the only place that knows what a
-program *reached for*, as opposed to what it was handed. So a run under the
-default full grant still tells you the minimum.
+program *reached for*, as opposed to what it was handed. So a run under `esdev`'s
+full grant still tells you the minimum `esrun` needs.
 
 **Refusals are reported too, and left out of the line:**
 
@@ -42,7 +43,7 @@ esdev --trace-permissions --deny-all app.mjs
 ```text
   imports   import  (denied — the program asked and was refused)
 
-  esrun --deny-all app.mjs
+  esrun app.mjs
 ```
 
 The program asked and did not get it; whether that was the right answer is your
@@ -70,5 +71,5 @@ imports left to resolve.
 
 ```sh
 esdev build app.mjs
-esrun --deny-all --allow-read --allow-net --allow-env dist/app.js
+esrun --allow-read --allow-net --allow-env dist/app.js
 ```

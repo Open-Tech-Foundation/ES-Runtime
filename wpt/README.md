@@ -4,11 +4,16 @@ Runs the upstream [Web Platform Tests](https://github.com/web-platform-tests/wpt
 for workers, HTML messaging and structured clone, unmodified, under `esrun`.
 
 ```sh
-./wpt/fetch.sh                                    # pinned sparse checkout → wpt/upstream
-esrun wpt/run.js                                  # every test, both scopes
-esrun wpt/run.js -- --mode=worker --verbose       # only inside real workers, listing failures
-esrun wpt/run.js -- --filter=webmessaging/        # substring match on the test path
-esrun wpt/run.js -- --update-expectations         # re-record the baseline
+./wpt/fetch.sh          # pinned sparse checkout → wpt/upstream
+
+# esrun grants nothing by default; the runner reads the tests, writes
+# expectations.json, imports its harness, and spawns real workers.
+wpt="esrun --allow-read --allow-write --allow-imports --allow-workers wpt/run.js"
+
+$wpt                                 # every test, both scopes
+$wpt -- --mode=worker --verbose      # only inside real workers, listing failures
+$wpt -- --filter=webmessaging/       # substring match on the test path
+$wpt -- --update-expectations        # re-record the baseline
 ```
 
 `esrun` claims flags that come before the script name, so the runner's own

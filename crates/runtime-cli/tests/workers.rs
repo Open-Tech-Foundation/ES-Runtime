@@ -29,13 +29,28 @@ fn stderr(out: &Output) -> String {
 }
 
 /// Writes a worker and a main module, runs the main module, returns its stdout.
+///
+/// `flags` without a permission flag means `--allow-all`: esrun grants nothing
+/// on its own (D65), and
+/// what these tests are about is how a *parent's* grant narrows on the way into
+/// a worker — which needs a parent that holds something in the first place. The
+/// tests about the narrowing itself name the parent's grant explicitly.
 fn run(prefix: &str, worker: &str, main: &str, flags: &[&str]) -> Output {
     write(&format!("{prefix}-worker.mjs"), worker);
     let app = write(
         &format!("{prefix}-main.mjs"),
         &main.replace("WORKER_URL", &format!("./{prefix}-worker.mjs")),
     );
-    esrun().args(flags).arg(&app).output().unwrap()
+    let mut command = esrun();
+    // `--max-heap`/`--timeout` shape a run without saying anything about its
+    // grant, so it is the absence of a *permission* flag that means "everything".
+    if !flags
+        .iter()
+        .any(|flag| flag.starts_with("--allow-") || flag.starts_with("--deny-"))
+    {
+        command.arg("--allow-all");
+    }
+    command.args(flags).arg(&app).output().unwrap()
 }
 
 #[test]
@@ -421,6 +436,7 @@ fn a_worker_can_be_handed_an_environment_instead_of_the_capability() {
         "#,
     );
     let out = esrun()
+        .arg("--allow-all")
         .arg(&app)
         .env("API_TOKEN", "sk-from-host")
         .output()
@@ -462,6 +478,7 @@ fn a_handed_environment_wins_over_the_hosts() {
         "#,
     );
     let out = esrun()
+        .arg("--allow-all")
         .arg(&app)
         .env("SECRET_FROM_HOST", "leak")
         .output()
@@ -487,7 +504,7 @@ fn an_empty_handed_environment_is_an_empty_environment() {
         w.onerror = (e) => { console.log(`err: ${e.message}`); e.preventDefault(); w.terminate(); };
         "#,
     );
-    let out = esrun().arg(&app).output().unwrap();
+    let out = esrun().arg("--allow-all").arg(&app).output().unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "count:0");
 }
@@ -532,7 +549,7 @@ fn a_worker_cannot_be_granted_what_its_parent_lacks() {
         const w = new Worker(new URL("WORKER_URL", import.meta.url), { permissions: ["net"] });
         w.onmessage = (e) => { console.log(e.data); w.terminate(); };
         "#,
-        &["--deny-net"],
+        &["--allow-all", "--deny-net"],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "net denied");
@@ -845,7 +862,7 @@ fn permissions_inherit_gives_the_parents_set_and_no_more() {
           });
         }
         "#,
-        &["--deny-net"],
+        &["--allow-all", "--deny-net"],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let out = stdout(&out);
@@ -1055,7 +1072,7 @@ fn deny_workers_refuses_the_spawn() {
         const w = new Worker(new URL("WORKER_URL", import.meta.url));
         w.onerror = (e) => { console.log("refused:", e.message); e.preventDefault(); };
         "#,
-        &["--deny-workers"],
+        &["--allow-all", "--deny-workers"],
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(

@@ -641,6 +641,7 @@ fn a_commonjs_dependency_is_converted_rather_than_refused() {
     // esrun refuses this package unbundled — that is D22, and it stays true.
     if let Some(esrun) = sibling_binary("esrun") {
         let refused = Command::new(esrun)
+            .arg("--allow-imports")
             .arg(dir.join("app.mjs"))
             .output()
             .expect("spawn esrun");
@@ -858,6 +859,7 @@ fn lib_keeps_an_export_no_other_module_uses() {
          console.log(UNUSED_BY_THE_ENTRY.join(','));\n",
     );
     let ran = Command::new(esrun)
+        .arg("--allow-imports")
         .arg(dir.join("consumer.mjs"))
         .output()
         .expect("spawn esrun");
@@ -2307,7 +2309,7 @@ fn a_failed_build_leaves_the_running_server_alone() {
 }
 
 // ---------------------------------------------------------------------------
-// `esdev create` (DECISIONS D64)
+// `esdev create` (DECISIONS D65)
 //
 // The command whose output is somebody else's starting point, so what is worth
 // testing is that the project it writes actually works — and that the command

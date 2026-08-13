@@ -8,6 +8,80 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `esrun` grants nothing by default.** `esrun app.js` used to hold
+  every capability; it now holds none, and a run reaches what the command line
+  that started it named (DECISIONS D65, superseding D38's default).
+
+  ```sh
+  esrun app.js                                # computes, reaches nothing
+  esrun --allow-imports --allow-listen=8080 server.js
+  esrun --allow-all app.js                    # what the old default was
+  ```
+
+  `esrun` stopped being a script runner some releases ago and is now the binary
+  a **service** is deployed with, and a service's grant is not a preference — it
+  is what an auditor reads. A default of "everything" makes the safe
+  configuration the one you have to remember.
+
+  Migrating: `--allow-all` (or `-A`) is the one-flag escape hatch, and
+  `esdev --trace-permissions app.js` runs the program and prints the narrow
+  `esrun` line it actually needs. **A command line that was already narrow is
+  unaffected** — `--deny-all` is still accepted, still means "nothing granted",
+  and is still worth writing on a deploy line so a reader need not know which
+  way a binary defaults.
+
+  The vocabulary, the scope lists, `permissions.has()` and every capability
+  check are unchanged. What moved is the baseline, and with it the direction
+  each mode runs in:
+
+  | Mode | Baseline | Direction |
+  | ---- | -------- | --------- |
+  | `--allow-<name>` | nothing granted (**the default**) | additive only |
+  | `--allow-all --deny-<name>` | everything granted | subtractive only |
+
+  `--deny-<name>` now requires `--allow-all`, exactly as `--allow-<name>` used
+  to require `--deny-all`. D38's property is intact: no flag ever overrides
+  another, so there is still no precedence rule anywhere.
+
+  Two smaller consequences worth knowing:
+
+  - A run with no flags is a **single-file** run, because `imports` is denied
+    with everything else. Multi-file programs need `--allow-imports`; a bundle
+    built by `esdev build` does not.
+  - **`runtime:process`'s `args` no longer needs `env`.** The arguments are the
+    command line that started the program — the same line the permission flags
+    are on — not host state a grant withholds. Left gated, the flip would have
+    forced `--allow-env`, and with it the whole environment, onto any script
+    that reads its own argv.
+
+- **`--allow-all` / `-A` is a real flag.** It used to be rejected with "there is
+  no --allow-all"; it now grants every capability, and is the only thing
+  `--deny-<name>` may subtract from.
+
+- **`esdev` keeps granting everything**, which is now the one place the two
+  binaries differ (D65). The inner loop should not need flags to run the program
+  you are in the middle of writing; a deployment should. The flags, scopes,
+  rules and error messages are one implementation in `es-runtime-cli-common`,
+  parameterised by a single baseline — so the two cannot drift on what
+  `--allow-net=…` means, only on where a flagless line starts. `--allow-all` is
+  the no-op on `esdev`, mirroring `--deny-all` on `esrun`.
+
+  Three things keep the gap visible: `esdev --trace-permissions` prints the
+  `esrun` line a run needs (now without a `--deny-all` prefix, since there is
+  nothing to prefix); `esdev start` spawns its child under `esdev.json`'s
+  `permissions`, so a real project's dev loop already runs under the production
+  grant; and `esdev create` scaffolds that block from the first commit.
+
+- **`esdev.json`'s `permissions` is read as the deploy grant.** It is validated
+  against "nothing granted" — so `{"allow": {"read": ["./dist"]}}` is now valid
+  on its own, where it used to need `"deny": ["all"]` beside it — and pinned to
+  its mode on the way out, so the same list means the same thing whichever
+  binary is handed it. `"deny": ["all"]` still parses; the React template drops
+  it as redundant. A subtractive block writes `"allow": {"all": true}` alongside
+  its denials.
+
 ## [0.24.0] - 2026-08-13
 
 ### Changed

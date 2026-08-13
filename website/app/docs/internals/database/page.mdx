@@ -170,7 +170,7 @@ not a gate.
   grant would guard nothing that happens. It is a third op that **takes no
   path**: an ungated op that accepted one would be a way to open any database on
   disk without `FileRead`. What it costs is memory, which guest JavaScript can
-  already spend without asking. It works under `--deny-all`, exactly as an
+  already spend without asking. It works with nothing granted, exactly as an
   in-process `Map` does.
 </Callout>
 

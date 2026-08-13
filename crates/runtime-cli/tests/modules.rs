@@ -7,9 +7,15 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-/// A `Command` for the built `esrun` binary.
+/// A `Command` for the built `esrun` binary, granted everything.
+///
+/// The grant is fixture, not subject: esrun grants nothing on its own (D65) and
+/// these tests are about module resolution, HTTP, fs and net *behaviour*. The
+/// capability model has its own suite in `permissions.rs`.
 fn esrun() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    command.arg("--allow-all");
+    command
 }
 
 /// Absolute path to a file under `tests/fixtures/`.

@@ -37,7 +37,7 @@ One `<pm> run build` produces all three. Pick the one you want.
 
 | | Deploy | Run |
 | --- | --- | --- |
-| **Server-rendered** | `dist/` | `esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js` |
+| **Server-rendered** | `dist/` | `esrun --allow-read=./dist --allow-listen=8080 dist/server.js` |
 | **Static** | `dist/static/` | any static host |
 | **Single-page** | `dist/index.html` + `dist/assets/` | any static host, with a fallback to `index.html` |
 
@@ -62,7 +62,7 @@ The server runs under exactly what `esdev.json` grants it, in development and in
 production:
 
 ```
---deny-all --allow-read=./dist --allow-listen=8080
+--allow-read=./dist --allow-listen=8080
 ```
 
 No filesystem beyond `dist`, no network, no subprocesses, no environment. Add

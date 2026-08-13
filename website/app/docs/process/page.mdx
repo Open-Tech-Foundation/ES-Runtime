@@ -129,7 +129,7 @@ rather than registering a handler that would never fire.
 ## Permissions
 
 `permissions` reports what this run may reach. The policy is fixed at launch by
-[esrun's denial flags](/docs/security#denying-capabilities-in-esrun), so `has()`
+[esrun's permission flags](/docs/security#granting-capabilities-in-esrun), so `has()`
 is a synchronous boolean — there is nothing to request.
 
 ```js

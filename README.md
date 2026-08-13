@@ -51,25 +51,31 @@ esrun examples/hello.js
 esrun examples/modules/main.mjs   # ES module: import/export + top-level await
 esrun -e='console.log(6 * 7)'
 esrun --env-file=.env app.mjs     # load env vars from a .env file
-esrun --deny-all app.mjs          # run with no host access at all
-esrun --deny-net app.mjs          # or deny one capability at a time
+esrun --allow-net app.mjs         # grant one capability at a time
+esrun --allow-all app.mjs         # or grant everything (unsandboxed)
 esrun --help
 ```
 
-`esrun` grants every capability by default. Two modes restrict a run, and they
-cannot be combined:
+**Nothing is granted by default.** A run reaches what the command line that
+started it named, and nothing else — so a program with no flags computes and
+reaches nothing, including no module loader. Two modes widen it, and they cannot
+be combined:
 
 ```sh
-esrun --deny-net --deny-run app.mjs                     # everything, minus these
-esrun --deny-all --allow-imports --allow-net app.mjs    # nothing, plus these
-esrun --deny-all --allow-net=api.example.com app.mjs    # ...narrowed to a list
+esrun --allow-imports --allow-net app.mjs         # nothing, plus these
+esrun --allow-net=api.example.com app.mjs         # ...narrowed to a list
+esrun --allow-all --deny-run app.mjs              # everything, minus these
 ```
 
-Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`.
-`--allow-<name>` requires `--deny-all`, and seven of them also take a
+Names: `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`,
+`workers`. `--deny-<name>` requires `--allow-all`, and seven of them also take a
 comma-separated list that narrows the grant — paths, addresses, program names,
 variable names, signal names. A denied operation throws `NotAllowedError`;
 importing a `runtime:` module always works.
+
+`esdev`, the development binary, is the opposite: it grants everything, so the
+inner loop needs no flags. `esdev --trace-permissions app.mjs` prints the
+`esrun` line that grants exactly what a run reached for.
 
 What a run may *load* is a separate question from what running code may reach,
 so it has a separate mechanism — `--import-policy=./import-policy.json` takes

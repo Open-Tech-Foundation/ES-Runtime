@@ -17,7 +17,7 @@ console.log("options win:", show(parseConnectionString("postgres://someone@elsew
 
 // Reading the environment needs the Env capability, and the driver treats a
 // refusal as "no defaults" rather than as a failure — a connection string that
-// named everything it needed should still work under --deny-all.
+// named everything it needed should still work with nothing else granted.
 let granted = false;
 try {
   granted = Boolean(env.PGHOST);

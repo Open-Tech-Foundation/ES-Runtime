@@ -9,7 +9,14 @@
 use std::process::{Command, Output};
 
 fn esrun(code: &str) -> Output {
+    esrun_granted(&[], code)
+}
+
+/// esrun under `flags`. Nothing is granted by default (D65), so a test whose
+/// subject reaches past the isolate names what it needs.
+fn esrun_granted(flags: &[&str], code: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .args(flags)
         .arg(format!("-e={code}"))
         .output()
         .expect("failed to spawn esrun")
@@ -215,7 +222,8 @@ fn a_bind_failure_handled_through_accept_does_not_also_fail_the_run() {
 /// no reason attached. The cause is now reported where uncaught errors go.
 #[test]
 fn a_bad_response_body_chunk_aborts_the_connection_and_reports_why() {
-    let out = esrun(
+    let out = esrun_granted(
+        &["--allow-listen", "--allow-net"],
         r#"
 import { serve } from "runtime:http";
 const server = serve({ port: 0, hostname: "127.0.0.1" }, () =>

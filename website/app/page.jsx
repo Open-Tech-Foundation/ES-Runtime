@@ -48,7 +48,7 @@ const features = [
   },
   {
     title: "Embeddable & capability-gated",
-    body: "The library form is deny-by-default — the host grants exactly the powers code needs — and its event loop has no owned thread: tick it from your own.",
+    body: "Deny-by-default in both forms: the binary grants what the command line names, the library what the host grants. The library's event loop has no owned thread — tick it from your own.",
   },
 ];
 

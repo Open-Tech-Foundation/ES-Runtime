@@ -28,13 +28,23 @@ fn stderr(out: &Output) -> String {
 
 /// Runs `source` in its own directory, so each test gets its own database and
 /// its own jail.
+///
+/// Empty `flags` means the grants a file-backed SQLite database needs — esrun
+/// grants nothing on its own (D65), and a `sqlite:` URL is a file. That is
+/// fixture, not subject: the tests here are about `runtime:db`, and the ones
+/// that *are* about the capability gate name their own flags.
 fn run(name: &str, source: &str, flags: &[&str]) -> Output {
     let base = dir(name);
     let app = base.join("app.mjs");
     std::fs::write(&app, source).expect("write module");
+    let grants: &[&str] = if flags.is_empty() {
+        &["--allow-read", "--allow-write"]
+    } else {
+        flags
+    };
     esrun()
         .current_dir(&base)
-        .args(flags)
+        .args(grants)
         .arg("app.mjs")
         .output()
         .unwrap()
@@ -227,7 +237,12 @@ fn opening_a_database_is_gated_like_a_file() {
     // The database exists now; a read-only grant may open it and may not write.
     let base = dir("caps-read");
     std::fs::write(base.join("app.mjs"), source).unwrap();
-    let seed = esrun().current_dir(&base).arg("app.mjs").output().unwrap();
+    let seed = esrun()
+        .current_dir(&base)
+        .args(["--allow-read", "--allow-write"])
+        .arg("app.mjs")
+        .output()
+        .unwrap();
     assert!(seed.status.success(), "stderr: {}", stderr(&seed));
     let read_only = esrun()
         .current_dir(&base)
@@ -578,7 +593,11 @@ attempts: true"
 #[test]
 fn the_built_in_backend_passes_its_own_conformance_suite() {
     for (name, url, flags) in [
-        ("conformance-file", "sqlite:./app.db", &[][..]),
+        (
+            "conformance-file",
+            "sqlite:./app.db",
+            &["--allow-read", "--allow-write"][..],
+        ),
         ("conformance-memory", "sqlite::memory:", &["--deny-all"][..]),
     ] {
         let base = dir(name);

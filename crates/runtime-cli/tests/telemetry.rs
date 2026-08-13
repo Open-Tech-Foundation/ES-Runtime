@@ -43,7 +43,9 @@ fn stderr_after_a_failed_handshake(name: &str, rust_log: Option<&str>) -> String
     std::fs::write(&app, TLS_SERVER).expect("write app");
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_esrun"));
-    cmd.arg(&app)
+    // Fixture, not subject (D65): this is a test about tracing output.
+    cmd.arg("--allow-all")
+        .arg(&app)
         .env("CERT", cert)
         .env("KEY", key)
         .env_remove("RUST_LOG")

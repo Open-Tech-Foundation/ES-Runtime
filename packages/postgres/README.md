@@ -356,7 +356,7 @@ no host and `PGHOST` still applies.
 Reading the environment needs the **`Env`** capability. A program running
 without it is not asking for libpq's defaults, so a refusal is not an error — it
 means no defaults, and a connection string that named everything it needed still
-works under `--deny-all`.
+works with nothing granted.
 
 `PGSSLROOTCERT` is **not** read: libpq takes a path there, and reading a file is
 a capability this driver will not exercise on your behalf. Pass the certificate
@@ -368,7 +368,7 @@ The driver needs **`Net`**, and nothing else — it is an ordinary outbound TCP
 connection. Scope it to the database and nothing else:
 
 ```sh
-esrun --deny-all --allow-imports --allow-net=db.internal:5432 app.js
+esrun --allow-imports --allow-net=db.internal:5432 app.js
 ```
 
 That is a narrower grant than a "may use a database" permission could ever be:

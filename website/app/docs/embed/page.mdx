@@ -25,7 +25,7 @@ Web-standard globals. The difference is who grants access:
 
 | Shape | Who grants capabilities | Typical use |
 | --- | --- | --- |
-| **`esrun` CLI** | Grants all capabilities automatically | Scripts, local tools, servers you trust |
+| **`esrun` CLI** | The command line — `--allow-<name>`, nothing by default | Services, scripts, local tools |
 | **Embeddable library** | The host (your Rust code) grants exactly what guest code needs | Plugins, sandboxes, policy-driven execution |
 
 See the [Security model](/docs/security) for how capabilities and the

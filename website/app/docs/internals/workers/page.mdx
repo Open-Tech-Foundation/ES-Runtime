@@ -105,7 +105,7 @@ usually holds everything, a worker holds nothing until you say so.
 
 **Spawning itself needs two grants**, not one: `workers`, and `imports` — the
 parent has to read the worker's entry module, and reading a module is what
-`imports` grants. So `--deny-all --allow-workers` alone is refused, and the
+`imports` grants. So `--allow-workers` alone is refused, and the
 refusal names the flag to add. Node requires `--allow-fs-read` alongside
 `--allow-worker` for the same reason; Deno requires `--allow-read`.
 

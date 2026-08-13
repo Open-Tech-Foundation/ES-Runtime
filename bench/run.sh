@@ -345,7 +345,9 @@ LLRT="$(command -v llrt 2>/dev/null)"
   [ -x "$d" ] && { LLRT="$d"; break; }
 done
 [ -n "$LLRT" ] && { add llrt "$LLRT" "$LLRT --version"; ORDER+=(llrt); }
-if [ -x "$ESRUN" ]; then add esrun "$ESRUN" "$ESRUN --version"; ORDER+=(esrun); else
+# --allow-all, matching deno -A above: every entrant runs unrestricted, so the
+# numbers are about the runtime rather than about its sandbox.
+if [ -x "$ESRUN" ]; then add esrun "$ESRUN --allow-all" "$ESRUN --version"; ORDER+=(esrun); else
   echo "esrun not found at $ESRUN — build it: cargo build --release -p es-runtime-cli" >&2; exit 1
 fi
 

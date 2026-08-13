@@ -19,8 +19,16 @@ fn write(name: &str, contents: &str) -> PathBuf {
     path
 }
 
+/// esrun, already granted `env`.
+///
+/// The grant is fixture, not subject: esrun grants nothing on its own (D65) and
+/// every test in this file is about what `env` *contains*, so making each one
+/// spell the flag would say the same thing thirty times. A test about the gate
+/// itself lives in `permissions.rs`.
 fn esrun() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_esrun"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
+    command.arg("--allow-env");
+    command
 }
 
 fn stdout(out: &Output) -> String {
@@ -310,7 +318,11 @@ const out = await new Command("sh", {
 console.log(new TextDecoder().decode(out.stdout).trim());
 "#,
     );
-    let out = esrun().arg(&app).output().expect("spawn esrun");
+    let out = esrun()
+        .arg("--allow-run=sh")
+        .arg(&app)
+        .output()
+        .expect("spawn esrun");
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert!(
         stdout(&out).contains("PORT=[8080]"),

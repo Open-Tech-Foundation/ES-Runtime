@@ -1,6 +1,6 @@
 // Worker `postMessage` round-trip cost, by payload size.
 //
-// Run:  esrun bench/worker-postmessage.js
+// Run:  esrun --allow-all bench/worker-postmessage.js
 //
 // Why this exists: the message path copies the serialized payload once on the
 // JS→Rust op crossing (`Value::Bytes`, ARCHITECTURE §9 / the D3a Phase 8

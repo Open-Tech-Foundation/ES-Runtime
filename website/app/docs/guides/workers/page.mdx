@@ -48,7 +48,7 @@ new Worker(new URL("./worker.js", import.meta.url));
 ```
 
 Two capabilities are needed to start a worker at all: `workers`, and `imports`
-to read its entry module. So `--deny-all --allow-workers` alone is refused —
+to read its entry module. So `--allow-workers` alone is refused —
 and says so:
 
 ```

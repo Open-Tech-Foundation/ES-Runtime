@@ -88,14 +88,15 @@ declare module "runtime:process" {
   export function offSignal(signal: SignalName, handler: (signal: SignalName) => void): void;
 
   /**
-   * A capability this process may be denied. These are exactly the suffixes of
-   * `esrun`'s `--deny-<name>` flags:
+   * A capability this process may hold. These are exactly the suffixes of the
+   * `--allow-<name>` / `--deny-<name>` flags:
    *
    * - `read` / `write` — the `runtime:fs` and `runtime:wasi` surfaces
    * - `imports` — the module loader (`import "./x.js"`, `import "pkg"`)
    * - `net` / `listen` — outbound (`fetch`, `WebSocket`, `runtime:net`) and
    *   inbound (`runtime:net` listen, `runtime:http` serve)
-   * - `env` — this module's `env`, `args`, and `cwd()`
+   * - `env` — this module's `env` and `cwd()` (`args` needs no grant: it is the
+   *   command line that started this program)
    * - `run` — `runtime:system` child processes
    * - `signals` — `onSignal`
    * - `workers` — starting a `Worker`
@@ -113,11 +114,13 @@ declare module "runtime:process" {
 
   /**
    * What this process is allowed to reach. The policy is fixed at launch — by
-   * `esrun`'s `--deny-all` / `--deny-<name>` flags, or by the embedder's
+   * the CLI's `--allow-<name>` / `--deny-<name>` flags, or by the embedder's
    * capability set — so this is introspection only: there is nothing to request
    * and no prompt to await, which is why it is synchronous.
    *
-   * Needs no capability: it answers even under `--deny-all`, which is the policy
+   * `esrun` grants nothing unless the command line said so, so a program that
+   * adapts to what it holds should expect to hold little. This needs no
+   * capability itself: it answers with everything denied, which is the policy
    * under which a program most needs to ask.
    *
    * ```js

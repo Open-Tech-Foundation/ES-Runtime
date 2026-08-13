@@ -1,21 +1,29 @@
 ---
 title: Securing Runtime
-description: Take a working service from "grants everything" to a deployment command that states exactly what it may touch — and read every denial back to the flag that fixes it.
+description: Build the deployment command that states exactly what a service may touch, starting from the default of nothing — and read every denial back to the flag that fixes it.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # Securing Runtime
 
-`esrun app.js` grants every capability. That is the right default for a script
-you just wrote and are about to run yourself. It is the wrong default for
-anything with dependencies, a network, or a production deployment.
+`esrun app.js` grants **nothing**. A service therefore does not run until its
+command line says what it may reach — which is the point: the grant a service
+runs under should be the thing that started it, not something you remember to
+add later.
 
-This guide is the practical path from one to the other. It is a **method**, not
-a command to copy: start from nothing, run it, and grant back exactly what
-breaks. The [security model](/docs/security) explains *why* the pieces are
-shaped this way; the [CLI reference](/api/cli#permissions) is the complete flag
-list and grammar.
+This guide is the practical path to that command. It is a **method**, not a
+command to copy: run it, and grant back exactly what breaks. The
+[security model](/docs/security) explains *why* the pieces are shaped this way;
+the [CLI reference](/api/cli#permissions) is the complete flag list and grammar.
+
+<Callout type="tip" title="Or let esdev write it for you">
+  `esdev --trace-permissions server.js` runs the program with everything granted,
+  watches every capability it reaches for, and prints the `esrun` line that
+  grants exactly those. It is the same answer as the method below, in one
+  command — the method is still worth reading, because step 3 (narrowing each
+  grant to a list) is the part a trace cannot do for you.
+</Callout>
 
 <Callout type="note" title="What this guide assumes">
   The `esrun` CLI, running a service you control. An **embedded** runtime — one
@@ -27,20 +35,19 @@ list and grammar.
 ## The method
 
 <Callout type="tip" title="Grant back, never take away">
-  Do not start from a working command and remove flags. You will stop the moment
-  the service runs, which is *before* you have found what it doesn't need. Start
-  from `--deny-all`, where nothing works, and add until it does. What you end up
-  with is the honest minimum, and you will have read a denial for every grant in
-  it.
+  Do not start from `--allow-all` and remove flags. You will stop the moment the
+  service runs, which is *before* you have found what it doesn't need. Start from
+  the default, where nothing works, and add until it does. What you end up with
+  is the honest minimum, and you will have read a denial for every grant in it.
 </Callout>
 
 ### 1. Start from nothing
 
 ```sh
-esrun --deny-all server.js
+esrun server.js
 ```
 
-Under `--deny-all` a run can compute and nothing else. It still executes the
+With nothing granted a run can compute and nothing else. It still executes the
 entry file — that file is read by the CLI before a runtime exists, and you named
 it — but it cannot read a second file, import a package, reach the network, or
 see the environment.
@@ -67,7 +74,7 @@ NotAllowedError: capability denied: FileSystem (permission "imports")
 Repeat until the service starts and serves. For a typical HTTP service:
 
 ```sh
-esrun --deny-all --allow-imports --allow-listen --allow-net --allow-env \
+esrun --allow-imports --allow-listen --allow-net --allow-env \
       --allow-read server.js
 ```
 
@@ -82,7 +89,7 @@ are all-or-nothing. Go back through the
 command and replace each whole grant with what the service actually touches:
 
 ```sh
-esrun --deny-all --allow-imports \
+esrun --allow-imports \
       --allow-listen=8080 \
       --allow-net=db.internal:5432,api.stripe.com \
       --allow-env=PORT,DATABASE_URL,STRIPE_KEY \
@@ -165,7 +172,7 @@ with a non-zero exit status, like any other uncaught exception.
   inside one:
 
   ```sh
-  esrun --deny-all --allow-listen=443 \
+  esrun --allow-listen=443 \
         --allow-read=/etc/letsencrypt/live/example.com \
         server.js
   ```
@@ -182,7 +189,7 @@ running code is a separate question, and has a separate mechanism — a JSON fil
 named explicitly and never auto-discovered:
 
 ```sh
-esrun --deny-all --allow-imports --import-policy=./import-policy.json server.js
+esrun --allow-imports --import-policy=./import-policy.json server.js
 ```
 
 ```json
@@ -209,7 +216,7 @@ policy that quietly permits or forbids everything. See the
 <Callout type="note" title="The policy is not a way around --deny-imports">
   Two layers, not two alternatives. The `imports` **capability** decides whether
   the module loader runs at all; the **policy** decides what it may then
-  resolve. Under `--deny-all`, an `"allow"` entry still loads nothing.
+  resolve. Without `--allow-imports`, an `"allow"` entry still loads nothing.
 </Callout>
 
 <Callout type="warning" title="A policy names packages, not content">
@@ -226,18 +233,18 @@ claims, so the parser never guesses. Each of these **fails the run** rather than
 starting one:
 
 ```
-$ esrun app.js --deny-all
-error: --deny-all appears after app.js, where it is the script's own argument
+$ esrun app.js --allow-net
+error: --allow-net appears after app.js, where it is the script's own argument
 and does nothing to the run.
 
-$ esrun --deny-al app.js
-error: unknown option: --deny-al
+$ esrun --allow-ne app.js
+error: unknown option: --allow-ne
 
-$ esrun --allow-net app.js
-error: --allow-net requires --deny-all: everything is granted by default, so
-there is nothing for --allow-net to add.
+$ esrun --deny-net app.js
+error: --deny-net requires --allow-all: every capability is denied by default,
+so there is nothing for --deny-net to take away.
 
-$ esrun --deny-all --allow-env --allow-env=HOME app.js
+$ esrun --allow-env --allow-env=HOME app.js
 error: --allow-env=HOME and --allow-env disagree: one narrows the grant to a
 list, the other grants it whole.
 ```
@@ -251,7 +258,7 @@ The consequences for a deployment are worth stating plainly:
 - **A typo cannot degrade you quietly.** An unknown flag stops the run and lists
   the valid names.
 - **No flag overrides another.** There is no precedence to reason about. The two
-  modes — `--deny-<name>` subtracting, `--deny-all --allow-<name>` adding —
+  modes — `--allow-<name>` adding, `--allow-all --deny-<name>` subtracting —
   cannot be combined, and granting one capability both whole and narrowed is an
   error rather than a rule someone has to remember.
 
@@ -283,7 +290,7 @@ names it, and loaded values fill unset keys rather than overriding the real
 environment, so a checked-in file cannot clobber production configuration.
 
 ```sh
-esrun --env-file=.env.production --deny-all --allow-env=PORT,DATABASE_URL app.js
+esrun --env-file=.env.production --allow-env=PORT,DATABASE_URL app.js
 ```
 
 Keys ending in `_KEY` / `_TOKEN` / `_SECRET` / `_PASS(WORD)`, or containing
@@ -299,7 +306,7 @@ Keys ending in `_KEY` / `_TOKEN` / `_SECRET` / `_PASS(WORD)`, or containing
 
 ## A pre-deploy checklist
 
-- The command starts from `--deny-all`, not from `--deny-<name>`.
+- The command names grants, and does not carry `--allow-all`.
 - Every `--allow-` flag that can carry a list carries one.
 - `--allow-run` is absent, or names exactly one program you can defend.
 - `--allow-env` names variables; it is not bare.

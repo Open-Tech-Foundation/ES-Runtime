@@ -907,8 +907,8 @@ measurement with a flattering guess.
 
 - These are **microbenchmarks** — they isolate one thing each and don't predict
   whole-application performance.
-- esrun runs **single-file classic scripts** (no ES-module loader) and grants all
-  capabilities — it's a convenience runner, not a sandbox here.
+- esrun is run with `--allow-all` here, matching how `deno -A` is invoked
+  alongside it: these measure the runtime, not its sandbox.
 - The crypto shapes reflect esrun's **op model** (sync ops wrapped in promises)
   as much as the underlying libraries.
 - `fetch` hits a trivial local server returning 64 bytes — it measures the

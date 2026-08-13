@@ -7,15 +7,18 @@ import { Callout } from "@opentf/web-docs";
 
 # Security model
 
-ES Runtime ships in two forms, and they differ on what code can reach by
-default:
+ES Runtime ships in two forms, and **both are deny-by-default** — they differ
+only in who does the granting:
 
-- **Embeddable library — deny-by-default.** A runtime the host creates can
-  compute, but cannot reach the host environment, filesystem, or network until
-  the host grants a capability for it.
-- **The `esrun` CLI — unrestricted by default.** The standalone binary grants
-  all capabilities so scripts run without setup. It is not deny-by-default;
-  restrict a run with [denial flags](#denying-capabilities-in-esrun).
+- **Embeddable library.** A runtime the host creates can compute, but cannot
+  reach the host environment, filesystem, or network until the host grants a
+  capability for it.
+- **The `esrun` CLI.** The standalone binary reaches what the command line that
+  started it named, and nothing else. Widen a run with
+  [grant flags](#granting-capabilities-in-esrun).
+
+[`esdev`](/docs/esdev), the development binary, is the exception: it grants
+everything so an inner loop needs no flags, and never reaches production.
 
 <Callout type="tip" title="Looking for the how-to?">
   This page is the model — what the pieces are and why. To take a working
@@ -55,23 +58,24 @@ and in-flight requests are usable only by the agent that created them — a
 the exception by design: a port is *meant* to be transferred, so its id is
 unguessable rather than owned.
 
-## Denying capabilities in esrun
+## Granting capabilities in esrun
 
-Two modes, each with a single direction. They cannot be combined, so no flag
-ever overrides another.
+**esrun grants nothing by default.** Two modes widen a run, each with a single
+direction. They cannot be combined, so no flag ever overrides another.
 
 ```sh
-esrun --deny-net --deny-run app.js                     # everything, minus these
-esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-all --deny-run app.js         # everything, minus these
 ```
 
 | Mode | Baseline | Direction |
 | --- | --- | --- |
-| `--deny-<name>` | everything granted | subtractive only |
-| `--deny-all --allow-<name>` | nothing granted | additive only |
+| `--allow-<name>` | nothing granted (**the default**) | additive only |
+| `--allow-all --deny-<name>` | everything granted | subtractive only |
 
-`--allow-<name>` requires `--deny-all` — with everything already granted, there
-is nothing for it to add.
+`--deny-<name>` requires `--allow-all` — with nothing granted, there is nothing
+for it to take away. `--deny-all` restates the default, and is worth writing on
+a deploy line so a reader need not know which way a binary defaults.
 
 | Name | Covers |
 | --- | --- |
@@ -80,14 +84,19 @@ is nothing for it to add.
 | `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
 | `net` | `fetch`, `WebSocket`, `runtime:net` connect, a UDP send |
 | `listen` | `runtime:net` listen and bind, `runtime:http` serve |
-| `env` | `runtime:process` env / args / cwd |
+| `env` | `runtime:process` env / cwd |
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` onSignal |
 | `workers` | `new Worker(...)` |
 
-`--deny-all` still runs the entry file — it is read before the runtime exists.
-It includes `--deny-imports`, so add `--allow-imports` for an app with
-dependencies.
+A run with nothing granted still executes the entry file — it is read before the
+runtime exists, and you named it. `imports` is denied with everything else, so
+add `--allow-imports` for an app with dependencies.
+
+[esdev](/docs/esdev), the development binary, is the one place this differs: it
+grants everything, so an inner loop needs no flags.
+`esdev --trace-permissions app.js` prints the `esrun` line a run actually
+needs.
 
 **Seven of the nine** can be granted narrowed to a list. Two are
 all-or-nothing: `imports`, because what may be *loaded* is [its own
@@ -95,7 +104,7 @@ mechanism](#import-policy), and `workers`, because a worker's grant is set at th
 spawn rather than on the command line:
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -140,7 +149,7 @@ reason. Each of these is an error, not a warning:
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word |
 | `esrun app.js --deny-net` | After the script it restricts nothing (`--` opts out) |
-| `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
+| `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
 | `--allow-ffi` | Not one of the nine |
 | `--allow-workers=x` | `workers` is all-or-nothing; a worker's own grant is set at the spawn |
 
@@ -163,7 +172,7 @@ code is a separate question, with a separate mechanism: a JSON file, named by
 `--import-policy` and never auto-discovered.
 
 ```sh
-esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+esrun --allow-imports --allow-net=db.internal:5432 \
       --import-policy=./import-policy.json server.js
 ```
 
@@ -192,10 +201,10 @@ The policy also binds `import.meta.resolve`: a package it refuses cannot be
 located, not just not imported — otherwise the refusal would still hand out the
 path.
 
-<Callout type="note" title="A policy is not a way around --deny-imports">
+<Callout type="note" title="A policy is not a way around a missing imports grant">
   Two layers, not two alternatives: the `imports` capability decides whether the
-  loader runs at all, the policy decides what it may resolve. Under
-  `--deny-all`, an allow entry still loads nothing.
+  loader runs at all, the policy decides what it may resolve. Without
+  `--allow-imports`, an allow entry still loads nothing.
 </Callout>
 
 <Callout type="warning" title="Known gap: no integrity">

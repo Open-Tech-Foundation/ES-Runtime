@@ -19,7 +19,6 @@
     "watch": ["server", "web"]
   },
   "permissions": {
-    "deny": ["all"],
     "allow": {
       "read": ["./dist"],
       "listen": ["8080"]

@@ -487,8 +487,8 @@ accepts an unknown name in `deno: { permissions }` silently.
 It can never be granted what its parent lacks, so no chain of spawns widens the
 original grant. Spawning at all requires `workers` (`--deny-workers` refuses
 it) **and `imports`**, because starting a worker means reading its entry module
-and reading a module is what `imports` grants — so `--deny-all --allow-workers`
-alone is refused, and the refusal says which flag to add. Node needs
+and reading a module is what `imports` grants — so `--allow-workers` alone
+is refused, and the refusal says which flag to add. Node needs
 `--allow-fs-read` alongside `--allow-worker` for the same reason; Deno needs
 `--allow-read`. A worker's own **static** `import`s still load — under the parent's authority to
 read them, resolved before any of the worker's code runs — so a worker granted
@@ -848,15 +848,17 @@ the required capability has been granted.
 
 ES-Runtime is deny-by-default: a fresh runtime can compute but cannot reach the
 host environment, filesystem, or network until the embedder grants the relevant
-capability. The standalone `esrun` CLI is the other way round — it grants
-everything unless you pass [`--deny-all` or `--deny-<name>`](#denying-capabilities-in-esrun).
+capability. **The standalone `esrun` CLI is the same** — it grants nothing until
+you [name what a run may reach](#granting-capabilities-in-esrun) (DECISIONS
+D65). `esdev`, the development binary, is the one exception: it grants
+everything, so an inner loop needs no flags.
 The check lives on the native op, so it cannot be bypassed by reaching a
 different module path, and **importing** a `runtime:` module never needs a
 capability — only its operations do.
 
 | Capability  | Grants                                                              |
 | ----------- | ------------------------------------------------------------------- |
-| `Env`       | Environment, arguments, cwd, platform — backs `runtime:process`.    |
+| `Env`       | Environment and cwd — backs `runtime:process`. Not `args` or `platform`: those describe the invocation and the binary, not host state. |
 | `FileRead`  | Read files within the configured root jail.                         |
 | `FileWrite` | Write files within the configured root jail.                        |
 | `Net`       | Open outbound network connections (`fetch`, `runtime:net` `connect`, a UDP `send`). |
@@ -870,37 +872,43 @@ jail**, on by default and not currently optional (DECISIONS D25). Paths are
 canonicalized to their real location before the check, so a symlink cannot
 escape the jail.
 
-### Denying capabilities in `esrun`
+### Granting capabilities in `esrun`
 
-`esrun` grants everything by default. Two modes restrict a run, and they cannot
-be combined (DECISIONS D38):
+**`esrun` grants nothing by default** (DECISIONS D65). Two modes widen a run, and
+they cannot be combined:
 
 ```sh
-esrun --deny-net --deny-run app.js                     # everything, minus these
-esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-all --deny-run app.js         # everything, minus these
 ```
 
 | Mode | Baseline | Direction |
 | ---- | -------- | --------- |
-| `--deny-<name>` | everything granted | subtractive only |
-| `--deny-all --allow-<name>` | nothing granted | additive only |
+| `--allow-<name>` | nothing granted (**the default**) | additive only |
+| `--allow-all --deny-<name>` | everything granted | subtractive only |
 
-`--allow-<name>` requires `--deny-all` — with everything already granted there is
-nothing for it to add. Neither mode mixes directions, so **no flag overrides
+`--deny-<name>` requires `--allow-all` — with nothing granted there is nothing
+for it to take away. Neither mode mixes directions, so **no flag overrides
 another**: read the list top to bottom and that is the answer.
 
-| Flag | Capability | Denies |
-| ---- | ---------- | ------ |
-| `--deny-read` | `FileRead` | `runtime:fs` / `runtime:wasi` reads |
-| `--deny-write` | `FileWrite` | `runtime:fs` / `runtime:wasi` mutations |
-| `--deny-imports` | `FileSystem` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
-| `--deny-net` | `Net` | `fetch`, `WebSocket`, `runtime:net` `connect`, a UDP `send` |
-| `--deny-listen` | `NetListen` | `runtime:net` `listen` and `bind`, `runtime:http` `serve` |
-| `--deny-env` | `Env` | `runtime:process` `env` / `args` / `cwd()` |
-| `--deny-run` | `Run` | `runtime:system` child processes |
-| `--deny-signals` | `Signals` | `runtime:process` `onSignal` |
+`--deny-all` is accepted and restates the default; it is worth writing on a
+deploy line, so a reader need not know which way a binary defaults. `esdev`
+defaults the other way, and there `--allow-all` is the no-op — the flags, the
+scopes and the rules are otherwise identical.
 
-Each name takes both prefixes: `--deny-net` and `--allow-net`.
+| Flag | Capability | Grants |
+| ---- | ---------- | ------ |
+| `--allow-read` | `FileRead` | `runtime:fs` / `runtime:wasi` reads |
+| `--allow-write` | `FileWrite` | `runtime:fs` / `runtime:wasi` mutations |
+| `--allow-imports` | `FileSystem` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
+| `--allow-net` | `Net` | `fetch`, `WebSocket`, `runtime:net` `connect`, a UDP `send` |
+| `--allow-listen` | `NetListen` | `runtime:net` `listen` and `bind`, `runtime:http` `serve` |
+| `--allow-env` | `Env` | `runtime:process` `env` / `cwd()` |
+| `--allow-run` | `Run` | `runtime:system` child processes |
+| `--allow-signals` | `Signals` | `runtime:process` `onSignal` |
+| `--allow-workers` | `Worker` | `new Worker(url)` |
+
+Each name takes both prefixes: `--allow-net` and `--deny-net`.
 
 #### Scoped grants
 
@@ -912,7 +920,7 @@ rather than on the command line. `--allow-workers=<list>` is **rejected** rather
 than ignored, so a run is never narrower on the command line than in reality:
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -1001,14 +1009,15 @@ happens to deliver.
 A value on a flag that could not enforce it would still be **rejected rather
 than ignored** — that rule outlives the capabilities it was written for, and
 applies to any capability added later. Denials never take a value: a scope narrows a
-grant, so it is written `--deny-all --allow-<name>=<list>`.
+grant, so it is written `--allow-<name>=<list>`.
 
-`--deny-all` is the union of all nine. It still runs the entry file — that file
-is read before the runtime exists — but since it includes `--deny-imports`, a
-fully denied run is a **single-file** run; add `--allow-imports` for an app with
-dependencies. `Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and survive
-`--deny-all`: no op gates them, so a denied script still computes. Ask from JS
-with [`permissions`](#runtimeprocess).
+The default — nothing granted — still runs the entry file, which is read before
+the runtime exists. But since it denies `imports` too, a run with no flags is a
+**single-file** run; add `--allow-imports` for an app with dependencies.
+`Clock`/`Entropy`/`Timers`/`TaskSpawn` have no flag and are never denied: no op
+gates them, so a denied script still computes. Ask from JS with
+[`permissions`](#runtimeprocess), or find the flag set a program needs with
+`esdev --trace-permissions app.js`.
 
 ### Import policy — what may be *loaded*
 
@@ -1017,7 +1026,7 @@ executing code is a different question, and it has its own mechanism (DECISIONS
 D39): a JSON file named by `--import-policy=<file>`.
 
 ```sh
-esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+esrun --allow-imports --allow-net=db.internal:5432 \
       --import-policy=./import-policy.json server.js
 ```
 
@@ -1055,8 +1064,8 @@ esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
 
 The two layers do not substitute for each other: the `imports` capability
 decides whether the loader runs at all, the policy decides what it may resolve.
-A policy is therefore **not a way around `--deny-imports`** — under
-`--deny-all`, an allow entry still loads nothing.
+A policy is therefore **not a way around a missing `imports` grant** — without
+`--allow-imports`, an allow entry still loads nothing.
 
 > **Known gap: no integrity.** A policy names packages and paths, not content.
 > `"express"` says the loader may resolve that package; it says nothing about
@@ -1083,10 +1092,10 @@ the script opts a script's own argument out of rule 2.
 | ------- | ------------ |
 | `--timeout 500` | Rule 1 — `500` would be mistaken for the script |
 | `--allow-net example.com` | Rule 1 |
-| `esrun app.js --deny-net` | Rule 2 — restricts nothing where it stands |
+| `esrun app.js --allow-net` | Rule 2 — grants nothing where it stands |
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
-| `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
+| `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
 | `--allow-ffi` | Not one of the nine |
 
 ---
@@ -1097,7 +1106,7 @@ Host process information: environment, arguments, working directory, platform,
 and exit. Aligned *in spirit* with the WinterTC CLI-API proposal (DECISIONS
 D26).
 
-- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`, and `platform` / `arch` / `exit` / `permissions`, which need none.
+- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`, and `args` / `platform` / `arch` / `exit` / `permissions`, which need none. `args` is the command line that started this program, so it is not host state a grant withholds (D65).
 - **Status:** Available
 - **Loading:** on demand — importing it adds nothing to startup if unused.
 - **Snapshotting:** `env` and `args` are captured on **first access**, not at
@@ -1135,7 +1144,7 @@ environment wins on a conflict unless `--env-override` is passed, and later
 
 ### Permissions
 
-The policy is fixed at launch — by `esrun`'s [denial flags](#denying-capabilities-in-esrun)
+The policy is fixed at launch — by `esrun`'s [permission flags](#granting-capabilities-in-esrun)
 or by the embedder's capability set — so this is introspection only. There is
 nothing to request and no prompt to await, which is why `has()` is a synchronous
 boolean rather than a promise.
@@ -2271,7 +2280,7 @@ server hashes for — the algorithms WebCrypto has no name for, hashing that run
 incrementally instead of all at once, encoded output, and passwords.
 
 - **Capability:** None. Hashing reads nothing and reaches nothing, so every
-  function works under `--deny-all`. The one exception is `password.hash()`,
+  function works with nothing granted. The one exception is `password.hash()`,
   which draws a random salt from `crypto.getRandomValues` and therefore needs
   `Entropy`; `password.verify()` needs nothing, because the salt is inside the
   stored string.

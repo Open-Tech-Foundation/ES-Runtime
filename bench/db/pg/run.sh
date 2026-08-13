@@ -22,7 +22,7 @@ RUNTIMES="${RUNTIMES:-esrun node bun deno}"
 
 cmd() {
   case "$1" in
-    esrun) echo "$esrun_bin" ;;
+    esrun) echo "$esrun_bin --allow-all" ;;
     node)  echo "node" ;;
     bun)   echo "bun" ;;
     deno)  echo "deno run --quiet --allow-all" ;;

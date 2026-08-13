@@ -13,7 +13,7 @@ runs incrementally, encoded output, and passwords.
 
 <Callout type="note" title="Capability: none">
   Hashing reads nothing and reaches nothing, so every function here works under
-  `--deny-all`. The exception is `password.hash()`, which draws a random salt
+  nothing granted. The exception is `password.hash()`, which draws a random salt
   and so needs **Entropy**; `password.verify()` needs nothing. Status:
   **Available**.
 </Callout>

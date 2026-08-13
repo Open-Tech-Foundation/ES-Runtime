@@ -114,7 +114,7 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    termination.
 6. **Side channels (Spectre, timing).** Relies on V8's own mitigations; not
    separately addressed at this layer.
-7. **`esrun` grants all capabilities** (trusted-local-script mode), but module
+7. **`esrun` grants nothing unless the command line says so** (D65), and module
    resolution **and** the filesystem capability are **root-jailed by default**
    (DECISIONS D25). `esrun` loads modules through `NodeModuleLoader` and serves
    `runtime:fs` from `SystemFileSystem`; both confine every *real* (canonicalized)
@@ -124,13 +124,17 @@ execution. Structured `tracing` spans surround ops and the loop; there is no
    root (enforced by `path::within_root`; covered by jail tests in
    `default-providers` and a `../escape.txt` rejection test in `runtime-cli`).
    So a granted capability's reach is the project root, not the whole filesystem.
-   Residual nuances: (a) within that root, the trusted-mode all-capabilities grant
-   has full reach — `esrun` is a runner for *trusted* local code, not a sandbox
-   for hostile code; (b) legitimate cross-root setups (workspaces, `pnpm link`, a
-   symlinked external store) need the **relax flag** (additional allowed roots),
-   which is the still-deferred CLI part of D24/D25; and (c) the strict
-   `FsModuleLoader` — an embedder-only alternative that `esrun` does **not** use —
-   is unjailed by design, so an embedder choosing it must add its own confinement.
+   Residual nuances: (a) within that root, a capability that *was* granted has
+   full reach unless it was also scoped (`--allow-read=./data`) — and `esrun` is
+   still not hardened for *hostile* code: the Phase 9 work (fuzzing, sanitizer
+   CI, an intrinsic-integrity audit, external review) is what that would need,
+   and the deny-by-default flip of D65 does not substitute for it; (b) legitimate
+   cross-root setups (workspaces, `pnpm link`, a symlinked external store) are
+   handled by naming the path — D54 made a path outside the jail *add* that
+   subtree, closing the "additional allowed roots" gap D24/D25 deferred; and
+   (c) the strict `FsModuleLoader` — an embedder-only alternative that `esrun`
+   does **not** use — is unjailed by design, so an embedder choosing it must add
+   its own confinement.
    An embedder sandboxing untrusted code should still withhold `FileSystem`/`Net`
    outright rather than rely on the jail alone.
 8. **UDP exposes what UDP exposes.** A bound datagram socket has no

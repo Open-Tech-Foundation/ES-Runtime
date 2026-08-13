@@ -113,11 +113,14 @@ impl RunOptions {
     }
 }
 
-/// Handles the permission flags — `--deny-all`, `--deny-<name>`,
-/// `--allow-<name>` — reporting whether `flag` was one of them.
+/// Handles the permission flags — `--allow-all`, `--deny-all`,
+/// `--allow-<name>`, `--deny-<name>` — reporting whether `flag` was one of them.
 ///
-/// `--allow-all` / `-A` is recognised here only to answer it: it is a Deno habit
-/// and the default on this runtime, so saying so beats rejecting it as unknown.
+/// Both `--all` flags are accepted by every binary, whichever way that binary's
+/// baseline points (D65). One of the two always restates the default and does
+/// nothing, and that is the point: a deploy line that says `--deny-all` outright,
+/// or a dev line that says `--allow-all`, is stating the grant it expects rather
+/// than trusting the reader to know which binary defaults which way.
 pub fn try_permission_flag(
     permissions: &mut Permissions,
     flag: &str,
@@ -126,15 +129,14 @@ pub fn try_permission_flag(
     match flag {
         "--deny-all" => {
             reject_value(flag, value)?;
-            permissions.all = true;
+            permissions.deny_all();
             Ok(true)
         }
-        "--allow-all" | "-A" => Err(
-            "there is no --allow-all: every capability is granted by default, so there is \
-             nothing to allow.\n\n\
-             Drop --deny-all to run unrestricted, or name what you need with --allow-<name>."
-                .to_string(),
-        ),
+        "--allow-all" | "-A" => {
+            reject_value(flag, value)?;
+            permissions.allow_all();
+            Ok(true)
+        }
         flag if flag.starts_with("--deny-") || flag.starts_with("--allow-") => {
             let allow = flag.starts_with("--allow-");
             let prefix = if allow { "--allow-" } else { "--deny-" };

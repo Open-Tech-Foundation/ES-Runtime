@@ -36,6 +36,7 @@ fn send(pid: u32, signal: &str) {
 #[test]
 fn a_guest_handler_intercepts_a_real_sigterm() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         .arg(fixture("signals.mjs"))
         .stdout(Stdio::piped())
         .spawn()
@@ -80,6 +81,7 @@ fn a_guest_handler_intercepts_a_real_sigterm() {
 #[test]
 fn an_unwatched_signal_still_terminates() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         .arg("-e=console.log('READY'); await new Promise(() => {});")
         .stdout(Stdio::piped())
         .spawn()
@@ -135,6 +137,7 @@ fn http_get(port: u16, path: &str) -> String {
 #[test]
 fn sigterm_drains_an_in_flight_request_before_exiting() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         .arg(fixture("shutdown-server.mjs"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -170,6 +173,7 @@ fn sigterm_drains_an_in_flight_request_before_exiting() {
 #[test]
 fn an_interrupt_with_no_server_exits_at_once() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         // A long grace, so a wrongly-applied drain would be unmistakable.
         .arg("--shutdown-grace=30000")
         .arg("-e=console.log('READY'); setInterval(() => {}, 1000);")
@@ -198,6 +202,7 @@ fn an_interrupt_with_no_server_exits_at_once() {
 #[test]
 fn the_shutdown_grace_bounds_the_drain() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         .arg("--shutdown-grace=300")
         .arg(format!(
             "-e={}",

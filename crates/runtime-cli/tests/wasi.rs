@@ -22,7 +22,10 @@ fn write(dir: &Path, rel: &str, bytes: &[u8]) {
 }
 
 fn run(dir: &Path, entry: &str) -> Output {
+    // `--allow-all` is fixture: esrun grants nothing on its own (D65) and these
+    // tests are about WASI, not about the capability model.
     Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         .arg(dir.join(entry))
         .output()
         .expect("failed to spawn esrun")
@@ -487,6 +490,7 @@ console.log("ENVCOUNT:", new DataView(memory.buffer).getUint32(0, true));
     );
 
     let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
+        .arg("--allow-all")
         .arg(dir.join("main.js"))
         .env("ESRUN_WASI_LEAK_CANARY", "should-not-appear")
         .output()

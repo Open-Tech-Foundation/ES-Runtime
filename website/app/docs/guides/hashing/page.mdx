@@ -163,7 +163,7 @@ await password.hash(input, { algorithm: "bcrypt", cost: 12 });
 
 <Callout type="tip" title="Hashing needs nothing">
   Hashing reads nothing and reaches nothing, so every function here works under
-  `--deny-all`. The one exception is `password.hash()`, which draws a random salt
+  nothing granted. The one exception is `password.hash()`, which draws a random salt
   and so needs **Entropy** — `password.verify()` needs nothing, because the salt
   is inside the stored string. A service that only checks passwords is granted
   nothing at all.

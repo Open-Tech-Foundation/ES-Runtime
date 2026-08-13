@@ -1,11 +1,12 @@
 //! `--trace-permissions` — what the run actually reached for, and the `esrun`
 //! command line that would grant exactly that (DECISIONS.md D59).
 //!
-//! The gap this closes is the last-mile one D59 was written about: `esrun`
-//! grants everything by default and can be narrowed to nothing, but nothing
-//! helped a developer arrive at the right flags — so in practice they ship the
-//! default and the differentiator evaporates. Running the program once under
-//! this prints the line to deploy with.
+//! The gap this closes is the last-mile one D59 was written about, and D65 made
+//! sharper: `esrun` now grants **nothing** by default, so a deployment that
+//! names no capability does not run at all. That is the right failure, but it
+//! still leaves a developer working out the flag set by trial and error — and
+//! `esdev` grants everything, so the dev loop never surfaces it. Running the
+//! program once under this prints the line to deploy with.
 //!
 //! What it observes is the capability check itself, in `engine`, which is the
 //! only place that knows what a program *reached for* rather than what it was
@@ -95,8 +96,11 @@ impl PermissionTrace {
             .filter(|(_, entry)| entry.granted)
             .map(|(name, _)| format!("--allow-{name}"))
             .collect();
+        // No `--deny-all`: esrun grants nothing to begin with (D65), so the
+        // grants *are* the line. A trace that printed the flag anyway would be
+        // teaching the habit of writing a no-op.
         out.push_str(&format!(
-            "\n  esrun --deny-all {}{}\n",
+            "\n  esrun {}{}\n",
             grants
                 .iter()
                 .map(|grant| format!("{grant} "))
@@ -155,7 +159,7 @@ mod tests {
             report.contains("reached past the isolate for nothing"),
             "{report}"
         );
-        assert!(report.contains("esrun --deny-all app.mjs"), "{report}");
+        assert!(report.contains("esrun app.mjs"), "{report}");
     }
 
     #[test]
@@ -165,7 +169,7 @@ mod tests {
         trace.observed("fetch", Capability::Net, true);
         let report = trace.report();
         assert!(
-            report.contains("esrun --deny-all --allow-read --allow-net app.mjs"),
+            report.contains("esrun --allow-read --allow-net app.mjs"),
             "{report}"
         );
     }
@@ -195,10 +199,7 @@ mod tests {
         assert!(report.contains("asked and was refused"), "{report}");
         // The deploy line grants what worked, never what was refused: whether a
         // refusal was correct is not a trace's call.
-        assert!(
-            report.contains("esrun --deny-all --allow-read app.mjs"),
-            "{report}"
-        );
+        assert!(report.contains("esrun --allow-read app.mjs"), "{report}");
     }
 
     #[test]

@@ -63,11 +63,13 @@ function unmask(value) {
 }
 
 // Importing a `runtime:` module must never need a capability — the gate is the
-// op, not the import (DECISIONS D26/D38). `env` and `args` are the only bindings
-// here whose values come from an `Env`-gated op, so both seed themselves on
-// *first access* rather than at module evaluation. Under `--deny-env` this
-// module still imports (and `exit`, `onSignal`, `permissions` still work);
-// touching `env`/`args` is what throws.
+// op, not the import (DECISIONS D26/D38). `env` is the only binding here whose
+// value comes from an `Env`-gated op, so it seeds itself on *first access*
+// rather than at module evaluation. Under `--deny-env` this module still imports
+// (and `exit`, `onSignal`, `permissions` still work); touching `env` is what
+// throws. `args` uses the same lazy seeding — not because it needs a capability
+// (D65 ungated it) but because it is frozen on first read, and freezing at
+// module evaluation would fix it before a worker's arguments arrive.
 function seeded(target, fill, onWrite) {
   let done = false;
   const seed = () => {

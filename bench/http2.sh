@@ -91,7 +91,9 @@ DENO="$(command -v deno 2>/dev/null)"
   [ -x "$d" ] && { DENO="$d"; break; }
 done
 [ -n "$DENO" ] && { CMD[deno]="$DENO run -A --quiet"; ORDER+=(deno); }
-if [ -x "$ESRUN" ]; then CMD[esrun]="$ESRUN"; ORDER+=(esrun); else
+# --allow-all, matching deno -A above: the runtime is the subject, not its
+# sandbox.
+if [ -x "$ESRUN" ]; then CMD[esrun]="$ESRUN --allow-all"; ORDER+=(esrun); else
   echo "esrun not found at $ESRUN — build it: cargo build --release -p es-runtime-cli" >&2; exit 1
 fi
 

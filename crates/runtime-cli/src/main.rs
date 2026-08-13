@@ -15,13 +15,18 @@
 //! (ES module packages only — CommonJS packages and `node:` builtins are
 //! rejected; nothing is installed).
 //!
+//! **Nothing is granted by default** (D65): a run reaches what `--allow-<name>`
+//! named on the line that started it, and nothing else. `esdev` is the opposite,
+//! because a developer's inner loop is not a deployment.
+//!
 //! Argument grammar: every flag is `--flag` or `--flag=value` — a value is never
 //! a separate argument — and esrun's flags come **before** the script, since
 //! everything after it belongs to the script.
 //!
 //! ```text
-//! esrun script.mjs            # run a module file
+//! esrun script.mjs            # run a module file, granted nothing
 //! esrun -e='console.log(1)'   # run an inline module snippet
+//! esrun --allow-net app.js    # ...and let it reach the network
 //! esrun --timeout=500 app.js  # values attach with '='
 //! esrun --version | --help
 //! ```
@@ -35,7 +40,7 @@ use es_runtime_cli_common::args::{
     RunOptions, reject_value, require_value, split_flag_value, try_permission_flag,
 };
 use es_runtime_cli_common::diagnostics::print_error;
-use es_runtime_cli_common::permissions::Permissions;
+use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 
 const USAGE: &str = "\
@@ -47,11 +52,12 @@ argument: `--timeout=500`, not `--timeout 500`.
 USAGE:
     esrun <file>                Run a JavaScript module file
     esrun -e=<code>             Run an inline module snippet
-    esrun --deny-all            Run with no host access at all (secure mode)
-    esrun --deny-<name>         Deny one capability; repeatable
-    esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
+    esrun --allow-<name>        Grant one capability; repeatable
                                 <name> is one of: read, write, imports, net,
                                 listen, env, run, signals, workers
+    esrun --allow-all, -A       Grant every capability (unsandboxed)
+    esrun --deny-<name>         Take one back; requires --allow-all; repeatable
+    esrun --deny-all            Grant nothing — the default, said outright
     esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list:
                                 read/write (paths), net/listen (addresses),
                                 run (programs), env (variable names),
@@ -84,19 +90,20 @@ Remote (`https://`) modules are explicitly unsupported to enforce a local-only s
 The full WinterTC surface is available (console, URL, fetch, crypto, streams,
 encoding, timers, events).
 
-Every host capability is granted by default. Restrict a run in one of two ways,
-never both — each has a single direction, so no flag ever overrides another:
+Nothing is granted by default: a run reaches what it was named on the command
+line that started it, and nothing else. Widen it in one of two ways, never both —
+each has a single direction, so no flag ever overrides another:
 
-    esrun --deny-net --deny-run app.js     # everything, minus these
-    esrun --deny-all --allow-net app.js    # nothing, plus these
-    esrun --deny-all --allow-net=api.example.com app.js   # ...and only there
+    esrun --allow-net --allow-read app.js  # nothing, plus these
+    esrun --allow-net=api.example.com app.js   # ...and only there
+    esrun --allow-all --deny-run app.js    # everything, minus these
 
---allow-<name> requires --deny-all (with everything already granted, there is
-nothing for it to add). A denied operation throws NotAllowedError; importing a
-runtime: module always works. --deny-all alone runs only the entry file: it can
-compute, but cannot read, write, import another file, reach the network, read
-the environment, or spawn anything. Ask from JS with `permissions.has(name)`
-from runtime:process.
+--deny-<name> requires --allow-all (with nothing granted, there is nothing for
+it to take away). A denied operation throws NotAllowedError; importing a
+runtime: module always works. With no flags at all a run is a single file: it
+can compute, but cannot read, write, import another file, reach the network,
+read the environment, or spawn anything — a multi-file program needs at least
+--allow-imports. Ask from JS with `permissions.has(name)` from runtime:process.
 
 A scope list narrows a grant. --allow-env=HOME,PATH hides every other variable;
 --allow-run=git,ls refuses to spawn anything else; --allow-net=api.example.com
@@ -115,7 +122,7 @@ reaches a certificate or a CA bundle the project does not contain.
 
 Entries are comma-separated and trimmed (`--allow-env=\"A, B\"` ≡
 `--allow-env=A,B`); an empty entry is an error. Denials take no value at all: a
-scope narrows a grant, so it is written --deny-all --allow-<name>=<list>.
+scope narrows a grant, so it is written --allow-<name>=<list>.
 
 What may be *loaded* is a separate question from what running code may reach, so
 it is a separate mechanism: --import-policy=<file> takes JSON with \"allow\"
@@ -186,7 +193,7 @@ fn upgrade() -> Result<String, String> {
 /// here as they do in `esdev`; what is matched below is what only `esrun` has.
 fn parse_args() -> Result<Config, String> {
     let mut options = RunOptions::default();
-    let mut permissions = Permissions::default();
+    let mut permissions = Permissions::new(Baseline::Nothing);
     // The flag the previous argument was, so a bare word following it can be
     // diagnosed as an attempted value rather than silently becoming the script.
     let mut previous_flag: Option<String> = None;

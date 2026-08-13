@@ -13,17 +13,19 @@ snippet) end to end. Inputs run as modules — `import`/`export` and top-level
 
 For TypeScript, bundling, tests, watching and a debugger, see the development
 binary: [esdev](/docs/esdev). It takes every flag below and means the same thing
-by each of them.
+by each of them — with one deliberate exception: `esdev` grants every capability
+by default, and `esrun` grants none.
 
 ## Usage
 
 ```text
 esrun <file>                Run a JavaScript module file
 esrun -e=<code>             Run an inline module snippet
-esrun --deny-all            Run with no host access at all
-esrun --deny-<name>         Deny one capability; repeatable
-esrun --allow-<name>        Grant one back; requires --deny-all; repeatable
+esrun --allow-<name>        Grant one capability; repeatable
 esrun --allow-<name>=<list> Grant it narrowed to a list (seven of the nine)
+esrun --allow-all, -A       Grant everything (unsandboxed)
+esrun --deny-<name>         Take one back; requires --allow-all; repeatable
+esrun --deny-all            Grant nothing — the default, said outright
 esrun --import-policy=<file>
                             JSON policy for what may be loaded
 esrun -t=<ms>, --timeout=<ms>
@@ -66,9 +68,10 @@ script that genuinely wants a flag esrun also knows.
 | `-e=<code>, --eval=<code>` | Run an inline module snippet instead of a file. Everything after `<code>` is passed to the script as arguments. |
 | `-t=<ms>, --timeout=<ms>` | Watchdog: stop execution after `<ms>` milliseconds. Useful for bounding untrusted or long-running scripts. |
 | `--max-heap=<mb>` | Heap ceiling in megabytes for this agent, and the ceiling the workers it starts inherit. Default: the container's memory limit when there is one, else the host's memory. See [Memory](#memory). |
-| `--deny-all` | Run with no host access at all. Cannot be combined with `--deny-<name>`. See [Permissions](#permissions). |
-| `--deny-<name>` | Deny one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`. Cannot be combined with `--deny-all`. |
-| `--allow-<name>` | Grant one capability back; repeatable. Requires `--deny-all`. |
+| `--allow-<name>` | Grant one capability; repeatable. `<name>` is one of `read`, `write`, `imports`, `net`, `listen`, `env`, `run`, `signals`, `workers`. See [Permissions](#permissions). |
+| `--allow-all, -A` | Grant every capability. Cannot be combined with `--allow-<name>` or `--deny-all`. |
+| `--deny-<name>` | Take one capability back; repeatable. Requires `--allow-all`. |
+| `--deny-all` | Grant nothing — the default, said outright. Cannot be combined with `--allow-all`. |
 | `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — see `--import-policy` — and neither does `workers`, whose scope is set at the spawn. See [Scoped grants](#scoped-grants). |
 | `--import-policy=<file>` | A JSON file of `"allow"` and/or `"deny"` lists of package names and paths, bounding what the module loader may resolve. Never auto-discovered. A second layer, not a substitute for the `imports` capability. See [Import policy](#import-policy). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
@@ -99,38 +102,43 @@ esrun --env-file=.env app.js
 # Give in-flight requests 30s to finish after SIGTERM
 esrun --shutdown-grace=30000 server.js
 
-# Run with no host access at all
-esrun --deny-all app.js
+# Run with no host access at all — the default
+esrun app.js
 
-# Run with everything except the network and subprocesses
-esrun --deny-net --deny-run app.js
-
-# Start from nothing and grant back exactly what a server needs
-esrun --deny-all --allow-imports --allow-listen --allow-net server.js
+# Grant exactly what a server needs
+esrun --allow-imports --allow-listen --allow-net server.js
 
 # ...and narrow those grants to what it actually touches
-esrun --deny-all --allow-imports --allow-listen=8080 \
+esrun --allow-imports --allow-listen=8080 \
       --allow-net=db.internal:5432 --allow-env=PORT,DATABASE_URL \
       --allow-read=./public --allow-write=./var/log \
       --allow-signals=SIGTERM server.js
 
 # Bound what the module loader may resolve, too
-esrun --deny-all --allow-imports --import-policy=./import-policy.json server.js
+esrun --allow-imports --import-policy=./import-policy.json server.js
+
+# Grant everything except the network and subprocesses
+esrun --allow-all --deny-net --deny-run app.js
 ```
 
 ## Permissions
 
-esrun grants every capability by default. Two modes restrict a run, and they
-cannot be combined:
+**esrun grants nothing by default.** A run reaches what the command line that
+started it named, and nothing else. Two modes widen it, and they cannot be
+combined:
 
 | Mode | Baseline | Direction |
 | --- | --- | --- |
-| `--deny-<name>` | everything granted | subtractive only |
-| `--deny-all --allow-<name>` | nothing granted | additive only |
+| `--allow-<name>` | nothing granted (**the default**) | additive only |
+| `--allow-all --deny-<name>` | everything granted | subtractive only |
 
-`--allow-<name>` requires `--deny-all` — with everything already granted, there
-is nothing for it to add. Neither mode mixes directions, so no flag ever
-overrides another.
+`--deny-<name>` requires `--allow-all` — with nothing granted, there is nothing
+for it to take away. Neither mode mixes directions, so no flag ever overrides
+another.
+
+`--deny-all` restates the default, and is worth writing on a deploy line so a
+reader need not know which way a binary defaults. [esdev](/docs/esdev) defaults
+the other way — everything granted — and there `--allow-all` is the no-op.
 
 | Name | Covers |
 | --- | --- |
@@ -139,7 +147,7 @@ overrides another.
 | `imports` | `import "./x.js"`, `import "pkg"`, dynamic `import()` |
 | `net` | `fetch`, `WebSocket`, `runtime:net` connect, a UDP send |
 | `listen` | `runtime:net` listen and bind, `runtime:http` serve |
-| `env` | `runtime:process` env / args / cwd |
+| `env` | `runtime:process` env / cwd. Not `args`: that is the command line that started the program |
 | `run` | `runtime:system` child processes |
 | `signals` | `runtime:process` onSignal |
 | `workers` | `new Worker(...)` — what the worker itself may do is granted at the spawn |
@@ -149,9 +157,9 @@ effect happens. Importing a `runtime:` module always works — the gate is the
 operation, not the import.
 
 <Callout type="tip" title="Building the command for a real deployment">
-  [Securing Runtime](/docs/guides/securing-runtime) walks a working script from
-  `--deny-all` to a narrowed command, and explains how to read each denial back
-  to the flag that fixes it.
+  [Securing Runtime](/docs/guides/securing-runtime) walks a working script to a
+  narrowed command, and explains how to read each denial back to the flag that
+  fixes it. `esdev --trace-permissions app.js` does it in one command.
 </Callout>
 
 ### Scoped grants
@@ -161,7 +169,7 @@ narrows the grant instead of handing over the whole capability. `imports` is the
 exception — what may be *loaded* has [its own mechanism](#import-policy).
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -239,7 +247,7 @@ executing code is a different question, and it has its own mechanism —
 `--import-policy=<file>`, a JSON file named explicitly and never auto-discovered.
 
 ```sh
-esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+esrun --allow-imports --allow-net=db.internal:5432 \
       --import-policy=./import-policy.json server.js
 ```
 
@@ -267,10 +275,10 @@ package's own files and says nothing about the packages *it* imports, so a
 dependency cannot quietly bring another along. The entry file is exempt: it is
 read before a loader exists, and you named it.
 
-<Callout type="note" title="A policy is not a way around --deny-imports">
+<Callout type="note" title="A policy is not a way around a missing imports grant">
   Two layers, not two alternatives: the `imports` capability decides whether the
-  loader runs at all, the policy decides what it may resolve. Under
-  `--deny-all`, an allow entry still loads nothing.
+  loader runs at all, the policy decides what it may resolve. Without
+  `--allow-imports`, an allow entry still loads nothing.
 </Callout>
 
 <Callout type="warning" title="A policy names packages, not content">
@@ -289,16 +297,17 @@ tidiness: ignoring one leaves a run wider than the command line claims.
 | `--deny-run=git` | A denial is all-or-nothing — a scope narrows a *grant* |
 | `--allow-env=A,,B` | An empty entry in a scope list |
 | `--allow-net example.com` | A value never attaches as a separate word ([rule 1](#argument-grammar)) |
-| `esrun app.js --deny-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
-| `--allow-net` without `--deny-all` | Nothing to add to an already-granted baseline |
+| `esrun app.js --allow-net` | After the script it is the script's argument ([rule 2](#argument-grammar)) |
+| `--deny-net` without `--allow-all` | Nothing to take from an empty baseline |
 | `--allow-ffi` | Not one of the nine |
 | `--allow-workers=x` | `workers` is all-or-nothing; the scope is set at the spawn |
 | `--timeout 500` | Same rule 1 — this is the parser's grammar, not a permission rule |
 
-<Callout type="note" title="--deny-all alone runs a single file">
-  The entry file is read before the runtime exists, so `--deny-all` still runs
-  what you named. It includes `--deny-imports`, though, so add `--allow-imports`
-  for an app with dependencies. Query the policy from JS with
+<Callout type="note" title="With no flags, a run is a single file">
+  The entry file is read before the runtime exists, so a run with nothing granted
+  still runs what you named. `imports` is denied with everything else, though, so
+  add `--allow-imports` for an app with dependencies — or ship a bundle, which
+  has none left to resolve. Query the policy from JS with
   [`permissions`](/api/process).
 </Callout>
 

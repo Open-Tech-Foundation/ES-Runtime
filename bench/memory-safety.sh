@@ -42,7 +42,8 @@ LLRT="$(command -v llrt 2>/dev/null)"
   [ -x "$d" ] && { LLRT="$d"; break; }
 done
 [ -n "$LLRT" ] && { CMD[llrt]="$LLRT"; ORDER+=(llrt); }
-[ -x "$ESRUN" ] && { CMD[esrun]="$ESRUN"; ORDER+=(esrun); }
+# --allow-all, matching deno -A above.
+[ -x "$ESRUN" ] && { CMD[esrun]="$ESRUN --allow-all"; ORDER+=(esrun); }
 
 SCRIPTS=(mem_nested_json mem_large_string mem_promise_leak)
 

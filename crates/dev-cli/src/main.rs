@@ -7,10 +7,20 @@
 //! loop, and `esdev` is the binary that pays it.
 //!
 //! **It never changes what the JS sees.** Same prelude, same snapshot, same
-//! providers, same capability enforcement — all of it shared with `esrun`
+//! providers, same capability *enforcement* — all of it shared with `esrun`
 //! through `es-runtime-cli-common`, so a program cannot behave one way here and
 //! another in production. What `esdev` changes is everything *around* a run:
 //! watching, restarting, attaching, discovering, reporting, building.
+//!
+//! **One exception, and it is deliberate (D65): the default grant.** `esdev`
+//! starts from every capability, `esrun` from none. Enforcement is the same code
+//! either way — what differs is only where a command line with no permission
+//! flags starts, because an inner loop that dies on an unnamed capability at
+//! every save is the cost D59 put on this binary to avoid. The gap is what
+//! `--trace-permissions` closes: it prints the `esrun` line that grants exactly
+//! what the run reached for. `esdev start` is narrower still — it spawns the
+//! child under `esdev.json`'s `permissions`, so the dev loop runs under the
+//! production grant.
 //!
 //! Argument grammar is `esrun`'s, unchanged: every flag is `--flag` or
 //! `--flag=value` — a value is never a separate argument — and esdev's flags
@@ -25,7 +35,7 @@ use es_runtime_cli_common::args::{
     RunOptions, reject_value, require_value, split_flag_value, try_permission_flag,
 };
 use es_runtime_cli_common::diagnostics::print_error;
-use es_runtime_cli_common::permissions::Permissions;
+use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 
 mod build;
@@ -135,7 +145,7 @@ PERMISSIONS:
     --trace-permissions         Watch every capability the run reaches for, and
                                 print the esrun line that grants exactly those:
 
-                                  esrun --deny-all --allow-read --allow-net app.js
+                                  esrun --allow-read --allow-net app.js
 
     What it records is the check itself, so it reports what the program *used*
     rather than what it was given — including the ones it asked for and was
@@ -166,9 +176,15 @@ TYPESCRIPT & JSX:
     \"runtime:fs\"`. Types are for your editor and `tsc --noEmit`; esdev never
     checks them.
 
-RUN OPTIONS (identical to esrun — a program behaves the same under both):
-    --deny-all                  Run with no host access at all
+RUN OPTIONS (the same flags esrun takes, with one deliberate difference):
+    esdev grants every capability by default; esrun grants none. The vocabulary,
+    the scope lists and the rules are identical — only the starting point
+    differs, so that the inner loop needs no flags and a deployment states what
+    it may reach. --trace-permissions turns one into the other.
+
+    --allow-all, -A             Grant everything — the default, said outright
     --deny-<name>               Deny one capability; repeatable
+    --deny-all                  Run with no host access at all, as esrun does
     --allow-<name>[=<list>]     Grant one back, optionally narrowed to a list;
                                 requires --deny-all. <name> is one of: read,
                                 write, imports, net, listen, env, run, signals,
@@ -231,7 +247,7 @@ WHAT YOU GET
     A project with its esdev.json written, its entry named by the script tag in
     its index.html, and a deploy line that is already narrow:
 
-        esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js
+        esrun --allow-read=./dist --allow-listen=8080 dist/server.js
 
     Then:
 
@@ -397,8 +413,8 @@ APPLICATION (the default)
     --allow-imports so the loader can walk node_modules; a bundle has no imports
     left to resolve:
 
-        esrun --deny-all --allow-imports --allow-listen=8080 app.js   # unbundled
-        esrun --deny-all --allow-listen=8080 dist/app.js              # bundled
+        esrun --allow-imports --allow-listen=8080 app.js  # unbundled
+        esrun --allow-listen=8080 dist/app.js             # bundled
 
 LIBRARY (--lib)
     A library is not the end of the line — it is an input to somebody else's
@@ -478,7 +494,7 @@ fn parse_args() -> Result<Command, String> {
     }
 
     let mut options = RunOptions::default();
-    let mut permissions = Permissions::default();
+    let mut permissions = Permissions::new(Baseline::Everything);
     let mut watching = false;
     let mut inspect: Option<InspectConfig> = None;
     let mut tracing_permissions = false;

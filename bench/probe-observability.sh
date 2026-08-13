@@ -90,7 +90,7 @@ probe() {
 
     case "$rt" in
       esrun) "${env_prefix[@]}" env CERT="$(cat "$WORK/cert.pem")" KEY="$(cat "$WORK/key.pem")" \
-               "$ESRUN" "$WORK/esrun.mjs" >"$WORK/$rt.$mode.out" 2>"$WORK/$rt.$mode.err" & ;;
+               "$ESRUN" --allow-all "$WORK/esrun.mjs" >"$WORK/$rt.$mode.out" 2>"$WORK/$rt.$mode.err" & ;;
       node)  "${env_prefix[@]}" env CERT="$(cat "$WORK/cert.pem")" KEY="$(cat "$WORK/key.pem")" \
                node "$WORK/node.mjs" >"$WORK/$rt.$mode.out" 2>"$WORK/$rt.$mode.err" & ;;
       deno)  "${env_prefix[@]}" env CERT="$(cat "$WORK/cert.pem")" KEY="$(cat "$WORK/key.pem")" \

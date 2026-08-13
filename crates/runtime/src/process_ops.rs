@@ -1,6 +1,6 @@
 //! Host ops backing `runtime:process` (DECISIONS D24): environment, arguments,
 //! working directory, platform, exit, and permission introspection. The ones
-//! reading process *state* — env, args, cwd — are gated on
+//! reading process *state* — env, cwd — are gated on
 //! [`Capability::Env`](es_runtime_common::Capability::Env); the security
 //! boundary is the op, not the JS module (D7, D38) — and dispatch to the
 //! injected [`Process`] provider. `process_exit` records the code and halts
@@ -12,12 +12,13 @@
 //! watch suppresses the signal's default action, so it is the privilege to
 //! decline to die on request rather than a read of process state.
 //!
-//! **Ungated here** (D38): `process_platform`/`process_arch` return
+//! **Ungated here** (D38, D65): `process_platform`/`process_arch` return
 //! `std::env::consts` values — compile-time constants of the binary the guest is
-//! already running, not host state — and `process_permissions_denied` reports
-//! only what the guest could discover anyway by calling ops and catching the
-//! denials. Gating those would make `runtime:process` unimportable under
-//! `--deny-env`, which D26 forbids.
+//! already running, not host state; `process_args` is the command line that
+//! started this program, which is the same line the permission flags are on; and
+//! `process_permissions_denied` reports only what the guest could discover
+//! anyway by calling ops and catching the denials. Gating those would make
+//! `runtime:process` unimportable under `--deny-env`, which D26 forbids.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -73,16 +74,20 @@ pub(crate) fn install(
         .requires(Capability::Env),
     )?;
 
+    // Ungated (D65), where it used to require `Env`. The arguments are the
+    // command line the user typed to start *this* program — the same line the
+    // permission flags are on — not a read of host state the flags exist to
+    // withhold. Under D38's permissive default the gate cost nothing; under
+    // D65's it would mean any script reading its own argv had to be handed
+    // `--allow-env`, and with it the entire environment. Node and Deno both
+    // leave argv ungated for this reason.
     let p = process.clone();
-    engine.register_op(
-        OpDecl::sync("process_args", move |_args| {
-            let proc = require(&p)?;
-            Ok(Value::Array(
-                proc.args().into_iter().map(Value::String).collect(),
-            ))
-        })
-        .requires(Capability::Env),
-    )?;
+    engine.register_op(OpDecl::sync("process_args", move |_args| {
+        let proc = require(&p)?;
+        Ok(Value::Array(
+            proc.args().into_iter().map(Value::String).collect(),
+        ))
+    }))?;
 
     let p = process.clone();
     engine.register_op(

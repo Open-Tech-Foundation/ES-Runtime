@@ -30,47 +30,55 @@ The resource-limit / FFI-safety spine (SPEC.md §4) is in place as of Phase 9:
 marshaler), sanitizer CI (Miri/ASAN), a WPT/min-common conformance run, a
 systematic intrinsic-integrity (prototype-pollution) audit, and an external
 security review. **Until those land, do not run hostile/untrusted code** with
-`esrun`, `--deny-all` or not; the embeddable library lets an embedder restrict
+`esrun`, sandboxed or not; the embeddable library lets an embedder restrict
 capabilities and inject its own providers.
 
-## Restricting an `esrun` run (`--deny-all` / `--deny-<name>`)
+## Granting an `esrun` run (`--allow-<name>` / `--allow-all`)
 
-`esrun` grants every capability by default — it runs a local script the user
-named. Restriction is opt-in (DECISIONS D38), and there are exactly two modes,
-which **cannot be combined**:
+**`esrun` grants nothing by default** (DECISIONS D65). A run reaches what the
+command line that started it named, and nothing else. There are exactly two
+modes, which **cannot be combined**:
 
 ```sh
-esrun --deny-net --deny-run app.js                     # everything, minus these
-esrun --deny-all --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-imports --allow-net app.js    # nothing, plus these
+esrun --allow-all --deny-run app.js         # everything, minus these
 ```
 
 | Mode | Baseline | Direction |
 |---|---|---|
-| `--deny-<name>` | everything granted | subtractive only |
-| `--deny-all --allow-<name>` | nothing granted | additive only |
+| `--allow-<name>` | nothing granted (**the default**) | additive only |
+| `--allow-all --deny-<name>` | everything granted | subtractive only |
 
-`--allow-<name>` requires `--deny-all`: with everything already granted there is
-nothing for it to add. Because neither mode mixes directions, **no flag ever
-overrides another** — a reader goes top to bottom and the list is the answer.
+`--deny-<name>` requires `--allow-all`: with nothing granted there is nothing for
+it to take away. Because neither mode mixes directions, **no flag ever overrides
+another** — a reader goes top to bottom and the list is the answer.
 
-The eight names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
-`signals` — the same words the `runtime:process` `permissions` API and the
-denial message use. A denied operation throws `NotAllowedError`
+`--deny-all` is accepted and restates the default. It is worth writing on a
+deploy line: a reader should not have to know which way a binary defaults to
+know what a service was granted. (`esdev`, the development binary, defaults the
+other way — everything granted — and there `--allow-all` is the no-op.)
+
+The nine names are `read`, `write`, `imports`, `net`, `listen`, `env`, `run`,
+`signals`, `workers` — the same words the `runtime:process` `permissions` API and
+the denial message use. A denied operation throws `NotAllowedError`
 (`ERR_CAPABILITY_DENIED`) **before** the effect, never a partial one.
 
 The parser is strict on purpose: a space-separated value, a permission
 flag placed after the script, or an unknown name is an **error**. Each of those, ignored,
 would leave a run wider than the command line claims.
 
-Two things `--deny-all` does *not* do, both deliberate:
+Two things the default does *not* do, both deliberate:
 
 - **It still runs the entry file.** That file is read by the CLI before a
   runtime exists, so it is outside the capability system — the user named it,
-  and the flags govern what it may then do. Since `--deny-all` includes
-  `--deny-imports`, a fully denied run is a **single-file** run; add
-  `--allow-imports` for an application with dependencies.
+  and the flags govern what it may then do. Since the default denies `imports`,
+  a run with no flags is a **single-file** run; add `--allow-imports` for an
+  application with dependencies.
 - **It does not revoke `Clock`/`Entropy`/`Timers`/`TaskSpawn`.** No op gates
   them; a denied script still computes, it just reaches nothing.
+
+Reaching the right flag set is one command: `esdev --trace-permissions app.js`
+runs the program and prints the `esrun` line that grants exactly what it used.
 
 Importing a `runtime:` module always works, under any policy — the gate is the
 op, not the import. A program can ask what it is allowed to do:
@@ -81,11 +89,11 @@ permissions.denied;          // ["read", "write", ...]
 permissions.has("net");      // false
 ```
 
-**Seven of the eight can be scoped to a list.** (`imports` is the exception —
+**Seven of the nine can be scoped to a list.** (`imports` is the exception —
 what may be *loaded* has its own mechanism, below.)
 
 ```sh
-esrun --deny-all --allow-imports --allow-env=PORT,DATABASE_URL \
+esrun --allow-imports --allow-env=PORT,DATABASE_URL \
       --allow-net=db.internal:5432 --allow-listen=8080 \
       --allow-read=./data --allow-write=./out --allow-run=git \
       --allow-signals=SIGTERM server.js
@@ -129,7 +137,7 @@ code is a separate question, and has a separate mechanism (DECISIONS D39) — a
 JSON file, named explicitly and never auto-discovered:
 
 ```sh
-esrun --deny-all --allow-imports --allow-net=db.internal:5432 \
+esrun --allow-imports --allow-net=db.internal:5432 \
       --import-policy=./import-policy.json server.js
 ```
 
@@ -155,8 +163,8 @@ before a loader exists.
 
 The two layers do not substitute for each other. The `imports` capability
 decides whether the loader runs at all; the policy decides what it may resolve.
-A policy is **not a way around `--deny-imports`** — under `--deny-all`, an allow
-entry still loads nothing.
+A policy is **not a way around a missing `imports` grant** — without
+`--allow-imports`, an allow entry still loads nothing.
 
 **Known gap: no integrity.** A policy names packages and paths, not content.
 `"express"` says the loader may resolve that package; it says nothing about
@@ -205,8 +213,7 @@ the agent that started it (DECISIONS D48/D49):
   at every level, so no chain of spawns widens the original grant. This is
   stricter than Deno, which clones the parent's permissions unmodified.
 - **Two grants are needed to spawn at all**, not one: `workers`, and `imports`
-  to read the worker's entry module. `--deny-all --allow-workers` alone is
-  refused. Node requires `--allow-fs-read` alongside `--allow-worker` for the
+  to read the worker's entry module. `--allow-workers` alone is refused. Node requires `--allow-fs-read` alongside `--allow-worker` for the
   same reason; Deno requires `--allow-read`.
 - **The entry module is read under the parent's authority, before the worker
   exists**, and the capability set narrows to the worker's own before a line of

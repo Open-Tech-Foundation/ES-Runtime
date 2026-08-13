@@ -113,7 +113,7 @@ probe() {
     esrun)
       [ -x "$ESRUN" ] || { echo '{}'; return; }
       esrun_fixture "$port" > "$WORK/esrun-$kind-$port.mjs"
-      "$ESRUN" "$WORK/esrun-$kind-$port.mjs" >/dev/null 2>&1 & pid=$! ;;
+      "$ESRUN" --allow-all "$WORK/esrun-$kind-$port.mjs" >/dev/null 2>&1 & pid=$! ;;
   esac
   sleep 2
   out="$(node "$script" "$port" "$CAP" 2>/dev/null)"

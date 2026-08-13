@@ -1,9 +1,13 @@
-// Runs a subset of the Web Platform Tests under esrun:
+// Runs a subset of the Web Platform Tests under esrun. It reads the tests,
+// writes expectations.json, imports its harness and spawns real workers, so
+// (esrun granting nothing by default) it needs all four:
 //
-//     esrun wpt/run.js                       # every mode, summary only
-//     esrun wpt/run.js --mode=worker -v      # only inside real workers, verbose
-//     esrun wpt/run.js --filter=Channel      # substring match on the test path
-//     esrun wpt/run.js --update-expectations # re-record expectations.json
+//     wpt="esrun --allow-read --allow-write --allow-imports --allow-workers"
+//
+//     $wpt wpt/run.js                        # every mode, summary only
+//     $wpt wpt/run.js --mode=worker -v       # only inside real workers, verbose
+//     $wpt wpt/run.js --filter=Channel       # substring match on the test path
+//     $wpt wpt/run.js --update-expectations  # re-record expectations.json
 //
 // The curated `crates/runtime/conformance` suite states spec behaviour in our
 // own words. This runs the upstream tests unmodified, which is the only way to

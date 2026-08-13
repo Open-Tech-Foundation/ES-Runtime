@@ -97,7 +97,7 @@ exit();              // defaults to 0
 
 ## permissions — what this run may reach
 
-Fixed at launch by [esrun's denial flags](/api/cli#permissions), so
+Fixed at launch by [esrun's permission flags](/api/cli#permissions), so
 `has()` is a synchronous boolean: there is nothing to request and no prompt to
 await.
 
@@ -117,7 +117,7 @@ if (permissions.has("write")) await fs.write("cache.json", data);
 
 `PermissionName` is `"read"`, `"write"`, `"imports"`, `"net"`, `"listen"`,
 `"env"`, `"run"`, `"signals"` — the same words the `--deny-<name>` flags use.
-Needs no capability, so it answers under `--deny-all` too.
+Needs no capability, so it answers with everything denied too.
 
 A [scoped grant](/api/cli#scoped-grants) reports `true`: `--allow-env=PORT`
 grants the `env` capability and narrows what it yields, so `has("env")` means

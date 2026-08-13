@@ -64,8 +64,16 @@ jobs:
       # real process exit. It exits non-zero on any failure. One platform is
       # enough — this checks the driver, not platform semantics — and the binary
       # is already built by the step above.
+      #
+      # The grants are named because esrun grants nothing (D65), and they are
+      # named rather than replaced by --allow-all deliberately: this suite runs
+      # the same way a deployment does, so a new test that needs the network
+      # should have to say so here.
       - if: matrix.os == 'ubuntu-latest'
-        run: cargo run -p es-runtime-cli -- crates/runtime/conformance/run.js
+        run: >
+          cargo run -p es-runtime-cli --
+          --allow-read --allow-write --allow-imports
+          crates/runtime/conformance/run.js
 
   # The pure-JS half of `runtime:serialization` (the Protobuf implementation) is
   # written in TypeScript under crates/runtime/js and bundled into the embedded

@@ -8,13 +8,43 @@ are recorded here. The format follows
 a tool rather than a contract, and its command line moves at its own pace. The
 runtime it runs your program on is `esrun`'s — same prelude, same snapshot, same
 providers, same capability enforcement — so what changes here is everything
-*around* a run, never what the JS sees. See the root
-[CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
+*around* a run, never what the JS sees. The one deliberate difference is the
+default grant: `esdev` starts from every capability and `esrun` from none
+(DECISIONS D65), so that an inner loop needs no flags and a deployment states
+what it may reach. See the root [CHANGELOG.md](../../CHANGELOG.md) for the
+runtime itself.
 
 `esdev` is **not a deployment target**: ship the artifact and run it under
 `esrun`, which has no development surface to attack.
 
 ## [Unreleased]
+
+### Changed
+
+- **`esrun` now grants nothing by default; `esdev` still grants everything**
+  (DECISIONS D65). This is the one place the two binaries differ, and it is
+  deliberate: a dev loop that dies on an unnamed capability at every `--watch`
+  save is the friction D59 put this binary here to absorb. The flags, scope
+  lists, rules and error text are one implementation in
+  `es-runtime-cli-common`, parameterised by a single baseline.
+
+  `--allow-all` / `-A` is accepted here and restates the default, mirroring
+  `--deny-all` on `esrun`. `--allow-<name>` still requires `--deny-all`, because
+  against "everything granted" there is nothing for it to add.
+
+- **`--trace-permissions` prints a shorter line.** It used to emit
+  `esrun --deny-all --allow-read --allow-net app.js`; the `--deny-all` is now a
+  no-op, so it emits `esrun --allow-read --allow-net app.js`. This is the
+  command that closes the gap between the two defaults — run it once and paste
+  the result into your deploy line.
+
+- **`esdev.json`'s `permissions` is validated as the deploy grant.** A block with
+  only grants — `{"allow": {"read": ["./dist"]}}` — is now valid on its own,
+  where it used to need `"deny": ["all"]` beside it. The flags handed to the
+  `esdev start` child carry an explicit `--deny-all`/`--allow-all`, so the block
+  means the same thing whichever binary reads it. `"deny": ["all"]` still
+  parses; the React template drops it. A block that subtracts writes
+  `"allow": {"all": true}` alongside its denials.
 
 ## [0.1.0] - 2026-08-13
 

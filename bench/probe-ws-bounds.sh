@@ -162,7 +162,7 @@ measure() {
 
 run() {
   case "$1" in
-    esrun) exec "$ESRUN" "$WORK/esrun.mjs" ;;
+    esrun) exec "$ESRUN" --allow-all "$WORK/esrun.mjs" ;;
     node)  exec node "$WORK/node.mjs" ;;
     deno)  exec deno run -A "$WORK/deno.mjs" ;;
     bun)   exec bun "$WORK/bun.mjs" ;;

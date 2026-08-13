@@ -37,8 +37,8 @@ An unbundled program needs `--allow-imports`, because the loader walks
 `node_modules` at runtime. A bundle has **no imports left to resolve**:
 
 ```sh
-esrun --deny-all --allow-imports --allow-listen=8080 app.js   # unbundled
-esrun --deny-all --allow-listen=8080 dist/app.js              # bundled
+esrun --allow-imports --allow-listen=8080 app.js  # unbundled
+esrun --allow-listen=8080 dist/app.js             # bundled
 ```
 
 The build is a security step, not only a packaging one.
@@ -197,7 +197,7 @@ with no filesystem or import access at all:
 
 ```sh
 esdev build server.tsx --out=dist/server.js --minify
-esrun --deny-all --allow-listen=8080 dist/server.js
+esrun --allow-listen=8080 dist/server.js
 ```
 
 # Libraries: `--lib`

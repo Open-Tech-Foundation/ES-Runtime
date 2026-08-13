@@ -1,5 +1,5 @@
-//! End-to-end tests for `--deny-all` / `--deny-<name>` and the `permissions`
-//! introspection they back (DECISIONS D38).
+//! End-to-end tests for the `--allow-*` / `--deny-*` grammar and the
+//! `permissions` introspection it backs (DECISIONS D38, D65).
 //!
 //! These spawn the real `esrun` binary, so the flag parser, the capability set
 //! it computes, the op-dispatch gate, and the `runtime:process` JS surface are
@@ -38,17 +38,65 @@ fn run(flags: &[&str], code: &str) -> Output {
         .expect("spawn esrun")
 }
 
-// ---- the default: nothing is denied -----------------------------------------
+// ---- the default: nothing is granted -----------------------------------------
 
 #[test]
-fn every_capability_is_granted_by_default() {
-    // esrun is permissive by default and stays that way; the sandbox is opt-in.
+fn nothing_is_granted_by_default() {
+    // esrun is deny-by-default (D65): a run reaches what the command line named
+    // and nothing else, so a line with no permission flag denies all nine.
     let out = run(
         &[],
+        "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim(),
+        "read,write,imports,net,listen,env,run,signals,workers"
+    );
+}
+
+#[test]
+fn allow_all_grants_every_capability() {
+    // The other end of the same line, and the only way to get the pre-D65
+    // default back.
+    let out = run(
+        &["--allow-all"],
         "import { permissions } from 'runtime:process'; console.log(JSON.stringify(permissions.denied));",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "[]");
+
+    // `-A` is the same flag.
+    let short = run(
+        &["-A"],
+        "import { permissions } from 'runtime:process'; console.log(JSON.stringify(permissions.denied));",
+    );
+    assert_eq!(stdout(&short).trim(), "[]");
+}
+
+#[test]
+fn deny_all_restates_the_default() {
+    // Kept, and deliberately a no-op: a deploy line that says `--deny-all`
+    // outright is stating the grant it expects rather than trusting the reader
+    // to know which way this binary defaults.
+    let bare = run(
+        &[],
+        "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
+    );
+    let explicit = run(
+        &["--deny-all"],
+        "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
+    );
+    assert!(explicit.status.success(), "stderr: {}", stderr(&explicit));
+    assert_eq!(stdout(&bare), stdout(&explicit));
+}
+
+#[test]
+fn allow_all_and_deny_all_are_mutually_exclusive() {
+    let out = run(&["--allow-all", "--deny-all"], "console.log(1)");
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(err.contains("--allow-all and --deny-all disagree"), "{err}");
 }
 
 // ---- --deny-all --------------------------------------------------------------
@@ -133,7 +181,7 @@ fn import_meta_resolve_is_denied_with_the_loader() {
 #[test]
 fn a_granular_flag_denies_only_its_own_capability() {
     let out = run(
-        &["--deny-net"],
+        &["--allow-all", "--deny-net"],
         "import { permissions } from 'runtime:process'; \
          console.log(permissions.denied.join(','), permissions.has('read'));",
     );
@@ -150,7 +198,7 @@ fn workers_is_a_permission_name_like_any_other() {
     // `workers` is not a permission — while `denied` listed it, since that
     // comes from the Rust side.
     let out = run(
-        &["--deny-workers"],
+        &["--allow-all", "--deny-workers"],
         "import { permissions } from 'runtime:process'; \
          console.log(permissions.has('workers'), permissions.denied.join(','));",
     );
@@ -158,7 +206,7 @@ fn workers_is_a_permission_name_like_any_other() {
     assert_eq!(stdout(&out).trim(), "false workers");
 
     let granted = run(
-        &[],
+        &["--allow-workers"],
         "import { permissions } from 'runtime:process'; \
          console.log(permissions.has('workers'));",
     );
@@ -168,7 +216,7 @@ fn workers_is_a_permission_name_like_any_other() {
 #[test]
 fn granular_flags_accumulate() {
     let out = run(
-        &["--deny-net", "--deny-run", "--deny-write"],
+        &["--allow-all", "--deny-net", "--deny-run", "--deny-write"],
         "import { permissions } from 'runtime:process'; console.log(permissions.denied.join(','));",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
@@ -189,7 +237,11 @@ fn deny_read_leaves_imports_working() {
          try { await fs.readDir('.'); console.log('NOT DENIED'); } \
          catch (e) { console.log('read denied:', e.name); }",
     );
-    let out = esrun().arg("--deny-read").arg(&app).output().unwrap();
+    let out = esrun()
+        .args(["--allow-all", "--deny-read"])
+        .arg(&app)
+        .output()
+        .unwrap();
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     assert!(s.contains("imported 7"), "{s}");
@@ -215,18 +267,18 @@ fn a_datagram_socket_is_checked_against_both_grants() {
         console.log(r);";
 
     // `net` denied: the port is still bindable, the datagram is not sendable.
-    let out = run(&["--deny-net"], bind_and_send);
+    let out = run(&["--allow-all", "--deny-net"], bind_and_send);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "BIND:ok:SEND:NotAllowedError");
 
     // `listen` denied: there is no socket to send from in the first place.
-    let out = run(&["--deny-listen"], bind_and_send);
+    let out = run(&["--allow-all", "--deny-listen"], bind_and_send);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "BIND:NotAllowedError");
 
-    // Both granted (the default): it works, which is what makes the two
-    // denials above evidence of the gate rather than of a broken example.
-    let out = run(&[], bind_and_send);
+    // Both granted, and named: it works, which is what makes the two denials
+    // above evidence of the gate rather than of a broken example.
+    let out = run(&["--allow-net", "--allow-listen"], bind_and_send);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(stdout(&out).trim(), "BIND:ok:SEND:ok");
 }
@@ -345,13 +397,14 @@ fn allow_imports_makes_deny_all_usable_for_a_multi_file_app() {
 }
 
 #[test]
-fn allow_requires_deny_all() {
-    // Rule 2: against the default baseline an allow is a no-op or a
-    // contradiction, so it is rejected rather than silently doing nothing.
-    let out = run(&["--allow-net"], "console.log('ran')");
+fn deny_requires_allow_all() {
+    // Rule 2, now pointing the other way (D65): against the default baseline —
+    // nothing granted — a denial is a no-op or a contradiction, so it is
+    // rejected rather than silently doing nothing.
+    let out = run(&["--deny-net"], "console.log('ran')");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("--allow-net requires --deny-all"),
+        stderr(&out).contains("--deny-net requires --allow-all"),
         "stderr: {}",
         stderr(&out)
     );
@@ -359,12 +412,12 @@ fn allow_requires_deny_all() {
 
 #[test]
 fn allow_cannot_be_mixed_with_granular_denials() {
-    // `--deny-read --allow-net` has no --deny-all, so rule 2 catches it: the two
-    // directions never appear on one command line.
-    let out = run(&["--deny-read", "--allow-net"], "console.log('ran')");
+    // `--allow-net --deny-read` has no --allow-all, so rule 2 catches it: the
+    // two directions never appear on one command line.
+    let out = run(&["--allow-net", "--deny-read"], "console.log('ran')");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("requires --deny-all"),
+        stderr(&out).contains("requires --allow-all"),
         "stderr: {}",
         stderr(&out)
     );
@@ -505,11 +558,13 @@ fn a_double_dash_lets_a_script_take_the_argument_itself() {
 }
 
 #[test]
-fn allow_all_points_at_the_default() {
-    let out = run(&["--allow-all"], "console.log(1)");
+fn an_allow_beside_allow_all_is_rejected() {
+    // The permissive mode's own rule 2: --allow-all already granted everything
+    // --allow-net would, so the pair is a contradiction rather than a narrowing.
+    let out = run(&["--allow-all", "--allow-net"], "console.log(1)");
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("there is no --allow-all"),
+        stderr(&out).contains("--allow-all cannot be combined with --allow-net"),
         "stderr: {}",
         stderr(&out)
     );
@@ -572,7 +627,7 @@ fn deny_env_leaves_exit_and_permissions_working() {
     // Denying `env` must deny reading the environment — not the unrelated
     // ability to exit, nor the ability to ask what is denied.
     let out = run(
-        &["--deny-env"],
+        &["--allow-all", "--deny-env"],
         "import { env, exit, permissions, platform } from 'runtime:process'; \
          console.log('platform', typeof platform === 'string'); \
          console.log('denied', permissions.denied.join(',')); \
@@ -1057,7 +1112,11 @@ fn run_with_policy(root: &PathBuf, policy: &str, flags: &[&str]) -> Output {
 #[test]
 fn an_import_policy_allow_list_admits_named_packages_and_paths() {
     let root = import_project("policy_allow");
-    let out = run_with_policy(&root, r#"{ "allow": ["./src", "good"] }"#, &[]);
+    let out = run_with_policy(
+        &root,
+        r#"{ "allow": ["./src", "good"] }"#,
+        &["--allow-imports"],
+    );
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     // The entry file is exempt — it is read before a loader exists, and the
@@ -1072,7 +1131,7 @@ fn an_import_policy_without_an_allow_list_only_denies() {
     // The shape for excluding a handful of packages without enumerating the
     // whole graph.
     let root = import_project("policy_deny_only");
-    let out = run_with_policy(&root, r#"{ "deny": ["evil"] }"#, &[]);
+    let out = run_with_policy(&root, r#"{ "deny": ["evil"] }"#, &["--allow-imports"]);
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     let s = stdout(&out);
     assert!(s.contains("loaded 1 good"), "{s}");
@@ -1287,16 +1346,16 @@ fn granting_a_capability_whole_and_narrowed_at_once_is_an_error() {
 }
 
 #[test]
-fn a_scoped_allow_still_requires_deny_all() {
-    // Rule 2 is unchanged by scoping: against "everything granted" there is
-    // nothing for an allow to add.
-    let out = run(&["--allow-env=HOME"], "console.log(1)");
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("--allow-env=HOME requires --deny-all"),
-        "stderr: {}",
-        stderr(&out)
+fn a_scoped_allow_needs_no_mode_flag() {
+    // The line that D65 exists to make writable: a grant, narrowed, and nothing
+    // else on it. Everything not named stays denied.
+    let out = run(
+        &["--allow-env=HOME"],
+        "import { permissions, env } from 'runtime:process'; \
+         console.log(permissions.has('env'), typeof env.HOME, permissions.has('net'));",
     );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out).trim(), "true string false");
 }
 
 // ---- the permissions API itself ----------------------------------------------
@@ -1338,7 +1397,7 @@ fn has_rejects_a_name_outside_the_vocabulary() {
 fn permissions_agrees_with_what_actually_throws() {
     // The API is only worth having if `has(x) === false` predicts the denial.
     let out = run(
-        &["--deny-write"],
+        &["--allow-all", "--deny-write"],
         "import { permissions } from 'runtime:process'; \
          import fs from 'runtime:fs'; \
          const allowed = permissions.has('write'); \
