@@ -658,6 +658,22 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D64 — `esdev create`: templates in the binary, and a scaffolder that owns nothing · *Proposed (2026-08-13)*
+
+**Context:** D60–D63 produced a toolchain and a template, and no way to get from one to the other. The gap is not that the template is hard to write — it is that writing it *correctly* is tedious in a way that produces a specific failure: the permission line. A developer assembling this by hand reaches a demo fastest by running with everything granted, and the narrow line is then a thing to add later, which is a thing never added. A scaffolded project starts narrow.
+
+**Decision (maintainer sign-off pending):**
+
+- **The templates are embedded at build time**, by a build script that walks `crates/dev-cli/templates` and emits an `include_bytes!` table. `create` therefore works offline, on a machine with no registry access, and always writes a project the `esdev` that wrote it can build — a fetching scaffolder can hand you something the binary was never tested against, and this project's non-goal on remote module imports is the same argument in a different place. Bytes rather than strings so a template may hold a favicon or a font; the `{{name}}` substitution is attempted only on files that are valid UTF-8. What a *running* template leaves behind (`node_modules`, `dist`, a lockfile) is skipped by the build script and asserted absent by a test: embedding an installed `node_modules` would put tens of megabytes of somebody else's code in this binary, and nothing about the build would complain.
+- **It writes files and stops** — no install, no `git init`, no prompts. There is no lockfile yet to say which package manager the project uses, so an install would be a guess that leaves a `package-lock.json` in a bun project; a package installer is a stated non-goal besides. No prompts because every other command here is a flag grammar that works in a script, and a scaffolder that stops to ask cannot be one.
+- **It never overwrites, and `--force` does not mean overwrite.** `esdev build --lib` empties its output directory because the build owns it (D59); this owns nothing — the directory it writes into may be a project somebody has worked in for a year. So a non-empty target is refused, and `--force` writes *among* what is there while still leaving every existing file alone, reporting which ones it left.
+- **`_gitignore` is written as `.gitignore`.** Not cosmetic: as itself it would apply to the template *in this repository*, which would untrack the file it means to ship. npm's packaging has the same problem and the same fix.
+- **The name comes from the directory**, into `package.json` and the document's `<title>`, sanitised — a directory called `My App` would otherwise produce a manifest every package manager rejects, on the first command the user runs.
+
+**Consequences:** `esdev create my-app && cd my-app && npm install && npm run dev` is the whole path from nothing to a running server-rendered React app, and the deploy line at the end of it is `--deny-all --allow-read=./dist --allow-listen=8080`. Verified by scaffolding into a scratch directory and then installing, testing, building and running what came out — including the static build and the hashed assets. **Not solved here:** more templates (hono, elysia and a Remix-style one are the reason the `--template` flag exists at all); a `--pm` flag or lockfile detection, since there is nothing yet to detect; and `create` cannot tell a user their `esdev` is older than the template they want, because there is only one source of both.
+
+---
+
 ### D63 — A React template that is a real project, and the three ways to ship it from one build · *Proposed (2026-08-13)*
 
 **Context:** D60–D62 built the machinery — targets, an HTML entry, a dev loop — and the thing they were for did not exist. The stack asked for was "a generic React fullstack app with SSR, SSG and SPA builds", and the question that had to be answered first is whether that is one template or three. It is one, and the reason is mechanical rather than aesthetic: the three differ only in **when** the render happens (per request, at build time, in the browser), and a project that expressed that as three codebases would have three renderers to keep in agreement.

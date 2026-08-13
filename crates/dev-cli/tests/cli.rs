@@ -2305,3 +2305,129 @@ fn a_failed_build_leaves_the_running_server_alone() {
     stop_supervisor(&mut child);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// `esdev create` (DECISIONS D64)
+//
+// The command whose output is somebody else's starting point, so what is worth
+// testing is that the project it writes actually works — and that the command
+// cannot damage a directory somebody already had something in.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_writes_a_project_that_builds_and_runs() {
+    let parent = watch_dir("c_project");
+    let dir = parent.join("weather-app");
+
+    let out = esdev_in(&parent)
+        .args(["create", "weather-app"])
+        .output()
+        .expect("spawn esdev create");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("npm install"), "{}", stdout(&out));
+
+    // The name comes from the directory, into the manifest and the document.
+    let manifest = std::fs::read_to_string(dir.join("package.json")).expect("read package.json");
+    assert!(manifest.contains(r#""name": "weather-app""#), "{manifest}");
+    assert!(!manifest.contains("{{name}}"), "a placeholder survived");
+    let document = std::fs::read_to_string(dir.join("index.html")).expect("read index.html");
+    assert!(
+        document.contains("<title>weather-app</title>"),
+        "{document}"
+    );
+
+    // `_gitignore` is written under the name it has to have — as itself, it
+    // would apply to the template in this repository.
+    assert!(dir.join(".gitignore").is_file(), "no .gitignore");
+    assert!(
+        !dir.join("_gitignore").exists(),
+        "_gitignore was written as-is"
+    );
+
+    // Nothing a local build or install left behind is in the binary.
+    assert!(!dir.join("node_modules").exists());
+    assert!(!dir.join("dist").exists());
+
+    // The tests it ships pass, which is the smallest end-to-end claim that
+    // does not need a package registry.
+    let tested = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        tested.status.success(),
+        "the template's own tests failed:\n{}{}",
+        stdout(&tested),
+        stderr(&tested)
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// It owns nothing it writes into, so a directory with anything in it is
+/// refused — and `--force` means "write among what is there", never over it.
+#[test]
+fn create_refuses_a_directory_that_holds_something() {
+    let parent = watch_dir("c_refuse");
+    let dir = parent.join("taken");
+    std::fs::create_dir_all(&dir).expect("create dir");
+    write_in(&dir, "package.json", "{ \"name\": \"mine\" }\n");
+
+    let refused = esdev_in(&parent)
+        .args(["create", "taken"])
+        .output()
+        .expect("spawn esdev create");
+    assert!(!refused.status.success());
+    assert!(
+        stderr(&refused).contains("not empty"),
+        "{}",
+        stderr(&refused)
+    );
+
+    let forced = esdev_in(&parent)
+        .args(["create", "taken", "--force"])
+        .output()
+        .expect("spawn esdev create");
+    assert!(forced.status.success(), "{}", stderr(&forced));
+    assert!(
+        stdout(&forced).contains("left alone"),
+        "{}",
+        stdout(&forced)
+    );
+    // The file that was there is the file that is there.
+    assert_eq!(
+        std::fs::read_to_string(dir.join("package.json")).expect("read"),
+        "{ \"name\": \"mine\" }\n"
+    );
+    // …and the rest of the project was written around it.
+    assert!(dir.join("src/server.tsx").is_file());
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+#[test]
+fn create_lists_its_templates_and_names_one_it_does_not_have() {
+    let dir = watch_dir("c_list");
+
+    let listed = esdev_in(&dir)
+        .args(["create", "--list"])
+        .output()
+        .expect("spawn esdev create");
+    assert!(listed.status.success(), "{}", stderr(&listed));
+    assert!(stdout(&listed).contains("react"), "{}", stdout(&listed));
+
+    let unknown = esdev_in(&dir)
+        .args(["create", "app", "--template=svelte"])
+        .output()
+        .expect("spawn esdev create");
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("no svelte template"),
+        "{}",
+        stderr(&unknown)
+    );
+    // The error is also the list, so the next command is obvious.
+    assert!(stderr(&unknown).contains("react"), "{}", stderr(&unknown));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

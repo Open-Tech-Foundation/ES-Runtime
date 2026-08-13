@@ -1,0 +1,68 @@
+---
+title: esdev create
+description: Scaffold a project that already builds, runs and deploys — templates baked into the binary.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# esdev create
+
+```sh
+esdev create my-app
+cd my-app
+npm install        # or bun, pnpm, yarn
+npm run dev
+```
+
+What you get is a project with its `esdev.json` written, its entry named by the
+script tag in its `index.html`, and a deploy line that is already narrow:
+
+```sh
+esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js
+```
+
+## Templates
+
+```sh
+esdev create --list
+esdev create my-app --template=react
+```
+
+| | |
+| --- | --- |
+| `react` | Server-rendered and hydrated, with a static build and an SPA build |
+
+They are **baked into the binary**, so `create` works offline and always writes
+a project the `esdev` that wrote it can build. Nothing is downloaded.
+
+## It writes files and stops
+
+No install, no `git init`, no prompts.
+
+There is no lockfile yet to say which package manager the project uses, and
+guessing wrong leaves a `package-lock.json` in a bun project. Prompts are out
+because every other command here is a flag grammar that works in a script.
+
+## It never overwrites
+
+A directory that already holds something is refused. `--force` writes *among*
+what is there and still leaves every existing file alone — it means "write here
+too", never "write over".
+
+```
+error: my-app is not empty.
+```
+
+## Options
+
+| | |
+| --- | --- |
+| `--template=<name>` | Which template (default `react`) |
+| `--list` | List the templates and exit |
+| `--force` | Write into a directory that already holds something |
+
+<Callout type="note" title="The name comes from the directory">
+  `esdev create weather-app` writes `"name": "weather-app"` into `package.json`
+  and `<title>weather-app</title>` into the document. A directory name that npm
+  would reject — `My App` — is lowercased and hyphenated on the way in.
+</Callout>

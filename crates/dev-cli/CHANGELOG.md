@@ -18,6 +18,44 @@ providers, same capability enforcement — so what changes here is everything
 
 ### Added
 
+- **`esdev create`** (DECISIONS D64) — a project that already works.
+
+  ```sh
+  esdev create my-app
+  esdev create --list
+  ```
+
+  Everything the four increments above built is only reachable if somebody can
+  get to a working project without assembling one: an `esdev.json` with the
+  right targets, an `index.html` whose script tag names the entry, a server that
+  reads its template from beside itself, and a permission line that is narrow
+  from the first run rather than widened to `--allow-all` on the way to a demo.
+
+  **The templates are baked into the binary** (a build script walks
+  `crates/dev-cli/templates`), so `create` works offline and always writes a
+  project the `esdev` that wrote it can build. A scaffolder that downloaded
+  could hand you something this binary was never tested against — and remote
+  module imports are a stated non-goal, which a template download would be by
+  another name. What a *running* template leaves behind — `node_modules`,
+  `dist`, a lockfile — is skipped, and a test asserts it: embedding an installed
+  `node_modules` would put tens of megabytes of somebody else's code in this
+  binary and nothing about the build would complain.
+
+  **It writes files and stops.** No install (there is no lockfile yet to say
+  which package manager this project uses, and guessing wrong leaves the wrong
+  one behind), no `git init`, no prompts — every other command here is a flag
+  grammar that works in a script.
+
+  **It never overwrites.** `esdev build --lib` empties its output because the
+  build owns it; this owns nothing, so a non-empty directory is refused, and
+  `--force` writes *among* what is there while still leaving every existing file
+  alone.
+
+  The project's name comes from the directory, into `package.json` and the
+  document's `<title>`, lowercased and hyphenated if npm would reject it.
+  `_gitignore` is written as `.gitignore` — as itself, it would apply to the
+  template in this repository and untrack the file it means to ship.
+
 - **A React template** (DECISIONS D63) — server-rendered, hydrated, and
   prerenderable to static HTML, from one project and one build.
 

@@ -25,6 +25,7 @@ const NAV = [
     title: "Development",
     items: [
       { title: "esdev", path: "/docs/esdev" },
+      { title: "Starting a project", path: "/docs/esdev/create" },
       { title: "TypeScript setup", path: "/docs/esdev/typescript" },
       { title: "Bundling", path: "/docs/esdev/build" },
       { title: "The dev loop", path: "/docs/esdev/start" },

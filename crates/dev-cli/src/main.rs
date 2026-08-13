@@ -30,6 +30,7 @@ use es_runtime_cli_common::{Config, Source};
 
 mod build;
 mod config;
+mod create;
 mod declarations;
 mod devserver;
 mod dts;
@@ -42,6 +43,7 @@ mod transform;
 mod types;
 mod watch;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
+use create::{CreateConfig, DEFAULT_TEMPLATE};
 use inspect::InspectConfig;
 use start::StartConfig;
 use test::TestConfig;
@@ -65,6 +67,8 @@ enum Command {
     Test(TestConfig),
     /// Build the project, run it, and keep both current.
     Start(Box<StartConfig>),
+    /// Write a new project from a template.
+    Create(CreateConfig),
 }
 
 const USAGE: &str = "\
@@ -83,6 +87,8 @@ USAGE:
                                 Run it, then print the permissions it used
     esdev --install-types       Add the runtime: TypeScript definitions to this
                                 project and wire up tsconfig.json
+    esdev create <dir>          Write a new project that already works
+                                (`esdev create --list` for the templates)
     esdev start                 Build what esdev.json describes, run it, and
                                 keep both current (`esdev start --help`)
     esdev test [filter...]      Run the test files (`esdev test --help`)
@@ -203,6 +209,41 @@ its TypeScript — and arrives with the globals already defined:
 
 The same vocabulary the runtime's own conformance suite uses. Exits non-zero if
 any file fails.
+";
+
+const CREATE_USAGE: &str = "\
+esdev create — a project that already works
+
+USAGE:
+    esdev create <dir>          Write a new project into <dir>
+    esdev create <dir> --template=<name>
+                                ...from a particular template
+    esdev create --list         List the templates
+    esdev create -h, --help     Show this help
+
+OPTIONS:
+    --template=<name>           Which template (default: react)
+    --force                     Write into a directory that already holds
+                                something. It still never replaces a file
+    --list                      List the templates and exit
+
+WHAT YOU GET
+    A project with its esdev.json written, its entry named by the script tag in
+    its index.html, and a deploy line that is already narrow:
+
+        esrun --deny-all --allow-read=./dist --allow-listen=8080 dist/server.js
+
+    Then:
+
+        cd <dir>
+        npm install                 (or bun, pnpm, yarn — whichever you use)
+        npm run dev
+
+    Nothing is installed for you: there is no lockfile yet to say which package
+    manager this project uses, and guessing wrong leaves the wrong one behind.
+
+    The templates are baked into this binary, so `create` works offline and
+    always writes a project this esdev can build.
 ";
 
 const START_USAGE: &str = "\
@@ -430,6 +471,9 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "start" {
             return parse_start(argv).map(|config| Command::Start(Box::new(config)));
+        }
+        if first == "create" {
+            return parse_create(argv).map(Command::Create);
         }
     }
 
@@ -871,6 +915,51 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     })))
 }
 
+/// Parses `esdev create <dir> [options]`.
+fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, String> {
+    let mut dirs: Vec<String> = Vec::new();
+    let mut template = DEFAULT_TEMPLATE.to_string();
+    let mut force = false;
+    for arg in args {
+        let (flag, value) = split_flag_value(&arg);
+        match flag {
+            "-h" | "--help" => {
+                reject_value(flag, value)?;
+                println!("{CREATE_USAGE}");
+                std::process::exit(0);
+            }
+            "--list" => {
+                reject_value(flag, value)?;
+                print!("{}", create::list());
+                std::process::exit(0);
+            }
+            "--template" => template = require_value(flag, value)?.to_string(),
+            "--force" => {
+                reject_value(flag, value)?;
+                force = true;
+            }
+            flag if flag.starts_with('-') && flag.len() > 1 => {
+                return Err(format!("unknown option: {flag}\n\n{CREATE_USAGE}"));
+            }
+            dir => dirs.push(dir.to_string()),
+        }
+    }
+    if dirs.is_empty() {
+        return Err(format!("missing directory argument\n\n{CREATE_USAGE}"));
+    }
+    if dirs.len() > 1 {
+        return Err(format!(
+            "esdev create writes one project; got {} directories.\n\n{CREATE_USAGE}",
+            dirs.len()
+        ));
+    }
+    Ok(CreateConfig {
+        dir: dirs.remove(0),
+        template,
+        force,
+    })
+}
+
 /// Parses `esdev start [options]`.
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
@@ -1046,6 +1135,13 @@ async fn main() -> ExitCode {
         Ok(Command::Test(config)) => return run_tests(config).await,
         Ok(Command::Build(request)) => build::run(request).await,
         Ok(Command::Start(config)) => start::start(*config).await,
+        Ok(Command::Create(config)) => match create::create(&config) {
+            Ok(report) => {
+                print!("{report}");
+                Ok(())
+            }
+            Err(err) => Err(err),
+        },
         Err(err) => Err(err),
     };
     match result {
