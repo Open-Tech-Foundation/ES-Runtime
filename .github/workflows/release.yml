@@ -7,6 +7,7 @@ on:
 permissions:
   contents: write  # create tags and GitHub Releases
   id-token: write
+  attestations: write  # sign build provenance for release assets
 
 concurrency:
   group: release
@@ -18,6 +19,7 @@ jobs:
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       release_es_runtime_cli: ${{ steps.check.outputs.release_es_runtime_cli }}
+      release_es_runtime_dev_cli: ${{ steps.check.outputs.release_es_runtime_dev_cli }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -25,12 +27,13 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.32.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.32.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
       - id: check
         run: |
-          echo "should_release=$(otf-release check --exclude-package es-runtime-cli)" >> "$GITHUB_OUTPUT"
+          echo "should_release=$(otf-release check --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
           echo "release_es_runtime_cli=$(otf-release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
+          echo "release_es_runtime_dev_cli=$(otf-release check --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
   matrix-es-runtime-cli:
     needs: [check-release]
@@ -43,8 +46,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.32.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.32.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
       - id: set
         run: echo "matrix=$(otf-release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
 
@@ -69,14 +72,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.32.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.32.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
       - name: Install otf-release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.32.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.32.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.34.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.ps1 | iex
       - name: Build es-runtime-cli
         run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
@@ -84,28 +87,73 @@ jobs:
           name: es-runtime-cli-${{ matrix.name }}-${{ matrix.arch }}
           path: .artifacts/es-runtime-cli
 
-  publish:
+  matrix-es-runtime-dev-cli:
     needs: [check-release]
-    if: needs.check-release.outputs.should_release == 'true'
+    if: needs.check-release.outputs.release_es_runtime_dev_cli == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.32.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.32.0/install.sh | bash
-      - name: Publish
-        run: otf-release publish
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+      - id: set
+        run: echo "matrix=$(otf-release matrix --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+
+  build-es-runtime-dev-cli:
+    needs: [check-release, matrix-es-runtime-dev-cli]
+    if: needs.check-release.outputs.release_es_runtime_dev_cli == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-es-runtime-dev-cli.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain
+        if: ${{ matrix.cross }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-${{ matrix.arch }}-linux-gnu
+      - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.vm }}
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install otf-release
+        if: runner.os != 'Windows'
+        shell: bash
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+      - name: Install otf-release
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          OTF_RELEASE_VERSION: v0.34.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.ps1 | iex
+      - name: Build es-runtime-dev-cli
+        if: ${{ !matrix.vm }}
+        run: otf-release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
+      - name: Build es-runtime-dev-cli in a freebsd VM
+        if: ${{ matrix.vm && matrix.name == 'freebsd' }}
+        uses: vmactions/freebsd-vm@v1
+        with:
+          arch: ${{ matrix.arch }}
+          usesh: true
+          copyback: true
+          prepare: |
+            pkg install -y rust
+          run: |
+            cargo build --release --target ${{ matrix.triple }}
+      - name: Stage es-runtime-dev-cli
+        if: ${{ matrix.vm }}
+        run: otf-release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }} --stage-only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: es-runtime-dev-cli-${{ matrix.name }}-${{ matrix.arch }}
+          path: .artifacts/es-runtime-dev-cli
 
   github-release-es-runtime-cli:
     needs: [check-release, build-es-runtime-cli]
@@ -121,10 +169,39 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.32.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.32.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: otf-release github-release --package es-runtime-cli --artifacts-dir .artifacts
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: .artifacts/.flat-es-runtime-cli/*
+
+  github-release-es-runtime-dev-cli:
+    needs: [check-release, build-es-runtime-dev-cli]
+    if: needs.check-release.outputs.release_es_runtime_dev_cli == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: .artifacts
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.34.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: otf-release github-release --package es-runtime-dev-cli --artifacts-dir .artifacts
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: .artifacts/.flat-es-runtime-dev-cli/*
 
