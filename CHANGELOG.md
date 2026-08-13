@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-08-13
+
 ### Changed
 
 - **`esrun types` and `esrun types --install` are gone**, and the definitions

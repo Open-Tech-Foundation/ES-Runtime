@@ -16,6 +16,8 @@ providers, same capability enforcement — so what changes here is everything
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-13
+
 ### Added
 
 - **`esdev create`** (DECISIONS D64) — a project that already works.
