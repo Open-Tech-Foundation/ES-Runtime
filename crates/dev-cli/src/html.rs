@@ -234,22 +234,63 @@ pub fn hashed_name(path: &Path, bytes: &[u8]) -> String {
     }
 }
 
+/// The few lines that make a document reload itself, injected only by the dev
+/// loop.
+///
+/// **Server-sent events, not a WebSocket.** All that has to cross is "it
+/// changed": one direction, one message, no protocol to speak. `EventSource`
+/// gets that with no handshake, and reconnects on its own by specification —
+/// which is the property that matters here, because the thing it is connected
+/// to is a build tool that the developer will restart. A WebSocket would need
+/// framing on this side and a reconnect loop on that one, to carry a string.
+///
+/// It is `esdev`'s endpoint rather than the application's, so no template ships
+/// dev-only code and nothing has to be stripped from it later.
+fn reload_client(port: u16) -> String {
+    format!(
+        "\n<script>\
+         (new EventSource(\"http://127.0.0.1:{port}/@esdev/reload\"))\
+         .onmessage=()=>location.reload();\
+         </script>\n"
+    )
+}
+
+/// Where the reload script goes: just before `</body>`, or `</html>`, or at the
+/// end.
+///
+/// Found by tokenizing rather than by searching for the text, because
+/// `"</body>"` inside a `<script>` string is not the end of the body — and a
+/// document with no `</body>` at all is valid, which is why there are three
+/// answers.
+fn injection_point(html: &str) -> usize {
+    let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
+    emitter.naively_switch_states(true);
+    let mut body = None;
+    let mut end = None;
+    for token in Tokenizer::new_with_emitter(html, emitter).flatten() {
+        if let Token::EndTag(tag) = token {
+            match tag.name.as_slice() {
+                b"body" => body = body.or(Some(tag.span.start)),
+                b"html" => end = end.or(Some(tag.span.start)),
+                _ => {}
+            }
+        }
+    }
+    body.or(end).unwrap_or(html.len())
+}
+
 /// Builds an HTML target: bundle what it imports, copy what it references,
 /// write it back pointing at both.
-///
-/// `hash` is what an `esdev start` will turn off — a stable filename is what
-/// lets a browser reload keep its cache warm and a developer read a stack
-/// trace, and neither matters to a deployment, where an unhashed name is
-/// instead the thing that serves last week's bundle to half your users.
 pub async fn build(
     target: &Target,
     root: &Path,
     out_dir: &Path,
-    hash: bool,
+    dev: Option<&crate::build::Dev>,
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
 ) -> Result<String, String> {
+    let hash = dev.is_none();
     let entry = root.join(&target.entry);
     let html = std::fs::read_to_string(&entry)
         .map_err(|e| format!("cannot read {}: {e}", target.entry))?;
@@ -321,7 +362,13 @@ pub async fn build(
         Vec::new()
     } else {
         crate::build::bundle_browser_entries(
-            modules, root, &assets, hash, minify, defines, conditions,
+            modules,
+            root,
+            &assets,
+            dev.is_some(),
+            minify,
+            defines,
+            conditions,
         )
         .await?
     };
@@ -340,7 +387,12 @@ pub async fn build(
         }
     }
 
-    let document = splice(&html, &rewritten);
+    let mut document = splice(&html, &rewritten);
+    if let Some(dev) = dev {
+        // Into the *output*, never the source. The file the developer edits is
+        // never written to by a build.
+        document.insert_str(injection_point(&document), &reload_client(dev.reload_port));
+    }
     std::fs::create_dir_all(out_dir)
         .map_err(|e| format!("cannot create {}: {e}", out_dir.display()))?;
     let name = entry

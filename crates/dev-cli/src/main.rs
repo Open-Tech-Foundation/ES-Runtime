@@ -31,9 +31,11 @@ use es_runtime_cli_common::{Config, Source};
 mod build;
 mod config;
 mod declarations;
+mod devserver;
 mod dts;
 mod html;
 mod inspect;
+mod start;
 mod test;
 mod trace;
 mod transform;
@@ -41,6 +43,7 @@ mod types;
 mod watch;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
 use inspect::InspectConfig;
+use start::StartConfig;
 use test::TestConfig;
 use trace::PermissionTrace;
 use transform::TypeStripper;
@@ -60,6 +63,8 @@ enum Command {
     Watch(WatchConfig),
     /// Discover and run test files.
     Test(TestConfig),
+    /// Build the project, run it, and keep both current.
+    Start(Box<StartConfig>),
 }
 
 const USAGE: &str = "\
@@ -78,6 +83,8 @@ USAGE:
                                 Run it, then print the permissions it used
     esdev --install-types       Add the runtime: TypeScript definitions to this
                                 project and wire up tsconfig.json
+    esdev start                 Build what esdev.json describes, run it, and
+                                keep both current (`esdev start --help`)
     esdev test [filter...]      Run the test files (`esdev test --help`)
     esdev build <entry>         Bundle an entry into one deployable ES module
     esdev build --lib <srcdir>  Build a publishable library instead: a module
@@ -196,6 +203,53 @@ its TypeScript — and arrives with the globals already defined:
 
 The same vocabulary the runtime's own conformance suite uses. Exits non-zero if
 any file fails.
+";
+
+const START_USAGE: &str = "\
+esdev start — the dev loop: build, run, rebuild, reload
+
+USAGE:
+    esdev start [options]       Build what esdev.json describes, run it, and
+                                keep both current
+
+OPTIONS:
+    --port=<n>                  The port esdev's own endpoint binds
+                                (default 5173, loopback only)
+    --config=<path>             Read this instead of ./esdev.json
+    --shutdown-grace=<ms>       How long the server may drain on a restart
+    -h, --help                  Show this help
+
+WHAT IT DOES
+    It is `esdev build` on a loop. A dev build differs from a release build in
+    exactly two ways — process.env.NODE_ENV is \"development\", and nothing is
+    content-hashed — and in nothing else, because a dev and a prod that
+    disagree about how a module resolves is the failure this toolchain exists
+    to prevent.
+
+    On a change: rebuild, restart the server, tell the browser to reload. A
+    build that fails leaves everything running — a syntax error mid-edit should
+    cost you a message, not the server you were about to fix it on.
+
+THE SERVER IS YOURS
+    \"start\": { \"run\": \"server\" } names the target whose output is your
+    server. esdev runs that output as a child process, under the config's
+    `permissions`, and restarts it with a SIGTERM — the same graceful stop
+    production gets, so a request in flight when you save is answered rather
+    than dropped. It is the same file production runs: no dev server stands in
+    for it and nothing wraps it.
+
+    A project with no server of its own — a static site, a single-page app —
+    has nothing to run, so esdev serves the output directory itself: files, an
+    index.html fallback for client-side routes, and nothing else.
+
+RELOAD
+    Every built document gets a few lines that open an EventSource against
+    esdev and reload when a build lands. It is esdev's endpoint rather than
+    your application's, so nothing dev-only is in your source, and it is in the
+    output only — the file you edit is never written to.
+
+    Nothing is preserved across a reload: this is a full page load, not hot
+    module replacement.
 ";
 
 const BUILD_USAGE: &str = "\
@@ -373,6 +427,9 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "test" {
             return parse_test(argv).map(Command::Test);
+        }
+        if first == "start" {
+            return parse_start(argv).map(|config| Command::Start(Box::new(config)));
         }
     }
 
@@ -688,11 +745,12 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                 ));
             }
             return Ok(BuildRequest::Project(Box::new(ProjectBuild {
-                project,
-                target,
+                project: std::sync::Arc::new(project),
+                targets: target.map(|name| vec![name]),
                 minify,
                 defines,
                 conditions,
+                dev: None,
             })));
         }
         if let Some(name) = target {
@@ -800,6 +858,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         source,
         out,
         out_dir: None,
+        dev: false,
         platform: config::Platform::Server,
         assets: Vec::new(),
         root: None,
@@ -810,6 +869,53 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         types: !no_types,
         dts_bundle,
     })))
+}
+
+/// Parses `esdev start [options]`.
+fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
+    let mut config_path: Option<String> = None;
+    let mut port: Option<u16> = None;
+    let mut options = RunOptions::default();
+    for arg in args {
+        let (flag, value) = split_flag_value(&arg);
+        if options.try_flag(flag, value)? {
+            continue;
+        }
+        match flag {
+            "-h" | "--help" => {
+                reject_value(flag, value)?;
+                println!("{START_USAGE}");
+                std::process::exit(0);
+            }
+            "--config" => config_path = Some(require_value(flag, value)?.to_string()),
+            "--port" => {
+                let given = require_value(flag, value)?;
+                port =
+                    Some(given.parse::<u16>().map_err(|_| {
+                        format!("--port={given} is not a port number (1 to 65535).")
+                    })?);
+            }
+            flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
+        }
+    }
+    let mut project = config::load(config_path.as_deref())?.ok_or_else(|| {
+        format!(
+            "esdev start needs a {0}, and there is none here.\n\n\
+             It describes what this project builds and what to run:\n\n  \
+             {{ \"targets\": {{ \"server\": {{ \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" }} }},\n    \
+             \"start\": {{ \"run\": \"server\" }} }}\n\n\
+             See `esdev build --help` for the rest of {0}.",
+            config::FILE_NAME
+        )
+    })?;
+    // A flag beats the file, the same way it does for a build.
+    if let Some(port) = port {
+        project.start.port = Some(port);
+    }
+    Ok(StartConfig {
+        project,
+        grace: options.shutdown_grace,
+    })
 }
 
 /// Parses `esdev test [--file=<path>] [filter...]`.
@@ -939,6 +1045,7 @@ async fn main() -> ExitCode {
         Ok(Command::Watch(config)) => watch::supervise(config).await,
         Ok(Command::Test(config)) => return run_tests(config).await,
         Ok(Command::Build(request)) => build::run(request).await,
+        Ok(Command::Start(config)) => start::start(*config).await,
         Err(err) => Err(err),
     };
     match result {

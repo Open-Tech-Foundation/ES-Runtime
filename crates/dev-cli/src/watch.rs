@@ -50,6 +50,32 @@ const WATCHED_EXTENSIONS: &[&str] = &[
     "js", "mjs", "cjs", "ts", "tsx", "jsx", "mts", "cts", "json", "wasm",
 ];
 
+/// Extensions a *build* answers to, over and above the ones a run does.
+///
+/// The difference is what the two consume. A run's inputs are modules; a
+/// build's include the document that names them, the stylesheet that document
+/// links, and whatever is sitting in `public` — none of which would restart a
+/// server, and all of which change what the browser gets.
+const ASSET_EXTENSIONS: &[&str] = &[
+    "html",
+    "htm",
+    "css",
+    "svg",
+    "png",
+    "jpg",
+    "jpeg",
+    "webp",
+    "avif",
+    "gif",
+    "ico",
+    "woff",
+    "woff2",
+    "ttf",
+    "otf",
+    "txt",
+    "webmanifest",
+];
+
 /// How long to wait for the filesystem to go quiet before restarting.
 ///
 /// One editor save is several events — a truncate, a write, sometimes a rename
@@ -79,12 +105,13 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+    let watch_scope = root.clone();
     // The watcher runs on its own thread and must outlive this scope, so it is
     // held here for the duration.
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res
             && is_change(&event.kind)
-            && event.paths.iter().any(|p| is_interesting(p))
+            && event.paths.iter().any(|p| is_interesting(p, &watch_scope))
         {
             // Unbounded and ignore-on-failure: the receiver only ever needs to
             // learn *that* something changed, so a full or closed channel costs
@@ -116,12 +143,12 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
                 }
                 // It is gone; there is nothing to stop. Hold here until
                 // something changes, so the watcher outlives the program.
-                match wait_for_change(&mut rx).await {
+                match coalesce(&mut rx).await {
                     Some(()) => true,
                     None => return Ok(()),
                 }
             }
-            _ = wait_for_change(&mut rx) => {
+            _ = coalesce(&mut rx) => {
                 stop(&mut child, config.grace).await;
                 true
             }
@@ -142,7 +169,7 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
 /// Blocks until a change arrives, then swallows the burst that follows it.
 ///
 /// `None` means the watcher is gone, which can only happen at shutdown.
-async fn wait_for_change(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
+pub async fn coalesce(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
     rx.recv().await?;
     // Coalesce: keep draining until the filesystem has been quiet for a beat.
     loop {
@@ -158,7 +185,7 @@ async fn wait_for_change(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
 ///
 /// The signal is the one the runtime already handles gracefully; the kill is
 /// the backstop for a program that will not take the hint.
-async fn stop(child: &mut Child, grace: Duration) {
+pub async fn stop(child: &mut Child, grace: Duration) {
     let Some(pid) = child.id() else {
         // Already reaped.
         return;
@@ -230,7 +257,7 @@ fn watch_root(entry: &Path) -> PathBuf {
 /// event as a change makes the watcher restart because it just restarted —
 /// forever, with no edit involved. Metadata is excluded for the same reason,
 /// since an access-time update is not an edit either.
-fn is_change(kind: &EventKind) -> bool {
+pub fn is_change(kind: &EventKind) -> bool {
     match kind {
         EventKind::Create(_) | EventKind::Remove(_) => true,
         EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_) | ModifyKind::Any) => true,
@@ -241,9 +268,29 @@ fn is_change(kind: &EventKind) -> bool {
 }
 
 /// Whether a changed path is one a restart should answer to.
-fn is_interesting(path: &Path) -> bool {
+pub fn is_interesting(path: &Path, root: &Path) -> bool {
+    is_watchable(path, root, WATCHED_EXTENSIONS)
+}
+
+/// Whether a changed path is one a *build* should answer to, beyond the
+/// modules [`is_interesting`] covers.
+pub fn is_asset(path: &Path, root: &Path) -> bool {
+    is_watchable(path, root, ASSET_EXTENSIONS)
+}
+
+/// Whether a change is inside the project, outside the machine-written
+/// directories, and in a file of a kind worth acting on.
+///
+/// **The ignored names are matched below the watch root, not anywhere in the
+/// path.** Matching the whole path looks equivalent and is not: a project that
+/// happens to live in `~/work/target/app` — or in a test's own
+/// `target/tmp/fixture` — would have every one of its files ignored, and the
+/// symptom is a watcher that runs and reports and never reacts to anything.
+/// Found exactly that way.
+fn is_watchable(path: &Path, root: &Path, extensions: &[&str]) -> bool {
     let ignored: HashSet<&str> = IGNORED_DIRS.iter().copied().collect();
-    if path
+    let relative = path.strip_prefix(root).unwrap_or(path);
+    if relative
         .components()
         .any(|c| ignored.contains(c.as_os_str().to_string_lossy().as_ref()))
     {
@@ -251,7 +298,7 @@ fn is_interesting(path: &Path) -> bool {
     }
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|ext| WATCHED_EXTENSIONS.contains(&ext))
+        .is_some_and(|ext| extensions.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 #[cfg(test)]
@@ -291,22 +338,56 @@ mod tests {
 
     #[test]
     fn source_files_are_interesting_and_documents_are_not() {
-        assert!(is_interesting(Path::new("/p/src/app.ts")));
-        assert!(is_interesting(Path::new("/p/server.mjs")));
-        assert!(is_interesting(Path::new("/p/package.json")));
-        assert!(!is_interesting(Path::new("/p/README.md")));
-        assert!(!is_interesting(Path::new("/p/logo.png")));
-        assert!(!is_interesting(Path::new("/p/no-extension")));
+        let root = Path::new("/p");
+        assert!(is_interesting(Path::new("/p/src/app.ts"), root));
+        assert!(is_interesting(Path::new("/p/server.mjs"), root));
+        assert!(is_interesting(Path::new("/p/package.json"), root));
+        assert!(!is_interesting(Path::new("/p/README.md"), root));
+        assert!(!is_interesting(Path::new("/p/logo.png"), root));
+        assert!(!is_interesting(Path::new("/p/no-extension"), root));
+
+        // A build has more inputs than a run does.
+        assert!(is_asset(Path::new("/p/index.html"), root));
+        assert!(is_asset(Path::new("/p/public/styles.css"), root));
+        assert!(!is_asset(Path::new("/p/src/app.ts"), root));
     }
 
     /// `dist` is the one that would otherwise loop: `esdev build` writes there,
     /// and a watcher that restarted on its own output would never settle.
     #[test]
     fn machine_written_directories_are_ignored() {
-        assert!(!is_interesting(Path::new("/p/node_modules/x/index.js")));
-        assert!(!is_interesting(Path::new("/p/dist/server.js")));
-        assert!(!is_interesting(Path::new("/p/target/debug/build.js")));
-        assert!(!is_interesting(Path::new("/p/.git/hooks/pre-commit.js")));
+        let root = Path::new("/p");
+        assert!(!is_interesting(
+            Path::new("/p/node_modules/x/index.js"),
+            root
+        ));
+        assert!(!is_interesting(Path::new("/p/dist/server.js"), root));
+        assert!(!is_interesting(Path::new("/p/target/debug/build.js"), root));
+        assert!(!is_interesting(
+            Path::new("/p/.git/hooks/pre-commit.js"),
+            root
+        ));
+    }
+
+    /// The names are ignored *below the root*, not anywhere in the path — a
+    /// project living in a directory called `target` is still a project, and
+    /// the symptom of getting this wrong is a watcher that never reacts.
+    #[test]
+    fn a_project_inside_an_ignored_name_is_still_watched() {
+        let root = Path::new("/home/me/work/target/app");
+        assert!(is_interesting(
+            Path::new("/home/me/work/target/app/src/x.ts"),
+            root
+        ));
+        assert!(is_asset(
+            Path::new("/home/me/work/target/app/index.html"),
+            root
+        ));
+        // …and its own build output is still ignored.
+        assert!(!is_interesting(
+            Path::new("/home/me/work/target/app/dist/x.js"),
+            root
+        ));
     }
 
     #[test]

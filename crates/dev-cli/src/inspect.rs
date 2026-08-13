@@ -411,7 +411,7 @@ async fn session(mut stream: TcpStream, shared: &Arc<Shared>, key: &str) {
 /// Deliberately stops there rather than reading whatever else is buffered: on a
 /// WebSocket upgrade the bytes after the head are already the client's first
 /// frames, and consuming them here would lose them.
-async fn read_head(stream: &mut TcpStream) -> Option<String> {
+pub async fn read_head(stream: &mut TcpStream) -> Option<String> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -428,7 +428,7 @@ async fn read_head(stream: &mut TcpStream) -> Option<String> {
 }
 
 /// The path from a request head's first line.
-fn request_path(head: &str) -> Option<String> {
+pub fn request_path(head: &str) -> Option<String> {
     let mut parts = head.lines().next()?.split_whitespace();
     let _method = parts.next()?;
     Some(parts.next()?.to_string())
@@ -453,7 +453,7 @@ fn websocket_key(head: &str) -> Option<String> {
     if upgrading { key } else { None }
 }
 
-async fn respond(
+pub async fn respond(
     stream: &mut TcpStream,
     status: &str,
     content_type: &str,

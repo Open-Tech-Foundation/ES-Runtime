@@ -18,6 +18,44 @@ providers, same capability enforcement — so what changes here is everything
 
 ### Added
 
+- **`esdev start`** (DECISIONS D62) — the dev loop: build, run, rebuild, reload.
+
+  ```sh
+  esdev start
+  ```
+
+  It is `esdev build` on a loop. **A dev build differs from a release build in
+  two ways** — `process.env.NODE_ENV` is `"development"`, and nothing is
+  content-hashed — and in nothing else: a dev and a prod that disagree about how
+  a module resolves is the failure this toolchain is arranged to prevent.
+
+  | | |
+  | --- | --- |
+  | `"start": { "run": "server" }` | The named target's output **is** your server. esdev runs it as a child under the config's `permissions`, and restarts it with a `SIGTERM` — so a request in flight when you save is answered rather than dropped |
+  | No `run` target | A static site or SPA has no server to be that, so esdev serves the output directory: files, an `index.html` fallback for client-side routes, nothing else |
+  | A failed build | **Changes nothing.** The rebuild happens *before* anything is stopped, so the server you were about to fix it on keeps answering — during the build as well as after a failed one |
+  | Reload | A few lines injected into each built document, opening an `EventSource` against esdev. Sent *after* the restart: a page told to reload while the server is coming back gets a connection refused and stays blank |
+
+  The reload endpoint is **esdev's**, not the application's, so no template ships
+  dev-only code and the file you edit is never written to. Server-sent events
+  rather than a WebSocket: one direction, one word, and `EventSource` reconnects
+  by specification — which matters, because the thing it is connected to is a
+  build tool the developer will restart.
+
+  It is a full page load, not hot module replacement: nothing is preserved.
+
+  **Two fixes fell out of building it**, both of which applied to `esdev build`
+  already:
+
+  - A bundler failure printed its `Debug` representation —
+    `BatchedBuildDiagnostic([BuildDiagnostic { kind: "PARSE_ERROR", … }])`. It
+    now names the file and says what happened: `src/App.tsx: Unexpected token`.
+  - The watcher matched its ignored directory names (`node_modules`, `dist`,
+    `target`, …) **anywhere in the path**, so a project living in a directory
+    called `target` — or a test fixture under `target/tmp` — had every one of its
+    files ignored, and the symptom was a watcher that started, reported, and
+    then reacted to nothing. They are matched below the watch root now.
+
 - **An `index.html` target** (DECISIONS D61) — the document is the entry, and
   the tags in it name the build's inputs.
 

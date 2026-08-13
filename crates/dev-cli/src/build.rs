@@ -97,6 +97,19 @@ pub struct BuildConfig {
     /// directory. `None` is the process's own — which is every command line,
     /// since a path typed into a shell is relative to where it was typed.
     pub root: Option<PathBuf>,
+    /// Whether this is a build for the dev loop rather than for deploying.
+    ///
+    /// Two things follow, and only two: `NODE_ENV` is `"development"` (so React
+    /// and everything like it hands over the build with the warnings in it),
+    /// and nothing is content-hashed. A stable filename is what keeps a reload
+    /// cheap and a stack trace readable, and it is exactly wrong for a
+    /// deployment, where the unchanged name is what serves last week's bundle
+    /// to half your users.
+    ///
+    /// Everything else is identical to a release build, deliberately. Dev and
+    /// prod differing on how a module *resolves* is the failure this whole
+    /// toolchain is arranged to prevent.
+    pub dev: bool,
     /// Whether to minify.
     pub minify: bool,
     /// Extra `exports` conditions, from `--conditions`. These **add** to the
@@ -134,6 +147,54 @@ const DEFAULT_CONDITIONS: &[&str] = &["worker"];
 /// with `worker` asserted gets the one that expects neither, and the failure is
 /// at runtime in someone's browser rather than here.
 const BROWSER_CONDITIONS: &[&str] = &["browser"];
+
+/// A bundler failure, in the shape a person reads.
+///
+/// Rolldown's own `Display` is the message alone — "Unexpected token" — which
+/// in a project of twenty files is most of a question rather than an answer.
+/// The module id is what turns it into one, and it is the first thing a dev
+/// loop's user needs, because they are looking at the editor rather than the
+/// terminal when it happens.
+fn diagnostics<D: std::fmt::Display>(reported: Vec<(Option<String>, D)>) -> String {
+    reported
+        .into_iter()
+        .map(|(id, diagnostic)| match id {
+            Some(id) => format!("{id}: {diagnostic}"),
+            None => diagnostic.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The bundler's failures, paired with the module each came from.
+///
+/// Spelled at the call sites rather than as a typed helper because the
+/// diagnostic type belongs to a crate this one does not depend on directly —
+/// it arrives through rolldown, and naming it would mean declaring a
+/// dependency to write one signature.
+macro_rules! reported {
+    () => {
+        |error| {
+            $crate::build::diagnostics(
+                error
+                    .into_vec()
+                    .into_iter()
+                    .map(|diagnostic| (diagnostic.id(), diagnostic))
+                    .collect(),
+            )
+        }
+    };
+}
+
+/// The `process.env.NODE_ENV` a build defines before any `--define` overrides
+/// it.
+fn node_env(dev: bool) -> &'static str {
+    if dev {
+        "\"development\""
+    } else {
+        "\"production\""
+    }
+}
 
 /// Where a bundle goes when `--out` did not say.
 fn default_out(entry: &str) -> PathBuf {
@@ -378,7 +439,7 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     } else {
         vec![(
             "process.env.NODE_ENV".to_string(),
-            "\"production\"".to_string(),
+            node_env(config.dev).to_string(),
         )]
     };
     define.extend(config.defines);
@@ -485,8 +546,8 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         ..BundlerOptions::default()
     };
 
-    let mut bundler = Bundler::new(options).map_err(|e| format!("{e:?}"))?;
-    bundler.write().await.map_err(|e| format!("{e:?}"))?;
+    let mut bundler = Bundler::new(options).map_err(reported!())?;
+    bundler.write().await.map_err(reported!())?;
 
     if !config.lib {
         // `[name].js` is a pattern, not a filename, so the directory case is
@@ -557,14 +618,17 @@ pub async fn bundle_browser_entries(
     entries: Vec<(String, String)>,
     root: &Path,
     out_dir: &Path,
-    hash: bool,
+    dev: bool,
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
 ) -> Result<Vec<(String, String)>, String> {
+    // Hashed for a deployment, stable for the dev loop — the same call `dev`
+    // makes everywhere, spelled once here.
+    let hash = !dev;
     let mut define: Vec<(String, String)> = vec![(
         "process.env.NODE_ENV".to_string(),
-        "\"production\"".to_string(),
+        node_env(dev).to_string(),
     )];
     define.extend(defines);
     let mut condition_names: Vec<String> = BROWSER_CONDITIONS
@@ -614,8 +678,8 @@ pub async fn bundle_browser_entries(
         ..BundlerOptions::default()
     };
 
-    let mut bundler = Bundler::new(options).map_err(|e| format!("{e:?}"))?;
-    bundler.write().await.map_err(|e| format!("{e:?}"))?;
+    let mut bundler = Bundler::new(options).map_err(reported!())?;
+    bundler.write().await.map_err(reported!())?;
 
     let mut written = Vec::new();
     for name in names {
@@ -712,19 +776,32 @@ pub enum BuildRequest {
 /// A build of the targets in a project's config.
 pub struct ProjectBuild {
     /// The parsed config.
-    pub project: crate::config::Project,
-    /// The single target `--target` selected, if it did.
-    pub target: Option<String>,
+    ///
+    /// Shared rather than owned because `esdev start` builds the same project
+    /// once a keystroke, and re-reading the file each time would mean a build
+    /// that quietly changed shape under an edit the developer had not finished.
+    pub project: std::sync::Arc<crate::config::Project>,
+    /// The targets to build; `None` is all of them.
+    pub targets: Option<Vec<String>>,
     /// `--minify`, which turns it on for every target built.
     pub minify: bool,
     /// `--define`s, added to every target's own.
     pub defines: Vec<(String, String)>,
     /// `--conditions`, added to every target's own.
     pub conditions: Vec<String>,
+    /// Set when this build is feeding the dev loop rather than a deployment.
+    pub dev: Option<Dev>,
+}
+
+/// What a dev-loop build needs to know that a release build does not.
+pub struct Dev {
+    /// The port esdev's own endpoint is on, so a document can be given the few
+    /// lines that reload it.
+    pub reload_port: u16,
 }
 
 /// Where a target's bundle lands.
-fn output_path(target: &crate::config::Target) -> PathBuf {
+pub fn output_path(target: &crate::config::Target) -> PathBuf {
     match &target.output {
         crate::config::Output::File(out) => PathBuf::from(out),
         crate::config::Output::Dir(dir) => {
@@ -760,23 +837,25 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
         .iter()
         .map(|t| t.name.as_str())
         .collect();
-    let selected: Vec<&crate::config::Target> = match &project.target {
+    let selected: Vec<&crate::config::Target> = match &project.targets {
         None => project.project.targets.iter().collect(),
-        Some(name) => {
-            let found = project
-                .project
-                .targets
-                .iter()
-                .find(|target| &target.name == name)
-                .ok_or_else(|| {
-                    format!(
-                        "--target={name} is not a target in this project.\n\n\
-                         Targets: {}.",
-                        names.join(", ")
-                    )
-                })?;
-            vec![found]
-        }
+        Some(wanted) => wanted
+            .iter()
+            .map(|name| {
+                project
+                    .project
+                    .targets
+                    .iter()
+                    .find(|target| &target.name == name)
+                    .ok_or_else(|| {
+                        format!(
+                            "--target={name} is not a target in this project.\n\n\
+                             Targets: {}.",
+                            names.join(", ")
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
     };
 
     for target in &selected {
@@ -799,10 +878,7 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
                 target,
                 &project.project.dir,
                 &out_dir,
-                // Hashed, because this is a build for deploying. `esdev start`
-                // will pass `false`: a stable name is what keeps a reload's
-                // cache warm, and nothing is deployed from there.
-                true,
+                project.dev.as_ref(),
                 target.minify || project.minify,
                 defines,
                 conditions,
@@ -826,6 +902,7 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             platform: target.platform,
             assets: target.assets.clone(),
             root: Some(project.project.dir.clone()),
+            dev: project.dev.is_some(),
             // A flag beats the file: `--minify` on a config that does not ask
             // for it is how a release build is taken of a project whose day to
             // day is unminified.

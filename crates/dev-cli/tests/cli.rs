@@ -2084,3 +2084,224 @@ fn two_module_scripts_that_would_collide_are_refused() {
         stderr(&out)
     );
 }
+
+// ---------------------------------------------------------------------------
+// `esdev start` (DECISIONS D62)
+//
+// The dev loop: build, run, rebuild, reload. What is worth testing is not that
+// a bundler bundles or that a socket accepts — it is the three promises the
+// loop makes. The app's own server is what runs. A build that fails leaves
+// what was working alone. And the browser is told, once, after the restart.
+// ---------------------------------------------------------------------------
+
+/// `esdev start` runs the application as a child of its own, so killing only
+/// the supervisor leaves that child holding a port — and, having inherited the
+/// test harness's stdout, holding the harness open too. The whole group goes.
+fn stop_supervisor(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let group = child.id();
+        let _ = Command::new("kill")
+            .arg("-TERM")
+            .arg(format!("-{group}"))
+            .status();
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// A supervisor in a process group of its own, with its output discarded.
+fn start_in(dir: &Path) -> std::process::Child {
+    let mut command = esdev_in(dir);
+    command
+        .arg("start")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command.spawn().expect("spawn esdev start")
+}
+
+/// A port unlikely to collide with anything else on the machine, derived from
+/// the test's own name so two tests never pick the same one.
+fn test_port(name: &str) -> u16 {
+    let hash = name.bytes().fold(0u32, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(u32::from(b))
+    });
+    20000 + u16::try_from(hash % 20000).unwrap_or(0)
+}
+
+/// One HTTP GET, spoken by hand — the same shape the dev server answers.
+fn http_get(port: u16, path: &str) -> Option<String> {
+    use std::io::{Read, Write};
+
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("set read timeout");
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    Some(String::from_utf8_lossy(&response).into_owned())
+}
+
+/// Polls until the server answers, or gives up — a build and a process start
+/// have to happen first, and how long that takes is the machine's business.
+fn wait_for_http(port: u16, path: &str, done: impl Fn(&str) -> bool) -> String {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut last = String::new();
+    while std::time::Instant::now() < deadline {
+        if let Some(response) = http_get(port, path) {
+            last = response;
+            if done(&last) {
+                return last;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    last
+}
+
+#[test]
+fn start_needs_a_project_to_start() {
+    let dir = build_dir("s_noconfig");
+    let out = esdev_in(&dir).arg("start").output().expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("esdev.json"), "{}", stderr(&out));
+}
+
+/// A project with no server of its own: esdev serves the output, falls back to
+/// index.html for a client-side route, and reloads on a change.
+#[test]
+fn start_serves_a_frontend_project_and_reloads_it() {
+    let dir = watch_dir("s_frontend");
+    let port = test_port("s_frontend");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.mjs", "document.title = 'FIRST';\n");
+    write_in(&dir, "styles.css", "body{color:red}\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head><link rel=\"stylesheet\" href=\"./styles.css\">\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body><div id=root></div></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
+                 "start": {{ "port": {port} }} }}"#
+        ),
+    );
+
+    let mut child = start_in(&dir);
+
+    let document = wait_for_http(port, "/", |body| body.contains("<div id=root>"));
+    assert!(document.contains("200 OK"), "{document}");
+
+    // Dev names are stable — no hash — so a reload keeps its cache and a stack
+    // trace stays readable.
+    assert!(document.contains(r#"src="/assets/main.js""#), "{document}");
+    assert!(
+        document.contains(r#"href="/assets/styles.css""#),
+        "{document}"
+    );
+    // The reload client is esdev's, and it is in the output only.
+    assert!(document.contains("EventSource"), "{document}");
+    assert!(
+        !std::fs::read_to_string(dir.join("index.html"))
+            .expect("read source")
+            .contains("EventSource"),
+        "the source document was written to"
+    );
+
+    // The bundle is served, and a client-side route falls back to the document.
+    let bundle = http_get(port, "/assets/main.js").unwrap_or_default();
+    assert!(bundle.contains("FIRST"), "{bundle}");
+    assert!(
+        bundle.contains("text/javascript"),
+        "served with the wrong type: {bundle}"
+    );
+    let route = http_get(port, "/about").unwrap_or_default();
+    assert!(route.contains("<div id=root>"), "{route}");
+    // …but a missing file is missing. HTML answered for a .js is a syntax
+    // error three steps from its cause.
+    let missing = http_get(port, "/assets/nope.js").unwrap_or_default();
+    assert!(missing.contains("404"), "{missing}");
+
+    // A change rebuilds, and the new bundle is what is served.
+    write_in(&dir, "src/main.mjs", "document.title = 'SECOND';\n");
+    let rebuilt = wait_for_http(port, "/assets/main.js", |body| body.contains("SECOND"));
+    assert!(rebuilt.contains("SECOND"), "the change never landed");
+
+    stop_supervisor(&mut child);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The promise that makes the loop usable: a syntax error mid-edit costs a
+/// message, not the server you were about to fix it on.
+#[test]
+fn a_failed_build_leaves_the_running_server_alone() {
+    let dir = watch_dir("s_broken");
+    let port = test_port("s_broken");
+    let served = test_port("s_broken_app");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/server.mjs",
+        &format!(
+            "import {{ serve }} from 'runtime:http';\n\
+             serve({{ port: {served} }}, () => new Response('ALIVE'));\n"
+        ),
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "targets": {{ "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }},
+                 "start": {{ "run": "server", "port": {port} }},
+                 "permissions": {{ "deny": ["all"], "allow": {{ "listen": ["{served}"] }} }} }}"#
+        ),
+    );
+
+    let mut child = start_in(&dir);
+    let alive = wait_for_http(served, "/", |body| body.contains("ALIVE"));
+    assert!(alive.contains("ALIVE"), "the server never came up: {alive}");
+
+    // Break it, and give the watcher long enough to have acted.
+    write_in(
+        &dir,
+        "src/server.mjs",
+        "import { serve } from 'runtime:http'; serve({\n",
+    );
+    std::thread::sleep(Duration::from_secs(3));
+    let still = http_get(served, "/").unwrap_or_default();
+    assert!(
+        still.contains("ALIVE"),
+        "a failed build took the server down: {still:?}"
+    );
+
+    // Fix it, and the fix is what is running.
+    write_in(
+        &dir,
+        "src/server.mjs",
+        &format!(
+            "import {{ serve }} from 'runtime:http';\n\
+             serve({{ port: {served} }}, () => new Response('FIXED'));\n"
+        ),
+    );
+    let fixed = wait_for_http(served, "/", |body| body.contains("FIXED"));
+    assert!(fixed.contains("FIXED"), "the fix never landed: {fixed}");
+
+    stop_supervisor(&mut child);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -62,6 +62,35 @@ pub struct Project {
     /// a target that runs after the build — it is expressed by the target
     /// itself rather than by its position in the file.
     pub targets: Vec<Target>,
+    /// What `esdev start` does, if the file says.
+    pub start: Start,
+    /// The permission flags the dev loop's child runs under, **as flags**.
+    ///
+    /// Kept in the spelling a person would type rather than as a resolved
+    /// capability set, because that is what they are: `esdev start` hands them
+    /// to a child process, and what it hands over should be readable in `ps`
+    /// and pasteable into a terminal. The translation happens once, here, and
+    /// is checked by `esrun`'s own parser on the way through.
+    pub permissions: Vec<String>,
+}
+
+/// What `esdev start` runs and watches.
+#[derive(Debug, Default)]
+pub struct Start {
+    /// The target whose output is *the server* — run as a child process, and
+    /// restarted when a rebuild finishes. Absent for a stack with no server of
+    /// its own, where esdev serves the output directory itself.
+    pub run: Option<String>,
+    /// The targets to rebuild on a change. Empty means all of them, which is
+    /// the useful default: a rebuild costs milliseconds, and a list that has
+    /// fallen out of date is a save that appears to do nothing.
+    pub watch: Vec<String>,
+    /// The directory to serve when there is no `run` target. Defaults to the
+    /// output of the one HTML target, since that is what a frontend-only stack
+    /// has.
+    pub serve: Option<String>,
+    /// The port esdev's own endpoint binds. Loopback, always.
+    pub port: Option<u16>,
 }
 
 /// One thing a project builds.
@@ -244,13 +273,20 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
     // would change under a dependency edit nobody connected to this file.
     targets.sort_by(|a, b| a.name.cmp(&b.name));
 
-    if let Some(start) = root.get("start") {
-        check_start(start, &targets, name)?;
-    }
-    if let Some(permissions) = root.get("permissions") {
-        check_permissions(permissions, name)?;
-    }
-    Ok(Some(Project { dir, targets }))
+    let start = match root.get("start") {
+        Some(start) => read_start(start, &targets, name)?,
+        None => Start::default(),
+    };
+    let permissions = match root.get("permissions") {
+        Some(permissions) => permission_flags(permissions, name)?,
+        None => Vec::new(),
+    };
+    Ok(Some(Project {
+        dir,
+        targets,
+        start,
+        permissions,
+    }))
 }
 
 /// Parses one entry of `targets`.
@@ -405,36 +441,49 @@ fn default_out(entry: &str) -> String {
     format!("dist/{stem}.js")
 }
 
-/// Validates `start` and the target names it refers to.
-fn check_start(value: &Value, targets: &[Target], file: &str) -> Result<(), String> {
+/// Reads `start`, checking the target names it refers to.
+fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, String> {
     let map = object(value, file, "`start`")?;
     known_keys(map, file, "`start`", START_KEYS)?;
     let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
 
-    if let Some(run) = map.get("run") {
-        let run = string(run, file, "`start`'s `run`")?;
-        if !names.contains(&run) {
-            return Err(unknown_target(file, "`start`'s `run`", run, &names));
+    let run = match map.get("run") {
+        None => None,
+        Some(run) => {
+            let run = string(run, file, "`start`'s `run`")?;
+            if !names.contains(&run) {
+                return Err(unknown_target(file, "`start`'s `run`", run, &names));
+            }
+            Some(run.to_string())
         }
-    }
-    for name in string_array(map.get("watch"), file, "`start`'s `watch`")? {
+    };
+    let watch = string_array(map.get("watch"), file, "`start`'s `watch`")?;
+    for name in &watch {
         if !names.contains(&name.as_str()) {
-            return Err(unknown_target(file, "`start`'s `watch`", &name, &names));
+            return Err(unknown_target(file, "`start`'s `watch`", name, &names));
         }
     }
-    if let Some(serve) = map.get("serve") {
-        string(serve, file, "`start`'s `serve`")?;
-    }
-    if let Some(port) = map.get("port")
-        && !port
-            .as_u64()
-            .is_some_and(|p| p > 0 && p <= u64::from(u16::MAX))
-    {
-        return Err(format!(
-            "{file}: `start`'s `port` is a number from 1 to 65535, not {port}."
-        ));
-    }
-    Ok(())
+    let serve = match map.get("serve") {
+        None => None,
+        Some(serve) => Some(string(serve, file, "`start`'s `serve`")?.to_string()),
+    };
+    let port = match map.get("port") {
+        None => None,
+        Some(port) => Some(
+            port.as_u64()
+                .filter(|p| *p > 0 && *p <= u64::from(u16::MAX))
+                .and_then(|p| u16::try_from(p).ok())
+                .ok_or_else(|| {
+                    format!("{file}: `start`'s `port` is a number from 1 to 65535, not {port}.")
+                })?,
+        ),
+    };
+    Ok(Start {
+        run,
+        watch,
+        serve,
+        port,
+    })
 }
 
 /// The error for a `start` key naming a target that is not there.
@@ -459,15 +508,17 @@ fn unknown_target(file: &str, at: &str, named: &str, names: &[&str]) -> String {
 /// flag — so an unknown capability, a scope on a capability that takes none, and
 /// a grant without `--deny-all` all fail here with the message they have always
 /// had.
-fn check_permissions(value: &Value, file: &str) -> Result<(), String> {
+fn permission_flags(value: &Value, file: &str) -> Result<Vec<String>, String> {
     let map = object(value, file, "`permissions`")?;
     known_keys(map, file, "`permissions`", &["deny", "allow"])?;
     let mut permissions = Permissions::default();
+    let mut flags = Vec::new();
 
     for name in string_array(map.get("deny"), file, "`permissions`'s `deny`")? {
         let flag = format!("--deny-{name}");
         try_permission_flag(&mut permissions, &flag, None)
             .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+        flags.push(flag);
     }
     if let Some(allow) = map.get("allow") {
         let allow = object(allow, file, "`permissions`'s `allow`")?;
@@ -490,6 +541,10 @@ fn check_permissions(value: &Value, file: &str) -> Result<(), String> {
             };
             try_permission_flag(&mut permissions, &flag, value.as_deref())
                 .map_err(|e| format!("{file}: `permissions`: {e}"))?;
+            flags.push(match &value {
+                Some(scopes) => format!("{flag}={scopes}"),
+                None => flag,
+            });
         }
     }
     // Resolving is what rejects a grant that contradicts the denials around it,
@@ -501,7 +556,7 @@ fn check_permissions(value: &Value, file: &str) -> Result<(), String> {
     permissions
         .scopes()
         .map_err(|e| format!("{file}: `permissions`: {e}"))?;
-    Ok(())
+    Ok(flags)
 }
 
 /// Reads a JSON object, or says what was found instead.

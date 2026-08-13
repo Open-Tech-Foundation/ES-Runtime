@@ -1,0 +1,92 @@
+---
+title: esdev start
+description: The dev loop — build what esdev.json describes, run it, rebuild on change, reload the browser.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# esdev start
+
+```sh
+esdev start
+```
+
+It is [`esdev build`](/docs/esdev/build) on a loop. A dev build differs from a
+release build in **two ways** — `process.env.NODE_ENV` is `"development"`, and
+nothing is content-hashed — and in nothing else. Dev and prod disagreeing about
+how a module resolves is the failure this toolchain exists to prevent.
+
+On a change: rebuild, restart the server, tell the browser.
+
+## The server is yours
+
+```json
+"start": { "run": "server" }
+```
+
+That names the target whose output *is* your server. esdev runs it as a child
+process under the config's `permissions` and restarts it with a `SIGTERM` — the
+graceful stop production gets, so a request in flight when you save is answered
+rather than dropped.
+
+**It is the same file production runs.** No dev server stands in for it, nothing
+wraps it, and there is no second code path that exists only on your machine.
+
+A project with no server of its own — a static site, a single-page app — has
+nothing to run, so esdev serves the output directory itself: files, an
+`index.html` fallback for client-side routes, and nothing else.
+
+## A failed build changes nothing
+
+```
+esdev: src/App.tsx: Unexpected token
+```
+
+The server you were about to fix it on is still running, still serving, and the
+browser is not told anything. A syntax error mid-edit is the most ordinary event
+in a dev loop; it should cost you a message.
+
+The rebuild happens **before** anything is stopped, so the old server also
+answers *during* it.
+
+## Reload
+
+Every built document gets a few lines that open an `EventSource` against esdev
+and reload when a build lands. It is esdev's endpoint, not your application's —
+nothing dev-only ends up in your source, and the file you edit is never written
+to.
+
+The message is sent **after** the restart. A page told to reload while the
+server is still coming back gets a connection refused and stays blank.
+
+<Callout type="note" title="Full reload, not HMR">
+  Nothing is preserved across it — your form, your open modal, your scroll
+  position all reset. What buys that back is hot module replacement, which needs
+  a transform callable from JavaScript, and esdev has none yet.
+</Callout>
+
+## Options
+
+| | |
+| --- | --- |
+| `--port=<n>` | esdev's own endpoint (default `5173`, **loopback only**) |
+| `--config=<path>` | Read this instead of `./esdev.json` |
+| `--shutdown-grace=<ms>` | How long the server may drain on a restart |
+
+```json
+"start": { "run": "server", "watch": ["server", "web"], "serve": "dist", "port": 5173 }
+```
+
+`watch` narrows what gets rebuilt; leaving it out rebuilds everything, which is
+what you want at 40 ms a build. `serve` overrides the directory served when
+there is no `run`.
+
+## What is watched
+
+The project root, minus `node_modules`, `.git`, `dist`, `target`, `.cache` and
+**every directory your targets write into** — a build that triggered itself
+would never settle. Ignored names are matched below the root, so a project
+living in a directory called `target` is still watched.
+
+Modules, and the things a *build* consumes that a run does not: `index.html`,
+stylesheets, images, fonts.
