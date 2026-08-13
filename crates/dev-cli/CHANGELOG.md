@@ -18,6 +18,49 @@ providers, same capability enforcement — so what changes here is everything
 
 ### Added
 
+- **An `index.html` target** (DECISIONS D61) — the document is the entry, and
+  the tags in it name the build's inputs.
+
+  ```json
+  { "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }
+  ```
+
+  ```html
+  <!-- written -->                          <!-- built -->
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./src/entry.client.tsx"></script>
+
+  <link rel="stylesheet" href="/assets/styles-621d3b66.css">
+  <script type="module" src="/assets/entry.client-fccaa347.js"></script>
+  ```
+
+  A server bundle's entry is a module, because the runtime starts at one. The
+  browser does not — it starts at a **document**, and the module is something
+  that document happens to reference. Naming the client entry in a config file
+  *and* its built URL in the HTML meant two places that were one rename apart
+  from disagreeing, with nothing to catch it.
+
+  | | |
+  | --- | --- |
+  | `<script type="module">` | An **entry**: it and everything it imports become one browser bundle |
+  | Everything else relative | **Copied** — stylesheets, favicons, images, classic scripts |
+  | Both | **Content-hashed** into `<outdir>/assets`, so a deployment can cache the whole directory immutably |
+  | Everything else in the file | **Untouched, byte for byte** — the title, the meta tags, the Open Graph block, the inline analytics snippet |
+
+  That last row is the reason for the dependency. `lol-html` rewrites a stream
+  in place, so bytes no handler touched come out exactly as the author wrote
+  them; parsing to a DOM and re-serialising would reformat quotes, entities and
+  self-closing tags in a file the developer owns. It brings four MPL-2.0 crates
+  (Servo's selector engine) with it — allowed **by name** in `deny.toml`, so a
+  new MPL dependency still fails the gate, and confined to `esdev`: not in
+  `esrun`, not in any library crate. See `NOTICE` and `docs/LICENSING.md`.
+
+  **A relative path is an input; anything else is a URL.** `/assets/vendor.js`,
+  `https://…`, `//cdn…` and `data:` are left exactly as written — one line of
+  rule, and the escape hatch for anything the build should keep out of. A
+  relative path that names nothing stops the build, because the alternative is
+  finding it in a browser.
+
 - **`esdev.json`** (DECISIONS D60) — what a project builds, in a file rather
   than on a command line.
 

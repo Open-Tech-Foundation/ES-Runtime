@@ -29,6 +29,23 @@ Run the gate locally with:
 cargo deny check
 ```
 
+### The one exception: MPL-2.0 in `esdev`
+
+Four crates are allowed by name in `deny.toml` — `cssparser`,
+`cssparser-macros`, `selectors` and `dtoa-short`, all reached through
+[`lol-html`](https://crates.io/crates/lol-html), which is how `esdev` reads an
+`index.html` for the build inputs its tags name (DECISIONS D61).
+
+They are named individually rather than the license being allowed, so a *new*
+MPL-2.0 dependency still fails the gate. MPL-2.0 is **file-level** copyleft: its
+reciprocity covers modifications to the covered files, and §3.3 expressly
+permits combining them into a Larger Work under another license. The crates are
+used unmodified, so the obligation is attribution and pointing at their source
+(see [`NOTICE`](../NOTICE)), and nothing propagates to ES-Runtime's own code.
+
+They are in **`dev-cli` only**: not in `esrun`, and not in any library crate an
+embedder links.
+
 ## RUSTSEC advisories
 
 A small number of advisories are deliberately accepted (e.g. the `rsa` crate's
@@ -42,3 +59,4 @@ RUSTSEC-2023-0071 Marvin timing advisory) and documented in `deny.toml`; see
 | ES-Runtime            | Apache-2.0     | Standard Apache-2.0 NOTICE handling |
 | V8 (engine)           | BSD-3-Clause   | Attribution; no relink obligation   |
 | Rust dependencies     | Permissive     | Attribution (gated by cargo-deny)   |
+| `esdev` HTML rewriter | MPL-2.0        | Attribution + source pointer; file-level only, `dev-cli` only |

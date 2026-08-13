@@ -51,6 +51,10 @@ oxc.workspace = true
 rolldown.workspace = true
 # `--watch`. The events only; the restart policy is ours.
 notify.workspace = true
+# An `index.html` target: the script and link tags in it are the build's inputs,
+# and the file esdev writes is the same one with those references pointing at
+# what was built. Same confinement as oxc and rolldown.
+lol_html.workspace = true
 # `--install-types` — merging the type package into tsconfig.json. Moved here
 # from `esrun` with the command itself (D59): a production binary has no reason
 # to be able to rewrite a tsconfig.

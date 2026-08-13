@@ -94,6 +94,26 @@ pub struct Target {
     pub run_after_build: bool,
 }
 
+impl Target {
+    /// Whether this target's entry is a document rather than a module.
+    ///
+    /// A server bundle starts at a module, because the runtime does. The
+    /// browser starts at a **document** — the module is something the document
+    /// references — so an HTML entry is a different kind of build, not a
+    /// different setting on the same one ([`crate::html`]).
+    pub fn is_html(&self) -> bool {
+        is_html_entry(&self.entry)
+    }
+}
+
+/// Whether an entry names a document rather than a module.
+fn is_html_entry(entry: &str) -> bool {
+    Path::new(entry)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"))
+}
+
 /// What a target's output looks like on disk.
 #[derive(Debug)]
 pub enum Output {
@@ -288,6 +308,10 @@ fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
             }
             Output::Dir(dir.to_string())
         }
+        // A document's output is a directory whichever way you look at it —
+        // the file itself, the bundles its scripts became, the chunks those
+        // split into and the stylesheets beside them.
+        (None, None) if is_html_entry(&entry) => Output::Dir("dist".to_string()),
         (None, None) => Output::File(default_out(&entry)),
     };
 
@@ -329,7 +353,7 @@ fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
         ));
     }
 
-    Ok(Target {
+    let built = Target {
         name: name.to_string(),
         entry,
         output,
@@ -339,7 +363,35 @@ fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
         define: defines(map.get("define"), file, &at)?,
         conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
         run_after_build,
-    })
+    };
+
+    // An HTML target's shape is decided by the document, so the keys that would
+    // decide it here are refused rather than quietly ignored. Each of these is
+    // a reasonable thing to write and a wrong thing to believe.
+    if built.is_html() {
+        if map.contains_key("out") {
+            return Err(format!(
+                "{file}: {at} builds an HTML file, and `out` names one output.\n\n\
+                 A document is a bundle, its chunks, its stylesheets and itself — \
+                 write \"outdir\": \"dist\"."
+            ));
+        }
+        if map.contains_key("platform") {
+            return Err(format!(
+                "{file}: {at} builds an HTML file, and sets `platform`.\n\n\
+                 What a document's scripts are built for is not in question: they \
+                 run in a browser."
+            ));
+        }
+        if built.run_after_build {
+            return Err(format!(
+                "{file}: {at} builds an HTML file with \"then\": \"run\".\n\n\
+                 There is nothing to execute — the output is a document and the \
+                 files it references."
+            ));
+        }
+    }
+    Ok(built)
 }
 
 /// Where a target's output goes when it did not say — the same default the
@@ -780,6 +832,35 @@ mod tests {
         )
         .expect_err("refused");
         assert!(!ungrounded.is_empty());
+    }
+
+    /// A document decides its own shape, so the keys that would decide it here
+    /// are refused rather than quietly ignored.
+    #[test]
+    fn an_html_target_refuses_the_keys_a_document_already_answers() {
+        let out = read(
+            r#"{ "targets": { "web": { "entry": "index.html", "out": "dist/index.html" } } }"#,
+        )
+        .expect_err("refused");
+        assert!(out.contains("`out` names one output"), "{out}");
+
+        let platform =
+            read(r#"{ "targets": { "web": { "entry": "index.html", "platform": "browser" } } }"#)
+                .expect_err("refused");
+        assert!(platform.contains("run in a browser"), "{platform}");
+
+        let then = read(r#"{ "targets": { "web": { "entry": "index.html", "then": "run" } } }"#)
+            .expect_err("refused");
+        assert!(then.contains("nothing to execute"), "{then}");
+    }
+
+    /// A document's output is a directory however you look at it: the file, the
+    /// bundles its scripts became, the chunks those split into.
+    #[test]
+    fn an_html_target_defaults_to_a_directory() {
+        let project = read(r#"{ "targets": { "web": { "entry": "index.html" } } }"#).expect("ok");
+        assert!(project.targets[0].is_html());
+        assert!(matches!(&project.targets[0].output, Output::Dir(dir) if dir == "dist"));
     }
 
     #[test]

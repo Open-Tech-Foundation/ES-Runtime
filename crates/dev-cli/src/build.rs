@@ -538,6 +538,102 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     Ok(format!("{}/ ({counted})", out_dir.display()))
 }
 
+/// Bundles the module scripts an HTML file names, and reports what each of them
+/// was written as.
+///
+/// Separate from [`build`] because the unit is different: that builds *one*
+/// entry to a name the caller chose, and this builds **every entry one document
+/// referenced** to names the bundler chooses — content-hashed, so the HTML has
+/// to be told what they turned out to be. Building them in one bundler run
+/// rather than one each is what lets two scripts on a page share a chunk instead
+/// of carrying two copies of their common imports.
+///
+/// **`runtime:*` is not external here, and that is deliberate.** In a server
+/// bundle it is left for the runtime to serve; in a browser there is nothing to
+/// serve it, so leaving it external would emit a bundle whose first import fails
+/// in somebody's browser. Unresolved, it fails here instead, naming the module
+/// and the file that imported it.
+pub async fn bundle_browser_entries(
+    entries: Vec<(String, String)>,
+    root: &Path,
+    out_dir: &Path,
+    hash: bool,
+    minify: bool,
+    defines: Vec<(String, String)>,
+    conditions: Vec<String>,
+) -> Result<Vec<(String, String)>, String> {
+    let mut define: Vec<(String, String)> = vec![(
+        "process.env.NODE_ENV".to_string(),
+        "\"production\"".to_string(),
+    )];
+    define.extend(defines);
+    let mut condition_names: Vec<String> = BROWSER_CONDITIONS
+        .iter()
+        .map(|c| (*c).to_string())
+        .collect();
+    condition_names.extend(conditions);
+
+    let names: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
+    let options = BundlerOptions {
+        input: Some(
+            entries
+                .into_iter()
+                .map(|(name, import)| InputItem {
+                    name: Some(name),
+                    import,
+                })
+                .collect(),
+        ),
+        cwd: Some(root.to_path_buf()),
+        dir: Some(out_dir.to_string_lossy().into_owned()),
+        // Written under the entry's own name and hashed *afterwards*, below.
+        // Nothing imports an entry — a chunk is imported by it, never the other
+        // way round — so renaming one once it is written breaks no reference,
+        // and it keeps this from having to read the bundler's own report of
+        // what it called things.
+        entry_filenames: Some("[name].js".to_string().into()),
+        // A chunk is always hashed: nothing names one, so there is no filename
+        // to keep stable, and a shared chunk that changed without its name
+        // changing is a browser running two halves of two builds.
+        chunk_filenames: Some("[name]-[hash].js".to_string().into()),
+        format: Some(OutputFormat::Esm),
+        platform: Some(Platform::Browser),
+        resolve: Some(ResolveOptions {
+            condition_names: Some(condition_names),
+            main_fields: Some(vec!["module".to_string(), "main".to_string()]),
+            ..ResolveOptions::default()
+        }),
+        define: Some(
+            define
+                .into_iter()
+                .collect::<HashMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        minify: minify.then_some(RawMinifyOptions::Bool(true)),
+        ..BundlerOptions::default()
+    };
+
+    let mut bundler = Bundler::new(options).map_err(|e| format!("{e:?}"))?;
+    bundler.write().await.map_err(|e| format!("{e:?}"))?;
+
+    let mut written = Vec::new();
+    for name in names {
+        let path = out_dir.join(format!("{name}.js"));
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        if !hash {
+            written.push((name.clone(), format!("{name}.js")));
+            continue;
+        }
+        let filename = crate::html::hashed_name(&path, &bytes);
+        std::fs::rename(&path, out_dir.join(&filename))
+            .map_err(|e| format!("cannot name {filename}: {e}"))?;
+        written.push((name, filename));
+    }
+    Ok(written)
+}
+
 /// Copies a target's `assets` into its output directory, and reports how many.
 ///
 /// **A file is copied by name; a directory is copied by its contents.** So
@@ -684,14 +780,45 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
     };
 
     for target in &selected {
-        let (out, out_dir) = match &target.output {
-            crate::config::Output::File(out) => (Some(out.clone()), None),
-            crate::config::Output::Dir(dir) => (None, Some(dir.clone())),
-        };
         let mut defines = target.define.clone();
         defines.extend(project.defines.iter().cloned());
         let mut conditions = target.conditions.clone();
         conditions.extend(project.conditions.iter().cloned());
+
+        // A document is its own kind of build: what it references is what gets
+        // built, and what is written is the document pointing at the results.
+        if target.is_html() {
+            let crate::config::Output::Dir(dir) = &target.output else {
+                return Err(format!(
+                    "target \"{}\": an HTML target writes a directory",
+                    target.name
+                ));
+            };
+            let out_dir = project.project.dir.join(dir);
+            let written = crate::html::build(
+                target,
+                &project.project.dir,
+                &out_dir,
+                // Hashed, because this is a build for deploying. `esdev start`
+                // will pass `false`: a stable name is what keeps a reload's
+                // cache warm, and nothing is deployed from there.
+                true,
+                target.minify || project.minify,
+                defines,
+                conditions,
+            )
+            .await
+            .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+            copy_assets(&target.assets, &project.project.dir, &out_dir)
+                .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+            println!("built → {written}");
+            continue;
+        }
+
+        let (out, out_dir) = match &target.output {
+            crate::config::Output::File(out) => (Some(out.clone()), None),
+            crate::config::Output::Dir(dir) => (None, Some(dir.clone())),
+        };
         let written = build(BuildConfig {
             source: target.entry.clone(),
             out,

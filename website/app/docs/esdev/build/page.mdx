@@ -104,7 +104,7 @@ esdev build src/app.ts           # ignores the file entirely
 
 | Key | |
 | --- | --- |
-| `entry` | The module the bundle is rooted at |
+| `entry` | The module the bundle is rooted at — or an `.html` file ([below](#an-html-entry)) |
 | `out` | One file |
 | `outdir` | A directory — what a browser target needs, since chunks land beside the entry |
 | `platform` | `server` (default) or `browser` |
@@ -135,6 +135,49 @@ bundle in `dist/` reading `index.html` reads `dist/index.html`. Assets are
 copied there by the build, which is what makes `dist/` the whole deployment —
 a directory copied by its contents, so `public/styles.css` is served at
 `/styles.css` with nothing rewriting an href.
+
+## An HTML entry
+
+A server bundle starts at a module, because the runtime does. The browser starts
+at a **document**.
+
+```json
+{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }
+```
+
+The tags in it are the build's inputs:
+
+```html
+<link rel="stylesheet" href="./styles.css" />
+<script type="module" src="./src/entry.client.tsx"></script>
+```
+
+become, in `dist/index.html`:
+
+```html
+<link rel="stylesheet" href="/assets/styles-621d3b66.css" />
+<script type="module" src="/assets/entry.client-fccaa347.js" />
+```
+
+| | |
+| --- | --- |
+| `<script type="module">` | An entry — it and everything it imports become one browser bundle |
+| Everything else relative | Copied: stylesheets, favicons, images, classic scripts |
+| Both | Content-hashed into `<outdir>/assets`, so the whole directory caches immutably |
+| Everything else in the file | Untouched, byte for byte — title, meta, Open Graph, inline scripts |
+
+A **relative** path is an input. A rooted path (`/assets/vendor.js`), a URL and
+a `data:` URI are left exactly as written — the escape hatch for anything the
+build should keep out of.
+
+Dynamic `import()` chunks land in the same directory, hashed by the bundler, and
+the entry still points at them.
+
+<Callout type="note" title="Not a CSS pipeline">
+  A stylesheet is copied, not bundled: `@import` and `url()` inside it are not
+  followed, and `import "./x.css"` from JavaScript is not supported. That is the
+  next gap, not a decision.
+</Callout>
 
 ## Where the file is
 

@@ -1919,3 +1919,168 @@ fn a_config_elsewhere_resolves_its_paths_against_itself() {
     );
     assert!(!outside.join("dist").exists(), "built beside the caller");
 }
+
+// ---------------------------------------------------------------------------
+// An `index.html` target (DECISIONS D61)
+//
+// A server bundle starts at a module because the runtime does; the browser
+// starts at a document. So the script and link tags in an HTML file are the
+// build's inputs, and what is written out is the same document pointing at what
+// was built — with everything the author wrote between those tags untouched.
+// ---------------------------------------------------------------------------
+
+/// A document that references one module, one stylesheet, one image, one CDN
+/// URL it does not own, and an inline script nobody should touch.
+fn html_project(name: &str) -> PathBuf {
+    let dir = build_dir(name);
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/dep.mjs", "export const answer = 42;\n");
+    write_in(
+        &dir,
+        "src/entry.client.mjs",
+        "import { answer } from './dep.mjs';\nconsole.log(answer);\n",
+    );
+    write_in(&dir, "styles.css", "body{color:red}\n");
+    write_in(&dir, "logo.svg", "<svg/>\n");
+    write_in(
+        &dir,
+        "index.html",
+        r#"<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>My App</title>
+<link rel="stylesheet" href="./styles.css">
+<link rel="icon" href="./logo.svg">
+<script>window.__EARLY__ = 1;</script>
+<script type="module" src="./src/entry.client.mjs"></script>
+<script src="https://cdn.example.com/analytics.js"></script>
+</head><body><div id="root"></div></body></html>
+"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+    dir
+}
+
+#[test]
+fn an_html_target_builds_what_it_references_and_rewrites_it() {
+    let dir = html_project("h_build");
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let document = std::fs::read_to_string(dir.join("dist/index.html")).expect("read the document");
+
+    // The module script became a hashed bundle under /assets, and the document
+    // points at it. The name is the bundler's, so it is read back out of the
+    // document rather than guessed.
+    let script = document
+        .split_once(r#"<script type="module" src=""#)
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(url, _)| url.to_string())
+        .expect("a module script survived");
+    assert!(script.starts_with("/assets/entry.client-"), "{script}");
+    assert!(script.ends_with(".js"), "{script}");
+    // The URL is rooted at the deployment, which is the output directory.
+    let bundle = dir.join("dist").join(script.trim_start_matches('/'));
+    assert!(bundle.exists(), "{script} was not written");
+    let code = std::fs::read_to_string(&bundle).expect("read bundle");
+    assert!(!code.contains("./dep.mjs"), "the import survived:\n{code}");
+
+    // The stylesheet and the icon were copied and hashed.
+    for (attribute, prefix, suffix) in [
+        ("href=\"/assets/styles-", "styles-", ".css"),
+        ("href=\"/assets/logo-", "logo-", ".svg"),
+    ] {
+        assert!(document.contains(attribute), "{document}");
+        let copied = std::fs::read_dir(dir.join("dist/assets"))
+            .expect("read assets")
+            .flatten()
+            .any(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                name.starts_with(prefix) && name.ends_with(suffix)
+            });
+        assert!(copied, "no {prefix}…{suffix} in dist/assets");
+    }
+
+    // Everything else is the author's.
+    assert!(document.contains("<title>My App</title>"), "{document}");
+    assert!(document.contains("window.__EARLY__ = 1;"), "{document}");
+    assert!(document.contains(r#"<html lang="en">"#), "{document}");
+    assert!(
+        document.contains(r#"src="https://cdn.example.com/analytics.js""#),
+        "a URL this build does not own was rewritten:\n{document}"
+    );
+}
+
+/// The hash follows the content, which is the whole reason it is there — a
+/// deployment caches `/assets` immutably, and a file whose name did not change
+/// is a file the browser will not fetch again.
+#[test]
+fn a_changed_file_gets_a_changed_name() {
+    let dir = html_project("h_hash");
+    let build = || {
+        let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+        assert!(out.status.success(), "{}", stderr(&out));
+        std::fs::read_to_string(dir.join("dist/index.html")).expect("read the document")
+    };
+
+    let before = build();
+    write_in(&dir, "styles.css", "body{color:blue}\n");
+    let after = build();
+    assert_ne!(before, after, "the stylesheet changed and its URL did not");
+}
+
+/// A relative path names a file in the project. If it is not there, that is a
+/// broken page, and the build is where it should be found — not the browser.
+#[test]
+fn a_reference_that_is_not_there_stops_the_build() {
+    let dir = build_dir("h_missing");
+    write_in(
+        &dir,
+        "index.html",
+        r#"<html><head><script type="module" src="./src/gone.mjs"></script></head></html>"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("./src/gone.mjs"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("not there"), "{}", stderr(&out));
+}
+
+/// Two entries built to one name is a build that silently ships half of what
+/// the page asked for.
+#[test]
+fn two_module_scripts_that_would_collide_are_refused() {
+    let dir = build_dir("h_collide");
+    std::fs::create_dir_all(dir.join("a")).expect("create a");
+    std::fs::create_dir_all(dir.join("b")).expect("create b");
+    write_in(&dir, "a/main.mjs", "console.log('a');\n");
+    write_in(&dir, "b/main.mjs", "console.log('b');\n");
+    write_in(
+        &dir,
+        "index.html",
+        r#"<html><head>
+           <script type="module" src="./a/main.mjs"></script>
+           <script type="module" src="./b/main.mjs"></script>
+           </head></html>"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("both called main"),
+        "{}",
+        stderr(&out)
+    );
+}

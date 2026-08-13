@@ -300,6 +300,19 @@ oxc = { version = "0.144.0", features = [
 # The Rust API is the less-travelled path (rolldown's supported surface is its
 # napi binding), so it is pinned exactly rather than floated.
 rolldown = "=1.2.3"
+
+# The HTML rewriter behind an `index.html` target (DECISIONS D61), and confined
+# to `dev-cli` with the other two: an HTML file is a build input on a
+# developer's machine, and `esrun` never parses one.
+#
+# lol-html rather than a regex or a DOM: what this does is read an `index.html`
+# for the script and link tags that name build inputs, and write it back with
+# those references pointing at what was built. That is exactly a selector-driven
+# rewrite over a stream — a DOM would be a tree nobody needs, and a regex over
+# HTML is the thing everyone regrets. It is Cloudflare's, BSD-3-Clause (already
+# allowed by deny.toml), and carries no HTML-spec surface of its own beyond the
+# parser.
+lol_html = "3.0.1"
 # Filesystem events for `esdev --watch` (DECISIONS D59). Confined to `dev-cli`:
 # nothing in production watches anything. 8.2.0 rather than the 9.0 release
 # candidates, per D7 — a pre-release is taken only when it is the only option

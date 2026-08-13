@@ -32,6 +32,7 @@ mod build;
 mod config;
 mod declarations;
 mod dts;
+mod html;
 mod inspect;
 mod test;
 mod trace;
@@ -244,7 +245,8 @@ A PROJECT (esdev.json)
     `esdev build` then builds all of them, and `--target=browser` one. Each
     target takes:
 
-      entry       The module the bundle is rooted at
+      entry       The module the bundle is rooted at — or an .html file, which
+                  is a different kind of build (see below)
       out         One file …
       outdir      … or a directory, which is what a browser target needs: a
                   dynamic import() emits a chunk beside its entry
@@ -267,6 +269,29 @@ A PROJECT (esdev.json)
     checked-in file granting itself capabilities is the thing the capability
     model exists to prevent: the grant a service runs under belongs on the
     command that deployed it.
+
+AN HTML ENTRY
+    A server bundle starts at a module, because the runtime does. The browser
+    starts at a document — so an .html entry is the build's input, and the tags
+    in it name the rest:
+
+        { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }
+
+        <link rel=\"stylesheet\" href=\"./styles.css\">
+        <script type=\"module\" src=\"./src/entry.client.tsx\"></script>
+
+    A <script type=\"module\"> is an entry: it and everything it imports become
+    one browser bundle. Anything else a relative reference names — a stylesheet,
+    a favicon, an image, a classic script — is copied. Both are content-hashed
+    into <outdir>/assets, and the document is written out pointing at them:
+
+        <link rel=\"stylesheet\" href=\"/assets/styles-621d3b66.css\">
+        <script type=\"module\" src=\"/assets/entry.client-fccaa347.js\"></script>
+
+    Everything else in the file is untouched, byte for byte — the title, the
+    meta tags, the inline snippet. A relative path is an input; a rooted path
+    (/assets/vendor.js), a URL and a data: URI are left exactly as written,
+    which is the escape hatch for anything the build should keep out of.
 
 APPLICATION (the default)
     The bundle is ES modules, `runtime:*` imports are left for the runtime to
