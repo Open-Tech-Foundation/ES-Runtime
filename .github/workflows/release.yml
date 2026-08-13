@@ -27,8 +27,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - id: check
         run: |
           echo "should_release=$(otf-release check --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
@@ -46,8 +46,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - id: set
         run: echo "matrix=$(otf-release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
 
@@ -72,14 +72,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - name: Install otf-release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.35.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.ps1 | iex
       - name: Build es-runtime-cli
         run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
@@ -98,8 +98,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - id: set
         run: echo "matrix=$(otf-release matrix --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
@@ -125,14 +125,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - name: Install otf-release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.35.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.ps1 | iex
       - name: Build es-runtime-dev-cli
         if: ${{ !matrix.vm }}
         run: otf-release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
@@ -169,8 +169,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -194,8 +194,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.34.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.34.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.35.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.35.0/install.sh | bash
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
