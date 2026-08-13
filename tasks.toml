@@ -1,9 +1,9 @@
 # tasks.toml — the workspace-root anchor and task config for `tsr`.
 #
 # The runtime itself is Rust and builds with cargo; these tasks cover the
-# JavaScript around it — the two driver packages and the pure-JS half of
-# `runtime:serialization`. Each member keeps its own scripts in package.json,
-# so a package can be built on its own; tsr is what runs them together.
+# JavaScript around it — the two database drivers and the pure-JS half of
+# `runtime:serialization`. Each member keeps its own scripts in package.json, so
+# a package still builds on its own; tsr is what runs them together.
 #
 #   tsr build          every JS package
 #   tsr test:unit      the suites that need nothing running
@@ -15,42 +15,45 @@
 members = ["packages/postgres", "packages/redis", "crates/runtime/js"]
 
 # --- fan out to each package's own scripts ----------------------------------
-# `delegate` runs the member's native script rather than restating the command
-# here: the build of a package is a property of that package.
+# `packages` auto-detects each member's native runner, so the command lives in
+# that package's package.json: what a package builds is a property of it.
+# These three fan out over independent packages, so they run in parallel.
 
 [tasks.build]
-delegate = "bun"
 packages = ["*"]
+parallel = true
 
 # Not "*": `crates/runtime/js` has 25 standing type errors (strict-null and
 # symbol-index, in the Protobuf reflection layer) and has never been typechecked
 # standalone — its tsconfig sets `types: []` and drives the editor, not a clean
-# build. Adding it here would ship a task that is red on arrival, so the two
-# packages that pass are the ones wired up. Fixing that backlog is its own change.
+# build. Adding it would ship a task red on arrival. Matched by manifest name
+# rather than path, which is the other thing `packages` accepts.
 [tasks.typecheck]
-delegate = "bun"
 packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
+parallel = true
 
 # The full suites — the driver packages need a live PostgreSQL / Redis, and say
-# so when they cannot reach one.
+# so when they cannot reach one. Serial: they are the noisy ones, and a failure
+# is easier to read when its output is not interleaved.
 [tasks.test]
-delegate = "bun"
 packages = ["*"]
 
 # The half that needs nothing running, which is what CI can always do.
 [tasks."test:unit"]
-delegate = "bun"
 packages = ["*"]
+parallel = true
 
 # --- repo-wide, run once at the root ----------------------------------------
 # Biome reads one config for the whole repo, so fanning these out would lint the
-# same files once per package.
+# same files once per package. `node_modules/.bin` is on PATH already — tsr
+# prepends it, walking up from the task directory to the workspace root.
 
 [tasks.lint]
-run = "./node_modules/.bin/biome check"
+run = "biome check"
 
 [tasks.format]
-run = "./node_modules/.bin/biome check --write"
+run = "biome check --write"
 
+# Sequential by design: `test:unit` reads what `build` wrote.
 [tasks.ci]
 deps = ["lint", "typecheck", "build", "test:unit"]
