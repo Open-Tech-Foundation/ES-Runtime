@@ -17,12 +17,12 @@ github_release_notes = "curated-changelog"
 [hooks]
 
 [publish.ignore_paths]
-es-runtime-common = []
-es-runtime-cli = []
 es-runtime = []
-es-runtime-engine = []
 es-runtime-providers = []
+es-runtime-engine = []
+es-runtime-common = []
 es-runtime-default-providers = []
+es-runtime-cli = []
 
 [[package]]
 name = "es-runtime-cli"
@@ -32,10 +32,10 @@ matrix = true
 command = "cargo build --release --target {triple}"
 artifacts = "target/{triple}/release/{bin}{ext}"
 bin_name = "esrun"
-tag_format = "esrun@{version}"
-legacy_tag_formats = ["v{version}"]
 attest = true
 checksums = true
+tag_format = "esrun@{version}"
+legacy_tag_formats = ["v{version}"]
 
 [[package.targets]]
 name = "linux"
@@ -82,10 +82,10 @@ matrix = true
 command = "cargo build --release --target {triple}"
 artifacts = "target/{triple}/release/{bin}{ext}"
 bin_name = "esdev"
-tag_format = "esdev@{version}"
 manifest = "crates/dev-cli/Cargo.toml"
 attest = true
 checksums = true
+tag_format = "esdev@{version}"
 
 [[package.targets]]
 name = "linux"
@@ -131,11 +131,3 @@ triple = "aarch64-pc-windows-msvc"
 runner = "windows-latest"
 stage_as = "win32-arm64"
 ext = ".exe"
-
-[[package.targets]]
-name = "freebsd"
-arch = "x86_64"
-triple = "x86_64-unknown-freebsd"
-runner = "ubuntu-latest"
-stage_as = "freebsd-x64"
-vm = true
