@@ -1,9 +1,9 @@
 ---
 title: Installation
-description: Install the esrun CLI — a prebuilt, checksum-verified binary that upgrades in place.
+description: Install esrun and esdev — prebuilt, checksum-verified binaries, one command.
 ---
 
-import { Tabs, CodeBlock } from "@opentf/web-docs";
+import { Tabs, CodeBlock, Callout } from "@opentf/web-docs";
 
 export const installTabs = [
   {
@@ -30,8 +30,8 @@ export const installTabs = [
 
 # Installation
 
-A prebuilt, checksum-verified `esrun` binary is downloaded and installed
-automatically.
+One command installs both binaries into `~/.es-runtime/bin`, checksum-verified:
+**`esrun`**, the server runtime, and **`esdev`**, the development toolchain.
 
 ## Install
 
@@ -40,23 +40,45 @@ automatically.
 Prefer to build from source? See the
 [README](https://github.com/Open-Tech-Foundation/ES-Runtime).
 
-## esdev
+## Just one of them
 
-The development binary is separate, and this script does not place it — see
-[esdev](/docs/esdev) for what it does and how to build it.
+A server or CI image has no use for the development binary — and `esdev` is
+[not a deployment target](/docs/esdev).
 
 ```sh
-cargo build-dev   # → target/release/esdev
+# Linux / macOS
+curl -fsSL .../install.sh | bash -s -- --only=esrun
+curl -fsSL .../install.sh | bash -s -- --only=esdev
 ```
+
+```powershell
+# Windows (PowerShell) — `irm | iex` cannot pass arguments, so this is an env var.
+$env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
+```
+
+## Pinning a version
+
+Each binary is released under its own tag — `esrun@0.24.0`, `esdev@0.1.0` — and
+each is pinned independently.
+
+```sh
+ESRUN_VERSION=0.24.0 ESDEV_VERSION=0.1.0 curl -fsSL .../install.sh | bash
+```
+
+`ES_RUNTIME_INSTALL` overrides the install prefix.
 
 ## Upgrade
 
-`esrun upgrade` updates the binary in place — no reinstall needed.
+`esrun upgrade` updates that binary in place — no reinstall needed.
 
 ```sh
 # Built in — downloads the latest release and replaces the binary.
 esrun upgrade
 ```
+
+`esdev` has no self-upgrade: re-run the installer to move it. A tool that
+rewrites its own executable is one more thing to go wrong on a machine where
+re-running one command is the fix.
 
 ## Uninstall
 
@@ -64,10 +86,17 @@ Delete the install directory and remove it from your `PATH`.
 
 ```sh
 # Linux / macOS — remove the install dir, then drop the PATH line from your shell profile.
-rm -rf "$HOME/.esrun"
+rm -rf "$HOME/.es-runtime"
 ```
 
 ```powershell
 # Windows (PowerShell) — remove the install dir, then remove it from your user PATH.
-Remove-Item -Recurse -Force "$HOME\.esrun"
+Remove-Item -Recurse -Force "$HOME\.es-runtime"
 ```
+
+<Callout type="note" title="Upgrading from before 0.25">
+  Installs used to land in `~/.esrun/bin`. The installer now uses
+  `~/.es-runtime/bin` and leaves the old directory alone — it will not delete
+  binaries it did not place. Remove `~/.esrun` and its `PATH` entry, or a stale
+  `esrun` there will shadow the new one.
+</Callout>

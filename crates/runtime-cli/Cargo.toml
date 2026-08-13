@@ -21,6 +21,11 @@ es-runtime-common.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
 # `esrun upgrade` — self-update from GitHub releases.
 self_update.workspace = true
+# `esrun upgrade` only. Already in the tree (via `es-runtime` and `reqwest`), so
+# naming it here costs nothing and keeps the release listing parsed rather than
+# pattern-matched.
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 
 [dev-dependencies]
 # Test-only: a self-signed cert, so the telemetry e2e can stand up a TLS

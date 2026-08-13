@@ -21,25 +21,37 @@ It ships in two shapes from the same core:
 
 ## Install
 
-A prebuilt, checksum-verified binary:
+Prebuilt, checksum-verified binaries into `~/.es-runtime/bin` — **`esrun`**, the
+server runtime, and **`esdev`**, the development toolchain.
 
 Linux / macOS:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
+
+# Just one of them — a server or CI image has no use for esdev:
+curl -fsSL .../install.sh | bash -s -- --only=esrun
 ```
 
 Windows (PowerShell):
 
 ```powershell
 irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
+
+# Just one of them (`irm | iex` cannot pass arguments):
+$env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
 ```
 
-Or build from source — a single self-contained binary at `target/release/esrun`,
-no extra files or asset directory:
+Each binary is released under its own tag — `esrun@0.24.0`, `esdev@0.1.0` — and
+pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. `esrun upgrade`
+updates that binary in place.
+
+Or build from source — self-contained binaries, no extra files or asset
+directory:
 
 ```sh
-cargo build --release -p es-runtime-cli   # or the alias: cargo build-cli
+cargo build --release -p es-runtime-cli       # or the alias: cargo build-cli
+cargo build --release -p es-runtime-dev-cli   # or: cargo build-dev
 ```
 
 ## Run JavaScript

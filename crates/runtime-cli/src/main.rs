@@ -137,17 +137,104 @@ script's own arguments.
 Everything after <file> (or the -e code) belongs to the script, readable as
 `args` from runtime:process.";
 
+/// The repository releases are published from.
+const REPO: &str = "Open-Tech-Foundation/ES-Runtime";
+
+/// This repository's releases, as `esrun` versions.
+///
+/// A [`ReleaseSource`] rather than self_update's built-in github backend, and it
+/// is the tag format that forces it. Each binary is released under its own tag —
+/// `esrun@0.24.0`, `esdev@0.1.0` — so:
+///
+/// - `/releases/latest` answers with whichever binary was published most
+///   recently. It returned `esdev@0.1.0` the day esdev first shipped, which is
+///   an esrun upgrade looking for an esrun archive in an esdev release.
+/// - the built-in backend derives a version by stripping a leading `v` from the
+///   tag, so `esrun@0.24.0` fails to parse as semver. In a *listing* that means
+///   the tag is silently skipped — leaving only the pre-0.24 `v0.23.0` tags
+///   visible, so `upgrade` would offer a **downgrade**.
+///
+/// Both are fixed in the same place: list the releases, keep the ones tagged for
+/// this binary, and report each one's bare version. The download URLs travel
+/// with the assets, so the tag never has to round-trip through a version parser.
+struct EsrunReleases;
+
+impl EsrunReleases {
+    /// The bare semver a release tag carries, or `None` if the tag is not one of
+    /// esrun's.
+    ///
+    /// Two spellings are esrun's: the current `esrun@<version>`, and the
+    /// pre-0.24 bare `v<version>` (release.toml's `legacy_tag_formats`), which
+    /// still has to resolve so an old binary can upgrade out of it. Anything
+    /// else — an `esdev@` tag, a rolling tag — is not.
+    fn version_of(tag: &str) -> Option<&str> {
+        tag.strip_prefix("esrun@").or_else(|| {
+            tag.strip_prefix('v')
+                .filter(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+        })
+    }
+}
+
+impl self_update::ReleaseSource for EsrunReleases {
+    fn get_releases(&self) -> self_update::Result<Vec<self_update::Release>> {
+        // Newest-first, which is the order this trait asks for. 100 is the
+        // API's maximum page size and far more history than an upgrade needs.
+        let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
+        let body = reqwest::blocking::Client::builder()
+            // GitHub rejects a request with no user agent.
+            .user_agent(concat!("esrun/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(self_update::errors::Error::transport)?
+            .get(&url)
+            .send()
+            .and_then(reqwest::blocking::Response::error_for_status)
+            .and_then(reqwest::blocking::Response::text)
+            .map_err(self_update::errors::Error::transport)?;
+
+        let listing: serde_json::Value =
+            serde_json::from_str(&body).map_err(self_update::errors::Error::invalid_response)?;
+
+        let mut releases = Vec::new();
+        for entry in listing.as_array().into_iter().flatten() {
+            let Some(version) = entry["tag_name"].as_str().and_then(Self::version_of) else {
+                continue;
+            };
+            let mut release = self_update::Release::builder();
+            release.version(version);
+            for asset in entry["assets"].as_array().into_iter().flatten() {
+                if let (Some(name), Some(url)) = (
+                    asset["name"].as_str(),
+                    asset["browser_download_url"].as_str(),
+                ) {
+                    release.asset(self_update::ReleaseAsset::new(name, url));
+                }
+            }
+            // A tag that is not semver after the prefix is skipped rather than
+            // failing the whole listing — one malformed release should not make
+            // `upgrade` unusable.
+            if let Ok(release) = release.build() {
+                releases.push(release);
+            }
+        }
+        Ok(releases)
+    }
+}
+
 /// `esrun upgrade` — find the latest GitHub release for this target, download +
 /// extract it, and replace the running binary in place (the same outcome as
-/// re-running install.sh / install.ps1, but built in). HTTPS via rustls.
+/// re-running install.sh, but built in). HTTPS via rustls.
+///
+/// Only `esrun` upgrades itself. `esdev` is a development binary installed
+/// alongside it, and a tool that rewrites its own executable is one more thing
+/// that can go wrong on a machine where the fix is re-running the installer.
 // Returns a `String` error (not a boxed `dyn Error`) so the result is `Send` and
 // can cross the OS-thread boundary this runs on (see the `"upgrade"` dispatch).
 fn upgrade() -> Result<String, String> {
     // Release assets are named `esrun-<os>-<arch>.{tar.gz,zip}` by the
-    // otf-release tool (see .github/workflows/release.yml), e.g.
-    // `esrun-linux-x86-64.tar.gz`. self_update selects the asset whose name
-    // contains its configured `target`, so build that `<os>-<arch>` token for
-    // the running platform rather than using the default Rust target triple.
+    // otf-release tool (see release.toml), e.g. `esrun-linux-x86-64.tar.gz`.
+    // self_update selects the asset whose name contains its configured `target`,
+    // so build that `<os>-<arch>` token for the running platform rather than
+    // using the default Rust target triple.
     let os = if cfg!(target_os = "windows") {
         "windows"
     } else if cfg!(target_os = "macos") {
@@ -162,9 +249,8 @@ fn upgrade() -> Result<String, String> {
     };
     let target = format!("{os}-{arch}");
 
-    let status = self_update::backends::github::Update::configure()
-        .repo_owner("Open-Tech-Foundation")
-        .repo_name("ES-Runtime")
+    let status = self_update::backends::custom::Update::configure()
+        .source(EsrunReleases)
         .bin_name("esrun")
         .target(&target)
         // The archive holds the binary at its root, so `{{ bin }}` alone (which
@@ -381,5 +467,24 @@ async fn main() -> ExitCode {
             print_error(&err);
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EsrunReleases;
+
+    /// The tag filter is the whole fix: an `esdev@` tag must not look like an
+    /// esrun version, or `upgrade` downloads the wrong binary's release.
+    #[test]
+    fn only_esruns_own_tags_carry_a_version() {
+        assert_eq!(EsrunReleases::version_of("esrun@0.24.0"), Some("0.24.0"));
+        // The pre-0.24 format, still resolvable so an old binary can leave it.
+        assert_eq!(EsrunReleases::version_of("v0.23.0"), Some("0.23.0"));
+
+        assert_eq!(EsrunReleases::version_of("esdev@0.1.0"), None);
+        assert_eq!(EsrunReleases::version_of("nightly"), None);
+        // `v` followed by a word is a name, not a version — `vnext` is not 'next'.
+        assert_eq!(EsrunReleases::version_of("vnext"), None);
     }
 }

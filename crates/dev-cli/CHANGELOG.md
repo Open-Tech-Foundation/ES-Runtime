@@ -19,6 +19,16 @@ runtime itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev` is installed by the one-liner.** The install script places both
+  binaries into `~/.es-runtime/bin`; `--only=esdev` (or `$env:ES_RUNTIME_ONLY`
+  on Windows) installs just this one, and `ESDEV_VERSION` pins it.
+
+  `esdev` has **no self-upgrade**, unlike `esrun` — re-run the installer. A
+  development tool that rewrites its own executable is one more thing to go
+  wrong on the machine where re-running one command is the fix.
+
 ### Changed
 
 - **`esrun` now grants nothing by default; `esdev` still grants everything**

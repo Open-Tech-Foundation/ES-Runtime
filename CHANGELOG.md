@@ -8,6 +8,51 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **The install one-liner was broken and 404ing.** `install.sh` and
+  `install.ps1` resolved the version from GitHub's `/releases/latest`, which
+  returns whichever release was published most recently — since `esdev@0.1.0`
+  shipped, that is esdev, so the esrun installer was building
+  `…/download/esdev@0.1.0/esrun-linux-x86-64.tar.gz` and getting a 404.
+
+  Both scripts now resolve each binary from the newest tag carrying *its* own
+  prefix. Asset names never changed; only the version lookup was wrong.
+
+- **`esrun upgrade` could offer a downgrade.** Per-binary tags
+  (`esrun@0.24.0`) are not semver after the `v`-stripping self_update applies,
+  so every current tag was silently skipped in the release listing and the
+  newest *visible* release was the pre-0.24 `v0.23.0` — reported as "New release
+  found! v0.22.0 --> v0.23.0 (NOT compatible)". Release resolution now runs
+  through a custom `ReleaseSource` that keeps esrun's own tags (both the current
+  `esrun@<version>` and the legacy `v<version>`) and reports each one's bare
+  version.
+
+### Changed
+
+- **The installer places both binaries**, into `~/.es-runtime/bin`:
+
+  ```sh
+  curl -fsSL .../install.sh | bash                      # esrun + esdev
+  curl -fsSL .../install.sh | bash -s -- --only=esrun   # servers, CI
+  ```
+
+  On Windows, `irm | iex` cannot take arguments, so the selector is
+  `$env:ES_RUNTIME_ONLY`. Versions pin independently with `ESRUN_VERSION` /
+  `ESDEV_VERSION`, each accepting a bare `0.24.0`, a full `esrun@0.24.0`, or a
+  legacy `v0.23.0`. The prefix moved from `ESRUN_INSTALL` to
+  `ES_RUNTIME_INSTALL`; the old name is still honoured.
+
+  **The install directory moved** from `~/.esrun/bin`, which only ever named one
+  of the two binaries. The old directory is left in place — the installer does
+  not delete binaries it did not put there — and is reported when found, because
+  a stale `esrun` earlier in `PATH` would shadow the new one. Remove `~/.esrun`
+  and its `PATH` entry.
+
+  On Windows ARM64 the installer now says that `esrun` has no release asset for
+  that platform (`esdev` does) and installs what it can, rather than failing
+  with a bare download error.
+
 ### Changed
 
 - **BREAKING: `esrun` grants nothing by default.** `esrun app.js` used to hold
