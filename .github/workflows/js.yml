@@ -64,8 +64,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - run: ./node_modules/.bin/biome ci
+      - uses: ./.github/actions/tsr
+      - run: tsr install
+      - run: tsr lint:ci
 
   # The PostgreSQL driver (packages/postgres). Two halves, deliberately.
   #
@@ -83,31 +84,19 @@ jobs:
     needs: changes
     if: needs.changes.outputs.js == 'true'
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: crates/runtime/js
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - run: bun install --frozen-lockfile
-      - run: bun test
-      # The bundle is built by our own `esdev`, so CI needs one. The *released*
-      # binary, installed the way a user would — building it here would compile
-      # V8 for a 83 KB bundle, and this way the installer is exercised on every
-      # run too. It also states the contract for the committed artifact: it is
-      # reproducible from a released esdev, so a change to esdev's bundler needs
-      # a release before the regenerated bundle lands.
-      - name: install esdev
-        working-directory: .
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
-            | bash -s -- --only=esdev
-          echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
+      - uses: ./.github/actions/tsr
+        with:
+          esdev: "true"
+      - run: tsr install
+      - run: tsr test:serialization
       # The bundle is committed (the runtime embeds it at compile time), so it
       # can drift from the source it was built from and nothing would notice
       # until a behaviour bug. Rebuild and require the tree to be unchanged.
-      - run: bun run build
-      - run: git diff --exit-code -- ../src/runtime_modules/serialization.js
+      - run: tsr build
+      - run: git diff --exit-code -- crates/runtime/src/runtime_modules/serialization.js
 
   # Biome over the JS packages (config: biome.json). Formatting and lint in one
   # pass — `biome check` is what `tsr lint` runs locally.
@@ -129,33 +118,23 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
-    defaults:
-      run:
-        working-directory: packages/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - uses: Swatinem/rust-cache@v2
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
-      - run: cargo build -p es-runtime-cli
-        working-directory: .
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      # `bun run build` is `esdev build --lib src` now, so this job needs esdev.
-      # The released binary rather than a source build: compiling V8 to produce a
-      # module tree would dominate this job's runtime.
-      - name: install esdev
-        working-directory: .
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
-            | bash -s -- --only=esdev
-          echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
-      - run: bun run build
-      - run: ./test/unit/run.sh
+      - uses: ./.github/actions/tsr
+        with:
+          esdev: "true"
+      - run: tsr build:esrun
+      - run: tsr install
+      - run: tsr typecheck
+      - run: tsr build
+      - run: tsr test:protocol
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
-      - run: ./test/run.sh
+      - run: tsr test:postgres
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           PG_URL: postgres://postgres:esrun@127.0.0.1:5432/esrun_test?sslmode=disable
@@ -192,20 +171,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
-      - run: cargo build -p es-runtime-cli
-        working-directory: .
-      - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      # `bun run build` is `esdev build --lib src` now, so this job needs esdev.
-      # The released binary rather than a source build: compiling V8 to produce a
-      # module tree would dominate this job's runtime.
-      - name: install esdev
-        working-directory: .
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
-            | bash -s -- --only=esdev
-          echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
-      - run: bun run build
+      - uses: ./.github/actions/tsr
+        with:
+          esdev: "true"
+      - run: tsr build:esrun
+      - run: tsr install
+      - run: tsr typecheck
+      - run: tsr build
 
       # The password-protected server, for the handshake half. A failed `HELLO`
       # has to be told apart from a wrong password, and only a server that wants
@@ -249,10 +221,10 @@ jobs:
       - name: start the sentinel deployment
         run: ./test/sentinel-server.sh >> "$GITHUB_ENV"
 
-      - run: ./test/unit/run.sh
+      - run: tsr test:protocol
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
-      - run: ./test/run.sh
+      - run: tsr test:redis
         env:
           ESRUN: ${{ github.workspace }}/target/debug/esrun
           REDIS_URL: redis://127.0.0.1:6379

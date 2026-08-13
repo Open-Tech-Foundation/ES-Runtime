@@ -2,11 +2,9 @@
   "name": "esrun-serialization",
   "private": true,
   "type": "module",
-  "description": "Source for the runtime:serialization module \u2014 pure-JS Protobuf (reflection) + thin wrappers over the Rust-backed text/binary parser ops. Bundled into crates/runtime/src/runtime_modules/serialization.js.",
+  "description": "Source for runtime:serialization. Bundled into the runtime binary.",
   "scripts": {
-    "build": "node build.mjs",
-    "test": "bun test",
-    "test:unit": "bun test"
+    "build": "node build.mjs"
   },
   "devDependencies": {
     "@bufbuild/protobuf": "^2.12.1",

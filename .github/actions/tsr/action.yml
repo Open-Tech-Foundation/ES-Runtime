@@ -1,0 +1,26 @@
+name: Set up tsr
+description: >
+  Installs the tsr task runner and puts it on PATH. Every workflow here runs
+  repo tasks through `tsr <task>` rather than spelling out cargo or bun, so what
+  CI does and what a contributor does cannot drift.
+inputs:
+  esdev:
+    description: Also install esdev, which the JS packages build with.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: install tsr
+      shell: bash
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/tsr/main/install.sh | bash
+        echo "$HOME/.tsr/bin" >> "$GITHUB_PATH"
+    # The released binary rather than a source build: compiling V8 to bundle a
+    # module tree would dominate the job, and this exercises our installer too.
+    - name: install esdev
+      if: inputs.esdev == 'true'
+      shell: bash
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh \
+          | bash -s -- --only=esdev
+        echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"

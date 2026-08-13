@@ -1,52 +1,74 @@
 # tasks.toml — the workspace-root anchor and task config for `tsr`.
 #
-# The runtime itself is Rust and builds with cargo; these tasks cover the
-# JavaScript around it — the two database drivers and the pure-JS half of
-# `runtime:serialization`. Each member keeps its own scripts in package.json, so
-# a package still builds on its own; tsr is what runs them together.
+# Every command CI runs is a task here, so what runs on a machine and what runs
+# in a workflow cannot drift. CI installs tsr and calls `tsr <task>`; it does not
+# spell out cargo or bun invocations of its own.
 #
-#   tsr build          every JS package
-#   tsr test:unit      the suites that need nothing running
-#   tsr ci             lint + typecheck + build + unit tests
+#   tsr --list          what there is
+#   tsr ci              what a pull request must pass
+#   tsr <task> --dry-run  print the command, run nothing
 #
 # Docs: https://tsr.opentechf.org/docs
 
 [workspace]
 members = ["packages/postgres", "packages/redis", "crates/runtime/js"]
 
-# --- fan out to each package's own scripts ----------------------------------
-# `packages` auto-detects each member's native runner, so the command lives in
-# that package's package.json: what a package builds is a property of it.
-# These three fan out over independent packages, so they run in parallel.
+# --- the runtime (Rust) ------------------------------------------------------
 
+[tasks.fmt]
+run = "cargo fmt --all --check"
+
+# Build first so the `v8` crate fetches its prebuilt static lib: clippy runs in
+# check mode, which does not trigger that download on a cold cache.
+[tasks.clippy]
+run = "cargo build --workspace --all-features && cargo clippy --workspace --all-targets --all-features -- -D warnings"
+
+[tasks.test]
+run = "cargo test --workspace --all-features"
+
+# The curated suite, driven by the real binary: a real event loop, a real
+# filesystem, real process exit. The grants are named rather than replaced by
+# --allow-all deliberately — this suite runs the way a deployment does, so a new
+# test that needs the network has to say so here.
+[tasks.conformance]
+run = "cargo run -p es-runtime-cli -- --allow-read --allow-write --allow-imports crates/runtime/conformance/run.js"
+
+[tasks.miri]
+run = "rustup toolchain install nightly --profile minimal --component miri && cargo +nightly miri test -p es-runtime-common -p es-runtime-providers"
+
+[tasks.msrv]
+run = "rustup toolchain install 1.95.0 --profile minimal && cargo +1.95.0 build --workspace --all-features"
+
+# A script, not a `run` line: this needs a loop and ::group:: annotations, and
+# tsr's mini-shell has no for-loops by design.
+[tasks.fuzz]
+run = "bash scripts/fuzz.sh"
+
+[tasks.deny]
+run = "cargo deny check"
+
+[tasks.audit]
+run = "cargo audit"
+
+# --- the JavaScript ----------------------------------------------------------
+
+[tasks.install]
+run = "bun install --frozen-lockfile"
+
+# `packages` auto-detects each member's native runner, so this is the one script
+# left in their package.json — `npm publish` needs it, and nothing else does.
 [tasks.build]
 packages = ["*"]
 parallel = true
 
-# Not "*": `crates/runtime/js` has 25 standing type errors (strict-null and
-# symbol-index, in the Protobuf reflection layer) and has never been typechecked
-# standalone — its tsconfig sets `types: []` and drives the editor, not a clean
-# build. Adding it would ship a task red on arrival. Matched by manifest name
-# rather than path, which is the other thing `packages` accepts.
+# Not "*": `crates/runtime/js` has 25 standing type errors and has never been
+# typechecked standalone (its tsconfig sets `types: []` and drives the editor).
+# Wiring it up would ship a task red on arrival. Matched by manifest name, which
+# is the other thing `packages` accepts.
 [tasks.typecheck]
+run = "tsc --noEmit"
 packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
 parallel = true
-
-# The full suites — the driver packages need a live PostgreSQL / Redis, and say
-# so when they cannot reach one. Serial: they are the noisy ones, and a failure
-# is easier to read when its output is not interleaved.
-[tasks.test]
-packages = ["*"]
-
-# The half that needs nothing running, which is what CI can always do.
-[tasks."test:unit"]
-packages = ["*"]
-parallel = true
-
-# --- repo-wide, run once at the root ----------------------------------------
-# Biome reads one config for the whole repo, so fanning these out would lint the
-# same files once per package. `node_modules/.bin` is on PATH already — tsr
-# prepends it, walking up from the task directory to the workspace root.
 
 [tasks.lint]
 run = "biome check"
@@ -54,6 +76,46 @@ run = "biome check"
 [tasks.format]
 run = "biome check --write"
 
-# Sequential by design: `test:unit` reads what `build` wrote.
+# Biome's CI mode: no writes, and it reports rather than fixes.
+[tasks."lint:ci"]
+run = "biome ci"
+
+# --- test suites -------------------------------------------------------------
+
+# The protocol halves, which need nothing running.
+[tasks."test:protocol"]
+run = "./test/unit/run.sh"
+packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
+parallel = true
+
+[tasks."test:serialization"]
+run = "bun test"
+dir = "crates/runtime/js"
+
+[tasks."test:unit"]
+deps = ["test:protocol", "test:serialization"]
+
+# The full driver suites — these need a live server, and say so when they cannot
+# reach one. One task each rather than a fan-out, because CI gives each its own
+# job with its own service containers.
+[tasks."test:postgres"]
+run = "./test/run.sh"
+dir = "packages/postgres"
+
+[tasks."test:redis"]
+run = "./test/run.sh"
+dir = "packages/redis"
+
+[tasks."test:drivers"]
+deps = ["test:postgres", "test:redis"]
+
+# The debug binary the driver suites run against (ESRUN points at it). Debug,
+# not release: these check behaviour rather than speed.
+[tasks."build:esrun"]
+run = "cargo build -p es-runtime-cli"
+
+# --- aggregates --------------------------------------------------------------
+
+# Sequential by design: test:unit reads what build wrote.
 [tasks.ci]
 deps = ["lint", "typecheck", "build", "test:unit"]

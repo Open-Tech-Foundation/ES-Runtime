@@ -65,8 +65,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
       # Build with the declared MSRV explicitly, overriding rust-toolchain.toml.
-      - run: rustup toolchain install 1.95.0 --profile minimal
-      - run: cargo +1.95.0 build --workspace --all-features
+      - uses: ./.github/actions/tsr
+      - run: tsr msrv
 
   # Fuzzing (SPEC §5). Each target gets a bounded run seeded from the committed
   # corpus in `fuzz/seeds/` — which includes the inputs that have found bugs, so
@@ -89,18 +89,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - name: Run each target for 60s
-        run: |
-          set -euo pipefail
-          for target in url encoding urlpattern compression serialization keys; do
-            echo "::group::fuzz $target"
-            # New coverage-increasing inputs go to the (gitignored) corpus
-            # directory; the seeds are read-only, so a run cannot bloat them.
-            cargo +nightly fuzz run "$target" \
-              "fuzz/corpus/$target" "fuzz/seeds/$target" \
-              -- -max_total_time=60 -rss_limit_mb=4096
-            echo "::endgroup::"
-          done
+      - uses: ./.github/actions/tsr
+      # The loop lives in scripts/fuzz.sh, so `tsr fuzz` runs locally too.
+      - run: tsr fuzz
       # A crash writes its input here; keep it so the failure is reproducible
       # from the run rather than only from whoever can rerun the fuzzer.
       - uses: actions/upload-artifact@v4
@@ -124,7 +115,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      - run: cargo deny check
+      - uses: ./.github/actions/tsr
+      - run: tsr deny
 
   audit:
     name: cargo-audit
@@ -136,4 +128,5 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
-      - run: cargo audit
+      - uses: ./.github/actions/tsr
+      - run: tsr audit

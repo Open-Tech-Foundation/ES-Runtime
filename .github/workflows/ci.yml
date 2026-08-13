@@ -1,13 +1,13 @@
 # The core gates for ES-Runtime (SPEC.md §5): formatting, clippy, the test
 # matrix, and Miri over the unsafe FFI seam. These run on every pull request.
 #
+# Every step is `tsr <task>`. The commands live in tasks.toml, so what CI runs
+# and what you run cannot drift — and `tsr <task> --dry-run` tells you exactly
+# what a job will do.
+#
 # Two companions carry the rest, so a change pays only for what it can break:
 #   .github/workflows/js.yml         the drivers and the serialization bundle
 #   .github/workflows/hardening.yml  MSRV, fuzzing, cargo-deny, cargo-audit
-#
-# The `v8` crate downloads a prebuilt static library at build time, so the
-# clippy and test jobs need network and benefit from the Rust cache. The
-# toolchain is pinned by rust-toolchain.toml (1.95.0).
 name: CI
 
 on:
@@ -15,7 +15,6 @@ on:
     branches: [main]
   pull_request:
 
-# One in-flight run per ref; cancel superseded runs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -30,7 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo fmt --all --check
+      - uses: ./.github/actions/tsr
+      - run: tsr fmt
 
   clippy:
     name: clippy -D warnings
@@ -38,12 +38,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      # Build first so the `v8` crate fetches its prebuilt static lib. Clippy
-      # runs in check mode, which doesn't trigger that download on a cold cache;
-      # deps build with normal rustc (only workspace crates use clippy-driver),
-      # so clippy then reuses the v8 artifact.
-      - run: cargo build --workspace --all-features
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - uses: ./.github/actions/tsr
+      - run: tsr clippy
 
   # Behavioral tests run on all three tier-1 platforms: filesystem/path semantics
   # (separators, drive letters, the symlink-canonicalized root jail), process exit
@@ -62,22 +58,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace --all-features
-      # The same conformance suite the `conformance_suite_passes` gate runs,
-      # driven instead by the real CLI: a real event loop, a real filesystem,
-      # real process exit. It exits non-zero on any failure. One platform is
-      # enough — this checks the driver, not platform semantics — and the binary
-      # is already built by the step above.
-      #
-      # The grants are named because esrun grants nothing (D65), and they are
-      # named rather than replaced by --allow-all deliberately: this suite runs
-      # the same way a deployment does, so a new test that needs the network
-      # should have to say so here.
+      - uses: ./.github/actions/tsr
+      - run: tsr test
+      # One platform is enough for the conformance suite — it checks the driver,
+      # not platform semantics — and the binary is already built above.
       - if: matrix.os == 'ubuntu-latest'
-        run: >
-          cargo run -p es-runtime-cli --
-          --allow-read --allow-write --allow-imports
-          crates/runtime/conformance/run.js
+        run: tsr conformance
 
   miri:
     name: miri
@@ -85,5 +71,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: rustup toolchain install nightly --profile minimal --component miri
-      - run: cargo +nightly miri test -p es-runtime-common -p es-runtime-providers
+      - uses: ./.github/actions/tsr
+      - run: tsr miri

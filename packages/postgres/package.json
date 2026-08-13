@@ -1,8 +1,9 @@
 {
   "name": "@opentf/esrun-postgres",
   "version": "0.0.1",
-  "description": "PostgreSQL driver for ES Runtime (esrun) \u2014 a runtime:db backend written entirely in JavaScript over runtime:net.",
+  "description": "PostgreSQL client and runtime:db driver for esrun.",
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -10,32 +11,18 @@
     }
   },
   "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "README.md"
-  ],
+  "files": ["dist", "README.md"],
   "engines": {
     "esrun": ">=0.22.0"
   },
   "scripts": {
-    "build": "esdev build --lib src",
-    "test": "./test/unit/run.sh && ./test/run.sh",
-    "test:unit": "./test/unit/run.sh",
-    "typecheck": "tsc --noEmit"
+    "build": "esdev build --lib src"
   },
   "devDependencies": {
     "@opentf/esrun-types": "file:../types",
     "typescript": "^7.0.2"
   },
-  "keywords": [
-    "esrun",
-    "es-runtime",
-    "opentf",
-    "postgres",
-    "postgresql",
-    "database",
-    "driver"
-  ],
+  "keywords": ["esrun", "es-runtime", "opentf", "postgres", "postgresql", "database", "driver"],
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
