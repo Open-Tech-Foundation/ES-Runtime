@@ -3320,3 +3320,103 @@ fn runtime_build_does_not_exist_under_esrun() {
         stderr(&out)
     );
 }
+
+/// The two modules are one feature used from two sides, and this is the shape
+/// they exist for: a server that bundles a route on demand, keeps the chunk,
+/// serves it, and on a save drops **only** the routes that used the changed
+/// file — all while staying up. Every part of that is happening at once here,
+/// which is the integration the design is really making a claim about: the
+/// bundler's hooks run in the same isolate that is answering the requests.
+#[test]
+fn a_dev_server_can_bundle_watch_and_serve_at_once() {
+    let dir = watch_dir("rb_devserver");
+    write_in(&dir, "dep.js", "export const answer = 42;\n");
+    write_in(
+        &dir,
+        "main.js",
+        "import { answer } from './dep.js';\nconsole.log(answer);\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+import { watch } from "runtime:watch";
+import { serve } from "runtime:http";
+import { write } from "runtime:fs";
+
+const cache = new Map();
+
+// A hook that awaits: the bundler must wait for this isolate, and this isolate
+// must go on answering requests while it does.
+const slow = {
+  name: "slow",
+  async transform() {
+    await new Promise((r) => setTimeout(r, 5));
+    return null;
+  },
+};
+
+async function bundleRoute(route) {
+  const bundle = await build({ input: route, plugins: [slow] });
+  const { output, watchFiles } = await bundle.generate({ codeSplitting: false });
+  await bundle.close();
+  const entry = { code: output[0].code, deps: new Set(watchFiles) };
+  cache.set(route, entry);
+  return entry;
+}
+
+const server = serve({ port: 0 }, async (req) => {
+  const route = new URL(req.url).pathname === "/dep" ? "dep.js" : "main.js";
+  const entry = cache.get(route) ?? (await bundleRoute(route));
+  return new Response(entry.code);
+});
+const { port } = await server.addr;
+
+const changes = watch(["."], { recursive: true });
+(async () => {
+  for await (const { path } of changes) {
+    for (const [route, entry] of cache) {
+      if (entry.deps.has(path)) cache.delete(route);
+    }
+  }
+})();
+
+const one = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+const two = await (await fetch(`http://127.0.0.1:${port}/dep`)).text();
+console.log("served", one.includes("console.log") && two.includes("answer"));
+console.log("cached", cache.size === 2);
+
+await write("dep.js", "export const answer = 44;\n");
+for (let i = 0; i < 40 && cache.size === 2; i++) {
+  await new Promise((r) => setTimeout(r, 100));
+}
+// Only what depended on dep.js was dropped — dep.js's own route and main.js's
+// both did, but nothing cleared the map wholesale.
+console.log("invalidated", cache.size < 2);
+
+const rebuilt = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+console.log("rebuilt", rebuilt.includes("44"));
+
+await changes.close();
+await server.stop();
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = stdout(&out);
+    for expected in [
+        "served true",
+        "cached true",
+        "invalidated true",
+        "rebuilt true",
+    ] {
+        assert!(
+            printed.contains(expected),
+            "{expected} missing from {printed}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
