@@ -39,12 +39,18 @@
 //! # What is bundled, and what is copied
 //!
 //! A `<script type="module">` is an **entry**: it and everything it imports
-//! become one bundle, under the browser conditions ([`crate::build`]). Anything
-//! else a relative reference names — a stylesheet, a favicon, an image, a
-//! classic script — is **copied** and hashed. A classic script cannot be
-//! bundled, because it has no imports to follow; a stylesheet is not bundled
-//! because there is no CSS pipeline here yet, and pretending otherwise would
-//! produce a file that silently lost its `@import`s.
+//! become one bundle, under the browser conditions ([`crate::build`]). A
+//! `<link rel="stylesheet">` is an entry too: it and everything it `@import`s
+//! become one stylesheet ([`crate::css`]). Anything else a relative reference
+//! names — a favicon, an image, a classic script — is **copied** and hashed,
+//! because a classic script has no imports to follow and an image has nothing
+//! to resolve.
+//!
+//! A stylesheet's own `url()` references are copied as well, and it is pointed
+//! at where they landed. That is not a nicety: bundling moves the file to
+//! `assets/`, and a relative `url()` is resolved by the browser against
+//! wherever the file *is*, so a stylesheet that moved without them would arrive
+//! pointing at nothing.
 
 use std::ops::Range;
 use std::path::Path;
@@ -279,6 +285,70 @@ fn injection_point(html: &str) -> usize {
     body.or(end).unwrap_or(html.len())
 }
 
+/// Whether a referenced file is a stylesheet, and so an entry rather than a
+/// file to copy.
+///
+/// By extension rather than by the `rel="stylesheet"` on the tag: a `<link>`
+/// can carry several `rel` values, `rel` is optional on the ones that matter
+/// least, and a `.css` file is a stylesheet however it was linked. The
+/// extension is also what decides this in every other build tool, which makes
+/// it the answer somebody will guess correctly.
+fn is_stylesheet(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "css")
+}
+
+/// Bundles a stylesheet and writes out the files it references.
+///
+/// Returns the CSS to write, which is deliberately *not* written here: its
+/// content hash has to be computed from these bytes, after every `url()` has
+/// been pointed at a real name. Hashing the source instead would leave a
+/// stylesheet whose name never changed when the file it `@import`s did — a
+/// stale-cache bug that only appears in production, and only for the people who
+/// visited before the change.
+fn stylesheet(
+    path: &Path,
+    assets: &Path,
+    hash: bool,
+    minify: bool,
+    sources: &mut usize,
+    written: &mut usize,
+) -> Result<Vec<u8>, String> {
+    let bundled = crate::css::bundle(path, minify)?;
+    let mut code = bundled.code;
+    // Every stylesheet that went in, not every `<link>` that named one: an
+    // `@import` is a file this build read, and counting tags instead would
+    // report the same "1 stylesheet" whether it resolved three of them or none.
+    *sources += bundled.sources;
+    // The files it pulled in are files this build wrote, and the summary is a
+    // count of those. Left out, a stylesheet that dragged in a font and three
+    // images would report as one asset.
+    *written += bundled.referenced.len();
+
+    for referenced in &bundled.referenced {
+        let bytes = std::fs::read(&referenced.path)
+            .map_err(|e| format!("cannot read {}: {e}", referenced.path.display()))?;
+        let name = if hash {
+            hashed_name(&referenced.path, &bytes)
+        } else {
+            referenced
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("asset")
+                .to_string()
+        };
+        std::fs::create_dir_all(assets)
+            .map_err(|e| format!("cannot create {}: {e}", assets.display()))?;
+        std::fs::write(assets.join(&name), &bytes)
+            .map_err(|e| format!("cannot write {name}: {e}"))?;
+        // Rooted, like every other URL this build writes, so it resolves the
+        // same from a page at `/` and a page at `/posts/1`.
+        code = code.replace(&referenced.placeholder, &format!("/{ASSET_DIR}/{name}"));
+    }
+
+    Ok(code.into_bytes())
+}
+
 /// Builds an HTML target: bundle what it imports, copy what it references,
 /// write it back pointing at both.
 pub async fn build(
@@ -307,6 +377,12 @@ pub async fn build(
     // string that two tags might spell differently.
     let mut rewritten: Vec<(&Reference, String)> = Vec::new();
     let mut modules: Vec<(String, String)> = Vec::new();
+    // Counted for the summary, and counted directly rather than derived from
+    // `rewritten`: what a `<link>` becomes is no longer one file, so the tags in
+    // the document have stopped being a count of anything.
+    let mut styled = 0usize;
+    let mut pulled_in = 0usize;
+    let mut copied = 0usize;
 
     for reference in &references {
         let path = base.join(&reference.url);
@@ -339,8 +415,13 @@ pub async fn build(
                 modules.push((name, path.to_string_lossy().into_owned()));
             }
             Kind::Asset => {
-                let bytes = std::fs::read(&path)
-                    .map_err(|e| format!("cannot read {}: {e}", reference.url))?;
+                let bytes = if is_stylesheet(&path) {
+                    stylesheet(&path, &assets, hash, minify, &mut styled, &mut pulled_in)?
+                } else {
+                    copied += 1;
+                    std::fs::read(&path)
+                        .map_err(|e| format!("cannot read {}: {e}", reference.url))?
+                };
                 let name = if hash {
                     hashed_name(&path, &bytes)
                 } else {
@@ -403,14 +484,15 @@ pub async fn build(
         .map_err(|e| format!("cannot write {}: {e}", written.display()))?;
 
     let scripts = bundled.len();
-    let copied = rewritten.len() - scripts;
+    let copied = copied + pulled_in;
     Ok(format!(
-        "{} ({scripts} script{}, {copied} asset{})",
+        "{} ({scripts} script{}, {styled} stylesheet{}, {copied} asset{})",
         written
             .strip_prefix(root)
             .unwrap_or(&written)
             .to_string_lossy(),
         if scripts == 1 { "" } else { "s" },
+        if styled == 1 { "" } else { "s" },
         if copied == 1 { "" } else { "s" }
     ))
 }

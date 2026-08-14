@@ -50,6 +50,11 @@ notify.workspace = true
 # what was built — spliced by byte span, so nothing else in it moves. Same
 # confinement as oxc and rolldown.
 html5gum.workspace = true
+# The stylesheets an `index.html` target references. Same confinement as oxc,
+# rolldown and html5gum, and one more reason besides: this is the tree's only
+# copyleft crate (MPL-2.0, with a deliberate exception in `deny.toml`), so the
+# line below is the whole of what keeps it out of what a service deploys.
+lightningcss.workspace = true
 # `--install-types` — merging the type package into tsconfig.json. Moved here
 # from `esrun` with the command itself (D59): a production binary has no reason
 # to be able to rewrite a tsconfig.

@@ -2035,6 +2035,86 @@ fn a_changed_file_gets_a_changed_name() {
     assert_ne!(before, after, "the stylesheet changed and its URL did not");
 }
 
+/// A stylesheet is an entry, not a file to copy: what the document ends up
+/// pointing at is the whole tree, with every `url()` aimed at where the file it
+/// named actually landed.
+///
+/// The unit tests in `css.rs` cover the bundling; what is worth an end-to-end
+/// test is the wiring around it, because both halves fail silently. A
+/// placeholder that is never substituted is a stylesheet full of opaque hashes,
+/// and a hash computed before substitution is a URL that never changes.
+#[test]
+fn a_stylesheet_is_bundled_with_what_it_imports_and_references() {
+    let dir = build_dir("h_css");
+    std::fs::create_dir_all(dir.join("theme")).expect("create theme");
+    write_in(
+        &dir,
+        "styles.css",
+        "@import \"./theme/dark.css\";\nbody { color: var(--ink) }\n",
+    );
+    write_in(
+        &dir,
+        "theme/dark.css",
+        ":root { --ink: #eee }\nbody { background: url(./grain.png) }\n",
+    );
+    write_in(&dir, "theme/grain.png", "not really a png\n");
+    write_in(
+        &dir,
+        "index.html",
+        r#"<!doctype html><html><head><link rel="stylesheet" href="./styles.css"></head><body></body></html>"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+
+    let build = || {
+        let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+        assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+        let document =
+            std::fs::read_to_string(dir.join("dist/index.html")).expect("read the document");
+        let url = document
+            .split_once(r#"<link rel="stylesheet" href=""#)
+            .and_then(|(_, rest)| rest.split_once('"'))
+            .map(|(url, _)| url.to_string())
+            .expect("the stylesheet survived");
+        let css = std::fs::read_to_string(dir.join("dist").join(url.trim_start_matches('/')))
+            .expect("read the stylesheet");
+        (url, css)
+    };
+
+    let (url, css) = build();
+    assert!(url.starts_with("/assets/styles-"), "{url}");
+
+    // The import is gone because its contents are here.
+    assert!(!css.contains("@import"), "the import survived:\n{css}");
+    assert!(css.contains("--ink"), "the import was not inlined:\n{css}");
+
+    // The `url()` names where the file landed — rooted, hashed, and written.
+    let referenced = css
+        .split_once("url(")
+        .and_then(|(_, rest)| rest.split_once(')'))
+        .map(|(url, _)| url.trim_matches(['"', '\'']).to_string())
+        .expect("a url() survived");
+    assert!(
+        referenced.starts_with("/assets/grain-") && referenced.ends_with(".png"),
+        "the placeholder was never substituted: {referenced}"
+    );
+    assert!(
+        dir.join("dist")
+            .join(referenced.trim_start_matches('/'))
+            .is_file(),
+        "{referenced} was not written"
+    );
+
+    // The name follows the content of the *bundle*, so editing an imported file
+    // — which the entry's own bytes know nothing about — still busts the cache.
+    write_in(&dir, "theme/dark.css", ":root { --ink: #111 }\n");
+    let (changed, _) = build();
+    assert_ne!(url, changed, "an imported file changed and the URL did not");
+}
+
 /// A relative path names a file in the project. If it is not there, that is a
 /// broken page, and the build is where it should be found — not the browser.
 #[test]

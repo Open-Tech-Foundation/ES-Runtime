@@ -44,8 +44,47 @@ allow = [
     # Permissive *data* license — covers the rustls root-certificate bundle
     # (webpki-root-certs), pulled in transitively via reqwest's TLS (D20).
     "CDLA-Permissive-2.0",
+    # The Boost Software License, not the Business Source License that shares the
+    # abbreviation: OSI-approved, permissive, and without even a
+    # binary-attribution requirement. Reached via lightningcss (xxhash-rust).
+    "BSL-1.0",
 ]
-exceptions = []
+exceptions = [
+    # The CSS pipeline in `esdev` (stylesheet `@import` bundling, minification
+    # and syntax lowering for an `index.html` target) is MPL-2.0, and with it the
+    # CSS-parsing subtree it is built on — Mozilla's own `cssparser` lineage, by
+    # way of Servo. These are the only copyleft crates in the tree, and they are
+    # allowed deliberately, on three grounds:
+    #
+    # 1. MPL-2.0's copyleft is **per-file**: it governs these crates' own
+    #    sources and does not reach a work that merely links them. Apache-2.0
+    #    output is unaffected, which is what D10 protects.
+    # 2. It is linked **only into `esdev`**, the binary a developer runs to
+    #    produce an artifact — never into `esrun`, which is what a service
+    #    deploys. Only `crates/dev-cli` takes the workspace dependency, and the
+    #    `copyleft-stays-out-of-esrun` task asserts it stays that way, because
+    #    ground 1 is the kind of reasoning that quietly stops applying when a
+    #    crate moves.
+    # 3. They are unmodified and used through their public APIs, so the
+    #    obligation the license does create — publish changes to those files — is
+    #    one there is nothing to discharge for.
+    #
+    # Listed crate by crate rather than as a blanket `allow = ["MPL-2.0"]`: a new
+    # copyleft dependency should have to be added here on purpose, which is the
+    # whole value of the gate. `cargo deny` names any crate that is missing.
+    { allow = ["MPL-2.0"], crate = "lightningcss" },
+    # lightningcss's own derive macro. A proc-macro, so it runs during the build
+    # and contributes no code to any binary at all.
+    { allow = ["MPL-2.0"], crate = "lightningcss-derive" },
+    # The CSS parser lightningcss is built on, and its pieces: Mozilla's
+    # `cssparser`, the selector engine Servo and Parcel share, and two small
+    # helpers pulled along with them.
+    { allow = ["MPL-2.0"], crate = "cssparser" },
+    { allow = ["MPL-2.0"], crate = "cssparser-color" },
+    { allow = ["MPL-2.0"], crate = "cssparser-macros" },
+    { allow = ["MPL-2.0"], crate = "parcel_selectors" },
+    { allow = ["MPL-2.0"], crate = "dtoa-short" },
+]
 
 [bans]
 # Surface duplicate versions (bloat / audit-surface) without failing the build

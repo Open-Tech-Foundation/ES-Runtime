@@ -301,6 +301,34 @@ oxc = { version = "0.144.0", features = [
 # napi binding), so it is pinned exactly rather than floated.
 rolldown = "=1.2.3"
 
+# The CSS pipeline behind an `index.html` target's stylesheets, confined to
+# `dev-cli` with `oxc` and `rolldown` for the same reason: a stylesheet is a
+# build input on a developer's machine, and `esrun` never parses one.
+#
+# It is here to close a gap `html.rs` used to document as one — a copied
+# stylesheet silently lost its `@import`s. lightningcss resolves them into a
+# single file, and while it has the file open it also minifies and lowers modern
+# syntax (nesting, `color-mix()`, logical properties) to whatever the target
+# browsers actually support.
+#
+# **It is MPL-2.0, the one copyleft dependency in the tree, and `deny.toml`
+# carries a deliberate exception for it.** The reasoning is there rather than
+# here; the short version is that MPL's copyleft is per-file, so it reaches
+# lightningcss's own sources and nothing of ours, and this crate is linked only
+# into `esdev` — the binary a developer runs, never the one a service ships.
+# Vite makes the same call for the same component.
+#
+# Alpha, and pinned exactly for it: the 1.0 line has been in alpha for years and
+# is what the ecosystem actually depends on, but a floated pre-release is a
+# breaking change that arrives on somebody else's schedule.
+#
+# `bundler` is the only feature on. `nodejs` (serde plumbing for the napi
+# binding) and the CLI are not ours to carry, and `bundler` is what pulls in
+# `@import` resolution — the whole reason the crate is here.
+lightningcss = { version = "=1.0.0-alpha.72", default-features = false, features = [
+    "bundler",
+] }
+
 # The HTML tokenizer behind an `index.html` target (DECISIONS D61), and confined
 # to `dev-cli` with the other two: an HTML file is a build input on a
 # developer's machine, and `esrun` never parses one.
