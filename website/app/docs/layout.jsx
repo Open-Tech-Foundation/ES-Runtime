@@ -100,6 +100,7 @@ const NAV = [
       { title: "Serialization", path: "/docs/internals/serialization" },
       { title: "WebCrypto", path: "/docs/internals/crypto" },
       { title: "WASI", path: "/docs/internals/wasi" },
+      { title: "The bundler bridge", path: "/docs/internals/bundler" },
     ],
   },
   {

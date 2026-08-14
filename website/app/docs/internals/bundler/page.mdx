@@ -1,0 +1,186 @@
+---
+title: "Internals: The bundler bridge"
+description: How runtime:build puts a parallel Rust bundler and a single-threaded V8 isolate in the same conversation — the inverted hook dispatch, what it costs, and why a subprocess could not do it.
+---
+
+# Internals: The bundler bridge
+
+How `runtime:build` gets a bundler whose graph walk is parallel and an isolate
+that has exactly one thread to agree on who runs what, and when.
+
+For signatures see [`runtime:build`](/api/build). This page is the part that is
+not in the signatures: where the work happens, what it costs, and which designs
+were tried and discarded.
+
+## Why the module exists at all
+
+rolldown has been linked into `esdev` since `esdev build` shipped. It was
+reachable from the subcommand and from nowhere else, which was fine until a
+framework's **dev server** needed it — and a dev server is a program, not a
+subcommand.
+
+The alternative is what everyone else does: `import { rolldown } from
+"rolldown"`. That package is a napi addon. This runtime does not load native
+addons and is not going to, so a dev server that bundles that way is a Node
+program by construction — which is precisely the dependency the framework was
+trying to remove. Either the runtime offers the bundler it already contains, or
+the tooling on top of it stays on Node.
+
+`esrun` does not serve the module. A production binary that could bundle would
+have to carry a bundler, and a deployment has nothing to bundle.
+
+## What a subprocess could not do
+
+The cheap design is a pipe: send source to a bundler process, read the bundle
+back. It was considered, and it fails on the first real plugin — because
+`transform` is only one of the hooks a real plugin uses.
+
+| Hook | Used for | Why a pipe cannot serve it |
+| --- | --- | --- |
+| `transform(code, id)` | compiling MDX, CSS modules | this one alone *would* work as a pipe |
+| `resolveId` + `load` | virtual modules — `@framework/nav`, `/posts` | they serve modules that exist on **no disk**; there is nothing to pipe |
+| `this.addWatchFile(f)` | those same modules | they depend on files they never import; without saying so, invalidation is wrong in the direction that serves stale output |
+| `this.resolve(spec, importer)` | asset plugins | needs the **bundler's own resolver**, mid-hook |
+| `this.emitFile({...})` | worker/asset emission | adds to a build that is already running |
+| `this.warn` / `this.error` | the error overlay | diagnostics have to reach the program, not a log nobody reads |
+
+Four of the six need the plugin and the bundler in one conversation. So the
+plugin API takes functions, and the functions run in the guest isolate.
+
+## The threading, which is the whole problem
+
+Two constraints, and they point in opposite directions.
+
+**Rolldown wants threads.** It parses, resolves and transforms in parallel, on
+whatever worker the scheduler picked. That parallelism is most of why it is
+fast.
+
+**A V8 isolate is one thread**, and the thread it belongs to is the one running
+the guest's program — a dev server that is answering HTTP requests while it
+builds. Nothing on another thread may touch it, and blocking it means blocking
+the server.
+
+So the bundler gets a thread of its own, with a multi-threaded tokio runtime,
+started on the first `build()` and kept for the rest of the run. Putting it on
+the isolate's current-thread runtime instead would have serialized the graph
+walk onto one core *and* interleaved it with the program's own work — the worst
+of both.
+
+That leaves the hooks, which have to run in the isolate. They cannot be called
+from rolldown's threads, so the direction is inverted: **a hook does not call
+JavaScript; it posts a request and waits.**
+
+```text
+  rolldown's threads                    the isolate's thread
+  ────────────────────────              ─────────────────────────────
+  transform(code, id)   ──┐
+  resolveId(spec)       ──┼── HookCall ──▶  await build_hook()  resolves
+  load(id)              ──┘                 plugin.transform(...) runs
+                          ◀── HookReply ──  build_hook_reply(id, value)
+```
+
+`build_hook` is an ordinary async op, and the pump that reads it is ordinary
+JavaScript in `runtime:build`. There is no second scheduler and no lock around
+V8; the isolate answers hook calls the same way it answers a socket read.
+
+### Why the pump does not await
+
+The pump accepts the next call while the previous hook is still running:
+
+```js
+for (;;) {
+  const call = await ops.build_hook();
+  if (call === null) return;
+  dispatch(call);            // deliberately not awaited
+}
+```
+
+Awaiting each one would make the bridge a queue of depth one, and rolldown's
+parallel walk would collapse to a serial one at the crossing. As written, the
+concurrency is bounded by the isolate being a single thread — which is real, and
+much larger than one.
+
+The consequence to know: **a hook that blocks the isolate synchronously blocks
+everything**, including the server the dev tool is running. An `async` hook that
+awaits I/O does not.
+
+### `this`, and its lifetime
+
+`this.resolve()` and `this.emitFile()` reach into the bundler while a build is
+running, so the context has to survive the crossing. Rolldown's `PluginContext`
+is `Arc`-backed and `Send`, so each in-flight call parks its context beside its
+reply channel, keyed by call id, and the context ops find it by that id.
+
+It is dropped the moment the hook returns. Holding one past its hook — stashing
+`this` and calling `resolve()` later — throws, because by then it may name a
+build that no longer exists.
+
+### Why a pending pump does not hold the process open
+
+`build_hook` is declared `unref`: an in-flight call is still polled and still
+resolves, but it does not by itself count as a reason for the event loop to keep
+running. That is correct rather than convenient — only a build **this agent
+started** can produce a hook call, so with the loop otherwise idle there is
+provably nothing left to answer. Without it, any program that bundled once would
+never exit.
+
+## What comes back, and why `watchFiles` is the point
+
+A build returns `{ output, watchFiles, warnings }`. The chunks carry their code
+as strings; nothing is written unless you call `write()`.
+
+`watchFiles` is every file the build read **plus** every file a plugin declared
+with `this.addWatchFile()`. It is the half of the API that makes a lazy cache
+possible:
+
+```js
+for await (const { path } of changes) {
+  for (const [route, chunk] of chunks) {
+    if (chunk.deps.has(path)) chunks.delete(route);   // three of forty
+  }
+}
+```
+
+Without it, a consumer can only clear everything on every save — which is the
+same as having no cache, and is exactly the regression this API exists to avoid.
+`this.addWatchFile()` is what extends it to modules the graph could not have
+discovered: a page compiled from frontmatter depends on files it never imports,
+and only the plugin knows.
+
+## Costs
+
+**A thread and a runtime.** One OS thread plus a multi-threaded tokio runtime,
+started on the first `build()` and kept. A dev server rebuilds continuously;
+paying for a thread per rebuild would be paying forty times a minute for
+nothing.
+
+**A round trip per hook call.** Two channel sends and a task wake-up, per hook,
+per module. That is why a plugin declares which hooks it has: a plugin listed as
+having `transform` puts *every module in the graph* through the crossing, so a
+hook it does not implement costs a round trip per module for nothing. The list
+is derived from the object automatically — a hook that is not a function is not
+declared.
+
+**Code crosses as strings.** `transform` receives a module's source and returns
+it; both are copies. A source map crosses as JSON, because that is the form
+every tool that makes one already has, and re-encoding it field by field would
+be the same bytes with more ways to be wrong.
+
+**No cached scan between generates.** Each `generate()` builds its bundler from
+the stored options and scans again. The output options may differ per call, and
+a bundler carrying stale ones is a build that silently ignores what it was asked
+for. For the dev-server pattern — one build per route, discarded after — there is
+nothing to cache anyway.
+
+## What is not scoped
+
+`--allow-read` bounds where a build may be **started**: `cwd` is resolved
+through the run's own filesystem view, so a build cannot begin somewhere the
+grant does not reach.
+
+What the bundler reads from there — the module graph, `node_modules`, whatever a
+plugin resolves — it reads itself, with the process's authority rather than
+through the jail. A module graph's extent is not knowable before it is walked,
+and a check that stopped at the first symlinked package would look like a
+boundary without being one. `runtime:build` is `esdev`-only, and `esdev` is a
+developer's own machine; the honest statement is better than the reassuring one.

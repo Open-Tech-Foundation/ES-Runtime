@@ -114,6 +114,34 @@ that exits leaves the watcher up.
   stop cleanly, so a restart there kills rather than drains.
 </Callout>
 
+## Two modules only esdev serves
+
+The bundler and the file watcher are also available **to the program**, as
+`runtime:` modules that exist under `esdev` and nowhere else:
+
+| Module | |
+| --- | --- |
+| [`runtime:build`](/api/build) | rolldown, with rollup's plugin hooks — running in your isolate |
+| [`runtime:watch`](/api/watch) | file-change events, with a watch set you can grow while it runs |
+
+They are here for the thing a subcommand cannot be: a **framework's dev
+server**, which bundles a route on demand, keeps the chunk in memory, serves it,
+and on a save drops exactly the chunks that used the changed file. The cache,
+the browser websocket and the route table belong to that program, so what it
+needs from this toolchain is an API rather than a command.
+
+```js
+import { build } from "runtime:build";
+import { watch } from "runtime:watch";
+
+const bundle = await build({ input: route, plugins: [mdx()] });
+const { output, watchFiles } = await bundle.generate({ codeSplitting: false });
+```
+
+`esrun` serves neither: importing one there fails at load rather than
+half-working. See [the bundler bridge](/docs/internals/bundler) for how a
+parallel bundler and a single-threaded isolate share the work.
+
 ## Flags
 
 Everything `esrun` takes, plus these. Every flag is `--flag` or `--flag=value` —
@@ -138,6 +166,8 @@ a value is never a separate argument — and they come **before** the script.
 No formatter and no linter: `oxlint` and `oxfmt` are npm binaries that already
 work, and neither `oxc_formatter` nor `oxc_linter` is published as a usable
 library crate. No package installer — `esrun` resolves an existing
-`node_modules` and installs nothing, which is correct. No task runner, and no
-browser dev server with HMR: a server runtime's bundling need is one deployable
-file, not an asset graph.
+`node_modules` and installs nothing, which is correct. No task runner, and no browser dev
+server with HMR: `esdev build`'s own need is one deployable file, not an asset
+graph. What `esdev` does offer, rather than build one, is the bundler and the
+watcher as modules — so the framework that wants a dev server can be a program
+on this runtime instead of a Node script.
