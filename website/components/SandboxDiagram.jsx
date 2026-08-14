@@ -72,13 +72,21 @@ const SHUT_TEXT = "esr-ink fill-zinc-400";
 // state: an icon here only ever renders for a lane the command line granted,
 // and granted-vs-denied stays orange-vs-grey inside the wall where it belongs.
 const HOST = {
-  net: ["fill-sky-950", "stroke-sky-400"],
-  read: ["fill-violet-950", "stroke-violet-400"],
-  listen: ["fill-emerald-950", "stroke-emerald-400"],
-  write: ["fill-rose-950", "stroke-rose-400"],
-  env: ["fill-fuchsia-950", "stroke-fuchsia-400"],
-  run: ["fill-indigo-950", "stroke-indigo-400"],
+  net: ["esr-ink fill-sky-950", "esr-ink stroke-sky-400"],
+  read: ["esr-ink fill-violet-950", "esr-ink stroke-violet-400"],
+  listen: ["esr-ink fill-emerald-950", "esr-ink stroke-emerald-400"],
+  write: ["esr-ink fill-rose-950", "esr-ink stroke-rose-400"],
+  env: ["esr-ink fill-fuchsia-950", "esr-ink stroke-fuchsia-400"],
+  run: ["esr-ink fill-indigo-950", "esr-ink stroke-indigo-400"],
 };
+
+// A denied lane still shows its resource — the thing exists, the run just
+// cannot reach it, and that reads better than a gap where a row should be.
+// It is the *line* that is missing, not the destination.
+const HOST_OFF_CHIP = "esr-ink fill-zinc-800";
+const HOST_OFF_INK = "esr-ink stroke-zinc-600";
+const HOST_ON_TEXT = "esr-ink fill-zinc-300";
+const HOST_OFF_TEXT = "esr-ink fill-zinc-600";
 
 const PASS_PULSE = "esr-pulse esr-pass fill-brand-500";
 const BLOCK_PULSE = "esr-pulse esr-block fill-zinc-500";
@@ -110,7 +118,7 @@ export default function SandboxDiagram() {
       <svg
         viewBox="0 0 960 620"
         role="img"
-        aria-label="JavaScript running in a V8 isolate calls out through the op boundary into Rust, where each capability has a slot in a wall. The slots the command line granted are open and those calls reach the host; the rest are closed and those calls stop at the wall with NotAllowedError before any effect. The command line and the grants it implies change every few seconds."
+        aria-label="JavaScript running in a V8 isolate calls out through the op boundary into Rust, where each capability has a slot in a wall. The slots the command line granted are open and those calls reach the host resource on the right; the rest are closed and those calls stop at the wall with NotAllowedError before any effect, so their resource is shown greyed with no line to it. The command line and the grants it implies change every few seconds."
         className="h-auto w-full min-w-[860px]"
         style="font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
       >
@@ -372,34 +380,28 @@ export default function SandboxDiagram() {
         </g>
 
         <g>
-          {has(run, "net") && <circle cx={HOST_ICON} cy={L.net} r="14" className={HOST.net[0]} />}
-          {has(run, "read") && <circle cx={HOST_ICON} cy={L.read} r="14" className={HOST.read[0]} />}
-          {has(run, "listen") && <circle cx={HOST_ICON} cy={L.listen} r="14" className={HOST.listen[0]} />}
-          {has(run, "write") && <circle cx={HOST_ICON} cy={L.write} r="14" className={HOST.write[0]} />}
-          {has(run, "env") && <circle cx={HOST_ICON} cy={L.env} r="14" className={HOST.env[0]} />}
-          {has(run, "run") && <circle cx={HOST_ICON} cy={L.run} r="14" className={HOST.run[0]} />}
+          <circle cx={HOST_ICON} cy={L.net} r="14" className={has(run, "net") ? HOST.net[0] : HOST_OFF_CHIP} />
+          <circle cx={HOST_ICON} cy={L.read} r="14" className={has(run, "read") ? HOST.read[0] : HOST_OFF_CHIP} />
+          <circle cx={HOST_ICON} cy={L.listen} r="14" className={has(run, "listen") ? HOST.listen[0] : HOST_OFF_CHIP} />
+          <circle cx={HOST_ICON} cy={L.write} r="14" className={has(run, "write") ? HOST.write[0] : HOST_OFF_CHIP} />
+          <circle cx={HOST_ICON} cy={L.env} r="14" className={has(run, "env") ? HOST.env[0] : HOST_OFF_CHIP} />
+          <circle cx={HOST_ICON} cy={L.run} r="14" className={has(run, "run") ? HOST.run[0] : HOST_OFF_CHIP} />
         </g>
         <g fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          {has(run, "net") && <use href="#i-globe" transform={at(HOST_ICON, L.net, 19)} className={HOST.net[1]} />}
-          {has(run, "read") && <use href="#i-file" transform={at(HOST_ICON, L.read, 19)} className={HOST.read[1]} />}
-          {has(run, "listen") && <use href="#i-server" transform={at(HOST_ICON, L.listen, 19)} className={HOST.listen[1]} />}
-          {has(run, "write") && <use href="#i-file" transform={at(HOST_ICON, L.write, 19)} className={HOST.write[1]} />}
-          {has(run, "env") && <use href="#i-key" transform={at(HOST_ICON, L.env, 19)} className={HOST.env[1]} />}
-          {has(run, "run") && <use href="#i-terminal" transform={at(HOST_ICON, L.run, 19)} className={HOST.run[1]} />}
+          <use href="#i-globe" transform={at(HOST_ICON, L.net, 19)} className={has(run, "net") ? HOST.net[1] : HOST_OFF_INK} />
+          <use href="#i-file" transform={at(HOST_ICON, L.read, 19)} className={has(run, "read") ? HOST.read[1] : HOST_OFF_INK} />
+          <use href="#i-server" transform={at(HOST_ICON, L.listen, 19)} className={has(run, "listen") ? HOST.listen[1] : HOST_OFF_INK} />
+          <use href="#i-file" transform={at(HOST_ICON, L.write, 19)} className={has(run, "write") ? HOST.write[1] : HOST_OFF_INK} />
+          <use href="#i-key" transform={at(HOST_ICON, L.env, 19)} className={has(run, "env") ? HOST.env[1] : HOST_OFF_INK} />
+          <use href="#i-terminal" transform={at(HOST_ICON, L.run, 19)} className={has(run, "run") ? HOST.run[1] : HOST_OFF_INK} />
         </g>
-
-        <g
-          className="fill-zinc-300"
-          font-size="13"
-          text-anchor="start"
-          dominant-baseline="central"
-        >
-          {has(run, "net") && <text x={HOST_TEXT} y={L.net}>api.example.com</text>}
-          {has(run, "read") && <text x={HOST_TEXT} y={L.read}>./config.json</text>}
-          {has(run, "listen") && <text x={HOST_TEXT} y={L.listen}>:8080</text>}
-          {has(run, "write") && <text x={HOST_TEXT} y={L.write}>./out/report.csv</text>}
-          {has(run, "env") && <text x={HOST_TEXT} y={L.env}>DATABASE_URL</text>}
-          {has(run, "run") && <text x={HOST_TEXT} y={L.run}>/bin/sh</text>}
+        <g font-size="13" text-anchor="start" dominant-baseline="central">
+          <text x={HOST_TEXT} y={L.net} className={has(run, "net") ? HOST_ON_TEXT : HOST_OFF_TEXT}>api.example.com</text>
+          <text x={HOST_TEXT} y={L.read} className={has(run, "read") ? HOST_ON_TEXT : HOST_OFF_TEXT}>./config.json</text>
+          <text x={HOST_TEXT} y={L.listen} className={has(run, "listen") ? HOST_ON_TEXT : HOST_OFF_TEXT}>:8080</text>
+          <text x={HOST_TEXT} y={L.write} className={has(run, "write") ? HOST_ON_TEXT : HOST_OFF_TEXT}>./out/report.csv</text>
+          <text x={HOST_TEXT} y={L.env} className={has(run, "env") ? HOST_ON_TEXT : HOST_OFF_TEXT}>DATABASE_URL</text>
+          <text x={HOST_TEXT} y={L.run} className={has(run, "run") ? HOST_ON_TEXT : HOST_OFF_TEXT}>/bin/sh</text>
         </g>
 
         {/* ---- refusal marks, flashing as a blocked pulse arrives ------------- */}
