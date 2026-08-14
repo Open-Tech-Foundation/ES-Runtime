@@ -16,6 +16,8 @@
 import { useEffect } from "react";
 import { Link, isRouteErrorResponse, useRouteError } from "react-router";
 
+import { Masthead } from "./Layout.tsx";
+
 export function ErrorPage() {
   const error = useRouteError();
   const status = isRouteErrorResponse(error) ? error.status : 500;
@@ -30,9 +32,14 @@ export function ErrorPage() {
 
   // A `Response` thrown by a loader — a deliberate 404, a 403, a redirect that
   // did not happen. The status is meaningful and the message is ours.
+  //
+  // The shell and masthead are rendered here rather than inherited: this
+  // component *replaces* the layout route's element, so without them an error
+  // page would arrive unstyled and with no navigation on it.
   if (isRouteErrorResponse(error)) {
     return (
-      <>
+      <div className="shell">
+        <Masthead />
         <p className="error-code">Error {error.status}</p>
         <h1>{error.status === 404 ? "No such page" : error.statusText || "Something went wrong"}</h1>
         <p className="lede">
@@ -43,14 +50,15 @@ export function ErrorPage() {
         <Link className="button button-primary" to="/">
           Back to the start
         </Link>
-      </>
+      </div>
     );
   }
 
   // Anything else is a bug: a component threw, a loader rejected, a network
   // call failed. In development the stack is worth more than the tidy page.
   return (
-    <>
+    <div className="shell">
+      <Masthead />
       <p className="error-code">Error 500</p>
       <h1>Something went wrong</h1>
       <p className="lede">
@@ -67,6 +75,6 @@ export function ErrorPage() {
       <Link className="button button-primary" to="/">
         Back to the start
       </Link>
-    </>
+    </div>
   );
 }

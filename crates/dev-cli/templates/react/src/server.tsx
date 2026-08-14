@@ -27,6 +27,12 @@ import { nonce, securityHeaders } from "./http/headers.ts";
 // is the whole of this program's access to the environment.
 const port = Number(unmask(env.PORT ?? "8080"));
 
+// Replaced with a literal by the build, so this is a constant and the branches
+// on it are eliminated. `esdev start` defines it as "development"; `esdev build`
+// as "production". Read once here rather than deep inside `src/http/`, which has
+// no imports on purpose and must stay runnable unbundled by `esdev test`.
+const DEVELOPMENT = process.env.NODE_ENV !== "production";
+
 /**
  * A file from `dist/assets`.
  *
@@ -50,7 +56,7 @@ async function asset(pathname: string): Promise<Response> {
     headers: {
       "content-type": contentType(name),
       "content-length": String(stat.size),
-      "cache-control": cacheControl(),
+      "cache-control": cacheControl(DEVELOPMENT),
       "x-content-type-options": "nosniff",
     },
   });
@@ -73,7 +79,7 @@ async function page(request: Request): Promise<Response> {
       // The document is rendered per request and is never the same twice — a
       // shared cache holding it would serve one visitor's page to another.
       "cache-control": "no-store",
-      ...securityHeaders(scriptNonce),
+      ...securityHeaders(scriptNonce, DEVELOPMENT),
     },
   });
 }

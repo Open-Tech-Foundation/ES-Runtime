@@ -22,7 +22,7 @@ const POSTS: Post[] = [
     summary: "The same components answer a request, hydrate a page, and write a file.",
     published: "2026-01-12",
     body: [
-      "src/render.tsx is the only file that turns a matched route into HTML. The server calls it per request, the prerender step calls it once per route at build time, and the browser hydrates whatever came out.",
+      "One file — src/render.tsx — turns a matched route into HTML. The server calls it per request, the prerender step calls it once per route at build time, and the browser hydrates whatever came out.",
       "That is deliberate. Two render paths means two ways for a page to be subtly different depending on how it was produced, and the difference always shows up somewhere expensive.",
     ],
   },
@@ -32,8 +32,8 @@ const POSTS: Post[] = [
     summary: "No filesystem beyond dist, no network, no subprocesses — in development too.",
     published: "2026-01-19",
     body: [
-      "esdev.json names the permissions this project needs, and `esdev start` runs the server under exactly them. There is no permissive development mode that quietly widens to --allow-all, because a grant you never exercise in development is a grant you discover in production.",
-      "Run `esdev --trace-permissions dist/server.js` to see what a run actually used. It prints the flag line, and it is usually shorter than what you asked for.",
+      "esdev.json names the permissions this project needs, and esdev start runs the server under exactly them. There is no permissive development mode that quietly widens to --allow-all, because a grant you never exercise in development is a grant you discover in production.",
+      "Run esdev --trace-permissions dist/server.js to see what a run actually used. It prints the flag line, and it is usually shorter than what you asked for.",
     ],
   },
   {

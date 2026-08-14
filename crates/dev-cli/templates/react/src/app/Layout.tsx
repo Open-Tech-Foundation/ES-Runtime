@@ -33,6 +33,30 @@ function useDocumentTitle() {
   }, [matches]);
 }
 
+/**
+ * The masthead, shared by [`Layout`] and [`ErrorPage`].
+ *
+ * Shared because an error page that loses the site's navigation is a dead end:
+ * a route's ErrorBoundary replaces *its own* route's element, and the boundary
+ * here is on the layout — so without this, a 404 would render with no header
+ * and no way back except the browser's Back button.
+ */
+export function Masthead() {
+  return (
+    <header className="masthead">
+      <NavLink to="/" className="wordmark" end>
+        {"{{name}}"}
+      </NavLink>
+      <nav>
+        <NavLink to="/" end>
+          Home
+        </NavLink>
+        <NavLink to="/posts">Writing</NavLink>
+      </nav>
+    </header>
+  );
+}
+
 export function Layout() {
   const navigation = useNavigation();
   useDocumentTitle();
@@ -42,17 +66,7 @@ export function Layout() {
     // that anything is happening. This is the whole of that feedback.
     <div className={navigation.state === "loading" ? "navigating" : undefined}>
       <div className="shell">
-        <header className="masthead">
-          <NavLink to="/" className="wordmark" end>
-            {"{{name}}"}
-          </NavLink>
-          <nav>
-            <NavLink to="/" end>
-              Home
-            </NavLink>
-            <NavLink to="/posts">Writing</NavLink>
-          </nav>
-        </header>
+        <Masthead />
 
         <main>
           <Outlet />

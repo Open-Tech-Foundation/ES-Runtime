@@ -81,6 +81,29 @@ namespace) is unstable and may change between minor releases until the API freez
   `color-mix()` are supported across the target browsers), value-level
   minification, and per-file typed class names.
 
+### Fixed
+
+- **The React template's Content-Security-Policy blocked its own live reload.**
+  `esdev start` injects its reload client as an inline script that cannot carry
+  a per-response nonce, and serves its endpoint from another loopback port — so
+  `script-src 'nonce-…'` and `connect-src 'self'` blocked the two halves and the
+  page silently never updated on a save. A development build now allows inline
+  script (dropping the nonce, since a policy that carries one *ignores*
+  `'unsafe-inline'`) and admits loopback on any port. The production policy is
+  unchanged.
+
+  The dev/production flag is now passed into `src/http/` rather than read there.
+  Those modules have no imports on purpose, so `esdev test` can run them
+  unbundled — where `process.env.NODE_ENV` has been replaced by nothing and
+  there is no `process` global to fall back on.
+
+- **The React template's error page rendered unstyled.** A route's
+  `ErrorBoundary` replaces its own route's element, and the boundary sits on the
+  layout — so a 404 arrived with no shell, no masthead, and no way back except
+  the browser's Back button.
+
+- Markdown backticks in the template's sample posts rendered literally, there
+  being no markdown renderer; a `<Link>` styled as a button was underlined.
 ### Changed
 
 - **The home page's architecture diagram is now an animated security diagram.**

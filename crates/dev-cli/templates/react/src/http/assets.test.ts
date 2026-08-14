@@ -1,4 +1,4 @@
-import { contentType, isAssetName } from "./assets.ts";
+import { cacheControl, contentType, isAssetName } from "./assets.ts";
 
 test("a content type is chosen by extension, case-insensitively", () => {
   assertEquals(contentType("entry.client-a1b2c3d4.js"), "text/javascript; charset=utf-8");
@@ -41,4 +41,11 @@ test("an asset name is one path segment and nothing else", () => {
 
 test("an implausibly long name is refused before it reaches the filesystem", () => {
   assert(!isAssetName("a".repeat(300)));
+});
+
+test("only a hashed build may be cached for ever", () => {
+  // Getting this wrong in the cacheable direction cannot be taken back: the
+  // browsers that accepted the answer are not reachable to correct it.
+  assert(cacheControl(false).includes("immutable"), cacheControl(false));
+  assert(!cacheControl(true).includes("immutable"), cacheControl(true));
 });

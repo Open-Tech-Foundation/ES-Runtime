@@ -84,13 +84,15 @@ export function isAssetName(name: string): boolean {
  *
  * The two go together exactly, because esdev decides both from the same thing:
  * a development build skips the hash *and* defines `NODE_ENV` as
- * `"development"`. So this reads the flag rather than trying to recognise a
+ * `"development"`. So this takes the flag rather than trying to recognise a
  * hash in a filename — guessing wrong in the cacheable direction is a mistake
  * with no way back, since the browsers that took the answer are not reachable
  * to correct it.
+ *
+ * Passed in rather than read here, for the reason this whole module has no
+ * imports: `esdev test` runs each file unbundled, where `process.env.NODE_ENV`
+ * has been replaced by nothing and there is no `process` global.
  */
-export function cacheControl(): string {
-  return process.env.NODE_ENV === "production"
-    ? "public, max-age=31536000, immutable"
-    : "no-cache";
+export function cacheControl(development: boolean): string {
+  return development ? "no-cache" : "public, max-age=31536000, immutable";
 }

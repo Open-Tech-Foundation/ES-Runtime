@@ -151,6 +151,10 @@ button,
   cursor: pointer;
   font: inherit;
   font-weight: 520;
+  /* `.button` is worn by a <Link>, which is an <a> and underlines by default.
+     A control that looks like a button should not also look like prose. */
+  text-decoration: none;
+  display: inline-block;
   padding: 0.5rem 0.95rem;
   border: 1px solid var(--line);
   border-radius: var(--radius);
