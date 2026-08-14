@@ -307,6 +307,11 @@ rolldown = "=1.2.3"
 # against re-exports that do not exist. Pinned with rolldown, since a plugin is
 # written against one version of its host.
 rolldown_common = "=1.2.3"
+# The source-map type rolldown's `load`/`transform` hooks return. Named here
+# because `runtime:build` lets a *JavaScript* plugin return one, and the JSON it
+# sends has to become this type. Already in the graph via rolldown; pinned with
+# it, since a hook signature and its types travel together.
+rolldown_sourcemap = "=1.2.3"
 anyhow = "1.0.104"
 
 

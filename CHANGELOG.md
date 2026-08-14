@@ -10,6 +10,41 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:build` — the bundler, callable from a program (`esdev` only).**
+  rolldown is already inside `esdev`; it is what `esdev build` runs. What was
+  missing was a way for *guest code* to reach it — and without that, a
+  framework's dev server has to import a bundler from npm, which is a napi
+  addon this runtime does not load, so the dev server has to be a Node program.
+
+  ```js
+  import { build } from "runtime:build";
+
+  const bundle = await build({
+    input: "app/main.jsx",
+    external: (id) => id.startsWith("/__route/"),
+    plugins: [mdx()],
+  });
+  const { output, watchFiles } = await bundle.generate({ codeSplitting: false });
+  serve(output[0].code);            // never written to disk
+  ```
+
+  **Real plugin hooks, taking real functions.** `buildStart`, `resolveId`,
+  `load`, `transform`, `buildEnd`, with rollup's arguments and rollup's `this`
+  — `this.resolve()`, `this.addWatchFile()`, `this.emitFile()`, `this.warn()`.
+  Piping source through a subprocess was considered and cannot work:
+  `resolveId` + `load` serve modules that exist on no disk, and there is
+  nothing to pipe.
+
+  **`watchFiles` comes back with the output**, including whatever a plugin
+  declared it depends on. Paired with `runtime:watch`, that is what lets a dev
+  server drop the three cached chunks a save invalidated and keep the other
+  thirty-seven.
+
+  The bundler runs on a thread of its own with a multi-threaded runtime, so its
+  parallel graph walk is not serialized onto the isolate's thread. Hooks cannot
+  follow it there — an isolate belongs to one thread — so a hook posts a request
+  and waits, and the guest's pump answers it. Several are in flight at once.
+
 - **`runtime:watch` — file-change events in guest JS (`esdev` only).** A dev
   server cannot answer a save the way `esdev --watch` does. That watcher
   `SIGTERM`s the program and starts another, which is right for *rerun this
@@ -35,17 +70,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
   Gated on `FileRead` and scoped by the same `--allow-read` list as reading —
   watching a directory tells you which files exist and when they are touched.
-  `esrun` does not serve the module at all: importing it there fails at load
-  with *unknown built-in module*, rather than yielding a watcher that never
-  fires.
 
 - **Embedders can add `runtime:` modules of their own.**
   `Runtime::register_module(specifier, source)` serves a module on the same
   terms as a baked one — no loader, no filesystem, and no capability to import
   it, because the gate is always the op. Shadowing a built-in is refused; a
-  specifier outside the `runtime:` scheme is refused. This is the seam
-  `runtime:watch` arrives through, and the reason `esrun` does not merely leave
-  it unwired but does not contain it.
+  specifier outside the `runtime:` scheme is refused. This is the seam both
+  modules above arrive through, and the reason `esrun` does not merely leave
+  them unwired but does not contain them: importing either there fails at load
+  with *unknown built-in module*.
 
 ### Changed
 

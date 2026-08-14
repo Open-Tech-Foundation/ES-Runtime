@@ -21,6 +21,7 @@ const NAV = [
       { title: "runtime:hashing", path: "/api/hashing" },
       { title: "runtime:system", path: "/api/system" },
       { title: "runtime:wasi", path: "/api/wasi" },
+      { title: "runtime:build", path: "/api/build" },
       { title: "runtime:watch", path: "/api/watch" },
     ],
   },

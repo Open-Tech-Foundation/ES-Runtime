@@ -1,0 +1,149 @@
+---
+title: runtime:build
+description: The bundler, callable from guest JS — with real plugin hooks running in the isolate. esdev only.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:build
+
+The bundler, from a program.
+
+<Callout type="warning" title="esdev only">
+  `esrun` does not serve this module. A production binary that could bundle
+  would have to contain a bundler, and a deployment has nothing to bundle — so
+  importing `runtime:build` under `esrun` fails at load with *unknown built-in
+  module*. Capability: **FileRead**; `write()` additionally needs **FileWrite**.
+</Callout>
+
+rolldown is already inside `esdev` — it is what `esdev build` runs. What was
+missing was a way for a *program* to reach it. Without that, a framework's dev
+server has to `import rolldown from "rolldown"`, which is a napi addon this
+runtime does not load; so the dev server has to be a Node program, which is the
+thing it was trying to stop being.
+
+## Import
+
+```js
+import { build } from "runtime:build";
+```
+
+## build(options)
+
+```js
+const bundle = await build({
+  input: "app/main.jsx",
+  external: (id) => id.startsWith("/__route/"),
+  resolve: { alias: { "@": "./src" }, extensions: [".js", ".jsx"] },
+  define: { "process.env.NODE_ENV": '"development"' },
+  plugins: [mdx(), css()],
+});
+
+const { output, watchFiles } = await bundle.generate({
+  format: "esm",
+  codeSplitting: false,
+});
+
+serve(output[0].code);      // never written to disk
+```
+
+| Option | Type | Description |
+| --- | --- | --- |
+| `input` | `string \| string[] \| Record<string, string>` | The entry, or entries. |
+| `external` | `string[] \| (id, importer, resolved) => boolean` | What to leave unbundled. A **predicate** as well as a list — a dev server externalises a shape, not a set. |
+| `platform` | `"neutral" \| "browser" \| "node"` | Which environment the output runs in; decides `exports` conditions. Default `neutral`, which is what this runtime is. |
+| `resolve` | `{ alias, extensions, conditionNames, mainFields }` | Resolution. |
+| `define` | `Record<string, string>` | Compile-time replacements. |
+| `plugins` | `Plugin[]` | See below. |
+| `minify`, `treeshake` | `boolean` | |
+| `cwd` | `string` | Where the build runs. Defaults to the entry module's directory. |
+
+Output options (`format`, `dir`, `codeSplitting`, `sourcemap`, `entryFileNames`,
+…) may be given here or per call to `generate()`/`write()`; the per-call ones
+win.
+
+## Bundle
+
+| Member | Returns | Description |
+| --- | --- | --- |
+| `generate(output?)` | `Promise<BuildResult>` | Builds, and returns the chunks **in memory**. Nothing is written. |
+| `write(output?)` | `Promise<BuildResult>` | The same build, landed under `dir`. Needs `FileWrite`. |
+| `close()` | `Promise<void>` | Releases the build. |
+| `watchFiles` | `string[]` | What the last build read. |
+
+### BuildResult
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `output` | `(OutputChunk \| OutputAsset)[]` | Chunks carry `code`, `fileName`, `isEntry`, `moduleIds`, `imports`, `dynamicImports`, `map`. |
+| `watchFiles` | `string[]` | Every file the build read, **plus** every file a plugin declared with `this.addWatchFile()`. |
+| `warnings` | `string[]` | The bundler's warnings and the plugins'. |
+
+`watchFiles` is the reason this returns more than code. Paired with
+[`runtime:watch`](/api/watch), it is what lets a dev server drop the three
+cached chunks whose dependencies changed and keep the other thirty-seven —
+instead of clearing everything on every save, which is the same as having no
+cache.
+
+## Plugins
+
+The hooks are rollup's, and take rollup's arguments, because that is what every
+plugin ever written expects.
+
+| Hook | Signature | For |
+| --- | --- | --- |
+| `buildStart()` | | Setup. |
+| `resolveId(source, importer, { isEntry })` | → `string \| { id, external } \| null` | Where a specifier points — including specifiers that point nowhere on disk. |
+| `load(id)` | → `string \| { code, map } \| null` | The contents of a module, including one you made up. |
+| `transform(code, id)` | → `string \| { code, map, moduleType } \| null` | Rewriting a module. |
+| `buildEnd(error)` | | Teardown, with the failure if there was one. |
+
+`resolveId` + `load` together are how a **virtual module** works — a specifier
+that exists on no disk, whose content the plugin invents. That is why this is a
+plugin API and not a "pipe source through a subprocess" protocol: there is
+nothing to pipe.
+
+### this
+
+Inside a hook, `this` is the bundler's own context, for as long as that hook
+runs:
+
+| Member | Description |
+| --- | --- |
+| `this.resolve(source, importer?)` | Asks the bundler's resolver, mid-hook. `null` if nothing resolves. |
+| `this.addWatchFile(file)` | Declares a dependency the graph could not discover — the frontmatter a generated module was built from. This is what puts it in `watchFiles`. |
+| `this.emitFile({ type, … })` | Adds a chunk or asset to a build already running. Returns a reference id. |
+| `this.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`. |
+| `this.error(msg)` | Fails the build. Throws — it does not return. |
+
+<Callout type="note" title="Where hooks run">
+  The bundler works on threads of its own; a hook runs **here**, in your
+  isolate, and the bundler waits for it. Several hooks can be in flight at once,
+  so a slow plugin holds up its own module rather than the whole build — but a
+  hook that blocks the isolate synchronously blocks everything, your server
+  included. Keep them `async`.
+</Callout>
+
+## Example: a dev server that rebuilds one route
+
+```js
+import { build } from "runtime:build";
+import { watch } from "runtime:watch";
+
+const chunks = new Map();          // route → { code, deps }
+
+async function bundleRoute(route) {
+  const b = await build({ input: route, plugins: [mdx()] });
+  const { output, watchFiles } = await b.generate({ codeSplitting: false });
+  await b.close();
+  chunks.set(route, { code: output[0].code, deps: new Set(watchFiles) });
+  for (const file of watchFiles) changes.add(file);
+}
+
+const changes = watch(["app"], { recursive: true });
+for await (const { path } of changes) {
+  for (const [route, chunk] of chunks) {
+    if (chunk.deps.has(path)) chunks.delete(route);   // only what used it
+  }
+}
+```

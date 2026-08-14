@@ -3101,3 +3101,222 @@ fn runtime_watch_does_not_exist_under_esrun() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// `runtime:build` — the bundler, from guest JS (the other esdev-only module).
+// ---------------------------------------------------------------------------
+
+/// The whole feature in one test: a plugin serving a **virtual module**
+/// (`resolveId` + `load`), a `transform`, an `external` **predicate**, output
+/// held in memory, and `watchFiles` covering both what was imported and what a
+/// plugin declared. None of that is reachable through a subprocess protocol,
+/// which is why the bridge exists.
+#[test]
+fn runtime_build_bundles_with_a_js_plugin() {
+    let dir = build_dir("rb_plugin");
+    write_in(&dir, "dep.js", "export const answer = 42;\n");
+    write_in(
+        &dir,
+        "main.js",
+        "import { answer } from './dep.js';\nimport hello from 'virtual:greeting';\nconsole.log(hello, answer);\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+
+const plugin = {
+  name: "greeting",
+  resolveId(source) {
+    return source === "virtual:greeting" ? "\0greeting" : null;
+  },
+  load(id) {
+    if (id !== "\0greeting") return null;
+    // A dependency the graph cannot discover: nothing imports dep.js *from
+    // here*, but this module is built from it.
+    this.addWatchFile("dep.js");
+    return 'export default "hello";';
+  },
+  transform(code, id) {
+    return id.endsWith("dep.js") ? code.replace("42", "43") : null;
+  },
+};
+
+const bundle = await build({
+  input: "main.js",
+  plugins: [plugin],
+  external: (id) => id.startsWith("runtime:"),
+});
+
+const { output, watchFiles } = await bundle.generate({ format: "esm", codeSplitting: false });
+console.log("chunks", output.length);
+console.log(output[0].code.includes('console.log("hello", 43)') ? "transformed" : output[0].code);
+console.log("watched", watchFiles.some((f) => f.endsWith("dep.js")));
+await bundle.close();
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = stdout(&out);
+    assert!(printed.contains("chunks 1"), "{printed}");
+    assert!(printed.contains("transformed"), "{printed}");
+    assert!(printed.contains("watched true"), "{printed}");
+}
+
+/// A hook's `this` is the bundler's own context, mid-build: `this.resolve()`
+/// asks its resolver, `this.emitFile()` adds to a build already running, and
+/// `this.warn()` reaches the caller instead of vanishing into a worker thread.
+#[test]
+fn runtime_build_hooks_get_the_bundlers_context() {
+    let dir = build_dir("rb_context");
+    write_in(&dir, "dep.js", "export const answer = 42;\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+
+const plugin = {
+  name: "probe",
+  async resolveId(source, importer) {
+    if (source !== "virtual:entry") return null;
+    const found = await this.resolve("./dep.js", importer ?? undefined);
+    console.log("resolved", found !== null && found.id.endsWith("dep.js"));
+    this.warn("a warning from the plugin");
+    return "\0entry";
+  },
+  load(id) {
+    if (id !== "\0entry") return null;
+    const ref = this.emitFile({ type: "asset", name: "meta.json", source: '{"ok":true}' });
+    console.log("emitted", typeof ref === "string");
+    return "export default 1;";
+  },
+};
+
+const bundle = await build({ input: "virtual:entry", plugins: [plugin] });
+const { output, warnings } = await bundle.generate({});
+console.log("assets", output.some((o) => o.type === "asset"));
+console.log("warned", warnings.some((w) => w.includes("a warning from the plugin")));
+await bundle.close();
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = stdout(&out);
+    for expected in [
+        "resolved true",
+        "emitted true",
+        "assets true",
+        "warned true",
+    ] {
+        assert!(
+            printed.contains(expected),
+            "{expected} missing from {printed}"
+        );
+    }
+}
+
+/// A plugin that throws fails the build **with its own message**. The hook ran
+/// on a different thread from the bundler; an error that arrived as "build
+/// failed" would be the worst possible outcome of that.
+#[test]
+fn runtime_build_reports_what_a_plugin_threw() {
+    let dir = build_dir("rb_throw");
+    write_in(&dir, "main.js", "console.log(1);\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({
+  input: "main.js",
+  plugins: [{ name: "boom", transform() { throw new Error("plugin exploded"); } }],
+});
+try {
+  await bundle.generate({});
+  console.log("NOT REACHED");
+} catch (err) {
+  console.log(String(err.message).includes("plugin exploded") ? "reported" : err.message);
+}
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("reported"), "{}", stdout(&out));
+}
+
+/// Building reads, so it needs `FileRead`; writing the result out needs
+/// `FileWrite` as well, and refusing one must not refuse the other.
+#[test]
+fn runtime_build_is_gated_on_the_filesystem_capabilities() {
+    let dir = build_dir("rb_caps");
+    write_in(&dir, "main.js", "console.log(1);\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({ input: "main.js" });
+try {
+  await bundle.write({ dir: "out" });
+  console.log("wrote");
+} catch (err) {
+  console.log("refused", err.name);
+}
+const { output } = await bundle.generate({});
+console.log("generated", output.length === 1);
+"#,
+    );
+
+    let denied = esdev_in(&dir)
+        .args(["--deny-write", "app.mjs"])
+        .output()
+        .expect("spawn esdev");
+    assert!(denied.status.success(), "{}", stderr(&denied));
+    assert!(
+        stdout(&denied).contains("refused NotAllowedError"),
+        "{}",
+        stdout(&denied)
+    );
+    // The same run still builds: the two grants are separate.
+    assert!(
+        stdout(&denied).contains("generated true"),
+        "{}",
+        stdout(&denied)
+    );
+
+    let all_denied = esdev_in(&dir)
+        .args(["--deny-all", "app.mjs"])
+        .output()
+        .expect("spawn esdev");
+    assert!(!all_denied.status.success(), "{}", stdout(&all_denied));
+    assert!(
+        stderr(&all_denied).contains("capability denied: FileRead"),
+        "{}",
+        stderr(&all_denied)
+    );
+}
+
+/// And, like the watcher, it is `esdev`'s: a production binary that could
+/// bundle would have to carry a bundler.
+#[test]
+fn runtime_build_does_not_exist_under_esrun() {
+    let Some(esrun) = sibling_binary("esrun") else {
+        eprintln!("skipping: esrun is not built in this target dir");
+        return;
+    };
+    let dir = build_dir("rb_esrun");
+    let app = write_in(&dir, "app.mjs", "import 'runtime:build';\n");
+
+    let out = Command::new(esrun).arg(&app).output().expect("spawn esrun");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("unknown built-in module"),
+        "{}",
+        stderr(&out)
+    );
+}

@@ -27,6 +27,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:hashing`](#runtimehashing)
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
+- [`runtime:build`](#runtimebuild) — `esdev` only
 - [`runtime:watch`](#runtimewatch) — `esdev` only
 - [Error codes](#error-codes)
 
@@ -842,6 +843,7 @@ the required capability has been granted.
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 | `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
+| `runtime:build`   | Available — **`esdev` only** | `FileRead` (+ `FileWrite` to `write()`) | [↓](#runtimebuild) |
 | `runtime:watch`   | Available — **`esdev` only** | `FileRead` | [↓](#runtimewatch) |
 
 ---
@@ -2563,6 +2565,124 @@ children does not pass it on, so grandchildren can outlive a kill.
 `SystemCommands` accepts a policy — `with_allowlist(["git", "ffmpeg"])` and
 `with_max_children(n)` — for an embedder that must grant `Run` without granting
 a shell.
+
+---
+
+## `runtime:build`
+
+The bundler, callable from guest JavaScript.
+
+- **Capability:** `FileRead`; `write()` also needs `FileWrite`.
+- **Status:** Available under **`esdev` only**. `esrun` does not serve this
+  module: importing it there fails at load with *unknown built-in module*.
+- **Loading:** on demand. The bundler thread starts on the first `build()`.
+
+rolldown is already inside `esdev` — it is what `esdev build` runs. What was
+missing was a way for a *program* to reach it. Without that, a framework's dev
+server has to import a bundler from npm, which is a napi addon this runtime does
+not load, so the dev server has to be a Node program.
+
+```js
+import { build } from "runtime:build";
+
+const bundle = await build({
+  input: "app/main.jsx",
+  external: (id) => id.startsWith("/__route/"),
+  resolve: { alias: { "@": "./src" }, extensions: [".js", ".jsx"] },
+  define: { "process.env.NODE_ENV": '"development"' },
+  plugins: [mdx()],
+});
+
+const { output, watchFiles } = await bundle.generate({
+  format: "esm",
+  codeSplitting: false,
+});
+serve(output[0].code);          // never written to disk
+```
+
+### `build(options)`
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `input` | `string \| string[] \| Record<string, string>` | — | The entry, or entries. |
+| `external` | `string[] \| (id, importer, resolved) => boolean` | — | What to leave unbundled. A predicate as well as a list: a dev server externalises a shape (`/__route/*`), not a set. |
+| `platform` | `"neutral" \| "browser" \| "node"` | `neutral` | Which environment the output runs in; decides `exports` conditions. |
+| `resolve` | `{ alias, extensions, conditionNames, mainFields }` | — | Resolution. |
+| `define` | `Record<string, string>` | — | Compile-time replacements. |
+| `plugins` | `Plugin[]` | `[]` | See below. |
+| `minify` / `treeshake` | `boolean` | `false` / `true` | |
+| `cwd` | `string` | the entry's directory | Where the build runs. Resolved through the run's own filesystem view. |
+
+Output options — `format`, `dir`, `file`, `codeSplitting`, `sourcemap`,
+`entryFileNames`, `chunkFileNames`, `assetFileNames`, `banner`, `footer` — may
+be given here or per call; the per-call ones win.
+
+### `Bundle`
+
+| Member | Returns | Description |
+| --- | --- | --- |
+| `generate(output?)` | `Promise<BuildResult>` | Builds; chunks come back **in memory**. |
+| `write(output?)` | `Promise<BuildResult>` | The same build, written under `dir`. |
+| `close()` | `Promise<void>` | Releases the build. |
+| `watchFiles` | `string[]` | What the last build read. |
+
+A `BuildResult` is `{ output, watchFiles, warnings }`. An `output` entry is
+either a chunk — `{ type: "chunk", fileName, name, code, isEntry,
+isDynamicEntry, moduleIds, imports, dynamicImports, map }` — or an asset:
+`{ type: "asset", fileName, source }`.
+
+`watchFiles` is every file the build read **plus** every file a plugin declared
+with `this.addWatchFile()`. Paired with [`runtime:watch`](#runtimewatch), it is
+what lets a dev server drop the chunks a change invalidates and keep the rest.
+
+### Plugins
+
+The hooks are rollup's, with rollup's arguments, because that is what every
+plugin ever written expects.
+
+| Hook | Returns | For |
+| --- | --- | --- |
+| `buildStart()` | — | Setup. |
+| `resolveId(source, importer, { isEntry })` | `string \| { id, external } \| null` | Where a specifier points — including one that points nowhere on disk. |
+| `load(id)` | `string \| { code, map } \| null` | A module's contents, including one the plugin invented. |
+| `transform(code, id)` | `string \| { code, map, moduleType } \| null` | Rewriting a module. |
+| `buildEnd(error)` | — | Teardown, with the failure if there was one. |
+
+A hook that is not in this list is ignored rather than refused: a plugin written
+for rollup works, minus that hook.
+
+Inside a hook, `this` is the bundler's own context, and only for as long as that
+hook runs:
+
+| Member | Description |
+| --- | --- |
+| `this.resolve(source, importer?)` | The bundler's resolver, mid-hook. `null` if nothing resolves. |
+| `this.addWatchFile(file)` | A dependency the graph could not have discovered. |
+| `this.emitFile({ type, … })` | Adds a chunk or asset to a running build; returns a reference id. |
+| `this.warn` / `info` / `debug` | Diagnostics. Warnings come back in `warnings`. |
+| `this.error(msg)` | Fails the build. Throws. |
+
+### Where the work happens
+
+The bundler runs on a **thread of its own**, with a multi-threaded runtime: its
+graph walk is parallel, and putting it on the isolate's thread would serialize
+it onto one core and stall the program whose dev server it is.
+
+Plugin hooks cannot follow it there — a V8 isolate belongs to one thread — so
+the direction is inverted. A hook posts a request and waits; the isolate's pump
+(an ordinary async op) resolves with it, runs the JavaScript, and replies.
+Several hooks are in flight at once, so the bundler's parallelism survives the
+crossing. A hook that blocks the isolate *synchronously* blocks everything the
+program is doing, its server included.
+
+### What is not scoped
+
+`--allow-read` bounds where a build may be **started**: `cwd` is resolved
+through the run's own filesystem view. What the bundler reads from there — the
+module graph, `node_modules` — it reads itself, with this process's authority
+rather than through the jail. A module graph's extent is not knowable up front,
+and a check that stopped at the first `node_modules` symlink would look like a
+boundary without being one. Stated rather than implied.
 
 ---
 

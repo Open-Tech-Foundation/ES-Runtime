@@ -44,6 +44,10 @@ oxc.workspace = true
 # does not make them.
 rolldown.workspace = true
 rolldown_common.workspace = true
+# A source map a JS plugin hands back, parsed from the JSON every tool that
+# makes one already has. Same pin and same graph as rolldown itself — this is
+# the crate rolldown's own hook signatures name, not a second implementation.
+rolldown_sourcemap.workspace = true
 anyhow.workspace = true
 # `--watch`. The events only; the restart policy is ours.
 notify.workspace = true

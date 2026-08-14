@@ -1454,6 +1454,7 @@ dependencies = [
  "oxc 0.144.0",
  "rolldown",
  "rolldown_common",
+ "rolldown_sourcemap",
  "rustix 1.1.4",
  "serde_json",
  "tokio",
