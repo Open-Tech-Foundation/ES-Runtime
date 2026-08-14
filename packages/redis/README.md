@@ -642,13 +642,14 @@ There is no mock. The value of this package is that it speaks a real server's
 protocol, and a fake one would only ever agree with our reading of the spec.
 
 ```sh
-bun run build
+tsr install
+tsr build
 docker run -d --name esrun-redis-plain -p 6379:6379 redis:latest
 docker run -d --name esrun-redis-auth  -p 6380:6379 redis:latest redis-server --requirepass esrun
 eval "$(test/tls-server.sh)"       # optional; the tls test skips without it
 eval "$(test/cluster-server.sh)"  # optional; the cluster test skips without it
 eval "$(test/sentinel-server.sh)" # optional; the sentinel test skips without it
-./test/run.sh
+tsr test:redis
 ```
 
 The unit tests need no server — a wire codec does not — and cover the cases a

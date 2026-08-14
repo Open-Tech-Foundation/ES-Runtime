@@ -1,8 +1,8 @@
 # @opentf/esrun-types
 
-TypeScript type definitions for [ES Runtime](https://es-runtime.opentechf.org)
-(`esrun`) — the `runtime:` standard modules, so your editor gives completion and
-type-checking for `import … from "runtime:process" | "runtime:path" | "runtime:fs"`.
+TypeScript type definitions for [ES Runtime](https://esrun.opentechf.org)
+(`esrun`) — every `runtime:` standard module, so your editor gives completion
+and type-checking for `import … from "runtime:fs"` and its siblings.
 
 ## Install
 
@@ -41,5 +41,20 @@ esrun targets the WinterTC web-platform surface, so web globals (`URL`, `Blob`,
 - `runtime:process` — `env`, `args`, `platform`, `arch`, `cwd()`, `exit()`
 - `runtime:path` — `join`, `resolve`, `normalize`, `dirname`, `basename`, `extname`, `parse`, `relative`, `isAbsolute`, `sep`, `delimiter`, `fromFileURL`, `toFileURL`
 - `runtime:fs` — `file()`, `write()`, `readDir`, `stat`, `exists`, `mkdir`, `remove`, `rename`, `Glob`
-- `runtime:system` — `Command`, `ChildProcess`
+- `runtime:db` — `connect`, `sql`, `queryAst`, `sqlite`, `Connection`, `Rows`, `Pool`, `Driver`, `DbError`, and the driver-authoring surface (`defineDriver`, `runBackendConformance`)
+- `runtime:net` — `connect`, `listen`, `bind`, `Socket`, `Listener`, `DatagramSocket`
+- `runtime:http` — `serve`, `Handler`, `Server`, `withTrailers`
+- `runtime:websocket` — `serve`, `upgradeWebSocket`, `WebSocketConnection`, `broadcast`
+- `runtime:serialization` — `XML`, `YAML`, `TOML`, `MessagePack`, `JSONL`, `Protobuf`
 - `runtime:hashing` — `hash`, `Hasher`, `hashStream`, `hmac`, `timingSafeEqual`, `password`
+- `runtime:system` — `Command`, `ChildProcess`
+- `runtime:wasi` — `WASI`
+
+The last three are `esdev`'s, not `esrun`'s — a deployed binary has no bundler,
+no watcher and no test runner:
+
+- `runtime:build` — `build`, `Plugin`, `Hook`, `BuildOptions`, `BuildResult`
+- `runtime:watch` — `watch`, `Watcher`, `Change`
+- `runtime:test` — `test`, `assert`, `assertEquals`, `assertThrows`, `assertRejects`
+
+…plus the few globals whose shape here differs from the standard libs.

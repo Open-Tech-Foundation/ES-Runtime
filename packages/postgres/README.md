@@ -1,6 +1,6 @@
 # @opentf/esrun-postgres
 
-A PostgreSQL driver for [ES Runtime](https://es-runtime.opentechf.org) (`esrun`),
+A PostgreSQL driver for [ES Runtime](https://esrun.opentechf.org) (`esrun`),
 written **entirely in JavaScript** over `runtime:net`.
 
 There is no native code in this package and none was added to the runtime for
@@ -26,7 +26,7 @@ for await (const user of await db.query("SELECT id, name FROM users")) {
 await db.close();
 ```
 
-Everything in the [`runtime:db` guide](https://es-runtime.opentechf.org/docs/db)
+Everything in the [`runtime:db` guide](https://esrun.opentechf.org/docs/db)
 works here — the `sql` tag, streaming results, transactions with savepoints,
 `executeMany`, and the portable error codes. This package passes the same
 `runBackendConformance()` suite the built-in `sqlite:` backend does.
@@ -404,7 +404,7 @@ different machines), and a `date` is a calendar day rather than an instant.
 has to hand a `Date` to something else.
 
 A full table, including how Node, Bun and Deno's drivers map the same columns,
-is at <https://es-runtime.opentechf.org/docs/db/authoring>, in a guide for
+is at <https://esrun.opentechf.org/docs/db/authoring>, in a guide for
 anyone writing a database driver or an ORM on `runtime:db`.
 
 An array of a type not in that list comes back as its raw literal
@@ -436,15 +436,15 @@ as the reverse — the mutual half of SCRAM is verified, not skipped.
 
 ## What is not here yet
 
-- **Binary result formats.** Everything is text for now. Binary is the larger
-  win for numeric-heavy results and is next.
-- **A connection pool.** One connection per `connect()` — unless you ask for `pool`.
-- **`COPY`** and cursors held across transactions.
-- **Prepared-statement caching** — each query re-parses.
+- **`COPY`.** The bulk-load protocol is its own message flow, and nothing here
+  speaks it.
+- **Cursors held across transactions** (`DECLARE … WITH HOLD`). Streaming a
+  result set within one works — see *One result set at a time*.
 
 ## Development
 
-Tests need a PostgreSQL to talk to:
+Every command below is a task in the repo's `tasks.toml`, so what runs here and
+what runs in CI cannot drift.
 
 The tests come in two halves. The **unit** tests need no database — a wire
 codec is checkable on its own, and the cases worth pinning (a message split
@@ -452,9 +452,9 @@ across three chunks, a quoted `NULL` inside an array, RFC 7677's published SCRAM
 vectors) are exactly the ones a live server will not produce on demand:
 
 ```sh
-bun install
-bun run build
-./test/unit/run.sh
+tsr install
+tsr build
+tsr test:protocol
 ```
 
 The **integration** tests need a real server, because speaking to one is the
@@ -465,7 +465,7 @@ docker run -d --name esrun-pg-test \
   -e POSTGRES_PASSWORD=esrun -e POSTGRES_DB=esrun_test \
   -p 127.0.0.1:5433:5432 postgres:latest
 
-./test/run.sh                 # unit, then the suite against the server
+tsr test:postgres             # unit, then the suite against the server
 docker rm -f esrun-pg-test
 ```
 
