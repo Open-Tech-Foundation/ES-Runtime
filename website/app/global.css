@@ -151,29 +151,15 @@ button:not(:disabled),
 
 /* The Rust mark in the sandbox diagram, in Rust's own colour rather than the
  * site's — the point of the mark is that this half of the boundary is somebody
- * else's technology. #ce422b is rust-lang.org's; the dark value is lightened to
- * clear contrast on the near-black background. Written here rather than as a
- * Tailwind arbitrary value so the two hexes sit together and the `<use>` shadow
- * content inherits `stroke` from the element the class is on. */
+ * else's technology. One value, not two: the panel is dark in both site themes,
+ * so this is #ce422b lightened to clear contrast on the dark ground. Written
+ * here rather than as a Tailwind arbitrary value so the `<use>` shadow content
+ * inherits `stroke` from the element the class is on. */
 .esr-rust {
-  stroke: #ce422b;
-}
-.esr-rust-text {
-  fill: #ce422b;
-}
-[data-theme="dark"] .esr-rust {
   stroke: #f0785f;
 }
-[data-theme="dark"] .esr-rust-text {
+.esr-rust-text {
   fill: #f0785f;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .esr-rust {
-    stroke: #f0785f;
-  }
-  :root:not([data-theme="light"]) .esr-rust-text {
-    fill: #f0785f;
-  }
 }
 
 /* Sandbox diagram (components/SandboxDiagram.jsx).

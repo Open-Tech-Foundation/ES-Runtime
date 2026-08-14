@@ -159,21 +159,24 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Sandbox Section */}
-      <section>
+      {/* Sandbox Section — dark in both site themes. This is the one thing on
+          the page that is ours rather than table stakes, and a band that breaks
+          the light/zinc-50 rhythm is how a reader is told so. It also gives the
+          brand orange and the host colours the ground they need. */}
+      <section className="border-y border-zinc-800 bg-zinc-950">
         <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
           <div className="mb-12 text-center">
-            <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
+            <h2 className="text-3xl font-bold tracking-tight text-zinc-50">
               Deny by default
             </h2>
-            <p className="mt-4 text-lg text-zinc-600 dark:text-zinc-400">
+            <p className="mt-4 text-lg text-zinc-400">
               A run reaches what the command line named, and nothing else.
             </p>
           </div>
-          <div className="mx-auto max-w-5xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 sm:p-8">
+          <div className="mx-auto max-w-5xl rounded-2xl bg-zinc-900 p-6 ring-1 ring-white/10 sm:p-8">
             <SandboxDiagram />
           </div>
-          <p className="mx-auto mt-6 max-w-5xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+          <p className="mx-auto mt-6 max-w-5xl text-center text-sm text-zinc-500">
             Nine capabilities: <code className="font-mono">read</code>, <code className="font-mono">write</code>,{" "}
             <code className="font-mono">imports</code>, <code className="font-mono">net</code>,{" "}
             <code className="font-mono">listen</code>, <code className="font-mono">env</code>,{" "}

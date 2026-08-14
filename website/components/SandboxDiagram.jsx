@@ -21,6 +21,12 @@
 // SVG attributes: they must be written `text-anchor`, not `textAnchor`, or the
 // HTML parser drops them and every label loses its alignment.
 //
+// The panel is dark in both site themes — it is the one showcase surface on the
+// page, and the brand orange and the host colours only carry on a dark ground.
+// So there are no `dark:` variants in here: every colour is the dark one, and
+// an open slot is filled with the panel's own background (zinc-900) because it
+// is a hole rather than a shape.
+//
 // Keyframes and the pulse geometry live in app/global.css.
 
 // Lane centres. Slots are 48 tall (cy ± 24).
@@ -54,28 +60,28 @@ const has = (i, cap) => RUNS[i].grants.includes(cap);
 const at = (cx, cy, size) =>
   `translate(${cx - size / 2} ${cy - size / 2}) scale(${size / 24})`;
 
-const OPEN_SLOT = "esr-slot fill-white stroke-brand-500 dark:fill-zinc-900";
+const OPEN_SLOT = "esr-slot stroke-brand-500 fill-zinc-900";
 const SHUT_SLOT =
-  "esr-slot fill-zinc-300 stroke-zinc-400 dark:fill-zinc-700 dark:stroke-zinc-600";
-const OPEN_INK = "esr-ink stroke-brand-600 dark:stroke-brand-400";
-const SHUT_INK = "esr-ink stroke-zinc-500 dark:stroke-zinc-400";
-const OPEN_TEXT = "esr-ink fill-brand-600 dark:fill-brand-400";
-const SHUT_TEXT = "esr-ink fill-zinc-600 dark:fill-zinc-400";
+  "esr-slot fill-zinc-700 stroke-zinc-600";
+const OPEN_INK = "esr-ink stroke-brand-400";
+const SHUT_INK = "esr-ink stroke-zinc-400";
+const OPEN_TEXT = "esr-ink fill-brand-400";
+const SHUT_TEXT = "esr-ink fill-zinc-400";
 // Each host resource gets its own hue, so the right-hand column reads as a set
 // of distinct things rather than a column of grey glyphs. This is identity, not
 // state: an icon here only ever renders for a lane the command line granted,
 // and granted-vs-denied stays orange-vs-grey inside the wall where it belongs.
 const HOST = {
-  net: ["fill-sky-100 dark:fill-sky-950", "stroke-sky-600 dark:stroke-sky-400"],
-  read: ["fill-violet-100 dark:fill-violet-950", "stroke-violet-600 dark:stroke-violet-400"],
-  listen: ["fill-emerald-100 dark:fill-emerald-950", "stroke-emerald-600 dark:stroke-emerald-400"],
-  write: ["fill-rose-100 dark:fill-rose-950", "stroke-rose-600 dark:stroke-rose-400"],
-  env: ["fill-fuchsia-100 dark:fill-fuchsia-950", "stroke-fuchsia-600 dark:stroke-fuchsia-400"],
-  run: ["fill-indigo-100 dark:fill-indigo-950", "stroke-indigo-600 dark:stroke-indigo-400"],
+  net: ["fill-sky-950", "stroke-sky-400"],
+  read: ["fill-violet-950", "stroke-violet-400"],
+  listen: ["fill-emerald-950", "stroke-emerald-400"],
+  write: ["fill-rose-950", "stroke-rose-400"],
+  env: ["fill-fuchsia-950", "stroke-fuchsia-400"],
+  run: ["fill-indigo-950", "stroke-indigo-400"],
 };
 
 const PASS_PULSE = "esr-pulse esr-pass fill-brand-500";
-const BLOCK_PULSE = "esr-pulse esr-block fill-zinc-400 dark:fill-zinc-500";
+const BLOCK_PULSE = "esr-pulse esr-block fill-zinc-500";
 
 export default function SandboxDiagram() {
   // Index into RUNS. A scalar rather than a set of booleans: one signal, and
@@ -168,15 +174,9 @@ export default function SandboxDiagram() {
         </defs>
 
         {/* ---- band headers: what each side of the boundary actually is ----- */}
-        <image href="/img/v8.svg" x="89" y="18" width="26" height="26" className="dark:hidden" />
-        <image
-          href="/img/v8-outline.svg"
-          x="89"
-          y="18"
-          width="26"
-          height="26"
-          className="hidden dark:block"
-        />
+        {/* The outline mark only: this panel is dark in both site themes, so
+            there is no light variant to swap to. */}
+        <image href="/img/v8-outline.svg" x="89" y="18" width="26" height="26" />
         <use
           href="#i-rust"
           transform={at(MID, 31, 26)}
@@ -200,11 +200,11 @@ export default function SandboxDiagram() {
           transform={at(780, 31, 24)}
           fill="none"
           stroke-width="1.6"
-          className="stroke-zinc-400 dark:stroke-zinc-500"
+          className="stroke-zinc-500"
         />
 
         <g
-          className="fill-zinc-400 dark:fill-zinc-500"
+          className="fill-zinc-500"
           font-size="11"
           letter-spacing="1.4"
           text-anchor="middle"
@@ -219,13 +219,13 @@ export default function SandboxDiagram() {
           y1="80"
           x2="928"
           y2="80"
-          className="stroke-zinc-200 dark:stroke-zinc-800"
+          className="stroke-zinc-800"
           stroke-width="1"
         />
 
         {/* ---- call sites, inside the isolate -------------------------------- */}
         <g
-          className="fill-zinc-700 dark:fill-zinc-300"
+          className="fill-zinc-300"
           font-size="13"
           text-anchor="start"
           dominant-baseline="central"
@@ -239,7 +239,7 @@ export default function SandboxDiagram() {
         </g>
 
         {/* ---- every call reaches the wall ----------------------------------- */}
-        <g className="stroke-zinc-200 dark:stroke-zinc-700" stroke-width="1.5">
+        <g className="stroke-zinc-700" stroke-width="1.5">
           <line x1="200" y1={L.net} x2={WALL_X} y2={L.net} />
           <line x1="200" y1={L.read} x2={WALL_X} y2={L.read} />
           <line x1="200" y1={L.listen} x2={WALL_X} y2={L.listen} />
@@ -255,7 +255,7 @@ export default function SandboxDiagram() {
           width={WALL_W}
           height="422"
           rx="14"
-          className="fill-zinc-100 stroke-zinc-200 dark:fill-zinc-800 dark:stroke-zinc-700"
+          className="fill-zinc-800 stroke-zinc-700"
           stroke-width="1"
         />
 
@@ -362,7 +362,7 @@ export default function SandboxDiagram() {
         </g>
 
         {/* ---- only a granted lane continues, and only it reaches anything ---- */}
-        <g className="stroke-brand-400 dark:stroke-brand-500" stroke-width="1.5">
+        <g className="stroke-brand-500" stroke-width="1.5">
           {has(run, "net") && <line x1={WALL_X + WALL_W} y1={L.net} x2="700" y2={L.net} />}
           {has(run, "read") && <line x1={WALL_X + WALL_W} y1={L.read} x2="700" y2={L.read} />}
           {has(run, "listen") && <line x1={WALL_X + WALL_W} y1={L.listen} x2="700" y2={L.listen} />}
@@ -389,7 +389,7 @@ export default function SandboxDiagram() {
         </g>
 
         <g
-          className="fill-zinc-700 dark:fill-zinc-300"
+          className="fill-zinc-300"
           font-size="13"
           text-anchor="start"
           dominant-baseline="central"
@@ -403,7 +403,7 @@ export default function SandboxDiagram() {
         </g>
 
         {/* ---- refusal marks, flashing as a blocked pulse arrives ------------- */}
-        <g stroke-width="2.2" stroke-linecap="round" className="stroke-red-500 dark:stroke-red-400">
+        <g stroke-width="2.2" stroke-linecap="round" className="stroke-red-400">
           {!has(run, "net") && (
             <g className="esr-deny" style="animation-delay: 0s">
               <line x1="367" y1={L.net - 7} x2="381" y2={L.net + 7} />
@@ -448,7 +448,7 @@ export default function SandboxDiagram() {
           y1="516"
           x2={MID}
           y2="548"
-          className="stroke-zinc-200 dark:stroke-zinc-700"
+          className="stroke-zinc-700"
           stroke-width="1.5"
         />
         <rect
@@ -457,7 +457,7 @@ export default function SandboxDiagram() {
           width="520"
           height="44"
           rx="10"
-          className="fill-zinc-50 stroke-zinc-200 dark:fill-zinc-800/60 dark:stroke-zinc-700"
+          className="fill-zinc-800/60 stroke-zinc-700"
           stroke-width="1"
         />
         <text
@@ -466,7 +466,7 @@ export default function SandboxDiagram() {
           font-size="13"
           text-anchor="middle"
           dominant-baseline="central"
-          className="fill-zinc-600 dark:fill-zinc-300"
+          className="fill-zinc-300"
         >
           {RUNS[run].cmd}
         </text>
