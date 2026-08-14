@@ -21,12 +21,18 @@ namespace) is unstable and may change between minor releases until the API freez
   file changes the entry's URL. Hashing the source would have left a stale-cache
   bug visible only in production.
 
-  **It adds no dependency.** The pipeline is three small modules — a tokenizer,
-  an `@import`/`url()` pass, and a minifier — that *splice byte spans and never
-  re-print*, which is the same thing `esdev` already does to an `index.html`. A
-  construct the pipeline has no name for comes out byte-for-byte as it went in;
-  the failure mode is leaving something alone rather than silently emitting
-  different CSS.
+  **It adds no dependency.** The pipeline is a real implementation of
+  [CSS Syntax Level 3](https://www.w3.org/TR/css-syntax-3/) — tokenizer, syntax
+  tree, parser, printer — with the `@import` and `url()` passes on top. It stays
+  small because it follows the spec's own two-layer design: the *generic*
+  grammar every rule obeys is closed and complete, so the tree has no selector
+  or media-query type and holds `@property`, `@container` and whatever ships
+  next year without knowing anything about them.
+
+  It is **lossless by construction**: every token keeps its verbatim text and
+  nothing is discarded, so `print(parse(x)) == x` for any input, valid CSS or
+  not. A pass that does not touch something cannot change it — which is the
+  guarantee that makes CSS tooling safe to run in a build.
 
   lightningcss was used first and withdrawn: it is MPL-2.0, and while that
   licence never reached `esrun` or anyone's application, it would have meant a

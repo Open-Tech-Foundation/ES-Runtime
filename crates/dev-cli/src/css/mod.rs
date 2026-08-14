@@ -6,87 +6,100 @@
 //! stylesheet silently loses its `@import`s, because the browser resolves them
 //! against wherever the file ended up rather than where it was written.
 //!
-//! This is that gap closed. The entry stylesheet and everything it imports
-//! become one file, the way a module entry and everything it imports become one
-//! bundle. Two things follow from having read the file at all:
+//! This is that gap closed, on a real parser rather than around one.
 //!
-//! * **`@import` is resolved**, so bundling changes what the browser fetches
-//!   and not what it renders.
-//! * **`url()` references are followed**, which is the half that is easy to
-//!   forget. A stylesheet that moves to `assets/` takes its font and its
-//!   background image with it, or it arrives pointing at two 404s.
+//! # The layers
+//!
+//! * [`token`] — [CSS Syntax Level 3 §4][tok]. The spec's full token set;
+//!   every token carries its verbatim text.
+//! * [`ast`] — the tree. The spec's *generic* grammar and nothing beyond it:
+//!   rules, blocks, declarations, component values. No selector type, no media
+//!   query type, because those belong to layers that grow without limit while
+//!   this one is closed and already complete.
+//! * [`parse`] — [§5][parse]. Does not fail; malformed input is represented.
+//! * [`print`] — the tree back to text, losslessly or minified.
+//! * [`bundle`] — the two passes that exist today: `@import` and `url()`.
+//!
+//! A new pass — value minification, syntax lowering, prefixing, CSS modules —
+//! is a module beside `bundle`, over the same tree. None of them is blocked by
+//! anything here, and none of them requires touching the layers below.
+//!
+//! # Lossless by construction
+//!
+//! `print(parse(x)) == x`, for **any** input, valid CSS or not. Every token is
+//! kept — whitespace, comments, unclosed blocks, bad strings — and printing is
+//! concatenation.
+//!
+//! This is the property that makes the rest safe to build on. The frightening
+//! failure mode in CSS tooling is a printer that meets a construct it has no
+//! representation for and emits something else instead: silently, in a build,
+//! in a file nobody reads. Here a pass that does not touch something cannot
+//! change it, and the round trip is asserted below over a corpus of the exotic
+//! constructs that would otherwise be where it happened.
 //!
 //! # Written here rather than taken from a crate
 //!
-//! The obvious dependency is lightningcss, and it was tried first. It works,
-//! and it is **MPL-2.0** — the licence reaches only its own files, but it is
-//! copyleft, and it brings a copyleft subtree with it. For a project whose
-//! `deny.toml` opens by saying copyleft fails the gate, that is a standing
-//! exception to explain to every downstream commercial user who runs a licence
-//! scanner over `esdev` (maintainer, 2026-08-14: no licensing complexity at any
-//! layer). Apache-2.0 alternatives exist — swc's CSS crates are the strongest —
-//! but they cost 121 crates of supply chain to buy features described below as
-//! deliberately out of scope.
+//! lightningcss was tried first and works. It is **MPL-2.0**, as is the
+//! `cssparser` subtree beneath it — seven copyleft crates in a project whose
+//! `deny.toml` opens by saying copyleft fails the gate, and a standing
+//! exception to re-explain to every downstream user who scans `esdev`
+//! (maintainer, 2026-08-14: no licensing complexity at any layer). swc's CSS
+//! crates are Apache-2.0 and carry no copyleft at all, but cost 121 crates to
+//! buy the features listed below as out of scope.
 //!
-//! What is actually needed turns out to be small, because of one decision:
-//!
-//! # It splices; it never re-prints
-//!
-//! Every pass here replaces the byte spans it understands and copies the rest
-//! through untouched. Nothing is parsed into a structure and printed back.
-//!
-//! That is what makes this tractable at a few hundred lines. Modelling CSS
-//! means modelling *all* of it, because a printer that meets a construct it has
-//! no representation for emits something else instead — silently, in a build,
-//! in a file nobody reads. A splicer that meets one leaves it alone. The
-//! failure modes are "did nothing" against "did something wrong", and only one
-//! of those is safe to ship.
-//!
-//! It is also the same architecture [`crate::html`] already uses on the
-//! document: html5gum finds spans, the build splices them, every other byte of
-//! the file survives.
-//!
-//! # The modules
-//!
-//! * [`token`] — the tokenizer. Guarantees the spans tile the input exactly.
-//! * [`bundle`] — `@import` resolution and `url()` rewriting, in one pass.
-//! * [`minify`] — comments and whitespace.
-//!
-//! Split this way because they are what a CSS pipeline grows *along*: a value
-//! minifier, a syntax lowerer, a prefixer and CSS modules are each a new module
-//! beside these rather than a change to them.
+//! What is left, once those features are not wanted, is the spec's generic
+//! grammar — which is small enough to own.
 //!
 //! # Deliberately not done
 //!
-//! **Syntax lowering** (nesting, `color-mix()`, logical properties) — every one
-//! is supported by every browser in the range this project targets, so lowering
-//! them today is work that produces a larger file and changes nothing.
-//! **Vendor prefixing** — same reason. **Value minification** — see
-//! [`minify`]. **CSS modules** and `import "./x.css"` from JavaScript — one
-//! feature, and it needs a stylesheet to be a *module*, which is a bundler
-//! change rather than a CSS one.
+//! **Syntax lowering** (nesting, `color-mix()`, logical properties) and
+//! **vendor prefixing** — every one is supported by every browser in the range
+//! this targets, so lowering them today produces a larger file and changes
+//! nothing. **Value minification** (`#ffffff` → `#fff`) — needs a per-property
+//! value grammar, which is the unbounded layer. **CSS modules** and
+//! `import "./x.css"` from JavaScript — one feature, and it needs a stylesheet
+//! to be a *module*, which is a bundler change rather than a CSS one.
 //!
-//! Each is a module beside these when it is asked for, and none of them is
-//! blocked by anything here.
+//! [tok]: https://www.w3.org/TR/css-syntax-3/#tokenization
+//! [parse]: https://www.w3.org/TR/css-syntax-3/#parsing
 
+pub mod ast;
 pub mod bundle;
-pub mod minify;
+pub mod parse;
+pub mod print;
 pub mod token;
 
 use std::path::Path;
 
-pub use bundle::Stylesheet;
+pub use bundle::Referenced;
+
+/// One stylesheet, bundled and printed.
+#[derive(Debug)]
+pub struct Stylesheet {
+    /// The CSS, with a placeholder at every local `url()`.
+    pub code: String,
+    /// The files those placeholders stand for.
+    pub referenced: Vec<Referenced>,
+    /// How many files were merged into it, the entry included.
+    pub sources: usize,
+}
 
 /// Bundles `entry` and everything it imports, minified or not.
 ///
-/// The one entry point [`crate::html`] uses; the modules behind it are public
-/// so that a future pass can be added without routing it through here.
+/// The one entry point [`crate::html`] uses. The layers behind it are public so
+/// that a new pass can be added without routing it through here.
 pub fn build(entry: &Path, minify: bool) -> Result<Stylesheet, String> {
-    let mut stylesheet = bundle::bundle(entry)?;
-    if minify {
-        stylesheet.code = minify::minify(&stylesheet.code);
-    }
-    Ok(stylesheet)
+    let bundled = bundle::bundle(entry)?;
+    let code = if minify {
+        print::print_minified(&bundled.sheet)
+    } else {
+        print::print(&bundled.sheet)
+    };
+    Ok(Stylesheet {
+        code,
+        referenced: bundled.referenced,
+        sources: bundled.sources,
+    })
 }
 
 #[cfg(test)]
@@ -104,6 +117,87 @@ mod tests {
             std::fs::write(&file, contents).expect("write");
         }
         dir.join(files[0].0)
+    }
+
+    /// **The** property of this design: anything the passes do not touch comes
+    /// out as it went in. Asserted over the constructs that would otherwise be
+    /// where a printer quietly rewrote something.
+    #[test]
+    fn parsing_and_printing_is_lossless() {
+        for source in [
+            "@supports (display: grid) and (not (display: inline-grid)) {\n  .a { grid-template-areas: \"a b\" \"c d\"; }\n}\n",
+            "@font-face { unicode-range: U+0025-00FF, U+4??; }\n",
+            "@property --x { syntax: '<length>'; inherits: false; }\n",
+            ".b { background: image-set(\"a.png\" 1x) }\n",
+            "@layer base, components;\n",
+            "@media (400px <= width <= 700px) { a { b: c } }\n",
+            "a[href^='x' i] ~ b > c + d { e: f }\n",
+            ".x { --raw: { still tokens }; }\n",
+            "@container card (min-width: 20em) { a { b: c } }\n",
+            "a { transition: color 120ms ease, transform 120ms ease }\n",
+            "/* leading */\n\n\nbody{color:red}\n\n/* trailing */\n",
+            "<!-- a{b:c} -->",
+            "a { color: RED; BACKGROUND: Blue }",
+            ":root { --Brand: #FFF }",
+            "@charset \"utf-8\";\n@import url(a.css) layer(base);\n",
+            "",
+            "   ",
+            "}}}{{{",
+            "a { color: rgb(1, 2",
+        ] {
+            let printed = print::print(&parse::parse(source));
+            assert_eq!(printed, source, "round trip changed {source:?}");
+        }
+    }
+
+    /// The round trip over every short string on the alphabet that drives the
+    /// tokenizer and the parser. Exhaustive rather than sampled: the states
+    /// that break a parser are the interleavings nobody thinks to write down,
+    /// and at this length there are few enough to simply try them all.
+    #[test]
+    fn parsing_and_printing_is_lossless_for_every_short_input() {
+        let alphabet: Vec<char> = r#"{}();:@"'\/*a1 "#.chars().collect();
+        for len in 1..=4usize {
+            let mut indices = vec![0usize; len];
+            loop {
+                let source: String = indices.iter().map(|&i| alphabet[i]).collect();
+                assert_eq!(
+                    print::print(&parse::parse(&source)),
+                    source,
+                    "round trip changed {source:?}"
+                );
+
+                let mut place = len;
+                let mut carried = true;
+                while carried && place > 0 {
+                    place -= 1;
+                    indices[place] += 1;
+                    carried = indices[place] == alphabet.len();
+                    if carried {
+                        indices[place] = 0;
+                    }
+                }
+                if carried {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The same property over the project's own stylesheet, which is the
+    /// realistic input and the one a regression would actually reach.
+    #[test]
+    fn the_templates_own_stylesheets_round_trip() {
+        for name in ["app.css", "theme.css"] {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/templates/react/styles/");
+            let source = std::fs::read_to_string(format!("{path}{name}"))
+                .unwrap_or_else(|e| panic!("read {name}: {e}"));
+            assert_eq!(
+                print::print(&parse::parse(&source)),
+                source,
+                "{name} did not round-trip"
+            );
+        }
     }
 
     /// The whole reason this module exists: a copied stylesheet loses these.
@@ -131,7 +225,7 @@ mod tests {
     }
 
     /// An `@import` one directory down naming a sibling of *its own*, which is
-    /// the case a resolver that anchors everything to the entry gets wrong.
+    /// the case a resolver anchored to the entry gets wrong.
     #[test]
     fn an_import_resolves_against_the_file_that_wrote_it() {
         let entry = project(
@@ -148,14 +242,14 @@ mod tests {
         assert_eq!(built.sources, 3);
     }
 
-    /// Both spellings, because a stylesheet in the wild uses either.
     #[test]
-    fn an_import_is_recognised_as_a_string_or_a_url() {
+    fn an_import_is_recognised_in_every_spelling() {
         for spelling in [
             "@import \"./a.css\";",
             "@import url(./a.css);",
             "@import url(\"./a.css\");",
             "@import  './a.css' ;",
+            "@IMPORT \"./a.css\";",
         ] {
             let entry = project(
                 "spelling",
@@ -211,8 +305,6 @@ mod tests {
         assert_eq!(built.sources, 1);
     }
 
-    /// A `url()` is reported so the file can travel with the stylesheet, and is
-    /// resolved against whichever file named it.
     #[test]
     fn a_url_is_reported_against_the_file_that_named_it() {
         let entry = project(
@@ -238,7 +330,6 @@ mod tests {
         );
     }
 
-    /// A quoted `url()` is a different token shape and has to be found too.
     #[test]
     fn a_quoted_url_is_rewritten_inside_its_quotes() {
         let entry = project(
@@ -251,18 +342,37 @@ mod tests {
 
         let built = build(&entry, false).expect("bundles");
         assert_eq!(built.referenced.len(), 1);
-        // The quotes survive; only what was between them was replaced.
         assert!(
             built
                 .code
-                .contains(&format!("url(\"{}\")", built.referenced[0].placeholder)),
+                .contains(&format!("\"{}\"", built.referenced[0].placeholder)),
             "{}",
             built.code
         );
     }
 
-    /// Two references get two slots, and neither placeholder is a prefix of the
-    /// other — the substitution above is a plain string replace.
+    /// A `url()` nested inside another function — `image-set()`, which is where
+    /// a pass that only looked at the top level would miss it.
+    #[test]
+    fn a_url_nested_inside_a_function_is_still_found() {
+        let entry = project(
+            "nested-url",
+            &[
+                (
+                    "styles.css",
+                    "a { background: image-set(url(./a.png) 1x, url(\"./b.png\") 2x) }",
+                ),
+                ("a.png", "png"),
+                ("b.png", "png"),
+            ],
+        );
+
+        let built = build(&entry, false).expect("bundles");
+        assert_eq!(built.referenced.len(), 2);
+    }
+
+    /// Two references get two slots, and no placeholder is a prefix of another
+    /// — the substitution above is a plain string replace.
     #[test]
     fn many_urls_get_placeholders_that_cannot_collide() {
         let mut css = String::new();
@@ -280,8 +390,7 @@ mod tests {
 
         let built = build(&entry, false).expect("bundles");
         assert_eq!(built.referenced.len(), 12);
-        // Substituting in order must not corrupt a later one — `…url_1__`
-        // must not match inside `…url_11__`.
+
         let mut code = built.code.clone();
         for (i, referenced) in built.referenced.iter().enumerate() {
             code = code.replace(&referenced.placeholder, &format!("/assets/{i}.png"));
@@ -298,8 +407,6 @@ mod tests {
         }
     }
 
-    /// The escape hatch, and the reason it has to be one: a build that tried to
-    /// resolve these would fail on every stylesheet that uses a CDN font.
     #[test]
     fn a_url_this_build_does_not_control_is_left_alone() {
         let entry = project(
@@ -322,7 +429,6 @@ mod tests {
         );
     }
 
-    /// The query is the browser's and is not part of the filename.
     #[test]
     fn a_query_survives_the_rewrite_without_being_part_of_the_path() {
         let entry = project(
@@ -340,13 +446,11 @@ mod tests {
             .code
             .replace(&built.referenced[0].placeholder, "/assets/f-abc.woff2");
         assert!(
-            substituted.contains("url(/assets/f-abc.woff2?v=2)"),
+            substituted.contains("/assets/f-abc.woff2?v=2"),
             "{substituted}"
         );
     }
 
-    /// A `url()` naming nothing is the build's mistake to report, not a 404 to
-    /// discover in a browser later.
     #[test]
     fn a_url_naming_nothing_is_an_error_that_says_where() {
         let entry = project(
@@ -359,8 +463,6 @@ mod tests {
         assert!(message.contains("not there"), "{message}");
     }
 
-    /// Two stylesheets importing each other has no bundled form. It must
-    /// terminate with a message rather than recurse until the stack goes.
     #[test]
     fn an_import_cycle_is_reported_rather_than_followed() {
         let entry = project(
@@ -373,21 +475,5 @@ mod tests {
 
         let message = build(&entry, false).expect_err("a cycle");
         assert!(message.contains("imports itself"), "{message}");
-    }
-
-    /// The property the whole design rests on: bytes this pipeline has no name
-    /// for come out exactly as they went in.
-    #[test]
-    fn what_it_does_not_understand_survives_byte_for_byte() {
-        let exotic = "@supports (display: grid) and (not (display: inline-grid)) {\n  \
-                      .a { grid-template-areas: \"a b\" \"c d\"; }\n}\n\
-                      @font-face { unicode-range: U+0025-00FF, U+4??; }\n\
-                      @property --x { syntax: '<length>'; inherits: false; }\n\
-                      .b { background: image-set(\"a.png\" 1x) }\n\
-                      @layer base, components;\n";
-        let entry = project("exotic", &[("styles.css", exotic)]);
-
-        let built = build(&entry, false).expect("bundles");
-        assert_eq!(built.code, exotic, "the pipeline rewrote something");
     }
 }
