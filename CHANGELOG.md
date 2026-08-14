@@ -8,7 +8,56 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev build` bundles stylesheets** (D67). A `<link rel="stylesheet">` in an
+  `index.html` target is now an entry, the way a `<script type="module">` already
+  was: it and everything it `@import`s become one hashed file. Modern syntax —
+  nesting, `color-mix()`, logical properties — is lowered to the target browsers,
+  and a relative `url()` is followed so fonts and images travel with the
+  stylesheet instead of arriving as 404s once it moves to `/assets`.
+
+  The hash is computed **after** `url()` substitution, so editing an `@import`ed
+  file changes the entry's URL. Hashing the source would have left a stale-cache
+  bug visible only in production.
+
+  Minification stays opt-in (`--minify`), matching JavaScript. CSS modules and
+  `import "./x.css"` from JavaScript are still not supported.
+
+  This adds **lightningcss (MPL-2.0)** — the first copyleft code in the tree,
+  allowed by a per-crate exception in `deny.toml` and confined to `esdev`, which
+  a service never deploys. `scripts/copyleft-confined.sh` fails the build if any
+  refused license family ever appears under a crate a deployment ships, because
+  that confinement is the ground the exception is granted on and `cargo deny`
+  cannot check it.
+
 ### Changed
+
+- **The `react` template is rebuilt on react-router 8** (D68), and is now a
+  starting point rather than a demonstration. A real route table — nested
+  layouts, dynamic segments, per-route loaders, error boundaries — read by the
+  server, the browser and the prerender step alike. A loader that throws a
+  `Response` produces a real status, so a 404 is a 404 rather than a 200 that
+  says "not found".
+
+  The server does what a deployed one has to: a Content-Security-Policy with a
+  per-response nonce (the one inline script is admitted by nonce, never
+  `'unsafe-inline'`), `nosniff`, `referrer-policy` and `permissions-policy`;
+  `SIGTERM` closes the listener and drains before exiting; immutable caching on
+  hashed assets; a `/healthz` that touches neither router nor data source; and
+  one JSON log line per request.
+
+  Fixed along the way, all silent: `globalThis.process.env.PORT` was read on a
+  runtime that has no `process` global and was `undefined` forever (it is now
+  `env` from `runtime:process`, granted `--allow-env=PORT`); a 404 shipped the
+  client bundle with no matching route, so `entry.client.tsx` threw into the
+  console of every 404; `render.tsx` claimed to stream the head first and did
+  not; and the README named a test file that did not exist and told the reader
+  to run `<pm> install`, a placeholder nothing substitutes.
+
+  `src/serialize.ts` is gone — `<StaticRouterProvider>` emits the hydration
+  script itself, escaped, and takes the nonce. The template's most
+  security-sensitive hand-rolled code is now the library's.
 
 - **The JavaScript in this repo builds with our own `esdev`.** The two database
   drivers build with `esdev build --lib src`, and the `runtime:serialization`

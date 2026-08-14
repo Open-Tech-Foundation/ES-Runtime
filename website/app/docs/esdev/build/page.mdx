@@ -173,10 +173,14 @@ build should keep out of.
 Dynamic `import()` chunks land in the same directory, hashed by the bundler, and
 the entry still points at them.
 
-<Callout type="note" title="Not a CSS pipeline">
-  A stylesheet is copied, not bundled: `@import` and `url()` inside it are not
-  followed, and `import "./x.css"` from JavaScript is not supported. That is the
-  next gap, not a decision.
+A `<link rel="stylesheet">` is an entry too. It and everything it `@import`s
+become one hashed file; modern syntax is lowered to the target browsers; and a
+relative `url()` is followed, so fonts and images travel with the stylesheet
+instead of arriving as 404s once it moves to `/assets`.
+
+<Callout type="note" title="No CSS modules">
+  `import "./x.css"` from JavaScript is not supported, and class names are not
+  hashed. A `<link>` in the document is how a stylesheet enters the build.
 </Callout>
 
 ## Where the file is

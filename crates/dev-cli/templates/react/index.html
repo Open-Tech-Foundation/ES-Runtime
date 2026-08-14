@@ -3,12 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--head-->
     <title>{{name}}</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <!--/head-->
+    <!-- Named here so the browser stops asking for /favicon.ico, which nothing
+         serves. esdev copies and hashes it like any other referenced file. -->
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles/app.css" />
     <script type="module" src="./src/entry.client.tsx"></script>
   </head>
   <body>
     <div id="root"><!--app--></div>
-    <!--data-->
   </body>
 </html>

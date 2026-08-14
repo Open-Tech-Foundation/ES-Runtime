@@ -21,7 +21,9 @@
   "permissions": {
     "allow": {
       "read": ["./dist"],
-      "listen": ["8080"]
+      "env": ["PORT"],
+      "listen": ["8080"],
+      "signals": ["SIGTERM", "SIGINT"]
     }
   }
 }

@@ -18,7 +18,8 @@ What you get is a project with its `esdev.json` written, its entry named by the
 script tag in its `index.html`, and a deploy line that is already narrow:
 
 ```sh
-esrun --allow-read=./dist --allow-listen=8080 dist/server.js
+esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 \
+      --allow-signals=SIGTERM,SIGINT dist/server.js
 ```
 
 ## Templates
@@ -30,7 +31,12 @@ esdev create my-app --template=react
 
 | | |
 | --- | --- |
-| `react` | Server-rendered and hydrated, with a static build and an SPA build |
+| `react` | React + react-router — server-rendered, hydrated, prerenderable to static HTML |
+
+The `react` template is a route table with loaders, nested layouts, dynamic
+segments and error boundaries, served by a file you own: a Content-Security-Policy
+with a per-response nonce, a `SIGTERM` that drains before it exits, immutable
+caching on hashed assets, and one JSON log line per request.
 
 They are **baked into the binary**, so `create` works offline and always writes
 a project the `esdev` that wrote it can build. Nothing is downloaded.

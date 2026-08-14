@@ -39,7 +39,7 @@ include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 /// choosing, and what they are choosing between is only visible from here.
 const DESCRIPTIONS: &[(&str, &str)] = &[(
     "react",
-    "React — server-rendered and hydrated, with a static build and an SPA build",
+    "React + react-router — server-rendered, hydrated, prerenderable to static HTML",
 )];
 
 /// A file whose name in the template is not the name it is written under.

@@ -359,3 +359,4 @@ mod tests {
         assert!(message.contains("styles.css"), "{message}");
     }
 }
+

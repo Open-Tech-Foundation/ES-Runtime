@@ -5,11 +5,18 @@
   "scripts": {
     "dev": "esdev start",
     "build": "esdev build",
-    "start": "esrun --allow-read=./dist --allow-listen=8080 dist/server.js",
-    "test": "esdev test"
+    "start": "esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 --allow-signals=SIGTERM,SIGINT dist/server.js",
+    "test": "esdev test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "react-router": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.0"
   }
 }

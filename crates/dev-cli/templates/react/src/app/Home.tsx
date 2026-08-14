@@ -1,21 +1,45 @@
-import { useState } from "react";
-import type { RouteData } from "./routes.ts";
+import { Link } from "react-router";
 
-export function Home({ data }: { data: RouteData }) {
-  // State, so a full reload being a *full* reload is something you can feel:
-  // count to three, save a file, and it is back to zero. That is the honest
-  // cost of not having hot module replacement.
-  const [count, setCount] = useState(0);
-
+export function Home() {
   return (
     <>
-      <h1>{data.title}</h1>
-      <p>{data.body}</p>
-      <p>
-        <button onClick={() => setCount(count + 1)}>counted {count}</button>
+      <h1>It renders on the server.</h1>
+      <p className="lede">
+        View source: the markup for this page arrived in the response. React then took it over in
+        the browser without rendering it a second time.
       </p>
+
+      <ul className="cards">
+        <li>
+          <Link className="card" to="/posts">
+            <h3>Routes with loaders →</h3>
+            <p>
+              Data is fetched before the component renders, on whichever side is rendering it.
+            </p>
+          </Link>
+        </li>
+        <li>
+          <Link className="card" to="/posts/permissions">
+            <h3>A dynamic segment →</h3>
+            <p>
+              <code>posts/:slug</code>, with its own loader — and a real 404 when the slug names
+              nothing.
+            </p>
+          </Link>
+        </li>
+        <li>
+          <Link className="card" to="/nowhere">
+            <h3>A URL that matches nothing →</h3>
+            <p>Status 404, rendered by the app rather than by the server's error page.</p>
+          </Link>
+        </li>
+      </ul>
+
+      <h2>Where to start</h2>
       <p>
-        Edit <code>src/app/Home.tsx</code> and this page reloads.
+        <code>src/routes.tsx</code> is the whole app in one file: paths, loaders, components and the
+        page titles they produce. <code>src/server.tsx</code> is what production runs. Everything
+        else exists to keep those two honest.
       </p>
     </>
   );
