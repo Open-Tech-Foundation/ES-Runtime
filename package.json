@@ -1,8 +1,13 @@
 {
-  "name": "es-runtime-tooling",
+  "name": "es-runtime-repo",
   "private": true,
   "type": "module",
-  "description": "Repo tooling: Biome, pinned. The runtime itself is Rust; tasks are in tasks.toml.",
+  "description": "The workspace root. The runtime itself is Rust; tasks are in tasks.toml.",
+  "packageManager": "bun@1.4.0",
+  "workspaces": [
+    "packages/*",
+    "crates/runtime/js"
+  ],
   "devDependencies": {
     "@biomejs/biome": "^2.4.0"
   }

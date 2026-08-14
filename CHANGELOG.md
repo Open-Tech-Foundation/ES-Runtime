@@ -8,6 +8,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **The repository is one Bun workspace.** The root `package.json` declares
+  `workspaces` and `packageManager`; `packages/*` and `crates/runtime/js` are
+  members with a single lockfile between them.
+
+  This was a CI bug, not only tidiness: `tsr install` runs one root
+  `bun install`, and without a workspace that installed Biome and nothing else
+  — so `tsr typecheck` and `tsr build` ran in packages whose `typescript` had
+  never been installed. It passed locally only because those directories had
+  been installed by hand.
+
 ### Added
 
 - **`esdev create` asks on a terminal** (D70): which template, and whether to

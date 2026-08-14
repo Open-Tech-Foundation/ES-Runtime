@@ -19,7 +19,7 @@
     "build": "esdev build --lib src"
   },
   "devDependencies": {
-    "@opentf/esrun-types": "file:../types",
+    "@opentf/esrun-types": "workspace:*",
     "typescript": "^7.0.2"
   },
   "keywords": ["esrun", "es-runtime", "opentf", "postgres", "postgresql", "database", "driver"],
