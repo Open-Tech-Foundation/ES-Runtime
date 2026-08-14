@@ -43,6 +43,8 @@ oxc.workspace = true
 # `esdev build`. Same confinement as oxc: the production binary runs bundles, it
 # does not make them.
 rolldown.workspace = true
+rolldown_common.workspace = true
+anyhow.workspace = true
 # `--watch`. The events only; the restart policy is ours.
 notify.workspace = true
 # An `index.html` target: the script and link tags in it are the build's inputs,

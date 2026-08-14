@@ -65,6 +65,7 @@
 
 pub mod ast;
 pub mod bundle;
+pub mod modules;
 pub mod parse;
 pub mod print;
 pub mod token;

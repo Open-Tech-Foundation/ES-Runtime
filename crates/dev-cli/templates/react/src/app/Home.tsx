@@ -1,5 +1,7 @@
 import { Link } from "react-router";
 
+import { Callout } from "./Callout.tsx";
+
 export function Home() {
   return (
     <>
@@ -34,6 +36,12 @@ export function Home() {
           </Link>
         </li>
       </ul>
+
+      <Callout>
+        This box is a <strong>CSS Module</strong>. <code>src/app/Callout.module.css</code> owns its
+        class names — the build scopes them, so nothing it declares can collide with anything
+        another component declares.
+      </Callout>
 
       <h2>Where to start</h2>
       <p>

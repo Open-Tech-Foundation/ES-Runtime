@@ -39,9 +39,38 @@ namespace) is unstable and may change between minor releases until the API freez
   standing seven-crate copyleft exception in a `deny.toml` that opens by
   refusing copyleft. `deny.toml` is back to `exceptions = []`.
 
+- **CSS Modules** (D69). A `*.module.css` imported from JavaScript is scoped to
+  the file that declares it, and the import resolves to the mapping:
+
+  ```js
+  import styles from "./Button.module.css";  // { button: "button_a1b2c3d4" }
+  ```
+
+  Class selectors, id selectors and `@keyframes` are renamed — the animation
+  references too, since a renamed `@keyframes` with an un-renamed reference is
+  an animation that silently stops running. `:global(…)` opts a name out, and
+  the wrapper is removed on the way through.
+
+  The scoped name is derived from the file's **path**, not its contents or a
+  counter. So a server build and a browser build arrive at the same name without
+  talking to each other (SSR hydrates cleanly), two machines building one commit
+  agree, and editing a component does not rename its classes.
+
+  Every module's CSS is collected into **one hashed stylesheet, linked from the
+  document** — never injected from script. Injecting costs a flash of unstyled
+  content, puts styling behind script execution, and needs
+  `style-src 'unsafe-inline'`, which the React template's own policy does not
+  grant.
+
+  `composes` is **refused with a message** rather than silently dropped: it
+  resolves a name from another module, which needs a dependency graph this pass
+  does not have, and ignoring it leaves an element missing half its styling with
+  nothing to show why.
+
   Not included, deliberately: syntax lowering and vendor prefixing (nesting and
   `color-mix()` are supported across the target browsers), value-level
-  minification, and CSS modules.
+  minification, and plain `import "./x.css"` — a stylesheet is either a `<link>`
+  in the document or a `*.module.css`.
 
 ### Changed
 

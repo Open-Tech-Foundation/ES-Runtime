@@ -103,8 +103,33 @@ whitespace.
 Nesting and `color-mix()` are written as-is and shipped as-is — they are
 supported everywhere this targets, so nothing lowers them.
 
-`import "./x.css"` from JavaScript is not supported, and there are no CSS
-modules; a `<link>` in the document is how a stylesheet enters this build.
+### CSS Modules
+
+A file named `*.module.css` is **scoped to itself**. Import it and you get the
+real class names:
+
+```tsx
+import styles from "./Callout.module.css";
+
+<aside className={styles.box}>…</aside>
+```
+
+`.box` becomes `.box_330a4019`, so two components can both declare `.box` and
+neither wins. `src/app/Callout.module.css` is the worked example.
+
+- The name is derived from the file's **path**, so it is the same on the server
+  and in the browser (SSR hydrates cleanly) and the same on every machine
+  building this commit. Editing the file does not rename its classes.
+- `:global(.no-js) .box` opts a name out of scoping. The wrapper is removed on
+  the way out.
+- Every module's CSS is collected into **one stylesheet, linked from the
+  document** — not injected by script, so there is no flash of unstyled content
+  and no need for `style-src 'unsafe-inline'`.
+- `composes` is not supported; it is refused with a message rather than silently
+  dropped. Compose in the markup: ``className={`${a.x} ${b.y}`}``.
+
+Plain `import "./x.css"` — a stylesheet with no scoping — is not supported. Use
+a `<link>` for global CSS, or `*.module.css` for a component's own.
 
 ## Types for `runtime:`
 

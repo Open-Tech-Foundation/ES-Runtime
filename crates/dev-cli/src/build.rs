@@ -63,7 +63,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use rolldown::{
-    Bundler, BundlerOptions, InputItem, IsExternal, OutputFormat, Platform, RawMinifyOptions,
+    BundlerOptions, InputItem, IsExternal, OutputFormat, Platform, RawMinifyOptions,
     ResolveOptions, TreeshakeOptions,
 };
 
@@ -546,7 +546,27 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         ..BundlerOptions::default()
     };
 
-    let mut bundler = Bundler::new(options).map_err(reported!())?;
+    // The same CSS Modules plugin the browser build runs, and for the same
+    // reason the *server* needs it: a component importing `./x.module.css`
+    // renders `className={styles.button}`, so the server has to resolve that to
+    // the identical scoped name or the markup it sends will not match the
+    // stylesheet the browser fetched.
+    //
+    // Its CSS output is discarded here. The name is derived from the file's
+    // path relative to the project root, so both builds arrive at it
+    // independently and neither has to tell the other. What the browser build
+    // writes is the one copy.
+    let mut bundler = rolldown::BundlerBuilder::default()
+        .with_options(options)
+        .with_plugins(vec![std::sync::Arc::new(
+            crate::cssmodules::CssModules::new(
+                &cwd,
+                crate::cssmodules::Collected::new(),
+                config.minify,
+            ),
+        )])
+        .build()
+        .map_err(reported!())?;
     bundler.write().await.map_err(reported!())?;
 
     if !config.lib {
@@ -614,6 +634,10 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
 /// serve it, so leaving it external would emit a bundle whose first import fails
 /// in somebody's browser. Unresolved, it fails here instead, naming the module
 /// and the file that imported it.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every one is a distinct build setting; a struct would only move the list"
+)]
 pub async fn bundle_browser_entries(
     entries: Vec<(String, String)>,
     root: &Path,
@@ -622,6 +646,7 @@ pub async fn bundle_browser_entries(
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
+    styles: &crate::cssmodules::Collected,
 ) -> Result<Vec<(String, String)>, String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
@@ -678,7 +703,16 @@ pub async fn bundle_browser_entries(
         ..BundlerOptions::default()
     };
 
-    let mut bundler = Bundler::new(options).map_err(reported!())?;
+    // The one plugin: a `.module.css` import becomes its name mapping, and the
+    // scoped CSS is pushed into `styles` for the caller to write out. See
+    // [`crate::cssmodules`].
+    let mut bundler = rolldown::BundlerBuilder::default()
+        .with_options(options)
+        .with_plugins(vec![std::sync::Arc::new(
+            crate::cssmodules::CssModules::new(root, styles.clone(), minify),
+        )])
+        .build()
+        .map_err(reported!())?;
     bundler.write().await.map_err(reported!())?;
 
     let mut written = Vec::new();

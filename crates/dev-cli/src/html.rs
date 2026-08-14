@@ -268,6 +268,26 @@ fn reload_client(port: u16) -> String {
 /// `"</body>"` inside a `<script>` string is not the end of the body — and a
 /// document with no `</body>` at all is valid, which is why there are three
 /// answers.
+/// Where a `<link>` for the JavaScript-imported stylesheets goes: the end of
+/// `<head>`, so it is fetched with the bundle rather than after it.
+///
+/// After any stylesheet the document already links, because a CSS Module is
+/// scoped to one component and a global sheet is the baseline it sits on —
+/// which is the order that makes a tie between them resolve the way an author
+/// expects.
+fn head_end(html: &str) -> Option<usize> {
+    let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
+    emitter.naively_switch_states(true);
+    for token in Tokenizer::new_with_emitter(html, emitter).flatten() {
+        if let Token::EndTag(tag) = token
+            && tag.name.as_slice() == b"head"
+        {
+            return Some(tag.span.start);
+        }
+    }
+    None
+}
+
 fn injection_point(html: &str) -> usize {
     let mut emitter: DefaultEmitter<usize> = DefaultEmitter::new_with_span();
     emitter.naively_switch_states(true);
@@ -439,6 +459,10 @@ pub async fn build(
         }
     }
 
+    // Filled by the bundler's CSS Modules plugin: what the JavaScript imported
+    // has no place in a JavaScript bundle, so it arrives here to be written as
+    // a stylesheet and linked below.
+    let styles = crate::cssmodules::Collected::new();
     let bundled = if modules.is_empty() {
         Vec::new()
     } else {
@@ -450,6 +474,7 @@ pub async fn build(
             minify,
             defines,
             conditions,
+            &styles,
         )
         .await?
     };
@@ -469,6 +494,34 @@ pub async fn build(
     }
 
     let mut document = splice(&html, &rewritten);
+
+    // The stylesheet the imported `.module.css` files became. Linked rather
+    // than injected from script: a `<style>` written at runtime costs a flash
+    // of unstyled content and needs `style-src 'unsafe-inline'`, which the
+    // template's own policy does not grant.
+    if !styles.is_empty() {
+        let css = styles.stylesheet();
+        let bytes = css.into_bytes();
+        let name = if hash {
+            hashed_name(Path::new("modules.css"), &bytes)
+        } else {
+            "modules.css".to_string()
+        };
+        std::fs::create_dir_all(&assets)
+            .map_err(|e| format!("cannot create {}: {e}", assets.display()))?;
+        std::fs::write(assets.join(&name), &bytes)
+            .map_err(|e| format!("cannot write {name}: {e}"))?;
+        styled += 1;
+
+        let link = format!("<link rel=\"stylesheet\" href=\"/{ASSET_DIR}/{name}\">");
+        match head_end(&document) {
+            Some(at) => document.insert_str(at, &link),
+            // A document with no `</head>` is one the browser will still give a
+            // head to; putting the link first is the closest this can get.
+            None => document.insert_str(0, &link),
+        }
+    }
+
     if let Some(dev) = dev {
         // Into the *output*, never the source. The file the developer edits is
         // never written to by a build.

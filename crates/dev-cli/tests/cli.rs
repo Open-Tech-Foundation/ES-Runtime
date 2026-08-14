@@ -2115,6 +2115,108 @@ fn a_stylesheet_is_bundled_with_what_it_imports_and_references() {
     assert_ne!(url, changed, "an imported file changed and the URL did not");
 }
 
+/// CSS Modules: a stylesheet the *JavaScript* imports, rather than one the
+/// document links.
+///
+/// The end-to-end property is the one the unit tests cannot reach — that the
+/// name the bundle uses and the name the stylesheet declares are the same
+/// string, and that two files declaring the same class do not collide.
+#[test]
+fn a_css_module_is_scoped_and_reaches_both_the_bundle_and_a_stylesheet() {
+    let dir = build_dir("h_cssmod");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/Button.module.css",
+        ".button { color: red }
+:global(.no-js) .button { color: grey }
+",
+    );
+    // A second file with the *same* local name: the whole point of scoping.
+    write_in(
+        &dir,
+        "src/Card.module.css",
+        ".button { color: blue }
+",
+    );
+    write_in(
+        &dir,
+        "src/main.js",
+        "import button from './Button.module.css';
+         import card from './Card.module.css';
+         document.body.className = button.button + ' ' + card.button;
+",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        r#"<!doctype html><html><head><title>t</title><script type="module" src="./src/main.js"></script></head><body></body></html>"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    // The document links a stylesheet nothing in it referenced — the build
+    // wrote it from what the JavaScript imported.
+    let document = std::fs::read_to_string(dir.join("dist/index.html")).expect("read document");
+    let href = document
+        .split_once(r#"<link rel="stylesheet" href=""#)
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(url, _)| url.to_string())
+        .expect("a stylesheet was linked");
+    assert!(href.starts_with("/assets/modules-"), "{href}");
+    let css = std::fs::read_to_string(dir.join("dist").join(href.trim_start_matches('/')))
+        .expect("read the stylesheet");
+
+    // Two files, one local name, two scoped names — and both are in the CSS.
+    let unique: std::collections::BTreeSet<&str> = css
+        .match_indices(".button_")
+        .map(|(at, _)| {
+            let from = at + 1;
+            let len = css[from..]
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(css.len() - from);
+            &css[from..from + len]
+        })
+        .collect();
+    assert_eq!(unique.len(), 2, "expected two scoped names, got {unique:?}");
+
+    // …and the bundle uses exactly those strings, or the markup would name a
+    // class the stylesheet never declared.
+    let bundle = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("main") && n.ends_with(".js"))
+        })
+        .expect("a bundle");
+    let code = std::fs::read_to_string(&bundle).expect("read bundle");
+    for name in &unique {
+        assert!(
+            code.contains(name),
+            "{name} is not in the bundle:
+{code}"
+        );
+    }
+
+    // `:global()` is a convention of this build, not a selector any browser
+    // knows: the wrapper has to be gone and its contents left alone.
+    assert!(
+        !css.contains(":global"),
+        "the wrapper survived:
+{css}"
+    );
+    assert!(css.contains(".no-js"), "{css}");
+}
+
 /// A relative path names a file in the project. If it is not there, that is a
 /// broken page, and the build is where it should be found — not the browser.
 #[test]

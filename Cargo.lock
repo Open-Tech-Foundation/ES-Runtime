@@ -1444,6 +1444,7 @@ dependencies = [
 name = "es-runtime-dev-cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "es-runtime-cli-common",
  "es-runtime-common",
  "es-runtime-providers",
@@ -1452,6 +1453,7 @@ dependencies = [
  "notify",
  "oxc 0.144.0",
  "rolldown",
+ "rolldown_common",
  "rustix 1.1.4",
  "serde_json",
  "tokio",

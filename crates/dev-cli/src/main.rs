@@ -42,6 +42,7 @@ mod build;
 mod config;
 mod create;
 mod css;
+mod cssmodules;
 mod declarations;
 mod devserver;
 mod dts;

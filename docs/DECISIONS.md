@@ -661,6 +661,30 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D69 — CSS Modules: a stylesheet the JavaScript imports · *Proposed (2026-08-14)* · *builds on D67, closes its last "not done"*
+
+**Context:** D67 listed CSS Modules as deliberately out of scope, on the grounds that it is "a bundler change rather than a CSS one". That was the right description and the wrong conclusion. The maintainer's answer (2026-08-14) was that it is the highest-priority remaining gap for a framework-grade React template — which is correct, because CSS has exactly one global namespace and a component tree does not. Every real React project reaches this problem on its second component, and the alternatives are a naming convention nobody enforces or a runtime CSS-in-JS library, which is a dependency and a per-render cost.
+
+**Decision (maintainer, 2026-08-14):** implement it, in two halves that meet at a name.
+
+`crates/dev-cli/src/css/modules.rs` is the **CSS half**: an AST pass that renames class selectors, id selectors and `@keyframes` — *and* the `animation` / `animation-name` values that refer to them, because a renamed `@keyframes` with an un-renamed reference is an animation that silently stops running. It reports the mapping. `:global(…)` is the opt-out and is **unwrapped**, not merely skipped: `:global` is a convention of this build, and a browser handed it matches nothing.
+
+`crates/dev-cli/src/cssmodules.rs` is the **bundler half**: a rolldown plugin on the `transform` hook. A `.module.css` module's source is replaced with a frozen object literal, so the graph sees an ordinary module and the component gets `styles.button` with no runtime. The scoped CSS has nowhere to go in a JavaScript bundle, so it is collected and `html.rs` writes it as one hashed stylesheet with a `<link>` in the head.
+
+**The scoped name is derived from the file's path**, not its contents and not a counter. Three things follow, and the first is the one that makes SSR work at all: the **server build and the browser build arrive at the same name independently**, with no shared state and no ordering between them, so the markup the server renders matches the stylesheet the browser fetched. Two machines building one commit agree. And editing a component does not rename its classes, so a rebuild does not invalidate every reference to a name.
+
+**Linked, not injected.** The common alternative is emitting a `<style>` from JavaScript at runtime. That costs a flash of unstyled content on first paint, puts styling behind script execution, and requires `style-src 'unsafe-inline'` — which D68's template deliberately does not grant. A `<link>` is fetched in parallel with the bundle and blocks rendering exactly as a stylesheet should.
+
+**`composes` is refused rather than ignored,** with a message pointing at the markup-level alternative. It resolves a name from *another* module, which needs a dependency graph this pass does not have; silently dropping it leaves an element missing half its styling and nothing to show why.
+
+**Consequences:** the plugin runs in **both** builds — the browser one, which writes the CSS, and the server one, which needs the identical mapping and discards it. `rolldown_common` and `anyhow` become named dependencies; both were already in the graph via `rolldown`, so neither adds a crate, and a plugin cannot be written against re-exports that do not exist. The React template gains `src/app/Callout.module.css` and `Callout.tsx` as the worked example, and `*.module.css` gets a `declare module` in `esdev-env.d.ts` — typed as `Readonly<Record<string, string>>` rather than a per-file union, since generating that would mean running the CSS pipeline from the type checker.
+
+Verified by 13 unit tests over the scoping pass, 3 over the generated module (including that a class name cannot break out of the JavaScript string literal it lands in), and an end-to-end test asserting the property the unit tests cannot reach: that two files declaring the same `.button` produce two names, that both appear in the CSS, and that the *bundle* uses those exact strings — the failure mode otherwise being markup naming a class the stylesheet never declared. In a browser: two components' `.button` resolving to different colours; and in the template, a scoped `<aside>` with `var(--accent)` resolving from the global theme, its nested `code` rule applying, and hydration clean.
+
+**Not solved here:** `composes`; plain `import "./x.css"`; and per-file typed class names.
+
+---
+
 ### D68 — The React template is a real app, not a demonstration · *Proposed (2026-08-14)* · *supersedes D64's template, amends its "not solved" list*
 
 **Context:** D64 shipped a template that worked and that nobody would start a project from. Its route table was three fields and a `match()` that compared strings for equality, so there were no dynamic segments and no client-side navigation; every route shared one flat `RouteData = { title, body }`, which is the shape that stops being usable on the second real page. Reviewing it against what it claimed turned up four defects, each silent:

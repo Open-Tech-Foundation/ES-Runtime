@@ -178,12 +178,26 @@ become one hashed file, and a relative `url()` is followed, so fonts and images
 travel with the stylesheet instead of arriving as 404s once it moves to
 `/assets`. `--minify` drops comments and collapses whitespace.
 
+### CSS Modules
+
+A `*.module.css` imported from JavaScript is scoped to the file that declares
+it, and the import resolves to the mapping:
+
+```js
+import styles from "./Button.module.css";  // { button: "button_a1b2c3d4" }
+```
+
+Class names, id selectors and `@keyframes` are renamed; the scoped name comes
+from the file's path, so a server build and a browser build agree without
+talking to each other. `:global(…)` opts out. Every module's CSS is collected
+into one hashed stylesheet and linked from the document — never injected from
+script, so nothing needs `style-src 'unsafe-inline'`.
+
 <Callout type="note" title="What the CSS pipeline does not do">
   No syntax lowering and no vendor prefixing — nesting and `color-mix()` are
   supported across the browsers this targets. No value-level minification. No
-  CSS modules: `import "./x.css"` from JavaScript is not supported and class
-  names are not hashed, so a `<link>` in the document is how a stylesheet
-  enters the build.
+  `composes` (it is refused, not ignored), and no plain `import "./x.css"`: a
+  stylesheet is either a `<link>` in the document or a `*.module.css`.
 </Callout>
 
 ## Where the file is

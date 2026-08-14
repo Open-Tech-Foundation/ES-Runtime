@@ -27,6 +27,23 @@ declare const process: {
 };
 
 /**
+ * A CSS Module — `import styles from "./Button.module.css"`.
+ *
+ * The build reads the stylesheet, rewrites its class names to be unique to that
+ * file, and replaces the import with the mapping. `styles.button` is the real
+ * class name to put in `className`.
+ *
+ * The value type is `string` rather than a per-file union of the names actually
+ * declared: generating that would mean running the CSS pipeline from the type
+ * checker, and `esdev` erases types rather than participating in them. A typo
+ * gives `undefined` at runtime and an element with no class.
+ */
+declare module "*.module.css" {
+  const styles: Readonly<Record<string, string>>;
+  export default styles;
+}
+
+/**
  * The globals `esdev test` injects into every `*.test.ts` file.
  *
  * There is no import: the runner wraps each file with these already defined,
