@@ -159,24 +159,25 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Sandbox Section — dark in both site themes. This is the one thing on
-          the page that is ours rather than table stakes, and a band that breaks
-          the light/zinc-50 rhythm is how a reader is told so. It also gives the
-          brand orange and the host colours the ground they need. */}
-      <section className="border-y border-zinc-800 bg-zinc-950">
+      {/* Sandbox Section. The section follows the site theme like every other;
+          only the diagram itself is dark in both, because the brand orange and
+          the six host colours need a dark ground to carry — and a single dark
+          slab on a light page is what marks it as the one thing here that is
+          ours rather than table stakes. */}
+      <section>
         <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
           <div className="mb-12 text-center">
-            <h2 className="text-3xl font-bold tracking-tight text-zinc-50">
+            <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
               Deny by default
             </h2>
-            <p className="mt-4 text-lg text-zinc-400">
+            <p className="mt-4 text-lg text-zinc-600 dark:text-zinc-400">
               A run reaches what the command line named, and nothing else.
             </p>
           </div>
-          <div className="mx-auto max-w-5xl rounded-2xl bg-zinc-900 p-6 ring-1 ring-white/10 sm:p-8">
+          <div className="mx-auto max-w-5xl rounded-2xl bg-zinc-900 p-6 shadow-xl ring-1 ring-white/10 sm:p-8 dark:shadow-none">
             <SandboxDiagram />
           </div>
-          <p className="mx-auto mt-6 max-w-5xl text-center text-sm text-zinc-500">
+          <p className="mx-auto mt-6 max-w-5xl text-center text-sm text-zinc-500 dark:text-zinc-400">
             Nine capabilities: <code className="font-mono">read</code>, <code className="font-mono">write</code>,{" "}
             <code className="font-mono">imports</code>, <code className="font-mono">net</code>,{" "}
             <code className="font-mono">listen</code>, <code className="font-mono">env</code>,{" "}
