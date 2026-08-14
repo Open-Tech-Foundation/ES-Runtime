@@ -1452,6 +1452,7 @@ dependencies = [
  "html5gum",
  "notify",
  "oxc 0.144.0",
+ "regex",
  "rolldown",
  "rolldown_common",
  "rolldown_sourcemap",

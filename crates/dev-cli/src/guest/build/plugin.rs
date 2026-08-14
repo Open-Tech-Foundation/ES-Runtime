@@ -1,5 +1,11 @@
-//! The bridge: a rolldown plugin whose hooks are JavaScript functions in the
-//! guest isolate.
+//! The adapter: our [plugin contract](super::contract) on one side, rolldown on
+//! the other, and the isolate boundary in the middle.
+//!
+//! **Everything that names rolldown in the plugin path lives here.** That is
+//! not tidiness — it is what makes the contract a contract. A guest-visible API
+//! defined by a third party's trait moves when that trait moves, and the
+//! `runtime:` namespace is a versioned promise. Behind this file the bundler is
+//! replaceable; in front of it, nothing changes if it is replaced.
 //!
 //! # Why the guest pulls instead of the host pushing
 //!
@@ -33,15 +39,23 @@
 //! by the bridge being a queue of one. Each call carries an id, and the reply
 //! finds its way back through it.
 //!
+//! # Why a filter earns its keep here and nowhere else
+//!
+//! In rollup a hook that returns `null` cost a function call. Here it costs a
+//! **round trip into a V8 isolate**, so an unfiltered `transform` is one
+//! crossing per module in the graph — four hundred of them on a middling app,
+//! to reach a plugin that wanted one `.mdx` file. The contract's
+//! [`Filter`](super::contract::Filter) is evaluated on *this* side, before the
+//! call is posted, which is why it is declarative: a predicate the guest owns
+//! could only be consulted by crossing.
+//!
 //! # `this`
 //!
 //! A hook's context is the other half of the API, and the half that cannot be
-//! a message: `this.resolve()` asks the *bundler's own resolver* a question
-//! mid-hook, and `this.addWatchFile()` declares a dependency the graph could
-//! not have discovered. Both are why a subprocess protocol was never an option
-//! here. [`PluginContext`] is `Arc`-backed and `Send`, so each in-flight call
-//! parks its context beside its reply channel, and the context ops reach it by
-//! call id — for exactly as long as that hook is running.
+//! a message: `ctx.resolve()` asks the *bundler's own resolver* a question
+//! mid-hook. [`PluginContext`] is `Arc`-backed and `Send`, so each in-flight
+//! call parks its context beside its reply channel, and the context ops reach
+//! it by call id — for exactly as long as that hook is running.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -51,12 +65,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::anyhow;
 use es_runtime_cli_common::Value;
 use rolldown::plugin::{
-    HookBuildEndArgs, HookBuildStartArgs, HookLoadArgs, HookLoadReturn, HookNoopReturn,
-    HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn, HookTransformArgs,
-    HookTransformOutput, HookTransformReturn, HookUsage, Plugin, PluginContext,
-    SharedLoadPluginContext, SharedTransformPluginContext,
+    HookBuildEndArgs, HookBuildStartArgs, HookLoadArgs, HookLoadOutput, HookLoadReturn,
+    HookNoopReturn, HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn, HookTransformArgs,
+    HookTransformOutput, HookTransformOutputMap, HookTransformReturn, HookUsage, Plugin,
+    PluginContext, PluginHookMeta, PluginOrder, SharedLoadPluginContext,
+    SharedTransformPluginContext,
 };
 use rolldown_common::{ModuleType, ResolvedExternal};
+
+use super::contract::{self, Hook, Order};
 use tokio::sync::{mpsc, oneshot};
 
 /// One hook call on its way to the guest.
@@ -69,8 +86,14 @@ pub struct HookCall {
     pub plugin: f64,
     /// The hook's name, spelled as the guest writes it.
     pub hook: &'static str,
-    /// Its arguments, in the order the guest's function takes them.
+    /// Its arguments, in the order the guest's function takes them. The
+    /// context is appended after these by the guest, so every hook reads
+    /// *data first, context last* — uniformly, with nothing positional in
+    /// between for a signature to get wrong.
     pub args: Vec<Value>,
+    /// What the context carries for this call, beyond the methods every
+    /// context has: `isEntry` on a resolve, and nothing so far on the rest.
+    pub meta: Vec<(String, Value)>,
 }
 
 /// What the guest's hook returned, or threw.
@@ -153,6 +176,7 @@ impl Bridge {
         plugin: f64,
         hook: &'static str,
         args: Vec<Value>,
+        meta: Vec<(String, Value)>,
         ctx: Option<HookCtx>,
     ) -> anyhow::Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -169,6 +193,7 @@ impl Bridge {
             plugin,
             hook,
             args,
+            meta,
         });
         let outcome = match posted {
             // The program dropped the pump — it exited, or the run was
@@ -213,37 +238,111 @@ impl Bridge {
     }
 }
 
-/// One JS plugin, as rolldown sees it.
+/// One plugin from the contract, wearing rolldown's trait.
+///
+/// The translation is the whole of this type: hooks in, filters applied,
+/// contract-shaped arguments across the bridge, contract-shaped answers back,
+/// rolldown's types on the way out.
 #[derive(Debug)]
 pub struct JsPlugin {
     bridge: Arc<Bridge>,
-    /// The guest's own handle for the plugin object.
-    id: f64,
-    name: String,
-    /// Which hooks the guest actually implements. Declaring this is not an
-    /// optimisation detail: a plugin that lists `transform` it does not have
-    /// puts every module in the graph through a round trip to the isolate.
+    /// Shared rather than cloned: a filter is a compiled regular expression,
+    /// and a dev server builds forty times a minute.
+    plugin: Arc<contract::Plugin>,
     usage: HookUsage,
 }
 
 impl JsPlugin {
-    pub fn new(bridge: Arc<Bridge>, id: f64, name: String, usage: HookUsage) -> Self {
+    pub fn new(bridge: Arc<Bridge>, plugin: Arc<contract::Plugin>) -> Self {
+        // Declaring the usage is not bookkeeping: a hook rolldown does not know
+        // this plugin has is a hook it never calls, and one it thinks it has is
+        // a crossing per module. Derived from the declaration rather than
+        // trusted from the guest.
+        let mut usage = HookUsage::empty();
+        if plugin.hooks.start.is_some() {
+            usage |= HookUsage::BuildStart;
+        }
+        if plugin.hooks.resolve.is_some() {
+            usage |= HookUsage::ResolveId;
+        }
+        if plugin.hooks.load.is_some() {
+            usage |= HookUsage::Load;
+        }
+        if plugin.hooks.transform.is_some() {
+            usage |= HookUsage::Transform;
+        }
+        if plugin.hooks.end.is_some() {
+            usage |= HookUsage::BuildEnd;
+        }
         JsPlugin {
             bridge,
-            id,
-            name,
+            plugin,
             usage,
         }
+    }
+
+    /// Whether this hook wants this module, decided **here** — before anything
+    /// crosses into the isolate.
+    fn admits(&self, hook: Hook, id: &str, code: Option<&str>) -> bool {
+        self.plugin
+            .hooks
+            .get(hook)
+            .is_some_and(|spec| spec.filter.admits(id, code))
+    }
+
+    fn order(&self, hook: Hook) -> Option<PluginHookMeta> {
+        let order = match self.plugin.hooks.get(hook)?.order {
+            Order::Pre => PluginOrder::Pre,
+            Order::Post => PluginOrder::Post,
+            Order::Normal => return None,
+        };
+        Some(PluginHookMeta { order: Some(order) })
+    }
+
+    async fn call(&self, hook: Hook, args: Vec<Value>, ctx: HookCtx) -> anyhow::Result<Value> {
+        self.call_with(hook, args, Vec::new(), ctx).await
+    }
+
+    async fn call_with(
+        &self,
+        hook: Hook,
+        args: Vec<Value>,
+        meta: Vec<(String, Value)>,
+        ctx: HookCtx,
+    ) -> anyhow::Result<Value> {
+        self.bridge
+            .call(self.plugin.id, hook.name(), args, meta, Some(ctx))
+            .await
     }
 }
 
 impl Plugin for JsPlugin {
     fn name(&self) -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Owned(self.name.clone())
+        std::borrow::Cow::Owned(self.plugin.name.clone())
     }
 
     fn register_hook_usage(&self) -> HookUsage {
         self.usage
+    }
+
+    fn build_start_meta(&self) -> Option<PluginHookMeta> {
+        self.order(Hook::Start)
+    }
+
+    fn resolve_id_meta(&self) -> Option<PluginHookMeta> {
+        self.order(Hook::Resolve)
+    }
+
+    fn load_meta(&self) -> Option<PluginHookMeta> {
+        self.order(Hook::Load)
+    }
+
+    fn transform_meta(&self) -> Option<PluginHookMeta> {
+        self.order(Hook::Transform)
+    }
+
+    fn build_end_meta(&self) -> Option<PluginHookMeta> {
+        self.order(Hook::End)
     }
 
     async fn build_start(
@@ -251,14 +350,14 @@ impl Plugin for JsPlugin {
         ctx: &PluginContext,
         _args: &HookBuildStartArgs<'_>,
     ) -> HookNoopReturn {
-        self.bridge
-            .call(
-                self.id,
-                "buildStart",
-                Vec::new(),
-                Some(HookCtx::Plain(ctx.clone())),
-            )
+        let out = self
+            .call(Hook::Start, Vec::new(), HookCtx::Plain(ctx.clone()))
             .await?;
+        // A build-wide input: a config file or a manifest the whole build was
+        // read from, which no module imports.
+        for file in contract::depends_on(&out) {
+            ctx.add_watch_file(&file);
+        }
         Ok(())
     }
 
@@ -267,43 +366,72 @@ impl Plugin for JsPlugin {
         ctx: &PluginContext,
         args: &HookResolveIdArgs<'_>,
     ) -> HookResolveIdReturn {
+        // `resolve` filters on the *specifier* — the id does not exist yet.
+        if !self.admits(Hook::Resolve, args.specifier, None) {
+            return Ok(None);
+        }
         let out = self
-            .bridge
-            .call(
-                self.id,
-                "resolveId",
+            .call_with(
+                Hook::Resolve,
                 vec![
                     Value::String(args.specifier.to_string()),
                     match args.importer {
                         Some(importer) => Value::String(importer.to_string()),
                         None => Value::Null,
                     },
-                    Value::Object(vec![("isEntry".to_string(), Value::Bool(args.is_entry))]),
                 ],
-                Some(HookCtx::Plain(ctx.clone())),
+                // On the context rather than a third positional argument, so
+                // `(source, importer, ctx)` is the signature and stays the
+                // signature if anything else is ever added.
+                vec![("isEntry".to_string(), Value::Bool(args.is_entry))],
+                HookCtx::Plain(ctx.clone()),
             )
             .await?;
-        Ok(resolved(out))
+        Ok(match contract::resolved(&out) {
+            contract::Resolved::Pass => None,
+            contract::Resolved::To {
+                id,
+                external,
+                virtual_module,
+            } => Some(HookResolveIdOutput {
+                // A module the plugin invented: rolldown's way of saying "no
+                // file behind this" is the `\0` prefix every bundler inherited
+                // from rollup. Applied here rather than asked of the plugin
+                // author, and stripped again before any id reaches them.
+                external: match external {
+                    contract::External::No => None,
+                    contract::External::Yes => Some(ResolvedExternal::Bool(true)),
+                    contract::External::Absolute => Some(ResolvedExternal::Absolute),
+                    contract::External::Relative => Some(ResolvedExternal::Relative),
+                },
+                ..HookResolveIdOutput::from_id(if virtual_module { virtual_id(&id) } else { id })
+            }),
+        })
     }
 
     async fn load(&self, ctx: SharedLoadPluginContext, args: &HookLoadArgs<'_>) -> HookLoadReturn {
+        // The id the plugin knows it by. A virtual module carries the backend's
+        // NUL prefix internally, and a filter written against `"@app/nav"` has
+        // to match the module the plugin itself named.
+        let id = guest_id(args.id);
+        if !self.admits(Hook::Load, id, None) {
+            return Ok(None);
+        }
+        let ctx = HookCtx::Load(ctx);
         let out = self
-            .bridge
-            .call(
-                self.id,
-                "load",
-                vec![Value::String(args.id.to_string())],
-                Some(HookCtx::Load(ctx)),
-            )
+            .call(Hook::Load, vec![Value::String(id.to_string())], ctx.clone())
             .await?;
-        let Some((code, map, module_type)) = code_and_map(out, "load")? else {
+        let Some(result) = contract::module_result(&out, Hook::Load).map_err(|e| anyhow!(e))?
+        else {
             return Ok(None);
         };
-        Ok(Some(rolldown::plugin::HookLoadOutput {
-            code: code.into(),
-            map,
-            module_type,
-            ..rolldown::plugin::HookLoadOutput::default()
+        let result = convert(result, Hook::Load)?;
+        declare(&ctx, &result.depends_on);
+        Ok(Some(HookLoadOutput {
+            code: result.code.into(),
+            map: result.map,
+            module_type: result.module_type,
+            ..HookLoadOutput::default()
         }))
     }
 
@@ -312,30 +440,40 @@ impl Plugin for JsPlugin {
         ctx: SharedTransformPluginContext,
         args: &HookTransformArgs<'_>,
     ) -> HookTransformReturn {
+        // The crossing this filter exists to avoid: without it, every module in
+        // the graph is shipped into the isolate so the plugin can look at its
+        // id and hand it straight back.
+        let id = guest_id(args.id);
+        if !self.admits(Hook::Transform, id, Some(args.code)) {
+            return Ok(None);
+        }
+        let ctx = HookCtx::Transform(ctx);
         let out = self
-            .bridge
             .call(
-                self.id,
-                "transform",
+                Hook::Transform,
                 vec![
                     Value::String(args.code.to_string()),
-                    Value::String(args.id.to_string()),
+                    Value::String(id.to_string()),
                 ],
-                Some(HookCtx::Transform(ctx)),
+                ctx.clone(),
             )
             .await?;
-        let Some((code, map, module_type)) = code_and_map(out, "transform")? else {
+        let Some(result) =
+            contract::module_result(&out, Hook::Transform).map_err(|e| anyhow!(e))?
+        else {
             return Ok(None);
         };
+        let result = convert(result, Hook::Transform)?;
+        declare(&ctx, &result.depends_on);
         Ok(Some(HookTransformOutput {
-            code: Some(code),
-            map: match map {
-                Some(map) => rolldown::plugin::HookTransformOutputMap::Sourcemap(Box::new(map)),
+            code: Some(result.code),
+            map: match result.map {
+                Some(map) => HookTransformOutputMap::Sourcemap(Box::new(map)),
                 // `Omitted`, not `Null`: the plugin said nothing about the map,
                 // which leaves the chain alone. `Null` would *break* it.
-                None => rolldown::plugin::HookTransformOutputMap::Omitted,
+                None => HookTransformOutputMap::Omitted,
             },
-            module_type,
+            module_type: result.module_type,
             ..HookTransformOutput::default()
         }))
     }
@@ -346,7 +484,7 @@ impl Plugin for JsPlugin {
         args: Option<&HookBuildEndArgs<'_>>,
     ) -> HookNoopReturn {
         // The failure, when there was one: a plugin that started something in
-        // `buildStart` has to be told the build died rather than finished.
+        // `start` has to be told the build died rather than finished.
         let error = match args {
             Some(args) => Value::String(
                 args.errors
@@ -357,88 +495,175 @@ impl Plugin for JsPlugin {
             ),
             None => Value::Null,
         };
-        self.bridge
-            .call(
-                self.id,
-                "buildEnd",
-                vec![error],
-                Some(HookCtx::Plain(ctx.clone())),
-            )
+        self.call(Hook::End, vec![error], HookCtx::Plain(ctx.clone()))
             .await?;
         Ok(())
     }
 }
 
-/// A `resolveId` return: `null`, a string, or `{ id, external }`.
-fn resolved(out: Value) -> Option<HookResolveIdOutput> {
-    match out {
-        Value::String(id) => Some(HookResolveIdOutput::from_id(id)),
-        Value::Object(fields) => {
-            let id = fields
-                .iter()
-                .find(|(k, _)| k == "id")
-                .and_then(|(_, v)| v.as_str())?;
-            let external = match fields.iter().find(|(k, _)| k == "external") {
-                Some((_, Value::Bool(true))) => Some(ResolvedExternal::Bool(true)),
-                Some((_, Value::String(kind))) if kind == "absolute" => {
-                    Some(ResolvedExternal::Absolute)
-                }
-                Some((_, Value::String(kind))) if kind == "relative" => {
-                    Some(ResolvedExternal::Relative)
-                }
-                _ => None,
-            };
-            Some(HookResolveIdOutput {
-                id: id.into(),
-                external,
-                ..HookResolveIdOutput::from_id(id)
-            })
+/// Hands the backend the files a hook said its module depends on.
+///
+/// The contract returns them; rolldown takes them one at a time through the
+/// context. Which is the translation this whole file is: the guest's shape is
+/// the one that cannot be got wrong, and the conversion happens once, here.
+///
+/// A relative path is resolved against the build's directory, because rolldown
+/// wants an absolute one and a guest writing `dependsOn: ["docs/_meta.js"]`
+/// means the same thing there as everywhere else in a run. Without this the
+/// entry lands verbatim, and the same file appears in `watchFiles` twice —
+/// once as the graph found it and once as the plugin spelled it — so a
+/// consumer matching a change against its dependency set misses half the time.
+fn declare(ctx: &HookCtx, files: &[String]) {
+    let cwd = ctx.plugin().cwd().clone();
+    for file in files {
+        let path = std::path::Path::new(file);
+        if path.is_absolute() {
+            ctx.add_watch_file(file);
+        } else {
+            ctx.add_watch_file(&cwd.join(path).to_string_lossy());
         }
-        // `null`, `undefined`, and anything else mean "not mine" — the same
-        // answer rollup gives them.
-        _ => None,
     }
 }
 
-/// A `load`/`transform` return: `null`, a string of code, or
-/// `{ code, map, moduleType }`.
-type CodeAndMap = Option<(
-    String,
-    Option<rolldown_sourcemap::SourceMap>,
-    Option<ModuleType>,
-)>;
+/// The id a virtual module is given inside the bundler.
+///
+/// Rolldown, like every bundler descended from rollup, marks "there is no file
+/// behind this" by a leading NUL byte in the id — a convention the plugin
+/// author is normally expected to know and apply by hand. The contract has a
+/// `virtual: true` flag instead, and the convention is applied here, which is
+/// where a backend's private notation belongs.
+fn virtual_id(id: &str) -> String {
+    if id.starts_with('\0') {
+        id.to_string()
+    } else {
+        format!("\0{id}")
+    }
+}
 
-fn code_and_map(out: Value, hook: &str) -> anyhow::Result<CodeAndMap> {
-    match out {
-        Value::String(code) => Ok(Some((code, None, None))),
-        Value::Object(fields) => {
-            let get = |name: &str| fields.iter().find(|(k, _)| k == name).map(|(_, v)| v);
-            let Some(code) = get("code").and_then(Value::as_str) else {
-                return Ok(None);
-            };
-            // A map crosses as JSON, which is what every JS tool that makes one
-            // already has: `JSON.stringify(map)` on the way out, parsed here.
-            // Converting object-by-object would be the same bytes with more
-            // ways to be wrong.
-            let map = match get("map").and_then(Value::as_str) {
-                Some(json) if !json.is_empty() => Some(
-                    rolldown_sourcemap::OwnedSourceMap::from_json_string(json)
-                        .map(rolldown_sourcemap::SourceMap::from)
-                        .map_err(|e| {
-                            anyhow!("{hook} returned a source map that is not valid: {e}")
-                        })?,
-                ),
-                _ => None,
-            };
-            let module_type = match get("moduleType").and_then(Value::as_str) {
-                Some(name) => Some(
-                    ModuleType::from_known_str(name)
-                        .map_err(|_| anyhow!("{hook} returned an unknown moduleType {name:?}"))?,
-                ),
-                None => None,
-            };
-            Ok(Some((code.to_string(), map, module_type)))
-        }
-        _ => Ok(None),
+/// The id as the plugin named it, with the backend's private notation removed.
+fn guest_id(id: &str) -> &str {
+    id.strip_prefix('\0').unwrap_or(id)
+}
+
+/// A contract answer, in rolldown's types.
+struct Module {
+    code: String,
+    map: Option<rolldown_sourcemap::SourceMap>,
+    module_type: Option<ModuleType>,
+    depends_on: Vec<String>,
+}
+
+fn convert(result: contract::ModuleResult, hook: Hook) -> anyhow::Result<Module> {
+    let map = match result.map {
+        Some(json) => Some(
+            rolldown_sourcemap::OwnedSourceMap::from_json_string(&json)
+                .map(rolldown_sourcemap::SourceMap::from)
+                .map_err(|e| {
+                    anyhow!("{}: the source map returned is not valid: {e}", hook.name())
+                })?,
+        ),
+        None => None,
+    };
+    let module_type = match &result.module_type {
+        Some(name) => Some(
+            ModuleType::from_known_str(name)
+                .map_err(|_| anyhow!("{}: unknown module type {name:?}", hook.name()))?,
+        ),
+        None => None,
+    };
+    Ok(Module {
+        code: result.code,
+        map,
+        module_type,
+        depends_on: result.depends_on,
+    })
+}
+
+// --- the context, from the ops' side ----------------------------------------
+//
+// The three below are what `ctx.resolve()`, `ctx.emit()` and `ctx.warn()` reach
+// when the guest calls them. They live here rather than beside the ops for the
+// reason the whole file exists: this is where the backend is named, and an op
+// that constructed a `rolldown_common::EmittedAsset` would put it back in front
+// of the contract.
+
+/// `ctx.resolve(source, importer)` — the bundler's own resolver, mid-hook.
+pub async fn ctx_resolve(
+    ctx: &HookCtx,
+    specifier: &str,
+    importer: Option<&str>,
+    skip_self: bool,
+) -> Result<Option<contract::ResolvedId>, String> {
+    let options = rolldown::plugin::PluginContextResolveOptions {
+        skip_self,
+        ..rolldown::plugin::PluginContextResolveOptions::default()
+    };
+    match ctx
+        .plugin()
+        .resolve(specifier, importer, Some(options))
+        .await
+    {
+        Err(err) => Err(err.to_string()),
+        // Unresolvable is `null`, not a throw — the answer a plugin branches
+        // on, rather than an exception it has to catch to ask a question.
+        Ok(Err(_)) => Ok(None),
+        Ok(Ok(resolved)) => Ok(Some(contract::ResolvedId {
+            id: resolved.id.to_string(),
+            external: !matches!(resolved.external, ResolvedExternal::Bool(false)),
+        })),
+    }
+}
+
+/// `ctx.emit({ type, … })` — an entry or an asset, added to a running build.
+pub fn ctx_emit(ctx: &HookCtx, emit: contract::Emit) -> Result<String, String> {
+    let plugin = ctx.plugin();
+    match emit {
+        contract::Emit::Chunk {
+            id,
+            name,
+            file_name,
+        } => plugin
+            .emit_chunk(rolldown_common::EmittedChunk {
+                name: name.map(Into::into),
+                file_name: file_name.map(Into::into),
+                id,
+                importer: None,
+                preserve_entry_signatures: None,
+            })
+            .map(|reference| reference.to_string())
+            .map_err(|e| e.to_string()),
+        contract::Emit::Asset {
+            name,
+            file_name,
+            source,
+        } => plugin
+            .emit_file(
+                rolldown_common::EmittedAsset {
+                    name,
+                    original_file_name: None,
+                    file_name: file_name.map(Into::into),
+                    source: match source {
+                        contract::Source::Text(text) => rolldown_common::StrOrBytes::Str(text),
+                        contract::Source::Bytes(bytes) => rolldown_common::StrOrBytes::Bytes(bytes),
+                    },
+                },
+                None,
+                None,
+            )
+            .map(|reference| reference.to_string())
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// `ctx.warn()` / `info()` / `debug()`.
+pub fn ctx_log(ctx: &HookCtx, level: &str, message: String) {
+    let log = rolldown::plugin::LogWithoutPlugin {
+        message,
+        ..Default::default()
+    };
+    match level {
+        "info" => ctx.plugin().info(log),
+        "debug" => ctx.plugin().debug(log),
+        _ => ctx.plugin().warn(log),
     }
 }

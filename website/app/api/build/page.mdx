@@ -36,7 +36,7 @@ const bundle = await build({
   external: (id) => id.startsWith("/__route/"),
   resolve: { alias: { "@": "./src" }, extensions: [".js", ".jsx"] },
   define: { "process.env.NODE_ENV": '"development"' },
-  plugins: [mdx(), css()],
+  plugins: [mdx, css],
 });
 
 const { output, watchFiles } = await bundle.generate({
@@ -87,34 +87,146 @@ cache.
 
 ## Plugins
 
-The hooks are rollup's, and take rollup's arguments, because that is what every
-plugin ever written expects.
+The plugin system is **ours**, not the bundler's passed through. That matters
+for a reason beyond taste: the `runtime:` namespace is a versioned contract, and
+an API defined by a third party's trait moves when that trait moves. rolldown is
+an *implementation* of what follows, not the definition of it.
 
-| Hook | Signature | For |
+A plugin is an object with a name and hooks. **A hook is an object carrying a
+`handler`** — there is one form, and rollup's bare-function shorthand is
+refused, because accepting it would make the filter, the order and the context
+argument optional extras on somebody else's design.
+
+```js
+const mdx = {
+  name: "mdx",
+  transform: {
+    filter: { id: /\.mdx$/ },
+    handler(code, id, ctx) {
+      const { js, meta } = compile(code, id);
+      return { code: js, type: "jsx", dependsOn: [meta] };
+    },
+  },
+};
+```
+
+### The five hooks
+
+| Hook | Handler | Returns |
 | --- | --- | --- |
-| `buildStart()` | | Setup. |
-| `resolveId(source, importer, { isEntry })` | → `string \| { id, external } \| null` | Where a specifier points — including specifiers that point nowhere on disk. |
-| `load(id)` | → `string \| { code, map } \| null` | The contents of a module, including one you made up. |
-| `transform(code, id)` | → `string \| { code, map, moduleType } \| null` | Rewriting a module. |
-| `buildEnd(error)` | | Teardown, with the failure if there was one. |
+| `start` | `(ctx)` | `{ dependsOn }`, or nothing |
+| `resolve` | `(source, importer, ctx)` | `{ id, external?, virtual? }`, or `null` |
+| `load` | `(id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
+| `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
+| `end` | `(error, ctx)` | nothing |
 
-`resolveId` + `load` together are how a **virtual module** works — a specifier
+Five, against rollup's twenty-odd. Each one is a promise a future bundler behind
+this has to keep, so the list is short deliberately and grows only when
+something cannot be written without it. `null` means *not mine* — the one
+convention worth keeping, because a hook has to be able to decline. Everything
+else must be the object: a bare string of code is refused with a message saying
+so.
+
+`resolve` + `load` together are how a **virtual module** works — a specifier
 that exists on no disk, whose content the plugin invents. That is why this is a
 plugin API and not a "pipe source through a subprocess" protocol: there is
 nothing to pipe.
 
-### this
+### filter — and why it matters more here
 
-Inside a hook, `this` is the bundler's own context, for as long as that hook
-runs:
+```js
+transform: {
+  filter: { id: /\.mdx$/, code: /^---/ },
+  handler(code, id, ctx) { … },
+}
+```
+
+| | |
+| --- | --- |
+| `filter.id` | a string (**exact**), a `RegExp`, or an array of either |
+| `filter.code` | the same, matched against the source — `transform` only |
+| both given | a module has to satisfy each |
+
+In rollup a hook that returns `null` costs a function call. Here it costs a
+**round trip into your isolate**, so an unfiltered `transform` is one crossing
+*per module in the graph* — four hundred of them on a middling app, to reach a
+plugin that wanted one `.mdx` file. The filter is matched on the host's side,
+before anything crosses, which is why it is declarative rather than a predicate
+you write.
+
+A pattern the host cannot evaluate (JavaScript's regular expressions are larger
+than what the matcher supports — lookbehind, backreferences) stops filtering
+rather than failing: the hook is called for everything, and your own code
+decides. Excluding modules a plugin was meant to see is the expensive way to be
+wrong.
+
+### dependsOn — dependencies are returned, not declared
+
+```js
+load: {
+  filter: { id: "@app/nav" },
+  async handler(id, ctx) {
+    return {
+      code: `export default ${JSON.stringify(await readNav())};`,
+      dependsOn: ["docs/_meta.js"],     // imported by nothing; watched anyway
+    };
+  },
+}
+```
+
+Rollup has `this.addWatchFile()` — a call you can forget to make, and forgetting
+it produces a build that serves stale output, which is the failure hardest to
+notice and worst to debug. Here they are a field of the value you return.
+Relative paths resolve like every other path in a run, and land in
+`watchFiles` as the same absolute path the graph reports.
+
+### virtual — no NUL-byte convention
+
+```js
+resolve: {
+  filter: { id: "@app/nav" },
+  handler: () => ({ id: "@app/nav", virtual: true }),
+}
+```
+
+Rollup signals "there is no file behind this id" by prefixing it with a NUL
+byte, and every bundler descended from it inherited the convention. Say
+`virtual: true` instead; the notation is the backend's business, applied and
+stripped where it belongs, and your `load` filter still matches the id you
+named.
+
+### order
+
+```js
+transform: { order: "pre", filter: { id: /\.mdx$/ }, handler }
+```
+
+`"pre"` runs before the unordered plugins, `"post"` after. For when one pass has
+to see a module before another does.
+
+### ctx — the last argument, not `this`
 
 | Member | Description |
 | --- | --- |
-| `this.resolve(source, importer?)` | Asks the bundler's resolver, mid-hook. `null` if nothing resolves. |
-| `this.addWatchFile(file)` | Declares a dependency the graph could not discover — the frontmatter a generated module was built from. This is what puts it in `watchFiles`. |
-| `this.emitFile({ type, … })` | Adds a chunk or asset to a build already running. Returns a reference id. |
-| `this.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`. |
-| `this.error(msg)` | Fails the build. Throws — it does not return. |
+| `ctx.resolve(source, importer?)` | Asks the bundler's resolver, mid-hook. `null` if nothing resolves. |
+| `ctx.emit({ type, … })` | Adds a chunk or asset to a running build; returns a reference id. |
+| `ctx.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`. |
+| `ctx.error(msg)` | Fails the build. Throws — it does not return. |
+| `ctx.isEntry` | On `resolve`: whether the specifier is an entry. |
+
+The context is an **argument**, so an arrow-function handler keeps it. Rollup's
+context-as-`this` is silently lost by an arrow, and a hook whose `this.resolve`
+is undefined fails a long way from the arrow that caused it.
+
+It is live only while its hook runs. Stashing `ctx` and calling `resolve()`
+later throws — by then it may name a build that no longer exists.
+
+### A plugin is guest code
+
+It runs in your isolate, under the same capability model as the rest of your
+program: a plugin that reads a file needs `FileRead`, like anything else. No
+other bundler's plugin API can say what a plugin is *allowed* to do, because
+none of them has a capability model to say it in.
 
 <Callout type="note" title="Where hooks run">
   The bundler works on threads of its own; a hook runs **here**, in your
@@ -133,7 +245,7 @@ import { watch } from "runtime:watch";
 const chunks = new Map();          // route → { code, deps }
 
 async function bundleRoute(route) {
-  const b = await build({ input: route, plugins: [mdx()] });
+  const b = await build({ input: route, plugins: [mdx] });
   const { output, watchFiles } = await b.generate({ codeSplitting: false });
   await b.close();
   chunks.set(route, { code: output[0].code, deps: new Set(watchFiles) });

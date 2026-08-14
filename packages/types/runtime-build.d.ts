@@ -31,44 +31,129 @@ declare module "runtime:build" {
     | { type: "asset"; name?: string; fileName?: string; source: string | Uint8Array }
     | { type: "chunk"; id: string; name?: string; fileName?: string };
 
-  /** What `load` and `transform` may return. */
-  export type ModuleOutput =
-    | string
+  /** What `load` and `transform` may return. `null` means "not mine". */
+  export type ModuleResult =
     | null
     | undefined
     | {
         code: string;
+        /** How the code should be treated. Omit to keep the backend's guess. */
+        type?: "js" | "jsx" | "ts" | "tsx" | "json" | "css" | "text" | (string & {});
         /** A source map, as an object or as JSON. */
         map?: unknown;
-        moduleType?: "js" | "jsx" | "ts" | "tsx" | "json" | "css" | "text" | (string & {});
+        /**
+         * Files this module depends on that the graph cannot discover — the
+         * frontmatter a generated module was built from. **Returned**, not
+         * declared by a call you can forget: forgetting it produces a build
+         * that serves stale output. Relative paths resolve like any other path
+         * in a run.
+         */
+        dependsOn?: string[];
+      };
+
+  /** What `resolve` may return. `null` means "not mine". */
+  export type ResolveResult =
+    | null
+    | undefined
+    | {
+        id: string;
+        external?: boolean | "absolute" | "relative";
+        /**
+         * There is no file behind this id — the plugin's `load` will provide
+         * it. Replaces rollup's convention of prefixing the id with a NUL byte.
+         */
+        virtual?: boolean;
       };
 
   /**
-   * A plugin. The hooks are rollup's, and take rollup's arguments; a plugin
-   * written for rollup or rolldown works here unchanged, minus any hook this
-   * list does not carry.
+   * A hook's context — the bundler's own, live only while that hook runs.
+   *
+   * The **last argument** of every handler, not `this`: an arrow-function
+   * handler keeps it, where rollup's context-as-`this` is silently lost.
+   */
+  export interface PluginContext {
+    /** Asks the bundler's resolver, mid-hook. `null` if nothing resolves. */
+    resolve(
+      source: string,
+      importer?: string,
+      options?: { skipSelf?: boolean },
+    ): Promise<{ id: string; external: boolean } | null>;
+    /** Adds a chunk or an asset to a build that is already running. */
+    emit(file: EmittedFile): string;
+    /** A diagnostic, surfaced in the build's `warnings`. */
+    warn(log: string | { message: string }): void;
+    info(log: string | { message: string }): void;
+    debug(log: string | { message: string }): void;
+    /** Fails the build with this message. Throws — it does not return. */
+    error(log: string | Error | { message: string }): never;
+    /** On `resolve`: whether the specifier being resolved is an entry. */
+    readonly isEntry?: boolean;
+  }
+
+  export type EmittedFile =
+    | { type: "asset"; name?: string; fileName?: string; source: string | Uint8Array }
+    | { type: "chunk"; id: string; name?: string; fileName?: string };
+
+  /** One pattern: a string is an **exact** match, a RegExp is tested. */
+  export type FilterPattern = string | RegExp | (string | RegExp)[];
+
+  /**
+   * Which modules a hook wants. Matched **on the host's side, before the call
+   * crosses into this isolate** — which is why it is declarative rather than a
+   * predicate you write. An unfiltered `transform` is one crossing per module
+   * in the graph.
+   */
+  export interface HookFilter {
+    /** Matched against the module id — or, for `resolve`, the specifier. */
+    id?: FilterPattern;
+    /** Matched against the module's source. `transform` only. */
+    code?: FilterPattern;
+  }
+
+  /** Where a hook runs relative to the plugins that did not say. */
+  export type HookOrder = "pre" | "post";
+
+  /**
+   * One hook. **This is the only form** — a bare function is rollup's
+   * shorthand and is refused, because accepting it would make the filter, the
+   * order and the context argument optional extras on somebody else's design.
+   */
+  export interface Hook<H> {
+    handler: H;
+    filter?: HookFilter;
+    order?: HookOrder;
+  }
+
+  /** A hook that runs once for the whole build, so it cannot be filtered. */
+  export interface WholeBuildHook<H> {
+    handler: H;
+    order?: HookOrder;
+  }
+
+  /**
+   * A plugin: a name, and hooks.
+   *
+   * The system is **ours**, not the bundler's passed through — a `runtime:`
+   * module is a versioned contract, and an API defined by a third party's trait
+   * moves when that trait moves.
+   *
+   * A plugin is guest code: it runs in this isolate under the same capability
+   * model as the rest of the program, so a plugin that reads a file needs
+   * `FileRead`.
    */
   export interface Plugin {
     name?: string;
-    buildStart?(this: PluginContext): void | Promise<void>;
-    resolveId?(
-      this: PluginContext,
-      source: string,
-      importer: string | null,
-      options: { isEntry: boolean },
-    ):
-      | string
-      | null
-      | undefined
-      | { id: string; external?: boolean | "absolute" | "relative" }
-      | Promise<string | null | undefined | { id: string; external?: boolean | "absolute" | "relative" }>;
-    load?(this: PluginContext, id: string): ModuleOutput | Promise<ModuleOutput>;
-    transform?(
-      this: PluginContext,
-      code: string,
-      id: string,
-    ): ModuleOutput | Promise<ModuleOutput>;
-    buildEnd?(this: PluginContext, error: string | null): void | Promise<void>;
+    start?: WholeBuildHook<(ctx: PluginContext) => void | { dependsOn?: string[] } | Promise<void | { dependsOn?: string[] }>>;
+    resolve?: Hook<
+      (source: string, importer: string | null, ctx: PluginContext) =>
+        | ResolveResult
+        | Promise<ResolveResult>
+    >;
+    load?: Hook<(id: string, ctx: PluginContext) => ModuleResult | Promise<ModuleResult>>;
+    transform?: Hook<
+      (code: string, id: string, ctx: PluginContext) => ModuleResult | Promise<ModuleResult>
+    >;
+    end?: WholeBuildHook<(error: string | null, ctx: PluginContext) => void | Promise<void>>;
   }
 
   export interface ResolveOptions {

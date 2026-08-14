@@ -10,6 +10,62 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:build`'s plugin system is the project's own, not the bundler's
+  passed through.** A `runtime:` module is a versioned contract, and an API
+  defined by a third party's Rust trait moves when that trait moves — a hook
+  renamed in a bundler's patch release would be a breaking change in this
+  runtime's standard library. There is now a contract layer between them:
+  rolldown is an implementation of it, named in exactly one file.
+
+  ```js
+  const mdx = {
+    name: "mdx",
+    transform: {
+      filter: { id: /\.mdx$/ },
+      handler(code, id, ctx) {
+        const { js, meta } = compile(code, id);
+        return { code: js, type: "jsx", dependsOn: [meta] };
+      },
+    },
+  };
+  ```
+
+  Five hooks — `start`, `resolve`, `load`, `transform`, `end` — and four things
+  in the shape are deliberately not rollup's:
+
+  - **A filter is declarative**, and matched on the host's side. In rollup a
+    hook returning `null` costs a function call; here it costs a round trip into
+    the isolate, so an unfiltered `transform` is one crossing *per module in the
+    graph*. A pattern the host cannot evaluate stops filtering rather than
+    failing — excluding modules a plugin was meant to see is the expensive way
+    to be wrong.
+  - **Dependencies are returned** (`dependsOn`), not declared by calling
+    `this.addWatchFile()`. A call you can forget produces a build that serves
+    stale output; a field of the value you return does not fail that way.
+    Relative paths resolve like any other path in a run.
+  - **A virtual module says `virtual: true`**, instead of being signalled by a
+    NUL byte glued to the front of its id.
+  - **The context is the last argument, not `this`** — so an arrow-function
+    handler keeps it.
+
+  Plus `order: "pre" | "post"`, which rolldown supports and was never surfaced.
+
+  **Breaking, and with no fallback:** a hook is an object carrying a `handler`.
+  Rollup's bare-function shorthand is refused, with a message saying what to
+  write instead; so is a misspelled hook name (which names the one it was
+  nearly), a filter on a whole-build hook, a `code` filter on anything but
+  `transform`, and an unknown `order`. All of it is checked by `build()`, at the
+  line that wrote the declaration.
+
+### Fixed
+
+- **A guest build now runs the same owned passes as `esdev build`.**
+  `runtime:build` installed only the guest's plugins, while the `build`
+  subcommand also installs this project's CSS Modules pass — so the same project
+  produced a scoped `styles.button` from one path and an unscoped one from the
+  other, and markup that did not match its own stylesheet. Both paths now build
+  through one plugin list.
+
 - **`runtime:test` — the test API, imported rather than ambient (`esdev` only).**
 
   ```js

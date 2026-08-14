@@ -48,6 +48,11 @@ rolldown_common.workspace = true
 # makes one already has. Same pin and same graph as rolldown itself — this is
 # the crate rolldown's own hook signatures name, not a second implementation.
 rolldown_sourcemap.workspace = true
+# Hook filters. A plugin declares which module ids its `transform` wants, and
+# the pattern is matched *here* — before the call crosses into the isolate,
+# which is the whole reason a filter is worth having on this architecture.
+# Already in the graph (via `runtime`'s URLPattern), so it adds no crate.
+regex.workspace = true
 anyhow.workspace = true
 # `--watch`. The events only; the restart policy is ours.
 notify.workspace = true

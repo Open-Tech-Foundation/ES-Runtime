@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rolldown::plugin::HookUsage;
 use rolldown::{
     BundlerBuilder, BundlerOptions, InputItem, IsExternal, OutputFormat, Platform,
     RawMinifyOptions, ResolveOptions, SourceMapType, TreeshakeOptions,
@@ -34,7 +33,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::plugin::{Bridge, JsPlugin};
 
 /// Everything `build()` was given, in a form that can cross a thread.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Options {
     pub cwd: Option<PathBuf>,
     /// Entries, as `(name, import)`. A name is what the chunk is called; most
@@ -48,7 +47,7 @@ pub struct Options {
     pub alias: Vec<(String, Vec<String>)>,
     pub extensions: Vec<String>,
     pub define: Vec<(String, String)>,
-    pub plugins: Vec<PluginSpec>,
+    pub plugins: Vec<Arc<crate::guest::build::contract::Plugin>>,
     pub minify: bool,
     pub treeshake: Option<bool>,
     pub output: OutputOptions,
@@ -105,14 +104,6 @@ pub enum External {
     /// a plugin hook. A predicate rather than a list is not a nicety: a dev
     /// server externalises `/__route/*` — a shape, not a set.
     Predicate(f64),
-}
-
-/// One JS plugin, as the guest registered it.
-#[derive(Clone)]
-pub struct PluginSpec {
-    pub id: f64,
-    pub name: String,
-    pub usage: HookUsage,
 }
 
 /// One chunk of a finished build.
@@ -331,18 +322,33 @@ async fn run(
     // plugin's diagnostics would go to the same place as a `console.log` in a
     // detached thread: nowhere the developer can see.
     let logs: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let plugins: Vec<rolldown::plugin::__inner::SharedPluginable> = options
-        .plugins
-        .iter()
-        .map(|spec| {
-            Arc::new(JsPlugin::new(
-                bridge.clone(),
-                spec.id,
-                spec.name.clone(),
-                spec.usage,
-            )) as rolldown::plugin::__inner::SharedPluginable
-        })
-        .collect();
+    // The passes this toolchain owns come first, and they are installed here
+    // for the same reason `esdev build` installs them: a component importing
+    // `./x.module.css` renders `className={styles.button}`, and a build that
+    // did not scope that name identically produces markup that does not match
+    // the stylesheet the browser fetched.
+    //
+    // They were **missing** here when this module first shipped, so a guest
+    // build and the `build` subcommand disagreed about the same project — the
+    // exact failure that follows from our own passes and the guest's plugins
+    // being two unrelated concepts. One list, in one order, is the fix.
+    let cwd = options
+        .cwd
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let mut plugins: Vec<rolldown::plugin::__inner::SharedPluginable> =
+        vec![Arc::new(crate::cssmodules::CssModules::new(
+            &cwd,
+            crate::cssmodules::Collected::new(),
+            options.minify,
+        ))];
+    // Then one per declaration, each carrying its own filters. Built per build
+    // rather than kept, because a build is where they are used and the options
+    // they came from outlive them.
+    plugins.extend(options.plugins.iter().map(|declared| {
+        Arc::new(JsPlugin::new(bridge.clone(), Arc::clone(declared)))
+            as rolldown::plugin::__inner::SharedPluginable
+    }));
 
     let mut bundler = BundlerBuilder::default()
         .with_options(bundler_options(options, output, bridge, logs.clone())?)
@@ -448,7 +454,7 @@ fn bundler_options(
                         es_runtime_cli_common::Value::Bool(resolved),
                     ];
                     Box::pin(async move {
-                        let answer = bridge.call(id, "external", args, None).await?;
+                        let answer = bridge.call(id, "external", args, Vec::new(), None).await?;
                         Ok(matches!(answer, es_runtime_cli_common::Value::Bool(true)))
                     })
                 },

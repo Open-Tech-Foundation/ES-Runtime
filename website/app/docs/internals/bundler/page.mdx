@@ -6,7 +6,9 @@ description: How runtime:build puts a parallel Rust bundler and a single-threade
 # Internals: The bundler bridge
 
 How `runtime:build` gets a bundler whose graph walk is parallel and an isolate
-that has exactly one thread to agree on who runs what, and when.
+that has exactly one thread to agree on who runs what, and when — and why the
+plugin system in front of them belongs to this project rather than to the
+bundler.
 
 For signatures see [`runtime:build`](/api/build). This page is the part that is
 not in the signatures: where the work happens, what it costs, and which designs
@@ -28,6 +30,51 @@ the tooling on top of it stays on Node.
 
 `esrun` does not serve the module. A production binary that could bundle would
 have to carry a bundler, and a deployment has nothing to bundle.
+
+## Three layers, and the middle one is the point
+
+```text
+  build.js, build.rs    the API and the ops
+  contract              what a plugin is — ours, versioned with runtime:
+  plugin.rs, server.rs  the adapter, and the only place rolldown is named
+```
+
+The first version of this had no middle layer: guest plugins were rolldown's
+hooks, handed through. It worked, and it was the wrong shape for two reasons.
+
+**A versioned contract cannot be defined by somebody else's trait.** The
+`runtime:` namespace is a promise this runtime makes about what a program can
+import. If `resolveId` is renamed in a bundler's patch release, that is a
+breaking change in a *language runtime's standard library*, arriving from a
+dependency bump.
+
+**And it produced a real bug.** `esdev build` installs this project's own CSS
+Modules pass; the guest path installed only the guest's plugins. So the same
+project got a scoped `styles.button` from the subcommand and an unscoped one
+from the module — markup that did not match its own stylesheet, depending on
+which path built it. That is what follows from our passes and the guest's
+plugins being two unrelated concepts glued to a third party's trait. One
+contract, one list, one order is the fix.
+
+### What a backend must provide
+
+Written down so "the bundler could be replaced" is checkable rather than hoped
+for. An implementation must be able to:
+
+1. resolve a specifier through an outside party, and accept an id with **no file
+   behind it**;
+2. ask an outside party for a module's contents, by id;
+3. ask an outside party to rewrite those contents;
+4. accept from any of those a list of **files the module depends on** that it
+   could not have discovered;
+5. resolve a specifier on demand, mid-hook, through its own resolver;
+6. accept an additional entry or asset while a build is running;
+7. report, per chunk, the modules that went into it.
+
+Seven. rolldown has all of them. esbuild has 1, 2, 5 and 6 — no transform hook,
+no chunk-level emit — so a swap there would lose features no adapter can
+synthesise. Which is the point of writing it down: the cost of a swap is legible
+before it is paid, rather than discovered during it.
 
 ## What a subprocess could not do
 
@@ -82,6 +129,27 @@ JavaScript; it posts a request and waits.**
 `build_hook` is an ordinary async op, and the pump that reads it is ordinary
 JavaScript in `runtime:build`. There is no second scheduler and no lock around
 V8; the isolate answers hook calls the same way it answers a socket read.
+
+### The filter, and why it exists here and not in rollup
+
+In rollup a hook that returns `null` cost a function call, so nobody needed a
+way to avoid calling it. Here it costs a **round trip into a V8 isolate** — an
+unfiltered `transform` is one crossing per module in the graph, four hundred of
+them on a middling app to reach a plugin that wanted one `.mdx` file.
+
+So a hook declares what it wants, and the pattern is matched on the Rust side
+before anything is posted:
+
+```js
+transform: { filter: { id: /\.mdx$/ }, handler(code, id, ctx) { … } }
+```
+
+A JavaScript `RegExp` crosses as its `source` and `flags` and is recompiled
+here. JavaScript's regular expressions are a larger language than the matcher's
+— lookbehind, backreferences — and a pattern that will not compile becomes
+"matches everything" rather than an error. Erring that way costs a crossing;
+erring the other way is a plugin that mysteriously never runs, and the developer
+has no way to see why.
 
 ### Why the pump does not await
 
@@ -155,11 +223,9 @@ paying for a thread per rebuild would be paying forty times a minute for
 nothing.
 
 **A round trip per hook call.** Two channel sends and a task wake-up, per hook,
-per module. That is why a plugin declares which hooks it has: a plugin listed as
-having `transform` puts *every module in the graph* through the crossing, so a
-hook it does not implement costs a round trip per module for nothing. The list
-is derived from the object automatically — a hook that is not a function is not
-declared.
+per module — for the modules a filter admits. Without a filter, that is every
+module in the graph, which is why the filter is part of the contract rather than
+an optimisation a plugin author might think to add.
 
 **Code crosses as strings.** `transform` receives a module's source and returns
 it; both are copies. A source map crosses as JSON, because that is the form

@@ -10,46 +10,52 @@
 //! `esrun` does not carry this module. A production binary that could bundle
 //! would have to contain a bundler, and a deployment has nothing to bundle.
 //!
-//! # What is here that a subprocess could not do
+//! # Three layers, and the middle one is the point
+//!
+//! ```text
+//!   build.js + this file  the API and the ops
+//!   contract              what a plugin is — ours, versioned with runtime:
+//!   plugin.rs, server.rs  the adapter, and the only place rolldown is named
+//! ```
+//!
+//! The bundler is an *implementation* of the contract, not the definition of
+//! it. A guest-visible API defined by a third party's trait moves when that
+//! trait moves — and a hook renamed in a bundler's patch release would be a
+//! breaking change in this runtime's standard library. [`contract`] states what
+//! a backend must be able to do; [`plugin`] is what makes rolldown do it.
+//!
+//! # What a subprocess could not do
 //!
 //! It would be cheaper to shell out to a bundler and pipe source through it,
 //! and that was considered. It cannot work, because `transform` is only one of
 //! the hooks real plugins use:
 //!
-//! * `resolveId` + `load` serve **virtual modules** — a specifier that exists on
+//! * `resolve` + `load` serve **virtual modules** — a specifier that exists on
 //!   no disk, whose content a plugin makes up. A pipe has nothing to pipe.
-//! * `this.addWatchFile()` declares a dependency the graph **cannot discover**:
-//!   a module built from frontmatter depends on files it never imports, and
+//! * A module built from frontmatter **depends on files it never imports**, and
 //!   without saying so the consumer's invalidation is wrong in the direction
 //!   that serves stale output.
-//! * `this.resolve()` asks the **bundler's own resolver** a question in the
+//! * `ctx.resolve()` asks the **bundler's own resolver** a question in the
 //!   middle of a hook.
-//! * `this.emitFile()` adds an entry to a build that is already running.
+//! * `ctx.emit()` adds an entry to a build that is already running.
 //!
-//! All four need the plugin and the bundler in the same conversation, which is
-//! what [`plugin`] is: real hooks, taking real functions, dispatched into the
-//! isolate.
-//!
-//! # The shape of the API
-//!
-//! Deliberately rollup's, because that is what every plugin ever written
-//! expects and there is nothing to gain from a fourth spelling:
-//!
-//! ```js
-//! const bundle = await build({ input: "app/main.js", plugins: [mdx()] });
-//! const { output, watchFiles } = await bundle.generate({ format: "esm" });
-//! ```
+//! All four need the plugin and the bundler in the same conversation.
 //!
 //! # Capabilities
 //!
 //! `FileRead` to build, `FileWrite` as well to `write()`. The `cwd` a build
 //! runs in is resolved through the run's own filesystem view, so a build cannot
 //! be *started* somewhere `--allow-read` does not reach. What it reads from
-//! there is read by rolldown itself, with this process's authority rather than
-//! through the jail — a module graph's extent is not knowable up front, and
-//! pretending otherwise would be a check that looks like a boundary without
+//! there is read by the bundler itself, with this process's authority rather
+//! than through the jail — a module graph's extent is not knowable up front,
+//! and pretending otherwise would be a check that looks like a boundary without
 //! being one. Stated rather than implied.
+//!
+//! A **plugin**, on the other hand, is guest code: it runs in this isolate and
+//! reaches the host through the same gated ops as any other program. A plugin
+//! that reads a file needs `FileRead` like anything else does.
 
+pub mod contract;
 pub mod plugin;
 pub mod server;
 
@@ -61,11 +67,10 @@ use es_runtime_cli_common::{
     AsyncOp, ExtensionContext, FileSystem, HostExtension, HostModule, OpDecl, OpError, Value,
 };
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
-use rolldown::plugin::HookUsage;
 use tokio::sync::mpsc;
 
 use plugin::{Bridge, HookCall, HookReply};
-use server::{BuildServer, External, Options, OutputOptions, PluginSpec};
+use server::{BuildServer, External, Options, OutputOptions};
 
 /// The `runtime:build` extension.
 pub struct BuildExtension;
@@ -192,6 +197,7 @@ impl HostExtension for BuildExtension {
                             ("plugin".to_string(), Value::Number(call.plugin)),
                             ("hook".to_string(), Value::String(call.hook.to_string())),
                             ("args".to_string(), Value::Array(call.args)),
+                            ("meta".to_string(), Value::Object(call.meta)),
                         ]),
                         None => Value::Null,
                     })
@@ -235,43 +241,17 @@ impl HostExtension for BuildExtension {
                 let Some(ctx) = this.bridge.context(call) else {
                     return Err(context_expired());
                 };
-                let options = rolldown::plugin::PluginContextResolveOptions {
-                    skip_self,
-                    ..rolldown::plugin::PluginContextResolveOptions::default()
-                };
-                match ctx
-                    .plugin()
-                    .resolve(&specifier, importer.as_deref(), Some(options))
+                let found = plugin::ctx_resolve(&ctx, &specifier, importer.as_deref(), skip_self)
                     .await
-                {
-                    Err(err) => Err(build_error(err.to_string())),
-                    // Unresolvable is `null`, not a throw — the same answer
-                    // rollup gives, and the one a plugin branches on.
-                    Ok(Err(_)) => Ok(Value::Null),
-                    Ok(Ok(resolved)) => Ok(Value::Object(vec![
-                        ("id".to_string(), Value::String(resolved.id.to_string())),
-                        (
-                            "external".to_string(),
-                            Value::Bool(!matches!(
-                                resolved.external,
-                                rolldown_common::ResolvedExternal::Bool(false)
-                            )),
-                        ),
-                    ])),
-                }
+                    .map_err(build_error)?;
+                Ok(match found {
+                    None => Value::Null,
+                    Some(resolved) => Value::Object(vec![
+                        ("id".to_string(), Value::String(resolved.id)),
+                        ("external".to_string(), Value::Bool(resolved.external)),
+                    ]),
+                })
             })
-        }));
-
-        // this.addWatchFile(file)
-        let this = state.clone();
-        ops.push(OpDecl::sync("build_watch_file", move |args| {
-            let call = arg_id(&args, 0);
-            let file = arg_str(&args, 1);
-            let Some(ctx) = this.bridge.context(call) else {
-                return Err(context_expired());
-            };
-            ctx.add_watch_file(&file);
-            Ok(Value::Undefined)
         }));
 
         // this.emitFile({ type, name, fileName, source | id })
@@ -282,7 +262,10 @@ impl HostExtension for BuildExtension {
             let Some(ctx) = this.bridge.context(call) else {
                 return Err(context_expired());
             };
-            emit(ctx.plugin(), &file).map(Value::String)
+            let request = contract::emit(&file).map_err(OpError::type_error)?;
+            plugin::ctx_emit(&ctx, request)
+                .map(Value::String)
+                .map_err(build_error)
         }));
 
         // this.warn(message) / this.info(message) / this.debug(message)
@@ -294,15 +277,7 @@ impl HostExtension for BuildExtension {
             let Some(ctx) = this.bridge.context(call) else {
                 return Err(context_expired());
             };
-            let log = rolldown::plugin::LogWithoutPlugin {
-                message,
-                ..Default::default()
-            };
-            match level.as_str() {
-                "info" => ctx.plugin().info(log),
-                "debug" => ctx.plugin().debug(log),
-                _ => ctx.plugin().warn(log),
-            }
+            plugin::ctx_log(&ctx, &level, message);
             Ok(Value::Undefined)
         }));
 
@@ -412,7 +387,7 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
         alias: alias_list(resolve_field("alias").as_ref()),
         extensions: string_list(resolve_field("extensions").as_ref()),
         define: pairs(get("define").as_ref()),
-        plugins: plugin_specs(get("plugins").as_ref()),
+        plugins: plugins(get("plugins").as_ref())?,
         minify: matches!(get("minify"), Some(Value::Bool(true))),
         treeshake: match get("treeshake") {
             Some(Value::Bool(on)) => Some(on),
@@ -454,90 +429,23 @@ fn output_options(value: Option<&Value>) -> OutputOptions {
     }
 }
 
-/// Reads the plugin list: each entry is the handle the guest registered the
-/// object under, plus which hooks it actually has.
-fn plugin_specs(value: Option<&Value>) -> Vec<PluginSpec> {
+/// Reads the plugin list.
+///
+/// Each entry is the handle the guest registered the object under, its name,
+/// and what it declared — parsed by the [contract](contract), which is also
+/// where a malformed declaration is refused. A plugin that cannot be read is a
+/// build that cannot start, rather than a plugin that quietly does nothing.
+fn plugins(value: Option<&Value>) -> Result<Vec<Arc<contract::Plugin>>, OpError> {
     let Some(Value::Array(items)) = value else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     items
         .iter()
-        .filter_map(|item| {
-            let id = field(item, "id")?.as_number()?;
-            let name = field(item, "name")
-                .and_then(Value::as_str)
-                .unwrap_or("plugin")
-                .to_string();
-            let mut usage = HookUsage::empty();
-            for hook in string_list(field(item, "hooks")) {
-                usage |= match hook.as_str() {
-                    "buildStart" => HookUsage::BuildStart,
-                    "resolveId" => HookUsage::ResolveId,
-                    "load" => HookUsage::Load,
-                    "transform" => HookUsage::Transform,
-                    "buildEnd" => HookUsage::BuildEnd,
-                    // A hook this bridge does not carry is ignored rather than
-                    // refused: the plugin still works, minus that hook, and
-                    // saying so belongs in the docs rather than in a throw at
-                    // the start of every build.
-                    _ => HookUsage::empty(),
-                };
-            }
-            Some(PluginSpec { id, name, usage })
-        })
+        .map(|item| contract::plugin(item).map(Arc::new))
         .collect()
 }
 
-/// `this.emitFile({ type, ... })`.
-fn emit(ctx: &rolldown::plugin::PluginContext, file: &Value) -> Result<String, OpError> {
-    let kind = field(file, "type")
-        .and_then(Value::as_str)
-        .unwrap_or("asset");
-    let name = field(file, "name")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let file_name = field(file, "fileName")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    match kind {
-        "chunk" => {
-            let id = field(file, "id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| OpError::type_error("emitFile: a chunk needs an id"))?
-                .to_string();
-            ctx.emit_chunk(rolldown_common::EmittedChunk {
-                name: name.map(Into::into),
-                file_name: file_name.map(Into::into),
-                id,
-                importer: None,
-                preserve_entry_signatures: None,
-            })
-            .map(|reference| reference.to_string())
-            .map_err(|e| build_error(e.to_string()))
-        }
-        _ => {
-            let source = match field(file, "source") {
-                Some(Value::Bytes(bytes)) => rolldown_common::StrOrBytes::Bytes(bytes.clone()),
-                Some(Value::String(text)) => rolldown_common::StrOrBytes::Str(text.clone()),
-                _ => return Err(OpError::type_error("emitFile: an asset needs a source")),
-            };
-            ctx.emit_file(
-                rolldown_common::EmittedAsset {
-                    name,
-                    original_file_name: None,
-                    file_name: file_name.map(Into::into),
-                    source,
-                },
-                None,
-                None,
-            )
-            .map(|reference| reference.to_string())
-            .map_err(|e| build_error(e.to_string()))
-        }
-    }
-}
-
-/// A finished build, in the shape rollup's `generate()` returns.
+/// A finished build, as the guest reads it.
 fn built_value(built: server::Built) -> Value {
     let mut output = Vec::with_capacity(built.chunks.len() + built.assets.len());
     for chunk in built.chunks {

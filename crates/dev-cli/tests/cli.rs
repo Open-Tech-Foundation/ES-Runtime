@@ -3253,20 +3253,31 @@ fn runtime_build_bundles_with_a_js_plugin() {
         r#"
 import { build } from "runtime:build";
 
+let transformCalls = 0;
+
 const plugin = {
   name: "greeting",
-  resolveId(source) {
-    return source === "virtual:greeting" ? "\0greeting" : null;
+  // A module that exists on no disk. `virtual: true` rather than the NUL-byte
+  // prefix every bundler inherited from rollup.
+  resolve: {
+    filter: { id: "virtual:greeting" },
+    handler: () => ({ id: "virtual:greeting", virtual: true }),
   },
-  load(id) {
-    if (id !== "\0greeting") return null;
+  load: {
+    filter: { id: "virtual:greeting" },
     // A dependency the graph cannot discover: nothing imports dep.js *from
-    // here*, but this module is built from it.
-    this.addWatchFile("dep.js");
-    return 'export default "hello";';
+    // here*, but this module is built from it. Returned, not declared by a
+    // call that can be forgotten.
+    handler: () => ({ code: 'export default "hello";', dependsOn: ["dep.js"] }),
   },
-  transform(code, id) {
-    return id.endsWith("dep.js") ? code.replace("42", "43") : null;
+  transform: {
+    // The filter is matched on the host side, so this handler is entered once
+    // — not once per module in the graph.
+    filter: { id: /dep\.js$/ },
+    handler(code, id, ctx) {
+      transformCalls++;
+      return { code: code.replace("42", "43") };
+    },
   },
 };
 
@@ -3278,6 +3289,7 @@ const bundle = await build({
 
 const { output, watchFiles } = await bundle.generate({ format: "esm", codeSplitting: false });
 console.log("chunks", output.length);
+console.log("crossings", transformCalls);
 console.log(output[0].code.includes('console.log("hello", 43)') ? "transformed" : output[0].code);
 console.log("watched", watchFiles.some((f) => f.endsWith("dep.js")));
 await bundle.close();
@@ -3288,6 +3300,9 @@ await bundle.close();
     assert!(out.status.success(), "{}", stderr(&out));
     let printed = stdout(&out);
     assert!(printed.contains("chunks 1"), "{printed}");
+    // The filter is the difference between one crossing into the isolate and
+    // one per module in the graph.
+    assert!(printed.contains("crossings 1"), "{printed}");
     assert!(printed.contains("transformed"), "{printed}");
     assert!(printed.contains("watched true"), "{printed}");
 }
@@ -3305,20 +3320,26 @@ fn runtime_build_hooks_get_the_bundlers_context() {
         r#"
 import { build } from "runtime:build";
 
+// Arrow functions throughout: the context is the last argument, not `this`,
+// so an arrow cannot silently lose it.
 const plugin = {
   name: "probe",
-  async resolveId(source, importer) {
-    if (source !== "virtual:entry") return null;
-    const found = await this.resolve("./dep.js", importer ?? undefined);
-    console.log("resolved", found !== null && found.id.endsWith("dep.js"));
-    this.warn("a warning from the plugin");
-    return "\0entry";
+  resolve: {
+    filter: { id: "virtual:entry" },
+    handler: async (source, importer, ctx) => {
+      const found = await ctx.resolve("./dep.js", importer ?? undefined);
+      console.log("resolved", found !== null && found.id.endsWith("dep.js"));
+      ctx.warn("a warning from the plugin");
+      return { id: "virtual:entry", virtual: true };
+    },
   },
-  load(id) {
-    if (id !== "\0entry") return null;
-    const ref = this.emitFile({ type: "asset", name: "meta.json", source: '{"ok":true}' });
-    console.log("emitted", typeof ref === "string");
-    return "export default 1;";
+  load: {
+    filter: { id: "virtual:entry" },
+    handler: (id, ctx) => {
+      const ref = ctx.emit({ type: "asset", name: "meta.json", source: '{"ok":true}' });
+      console.log("emitted", typeof ref === "string");
+      return { code: "export default 1;" };
+    },
   },
 };
 
@@ -3346,6 +3367,199 @@ await bundle.close();
     }
 }
 
+/// The declaration is checked where it is written. There is **one** way to
+/// declare a hook, and rollup's bare-function shorthand is refused rather than
+/// quietly accepted — accepting it would make the filter, the order and the
+/// context argument optional extras on somebody else's design.
+#[test]
+fn runtime_build_refuses_a_malformed_plugin() {
+    let dir = build_dir("rb_strict");
+    write_in(&dir, "main.js", "console.log(1);\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+
+const refuse = async (plugin, what) => {
+  try {
+    await build({ input: "main.js", plugins: [plugin] });
+    console.log("NOT REFUSED", what);
+  } catch (err) {
+    console.log(what, "|", err.message);
+  }
+};
+
+await refuse({ name: "legacy", transform(code, id) {} }, "bare");
+await refuse({ name: "typo", tranform: { handler() {} } }, "typo");
+await refuse({ name: "wide", start: { filter: { id: /x/ }, handler() {} } }, "filtered-start");
+await refuse({ name: "codef", load: { filter: { code: /x/ }, handler() {} } }, "code-on-load");
+await refuse({ name: "ord", transform: { order: "first", handler() {} } }, "order");
+await refuse({ name: "none", transform: { filter: { id: /x/ } } }, "no-handler");
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = stdout(&out);
+    assert!(!printed.contains("NOT REFUSED"), "{printed}");
+    // Each rejection says what to write instead, and a misspelling names the
+    // hook it was nearly.
+    assert!(
+        printed.contains("a hook is an object, not a function"),
+        "{printed}"
+    );
+    assert!(printed.contains(r#"Did you mean "transform""#), "{printed}");
+    assert!(printed.contains("cannot be filtered"), "{printed}");
+    assert!(
+        printed.contains("only transform can filter on code"),
+        "{printed}"
+    );
+    assert!(printed.contains(r#""pre" or "post""#), "{printed}");
+    assert!(printed.contains("handler must be a function"), "{printed}");
+}
+
+/// `order` decides which plugin sees a module first — the thing a framework
+/// needs when one pass has to run before another.
+#[test]
+fn runtime_build_runs_hooks_in_the_order_they_asked_for() {
+    let dir = build_dir("rb_order");
+    write_in(&dir, "main.js", "console.log(1);\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+
+const seen = [];
+const at = (name, order) => ({
+  name,
+  transform: {
+    filter: { id: /main\.js$/ },
+    order,
+    handler: () => { seen.push(name); return null; },
+  },
+});
+
+const bundle = await build({
+  input: "main.js",
+  plugins: [at("normal"), at("pre", "pre"), at("post", "post")],
+});
+await bundle.generate({});
+console.log("order", seen.join(","));
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("order pre,normal,post"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// A `dependsOn` written the way every other path in a run is written —
+/// relative — has to land in `watchFiles` as the same absolute path the graph
+/// reports for it. Otherwise the same file appears twice, once as the graph
+/// found it and once as the plugin spelled it, and a consumer matching a change
+/// against its dependency set misses half the time.
+#[test]
+fn runtime_build_resolves_a_relative_dependency() {
+    let dir = build_dir("rb_deps");
+    write_in(&dir, "dep.js", "export const x = 1;\n");
+    write_in(&dir, "main.js", "console.log(1);\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+
+const bundle = await build({
+  input: "main.js",
+  plugins: [{
+    name: "deps",
+    transform: {
+      filter: { id: /main\.js$/ },
+      handler: (code) => ({ code, dependsOn: ["dep.js"] }),
+    },
+  }],
+});
+const { watchFiles } = await bundle.generate({});
+const dep = watchFiles.filter((f) => f.endsWith("dep.js"));
+console.log("absolute", dep.length === 1 && dep[0].startsWith("/"));
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("absolute true"), "{}", stdout(&out));
+}
+
+/// The passes this toolchain owns are installed in a guest build too, and this
+/// is the regression test for the day they were not: `esdev build` scoped
+/// `styles.button` and `runtime:build` did not, so the same project produced
+/// markup that did not match its own stylesheet depending on which path built
+/// it. Both must arrive at the identical scoped name.
+#[test]
+fn runtime_build_runs_the_same_owned_passes_as_the_subcommand() {
+    let dir = build_dir("rb_css");
+    write_in(&dir, "s.module.css", ".button { color: red; }\n");
+    write_in(
+        &dir,
+        "app-entry.js",
+        "import styles from './s.module.css';\nconsole.log(styles.button);\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({ input: "app-entry.js" });
+const { output } = await bundle.generate({});
+const name = /button_[a-f0-9]+/.exec(output[0].code);
+console.log("scoped", name === null ? "none" : name[0]);
+"#,
+    );
+
+    let from_module = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(from_module.status.success(), "{}", stderr(&from_module));
+
+    let from_subcommand = esdev_in(&dir)
+        .args(["build", "app-entry.js", "--out=out/x.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(
+        from_subcommand.status.success(),
+        "{}",
+        stderr(&from_subcommand)
+    );
+
+    let written = std::fs::read_to_string(dir.join("out/x.js")).expect("read the bundle");
+    let subcommand_name = regex_find(&written);
+    let module_name = stdout(&from_module)
+        .lines()
+        .find_map(|l| l.strip_prefix("scoped ").map(str::to_string))
+        .expect("the module build printed a name");
+    assert_eq!(
+        module_name, subcommand_name,
+        "the two build paths disagree about the scoped name"
+    );
+}
+
+/// The first `button_<hash>` in some text. Written by hand rather than with a
+/// regex crate: this file drives a binary, and a test dependency to find eight
+/// hex digits is not worth the graph.
+fn regex_find(text: &str) -> String {
+    let at = text.find("button_").expect("a scoped name in the bundle");
+    let rest = &text[at..];
+    let end = rest
+        .char_indices()
+        .find(|(i, c)| *i > 7 && !c.is_ascii_hexdigit())
+        .map_or(rest.len(), |(i, _)| i);
+    rest[..end].to_string()
+}
+
 /// A plugin that throws fails the build **with its own message**. The hook ran
 /// on a different thread from the bundler; an error that arrived as "build
 /// failed" would be the worst possible outcome of that.
@@ -3360,7 +3574,9 @@ fn runtime_build_reports_what_a_plugin_threw() {
 import { build } from "runtime:build";
 const bundle = await build({
   input: "main.js",
-  plugins: [{ name: "boom", transform() { throw new Error("plugin exploded"); } }],
+  plugins: [
+    { name: "boom", transform: { handler() { throw new Error("plugin exploded"); } } },
+  ],
 });
 try {
   await bundle.generate({});
@@ -3478,9 +3694,12 @@ const cache = new Map();
 // must go on answering requests while it does.
 const slow = {
   name: "slow",
-  async transform() {
-    await new Promise((r) => setTimeout(r, 5));
-    return null;
+  transform: {
+    filter: { id: /\.js$/ },
+    handler: async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return null;
+    },
   },
 };
 
