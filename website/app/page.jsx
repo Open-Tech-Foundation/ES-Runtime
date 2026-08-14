@@ -2,6 +2,7 @@ import BenchRoller from "../components/BenchRoller.jsx";
 import CodeTabs from "../components/CodeTabs.jsx";
 import RpsChart from "../components/RpsChart.jsx";
 import RuntimeVersions from "../components/RuntimeVersions.jsx";
+import SandboxDiagram from "../components/SandboxDiagram.jsx";
 import StatusIcon from "../components/StatusIcon.jsx";
 import bench from "../src/benchmarks.js";
 
@@ -99,7 +100,7 @@ export default function HomePage() {
                 href="/docs"
                 className="inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-5 py-3 text-sm font-semibold text-zinc-900 shadow-sm transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600 dark:hover:bg-zinc-800"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-brand-500"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-3.05 11a22.35 22.35 0 0 1-3.95 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="text-brand-500"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-3.05 11a22.35 22.35 0 0 1-3.95 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg>
                 Get started
               </a>
             </div>
@@ -158,69 +159,27 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Architecture Section */}
+      {/* Sandbox Section */}
       <section>
         <div className="mx-auto max-w-6xl px-6 py-20 lg:py-24">
           <div className="mb-12 text-center">
             <h2 className="text-3xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-              Simple Runtime Architecture
+              Deny by default
             </h2>
             <p className="mt-4 text-lg text-zinc-600 dark:text-zinc-400">
-              How your JavaScript code interacts with the system.
+              A run reaches what the command line named, and nothing else.
             </p>
           </div>
-          <div className="mx-auto flex max-w-4xl flex-col items-center justify-between gap-8 rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 md:flex-row">
-            <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-white p-2 shadow-sm ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
-                <img
-                  src="/img/v8.svg"
-                  alt="V8"
-                  width="40"
-                  height="40"
-                  className="h-10 w-10 dark:hidden"
-                />
-                <img
-                  src="/img/v8-outline.svg"
-                  alt="V8"
-                  width="40"
-                  height="40"
-                  className="hidden h-10 w-10 dark:block"
-                />
-              </div>
-              <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">JavaScript</h3>
-              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Executes your JS/ESM code at lightning speed.</p>
-            </div>
-            <div className="hidden text-brand-400 md:block">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-            </div>
-            <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-orange-100 dark:bg-orange-950/50">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-orange-600 dark:text-orange-400"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
-              </div>
-              <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">Op Layer</h3>
-              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Drives the event loop and low-cost boundary calls.</p>
-            </div>
-            <div className="hidden text-brand-400 md:block">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-            </div>
-            <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-950/50">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 dark:text-blue-400"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
-              </div>
-              <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">Runtime Modules</h3>
-              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Standard Web APIs like fetch, crypto, and streams.</p>
-            </div>
-            <div className="hidden text-brand-400 md:block">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
-            </div>
-            <div className="flex-1 text-center">
-              <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-zinc-100 text-2xl dark:bg-zinc-800">
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-zinc-600 dark:text-zinc-400"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
-              </div>
-              <h3 className="mt-4 font-semibold text-zinc-900 dark:text-zinc-100">OS Level</h3>
-              <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">Kernel networking, file system, and raw system I/O.</p>
-            </div>
+          <div className="mx-auto max-w-5xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-900 sm:p-8">
+            <SandboxDiagram />
           </div>
+          <p className="mx-auto mt-6 max-w-5xl text-center text-sm text-zinc-500 dark:text-zinc-400">
+            Nine capabilities: <code className="font-mono">read</code>, <code className="font-mono">write</code>,{" "}
+            <code className="font-mono">imports</code>, <code className="font-mono">net</code>,{" "}
+            <code className="font-mono">listen</code>, <code className="font-mono">env</code>,{" "}
+            <code className="font-mono">run</code>, <code className="font-mono">signals</code>,{" "}
+            <code className="font-mono">workers</code>. The gate is the op, not the import.
+          </p>
         </div>
       </section>
 

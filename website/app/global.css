@@ -149,6 +149,191 @@ button:not(:disabled),
   }
 }
 
+/* The Rust mark in the sandbox diagram, in Rust's own colour rather than the
+ * site's — the point of the mark is that this half of the boundary is somebody
+ * else's technology. #ce422b is rust-lang.org's; the dark value is lightened to
+ * clear contrast on the near-black background. Written here rather than as a
+ * Tailwind arbitrary value so the two hexes sit together and the `<use>` shadow
+ * content inherits `stroke` from the element the class is on. */
+.esr-rust {
+  stroke: #ce422b;
+}
+.esr-rust-text {
+  fill: #ce422b;
+}
+[data-theme="dark"] .esr-rust {
+  stroke: #f0785f;
+}
+[data-theme="dark"] .esr-rust-text {
+  fill: #f0785f;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .esr-rust {
+    stroke: #f0785f;
+  }
+  :root:not([data-theme="light"]) .esr-rust-text {
+    fill: #f0785f;
+  }
+}
+
+/* Sandbox diagram (components/SandboxDiagram.jsx).
+ *
+ * Pulses cross the op boundary at one constant speed, so the two animations
+ * have to agree on it: `esr-pass` travels x=200 → 700 (500 units, landing on
+ * the host marker) between 4% and 52% of the cycle, and `esr-block` covers the
+ * 184 units to the wall at x=384 in the same-length 17.7% — which is why it
+ * arrives at 21.7% and not at a rounder number. A blocked pulse stops *at* the
+ * wall and never crosses it: that is the claim the diagram is making, so the
+ * keyframe must not overshoot.
+ *
+ * A passing pulse goes dark while it is inside the wall (x=392..612, which is
+ * 22%..43.5% of the cycle) and lights again on the far side. That is the op
+ * being checked and then performed, and it also keeps a moving dot from
+ * crossing the capability label it would otherwise sit on top of.
+ *
+ * The opacity keyframes in that stretch carry no transform, so travel still
+ * interpolates linearly between the 0% and 52% keyframes and the speed is
+ * unchanged.
+ *
+ * translateX on a <g> rather than animating `cx`: transforms on a group are
+ * universally supported, and one unit is one user unit in the viewBox.
+ *
+ * One cycle is 5.4s and the six lanes are staggered 0.9s apart, which is also
+ * how often the component picks a new command line — so a lane is re-armed
+ * between flights rather than mid-flight. */
+@keyframes esr-pass {
+  0% {
+    transform: translateX(200px);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  22% {
+    opacity: 1;
+  }
+  25% {
+    opacity: 0;
+  }
+  42% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 1;
+  }
+  52% {
+    transform: translateX(700px);
+    opacity: 1;
+  }
+  58% {
+    transform: translateX(700px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(700px);
+    opacity: 0;
+  }
+}
+@keyframes esr-block {
+  0% {
+    transform: translateX(200px);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  21.7% {
+    transform: translateX(384px);
+    opacity: 1;
+  }
+  26% {
+    transform: translateX(384px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(384px);
+    opacity: 0;
+  }
+}
+/* The refusal mark lands with the pulse it belongs to. */
+@keyframes esr-deny {
+  0%,
+  19% {
+    opacity: 0;
+  }
+  23% {
+    opacity: 1;
+  }
+  36% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* `both` is load-bearing, not boilerplate: without it a lane still inside its
+ * animation-delay renders its base style, so a pulse yet to depart sat at
+ * translateX(0) in the left margin and a refusal mark was drawn before the
+ * pulse it belongs to had arrived. `backwards` holds the 0% frame through the
+ * delay; `forwards` holds the last one after. */
+.esr-pulse,
+.esr-deny {
+  animation-duration: 5.4s;
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+.esr-pass {
+  animation-name: esr-pass;
+}
+.esr-block {
+  animation-name: esr-block;
+}
+.esr-deny {
+  animation-name: esr-deny;
+}
+
+/* When the command line changes, the wall reconfigures. Transition the colours
+ * so a slot opening reads as opening rather than as a repaint. */
+.esr-slot,
+.esr-ink {
+  transition:
+    fill 0.45s ease,
+    stroke 0.45s ease;
+}
+
+/* The diagram has an intrinsic minimum width — below it the wall, which is the
+ * whole point, would scroll off with nothing to say so. Fade the trailing edge
+ * at the widths where it actually overflows, so the cut is legible as "there is
+ * more" rather than as a crop. Above that width there is no overflow and no
+ * fade. */
+@media (max-width: 1023px) {
+  .esr-scroller {
+    -webkit-mask-image: linear-gradient(to right, #000 82%, transparent 100%);
+    mask-image: linear-gradient(to right, #000 82%, transparent 100%);
+  }
+}
+
+/* Reduced motion: hold the diagram in its resting state. The wall, the open and
+ * closed slots and the command line already carry the whole message — the
+ * pulses are the illustration of it, not the message. The grant set still
+ * changes; that is content, not decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .esr-pulse {
+    animation: none;
+    opacity: 0;
+  }
+  .esr-deny {
+    animation: none;
+    opacity: 1;
+  }
+  .esr-slot,
+  .esr-ink {
+    transition: none;
+  }
+}
+
 /* Footer org link (logo + name). */
 .otfw-footer {
   background-color: #09090b;
