@@ -10,6 +10,24 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`esdev create` asks on a terminal** (D70): which template, and whether to
+  install. Away from one — a pipe, a CI job, anything with `CI` set — it takes
+  the defaults and says nothing, because a prompt in a script is a script that
+  hangs.
+
+  Every question has a flag, so nothing is only reachable by answering one:
+
+  ```sh
+  esdev create my-app --template=api --install=bun
+  esdev create my-app --yes            # defaults, no questions
+  esdev create my-app --no-install
+  ```
+
+  Only package managers this machine actually has are offered, detected by
+  running `--version` rather than walking `PATH`. Unattended runs still install
+  nothing: D64's objection was to *guessing* which package manager a project
+  uses, and asking resolves that at the root.
+
 - **Three more templates** for `esdev create`, so it offers a real choice:
 
   | | |

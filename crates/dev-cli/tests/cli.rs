@@ -2744,6 +2744,85 @@ fn every_dependency_free_template_passes_its_own_tests() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+/// A prompt in a script is a script that hangs, which is the whole reason the
+/// interactive path is gated. These run with stdin closed — the shape every CI
+/// job has — and must answer without asking anything.
+#[test]
+fn create_never_asks_when_nobody_is_there() {
+    let parent = watch_dir("c_quiet");
+
+    // No flags at all: the default template, and nothing installed.
+    let out = esdev_in(&parent)
+        .args(["create", "quiet"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("react template"), "{}", stdout(&out));
+    // The next steps tell them to install, because this run did not.
+    assert!(stdout(&out).contains("npm install"), "{}", stdout(&out));
+    assert!(
+        !parent.join("quiet/node_modules").exists(),
+        "an unattended run installed something"
+    );
+
+    // …and nothing was written to the question stream.
+    assert!(
+        !stderr(&out).contains("Which template"),
+        "it asked anyway:\n{}",
+        stderr(&out)
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// Every question has a flag, so the interactive path is a convenience over the
+/// scriptable one rather than the only way to an answer.
+#[test]
+fn every_question_has_a_flag() {
+    let parent = watch_dir("c_flags");
+
+    let out = esdev_in(&parent)
+        .args(["create", "flagged", "--template=lib", "--no-install"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        parent.join("flagged/src/index.ts").is_file(),
+        "not the lib template"
+    );
+
+    // The next step is what that template actually has: a library has nothing
+    // to `run dev`.
+    assert!(stdout(&out).contains("run test"), "{}", stdout(&out));
+
+    // `--yes` is the conventional "take every default", and must not ask
+    // either — even where a terminal would have been available.
+    let yes = esdev_in(&parent)
+        .args(["create", "defaulted", "--yes"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(yes.status.success(), "{}", stderr(&yes));
+    assert!(stdout(&yes).contains("react template"), "{}", stdout(&yes));
+
+    // A package manager that is not one is named as such, before anything runs.
+    let unknown = esdev_in(&parent)
+        .args(["create", "nope", "--install=cargo"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("npm, bun, pnpm, yarn"),
+        "{}",
+        stderr(&unknown)
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 #[test]
 fn create_lists_its_templates_and_names_one_it_does_not_have() {
     let dir = watch_dir("c_list");

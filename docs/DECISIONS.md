@@ -661,6 +661,30 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D70 — `esdev create` asks, when there is somebody to ask · *Proposed (2026-08-14)* · *amends D64's "no prompts, no install"*
+
+**Context:** D64 gave two reasons for a scaffolder that writes files and stops, and they are not equally durable.
+
+*"No prompts because every other command here is a flag grammar that works in a script, and a scaffolder that stops to ask cannot be one of them."* — correct, and about a **script**. It is an argument for not prompting where nobody can answer, which is not the same as an argument for never prompting.
+
+*"No install because there is no lockfile yet to say which package manager this project uses, and guessing wrong leaves a `package-lock.json` in a bun project."* — also correct, and an argument against **guessing**. Asking is the one thing that resolves it at the root, because the person running the command is exactly who knows the answer.
+
+There was also a practical reason not to bother: `create` had one template, so an interactive picker would have had a single option to present. D70 follows the three templates that changed that.
+
+**Decision (maintainer, 2026-08-14):** ask on a terminal, and nowhere else.
+
+- **The gate is strict**: stdin *and* stderr must both be a TTY, and `CI` must be unset. A prompt in a script is a script that hangs, which is the failure this is written to avoid. Two integration tests run `create` with stdin closed and assert that nothing was asked and nothing installed.
+- **Every question has a flag.** `--template=api --install=bun` is the same run with nothing to type, `--no-install` and `-y`/`--yes` are the explicit refusals. The interactive path is a convenience over the scriptable one and never the only way to an answer.
+- **Unattended behaviour is unchanged.** No prompt, no install, and the same report — so D64's rule still holds in exactly the case it was written for.
+- **Only installed package managers are offered.** Detected by running `--version` rather than walking `PATH`, since a name on `PATH` can still be a broken shim, and a shim that fails here fails before anything has been installed.
+- **The prompt is hand-written**, on `std::io::IsTerminal`, which the tree already uses. The crates that do this well draw their own UI in raw mode; a command that runs once needs a question somebody can answer and a transcript they can read afterwards, not a redraw loop.
+
+**This is still not a package installer.** It runs *theirs* — the command they would have typed — and everything about resolution, the registry, the lockfile and the network belongs to it.
+
+**Consequences:** `CreateConfig` carries `Option`s where it carried values, because "not said" and "said" now differ: unset means ask-or-default, set means an answer. The report is printed *before* the install rather than returned at the end, so the transcript reads in the order things happened rather than putting the installer's output above the line announcing the project it installed into. Next steps are per-template — a library has nothing to `run dev`. Verified over a real PTY: choosing by number and by name, the default on Enter, `skip` leaving no `node_modules`, and an unknown manager named as such before anything runs.
+
+---
+
 ### D69 — CSS Modules: a stylesheet the JavaScript imports · *Proposed (2026-08-14)* · *builds on D67, closes its last "not done"*
 
 **Context:** D67 listed CSS Modules as deliberately out of scope, on the grounds that it is "a bundler change rather than a CSS one". That was the right description and the wrong conclusion. The maintainer's answer (2026-08-14) was that it is the highest-priority remaining gap for a framework-grade React template — which is correct, because CSS has exactly one global namespace and a component tree does not. Every real React project reaches this problem on its second component, and the alternatives are a naming convention nobody enforces or a runtime CSS-in-JS library, which is a dependency and a per-render cost.

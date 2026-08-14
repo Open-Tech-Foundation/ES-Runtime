@@ -8,17 +8,24 @@
 //! a demo. None of that is hard to write and all of it is tedious to write
 //! correctly, which is exactly what a scaffolder is for.
 //!
-//! # It writes files and stops
+//! # It asks, or it writes files and stops
 //!
-//! No install, no `git init`, no prompts.
+//! Which of those depends on whether anybody is there. On a terminal it asks
+//! two questions — which template, and whether to install — and away from one
+//! it writes the files and says nothing, because every other command here is a
+//! flag grammar that works unattended and `create` stays one whenever it cannot
+//! see a person ([`crate::prompt::interactive`]).
 //!
-//! **No install** because there is no lockfile yet to say which package manager
-//! this project uses, and guessing wrong leaves a `package-lock.json` in a bun
-//! project — the sort of mess that outlives the guess. A package installer is a
-//! stated non-goal of this project besides.
+//! **Everything a prompt asks has a flag**, so the interactive path is a
+//! convenience over the scriptable one and never the only way to an answer.
+//! `--template=api --install=bun` is the same run with nothing to type.
 //!
-//! **No prompts** because every other command here is a flag grammar that works
-//! in a script, and a scaffolder that stops to ask cannot be one of them.
+//! D64 refused to install at all, and the reason it gave was exact: there is no
+//! lockfile yet to say which package manager this project uses, and guessing
+//! wrong leaves a `package-lock.json` in a bun project. That is an argument
+//! against **guessing**, and it still holds — a non-interactive run installs
+//! nothing. Asking resolves the objection at its root, by getting the answer
+//! from the person who knows it. See [`crate::install`].
 //!
 //! # It never overwrites
 //!
@@ -69,28 +76,39 @@ const RENAMED: &[(&str, &str)] = &[("_gitignore", ".gitignore")];
 pub struct CreateConfig {
     /// The directory to write into.
     pub dir: String,
-    /// Which template.
-    pub template: String,
+    /// Which template, or `None` to ask (or take the default).
+    pub template: Option<String>,
     /// Whether to write into a directory that already holds something.
     pub force: bool,
+    /// Which package manager to install with, `Some(None)` for an explicit
+    /// "do not install", and `None` to ask (or, unattended, not to).
+    pub install: Option<Option<String>>,
 }
 
-/// The default template, when `--template` did not say.
+/// The default template, when `--template` did not say and nobody was asked.
 pub const DEFAULT_TEMPLATE: &str = "react";
+
+/// What a bare `--install` means.
+///
+/// npm, because it is what a Node installation already has — the answer that
+/// needs the least explaining when somebody did not name one.
+pub const DEFAULT_MANAGER: &str = "npm";
 
 /// Scaffolds a project and reports what to do next.
 pub fn create(config: &CreateConfig) -> Result<String, String> {
+    // Asked before anything is written, so a person who changes their mind at
+    // the prompt leaves no directory behind.
+    let template = match &config.template {
+        Some(named) => named.clone(),
+        None if crate::prompt::interactive() => ask_template(),
+        None => DEFAULT_TEMPLATE.to_string(),
+    };
+
     let files = TEMPLATES
         .iter()
-        .find(|(name, _)| *name == config.template)
+        .find(|(name, _)| *name == template)
         .map(|(_, files)| *files)
-        .ok_or_else(|| {
-            format!(
-                "there is no {} template.\n\n{}",
-                config.template,
-                list().trim_end()
-            )
-        })?;
+        .ok_or_else(|| format!("there is no {template} template.\n\n{}", list().trim_end()))?;
 
     let target = PathBuf::from(&config.dir);
     if target.is_file() {
@@ -139,14 +157,13 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     // files.
     if written == 0 {
         return Ok(format!(
-            "nothing to write: {} already holds every file the {} template has.\n",
-            config.dir, config.template
+            "nothing to write: {} already holds every file the {template} template has.\n",
+            config.dir
         ));
     }
     let mut report = format!(
-        "created {} from the {} template ({written} file{})\n",
+        "created {} from the {template} template ({written} file{})\n",
         config.dir,
-        config.template,
         if written == 1 { "" } else { "s" },
     );
     if !skipped.is_empty() {
@@ -155,11 +172,110 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
             skipped.join(", ")
         ));
     }
-    report.push_str(&format!(
-        "\n  cd {}\n  npm install\n  npm run dev\n",
-        config.dir
-    ));
+    // Reported before the install rather than after it, so the transcript reads
+    // in the order things happened: what was written, then what installing it
+    // printed. Returning the whole report at the end would put the install's
+    // own output above the line announcing the project it installed into.
+    print!("{report}");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    report.clear();
+
+    // Only now, with the project on disk: an install that fails leaves a
+    // project that is complete and one command away, rather than half of one.
+    let installed = match &config.install {
+        Some(Some(named)) => {
+            let manager = crate::install::by_name(named).ok_or_else(|| {
+                format!(
+                    "there is no {named} package manager.\n\nKnown: {}.",
+                    crate::install::MANAGERS
+                        .iter()
+                        .map(|m| m.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            })?;
+            crate::install::run(manager, &target)?;
+            Some(manager)
+        }
+        Some(None) => None,
+        None if crate::prompt::interactive() => match ask_install() {
+            Some(manager) => {
+                crate::install::run(manager, &target)?;
+                Some(manager)
+            }
+            None => None,
+        },
+        None => None,
+    };
+
+    report.push_str(&next_steps(&config.dir, &template, installed));
     Ok(report)
+}
+
+/// The lines printed after the project is written.
+fn next_steps(dir: &str, template: &str, installed: Option<crate::install::Manager>) -> String {
+    // The command that actually starts it, which is not the same for every
+    // template: a library has nothing to run.
+    let run = match template {
+        "lib" => "test",
+        _ => "dev",
+    };
+    let manager = installed.map_or("npm", |m| m.name);
+
+    let mut steps = format!("\n  cd {dir}\n");
+    if installed.is_none() {
+        steps.push_str(&format!("  {manager} install\n"));
+    }
+    steps.push_str(&format!("  {manager} run {run}\n"));
+    steps
+}
+
+/// Which template, asked on a terminal.
+fn ask_template() -> String {
+    let choices: Vec<crate::prompt::Choice<'_>> = TEMPLATES
+        .iter()
+        .map(|(name, _)| crate::prompt::Choice {
+            name,
+            description: DESCRIPTIONS
+                .iter()
+                .find(|(template, _)| template == name)
+                .map_or("", |(_, description)| description),
+        })
+        .collect();
+    let default = choices
+        .iter()
+        .position(|choice| choice.name == DEFAULT_TEMPLATE)
+        .unwrap_or(0);
+
+    choices[crate::prompt::select("Which template?", &choices, default)]
+        .name
+        .to_string()
+}
+
+/// Whether to install, and with what.
+///
+/// Only what this machine actually has is offered: naming a package manager
+/// that is not installed is offering an error message.
+fn ask_install() -> Option<crate::install::Manager> {
+    let available = crate::install::available();
+    if available.is_empty() {
+        return None;
+    }
+
+    let mut choices: Vec<crate::prompt::Choice<'_>> = available
+        .iter()
+        .map(|manager| crate::prompt::Choice {
+            name: manager.name,
+            description: "",
+        })
+        .collect();
+    choices.push(crate::prompt::Choice {
+        name: "skip",
+        description: "write the files and stop",
+    });
+
+    let chosen = crate::prompt::select("Install the dependencies?", &choices, 0);
+    available.get(chosen).copied()
 }
 
 /// Writes one file, substituting the project's name into it.

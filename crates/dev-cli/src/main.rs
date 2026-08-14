@@ -48,6 +48,8 @@ mod devserver;
 mod dts;
 mod html;
 mod inspect;
+mod install;
+mod prompt;
 mod start;
 mod test;
 mod trace;
@@ -243,25 +245,34 @@ OPTIONS:
     --template=<name>           Which template (default: react)
     --force                     Write into a directory that already holds
                                 something. It still never replaces a file
+    --install[=<manager>]       Install dependencies after writing: npm, bun,
+                                pnpm or yarn (default npm)
+    --no-install                Write the files and stop
+    -y, --yes                   Take every default; never ask
     --list                      List the templates and exit
 
 WHAT YOU GET
     A project with its esdev.json written, its entry named by the script tag in
-    its index.html, and a deploy line that is already narrow:
+    its index.html, and a permission line that is narrow from the first run:
 
         esrun --allow-read=./dist --allow-listen=8080 dist/server.js
 
-    Then:
-
-        cd <dir>
-        npm install                 (or bun, pnpm, yarn — whichever you use)
-        npm run dev
-
-    Nothing is installed for you: there is no lockfile yet to say which package
-    manager this project uses, and guessing wrong leaves the wrong one behind.
-
     The templates are baked into this binary, so `create` works offline and
     always writes a project this esdev can build.
+
+ASKING
+    On a terminal it asks which template and whether to install. Everywhere
+    else — a pipe, a CI job, anything with CI set — it takes the defaults and
+    says nothing, because a prompt in a script is a script that hangs.
+
+    Every question has a flag, so nothing is only reachable by answering one:
+
+        esdev create my-app --template=api --install=bun
+        esdev create my-app --yes           (defaults, no questions)
+
+    Unattended it installs nothing. There is no lockfile yet to say which
+    package manager this project uses, and guessing wrong leaves the wrong one
+    behind — which is a reason not to guess, not a reason not to ask.
 ";
 
 const START_USAGE: &str = "\
@@ -936,7 +947,10 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
 /// Parses `esdev create <dir> [options]`.
 fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, String> {
     let mut dirs: Vec<String> = Vec::new();
-    let mut template = DEFAULT_TEMPLATE.to_string();
+    // `None` means "not said", which on a terminal becomes a question and
+    // away from one becomes the default. A flag is always an answer.
+    let mut template: Option<String> = None;
+    let mut install: Option<Option<String>> = None;
     let mut force = false;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
@@ -951,7 +965,22 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 print!("{}", create::list());
                 std::process::exit(0);
             }
-            "--template" => template = require_value(flag, value)?.to_string(),
+            "--template" => template = Some(require_value(flag, value)?.to_string()),
+            // `--install` alone means "with npm"; `--install=bun` names one.
+            "--install" => {
+                install = Some(Some(value.unwrap_or(create::DEFAULT_MANAGER).to_string()));
+            }
+            "--no-install" => {
+                reject_value(flag, value)?;
+                install = Some(None);
+            }
+            // The conventional spelling of "do not ask me anything": take every
+            // default rather than prompting, even on a terminal.
+            "-y" | "--yes" => {
+                reject_value(flag, value)?;
+                template.get_or_insert_with(|| DEFAULT_TEMPLATE.to_string());
+                install.get_or_insert(None);
+            }
             "--force" => {
                 reject_value(flag, value)?;
                 force = true;
@@ -975,6 +1004,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
         dir: dirs.remove(0),
         template,
         force,
+        install,
     })
 }
 
