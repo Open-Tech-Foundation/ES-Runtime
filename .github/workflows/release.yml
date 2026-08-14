@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
+      release_opentf_esrun_postgres: ${{ steps.check.outputs.release_opentf_esrun_postgres }}
+      release_opentf_esrun_redis: ${{ steps.check.outputs.release_opentf_esrun_redis }}
       release_es_runtime_cli: ${{ steps.check.outputs.release_es_runtime_cli }}
       release_es_runtime_dev_cli: ${{ steps.check.outputs.release_es_runtime_dev_cli }}
     steps:
@@ -31,7 +33,9 @@ jobs:
         run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
       - id: check
         run: |
-          echo "should_release=$(otf-release check --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "should_release=$(otf-release check --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_postgres=$(otf-release check --package @opentf/esrun-postgres)" >> "$GITHUB_OUTPUT"
+          echo "release_opentf_esrun_redis=$(otf-release check --package @opentf/esrun-redis)" >> "$GITHUB_OUTPUT"
           echo "release_es_runtime_cli=$(otf-release check --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
           echo "release_es_runtime_dev_cli=$(otf-release check --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
@@ -138,6 +142,99 @@ jobs:
         with:
           name: es-runtime-dev-cli-${{ matrix.name }}-${{ matrix.arch }}
           path: .artifacts/es-runtime-dev-cli
+
+  publish-opentf-esrun-postgres:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_opentf_esrun_postgres == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/tsr
+        with:
+          esdev: "true"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - name: Build @opentf/esrun-postgres
+        run: tsr build
+        working-directory: packages/postgres
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.36.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+      - name: Publish
+        run: otf-release publish --package @opentf/esrun-postgres
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-opentf-esrun-redis:
+    needs: [check-release]
+    if: needs.check-release.outputs.release_opentf_esrun_redis == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/tsr
+        with:
+          esdev: "true"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - name: Build @opentf/esrun-redis
+        run: tsr build
+        working-directory: packages/redis
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.36.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+      - name: Publish
+        run: otf-release publish --package @opentf/esrun-redis
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: [check-release, publish-opentf-esrun-postgres, publish-opentf-esrun-redis]
+    if: >-
+      always() &&
+      needs.check-release.outputs.should_release == 'true' &&
+      needs.publish-opentf-esrun-postgres.result != 'failure' &&
+      needs.publish-opentf-esrun-postgres.result != 'cancelled' &&
+      needs.publish-opentf-esrun-redis.result != 'failure' &&
+      needs.publish-opentf-esrun-redis.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: bun install --frozen-lockfile
+      - name: Install otf-release
+        shell: bash
+        env:
+          OTF_RELEASE_VERSION: v0.36.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+      - name: Publish
+        run: otf-release publish --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   github-release-es-runtime-cli:
     needs: [check-release, build-es-runtime-cli]

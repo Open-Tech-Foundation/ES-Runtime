@@ -1,4 +1,7 @@
-adapters = ["crates.io"]
+adapters = [
+    "npm",
+    "crates.io",
+]
 skip_publish = [
     "es-runtime",
     "es-runtime-cli-common",
@@ -17,12 +20,63 @@ github_release_notes = "curated-changelog"
 [hooks]
 
 [publish.ignore_paths]
-es-runtime = []
-es-runtime-providers = []
-es-runtime-engine = []
 es-runtime-common = []
 es-runtime-default-providers = []
+"@opentf/esrun-postgres" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
+"@opentf/esrun-types" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
 es-runtime-cli = []
+es-runtime-providers = []
+es-runtime = []
+"@opentf/esrun-redis" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
+es-runtime-engine = []
+
+[[package]]
+name = "@opentf/esrun-postgres"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "tsr build"
+artifacts = ""
+manifest = "packages/postgres/package.json"
+
+[[package]]
+name = "@opentf/esrun-redis"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = "tsr build"
+artifacts = ""
+manifest = "packages/redis/package.json"
+
+[[package]]
+name = "@opentf/esrun-types"
+adapter = "npm"
+mode = "publish"
+matrix = false
+command = ""
+artifacts = ""
+manifest = "packages/types/package.json"
 
 [[package]]
 name = "es-runtime-cli"
@@ -72,6 +126,14 @@ arch = "x86_64"
 triple = "x86_64-pc-windows-msvc"
 runner = "windows-latest"
 stage_as = "win32-x64"
+ext = ".exe"
+
+[[package.targets]]
+name = "windows"
+arch = "aarch64"
+triple = "aarch64-pc-windows-msvc"
+runner = "windows-latest"
+stage_as = "win32-arm64"
 ext = ".exe"
 
 [[package]]
