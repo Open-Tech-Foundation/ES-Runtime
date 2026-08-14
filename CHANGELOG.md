@@ -11,25 +11,31 @@ namespace) is unstable and may change between minor releases until the API freez
 ### Added
 
 - **`esdev build` bundles stylesheets** (D67). A `<link rel="stylesheet">` in an
-  `index.html` target is now an entry, the way a `<script type="module">` already
-  was: it and everything it `@import`s become one hashed file. Modern syntax —
-  nesting, `color-mix()`, logical properties — is lowered to the target browsers,
-  and a relative `url()` is followed so fonts and images travel with the
-  stylesheet instead of arriving as 404s once it moves to `/assets`.
+  `index.html` target is now an entry, the way a `<script type="module">`
+  already was: it and everything it `@import`s become one hashed file, and a
+  relative `url()` is followed so fonts and images travel with the stylesheet
+  instead of arriving as 404s once it moves to `/assets`. `--minify` drops
+  comments and collapses whitespace.
 
   The hash is computed **after** `url()` substitution, so editing an `@import`ed
   file changes the entry's URL. Hashing the source would have left a stale-cache
   bug visible only in production.
 
-  Minification stays opt-in (`--minify`), matching JavaScript. CSS modules and
-  `import "./x.css"` from JavaScript are still not supported.
+  **It adds no dependency.** The pipeline is three small modules — a tokenizer,
+  an `@import`/`url()` pass, and a minifier — that *splice byte spans and never
+  re-print*, which is the same thing `esdev` already does to an `index.html`. A
+  construct the pipeline has no name for comes out byte-for-byte as it went in;
+  the failure mode is leaving something alone rather than silently emitting
+  different CSS.
 
-  This adds **lightningcss (MPL-2.0)** — the first copyleft code in the tree,
-  allowed by a per-crate exception in `deny.toml` and confined to `esdev`, which
-  a service never deploys. `scripts/copyleft-confined.sh` fails the build if any
-  refused license family ever appears under a crate a deployment ships, because
-  that confinement is the ground the exception is granted on and `cargo deny`
-  cannot check it.
+  lightningcss was used first and withdrawn: it is MPL-2.0, and while that
+  licence never reached `esrun` or anyone's application, it would have meant a
+  standing seven-crate copyleft exception in a `deny.toml` that opens by
+  refusing copyleft. `deny.toml` is back to `exceptions = []`.
+
+  Not included, deliberately: syntax lowering and vendor prefixing (nesting and
+  `color-mix()` are supported across the target browsers), value-level
+  minification, and CSS modules.
 
 ### Changed
 

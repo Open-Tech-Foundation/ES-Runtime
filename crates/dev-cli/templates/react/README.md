@@ -96,9 +96,12 @@ production is a grant nobody has tested.
 ## Styling
 
 `styles/app.css` is linked from `index.html`. esdev resolves its `@import`s at
-build time into one hashed file, lowers modern syntax — nesting, `color-mix()`,
-logical properties — to what the target browsers ship, and follows `url()` so
-fonts and images travel with the stylesheet.
+build time into one hashed file, and follows `url()` so fonts and images travel
+with the stylesheet. `npm run build -- --minify` drops comments and collapses
+whitespace.
+
+Nesting and `color-mix()` are written as-is and shipped as-is — they are
+supported everywhere this targets, so nothing lowers them.
 
 `import "./x.css"` from JavaScript is not supported, and there are no CSS
 modules; a `<link>` in the document is how a stylesheet enters this build.

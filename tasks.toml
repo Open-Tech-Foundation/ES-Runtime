@@ -47,11 +47,11 @@ run = "bash scripts/fuzz.sh"
 [tasks.deny]
 run = "cargo deny check"
 
-# `deny.toml` allows exactly one copyleft crate — lightningcss, MPL-2.0 — and the
-# exception is argued on the crate reaching `esdev` and nothing else. That
-# argument is about the shape of a dependency graph, which `cargo deny` has no
-# way to assert, so it is asserted here: if MPL-2.0 code ever turns up in what a
-# service deploys, this fails rather than the reasoning silently going stale.
+# `cargo deny` checks *which* licences are in the graph; this checks **where**.
+# An exception for a copyleft crate is normally argued on it reaching `esdev`
+# and never the binary a service deploys — a claim about the shape of a
+# dependency graph that one moved line can quietly falsify. There are no
+# exceptions today (D67), and the gate is kept so the next one has to hold.
 [tasks.copyleft-stays-out-of-esrun]
 run = "bash scripts/copyleft-confined.sh"
 

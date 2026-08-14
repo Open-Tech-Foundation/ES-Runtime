@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
-# Asserts that the tree's one copyleft dependency cannot reach a deployed service.
+# Asserts that no copyleft dependency can reach a deployed service.
 #
-# `deny.toml` allows lightningcss (MPL-2.0) as a deliberate exception, and the
-# case for it rests on where the crate ends up: linked into `esdev`, the binary a
-# developer runs to produce an artifact, and never into `esrun`, the binary that
-# runs one in production. MPL's copyleft is per-file, so that placement is what
-# keeps the obligation confined to lightningcss's own sources.
+# `deny.toml` allows only permissive licences and carries no exceptions, so
+# today this passes trivially. It is kept anyway, because the check it makes is
+# one `cargo deny` cannot: *where in the graph* a licence sits.
 #
-# `cargo deny` checks licenses against a policy; it has no way to say "this
-# license, only in that part of the graph". So the graph is checked here. Without
-# it, moving a workspace dependency one line would quietly invalidate the
-# argument the exception is granted on, and nothing would fail.
+# The history is the argument for it. The CSS pipeline was first built on
+# lightningcss, which is MPL-2.0, and the case for accepting it rested entirely
+# on placement — copyleft that is per-file, in a crate linked only into `esdev`,
+# never into the `esrun` a service deploys. That reasoning was sound and it was
+# also one moved dependency line away from silently ceasing to be true, with
+# nothing to notice. lightningcss is gone (D67) and the reasoning is no longer
+# load-bearing, but the next crate worth an exception will make the same
+# argument, and this is what holds it to it.
 #
 # A script rather than a `run =` line in tasks.toml: the check is a pipeline and
 # tsr's mini-shell has no pipes by design.
 set -euo pipefail
 
-# The binaries a service deploys. `esdev` is deliberately absent — it is the
-# crate the exception exists for.
+# The binaries a service deploys. `esdev` is deliberately absent: it is the
+# development toolchain, and the one place an exception would ever be argued
+# for.
 DEPLOYED=(es-runtime-cli es-runtime es-runtime-engine es-runtime-providers
     es-runtime-default-providers es-runtime-common es-runtime-cli-common)
 
@@ -58,13 +61,13 @@ done
 if [[ $status -ne 0 ]]; then
     cat >&2 <<'EOF'
 
-What a service deploys must carry no copyleft code. deny.toml grants exactly one
-exception — lightningcss, MPL-2.0 — and grants it on the grounds that the crate
-is confined to `esdev`, which is not in the list above.
+What a service deploys must carry no copyleft code. deny.toml currently grants
+no exceptions at all, so a hit here means a new dependency brought one in.
 
-Either move the dependency back behind `esdev`, or, if it genuinely belongs in a
-deployed crate, revisit the exception in deny.toml rather than this list. The
-license reasoning there is what changes; this script only reports that it has.
+Either move it behind `esdev`, which is not in the list above, or — if it
+genuinely belongs in a deployed crate — argue the exception in deny.toml rather
+than editing this list. The licence reasoning belongs there; this script only
+reports when it has stopped holding.
 EOF
     exit 1
 fi

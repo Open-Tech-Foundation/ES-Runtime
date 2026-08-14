@@ -1,9 +1,9 @@
 /* The stylesheet index.html links, and the only one it needs to.
  *
  * esdev follows @import at build time and emits a single hashed file, so the
- * split below costs nothing at runtime. Nesting and color-mix() are lowered to
- * what the target browsers actually ship — write the language, not the
- * intersection of your users' browsers. */
+ * split below costs nothing at runtime. Nesting and color-mix() are shipped as
+ * written: they are supported everywhere this targets, so nothing rewrites
+ * them. */
 
 @import "./theme.css";
 

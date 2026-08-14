@@ -313,7 +313,7 @@ fn stylesheet(
     sources: &mut usize,
     written: &mut usize,
 ) -> Result<Vec<u8>, String> {
-    let bundled = crate::css::bundle(path, minify)?;
+    let bundled = crate::css::build(path, minify)?;
     let mut code = bundled.code;
     // Every stylesheet that went in, not every `<link>` that named one: an
     // `@import` is a file this build read, and counting tags instead would

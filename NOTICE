@@ -12,5 +12,6 @@ licensed under the BSD-3-Clause license (https://github.com/v8/v8). V8 is
 statically linked via the `v8` crate.
 
 Rust dependencies are distributed under OSI-approved permissive licenses
-(Apache-2.0, MIT, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0); the set is enforced
-by cargo-deny (see deny.toml). See docs/LICENSING.md for details.
+(Apache-2.0, MIT, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0, BSL-1.0); the set is
+enforced by cargo-deny (see deny.toml). See docs/LICENSING.md for details.
+

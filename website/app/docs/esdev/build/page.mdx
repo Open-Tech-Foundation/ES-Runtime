@@ -174,13 +174,16 @@ Dynamic `import()` chunks land in the same directory, hashed by the bundler, and
 the entry still points at them.
 
 A `<link rel="stylesheet">` is an entry too. It and everything it `@import`s
-become one hashed file; modern syntax is lowered to the target browsers; and a
-relative `url()` is followed, so fonts and images travel with the stylesheet
-instead of arriving as 404s once it moves to `/assets`.
+become one hashed file, and a relative `url()` is followed, so fonts and images
+travel with the stylesheet instead of arriving as 404s once it moves to
+`/assets`. `--minify` drops comments and collapses whitespace.
 
-<Callout type="note" title="No CSS modules">
-  `import "./x.css"` from JavaScript is not supported, and class names are not
-  hashed. A `<link>` in the document is how a stylesheet enters the build.
+<Callout type="note" title="What the CSS pipeline does not do">
+  No syntax lowering and no vendor prefixing — nesting and `color-mix()` are
+  supported across the browsers this targets. No value-level minification. No
+  CSS modules: `import "./x.css"` from JavaScript is not supported and class
+  names are not hashed, so a `<link>` in the document is how a stylesheet
+  enters the build.
 </Callout>
 
 ## Where the file is
