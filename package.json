@@ -4,6 +4,7 @@
   "type": "module",
   "description": "The workspace root. The runtime itself is Rust; tasks are in tasks.toml.",
   "packageManager": "bun@1.4.0",
+  "_workspaces": "website/ and bench/ are deliberately not members and keep their own bun.lock. website/ must stay on lockfileVersion 1 — its deploy cannot read 2, and folding it in here would move its dependencies into this v2 lockfile and break the build. bench/ is the cross-runtime comparison clients, which have no business in the runtime's dependency graph.",
   "workspaces": [
     "packages/*",
     "crates/runtime/js"
