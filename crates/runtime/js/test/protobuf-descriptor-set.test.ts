@@ -1,6 +1,5 @@
-import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { Schema } from "../serialization/protobuf/schema.js";
+import { file } from "runtime:fs";
+import { Schema } from "../serialization/protobuf/schema.ts";
 
 // The .proto the fixture was compiled from (protoc --descriptor_set_out
 // --include_imports). Kept in sync with scratchpad/proto/order.proto.
@@ -22,7 +21,9 @@ const ORDER_PROTO = `
     message Item { string sku = 1; int32 qty = 2; }
   }`;
 
-const fdset = new Uint8Array(readFileSync(new URL("./fixtures/order.fdset", import.meta.url)));
+// Top-level await, which a test file may use freely: it is an ES module and
+// the runner runs it as one, rather than importing it from a driver.
+const fdset = await file(new URL("./fixtures/order.fdset", import.meta.url)).bytes();
 
 const value = {
   id: "o1",
@@ -42,16 +43,14 @@ const value = {
 test("fromDescriptorSet encodes byte-identically to a .proto-text schema", () => {
   const fromSet = Schema.fromDescriptorSet(fdset);
   const fromText = new Schema(ORDER_PROTO);
-  expect([...fromSet.encode("shop.Order", value)]).toEqual([
-    ...fromText.encode("shop.Order", value),
-  ]);
+  assertEquals([...fromSet.encode("shop.Order", value)], [...fromText.encode("shop.Order", value)]);
 });
 
 test("fromDescriptorSet round-trips binary and JSON (maps, oneofs, enums, nested, WKT)", () => {
   const s = Schema.fromDescriptorSet(fdset);
-  expect(s.decode("shop.Order", s.encode("shop.Order", value))).toEqual(value);
+  assertEquals(s.decode("shop.Order", s.encode("shop.Order", value)), value);
   const json = s.toJson("shop.Order", value);
-  expect(s.fromJson("shop.Order", json)).toEqual(value);
+  assertEquals(s.fromJson("shop.Order", json), value);
 });
 
 // A minimal descriptor.proto subset, used to synthesize a proto2 descriptor set
@@ -100,6 +99,6 @@ test("fromDescriptorSet accepts a proto2 descriptor (unset syntax, required labe
     `syntax="proto2"; package people; message Person { required string name = 1; optional int32 age = 2; }`,
   );
   const v = { name: "ada", age: 0 }; // proto2 optional → explicit presence, 0 is kept
-  expect([...fromSet.encode("people.Person", v)]).toEqual([...fromText.encode("people.Person", v)]);
-  expect(fromSet.decode("people.Person", fromSet.encode("people.Person", v))).toEqual(v);
+  assertEquals([...fromSet.encode("people.Person", v)], [...fromText.encode("people.Person", v)]);
+  assertEquals(fromSet.decode("people.Person", fromSet.encode("people.Person", v)), v);
 });

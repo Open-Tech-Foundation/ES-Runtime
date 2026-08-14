@@ -5,13 +5,13 @@
 // usual link() builds the registry. proto2, proto3, and editions 2023/2024 are
 // accepted (matching the text parser); a missing `syntax` field means proto2.
 
-import { decode } from "./decode.js";
-import type { FeatureSet } from "./features.js";
-import { link, type Registry } from "./link.js";
-import type { AstEnum, AstField, AstMessage, AstOneof, ParsedFile } from "./parser.js";
-import { parseProto } from "./parser.js";
-import { Reader } from "./reader.js";
-import { WKT } from "./wkt.js";
+import { decode } from "./decode.ts";
+import type { FeatureSet } from "./features.ts";
+import { link, type Registry } from "./link.ts";
+import type { AstEnum, AstField, AstMessage, AstOneof, ParsedFile } from "./parser.ts";
+import { parseProto } from "./parser.ts";
+import { Reader } from "./reader.ts";
+import { WKT } from "./wkt.ts";
 
 // Only the fields we read, with their canonical descriptor.proto field numbers.
 // Enum-typed fields are declared as enums so decode yields the value-name string.

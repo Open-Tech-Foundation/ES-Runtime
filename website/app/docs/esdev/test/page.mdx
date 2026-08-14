@@ -33,12 +33,24 @@ test("rejects", async () => {
 | --- | --- |
 | `test(name, fn)` | `fn` may be async; failures are collected |
 | `assert(cond, msg?)` | |
-| `assertEquals(actual, expected, msg?)` | |
-| `assertThrows(fn, msg?)` | |
-| `assertRejects(fn, msg?)` | |
+| `assertEquals(actual, expected, msg?)` | Structural |
+| `assertThrows(fn, expected?, msg?)` | |
+| `assertRejects(fn, expected?, msg?)` | |
 
 The same vocabulary the runtime's own conformance suite uses: reading its tests
 and writing your own should not mean learning two.
+
+`assertEquals` walks the values: `BigInt` and `NaN` compare, typed arrays and
+`ArrayBuffer` compare as bytes, `Map` and `Set` by contents, objects by their
+key set rather than key order, and a cyclic structure terminates.
+
+`expected` is what the error must be — omit it to accept any throw.
+
+| | |
+| --- | --- |
+| `"TypeError"` | the error's `name`, or a substring of its message |
+| `/too long/` | tested against the message |
+| `HttpError` | an `instanceof` check |
 
 ## One process per file
 
@@ -56,9 +68,9 @@ It keeps its own path, its module resolution, its relative imports and its
 TypeScript, and simply arrives with `test()` already defined. Nothing wraps it
 and nothing imports it.
 
-That matters for line numbers: the harness is injected as a **single physical
-line**, so a failing assertion names the line you wrote. Only line 1's columns
-shift.
+That matters for line numbers: types are stripped first and the harness is
+injected afterwards as a **single physical line**, so a failing assertion names
+the line you wrote. Only line 1's columns shift.
 
 <Callout type="note" title="Not yet">
   Parallelism across files, `describe` nesting, per-file timeouts, and a

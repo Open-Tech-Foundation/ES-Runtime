@@ -5,8 +5,8 @@
 // as unknown), and custom field defaults (`[default = …]`) parse but are not
 // materialized (the decoded value shape stays sparse).
 
-import { type FeatureSet, featureFromOption } from "./features.js";
-import { Lexer, type Token } from "./lexer.js";
+import { type FeatureSet, featureFromOption } from "./features.ts";
+import { Lexer, type Token } from "./lexer.ts";
 
 export interface AstField {
   label: "singular" | "optional" | "repeated" | "required";

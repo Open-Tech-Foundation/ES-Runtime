@@ -21,6 +21,27 @@
 //! `assert`, `assertEquals`, `assertThrows`, `assertRejects` — because a
 //! developer reading the runtime's tests and writing their own should not have
 //! to learn two vocabularies.
+//!
+//! **`assertEquals` compares structurally, not through `JSON.stringify`.** It
+//! used to do the latter, which was wrong in a way that mattered on this
+//! runtime specifically: `JSON.stringify` *throws* on a `BigInt`, so the one
+//! assertion an int64 test most needs to make could not be written at all, and
+//! a `Uint8Array` stringified to `{"0":1,"1":2}` rather than comparing as
+//! bytes. It was also order-sensitive on object keys, which no equality test
+//! wants. The comparison here walks the values: `BigInt` and `NaN` through
+//! `Object.is`, typed arrays and `ArrayBuffer` byte by byte, `Map`/`Set` by
+//! contents, `Date`/`RegExp`/`Error` by what identifies them, objects by their
+//! key *set* — and it remembers pairs it is already comparing, so a cyclic
+//! structure terminates instead of blowing the stack.
+//!
+//! **`assertThrows`/`assertRejects` take what they expect, not a label.** The
+//! second argument used to be the message printed on failure, which meant the
+//! natural thing to write — `assertThrows(fn, "TypeError")` — asserted
+//! *nothing* about the error: any throw passed. Every call site in this
+//! repository was already written that way, so the argument now matches. A
+//! string matches the error's `name` or a substring of its message, a `RegExp`
+//! tests the message, and a constructor is an `instanceof` check. The failure
+//! message, when one is wanted, moved to the third argument.
 
 use std::path::{Path, PathBuf};
 
@@ -78,26 +99,141 @@ globalThis.test = (name, fn) => {
 globalThis.assert = (cond, msg) => {
   if (!cond) throw new Error(msg || "assertion failed");
 };
-globalThis.assertEquals = (actual, expected, msg) => {
-  const a = JSON.stringify(actual);
-  const b = JSON.stringify(expected);
-  if (a !== b) throw new Error(msg || `expected ${b}, got ${a}`);
+const __esdevKeys = (o) => Object.keys(o).filter((k) => o[k] !== undefined);
+const __esdevEq = (a, b, seen) => {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null || typeof a !== "object") return false;
+  const tag = Object.prototype.toString.call(a);
+  if (tag !== Object.prototype.toString.call(b)) return false;
+  if (a instanceof Date) return a.getTime() === b.getTime();
+  if (a instanceof RegExp) return a.source === b.source && a.flags === b.flags;
+  if (a instanceof Error) return a.name === b.name && a.message === b.message;
+  for (const pair of seen) if (pair[0] === a && pair[1] === b) return true;
+  seen.push([a, b]);
+  if (a instanceof ArrayBuffer) return __esdevBytes(new Uint8Array(a), new Uint8Array(b));
+  if (ArrayBuffer.isView(a)) {
+    return __esdevBytes(
+      new Uint8Array(a.buffer, a.byteOffset, a.byteLength),
+      new Uint8Array(b.buffer, b.byteOffset, b.byteLength),
+    );
+  }
+  if (a instanceof Map) {
+    if (a.size !== b.size) return false;
+    for (const [k, v] of a) {
+      if (b.has(k)) {
+        if (!__esdevEq(v, b.get(k), seen)) return false;
+        continue;
+      }
+      let found = false;
+      for (const [k2, v2] of b) {
+        if (__esdevEq(k, k2, seen) && __esdevEq(v, v2, seen)) { found = true; break; }
+      }
+      if (!found) return false;
+    }
+    return true;
+  }
+  if (a instanceof Set) {
+    if (a.size !== b.size) return false;
+    for (const v of a) {
+      if (b.has(v)) continue;
+      let found = false;
+      for (const v2 of b) if (__esdevEq(v, v2, seen)) { found = true; break; }
+      if (!found) return false;
+    }
+    return true;
+  }
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!__esdevEq(a[i], b[i], seen)) return false;
+    return true;
+  }
+  const ka = __esdevKeys(a);
+  const kb = __esdevKeys(b);
+  if (ka.length !== kb.length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+    if (!__esdevEq(a[k], b[k], seen)) return false;
+  }
+  return true;
 };
-globalThis.assertThrows = (fn, msg) => {
+const __esdevBytes = (a, b) => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+};
+const __esdevShow = (v) => {
+  if (typeof v === "bigint") return String(v) + "n";
+  if (v === undefined || typeof v === "symbol" || typeof v === "function") return String(v);
+  try {
+    const s = JSON.stringify(v, (_k, x) => {
+      if (typeof x === "bigint") return String(x) + "n";
+      if (ArrayBuffer.isView(x) && !(x instanceof DataView)) return Array.from(x);
+      if (x instanceof Map) return Array.from(x);
+      if (x instanceof Set) return Array.from(x);
+      return x;
+    });
+    return s === undefined ? String(v) : s;
+  } catch {
+    return String(v);
+  }
+};
+const __esdevErr = (e) =>
+  e && e.name && e.message !== undefined ? e.name + ": " + e.message : String(e);
+const __esdevWant = (want) =>
+  typeof want === "function" ? want.name || "the expected error" : String(want);
+const __esdevMatches = (e, want) => {
+  if (want === undefined || want === null) return true;
+  const message = e && e.message !== undefined ? String(e.message) : String(e);
+  const name = e && e.name ? String(e.name) : "";
+  if (typeof want === "string") return name === want || message.includes(want);
+  if (want instanceof RegExp) return want.test(message) || want.test(__esdevErr(e));
+  if (typeof want === "function") return e instanceof want;
+  return false;
+};
+const __esdevThrew = (e, want, msg, verb, conn) => {
+  if (__esdevMatches(e, want)) return;
+  throw new Error(
+    (msg ? msg + ": " : "") + "expected it to " + verb + " " + conn + __esdevWant(want) +
+    ", got " + __esdevErr(e),
+  );
+};
+const __esdevNever = (want, msg, verb, conn) => {
+  throw new Error(
+    (msg ? msg + ": " : "") + "expected it to " + verb +
+    (want === undefined ? "" : " " + conn + __esdevWant(want)) + ", but it did not",
+  );
+};
+globalThis.assertEquals = (actual, expected, msg) => {
+  if (__esdevEq(actual, expected, [])) return;
+  throw new Error(
+    (msg ? msg + ": " : "") +
+    "expected " + __esdevShow(expected) + ", got " + __esdevShow(actual),
+  );
+};
+globalThis.assertThrows = (fn, want, msg) => {
+  let threw;
+  let caught = false;
   try {
     fn();
-  } catch {
-    return;
+  } catch (e) {
+    threw = e;
+    caught = true;
   }
-  throw new Error(msg || "expected it to throw");
+  if (!caught) __esdevNever(want, msg, "throw", "");
+  __esdevThrew(threw, want, msg, "throw", "");
 };
-globalThis.assertRejects = async (fn, msg) => {
+globalThis.assertRejects = async (fn, want, msg) => {
+  let threw;
+  let caught = false;
   try {
     await fn();
-  } catch {
-    return;
+  } catch (e) {
+    threw = e;
+    caught = true;
   }
-  throw new Error(msg || "expected it to reject");
+  if (!caught) __esdevNever(want, msg, "reject", "with ");
+  __esdevThrew(threw, want, msg, "reject", "with ");
 };
 "#;
 
@@ -173,19 +309,25 @@ fn url_from_path(path: &Path) -> Option<String> {
 
 impl SourceTransform for TestTransform {
     fn transform(&self, specifier: &str, source: String) -> Result<String, String> {
-        let source = if specifier == self.entry {
-            // The harness goes at the top of the *body*. Imports are hoisted and
-            // their modules evaluate first regardless, so a `test(...)` call in
-            // the body still sees the globals.
-            // No newline between the harness and the source: the user's first
-            // line must remain line 1. Only its columns shift, and the epilogue
-            // goes after everything they wrote, so every other line number is
-            // exactly what their editor shows.
-            format!("{}{source}\n{EPILOGUE}", one_line(HARNESS))
-        } else {
-            source
-        };
-        self.inner.transform(specifier, source)
+        // Strip first, wrap second. The order matters and used to be the other
+        // way round: the stripper re-prints the AST through oxc's codegen, which
+        // does not preserve line positions, so a harness folded onto one line
+        // came back out as one statement per line — and every line number in a
+        // `.ts` stack trace was pushed down by the length of the harness. With
+        // the wrap applied afterwards the harness never reaches the printer, and
+        // stays the single line it was folded into.
+        let source = self.inner.transform(specifier, source)?;
+        if specifier != self.entry {
+            return Ok(source);
+        }
+        // The harness goes at the top of the *body*. Imports are hoisted and
+        // their modules evaluate first regardless, so a `test(...)` call in the
+        // body still sees the globals.
+        // No newline between the harness and the source: the user's first line
+        // must remain line 1. Only its columns shift, and the epilogue goes
+        // after everything they wrote, so every other line number is the one
+        // the printer produced for their code alone.
+        Ok(format!("{}{source}\n{EPILOGUE}", one_line(HARNESS)))
     }
 }
 

@@ -1,31 +1,16 @@
 /**
- * What esdev puts into a file that TypeScript cannot see for itself.
- *
- * Not from `esdev --install-types` — that installs the `runtime:` modules,
- * which are what the *runtime* provides. These come from the build and test
- * tooling, so they are declared with the project that uses them.
- */
-
-/**
- * `process.env.NODE_ENV`, which `esdev build` replaces with a literal before
- * the bundler runs.
- *
- * There is no `process` global on this runtime — `runtime:process` is where the
- * real environment lives. This is a *compile-time constant* and nothing more,
- * which is why it is declared as one.
- */
-declare const process: {
-  readonly env: {
-    readonly NODE_ENV: "development" | "production";
-  };
-};
-
-/**
  * The globals `esdev test` injects into every `*.test.ts` file.
  *
- * There is no import: the runner wraps each file with these already defined,
- * which is what lets a test file be an ordinary module that runs unbundled.
+ * There is no import: the runner prepends these to the file's own source, which
+ * is what lets a test file stay an ordinary module that runs unbundled and
+ * keeps its own path and module resolution.
+ *
+ * The same declarations `esdev create` writes into a new project's
+ * `src/esdev-env.d.ts`. They live here rather than coming from a package
+ * because this directory is not a published package — it is the source of the
+ * `runtime:serialization` module, bundled into the runtime binary.
  */
+
 declare function test(name: string, fn: () => void | Promise<void>): void;
 
 /** Fails the test unless `condition` is truthy. */

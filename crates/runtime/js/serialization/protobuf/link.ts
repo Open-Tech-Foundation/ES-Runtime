@@ -2,10 +2,10 @@
 // types, links field type references, lowers maps, and resolves editions/proto3
 // features into concrete presence/packed/closed flags.
 
-import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.js";
-import { baseFeatures, type FeatureSet, mergeFeatures } from "./features.js";
-import type { AstEnum, AstField, AstMessage, ParsedFile } from "./parser.js";
-import { Parser } from "./parser.js";
+import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.ts";
+import { baseFeatures, type FeatureSet, mergeFeatures } from "./features.ts";
+import type { AstEnum, AstField, AstMessage, ParsedFile } from "./parser.ts";
+import { Parser } from "./parser.ts";
 
 export interface Registry {
   messages: Map<string, MessageType>;

@@ -7,9 +7,9 @@
 // of Uint8Array chunks. A small buffering reader handles values (varints,
 // length-delimited regions) that straddle chunk boundaries.
 
-import { decode } from "./decode.js";
-import type { Field, MessageType } from "./descriptor.js";
-import { Reader, WIRE_EGROUP, WIRE_LEN } from "./reader.js";
+import { decode } from "./decode.ts";
+import type { Field, MessageType } from "./descriptor.ts";
+import { Reader, WIRE_EGROUP, WIRE_LEN } from "./reader.ts";
 
 interface ReadableStreamLike {
   getReader(): { read(): Promise<{ done: boolean; value?: Uint8Array }> };

@@ -1,6 +1,6 @@
 // Low-level protobuf wire reader. Varints up to 64 bits; 64-bit values surface
 // as BigInt. Fixed-width via DataView (little-endian). Strings via inlined UTF-8.
-import { utf8Read } from "./utf8.js";
+import { utf8Read } from "./utf8.ts";
 
 export const WIRE_VARINT = 0;
 export const WIRE_I64 = 1;

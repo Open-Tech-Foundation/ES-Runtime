@@ -3,8 +3,8 @@
 // 64-bit ints are BigInt, enums are value-name strings (unknown numbers kept as
 // numbers), bytes are Uint8Array, maps are plain objects, nested are objects.
 // Unrecognized fields are preserved under the UNKNOWN symbol for lossless re-encode.
-import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.js";
-import { type Reader, WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.js";
+import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.ts";
+import { type Reader, WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.ts";
 
 export const UNKNOWN = Symbol.for("esrun.protobuf.unknown");
 

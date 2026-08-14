@@ -1,5 +1,4 @@
-import { expect, test } from "bun:test";
-import { Schema } from "../serialization/protobuf/schema.js";
+import { Schema } from "../serialization/protobuf/schema.ts";
 
 test("scalar JSON mapping: 64-bit as string, bytes as base64, enum as name", () => {
   const s = new Schema(`
@@ -21,7 +20,7 @@ test("scalar JSON mapping: 64-bit as string, bytes as base64, enum as name", () 
     c: "GREEN",
   };
   const json = s.toJson("M", value);
-  expect(json).toEqual({
+  assertEquals(json, {
     i: -7,
     big: "9007199254740993",
     ubig: "18446744073709551615",
@@ -31,7 +30,7 @@ test("scalar JSON mapping: 64-bit as string, bytes as base64, enum as name", () 
     by: "AQID/w==",
     c: "GREEN",
   });
-  expect(s.fromJson("M", json)).toEqual(value);
+  assertEquals(s.fromJson("M", json), value);
 });
 
 test("JSON accepts field name and number for enums; round-trips repeated/map", () => {
@@ -45,15 +44,15 @@ test("JSON accepts field name and number for enums; round-trips repeated/map", (
     }
   `);
   const value = { nums: [1n, 2n], counts: { x: 1 }, e: "A" };
-  expect(s.toJson("M", value)).toEqual({ nums: ["1", "2"], counts: { x: 1 }, e: "A" });
+  assertEquals(s.toJson("M", value), { nums: ["1", "2"], counts: { x: 1 }, e: "A" });
   // numeric enum on input is accepted
-  expect(s.fromJson("M", { nums: ["1", "2"], counts: { x: 1 }, e: 1 })).toEqual(value);
+  assertEquals(s.fromJson("M", { nums: ["1", "2"], counts: { x: 1 }, e: 1 }), value);
 });
 
 test("non-finite floats map to strings", () => {
   const s = new Schema(`syntax="proto3"; message M { double d = 1; float f = 2; }`);
-  expect(s.toJson("M", { d: Infinity, f: NaN })).toEqual({ d: "Infinity", f: "NaN" });
-  expect(s.fromJson("M", { d: "-Infinity", f: "NaN" })).toEqual({ d: -Infinity, f: NaN });
+  assertEquals(s.toJson("M", { d: Infinity, f: NaN }), { d: "Infinity", f: "NaN" });
+  assertEquals(s.fromJson("M", { d: "-Infinity", f: "NaN" }), { d: -Infinity, f: NaN });
 });
 
 const WKT_IMPORTS = `
@@ -78,9 +77,9 @@ test("Timestamp and Duration map to strings", () => {
     dur: { seconds: 3n, nanos: 1 },
   };
   const json = s.toJson("M", value) as Record<string, string>;
-  expect(json.ts).toBe("1972-01-01T01:00:00.021Z");
-  expect(json.dur).toBe("3.000000001s");
-  expect(s.fromJson("M", json)).toEqual(value);
+  assertEquals(json.ts, "1972-01-01T01:00:00.021Z");
+  assertEquals(json.dur, "3.000000001s");
+  assertEquals(s.fromJson("M", json), value);
 });
 
 test("wrappers map to bare values", () => {
@@ -93,8 +92,8 @@ test("wrappers map to bare values", () => {
       }`,
   });
   const value = { n: { value: 42n }, s: { value: "hi" }, b: { value: new Uint8Array([1, 2]) } };
-  expect(s.toJson("M", value)).toEqual({ n: "42", s: "hi", b: "AQI=" });
-  expect(s.fromJson("M", { n: "42", s: "hi", b: "AQI=" })).toEqual(value);
+  assertEquals(s.toJson("M", value), { n: "42", s: "hi", b: "AQI=" });
+  assertEquals(s.fromJson("M", { n: "42", s: "hi", b: "AQI=" }), value);
 });
 
 test("Struct / Value / ListValue map to native JSON", () => {
@@ -104,7 +103,7 @@ test("Struct / Value / ListValue map to native JSON", () => {
   });
   const native = { a: 1, b: "x", c: true, d: null, e: [1, "y"], f: { g: 2 } };
   const value = s.fromJson("M", { data: native });
-  expect(s.toJson("M", value)).toEqual({ data: native });
+  assertEquals(s.toJson("M", value), { data: native });
 });
 
 test("FieldMask maps to a comma-joined camelCase string", () => {
@@ -114,8 +113,8 @@ test("FieldMask maps to a comma-joined camelCase string", () => {
   });
   const json = { mask: "user.displayName,user.email" };
   const value = s.fromJson("M", json);
-  expect(value).toEqual({ mask: { paths: ["user.display_name", "user.email"] } });
-  expect(s.toJson("M", value)).toEqual(json);
+  assertEquals(value, { mask: { paths: ["user.display_name", "user.email"] } });
+  assertEquals(s.toJson("M", value), json);
 });
 
 test("Any embeds @type and round-trips, including a WKT payload", () => {
@@ -126,9 +125,9 @@ test("Any embeds @type and round-trips, including a WKT payload", () => {
   });
   // message payload: spread alongside @type
   const j1 = { any: { "@type": "type.googleapis.com/Inner", a: 5, b: "x" } };
-  expect(s.toJson("M", s.fromJson("M", j1))).toEqual(j1);
+  assertEquals(s.toJson("M", s.fromJson("M", j1)), j1);
 
   // WKT payload with non-object JSON: nested under "value"
   const j2 = { any: { "@type": "type.googleapis.com/google.protobuf.Duration", value: "2.500s" } };
-  expect(s.toJson("M", s.fromJson("M", j2))).toEqual(j2);
+  assertEquals(s.toJson("M", s.fromJson("M", j2)), j2);
 });

@@ -1,8 +1,8 @@
 // Low-level protobuf wire writer. Growable buffer; nested messages are encoded
 // into child writers and spliced with a length prefix (simple for a reflective
 // encoder). Strings via inlined UTF-8.
-import { WIRE_LEN } from "./reader.js";
-import { utf8Length, utf8Write } from "./utf8.js";
+import { WIRE_LEN } from "./reader.ts";
+import { utf8Length, utf8Write } from "./utf8.ts";
 
 export class Writer {
   private buf: Uint8Array;

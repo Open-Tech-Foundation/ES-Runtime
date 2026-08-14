@@ -2,10 +2,10 @@
 // presence (implicit-presence scalars at default are omitted) and packed
 // encoding, re-emits preserved unknown fields.
 
-import { UNKNOWN } from "./decode.js";
-import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.js";
-import { WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.js";
-import { Writer } from "./writer.js";
+import { UNKNOWN } from "./decode.ts";
+import type { EnumType, Field, FieldType, MessageType, ScalarType } from "./descriptor.ts";
+import { WIRE_EGROUP, WIRE_LEN, WIRE_SGROUP } from "./reader.ts";
+import { Writer } from "./writer.ts";
 
 function writeScalarRaw(w: Writer, t: ScalarType, v: unknown): void {
   switch (t) {

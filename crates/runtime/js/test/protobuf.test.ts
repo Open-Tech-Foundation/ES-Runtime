@@ -1,11 +1,10 @@
-import { expect, test } from "bun:test";
-import { Schema } from "../serialization/protobuf/schema.js";
+import { Schema } from "../serialization/protobuf/schema.ts";
 
 test("exact wire bytes for a simple message", () => {
   const s = new Schema(`syntax="proto3"; message M { int32 a = 1; string b = 2; }`);
   const bytes = s.encode("M", { a: 150, b: "hi" });
-  expect([...bytes]).toEqual([0x08, 0x96, 0x01, 0x12, 0x02, 0x68, 0x69]);
-  expect(s.decode("M", bytes)).toEqual({ a: 150, b: "hi" });
+  assertEquals([...bytes], [0x08, 0x96, 0x01, 0x12, 0x02, 0x68, 0x69]);
+  assertEquals(s.decode("M", bytes), { a: 150, b: "hi" });
 });
 
 test("all scalar types round-trip (proto3)", () => {
@@ -41,7 +40,7 @@ test("all scalar types round-trip (proto3)", () => {
     c: "BLUE",
     inner: { v: "x" },
   };
-  expect(s.decode("t.All", s.encode("t.All", input))).toEqual(input);
+  assertEquals(s.decode("t.All", s.encode("t.All", input)), input);
 });
 
 test("repeated packed + expanded, maps, oneof", () => {
@@ -62,42 +61,43 @@ test("repeated packed + expanded, maps, oneof", () => {
     names: { "1": "one", "2": "two" },
     b: "picked",
   };
-  expect(s.decode("M", s.encode("M", input))).toEqual(input);
+  assertEquals(s.decode("M", s.encode("M", input)), input);
 });
 
 test("oneof last-wins on decode", () => {
   const s = new Schema(`syntax="proto3"; message M { oneof k { int32 a = 1; int32 b = 2; } }`);
   // hand-build a buffer with both a and b set; b (field 2) appears last.
   const both = new Uint8Array([0x08, 0x05, 0x10, 0x07]); // a=5, b=7
-  expect(s.decode("M", both)).toEqual({ b: 7 });
+  assertEquals(s.decode("M", both), { b: 7 });
 });
 
 test("implicit presence omits defaults; explicit (optional) keeps them", () => {
   const s = new Schema(`syntax="proto3"; message M { int32 a = 1; optional int32 b = 2; }`);
   // a=0 (implicit) omitted; b=0 (explicit) written.
   const bytes = s.encode("M", { a: 0, b: 0 });
-  expect([...bytes]).toEqual([0x10, 0x00]); // only field 2
-  expect(s.decode("M", bytes)).toEqual({ b: 0 });
+  assertEquals([...bytes], [0x10, 0x00]); // only field 2
+  assertEquals(s.decode("M", bytes), { b: 0 });
 });
 
 test("edition 2023 gives explicit presence by default", () => {
   const s = new Schema(`edition = "2023"; message M { int32 a = 1; }`);
   // a=0 with explicit presence (2023 default) is written.
   const bytes = s.encode("M", { a: 0 });
-  expect([...bytes]).toEqual([0x08, 0x00]);
-  expect(s.decode("M", bytes)).toEqual({ a: 0 });
+  assertEquals([...bytes], [0x08, 0x00]);
+  assertEquals(s.decode("M", bytes), { a: 0 });
 });
 
 test("edition 2024 parses and shares 2023 wire defaults (explicit presence)", () => {
   const s = new Schema(`edition = "2024"; message M { int32 a = 1; }`);
   // a=0 with explicit presence (editions default) is written, same as 2023.
   const bytes = s.encode("M", { a: 0 });
-  expect([...bytes]).toEqual([0x08, 0x00]);
-  expect(s.decode("M", bytes)).toEqual({ a: 0 });
+  assertEquals([...bytes], [0x08, 0x00]);
+  assertEquals(s.decode("M", bytes), { a: 0 });
 });
 
 test("unsupported editions are rejected with a clear error", () => {
-  expect(() => new Schema(`edition = "2025"; message M { int32 a = 1; }`)).toThrow(
+  assertThrows(
+    () => new Schema(`edition = "2025"; message M { int32 a = 1; }`),
     /unsupported edition "2025"/,
   );
 });
@@ -107,17 +107,17 @@ test("unknown fields are preserved across re-encode", () => {
   const original = full.encode("M", { a: 5, b: "keep" });
   const partial = new Schema(`syntax="proto3"; message M { int32 a = 1; }`);
   const decoded = partial.decode("M", original);
-  expect(decoded.a).toBe(5);
+  assertEquals(decoded.a, 5);
   // re-encoding the partial decode must still carry field b
   const reencoded = partial.encode("M", decoded);
-  expect(full.decode("M", reencoded)).toEqual({ a: 5, b: "keep" });
+  assertEquals(full.decode("M", reencoded), { a: 5, b: "keep" });
 });
 
 // --- regressions found by the official protobuf conformance suite ---
 
 test("negative enum values parse", () => {
   const s = new Schema(`syntax="proto3"; enum E { Z = 0; NEG = -1; } message M { E e = 1; }`);
-  expect(s.decode("M", s.encode("M", { e: "NEG" }))).toEqual({ e: "NEG" });
+  assertEquals(s.decode("M", s.encode("M", { e: "NEG" })), { e: "NEG" });
 });
 
 test("decodeStream yields repeated message elements across chunk boundaries", async () => {
@@ -138,14 +138,14 @@ test("decodeStream yields repeated message elements across chunk boundaries", as
   }
   const out = [];
   for await (const book of s.decodeStream("Catalog", "books", oneByteAtATime())) out.push(book);
-  expect(out).toEqual(books);
+  assertEquals(out, books);
 });
 
 test("decodeStream accepts a ReadableStream and rejects non-repeated-message fields", async () => {
   const s = new Schema(
     `syntax="proto3"; message M { repeated int32 ns = 1; message Sub { int32 a = 1; } repeated Sub subs = 2; }`,
   );
-  expect(() => s.decodeStream("M", "ns", [])).toThrow(/repeated message field/);
+  assertThrows(() => s.decodeStream("M", "ns", []), /repeated message field/);
 
   const bytes = s.encode("M", { subs: [{ a: 1 }, { a: 2 }] });
   const stream = new ReadableStream({
@@ -156,7 +156,7 @@ test("decodeStream accepts a ReadableStream and rejects non-repeated-message fie
   });
   const out = [];
   for await (const sub of s.decodeStream("M", "subs", stream)) out.push(sub);
-  expect(out).toEqual([{ a: 1 }, { a: 2 }]);
+  assertEquals(out, [{ a: 1 }, { a: 2 }]);
 });
 
 test("encodeDelimited / decodeDelimited round-trips a stream of messages", async () => {
@@ -180,7 +180,7 @@ test("encodeDelimited / decodeDelimited round-trips a stream of messages", async
   // Decode from a Uint8Array directly.
   const direct = [];
   for await (const e of s.decodeDelimited("Event", buf)) direct.push(e);
-  expect(direct).toEqual(events);
+  assertEquals(direct, events);
 
   // And from a one-byte-at-a-time stream (straddles every length prefix).
   async function* dribble() {
@@ -188,7 +188,7 @@ test("encodeDelimited / decodeDelimited round-trips a stream of messages", async
   }
   const streamed = [];
   for await (const e of s.decodeDelimited("Event", dribble())) streamed.push(e);
-  expect(streamed).toEqual(events);
+  assertEquals(streamed, events);
 });
 
 test("editions delimited (group) message encoding round-trips", () => {
@@ -200,8 +200,8 @@ test("editions delimited (group) message encoding round-trips", () => {
   const input = { sub: { a: 99 }, many: [{ a: 1 }, { a: 2 }] };
   const bytes = s.encode("M", input);
   // group: start-group tag (1<<3|3=0x0B), a=99 (0x08 0x63), end-group (1<<3|4=0x0C).
-  expect([...bytes.slice(0, 4)]).toEqual([0x0b, 0x08, 0x63, 0x0c]);
-  expect(s.decode("M", bytes)).toEqual(input);
+  assertEquals([...bytes.slice(0, 4)], [0x0b, 0x08, 0x63, 0x0c]);
+  assertEquals(s.decode("M", bytes), input);
 });
 
 test("singular message fields merge across repeated occurrences", () => {
@@ -211,7 +211,7 @@ test("singular message fields merge across repeated occurrences", () => {
   const a = s.encode("M", { inner: { a: 1 } });
   const b = s.encode("M", { inner: { b: 2 } });
   const concat = new Uint8Array([...a, ...b]);
-  expect(s.decode("M", concat)).toEqual({ inner: { a: 1, b: 2 } });
+  assertEquals(s.decode("M", concat), { inner: { a: 1, b: 2 } });
 });
 
 test("unknown length-delimited field is skipped without desync", () => {
@@ -219,22 +219,24 @@ test("unknown length-delimited field is skipped without desync", () => {
   const partial = new Schema(`syntax="proto3"; message M { int32 b = 2; }`);
   // field a (unknown to partial) precedes known field b — a skip off-by-one would corrupt b.
   const decoded = partial.decode("M", full.encode("M", { a: "skipme", b: 99 }));
-  expect(decoded.b).toBe(99);
+  assertEquals(decoded.b, 99);
 });
 
 test("rejects truncated, overlong, and field-0 inputs", () => {
   const s = new Schema(`syntax="proto3"; message M { int64 n = 1; }`);
   const valid = s.encode("M", { n: 300n });
-  expect(() => s.decode("M", valid.subarray(0, valid.length - 1))).toThrow(); // truncated varint
-  expect(() => s.decode("M", new Uint8Array([0x08, ...Array(11).fill(0x80)]))).toThrow(/too long/); // overlong
-  expect(() => s.decode("M", new Uint8Array([0x00, 0x01]))).toThrow(/field number 0/); // tag field 0
+  assertThrows(() => s.decode("M", valid.subarray(0, valid.length - 1))); // truncated varint
+  assertThrows(() => s.decode("M", new Uint8Array([0x08, ...Array(11).fill(0x80)])), /too long/); // overlong
+  assertThrows(() => s.decode("M", new Uint8Array([0x00, 0x01])), /field number 0/); // tag field 0
 });
 
 test("proto2-only constructs are rejected outside proto2", () => {
-  expect(() => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`)).toThrow(
+  assertThrows(
+    () => new Schema(`syntax="proto3"; message M { required int32 a = 1; }`),
     /required/,
   );
-  expect(() => new Schema(`syntax="proto3"; message M { optional group G = 1 { } }`)).toThrow(
+  assertThrows(
+    () => new Schema(`syntax="proto3"; message M { optional group G = 1 { } }`),
     /group/,
   );
 });
@@ -251,16 +253,16 @@ test("proto2: required + optional presence, unpacked repeated, closed enum", () 
     }
   `);
   // required/optional both keep their zero value on the wire (explicit presence).
-  expect([...s.encode("M", { r: 0, o: 0 })]).toEqual([0x08, 0x00, 0x10, 0x00]);
+  assertEquals([...s.encode("M", { r: 0, o: 0 })], [0x08, 0x00, 0x10, 0x00]);
   // repeated int32 is NOT packed in proto2: one tag per element.
-  expect([...s.encode("M", { ns: [1, 2] })]).toEqual([0x18, 0x01, 0x18, 0x02]);
+  assertEquals([...s.encode("M", { ns: [1, 2] })], [0x18, 0x01, 0x18, 0x02]);
   // a full round-trip
   const v = { r: 7, o: 3, ns: [1, 2, 3], e: "B" };
-  expect(s.decode("M", s.encode("M", v))).toEqual(v);
+  assertEquals(s.decode("M", s.encode("M", v)), v);
   // an unrecognized closed-enum number is retained, not surfaced
   const wire = new Uint8Array([0x20, 0x05]); // field 4 = 5, undeclared
-  expect(s.decode("M", wire).e).toBeUndefined();
-  expect([...s.encode("M", s.decode("M", wire))]).toEqual([0x20, 0x05]);
+  assertEquals(s.decode("M", wire).e, undefined);
+  assertEquals([...s.encode("M", s.decode("M", wire))], [0x20, 0x05]);
 });
 
 test("proto2: groups encode/decode as delimited message fields", () => {
@@ -273,11 +275,11 @@ test("proto2: groups encode/decode as delimited message fields", () => {
   `);
   // group name lowercases to the field key; start-group/end-group framing on the wire.
   const bytes = s.encode("M", { inner: { a: 5 } });
-  expect([...bytes]).toEqual([0x0b, 0x08, 0x05, 0x0c]); // SGROUP(1) int32 a=5 EGROUP(1)
-  expect(s.decode("M", bytes)).toEqual({ inner: { a: 5 } });
+  assertEquals([...bytes], [0x0b, 0x08, 0x05, 0x0c]); // SGROUP(1) int32 a=5 EGROUP(1)
+  assertEquals(s.decode("M", bytes), { inner: { a: 5 } });
   // repeated group round-trips
   const v = { inner: { a: 1, b: "x" }, pt: [{ x: 1 }, { x: 2 }] };
-  expect(s.decode("M", s.encode("M", v))).toEqual(v);
+  assertEquals(s.decode("M", s.encode("M", v)), v);
 });
 
 test("proto2: custom field defaults parse (and are not materialized)", () => {
@@ -291,19 +293,19 @@ test("proto2: custom field defaults parse (and are not materialized)", () => {
   `);
   // the [default=…] options are accepted but the value shape stays sparse:
   // an absent field is simply absent, not its declared default.
-  expect(s.decode("M", new Uint8Array([]))).toEqual({});
-  expect(s.decode("M", s.encode("M", { a: 5 }))).toEqual({ a: 5 });
+  assertEquals(s.decode("M", new Uint8Array([])), {});
+  assertEquals(s.decode("M", s.encode("M", { a: 5 })), { a: 5 });
 });
 
 test("decode enforces a maximum nesting depth", () => {
   const s = new Schema(`syntax="proto3"; message M { M m = 1; }`);
   let ok: Record<string, unknown> = {};
   for (let i = 0; i < 50; i++) ok = { m: ok };
-  expect(s.decode("M", s.encode("M", ok))).toEqual(ok); // within the limit
+  assertEquals(s.decode("M", s.encode("M", ok)), ok); // within the limit
 
   let deep: Record<string, unknown> = {};
   for (let i = 0; i < 200; i++) deep = { m: deep };
-  expect(() => s.decode("M", s.encode("M", deep))).toThrow(/depth/);
+  assertThrows(() => s.decode("M", s.encode("M", deep)), /depth/);
 });
 
 test("CLOSED enum retains an unrecognized value as an unknown field", () => {
@@ -312,12 +314,12 @@ test("CLOSED enum retains an unrecognized value as an unknown field", () => {
     `edition="2023"; package t; enum E { option features.enum_type = CLOSED; A=0; B=1; } message M { E e = 1; }`,
   );
   const wire = open.encode("t.M", { e: 5 }); // value 5 is not a declared member
-  expect([...wire]).toEqual([0x08, 0x05]);
+  assertEquals([...wire], [0x08, 0x05]);
 
   const decoded = closed.decode("t.M", wire);
-  expect(decoded.e).toBeUndefined(); // not surfaced as the field
-  expect([...closed.encode("t.M", decoded)]).toEqual([0x08, 0x05]); // preserved on re-encode
-  expect(closed.decode("t.M", open.encode("t.M", { e: 1 }))).toEqual({ e: "B" }); // known value still decodes
+  assertEquals(decoded.e, undefined); // not surfaced as the field
+  assertEquals([...closed.encode("t.M", decoded)], [0x08, 0x05]); // preserved on re-encode
+  assertEquals(closed.decode("t.M", open.encode("t.M", { e: 1 })), { e: "B" }); // known value still decodes
 });
 
 test("CLOSED repeated (packed) enum keeps known members, preserves unknown", () => {
@@ -330,9 +332,9 @@ test("CLOSED repeated (packed) enum keeps known members, preserves unknown", () 
   const wire = open.encode("t.M", { es: [1, 7, 0] }); // 7 is unknown to the closed schema
 
   const decoded = closed.decode("t.M", wire);
-  expect(decoded.es).toEqual(["B", "A"]); // known members, in order
+  assertEquals(decoded.es, ["B", "A"]); // known members, in order
   // re-encoding emits the known members (packed) plus the retained unknown 7.
-  expect(open.decode("t.M", closed.encode("t.M", decoded)).es).toEqual(["B", "A", 7]);
+  assertEquals(open.decode("t.M", closed.encode("t.M", decoded)).es, ["B", "A", 7]);
 });
 
 test("encode accepts proto field names as well as their JSON names", () => {
@@ -341,9 +343,9 @@ test("encode accepts proto field names as well as their JSON names", () => {
   // mapping requires parsers to accept. It used to match no field at all, so
   // this encoded to an empty buffer and lost the whole message in silence.
   const expected = [0x0a, 0x03, 0x61, 0x64, 0x61, 0x10, 0x24];
-  expect([...s.encode("M", { user_name: "ada", age_years: 36 })]).toEqual(expected);
-  expect([...s.encode("M", { userName: "ada", ageYears: 36 })]).toEqual(expected);
-  expect([...s.encode("M", { user_name: "ada", ageYears: 36 })]).toEqual(expected);
+  assertEquals([...s.encode("M", { user_name: "ada", age_years: 36 })], expected);
+  assertEquals([...s.encode("M", { userName: "ada", ageYears: 36 })], expected);
+  assertEquals([...s.encode("M", { user_name: "ada", ageYears: 36 })], expected);
 });
 
 test("encode accepts either spelling in nested, repeated and map fields", () => {
@@ -366,8 +368,8 @@ test("encode accepts either spelling in nested, repeated and map fields", () => 
     scoreMap: { x: 1 },
     innerMsg: { deepField: "z" },
   });
-  expect([...snake]).toEqual([...camel]);
-  expect(s.decode("M", snake)).toEqual({
+  assertEquals([...snake], [...camel]);
+  assertEquals(s.decode("M", snake), {
     tagList: ["a"],
     scoreMap: { x: 1 },
     innerMsg: { deepField: "z" },
@@ -380,19 +382,21 @@ test("encode rejects a key matching no field instead of dropping it", () => {
   );
   // A typo silently produced a short buffer, which is the failure mode that
   // makes a wrong field name impossible to notice until the far end.
-  expect(() => s.encode("M", { usr_name: "ada" })).toThrow(/unknown field "usr_name" in M/);
-  expect(() => s.encode("M", { inner_msg: { deep_fld: "z" } })).toThrow(
+  assertThrows(() => s.encode("M", { usr_name: "ada" }), /unknown field "usr_name" in M/);
+  assertThrows(
+    () => s.encode("M", { inner_msg: { deep_fld: "z" } }),
     /unknown field "deep_fld" in Inner/,
   );
   // The opt-out skips them, and still encodes the fields it did recognize.
-  expect([
-    ...s.encode("M", { usr_name: "x", user_name: "ada" }, { ignoreUnknownFields: true }),
-  ]).toEqual([0x0a, 0x03, 0x61, 0x64, 0x61]);
+  assertEquals(
+    [...s.encode("M", { usr_name: "x", user_name: "ada" }, { ignoreUnknownFields: true })],
+    [0x0a, 0x03, 0x61, 0x64, 0x61],
+  );
 });
 
 test("encode rejects a field given under both of its names", () => {
   const s = new Schema(`syntax="proto3"; message M { string user_name = 1; }`);
-  expect(() => s.encode("M", { user_name: "a", userName: "b" })).toThrow(/given twice/);
+  assertThrows(() => s.encode("M", { user_name: "a", userName: "b" }), /given twice/);
 });
 
 test("a decoded message re-encodes cleanly despite the unknown-field check", () => {
@@ -404,6 +408,6 @@ test("a decoded message re-encodes cleanly despite the unknown-field check", () 
   const old = new Schema(`syntax="proto3"; message M { string user_name = 1; }`);
   const bytes = full.encode("M", { user_name: "ada", age_years: 36 });
 
-  expect([...full.encode("M", full.decode("M", bytes))]).toEqual([...bytes]);
-  expect([...old.encode("M", old.decode("M", bytes))]).toEqual([...bytes]);
+  assertEquals([...full.encode("M", full.decode("M", bytes))], [...bytes]);
+  assertEquals([...old.encode("M", old.decode("M", bytes))], [...bytes]);
 });

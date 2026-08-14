@@ -12,7 +12,7 @@
 // scalars, well-formed UTF-16 strings, duplicate-oneof and unknown-field
 // rejection); serialization validates the WKT range/round-trip rules.
 
-import { decode } from "./decode.js";
+import { decode } from "./decode.ts";
 import {
   BIGINT_SCALARS,
   type EnumType,
@@ -21,11 +21,11 @@ import {
   type MessageType,
   type ScalarType,
   scalarDefault,
-} from "./descriptor.js";
-import { encode } from "./encode.js";
-import type { Registry } from "./link.js";
-import { Reader } from "./reader.js";
-import { Writer } from "./writer.js";
+} from "./descriptor.ts";
+import { encode } from "./encode.ts";
+import type { Registry } from "./link.ts";
+import { Reader } from "./reader.ts";
+import { Writer } from "./writer.ts";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [k: string]: JsonValue };
 

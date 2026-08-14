@@ -1600,6 +1600,127 @@ fn a_failure_names_the_line_the_developer_wrote() {
     );
 }
 
+/// The `.ts` counterpart of the test above, which is the one that matters: the
+/// harness is folded onto a single line so it cannot renumber the file, but for
+/// a typed file it used to be prepended *before* the stripper — and the
+/// stripper re-prints through oxc's codegen, which unfolded it again. This
+/// reported line 44 for an assertion on line 3. The sibling test above passed
+/// throughout, because `.mjs` never reaches the printer.
+#[test]
+fn a_typescript_failure_names_the_line_the_developer_wrote() {
+    let dir = build_dir("t_lines_ts");
+    write_in(
+        &dir,
+        "lines.test.ts",
+        "test('fails on line three', () => {\n  const x: number = 1;\n  assert(x === 2, 'nope');\n});\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success());
+    assert!(
+        text.contains("lines.test.ts:3:"),
+        "the harness renumbered the typed file:\n{text}"
+    );
+}
+
+/// `assertEquals` walks the values rather than stringifying them. The `BigInt`
+/// case is the one that forced this: `JSON.stringify` throws on one, so on a
+/// runtime with int64 the assertion could not be written at all.
+#[test]
+fn assert_equals_compares_structurally() {
+    let dir = build_dir("t_deep_equal");
+    write_in(
+        &dir,
+        "eq.test.mjs",
+        r#"
+const no = (fn, label) => {
+  let threw = false;
+  try { fn(); } catch { threw = true; }
+  assert(threw, label + ": should have failed");
+};
+test('holds', () => {
+  assertEquals(-9223372036854775808n, -9223372036854775808n);
+  assertEquals({ id: 1n }, { id: 1n });
+  assertEquals(new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 3]));
+  assertEquals(new Uint8Array([9, 1, 2]).subarray(1), new Uint8Array([1, 2]));
+  assertEquals(NaN, NaN);
+  assertEquals({ a: 1, b: 2 }, { b: 2, a: 1 });
+  assertEquals(new Map([['k', 1n]]), new Map([['k', 1n]]));
+  assertEquals(new Set([1, 2]), new Set([2, 1]));
+  const cyclic = { name: 'x' }; cyclic.self = cyclic;
+  const twin = { name: 'x' }; twin.self = twin;
+  assertEquals(cyclic, twin);
+
+  no(() => assertEquals(1n, 2n), 'unequal bigint');
+  no(() => assertEquals(1n, 1), 'bigint vs number');
+  no(() => assertEquals(new Uint8Array([1]), new Uint8Array([2])), 'bytes');
+  no(() => assertEquals(new Uint8Array([1]), new Int8Array([1])), 'view type');
+  no(() => assertEquals({ a: 1 }, { a: 1, b: 2 }), 'extra key');
+  no(() => assertEquals(new Map([['k', 1]]), new Map([['k', 2]])), 'map value');
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+}
+
+/// The second argument is the expectation, not a label. It used to be the
+/// latter, which meant `assertThrows(fn, "TypeError")` asserted nothing at all.
+#[test]
+fn assert_throws_checks_the_error_it_was_given() {
+    let dir = build_dir("t_throws");
+    write_in(
+        &dir,
+        "throws.test.mjs",
+        r#"
+const no = (fn, label) => {
+  let threw = false;
+  try { fn(); } catch { threw = true; }
+  assert(threw, label + ": should have failed");
+};
+const boom = () => { throw new TypeError('field number 0 is not allowed'); };
+test('holds', () => {
+  assertThrows(boom);
+  assertThrows(boom, 'TypeError');
+  assertThrows(boom, 'field number 0');
+  assertThrows(boom, /number 0 is not/);
+  assertThrows(boom, TypeError);
+
+  no(() => assertThrows(boom, 'RangeError'), 'wrong name');
+  no(() => assertThrows(boom, /depth/), 'wrong pattern');
+  no(() => assertThrows(boom, RangeError), 'wrong constructor');
+  no(() => assertThrows(() => 1), 'never threw');
+  no(() => assertThrows(() => 1, 'TypeError'), 'never threw, name wanted');
+});
+test('async', async () => {
+  const rejects = async () => { throw new RangeError('depth limit'); };
+  await assertRejects(rejects);
+  await assertRejects(rejects, 'RangeError');
+  await assertRejects(rejects, /depth/);
+  await assertRejects(rejects, RangeError);
+
+  let threw = false;
+  try { await assertRejects(rejects, 'TypeError'); } catch { threw = true; }
+  assert(threw, 'a wrong name should have failed');
+  threw = false;
+  try { await assertRejects(async () => 1); } catch { threw = true; }
+  assert(threw, 'a resolving promise should have failed');
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+}
+
 /// One process per file: a file that exits must not take the run with it, and
 /// the others must still be reported.
 #[test]

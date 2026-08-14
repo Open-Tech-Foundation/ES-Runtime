@@ -96,9 +96,21 @@ run = "./test/unit/run.sh"
 packages = ["@opentf/esrun-postgres", "@opentf/esrun-redis"]
 parallel = true
 
+# Run with our own `esdev`, not bun — the same reasoning as `build` above. This
+# is the runtime's largest hand-written JS subsystem, and running it on the
+# binary we ship means the suite exercises the module loader, the TypeScript
+# stripping and the event loop a deployment actually gets, rather than another
+# runtime's versions of all three.
+#
+# `target/release` goes on PATH ahead of everything so a locally built `esdev`
+# wins over an installed one — the runner has to be exercisable before it is
+# released, and with PATH alone a contributor who just built their change would
+# still be testing against the last release. Relative to `dir`, which is where
+# the command runs. CI has no such build and picks up the released binary.
 [tasks."test:serialization"]
-run = "bun test"
+run = "esdev test"
 dir = "crates/runtime/js"
+env = { PATH = "../../../target/release:${PATH}" }
 
 [tasks."test:unit"]
 deps = ["test:protocol", "test:serialization"]

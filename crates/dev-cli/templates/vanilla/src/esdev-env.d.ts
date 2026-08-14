@@ -43,11 +43,28 @@ declare function test(name: string, fn: () => void | Promise<void>): void;
 /** Fails the test unless `condition` is truthy. */
 declare function assert(condition: unknown, message?: string): asserts condition;
 
-/** Fails the test unless `actual` deep-equals `expected`. */
+/**
+ * Fails the test unless `actual` deep-equals `expected`.
+ *
+ * Structural, not `JSON.stringify`: `BigInt` and `NaN` compare, typed arrays
+ * and `ArrayBuffer` compare as bytes, `Map` and `Set` by contents, objects by
+ * their key set rather than key order, and a cyclic structure terminates.
+ */
 declare function assertEquals<T>(actual: T, expected: T, message?: string): void;
 
-/** Fails the test unless `fn` throws. */
-declare function assertThrows(fn: () => unknown, message?: string): void;
+/**
+ * What a thrown error is checked against: a string (the error's `name`, or a
+ * substring of its message), a `RegExp` tested against the message, or a
+ * constructor for an `instanceof` check.
+ */
+type ExpectedError = string | RegExp | (new (...args: never[]) => Error);
 
-/** Fails the test unless `fn`'s promise rejects. */
-declare function assertRejects(fn: () => Promise<unknown>, message?: string): Promise<void>;
+/** Fails the test unless `fn` throws, and unless the error matches `expected`. */
+declare function assertThrows(fn: () => unknown, expected?: ExpectedError, message?: string): void;
+
+/** Fails the test unless `fn`'s promise rejects, and unless the error matches `expected`. */
+declare function assertRejects(
+  fn: () => Promise<unknown>,
+  expected?: ExpectedError,
+  message?: string,
+): Promise<void>;

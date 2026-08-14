@@ -1,3 +1,4 @@
+import { HttpError } from "./http.ts";
 import { validateTitle } from "./tasks.ts";
 
 test("a title is trimmed and returned", () => {
@@ -7,7 +8,9 @@ test("a title is trimmed and returned", () => {
 test("a body that is not an object is refused", () => {
   // The three shapes JSON.parse happily produces that are not a record.
   for (const body of ["a string", 42, null, [1, 2], true]) {
-    assertThrows(() => validateTitle(body), `accepted ${JSON.stringify(body)}`);
+    // Second argument is what the error must be, third is what to say when it
+    // is not: a bare `assertThrows` would also pass on a TypeError from a bug.
+    assertThrows(() => validateTitle(body), HttpError, `accepted ${JSON.stringify(body)}`);
   }
 });
 

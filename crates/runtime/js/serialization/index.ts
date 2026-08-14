@@ -3,9 +3,9 @@
 //
 // XML/YAML/TOML/JSONL/MessagePack are thin wrappers over the Rust host ops;
 // Protobuf is a pure-JS reflective implementation (./protobuf).
-export { Protobuf } from "./protobuf/schema.js";
+export { Protobuf } from "./protobuf/schema.ts";
 
-import { Protobuf as ProtobufDefault } from "./protobuf/schema.js";
+import { Protobuf as ProtobufDefault } from "./protobuf/schema.ts";
 
 const ops = (globalThis as unknown as { __ops: Record<string, (...a: any[]) => any> }).__ops;
 const {

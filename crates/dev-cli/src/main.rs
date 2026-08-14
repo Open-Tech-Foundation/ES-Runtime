@@ -224,8 +224,16 @@ its TypeScript — and arrives with the globals already defined:
     test(name, fn)              fn may be async; failures are collected
     assert(cond, msg?)
     assertEquals(actual, expected, msg?)
-    assertThrows(fn, msg?)
-    assertRejects(fn, msg?)
+    assertThrows(fn, expected?, msg?)
+    assertRejects(fn, expected?, msg?)
+
+assertEquals compares structurally: BigInt and NaN, typed arrays and
+ArrayBuffer by their bytes, Map and Set by contents, objects by their key set
+rather than key order, and cycles terminate.
+
+The `expected` error is a string (matched against the error's name, or as a
+substring of its message), a RegExp (matched against the message), or a
+constructor (an instanceof check). Omit it to accept any throw.
 
 The same vocabulary the runtime's own conformance suite uses. Exits non-zero if
 any file fails.

@@ -2,16 +2,16 @@
 // map of filename → source for multi-file schemas with imports) at runtime and
 // decodes/encodes messages reflectively against it.
 
-import { decode } from "./decode.js";
-import { parseDescriptorSet } from "./descriptor_set.js";
-import { type EncodeOptions, encode } from "./encode.js";
-import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.js";
-import { link, type Registry } from "./link.js";
-import { type ParsedFile, parseProto } from "./parser.js";
-import { Reader } from "./reader.js";
-import { decodeDelimitedStream, decodeStream, type StreamSource } from "./stream.js";
-import { WKT } from "./wkt.js";
-import { Writer } from "./writer.js";
+import { decode } from "./decode.ts";
+import { parseDescriptorSet } from "./descriptor_set.ts";
+import { type EncodeOptions, encode } from "./encode.ts";
+import { type FromJsonOptions, type JsonValue, messageFromJson, messageToJson } from "./json.ts";
+import { link, type Registry } from "./link.ts";
+import { type ParsedFile, parseProto } from "./parser.ts";
+import { Reader } from "./reader.ts";
+import { decodeDelimitedStream, decodeStream, type StreamSource } from "./stream.ts";
+import { WKT } from "./wkt.ts";
+import { Writer } from "./writer.ts";
 
 export interface SchemaOptions {
   /** Entry filename when `proto` is a file map (defaults to all files). */

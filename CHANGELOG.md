@@ -10,6 +10,41 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Changed
 
+- **`esdev test` assertions compare properly** — and the second argument to
+  `assertThrows` / `assertRejects` is now what the error must be, not a label.
+
+  `assertEquals` compared through `JSON.stringify`, which *throws* on a
+  `BigInt` — so on this runtime the assertion an int64 test most needs could
+  not be written. It also rendered a `Uint8Array` as `{"0":1,"1":2}` instead of
+  comparing bytes, and cared about object key order. It now walks the values:
+  `BigInt` and `NaN`, typed arrays and `ArrayBuffer` as bytes, `Map` and `Set`
+  by contents, objects by key set, and cycles terminate.
+
+  ```ts
+  assertEquals(reader.int64(), -9223372036854775808n);   // used to throw
+  assertThrows(() => s.decode("M", bytes), /field number 0/);
+  assertThrows(() => validateTitle(body), HttpError, "accepted a string");
+  ```
+
+  **Breaking:** `assertThrows(fn, "TypeError")` used to treat `"TypeError"` as
+  the text to print on failure, so it asserted nothing — any throw passed. It
+  is now the expectation (an error name or message substring, a `RegExp` over
+  the message, or a constructor for an `instanceof` check), and the failure
+  label moved to the third argument. Every call site in this repository was
+  already written the new way.
+
+- **`.ts` stack traces name the line you wrote.** The harness is folded onto one
+  physical line so it cannot renumber the file, but it was being prepended
+  *before* type-stripping — and the stripper re-prints through oxc's codegen,
+  which unfolded it again. An assertion on line 2 of a `.ts` file reported line
+  44. Stripping now happens first. `.js` was never affected.
+
+- **The serialization suite runs on `esdev test`**, not `bun test` — the
+  runtime's largest hand-written JS subsystem now gates on the binary we ship,
+  exercising its module loader, type stripping and event loop. Its `.js`
+  import specifiers moved to `.ts`, matching every `esdev` template and the
+  runtime's rule that a specifier names a file that exists (D21/D40).
+
 - **The repository is one Bun workspace.** The root `package.json` declares
   `workspaces` and `packageManager`; `packages/*` and `crates/runtime/js` are
   members with a single lockfile between them.
