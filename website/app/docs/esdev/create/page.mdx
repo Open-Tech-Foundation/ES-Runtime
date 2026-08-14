@@ -32,6 +32,9 @@ esdev create my-app --template=react
 | | |
 | --- | --- |
 | `react` | React + react-router — server-rendered, hydrated, prerenderable to static HTML |
+| `api` | A JSON API — routing, validation, error handling. **No dependencies** |
+| `vanilla` | TypeScript and the DOM — no framework |
+| `lib` | A publishable package — module tree, `.d.ts`, `exports` wired |
 
 The `react` template is a route table with loaders, nested layouts, dynamic
 segments and error boundaries, served by a file you own: a Content-Security-Policy
@@ -41,13 +44,36 @@ caching on hashed assets, and one JSON log line per request.
 They are **baked into the binary**, so `create` works offline and always writes
 a project the `esdev` that wrote it can build. Nothing is downloaded.
 
-## It writes files and stops
+## It asks, or it writes files and stops
 
-No install, no `git init`, no prompts.
+On a terminal it asks which template and whether to install:
 
-There is no lockfile yet to say which package manager the project uses, and
-guessing wrong leaves a `package-lock.json` in a bun project. Prompts are out
-because every other command here is a flag grammar that works in a script.
+```
+Which template?
+  1) api      A JSON API — routing, validation, error handling. No dependencies
+  2) lib      A publishable TypeScript package — module tree, .d.ts
+  3) react    React + react-router — server-rendered, hydrated (default)
+  4) vanilla  TypeScript and the DOM — no framework
+>
+```
+
+Away from one — a pipe, a CI job, anything with `CI` set — it takes the
+defaults and says nothing. A prompt in a script is a script that hangs.
+
+**Every question has a flag**, so nothing is only reachable by answering one:
+
+```sh
+esdev create my-app --template=api --install=bun
+esdev create my-app --yes            # defaults, no questions
+esdev create my-app --no-install
+```
+
+Only package managers this machine actually has are offered. Unattended it
+installs nothing: there is no lockfile yet to say which one this project uses,
+and guessing wrong leaves the wrong one behind — which is a reason not to
+guess, not a reason not to ask.
+
+It still does no `git init`.
 
 ## It never overwrites
 
@@ -64,6 +90,9 @@ error: my-app is not empty.
 | | |
 | --- | --- |
 | `--template=<name>` | Which template (default `react`) |
+| `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
+| `--no-install` | Write the files and stop |
+| `-y`, `--yes` | Take every default; never ask |
 | `--list` | List the templates and exit |
 | `--force` | Write into a directory that already holds something |
 
