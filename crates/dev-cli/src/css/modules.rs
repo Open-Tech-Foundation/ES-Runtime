@@ -34,10 +34,39 @@
 //! supported; the functional form is unambiguous and is what tooling has
 //! standardised on.
 //!
-//! **`composes`** is refused rather than ignored. It resolves a name from
-//! *another* module, which needs a dependency graph this pass does not have,
-//! and silently dropping it produces an element missing half its styling with
-//! nothing to show why.
+//! # `composes`
+//!
+//! Reuse without repetition, resolved at build time:
+//!
+//! ```css
+//! .button {
+//!   composes: rounded from "./base.module.css";
+//!   color: white;
+//! }
+//! ```
+//!
+//! `styles.button` then stops being one name and becomes two —
+//! `"button_a1b2c3d4 rounded_e5f6a7b8"` — and the element carries both classes.
+//! The declaration itself is **removed**, because `composes` is a convention of
+//! this build and not a property any browser knows.
+//!
+//! Three forms: `composes: a b` (this file), `composes: a from "./x.module.css"`
+//! (another module, resolved through [`Resolve`]), and `composes: a from global`
+//! (a name nothing scopes).
+//!
+//! Two restrictions, both enforced with a message rather than silently: the rule
+//! must be a **single class selector**, since otherwise there is no one name to
+//! attach the composition to; and a cycle between modules is refused, since it
+//! has no finite answer.
+//!
+//! Composition is **transitive**: if `.big` composes `.button` and `.button`
+//! composes `.rounded`, `.big` carries all three, because a class only styles
+//! an element that actually has it. A cycle is refused rather than followed.
+//!
+//! **Order in the class list does not decide the cascade** — which rule wins is
+//! decided by specificity and position in the stylesheet, exactly as always. So
+//! `composes` is for combining things that do not overlap; two composed classes
+//! setting the same property is a coin toss, and the same was true before.
 //!
 //! # The hash is over the path, not the contents
 //!
@@ -49,7 +78,39 @@
 use std::collections::{BTreeMap, HashSet};
 
 use super::ast::*;
+use super::print::value_text;
 use super::token::{Kind, Token};
+
+/// How a `composes: … from "./other.module.css"` reaches the other module.
+///
+/// A trait rather than a path, so this module does no I/O and its tests need no
+/// files. [`crate::cssmodules`] implements it by parsing and scoping the target,
+/// with a memo so a module imported twice is scoped once.
+pub trait Resolve {
+    /// The scoped names of the module `specifier` names, relative to the file
+    /// currently being scoped.
+    fn names(&mut self, specifier: &str) -> Result<BTreeMap<String, String>, String>;
+}
+
+/// One name a class composes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Composed {
+    /// A class in this same file, resolved once the whole file has been walked.
+    Local(String),
+    /// A name that is already final: from another module, or `from global`.
+    Ready(String),
+}
+
+/// A [`Resolve`] that refuses every specifier — for a caller with no module
+/// graph, and for the tests that do not exercise cross-file composition.
+#[allow(dead_code, reason = "the no-graph entry point; used by tests")]
+pub struct NoImports;
+
+impl Resolve for NoImports {
+    fn names(&mut self, specifier: &str) -> Result<BTreeMap<String, String>, String> {
+        Err(format!("cannot resolve {specifier} from here"))
+    }
+}
 
 /// A stylesheet with its names scoped, and the mapping JavaScript needs.
 #[derive(Debug)]
@@ -64,7 +125,17 @@ pub struct Scoped {
 ///
 /// `ident` identifies the file — a path relative to the project root — and is
 /// the only thing the generated names depend on.
-pub fn scope(mut sheet: Stylesheet, ident: &str) -> Result<Scoped, String> {
+#[allow(dead_code, reason = "the no-graph entry point; used by tests")]
+pub fn scope(sheet: Stylesheet, ident: &str) -> Result<Scoped, String> {
+    scope_with(sheet, ident, &mut NoImports)
+}
+
+/// Scopes `sheet`, resolving `composes … from` through `resolve`.
+pub fn scope_with<R: Resolve>(
+    mut sheet: Stylesheet,
+    ident: &str,
+    resolve: &mut R,
+) -> Result<Scoped, String> {
     let suffix = hash(ident);
     let mut names = BTreeMap::new();
 
@@ -73,13 +144,91 @@ pub fn scope(mut sheet: Stylesheet, ident: &str) -> Result<Scoped, String> {
     let mut keyframes = HashSet::new();
     collect_keyframes(&sheet.items, &mut keyframes);
 
+    // What each class composes, collected while walking and applied after — so
+    // a class may compose one declared further down the same file.
+    let mut composed: Vec<(String, Vec<Composed>)> = Vec::new();
+
     for item in &mut sheet.items {
         if let Item::Rule(rule) = item {
-            rewrite_rule(rule, &suffix, &keyframes, &mut names)?;
+            rewrite_rule(
+                rule,
+                &suffix,
+                &keyframes,
+                &mut names,
+                &mut composed,
+                resolve,
+            )?;
+        }
+    }
+
+    // Composition is **transitive**. If `.big` composes `.button` and `.button`
+    // composes `.rounded`, an element with only `big button` gets none of
+    // `.rounded`'s rules — the class has to be on the element, and nothing else
+    // will put it there. So each list is expanded through the whole chain.
+    let chains: BTreeMap<String, Vec<Composed>> = composed.into_iter().collect();
+    let locals: Vec<String> = chains.keys().cloned().collect();
+    for local in locals {
+        let mut out = Vec::new();
+        expand(&local, &chains, &names, &suffix, &mut out, &mut Vec::new())?;
+        if let Some(own) = names.get(&local).cloned() {
+            let mut value = own;
+            for name in out {
+                value.push(' ');
+                value.push_str(&name);
+            }
+            names.insert(local, value);
         }
     }
 
     Ok(Scoped { sheet, names })
+}
+
+/// Appends everything `local` composes, following the chain.
+///
+/// `visiting` is the path taken to get here, and is what makes a cycle
+/// terminate. Two classes composing each other has no finite answer, and a
+/// build that recursed until the stack went would report it as a crash rather
+/// than as the mistake it is.
+fn expand(
+    local: &str,
+    chains: &BTreeMap<String, Vec<Composed>>,
+    names: &BTreeMap<String, String>,
+    suffix: &str,
+    out: &mut Vec<String>,
+    visiting: &mut Vec<String>,
+) -> Result<(), String> {
+    if visiting.iter().any(|seen| seen == local) {
+        return Err(format!(
+            "`composes` cycles through `{local}`.\n\n             A class composing one that composes it back has no answer."
+        ));
+    }
+    visiting.push(local.to_string());
+
+    for name in chains.get(local).map(Vec::as_slice).unwrap_or_default() {
+        match name {
+            Composed::Ready(name) => push_once(out, name.clone()),
+            Composed::Local(name) => {
+                if !names.contains_key(name) {
+                    return Err(format!(
+                        "`composes: {name}` names a class this file does not declare."
+                    ));
+                }
+                push_once(out, scoped(name, suffix));
+                expand(name, chains, names, suffix, out, visiting)?;
+            }
+        }
+    }
+
+    visiting.pop();
+    Ok(())
+}
+
+/// Adds a class name unless it is already in the list — two chains reaching the
+/// same class is ordinary, and the attribute should say it once.
+fn push_once(out: &mut Vec<String>, name: String) {
+    if !out.contains(&name) {
+        out.push(name);
+    }
 }
 
 /// The scoped form of a local name.
@@ -122,16 +271,29 @@ fn keyframes_name(prelude: &[ComponentValue]) -> Option<String> {
         .map(|token| token.text.clone())
 }
 
-fn rewrite_rule(
+fn rewrite_rule<R: Resolve>(
     rule: &mut Rule,
     suffix: &str,
     keyframes: &HashSet<String>,
     names: &mut BTreeMap<String, String>,
+    composed: &mut Vec<(String, Vec<Composed>)>,
+    resolve: &mut R,
 ) -> Result<(), String> {
     match rule {
         Rule::Qualified(qualified) => {
+            // Read before the selector is rewritten, so the error message and
+            // the mapping key both name the class the author wrote.
+            let sole = sole_class(&qualified.prelude);
             rewrite_selector(&mut qualified.prelude, suffix, names);
-            rewrite_block(&mut qualified.block, suffix, keyframes, names)?;
+            take_composes(&mut qualified.block, sole, composed, resolve)?;
+            rewrite_block(
+                &mut qualified.block,
+                suffix,
+                keyframes,
+                names,
+                composed,
+                resolve,
+            )?;
         }
         Rule::At(at) => {
             // `@keyframes fade` declares a name this file owns.
@@ -151,42 +313,142 @@ fn rewrite_rule(
                 *token = Token::new(Kind::Ident, renamed);
             }
             if let Some(block) = &mut at.block {
-                rewrite_block(block, suffix, keyframes, names)?;
+                rewrite_block(block, suffix, keyframes, names, composed, resolve)?;
             }
         }
     }
     Ok(())
 }
 
-fn rewrite_block(
+fn rewrite_block<R: Resolve>(
     block: &mut Block,
     suffix: &str,
     keyframes: &HashSet<String>,
     names: &mut BTreeMap<String, String>,
+    composed: &mut Vec<(String, Vec<Composed>)>,
+    resolve: &mut R,
 ) -> Result<(), String> {
     for item in &mut block.items {
         match item {
             BlockItem::Declaration(declaration) => {
-                let property = declaration.name.text.to_ascii_lowercase();
-                if property == "composes" {
-                    return Err("`composes` is not supported.\n\n\
-                         It resolves a class from another module, which needs a \
-                         dependency graph this build does not have. Compose in \
-                         the markup instead — className={`${a.x} ${b.y}`} — \
-                         which is explicit and needs no build step."
-                        .to_string());
-                }
                 // `animation: fade 1s` and `animation-name: fade` name a
                 // `@keyframes` this file scoped, so the reference moves with it.
+                let property = declaration.name.text.to_ascii_lowercase();
                 if property == "animation" || property == "animation-name" {
                     rewrite_animation(&mut declaration.value, suffix, keyframes);
                 }
             }
-            BlockItem::Rule(rule) => rewrite_rule(rule, suffix, keyframes, names)?,
+            BlockItem::Rule(rule) => {
+                rewrite_rule(rule, suffix, keyframes, names, composed, resolve)?;
+            }
             BlockItem::Trivia(_) | BlockItem::Semicolon | BlockItem::Dangling(_) => {}
         }
     }
     Ok(())
+}
+
+/// Removes every `composes` declaration from `block` and records what it named.
+///
+/// Removed rather than rewritten: `composes` is a convention of this build, and
+/// a browser handed one skips it as an unknown property — which would look like
+/// it worked while doing nothing.
+fn take_composes<R: Resolve>(
+    block: &mut Block,
+    sole: Option<String>,
+    composed: &mut Vec<(String, Vec<Composed>)>,
+    resolve: &mut R,
+) -> Result<(), String> {
+    let mut found: Vec<Composed> = Vec::new();
+    let mut error = None;
+    // A declaration is followed by the `;` that ended it. Dropping the
+    // declaration alone would leave that behind as an empty one — harmless to a
+    // browser, and visible in the output as a stray `;`.
+    let mut drop_next_semicolon = false;
+
+    block.items.retain(|item| {
+        if let BlockItem::Semicolon = item
+            && std::mem::take(&mut drop_next_semicolon)
+        {
+            return false;
+        }
+        let BlockItem::Declaration(declaration) = item else {
+            return true;
+        };
+        if !declaration.name.text.eq_ignore_ascii_case("composes") {
+            return true;
+        }
+        drop_next_semicolon = true;
+        match sole.as_deref() {
+            // `composes` attaches a name to *one* class. On `.a .b` or `div`
+            // there is nothing to attach it to.
+            None => {
+                error.get_or_insert_with(|| {
+                    "`composes` needs a rule that is a single class selector.\n\n                     It adds a name to that class, and a rule matching anything                      else has no one name to add it to. Move the `composes` to                      its own `.class { … }` rule."
+                        .to_string()
+                });
+            }
+            Some(_) => match compose_names(&declaration.value, resolve) {
+                Ok(names) => found.extend(names),
+                Err(message) => {
+                    error.get_or_insert(message);
+                }
+            },
+        }
+        false
+    });
+
+    if let Some(message) = error {
+        return Err(message);
+    }
+    if let (Some(class), false) = (sole, found.is_empty()) {
+        composed.push((class, found));
+    }
+    Ok(())
+}
+
+/// The scoped names one `composes` declaration resolves to.
+fn compose_names<R: Resolve>(
+    value: &[ComponentValue],
+    resolve: &mut R,
+) -> Result<Vec<Composed>, String> {
+    let words: Vec<String> = value
+        .iter()
+        .filter(|value| !value.is_trivia())
+        .map(value_text)
+        .collect();
+
+    // `composes: a b from "./x.module.css"` — everything before `from` is a
+    // name, and what follows says where to look it up.
+    let (wanted, source) = match words.iter().position(|word| word == "from") {
+        Some(at) => (&words[..at], words.get(at + 1).map(String::as_str)),
+        None => (&words[..], None),
+    };
+
+    if wanted.is_empty() {
+        return Err("`composes` names nothing.".to_string());
+    }
+
+    match source {
+        // `composes: a b` — this file's own classes. Deferred, so a class may
+        // compose one declared further down.
+        None => Ok(wanted.iter().cloned().map(Composed::Local).collect()),
+        // `composes: a from global` — a name nothing scopes.
+        Some("global") => Ok(wanted.iter().cloned().map(Composed::Ready).collect()),
+        Some(specifier) => {
+            let path = specifier.trim_matches(['"', '\'']);
+            let names = resolve.names(path)?;
+            wanted
+                .iter()
+                .map(|name| {
+                    names
+                        .get(name)
+                        .cloned()
+                        .map(Composed::Ready)
+                        .ok_or_else(|| format!("{path} has no class `{name}` to compose."))
+                })
+                .collect()
+        }
+    }
 }
 
 /// Renames any identifier in an animation value that names a scoped keyframes.
@@ -283,6 +545,26 @@ fn rewrite_selector(
     *prelude = out;
 }
 
+/// The single class a rule selects, if that is all it selects.
+///
+/// `composes` attaches a name to one class, so `.a`, and not `.a .b`, `div.a`
+/// or `.a:hover`. Anything with more than one significant token is refused.
+fn sole_class(prelude: &[ComponentValue]) -> Option<String> {
+    let significant: Vec<&ComponentValue> =
+        prelude.iter().filter(|value| !value.is_trivia()).collect();
+    let [dot, name] = significant.as_slice() else {
+        return None;
+    };
+    let ComponentValue::Token(dot) = dot else {
+        return None;
+    };
+    let ComponentValue::Token(name) = name else {
+        return None;
+    };
+    (dot.kind == Kind::Delim && dot.text == "." && name.kind == Kind::Ident)
+        .then(|| name.text.clone())
+}
+
 /// Whether a name is one this pass should rewrite — an ordinary identifier and
 /// not something escaped into looking like one.
 fn is_name(name: &str) -> bool {
@@ -301,6 +583,10 @@ mod tests {
     fn scoped_css(source: &str) -> (String, BTreeMap<String, String>) {
         let out = scope(parse(source), "src/Button.module.css").expect("scopes");
         (print_minified(&out.sheet), out.names)
+    }
+
+    fn scoped_css_err(source: &str) -> String {
+        scope(parse(source), "src/Button.module.css").expect_err("should not scope")
     }
 
     #[test]
@@ -411,16 +697,144 @@ mod tests {
         assert!(names.contains_key("wide"), "{names:?}");
     }
 
-    /// Silently dropping it would leave an element missing half its styling
-    /// with nothing to show why.
-    #[test]
-    fn composes_is_refused_rather_than_ignored() {
-        let message = scope(
-            parse(".a { composes: b from './other.css' }"),
-            "src/x.module.css",
+    /// A stub module graph, so these tests need no files on disk.
+    struct Stub(BTreeMap<String, BTreeMap<String, String>>);
+
+    impl Resolve for Stub {
+        fn names(&mut self, specifier: &str) -> Result<BTreeMap<String, String>, String> {
+            self.0
+                .get(specifier)
+                .cloned()
+                .ok_or_else(|| format!("no such module {specifier}"))
+        }
+    }
+
+    fn stub(module: &str, names: &[(&str, &str)]) -> Stub {
+        Stub(
+            [(
+                module.to_string(),
+                names
+                    .iter()
+                    .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+                    .collect(),
+            )]
+            .into_iter()
+            .collect(),
         )
-        .expect_err("composes is not supported");
-        assert!(message.contains("composes"), "{message}");
+    }
+
+    /// The mechanic: the mapping's value becomes two names, and the element
+    /// carries both classes.
+    #[test]
+    fn composing_from_another_module_yields_both_names() {
+        let out = scope_with(
+            parse(".button { composes: rounded from \"./base.module.css\"; color: white }"),
+            "src/Button.module.css",
+            &mut stub("./base.module.css", &[("rounded", "rounded_e5f6a7b8")]),
+        )
+        .expect("composes");
+
+        let value = &out.names["button"];
+        assert!(value.ends_with(" rounded_e5f6a7b8"), "{value}");
+        assert_eq!(value.split(' ').count(), 2, "{value}");
+
+        // The declaration is gone: a browser handed `composes:` skips it as an
+        // unknown property, which would look like it worked.
+        let css = print_minified(&out.sheet);
+        assert!(!css.contains("composes"), "{css}");
+        assert!(css.contains("color:white"), "{css}");
+    }
+
+    #[test]
+    fn composing_within_one_file_needs_no_module_graph() {
+        let (_, names) = scoped_css(".base { padding: 1rem }\n.card { composes: base }");
+        let card = &names["card"];
+        assert_eq!(card.split(' ').count(), 2, "{card}");
+        assert!(
+            card.ends_with(&names["base"]),
+            "{card} vs {}",
+            names["base"]
+        );
+    }
+
+    /// A class may compose one declared further down the file, which is why the
+    /// lookup is deferred until the whole file has been walked.
+    #[test]
+    fn composing_a_class_declared_later_works() {
+        let (_, names) = scoped_css(".card { composes: base }\n.base { padding: 1rem }");
+        assert!(names["card"].ends_with(&names["base"]), "{names:?}");
+    }
+
+    /// A class only styles an element that has it, so a chain has to be
+    /// followed all the way down or the middle link's styling is lost.
+    #[test]
+    fn composition_is_transitive() {
+        let (_, names) =
+            scoped_css(".rounded{}\n.button { composes: rounded }\n.big { composes: button }");
+        let big: Vec<&str> = names["big"].split(' ').collect();
+        assert_eq!(big.len(), 3, "{:?}", names["big"]);
+        assert!(big.contains(&names["rounded"].as_str()), "{big:?}");
+    }
+
+    /// Two chains reaching the same class should say it once.
+    #[test]
+    fn a_name_reached_twice_appears_once() {
+        let (_, names) =
+            scoped_css(".a{}\n.b { composes: a }\n.c { composes: a }\n.d { composes: b c }");
+        let parts: Vec<&str> = names["d"].split(' ').collect();
+        let unique: std::collections::BTreeSet<&str> = parts.iter().copied().collect();
+        assert_eq!(parts.len(), unique.len(), "{:?}", names["d"]);
+    }
+
+    /// Two classes composing each other has no finite answer.
+    #[test]
+    fn a_composition_cycle_is_refused_rather_than_followed() {
+        let message = scoped_css_err(".a { composes: b }\n.b { composes: a }");
+        assert!(message.contains("cycles"), "{message}");
+    }
+
+    #[test]
+    fn several_names_compose_in_the_order_written() {
+        let (_, names) = scoped_css(".a{}\n.b{}\n.c { composes: a b }");
+        let parts: Vec<&str> = names["c"].split(' ').collect();
+        assert_eq!(parts.len(), 3, "{:?}", names["c"]);
+        assert_eq!(parts[1], names["a"]);
+        assert_eq!(parts[2], names["b"]);
+    }
+
+    /// `from global` reaches a name nothing scopes.
+    #[test]
+    fn composing_from_global_keeps_the_name_as_written() {
+        let (_, names) = scoped_css(".a { composes: sr-only from global }");
+        assert!(names["a"].ends_with(" sr-only"), "{:?}", names["a"]);
+    }
+
+    /// `composes` adds a name to *one* class, so a rule matching anything else
+    /// has nothing to add it to.
+    #[test]
+    fn composes_on_a_rule_that_is_not_one_class_is_refused() {
+        for selector in [".a .b", "div", ".a:hover", ".a, .b"] {
+            let source = format!("{selector} {{ composes: x from global }}");
+            let message =
+                scope(parse(&source), "src/x.module.css").expect_err("should refuse {selector}");
+            assert!(message.contains("single class"), "{selector}: {message}");
+        }
+    }
+
+    /// A name that is not there is the author's mistake to see, not an element
+    /// quietly missing half its styling.
+    #[test]
+    fn composing_a_name_that_does_not_exist_is_an_error() {
+        let local = scoped_css_err(".a { composes: nope }");
+        assert!(local.contains("nope"), "{local}");
+
+        let remote = scope_with(
+            parse(".a { composes: nope from \"./base.module.css\" }"),
+            "src/x.module.css",
+            &mut stub("./base.module.css", &[("rounded", "rounded_1")]),
+        )
+        .expect_err("no such class");
+        assert!(remote.contains("nope"), "{remote}");
     }
 
     /// A custom property is not a class, and `.5em` is not a class either.

@@ -125,11 +125,36 @@ neither wins. `src/app/Callout.module.css` is the worked example.
 - Every module's CSS is collected into **one stylesheet, linked from the
   document** — not injected by script, so there is no flash of unstyled content
   and no need for `style-src 'unsafe-inline'`.
-- `composes` is not supported; it is refused with a message rather than silently
-  dropped. Compose in the markup: ``className={`${a.x} ${b.y}`}``.
+**`composes`** reuses a class without repeating its rules:
 
-Plain `import "./x.css"` — a stylesheet with no scoping — is not supported. Use
-a `<link>` for global CSS, or `*.module.css` for a component's own.
+```css
+.button {
+  composes: rounded from "./base.module.css";
+  color: white;
+}
+```
+
+`styles.button` then becomes two names — `"button_a1b2 rounded_e5f6"` — and the
+element carries both. Three forms: `composes: a b` (this file),
+`composes: a from "./x.module.css"`, and `composes: a from global`. It is
+transitive, so composing a class that itself composes gets you the whole chain.
+
+Order in the class list does not decide the cascade — specificity and position
+in the stylesheet do, as always. So compose things that do not overlap.
+
+### Importing a plain stylesheet
+
+```js
+import "some-package/dist/style.css";
+```
+
+A `.css` that is *not* `.module.css` is emitted unscoped. That is what
+third-party CSS needs: a library's own JavaScript emits its class names as
+hardcoded strings, so scoping them would rename half of a contract the library
+has with itself.
+
+For your own global styles prefer the `<link>` in `index.html` — it is fetched
+without waiting for the bundle.
 
 ## Types for `runtime:`
 

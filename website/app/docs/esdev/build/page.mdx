@@ -193,11 +193,19 @@ talking to each other. `:global(…)` opts out. Every module's CSS is collected
 into one hashed stylesheet and linked from the document — never injected from
 script, so nothing needs `style-src 'unsafe-inline'`.
 
+`composes` reuses a class without repeating its rules — from the same file,
+from another module (`composes: a from "./x.module.css"`), or from outside the
+system (`composes: a from global`). The mapping's value becomes a list of class
+names, and it is transitive.
+
+A `.css` that is **not** `.module.css` is emitted unscoped. That is what
+third-party stylesheets need: a library's own JavaScript emits its class names
+as hardcoded strings, so scoping them would break it.
+
 <Callout type="note" title="What the CSS pipeline does not do">
   No syntax lowering and no vendor prefixing — nesting and `color-mix()` are
-  supported across the browsers this targets. No value-level minification. No
-  `composes` (it is refused, not ignored), and no plain `import "./x.css"`: a
-  stylesheet is either a `<link>` in the document or a `*.module.css`.
+  supported across the browsers this targets. No value-level minification, and
+  no per-file typed class names.
 </Callout>
 
 ## Where the file is

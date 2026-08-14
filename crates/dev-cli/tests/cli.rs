@@ -2217,6 +2217,102 @@ fn a_css_module_is_scoped_and_reaches_both_the_bundle_and_a_stylesheet() {
     assert!(css.contains(".no-js"), "{css}");
 }
 
+/// `composes`, and a plain stylesheet imported from JavaScript.
+///
+/// The properties worth an end-to-end test are the two that need the module
+/// graph: that a composed module's rules reach the output even though nothing
+/// imported it, and that composition is transitive — a class only styles an
+/// element that actually carries it, so a chain that stops halfway loses the
+/// middle link's styling and nothing reports it.
+#[test]
+fn composes_is_transitive_and_a_plain_stylesheet_is_imported_whole() {
+    let dir = build_dir("h_composes");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::create_dir_all(dir.join("vendor")).expect("create vendor");
+
+    // Nothing imports this module; only `composes` names it.
+    write_in(
+        &dir,
+        "src/base.module.css",
+        ".rounded { border-radius: 8px }\n",
+    );
+    write_in(
+        &dir,
+        "src/Button.module.css",
+        ".button { composes: rounded from \"./base.module.css\"; color: white }\n         .big { composes: button; font-size: 2rem }\n",
+    );
+    // A third-party stylesheet: its own JS emits these names, so scoping them
+    // would rename half of a contract the library has with itself.
+    write_in(
+        &dir,
+        "vendor/lib.css",
+        ".lib-widget { outline: 2px solid green }\n",
+    );
+    write_in(
+        &dir,
+        "src/main.js",
+        "import '../vendor/lib.css';\n         import styles from './Button.module.css';\n         document.body.className = styles.big;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        r#"<!doctype html><html><head><title>t</title><script type="module" src="./src/main.js"></script></head><body></body></html>"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let document = std::fs::read_to_string(dir.join("dist/index.html")).expect("read document");
+    let href = document
+        .split_once(r#"<link rel="stylesheet" href=""#)
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(url, _)| url.to_string())
+        .expect("a stylesheet was linked");
+    let css = std::fs::read_to_string(dir.join("dist").join(href.trim_start_matches('/')))
+        .expect("read the stylesheet");
+
+    // The composed module's rules are there even though no JavaScript imported
+    // it — without them, `composes` hands out a class name that styles nothing.
+    assert!(
+        css.contains("border-radius"),
+        "the composed module is missing:\n{css}"
+    );
+    // `composes` is not a property any browser knows; it must be gone.
+    assert!(!css.contains("composes"), "{css}");
+    // A vendor stylesheet is emitted unscoped, or its own JS stops matching it.
+    assert!(css.contains(".lib-widget"), "{css}");
+
+    let bundle = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("main") && n.ends_with(".js"))
+        })
+        .expect("a bundle");
+    let code = std::fs::read_to_string(&bundle).expect("read bundle");
+
+    // `.big` composes `.button`, which composes `.rounded` — three names, and
+    // every one of them declared in the stylesheet.
+    let big = code
+        .split_once(r#""big": ""#)
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(value, _)| value.to_string())
+        .expect("a mapping for `big`");
+    let names: Vec<&str> = big.split(' ').collect();
+    assert_eq!(names.len(), 3, "not transitive: {big}");
+    for name in names {
+        assert!(css.contains(name), "{name} is not declared in:\n{css}");
+    }
+}
+
 /// A relative path names a file in the project. If it is not there, that is a
 /// broken page, and the build is where it should be found — not the browser.
 #[test]

@@ -500,8 +500,35 @@ pub async fn build(
     // of unstyled content and needs `style-src 'unsafe-inline'`, which the
     // template's own policy does not grant.
     if !styles.is_empty() {
-        let css = styles.stylesheet();
-        let bytes = css.into_bytes();
+        // Each sheet's `url()`s are still placeholders. They are substituted
+        // here, for the same reason a `<link>`ed stylesheet's are: the CSS is
+        // about to move into `assets/`, and a relative `url()` moves with it.
+        let mut parts = Vec::new();
+        for sheet in styles.take() {
+            let mut code = sheet.code;
+            for referenced in &sheet.referenced {
+                let bytes = std::fs::read(&referenced.path)
+                    .map_err(|e| format!("cannot read {}: {e}", referenced.path.display()))?;
+                let name = if hash {
+                    hashed_name(&referenced.path, &bytes)
+                } else {
+                    referenced
+                        .path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("asset")
+                        .to_string()
+                };
+                std::fs::create_dir_all(&assets)
+                    .map_err(|e| format!("cannot create {}: {e}", assets.display()))?;
+                std::fs::write(assets.join(&name), &bytes)
+                    .map_err(|e| format!("cannot write {name}: {e}"))?;
+                code = code.replace(&referenced.placeholder, &format!("/{ASSET_DIR}/{name}"));
+                pulled_in += 1;
+            }
+            parts.push(code);
+        }
+        let bytes = parts.join("\n").into_bytes();
         let name = if hash {
             hashed_name(Path::new("modules.css"), &bytes)
         } else {

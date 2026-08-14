@@ -62,17 +62,36 @@ namespace) is unstable and may change between minor releases until the API freez
   `style-src 'unsafe-inline'`, which the React template's own policy does not
   grant.
 
-  `composes` is **refused with a message** rather than silently dropped: it
-  resolves a name from another module, which needs a dependency graph this pass
-  does not have, and ignoring it leaves an element missing half its styling with
-  nothing to show why.
+  **`composes`** reuses a class without repeating its rules, in all three forms
+  — `composes: a b` (same file), `composes: a from "./x.module.css"`, and
+  `composes: a from global`. The mapping's value becomes a list of class names
+  and the element carries all of them. It is **transitive**: composing a class
+  that itself composes gets the whole chain, because a class only styles an
+  element that actually carries it. Cycles are refused, and a composed module's
+  rules are emitted even though nothing imported it.
+
+  **A plain `import "./x.css"`** — anything not `.module.css` — is emitted
+  unscoped. That is what third-party stylesheets need: a library's own
+  JavaScript emits its class names as hardcoded strings, so scoping them would
+  rename half of a contract the library has with itself. The alternative, copying
+  the file out of `node_modules` and `<link>`ing it, goes stale on the next
+  upgrade.
 
   Not included, deliberately: syntax lowering and vendor prefixing (nesting and
   `color-mix()` are supported across the target browsers), value-level
-  minification, and plain `import "./x.css"` — a stylesheet is either a `<link>`
-  in the document or a `*.module.css`.
+  minification, and per-file typed class names.
 
 ### Changed
+
+- **The home page's architecture diagram is now an animated security diagram.**
+  The old static "Simple Runtime Architecture" row is replaced by an inline SVG
+  that draws the deny-by-default model: guest code on the left, a capability
+  gate in the middle, host resources on the right, and the nine capability
+  names below. On a 7s loop a `fetch` op reaches the gate without `net`, is
+  refused (`✕ ERR_CAPABILITY_DENIED` — the error thrown *before* the effect),
+  and bounces back; a `fs.read` op passes through to the file system. The
+  animation is pure CSS (`global.css`), confined to the shield via a
+  `clip-path`, and honours `prefers-reduced-motion`.
 
 - **The `react` template is rebuilt on react-router 8** (D68), and is now a
   starting point rather than a demonstration. A real route table — nested
