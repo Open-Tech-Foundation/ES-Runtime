@@ -10,6 +10,28 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **Three more templates** for `esdev create`, so it offers a real choice:
+
+  | | |
+  | --- | --- |
+  | `api` | A JSON API — routing on `URLPattern`, validation, error mapping. **No dependencies**, 9.9 KB bundled |
+  | `vanilla` | TypeScript and the DOM, no framework |
+  | `lib` | A publishable package — module tree preserved, `.d.ts` emitted, `exports` wired |
+
+  Each is dependency-free, which is the point of an `api` template on a server
+  runtime: `URLPattern`, `Request`, `Response` and `crypto.randomUUID()` are all
+  web standards this runtime already has, so a router is a table and a loop. Its
+  permission line grants **no filesystem at all** — not even read.
+
+  Having no React also means nothing reaches CommonJS, so `esdev test` can run
+  every module: 20 tests in `api`, 9 in `lib`, covering the router's 405-with-
+  `Allow`, the error-to-response mapping, the validation, and the retry
+  backoff's abort path.
+
+  A new end-to-end test scaffolds every dependency-free template and runs its
+  own suite and build, because a template is a project nobody builds until
+  somebody depends on it.
+
 - **`esdev build` bundles stylesheets** (D67). A `<link rel="stylesheet">` in an
   `index.html` target is now an entry, the way a `<script type="module">`
   already was: it and everything it `@import`s become one hashed file, and a

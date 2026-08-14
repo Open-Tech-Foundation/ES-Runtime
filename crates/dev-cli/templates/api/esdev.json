@@ -1,0 +1,19 @@
+{
+  "targets": {
+    "server": {
+      "entry": "src/server.ts",
+      "out": "dist/server.js"
+    }
+  },
+  "start": {
+    "run": "server",
+    "watch": ["server"]
+  },
+  "permissions": {
+    "allow": {
+      "listen": ["8080"],
+      "env": ["PORT"],
+      "signals": ["SIGTERM", "SIGINT"]
+    }
+  }
+}

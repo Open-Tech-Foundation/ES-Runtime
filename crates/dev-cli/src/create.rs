@@ -37,10 +37,24 @@ include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 ///
 /// Beside the templates rather than inside them: a description is for somebody
 /// choosing, and what they are choosing between is only visible from here.
-const DESCRIPTIONS: &[(&str, &str)] = &[(
-    "react",
-    "React + react-router — server-rendered, hydrated, prerenderable to static HTML",
-)];
+const DESCRIPTIONS: &[(&str, &str)] = &[
+    (
+        "api",
+        "A JSON API — routing, validation, error handling. No dependencies",
+    ),
+    (
+        "react",
+        "React + react-router — server-rendered, hydrated, prerenderable to static HTML",
+    ),
+    (
+        "lib",
+        "A publishable TypeScript package — module tree, .d.ts, no dependencies",
+    ),
+    (
+        "vanilla",
+        "TypeScript and the DOM — no framework, no dependencies",
+    ),
+];
 
 /// A file whose name in the template is not the name it is written under.
 ///

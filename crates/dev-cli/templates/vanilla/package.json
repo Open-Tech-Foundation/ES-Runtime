@@ -1,0 +1,11 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esdev start",
+    "build": "esdev build",
+    "test": "esdev test",
+    "typecheck": "tsc --noEmit"
+  }
+}

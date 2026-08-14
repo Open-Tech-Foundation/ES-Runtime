@@ -1,0 +1,37 @@
+/* A CSS Module: these class names are scoped to this file, so nothing here can
+ * collide with anything another file declares. See src/main.ts. */
+
+.count {
+  font-weight: 560;
+  margin: 0 0 0.75rem;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+}
+
+.add {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.remove {
+  font-size: 0.875rem;
+  padding: 0.3rem 0.6rem;
+}

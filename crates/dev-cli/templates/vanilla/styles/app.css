@@ -1,0 +1,59 @@
+/* The stylesheet index.html links, and the only one it needs to.
+ *
+ * esdev follows @import at build time and emits a single hashed file. Component
+ * styling lives in *.module.css beside the code that uses it; this file is the
+ * baseline those sit on. */
+
+@import "./theme.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0 0.75rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.65 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding-block: 3rem 4rem;
+}
+
+h1 {
+  font-size: clamp(1.75rem, 1.2rem + 2vw, 2.35rem);
+  letter-spacing: -0.025em;
+  margin: 0 0 0.4rem;
+}
+
+.lede {
+  color: var(--muted);
+  margin: 0 0 2rem;
+}
+
+.pending {
+  color: var(--muted);
+  font-style: italic;
+}
+
+button {
+  cursor: pointer;
+  font: inherit;
+  font-weight: 520;
+  padding: 0.5rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--ink);
+
+  &:hover {
+    border-color: color-mix(in oklab, var(--accent) 50%, var(--line));
+  }
+}

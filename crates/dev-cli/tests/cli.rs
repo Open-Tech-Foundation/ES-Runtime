@@ -2685,6 +2685,65 @@ fn create_refuses_a_directory_that_holds_something() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+/// Every template, scaffolded and put through its own test suite.
+///
+/// The one property that matters for a scaffolder and cannot be checked by
+/// looking at the files: that what it writes *works*. A template is a project
+/// nobody builds until somebody depends on it, which is exactly the kind of
+/// thing that rots quietly.
+///
+/// `react` is the exception, and deliberately: its tests need `node_modules`,
+/// and installing from a registry is not something a unit test should do. It is
+/// covered by `create_writes_a_project_that_builds_and_runs` instead.
+#[test]
+fn every_dependency_free_template_passes_its_own_tests() {
+    let parent = watch_dir("c_all");
+
+    for template in ["api", "lib", "vanilla"] {
+        let dir = parent.join(template);
+        let created = esdev_in(&parent)
+            .args(["create", template, &format!("--template={template}")])
+            .output()
+            .expect("spawn esdev create");
+        assert!(
+            created.status.success(),
+            "{}: {}",
+            template,
+            stderr(&created)
+        );
+
+        let tested = esdev_in(&dir)
+            .arg("test")
+            .output()
+            .expect("spawn esdev test");
+        assert!(
+            tested.status.success(),
+            "the {template} template's own tests failed:\n{}{}",
+            stdout(&tested),
+            stderr(&tested)
+        );
+
+        // …and it builds. A template that tests clean and does not build is
+        // still a broken starting point.
+        let mut build = esdev_in(&dir);
+        build.arg("build");
+        if template == "lib" {
+            // `--lib` is a flag rather than an esdev.json key, so the template
+            // carries it in its `build` script rather than its config.
+            build.args(["--lib", "src"]);
+        }
+        let built = build.output().expect("spawn esdev build");
+        assert!(
+            built.status.success(),
+            "the {template} template does not build:\n{}{}",
+            stdout(&built),
+            stderr(&built)
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 #[test]
 fn create_lists_its_templates_and_names_one_it_does_not_have() {
     let dir = watch_dir("c_list");

@@ -1,0 +1,12 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esdev start",
+    "build": "esdev build",
+    "start": "esrun --allow-listen=8080 --allow-env=PORT --allow-signals=SIGTERM,SIGINT dist/server.js",
+    "test": "esdev test",
+    "typecheck": "tsc --noEmit"
+  }
+}
