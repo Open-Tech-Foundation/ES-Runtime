@@ -1,0 +1,94 @@
+---
+title: runtime:watch
+description: File-change events in guest JS — for a program that has to stay up through a save. esdev only.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:watch
+
+File changes, delivered to the program.
+
+<Callout type="warning" title="esdev only">
+  `esrun` does not serve this module. A watcher is development machinery — what
+  it watches is source, and there is none on a production box — so importing
+  `runtime:watch` under `esrun` fails at load with *unknown built-in module*,
+  rather than handing back a watcher that never fires. Capability:
+  **FileRead**, scoped by the same `--allow-read` list as reading.
+</Callout>
+
+`esdev --watch` answers a change by `SIGTERM`ing the program and starting it
+again. That is right for *rerun this script* and wrong for a dev server: a
+server holding forty compiled chunks, an open websocket to a browser and a warm
+compile server cannot throw all of it away because one file changed. It needs to
+be told **which** file, so it can drop what depended on that one and keep the
+rest. That is this module.
+
+## Import
+
+```js
+import { watch } from "runtime:watch";
+```
+
+## watch(paths, options?)
+
+Returns a `Watcher` immediately; the watch itself is opened on the first
+`await`, so a path outside the sandbox root — or one `--allow-read` does not
+cover — surfaces as a rejection where you use it.
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `paths` | `string \| string[]` | What to watch. Relative paths resolve like every other path in a run: against the entry module's directory. |
+| `options.recursive` | `boolean` (default `false`) | Watch the directories below these too. |
+
+Non-recursive by default, matching what the OS watchers do natively: on Linux a
+recursive watch costs a descriptor per directory, and a caller watching one file
+should not pay for the tree it sits in.
+
+## Watcher
+
+| Member | Returns | Description |
+| --- | --- | --- |
+| `[Symbol.asyncIterator]()` | `AsyncIterator<Change>` | Iterate the changes. Leaving the loop closes the watcher. |
+| `next()` | `Promise<Change \| null>` | The next change; `null` once closed. |
+| `add(path)` | `Promise<boolean>` | Start watching another path. `false` if already watched. |
+| `remove(path)` | `Promise<boolean>` | Stop watching one path. `false` if it was not watched. |
+| `close()` | `Promise<void>` | End the watch and release its descriptors. Idempotent. |
+
+`add` and `remove` are methods rather than constructor arguments because the
+watch set is not knowable up front: which files a bundle depends on is known
+only once it has been built, so a shared `lib/` outside the app directory starts
+being watched the moment a chunk proves it needs it.
+
+## Change
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kind` | `"created" \| "modified" \| "removed"` | What happened. |
+| `path` | `string` | The resolved absolute path — the same form `runtime:fs` reports. |
+
+Three names, where the backends have dozens. The consumer's question is *does
+what I cached still stand?*, which has three answers; a name that means one
+thing on Linux and another on macOS is worse than no name.
+
+**Events are debounced per path.** One editor save is several filesystem events
+— a truncate, a write, sometimes a rename over the top — so a consumer acting on
+each of them rebuilds three times, the last two against a file that was already
+finished. The host holds each path's events for a quiet period (the same one
+`--watch` uses) and delivers what they add up to: a create followed by a write
+is a **create**, and a remove followed by a create — every editor's atomic save
+— is a **modification**, because the path existed before and exists now.
+
+## Example
+
+```js
+import { watch } from "runtime:watch";
+
+const changes = watch(["app", "lib"], { recursive: true });
+
+for await (const { kind, path } of changes) {
+  if (kind === "removed") cache.delete(path);
+  else invalidate(path);            // drop only the chunks that used it
+  for (const dep of rebuild()) changes.add(dep);
+}
+```

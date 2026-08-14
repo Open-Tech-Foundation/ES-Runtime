@@ -502,6 +502,15 @@ pub struct Runtime {
     /// to *authorize* anything, only to answer "what am I allowed to do?".
     /// [`set_capabilities`](Self::set_capabilities) writes both.
     capabilities: Rc<Cell<CapabilitySet>>,
+    /// `runtime:` modules the **embedder** added, alongside the baked ones —
+    /// see [`register_module`](Self::register_module).
+    ///
+    /// Empty in `esrun`, and that is the point: the namespace a program can
+    /// import is the same everywhere the runtime is embedded, plus whatever the
+    /// binary in front of it deliberately put there. `esdev` puts
+    /// `runtime:build` and `runtime:watch` here, which is how a development
+    /// module exists without existing in production.
+    host_modules: HashMap<String, Rc<str>>,
 }
 
 impl Runtime {
@@ -528,6 +537,7 @@ impl Runtime {
             handle_refs: Rc::new(Cell::new(0)),
             is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
+            host_modules: HashMap::new(),
         };
         // Register the world-touching ops, then evaluate the prelude that builds
         // the pure-JS APIs on top of them (DECISIONS.md D8).
@@ -631,6 +641,7 @@ impl Runtime {
             handle_refs: Rc::new(Cell::new(0)),
             is_worker: providers.worker_scope.is_some(),
             capabilities: Rc::new(Cell::new(CapabilitySet::none())),
+            host_modules: HashMap::new(),
         };
         // Rebind handlers only; the engine skips the (baked) JS shells and the
         // prelude is already present in the restored context.
@@ -646,6 +657,10 @@ impl Runtime {
             entry_slot,
             handle_refs,
         )?;
+        // Every op the snapshot has a shell for is now bound; an op registered
+        // after this point (an embedder's — `esdev`'s bundler and watcher) is
+        // one the snapshot never saw, and gets its shell installed for real.
+        runtime.engine.finish_baked_ops();
         // Except the fragments that cannot be baked — `WebAssembly` exists only
         // now, in a real isolate, so its wrappers are installed per-launch.
         runtime.engine.eval(&prelude::post_snapshot_source())?;
@@ -674,6 +689,41 @@ impl Runtime {
     /// Registers a host op, callable from JS as `globalThis.__ops.<name>`.
     pub fn register_op(&mut self, op: OpDecl) -> Result<()> {
         self.engine.register_op(op)?;
+        Ok(())
+    }
+
+    /// Adds a `runtime:` module served by **this embedder**, on the same terms
+    /// as the baked ones: no loader, no filesystem, no capability to import it
+    /// (D26/D38) — its ops carry the gates, exactly like `runtime:fs`.
+    ///
+    /// The namespace is otherwise fixed, and deliberately so: a program's
+    /// imports must mean the same thing under every embedding of this runtime.
+    /// What this seam adds is the case where they *cannot* — a module that only
+    /// a development binary can honour, because the machinery behind it is not
+    /// in the production one. `esdev` registers `runtime:build` (the bundler)
+    /// and `runtime:watch` (file events); `esrun` registers nothing, so an
+    /// `import "runtime:build"` there fails at load with "unknown built-in
+    /// module" rather than half-working.
+    ///
+    /// # Errors
+    ///
+    /// A specifier outside the `runtime:` scheme, or one a baked module already
+    /// answers to. Shadowing a built-in is refused rather than resolved in some
+    /// order, because the order would be the only thing standing between a
+    /// program and a redefined `runtime:fs`.
+    pub fn register_module(&mut self, specifier: &str, source: &str) -> Result<()> {
+        if !runtime_modules::is_builtin_scheme(specifier) {
+            return Err(Error::ModuleLoad(format!(
+                "host module {specifier:?} is not in the runtime: namespace"
+            )));
+        }
+        if runtime_modules::source(specifier).is_some() {
+            return Err(Error::ModuleLoad(format!(
+                "{specifier:?} is a built-in module and cannot be replaced"
+            )));
+        }
+        self.host_modules
+            .insert(specifier.to_string(), Rc::from(source));
         Ok(())
     }
 
@@ -970,9 +1020,16 @@ impl Runtime {
         if let Some(&id) = self.module_map.get(specifier) {
             return Ok((id, None));
         }
-        let source = runtime_modules::source(specifier)
-            .ok_or_else(|| Error::ModuleLoad(format!("unknown built-in module {specifier:?}")))?;
-        let id = self.engine.compile_module(specifier, source)?;
+        // A baked module first, then whatever the embedder added
+        // ([`register_module`](Self::register_module) refuses to shadow one, so
+        // the order here is a formality rather than a policy).
+        let source: Rc<str> = match runtime_modules::source(specifier) {
+            Some(baked) => Rc::from(baked),
+            None => self.host_modules.get(specifier).cloned().ok_or_else(|| {
+                Error::ModuleLoad(format!("unknown built-in module {specifier:?}"))
+            })?,
+        };
+        let id = self.engine.compile_module(specifier, &source)?;
         self.module_map.insert(specifier.to_string(), id);
         Ok((id, Some(specifier.to_string())))
     }
@@ -6082,6 +6139,63 @@ mod tests {
                 "{name} is listed but has no baked source"
             );
         }
+    }
+
+    /// A host module is importable exactly like a baked one — same scheme, same
+    /// dedup, and (as with every `runtime:` module) no capability needed to
+    /// import it.
+    #[test]
+    fn host_registered_module_is_importable() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.register_module("runtime:demo", "export const answer = 42;")
+            .expect("register");
+        let state = run_module(
+            &mut rt,
+            "import { answer } from 'runtime:demo'; globalThis.result = answer;",
+            MapLoader::new(&[]),
+        );
+        assert_eq!(state, ModuleEvalState::Completed);
+        assert_eq!(rt.eval("globalThis.result").unwrap(), Value::Number(42.0));
+    }
+
+    /// The namespace is not open season: a host module cannot take a baked
+    /// module's name, because the program that imports `runtime:fs` must get
+    /// `runtime:fs`.
+    #[test]
+    fn host_module_cannot_shadow_a_builtin() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let err = rt
+            .register_module("runtime:fs", "export const nope = 1;")
+            .expect_err("shadowing a built-in must be refused");
+        assert!(err.to_string().contains("cannot be replaced"), "{err}");
+    }
+
+    /// And it is a `runtime:` seam, not a general module-injection one — an
+    /// embedder that wants a bare specifier has a loader for that.
+    #[test]
+    fn host_module_must_be_in_the_runtime_namespace() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        let err = rt
+            .register_module("demo", "export const nope = 1;")
+            .expect_err("a bare specifier must be refused");
+        assert!(err.to_string().contains("runtime: namespace"), "{err}");
+    }
+
+    /// An unregistered `runtime:` specifier still fails at load rather than
+    /// resolving through the loader — `runtime:build` under `esrun` is this
+    /// case, and it has to be a clear failure rather than a mystery.
+    #[test]
+    fn unknown_runtime_module_fails_to_load() {
+        let _g = v8_guard();
+        let mut rt = runtime();
+        rt.set_capabilities(CapabilitySet::all());
+        let err =
+            block_on(rt.load_module_source(ENTRY, "import 'runtime:nope';", MapLoader::new(&[])))
+                .expect_err("an unknown built-in must not load");
+        assert!(err.to_string().contains("unknown built-in module"), "{err}");
     }
 
     #[test]

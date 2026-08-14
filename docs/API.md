@@ -27,6 +27,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:hashing`](#runtimehashing)
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
+- [`runtime:watch`](#runtimewatch) — `esdev` only
 - [Error codes](#error-codes)
 
 ---
@@ -841,6 +842,7 @@ the required capability has been granted.
 | `runtime:websocket` | Available | `NetListen` | [↓](#runtimewebsocket)         |
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 | `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
+| `runtime:watch`   | Available — **`esdev` only** | `FileRead` | [↓](#runtimewatch) |
 
 ---
 
@@ -2561,6 +2563,92 @@ children does not pass it on, so grandchildren can outlive a kill.
 `SystemCommands` accepts a policy — `with_allowlist(["git", "ffmpeg"])` and
 `with_max_children(n)` — for an embedder that must grant `Run` without granting
 a shell.
+
+---
+
+## `runtime:watch`
+
+File-change events, delivered to guest JS.
+
+- **Capability:** `FileRead`, scoped by the same `--allow-read` list as reading.
+- **Status:** Available under **`esdev` only**. `esrun` does not serve this
+  module: importing it there fails at load with *unknown built-in module*.
+- **Loading:** on demand.
+
+A watcher is development machinery — what it watches is source — so the binary
+that serves production does not carry one. `esdev --watch` is the other watcher
+in this toolchain, and answers a change by `SIGTERM`ing the program and starting
+it again; this module exists for the case where that is the wrong answer. A dev
+server holding compiled chunks, an open websocket to a browser and a warm
+compile server cannot discard all of it because one file of forty changed. It
+needs to be told **which** file.
+
+```js
+import { watch } from "runtime:watch";
+
+const changes = watch(["app", "lib"], { recursive: true });
+
+for await (const { kind, path } of changes) {
+  if (kind === "removed") cache.delete(path);
+  else invalidate(path);
+  for (const dep of rebuild()) changes.add(dep);
+}
+```
+
+### `watch(paths, options?)`
+
+Returns a `Watcher` synchronously; the watch is opened on the first `await`, so
+a path outside the sandbox root, or one `--allow-read` does not cover, surfaces
+as a rejection at the point of use.
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `paths` | `string \| string[]` | — | What to watch. Relative paths resolve against the entry module's directory, like every other path in a run. |
+| `options.recursive` | `boolean` | `false` | Watch the directories below these too. |
+
+Non-recursive by default, matching the OS watchers: on Linux a recursive watch
+costs a descriptor per directory, and watching one file should not cost the tree
+it sits in.
+
+### `Watcher`
+
+| Member | Returns | Description |
+| --- | --- | --- |
+| `[Symbol.asyncIterator]()` | `AsyncIterator<Change>` | Iterates changes; leaving the loop closes the watcher. |
+| `next()` | `Promise<Change \| null>` | The next change, or `null` once closed. |
+| `add(path)` | `Promise<boolean>` | Watch another path. `false` if already watched. |
+| `remove(path)` | `Promise<boolean>` | Stop watching one path. `false` if it was not watched. |
+| `close()` | `Promise<void>` | End the watch and release its descriptors. Idempotent. |
+
+The watch set is mutable because it is not knowable up front: which files a
+bundle depends on is known only after it is built, so a shared `lib/` outside
+the app directory starts being watched once a chunk proves it depends on it.
+
+### `Change`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `kind` | `"created" \| "modified" \| "removed"` | What happened. |
+| `path` | `string` | The resolved absolute path, in the form `runtime:fs` reports. |
+
+Three names, where the backends have dozens: the consumer's question is whether
+what it cached still stands, and a name meaning one thing on Linux and another
+on macOS is worse than none.
+
+**Events are debounced per path.** One editor save is several filesystem events,
+and acting on each of them means rebuilding three times — twice against a file
+that was already finished. Each path's events are held for a quiet period and
+delivered as what they add up to: create-then-write is a **create**, and
+remove-then-create (every editor's atomic save) is a **modification**, because
+the path existed before and exists now.
+
+### Embedding
+
+This module is not part of the runtime crate's namespace. It is registered by
+`esdev` through `Runtime::register_module` + `register_op`, the same seam any
+embedder can use to add a `runtime:` module its binary — and only its binary —
+can honour. Nothing about the module pipeline or the capability check differs
+for it.
 
 ---
 

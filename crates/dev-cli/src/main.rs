@@ -46,6 +46,7 @@ mod cssmodules;
 mod declarations;
 mod devserver;
 mod dts;
+mod guest;
 mod html;
 mod inspect;
 mod install;
@@ -583,6 +584,7 @@ fn parse_args() -> Result<Command, String> {
                         scopes: permissions.scopes()?,
                         options,
                         transform: Some(std::sync::Arc::new(TypeStripper)),
+                        extensions: guest::extensions(),
                         // The deploy line is printed with the entry as it was
                         // named, so it is one a reader can copy. For `-e` there
                         // is nothing to name, and the placeholder says so.
@@ -637,6 +639,7 @@ fn parse_args() -> Result<Command, String> {
                         scopes: permissions.scopes()?,
                         options,
                         transform: Some(std::sync::Arc::new(TypeStripper)),
+                        extensions: guest::extensions(),
                         observer: permission_trace(tracing_permissions, path),
                         inspector: None,
                     }),
@@ -1100,6 +1103,7 @@ async fn run_tests(config: TestConfig) -> ExitCode {
             scopes: std::collections::HashMap::new(),
             options: RunOptions::default(),
             transform: Some(std::sync::Arc::new(test::TestTransform::new(&path))),
+            extensions: guest::extensions(),
             observer: None,
             inspector: None,
         };

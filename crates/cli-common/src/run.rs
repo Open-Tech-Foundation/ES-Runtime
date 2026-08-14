@@ -27,6 +27,7 @@ use crate::args::RunOptions;
 use crate::console::StdoutConsole;
 use crate::diagnostics::{Failure, flush_failures, timeout_message};
 use crate::dotenv;
+use crate::extension::{ExtensionContext, HostExtension};
 use crate::permissions::{Scopes, address_scope, path_scope, signal_scope};
 use crate::shutdown::{SHUTDOWN_CODE, spawn_shutdown_watcher};
 
@@ -74,6 +75,16 @@ pub struct Config {
     /// capabilities into the `esrun` command line that would grant exactly them
     /// is `esdev`'s job, and lives there.
     pub observer: Option<es_runtime::SharedObserver>,
+    /// `runtime:` modules and ops this binary adds to the namespace — how
+    /// `esdev` serves `runtime:build` and `runtime:watch`
+    /// ([`HostExtension`](crate::HostExtension)).
+    ///
+    /// `esrun` passes none, and that is the whole point of the field: a
+    /// production binary carries neither a bundler nor a file watcher, so a
+    /// program that imports one fails at load there rather than behaving
+    /// differently. Registered on the main agent only — a worker gets the
+    /// standard namespace.
+    pub extensions: Vec<Box<dyn HostExtension>>,
     /// A debugger to attach before the entry module is loaded — how `esdev`
     /// serves `--inspect` (D59).
     ///
@@ -332,7 +343,7 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // view, so a database is scoped by `--allow-read`/`--allow-write` exactly
     // as a file is — and the write-ahead log the engine opens beside it is
     // judged by the same list, rather than by nothing.
-    .with_embedded_db(Arc::new(SystemEmbeddedDb::new(file_system)))
+    .with_embedded_db(Arc::new(SystemEmbeddedDb::new(file_system.clone())))
     .with_sync_file_system(sync_file_system)
     .with_net_provider(Arc::new(system_net))
     .with_http_server(http_server.clone())
@@ -431,6 +442,25 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     runtime.set_capabilities(config.capabilities);
     if let Some(observer) = &config.observer {
         runtime.set_capability_observer(observer.clone());
+    }
+
+    // The binary's own additions to the `runtime:` namespace (`esdev`'s bundler
+    // and watcher). After the capability set, so an op that asks what it is
+    // allowed to do at registration reads the real answer; before the entry
+    // module, because the entry is free to import one on its first line.
+    let extension_ctx = ExtensionContext {
+        file_system: file_system.clone(),
+        base_dir: &base_dir,
+    };
+    for extension in &config.extensions {
+        for op in extension.ops(&extension_ctx) {
+            runtime.register_op(op).map_err(|e| e.to_string())?;
+        }
+        for module in extension.modules() {
+            runtime
+                .register_module(module.specifier, module.source)
+                .map_err(|e| e.to_string())?;
+        }
     }
 
     // Attach the debugger before the entry module is loaded: V8 announces each

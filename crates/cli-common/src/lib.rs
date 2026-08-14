@@ -19,11 +19,19 @@ pub mod args;
 pub mod console;
 pub mod diagnostics;
 pub mod dotenv;
+pub mod extension;
 pub mod permissions;
 pub mod run;
 pub mod shutdown;
 
+pub use extension::{ExtensionContext, HostExtension, HostModule};
 pub use run::{Config, Inspector, Source, run};
+
+/// What writing a host extension's ops takes, re-exported so a binary reaches
+/// for this crate rather than for the engine and the provider crates directly.
+/// The same reasoning as the two re-exports above: a binary's business is its
+/// command line, and it should need one dependency to state what its ops are.
+pub use es_runtime::{AsyncOp, FileSystem, OpDecl, OpError, OpResult, Value};
 
 /// The debugger transport, re-exported so a binary that implements one does not
 /// have to name the engine crate to do it (`esdev`'s `--inspect` server is the

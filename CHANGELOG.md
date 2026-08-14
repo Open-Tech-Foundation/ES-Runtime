@@ -8,6 +8,45 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:watch` — file-change events in guest JS (`esdev` only).** A dev
+  server cannot answer a save the way `esdev --watch` does. That watcher
+  `SIGTERM`s the program and starts another, which is right for *rerun this
+  script* and wrong for a server holding forty compiled chunks, an open
+  websocket to a browser and a warm compile server: it has to **stay up** and
+  drop only what changed.
+
+  ```js
+  import { watch } from "runtime:watch";
+
+  const changes = watch(["app", "lib"], { recursive: true });
+  for await (const { kind, path } of changes) {
+    invalidate(path);
+    for (const dep of rebuild()) changes.add(dep);   // the set grows as it runs
+  }
+  ```
+
+  The watch set is mutable because it is not knowable up front — which files a
+  bundle depends on is known only after it is built. Events are debounced per
+  path, so one editor save is one event rather than three, and what a burst adds
+  up to is reported honestly: create-then-write is a create, and the
+  remove-then-create every editor does on save is a modification.
+
+  Gated on `FileRead` and scoped by the same `--allow-read` list as reading —
+  watching a directory tells you which files exist and when they are touched.
+  `esrun` does not serve the module at all: importing it there fails at load
+  with *unknown built-in module*, rather than yielding a watcher that never
+  fires.
+
+- **Embedders can add `runtime:` modules of their own.**
+  `Runtime::register_module(specifier, source)` serves a module on the same
+  terms as a baked one — no loader, no filesystem, and no capability to import
+  it, because the gate is always the op. Shadowing a built-in is refused; a
+  specifier outside the `runtime:` scheme is refused. This is the seam
+  `runtime:watch` arrives through, and the reason `esrun` does not merely leave
+  it unwired but does not contain it.
+
 ### Changed
 
 - **`esdev test` assertions compare properly** — and the second argument to

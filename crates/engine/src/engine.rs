@@ -218,6 +218,16 @@ pub trait Engine {
     /// (ARCHITECTURE.md §4).
     fn register_op(&mut self, op: OpDecl) -> Result<()>;
 
+    /// Marks the end of the ops the snapshot baked JS shells for.
+    ///
+    /// Restoring a snapshot rebinds handlers without re-creating their shells,
+    /// because the shells are already in the restored context (D8). That is only
+    /// true of the ops that were present when the snapshot was taken — an op
+    /// registered *afterwards* by an embedder is new, and would otherwise get a
+    /// handler no JS function reaches. Called once, immediately after the baked
+    /// set has been rebound; a no-op on an engine built without a snapshot.
+    fn finish_baked_ops(&mut self) {}
+
     /// Replaces the capability set checked before capability-gated ops dispatch
     /// (DECISIONS.md D7). Deny-by-default: the initial set grants nothing.
     fn set_capabilities(&mut self, capabilities: CapabilitySet);
@@ -809,6 +819,12 @@ impl Engine for V8Engine {
         let context = v8::Local::new(scope, &self.context);
         let scope = &mut v8::ContextScope::new(scope, context);
         install_op(scope, context, &op.name, op_id)
+    }
+
+    fn finish_baked_ops(&mut self) {
+        // Anything from here on is an addition to the snapshot's op table, so it
+        // needs the JS shell the snapshot could not contain.
+        self.ops_baked = false;
     }
 
     fn set_capabilities(&mut self, capabilities: CapabilitySet) {

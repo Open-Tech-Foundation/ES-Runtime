@@ -352,6 +352,11 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    // Nothing is added to the `runtime:` namespace here. A
+                    // production binary offers the standard modules and only
+                    // those, so `runtime:build` and `runtime:watch` — `esdev`'s
+                    // — are not merely unwired but absent.
+                    extensions: Vec::new(),
                     observer: None,
                     // esrun has no inspector and no flag that could ask for
                     // one: a debugger port would undo every --deny-* the
@@ -389,6 +394,11 @@ fn parse_args() -> Result<Config, String> {
                     // esrun runs JavaScript. Turning a `.ts` into that is
                     // `esdev`'s job, on a developer's machine.
                     transform: None,
+                    // Nothing is added to the `runtime:` namespace here. A
+                    // production binary offers the standard modules and only
+                    // those, so `runtime:build` and `runtime:watch` — `esdev`'s
+                    // — are not merely unwired but absent.
+                    extensions: Vec::new(),
                     observer: None,
                     // esrun has no inspector and no flag that could ask for
                     // one: a debugger port would undo every --deny-* the
