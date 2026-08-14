@@ -1,0 +1,98 @@
+---
+title: runtime:test
+description: test() and the assertions esdev test runs — imported, not ambient. esdev only.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:test
+
+The test API, as a module you import.
+
+<Callout type="warning" title="esdev only">
+  A test file is never a production artifact, so `esrun` does not serve this
+  module: importing it there fails at load with *unknown built-in module*.
+  Capability: **none** — an assertion computes and reaches nothing.
+</Callout>
+
+```js
+import { test, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
+
+test("adds", () => assertEquals(add(2, 3), 5));
+test("fetches", async () => assertEquals((await get("/")).status, 200));
+```
+
+These were five **globals** until now, prepended to every test file's own
+source. Importing them fixes three things at once:
+
+- the runtime hands out no ambient names anywhere else — everything is a
+  `runtime:` module;
+- a **helper module** beside the test file can use the assertions, where before
+  only the entry was wrapped;
+- they have types, so a `.ts` test file no longer references five undeclared
+  names and `tsc --noEmit` no longer fails on a suite that runs perfectly.
+
+Run a file with [`esdev test`](/docs/esdev/test), or directly — `esdev
+app.test.ts` prints the same report, because what makes a run a test run is the
+module it imported.
+
+## test(name, fn)
+
+Registers a test and **starts it immediately**. `fn` may be `async`. Tests are
+not queued, so one awaiting a timer does not hold up the next; `esdev` prints
+the tally once the program is done and exits non-zero if anything failed.
+
+A test that never settles is reported as a failure — *"the test never
+finished"* — rather than being left out of a green run.
+
+## Assertions
+
+| Function | |
+| --- | --- |
+| `assert(condition, message?)` | Fails unless `condition` is truthy. |
+| `assertEquals(actual, expected, message?)` | Fails unless the two are **structurally** equal. |
+| `assertThrows(fn, want?, message?)` | Fails unless `fn` throws, and unless the error matches `want`. |
+| `assertRejects(fn, want?, message?)` | The async form. Returns a promise — `await` it. |
+
+### assertEquals compares values, not their JSON
+
+It walks them: `BigInt` and `NaN` through `Object.is`, typed arrays and
+`ArrayBuffer` byte by byte, `Map` and `Set` by contents, `Date`/`RegExp`/`Error`
+by what identifies them, objects by their key *set* rather than key order, and
+cycles terminate.
+
+Stringifying was the original implementation, and on this runtime it could not
+express the assertion an int64 test most needs — `JSON.stringify` **throws** on
+a `BigInt`, and rendered a `Uint8Array` as `{"0":1,"1":2}`.
+
+```js
+assertEquals(reader.int64(), -9223372036854775808n);
+assertEquals(bytes, new Uint8Array([1, 2, 3]));
+assertEquals({ a: 1, b: 2 }, { b: 2, a: 1 });
+```
+
+### The second argument is the expectation
+
+Not a label. An error `name` or a substring of its message, a `RegExp` over the
+message, or a constructor for an `instanceof` check. The failure label is the
+third argument.
+
+```js
+assertThrows(() => parse(bad), TypeError);
+assertThrows(() => parse(bad), "field number 0");
+assertThrows(() => parse(bad), /number 0 is not/, "the parser accepted it");
+await assertRejects(() => fetchIt(), "TimeoutError");
+```
+
+<Callout type="note" title="Sharing test code">
+  Because the assertions are imported, a helper module can use them:
+
+```js
+// helpers.js
+import { assertEquals } from "runtime:test";
+export const assertSorted = (xs) => assertEquals(xs, [...xs].sort());
+```
+
+  That was impossible while they were globals — the harness reached only the
+  file being run.
+</Callout>

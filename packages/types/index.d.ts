@@ -21,4 +21,5 @@
 /// <reference path="./runtime-wasi.d.ts" />
 /// <reference path="./runtime-system.d.ts" />
 /// <reference path="./runtime-build.d.ts" />
+/// <reference path="./runtime-test.d.ts" />
 /// <reference path="./runtime-watch.d.ts" />

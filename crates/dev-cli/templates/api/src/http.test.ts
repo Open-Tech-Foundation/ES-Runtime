@@ -1,3 +1,4 @@
+import { test, assert, assertEquals, assertRejects } from "runtime:test";
 import { HttpError, json, noContent, readJson, securityHeaders, toResponse } from "./http.ts";
 
 test("json carries its type and the security headers", async () => {

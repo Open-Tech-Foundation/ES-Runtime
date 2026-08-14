@@ -1,3 +1,4 @@
+import { test, assert, assertEquals } from "runtime:test";
 import { escape, head, pickMeta } from "./head.ts";
 
 test("the deepest route that describes a title is the one that wins", () => {

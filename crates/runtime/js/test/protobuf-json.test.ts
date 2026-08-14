@@ -1,3 +1,4 @@
+import { test, assertEquals } from "runtime:test";
 import { Schema } from "../serialization/protobuf/schema.ts";
 
 test("scalar JSON mapping: 64-bit as string, bytes as base64, enum as name", () => {

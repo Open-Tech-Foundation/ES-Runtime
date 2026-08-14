@@ -1509,11 +1509,17 @@ fn watch_needs_a_file_to_watch() {
 #[test]
 fn test_runs_discovered_files_and_reports_failures() {
     let dir = build_dir("t_run");
-    write_in(&dir, "ok.test.mjs", "test('passes', () => assert(true));\n");
+    write_in(
+        &dir,
+        "ok.test.mjs",
+        "import { test, assert } from 'runtime:test';\n\
+         test('passes', () => assert(true));\n",
+    );
     write_in(
         &dir,
         "bad.test.mjs",
-        "test('fails', () => assertEquals(1, 2));\n",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('fails', () => assertEquals(1, 2));\n",
     );
     // Not a test file: discovery must not sweep in ordinary source.
     write_in(&dir, "helper.mjs", "export const x = 1;\n");
@@ -1537,7 +1543,8 @@ fn a_passing_suite_exits_zero() {
     write_in(
         &dir,
         "a.test.mjs",
-        "test('sync', () => assert(true));\n\
+        "import { test, assert, assertThrows, assertRejects } from 'runtime:test';\n\
+         test('sync', () => assert(true));\n\
          test('async', async () => { const v = await Promise.resolve(1); assert(v === 1); });\n\
          test('throws', () => assertThrows(() => { throw new Error('x'); }));\n\
          test('rejects', async () => await assertRejects(async () => { throw new Error('x'); }));\n",
@@ -1563,7 +1570,8 @@ fn a_typescript_test_file_runs_with_its_imports() {
     write_in(
         &dir,
         "math.test.ts",
-        "import { add } from './math.ts';\n\
+        "import { test, assertEquals } from 'runtime:test';\n\
+         import { add } from './math.ts';\n\
          interface Case { a: number; b: number; want: number }\n\
          test('adds', () => {\n\
          \x20 const c: Case = { a: 2, b: 3, want: 5 };\n\
@@ -1579,14 +1587,18 @@ fn a_typescript_test_file_runs_with_its_imports() {
 }
 
 /// The property that makes a failure actionable: the frame names the line the
-/// developer wrote, not a line the injected harness moved it to.
+/// developer wrote. It used to be the interesting test, because a harness was
+/// prepended to the file and had to be folded onto one line to avoid moving
+/// every line number. Nothing is injected now — the test API is imported — so
+/// this asserts the property still holds with the mechanism gone.
 #[test]
 fn a_failure_names_the_line_the_developer_wrote() {
     let dir = build_dir("t_lines");
     write_in(
         &dir,
         "lines.test.mjs",
-        "test('fails on line three', () => {\n  const x = 1;\n  assert(x === 2, 'nope');\n});\n",
+        "import { test, assert } from 'runtime:test';\n\
+         test('fails on line four', () => {\n  const x = 1;\n  assert(x === 2, 'nope');\n});\n",
     );
     let out = esdev_in(&dir)
         .arg("test")
@@ -1595,24 +1607,25 @@ fn a_failure_names_the_line_the_developer_wrote() {
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(!out.status.success());
     assert!(
-        text.contains("lines.test.mjs:3:"),
-        "the harness renumbered the file:\n{text}"
+        text.contains("lines.test.mjs:4:"),
+        "the failing line was renumbered:\n{text}"
     );
 }
 
-/// The `.ts` counterpart of the test above, which is the one that matters: the
-/// harness is folded onto a single line so it cannot renumber the file, but for
-/// a typed file it used to be prepended *before* the stripper — and the
-/// stripper re-prints through oxc's codegen, which unfolded it again. This
-/// reported line 44 for an assertion on line 3. The sibling test above passed
-/// throughout, because `.mjs` never reaches the printer.
+/// The `.ts` counterpart, and the one that has always been at risk: a typed
+/// file goes through oxc's codegen, which re-prints it. The old harness was
+/// prepended *before* that step and came back out unfolded, reporting line 44
+/// for an assertion on line 3 — a bug the `.mjs` sibling above could never
+/// catch, because `.mjs` never reaches the printer. There is no harness to
+/// unfold now; what is left under test is the stripper itself.
 #[test]
 fn a_typescript_failure_names_the_line_the_developer_wrote() {
     let dir = build_dir("t_lines_ts");
     write_in(
         &dir,
         "lines.test.ts",
-        "test('fails on line three', () => {\n  const x: number = 1;\n  assert(x === 2, 'nope');\n});\n",
+        "import { test, assert } from 'runtime:test';\n\
+         test('fails on line four', () => {\n  const x: number = 1;\n  assert(x === 2, 'nope');\n});\n",
     );
     let out = esdev_in(&dir)
         .arg("test")
@@ -1621,8 +1634,8 @@ fn a_typescript_failure_names_the_line_the_developer_wrote() {
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(!out.status.success());
     assert!(
-        text.contains("lines.test.ts:3:"),
-        "the harness renumbered the typed file:\n{text}"
+        text.contains("lines.test.ts:4:"),
+        "the typed file was renumbered:\n{text}"
     );
 }
 
@@ -1636,6 +1649,8 @@ fn assert_equals_compares_structurally() {
         &dir,
         "eq.test.mjs",
         r#"
+import { test, assert, assertEquals } from "runtime:test";
+
 const no = (fn, label) => {
   let threw = false;
   try { fn(); } catch { threw = true; }
@@ -1679,6 +1694,8 @@ fn assert_throws_checks_the_error_it_was_given() {
         &dir,
         "throws.test.mjs",
         r#"
+import { test, assert, assertThrows, assertRejects } from "runtime:test";
+
 const no = (fn, label) => {
   let threw = false;
   try { fn(); } catch { threw = true; }
@@ -1721,6 +1738,105 @@ test('async', async () => {
     assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
 }
 
+/// What the globals could not do: a **helper module** beside the test file can
+/// use the assertions. The harness was injected into the entry only, so a
+/// shared `test-helpers.ts` — the one place a suite most wants to share code —
+/// had no `assertEquals` to call.
+#[test]
+fn a_helper_module_can_import_the_assertions() {
+    let dir = build_dir("t_helper");
+    write_in(
+        &dir,
+        "helper.mjs",
+        "import { assertEquals } from 'runtime:test';\n\
+         export const assertSorted = (xs) => assertEquals(xs, [...xs].sort());\n",
+    );
+    write_in(
+        &dir,
+        "use.test.mjs",
+        "import { test } from 'runtime:test';\n\
+         import { assertSorted } from './helper.mjs';\n\
+         test('a helper asserts', () => assertSorted([1, 2, 3]));\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(stdout(&out).contains("1 passed"), "{}", stdout(&out));
+}
+
+/// A test that never settles is a **failure**, not a hang and not an omission.
+/// The old epilogue awaited every pending promise, so this file hung forever;
+/// with the tally in the host, the case is simply never finished, and a run
+/// that reported "1 passed" and exited zero would be lying about the other one.
+#[test]
+fn a_test_that_never_finishes_fails_the_run() {
+    let dir = build_dir("t_unfinished");
+    write_in(
+        &dir,
+        "hangs.test.mjs",
+        "import { test, assert } from 'runtime:test';\n\
+         test('finishes', () => assert(true));\n\
+         test('never finishes', async () => { await new Promise(() => {}); });\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("FAIL never finishes"), "{text}");
+    assert!(text.contains("never finished"), "{text}");
+    assert!(text.contains("1 passed, 1 failed"), "{text}");
+}
+
+/// A test file is a module like any other, so running one directly is running
+/// a module — no subcommand needed, and the same report either way.
+#[test]
+fn a_test_file_runs_on_its_own() {
+    let dir = build_dir("t_direct");
+    write_in(
+        &dir,
+        "direct.test.mjs",
+        "import { test, assertEquals } from 'runtime:test';\n\
+         test('adds', () => assertEquals(2 + 3, 5));\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("direct.test.mjs")
+        .output()
+        .expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    assert!(
+        stdout(&out).contains("1 passed, 0 failed"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// And `runtime:test` is `esdev`'s, like the other two: a test file is never a
+/// production artifact.
+#[test]
+fn runtime_test_does_not_exist_under_esrun() {
+    let Some(esrun) = sibling_binary("esrun") else {
+        eprintln!("skipping: esrun is not built in this target dir");
+        return;
+    };
+    let dir = build_dir("t_esrun");
+    let app = write_in(&dir, "app.mjs", "import 'runtime:test';\n");
+
+    let out = Command::new(esrun).arg(&app).output().expect("spawn esrun");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("unknown built-in module"),
+        "{}",
+        stderr(&out)
+    );
+}
+
 /// One process per file: a file that exits must not take the run with it, and
 /// the others must still be reported.
 #[test]
@@ -1729,12 +1845,15 @@ fn a_file_that_exits_does_not_end_the_run() {
     write_in(
         &dir,
         "a_exits.test.mjs",
-        "import { exit } from 'runtime:process';\ntest('bails', () => exit(3));\n",
+        "import { test } from 'runtime:test';\n\
+         import { exit } from 'runtime:process';\n\
+         test('bails', () => exit(3));\n",
     );
     write_in(
         &dir,
         "b_fine.test.mjs",
-        "test('fine', () => assert(true));\n",
+        "import { test, assert } from 'runtime:test';\n\
+         test('fine', () => assert(true));\n",
     );
 
     let out = esdev_in(&dir)
@@ -1749,8 +1868,16 @@ fn a_file_that_exits_does_not_end_the_run() {
 #[test]
 fn a_filter_selects_by_path() {
     let dir = build_dir("t_filter");
-    write_in(&dir, "alpha.test.mjs", "test('a', () => assert(true));\n");
-    write_in(&dir, "beta.test.mjs", "test('b', () => assert(true));\n");
+    write_in(
+        &dir,
+        "alpha.test.mjs",
+        "import { test, assert } from 'runtime:test';\ntest('a', () => assert(true));\n",
+    );
+    write_in(
+        &dir,
+        "beta.test.mjs",
+        "import { test, assert } from 'runtime:test';\ntest('b', () => assert(true));\n",
+    );
 
     let out = esdev_in(&dir)
         .args(["test", "alpha"])

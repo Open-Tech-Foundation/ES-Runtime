@@ -1,3 +1,4 @@
+import { test, assertEquals } from "runtime:test";
 import { formatCount, nextId, type Item } from "./items.ts";
 
 const items = (...ids: number[]): Item[] => ids.map((id) => ({ id, label: `Item ${id}` }));

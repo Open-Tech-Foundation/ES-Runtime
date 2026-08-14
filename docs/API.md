@@ -28,6 +28,7 @@ module's operations are gated on an explicit [`Capability`](#capabilities).
 - [`runtime:wasi`](#runtimewasi)
 - [`runtime:system`](#runtimesystem)
 - [`runtime:build`](#runtimebuild) — `esdev` only
+- [`runtime:test`](#runtimetest) — `esdev` only
 - [`runtime:watch`](#runtimewatch) — `esdev` only
 - [Error codes](#error-codes)
 
@@ -844,6 +845,7 @@ the required capability has been granted.
 | `runtime:serialization` | Available   | None       | [↓](#runtimeserialization)           |
 | `runtime:hashing` | Available   | None — `Entropy` for `password.hash` only | [↓](#runtimehashing) |
 | `runtime:build`   | Available — **`esdev` only** | `FileRead` (+ `FileWrite` to `write()`) | [↓](#runtimebuild) |
+| `runtime:test`    | Available — **`esdev` only** | none | [↓](#runtimetest) |
 | `runtime:watch`   | Available — **`esdev` only** | `FileRead` | [↓](#runtimewatch) |
 
 ---
@@ -2683,6 +2685,70 @@ module graph, `node_modules` — it reads itself, with this process's authority
 rather than through the jail. A module graph's extent is not knowable up front,
 and a check that stopped at the first `node_modules` symlink would look like a
 boundary without being one. Stated rather than implied.
+
+---
+
+## `runtime:test`
+
+`test()` and the assertions `esdev test` runs.
+
+- **Capability:** none. An assertion computes and reaches nothing; the tally is
+  bookkeeping the process keeps about itself.
+- **Status:** Available under **`esdev` only**. A test file is never a
+  production artifact (D59), so `esrun` does not serve this module.
+- **Loading:** on demand.
+
+```js
+import { test, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
+
+test("adds", () => assertEquals(add(2, 3), 5));
+test("fetches", async () => assertEquals((await get("/")).status, 200));
+```
+
+These were **globals** until now, prepended to each test file's own source.
+Importing them fixes three things at once: the runtime hands out no ambient
+names anywhere else; a helper module beside the test file can now use the
+assertions (only the entry was ever wrapped); and they have types, so a `.ts`
+test file no longer references five undeclared names.
+
+Run a file with `esdev test`, or directly — `esdev app.test.ts` prints the same
+report, because what makes a run a test run is the module it imported.
+
+### `test(name, fn)`
+
+Registers a test and **starts it immediately**; `fn` may be `async`. Tests are
+not queued, so one awaiting a timer does not hold up the next. `esdev` prints
+the tally once the program reaches quiescence and exits non-zero if anything
+failed.
+
+A test that never settles is reported as a failure — *"the test never finished"*
+— rather than left out of a green run.
+
+### Assertions
+
+| Function | |
+| --- | --- |
+| `assert(condition, message?)` | Fails unless `condition` is truthy. |
+| `assertEquals(actual, expected, message?)` | Fails unless the two are **structurally** equal. |
+| `assertThrows(fn, want?, message?)` | Fails unless `fn` throws, and unless the error matches `want`. |
+| `assertRejects(fn, want?, message?)` | The async form. Returns a promise — `await` it. |
+
+`assertEquals` walks the values rather than stringifying them: `BigInt` and
+`NaN` through `Object.is`, typed arrays and `ArrayBuffer` byte by byte, `Map`
+and `Set` by contents, `Date`/`RegExp`/`Error` by what identifies them, objects
+by their key *set* rather than key order, and cycles terminate. Stringifying was
+the original implementation and could not express the assertion an int64 test
+most needs — `JSON.stringify` throws on a `BigInt`.
+
+`want` is **what the error must be**, not a label: an error `name` or a
+substring of its message, a `RegExp` over the message, or a constructor for an
+`instanceof` check. The failure label is the third argument.
+
+```js
+assertThrows(() => parse(bad), TypeError);
+assertThrows(() => parse(bad), "field number 0");
+await assertRejects(() => fetchIt(), /timed out/, "the client should give up");
+```
 
 ---
 

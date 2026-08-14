@@ -1,3 +1,4 @@
+import { test, assertEquals, assertThrows } from "runtime:test";
 import { Schema } from "../serialization/protobuf/schema.ts";
 
 test("exact wire bytes for a simple message", () => {

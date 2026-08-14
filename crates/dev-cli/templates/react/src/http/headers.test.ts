@@ -1,3 +1,4 @@
+import { test, assert, assertEquals } from "runtime:test";
 import { nonce, securityHeaders } from "./headers.ts";
 
 test("a nonce is unguessable and never repeats", () => {

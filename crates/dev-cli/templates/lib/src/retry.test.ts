@@ -1,3 +1,4 @@
+import { test, assert, assertEquals, assertRejects } from "runtime:test";
 import { retry } from "./retry.ts";
 
 /** A function that fails `times` times, then succeeds. */

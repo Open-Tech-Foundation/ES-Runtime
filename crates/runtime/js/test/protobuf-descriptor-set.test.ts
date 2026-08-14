@@ -1,3 +1,4 @@
+import { test, assertEquals } from "runtime:test";
 import { file } from "runtime:fs";
 import { Schema } from "../serialization/protobuf/schema.ts";
 

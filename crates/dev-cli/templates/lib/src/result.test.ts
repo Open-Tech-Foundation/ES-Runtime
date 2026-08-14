@@ -1,3 +1,4 @@
+import { test, assert, assertEquals } from "runtime:test";
 import { attempt, err, ok } from "./result.ts";
 
 test("ok and err narrow on the discriminant", () => {

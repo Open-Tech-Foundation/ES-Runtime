@@ -10,6 +10,36 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:test` — the test API, imported rather than ambient (`esdev` only).**
+
+  ```js
+  import { test, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
+
+  test("adds", () => assertEquals(add(2, 3), 5));
+  ```
+
+  **Breaking:** `test` and the four assertions are no longer globals. A test
+  file must import them. Every test file in this repository and in the `esdev
+  create` templates was updated; the API itself is unchanged.
+
+  They were globals prepended to each test file's own source, folded onto a
+  single physical line so the file's line 1 stayed line 1, with an epilogue
+  appended to await and report. Three things were wrong with that, and an
+  import fixes all of them: this runtime hands out no ambient names anywhere
+  else; only the *entry* was wrapped, so a shared `test-helpers.ts` beside the
+  test file could not call `assertEquals`; and there was nowhere to declare
+  them, so a `.ts` test file referenced five undeclared names and `tsc
+  --noEmit` failed on a suite that ran perfectly.
+
+  The tally moved into the host, which removes the appended epilogue too — so
+  what runs is now byte for byte the file on disk. Two things follow:
+
+  - **`esdev app.test.ts` works on its own.** A test file is an ordinary
+    module, and any run that imported `runtime:test` prints the same report.
+  - **A test that never settles is a failure**, reported as *"the test never
+    finished"*. The epilogue used to `await` every pending promise, so such a
+    test hung the file forever.
+
 - **`runtime:build` — the bundler, callable from a program (`esdev` only).**
   rolldown is already inside `esdev`; it is what `esdev build` runs. What was
   missing was a way for *guest code* to reach it — and without that, a

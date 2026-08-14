@@ -17,9 +17,12 @@ Exits non-zero if any file fails.
 
 ## Write one
 
-The globals are already defined — there is nothing to import.
+The API comes from [`runtime:test`](/api/test), like everything else on this
+runtime.
 
 ```ts
+import { test, assertEquals, assertRejects } from "runtime:test";
+
 test("adds", () => {
   assertEquals(1 + 1, 2);
 });
@@ -27,6 +30,15 @@ test("adds", () => {
 test("rejects", async () => {
   await assertRejects(() => fetch("http://127.0.0.1:1/"));
 });
+```
+
+Because it is an import, a **helper module** beside your test file can use the
+assertions too:
+
+```ts
+// helpers.ts
+import { assertEquals } from "runtime:test";
+export const assertSorted = (xs: number[]) => assertEquals(xs, [...xs].sort());
 ```
 
 | | |
@@ -62,18 +74,40 @@ the prelude snapshot makes that cheap.
 `--file=<path>` is what a child is invoked with, and is equally a supported way
 to run one file by hand.
 
-## The file is the entry
+## The file is the entry, unaltered
 
 It keeps its own path, its module resolution, its relative imports and its
-TypeScript, and simply arrives with `test()` already defined. Nothing wraps it
-and nothing imports it.
+TypeScript — and nothing is added to it. What runs is byte for byte the file on
+disk, so a failing assertion names the line you wrote because it *is* the line
+you wrote.
 
-That matters for line numbers: types are stripped first and the harness is
-injected afterwards as a **single physical line**, so a failing assertion names
-the line you wrote. Only line 1's columns shift.
+That was not always true. The API used to be five globals prepended to the file
+as a single physical line, with an epilogue appended to await and report, and
+keeping your line 1 as line 1 was a constraint the harness had to be written
+around. Moving the API into a module and the tally into the host removed both.
+
+Since a test file is now an ordinary module, running one directly works and
+reports the same way:
+
+```sh
+esdev app.test.ts
+```
+
+## A test that never finishes
+
+It is reported as a **failure**, not a hang:
+
+```text
+  FAIL never finishes
+    the test never finished — it is waiting on something that never happened
+  3 passed, 1 failed
+```
+
+The runner knows a case started and never settled. It used to await every
+pending promise, so a test waiting on something that never happened hung the
+file forever.
 
 <Callout type="note" title="Not yet">
   Parallelism across files, `describe` nesting, per-file timeouts, and a
-  machine-readable reporter. A reported stack also still includes the harness's
-  own frames, all at line 1 — noise rather than wrong.
+  machine-readable reporter.
 </Callout>

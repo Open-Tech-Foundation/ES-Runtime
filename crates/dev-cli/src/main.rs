@@ -1095,20 +1095,24 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
 /// invoked with, and is equally a supported way to run one file by hand.
 async fn run_tests(config: TestConfig) -> ExitCode {
     if let Some(file) = config.file {
-        let path = std::path::PathBuf::from(&file);
+        // Nothing is added to the file. It is an ordinary run of an ordinary
+        // module — the same transform any `.ts` gets — and the test API comes
+        // from the `runtime:test` the file imported. What makes this a *test*
+        // run is what `finish()` finds afterwards, not anything done to the
+        // source.
         let run = Config {
             source: Source::File(file.clone()),
             args: Vec::new(),
             capabilities: es_runtime_common::CapabilitySet::all(),
             scopes: std::collections::HashMap::new(),
             options: RunOptions::default(),
-            transform: Some(std::sync::Arc::new(test::TestTransform::new(&path))),
+            transform: Some(std::sync::Arc::new(TypeStripper)),
             extensions: guest::extensions(),
             observer: None,
             inspector: None,
         };
         return match es_runtime_cli_common::run("esdev", run).await {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(()) => guest::test::finish(),
             Err(err) => {
                 print_error(&err);
                 ExitCode::FAILURE
@@ -1205,7 +1209,10 @@ async fn main() -> ExitCode {
         Err(err) => Err(err),
     };
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        // Whatever the command line called this run, a program that imported
+        // `runtime:test` ran tests, and their tally decides the exit code. One
+        // that did not prints nothing and succeeds — which is every other run.
+        Ok(()) => guest::test::finish(),
         Err(err) => {
             print_error(&err);
             ExitCode::FAILURE

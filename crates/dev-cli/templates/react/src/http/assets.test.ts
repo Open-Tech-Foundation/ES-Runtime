@@ -1,3 +1,4 @@
+import { test, assert, assertEquals } from "runtime:test";
 import { cacheControl, contentType, isAssetName } from "./assets.ts";
 
 test("a content type is chosen by extension, case-insensitively", () => {

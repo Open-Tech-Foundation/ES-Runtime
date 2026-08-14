@@ -22,6 +22,7 @@ const NAV = [
       { title: "runtime:system", path: "/api/system" },
       { title: "runtime:wasi", path: "/api/wasi" },
       { title: "runtime:build", path: "/api/build" },
+      { title: "runtime:test", path: "/api/test" },
       { title: "runtime:watch", path: "/api/watch" },
     ],
   },

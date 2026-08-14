@@ -114,18 +114,19 @@ that exits leaves the watcher up.
   stop cleanly, so a restart there kills rather than drains.
 </Callout>
 
-## Two modules only esdev serves
+## Three modules only esdev serves
 
-The bundler and the file watcher are also available **to the program**, as
-`runtime:` modules that exist under `esdev` and nowhere else:
+Development machinery is available **to the program** as well as to the command
+line — as `runtime:` modules that exist under `esdev` and nowhere else:
 
 | Module | |
 | --- | --- |
 | [`runtime:build`](/api/build) | rolldown, with rollup's plugin hooks — running in your isolate |
+| [`runtime:test`](/api/test) | `test()` and the assertions [`esdev test`](/docs/esdev/test) runs |
 | [`runtime:watch`](/api/watch) | file-change events, with a watch set you can grow while it runs |
 
-They are here for the thing a subcommand cannot be: a **framework's dev
-server**, which bundles a route on demand, keeps the chunk in memory, serves it,
+The first and last are here for the thing a subcommand cannot be: a
+**framework's dev server**, which bundles a route on demand, keeps the chunk in memory, serves it,
 and on a save drops exactly the chunks that used the changed file. The cache,
 the browser websocket and the route table belong to that program, so what it
 needs from this toolchain is an API rather than a command.
@@ -138,7 +139,7 @@ const bundle = await build({ input: route, plugins: [mdx()] });
 const { output, watchFiles } = await bundle.generate({ codeSplitting: false });
 ```
 
-`esrun` serves neither: importing one there fails at load rather than
+`esrun` serves none of them: importing one there fails at load rather than
 half-working. See [the bundler bridge](/docs/internals/bundler) for how a
 parallel bundler and a single-threaded isolate share the work.
 

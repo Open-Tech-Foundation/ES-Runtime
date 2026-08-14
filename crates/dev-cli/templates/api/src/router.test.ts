@@ -1,3 +1,4 @@
+import { test, assertEquals } from "runtime:test";
 import { Router } from "./router.ts";
 
 const ok = () => new Response("ok");
