@@ -24,10 +24,13 @@
 /// Deliberately not the bundler's own platform enum: this is what *we* assert,
 /// and it survives changing what is underneath. The two map onto each other at
 /// the two call sites that speak to a bundler, and nowhere else.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Target {
     /// This runtime — neither a browser nor Node, which is the whole reason a
-    /// condition has to be asserted rather than implied by a platform.
+    /// condition has to be asserted rather than implied by a platform. The
+    /// default, because a build run here is a build for here unless it says
+    /// otherwise.
+    #[default]
     Server,
     /// A browser, where a `document` and a `window` exist.
     Browser,
@@ -35,6 +38,11 @@ pub enum Target {
     /// `runtime:build` can ask for this, and only a caller bundling something
     /// to run somewhere else would.
     Node,
+    /// An input to somebody else's build. A library asserts **no** condition:
+    /// `worker` decides which build of a dependency is inlined, a library
+    /// inlines none of them, and baking one in publishes a package that has
+    /// already chosen for its consumer (D59).
+    Library,
 }
 
 /// The condition a Web-API-targeting package uses for the build that does not
@@ -83,6 +91,8 @@ pub fn conditions(target: Target, extra: impl IntoIterator<Item = String>) -> Ve
         // The bundler's Node platform asserts `node` and `require` itself, and
         // asserting them twice is not better than once.
         Target::Node => &[],
+        // Not ours to choose. See the variant.
+        Target::Library => &[],
     };
     let mut names: Vec<String> = base.iter().map(|c| (*c).to_string()).collect();
     names.extend(extra);
@@ -92,7 +102,10 @@ pub fn conditions(target: Target, extra: impl IntoIterator<Item = String>) -> Ve
 /// The main fields a target falls back on, or `None` to leave the bundler's own.
 pub fn main_fields(target: Target) -> Option<Vec<String>> {
     match target {
-        Target::Server | Target::Browser => {
+        // A library still has to *resolve* what it externalises, so it takes
+        // the same fallback: choosing a build and finding one are different
+        // questions.
+        Target::Server | Target::Browser | Target::Library => {
             Some(MAIN_FIELDS.iter().map(|f| (*f).to_string()).collect())
         }
         // Node's are the bundler's to know, and it does.
@@ -142,6 +155,17 @@ mod tests {
 
     /// Node is the one target whose resolution the bundler already knows, and
     /// restating it here would be a second copy to keep current.
+    /// A library is an input to somebody else's build, and a condition asserted
+    /// here is one its consumer can no longer choose.
+    #[test]
+    fn a_library_asserts_nothing_of_its_own() {
+        assert!(conditions(Target::Library, []).is_empty());
+        assert_eq!(
+            conditions(Target::Library, ["custom".to_string()]),
+            vec!["custom"]
+        );
+    }
+
     #[test]
     fn node_is_left_to_the_bundler() {
         assert!(conditions(Target::Node, []).is_empty());

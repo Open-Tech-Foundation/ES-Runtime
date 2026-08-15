@@ -366,8 +366,31 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
                 .collect(),
         )),
         Some(Value::String(one)) => Some(External::List(vec![one])),
-        // A function crossed as the handle the guest registered it under.
-        Some(Value::Number(id)) => Some(External::Predicate(id)),
+        // A function, crossed as the handle the guest registered it under, and
+        // bound here to the same bridge a plugin hook rides. Every specifier
+        // the bundler meets becomes a question for the isolate; the answers are
+        // not cached, because the predicate is the guest's and a bundler that
+        // remembered its answers would be deciding when it stopped asking.
+        Some(Value::Number(id)) => {
+            let bridge = state.bridge.clone();
+            Some(External::Predicate(std::sync::Arc::new(
+                move |specifier: &str, importer: Option<&str>, resolved: bool| {
+                    let bridge = bridge.clone();
+                    let args = vec![
+                        Value::String(specifier.to_string()),
+                        match importer {
+                            Some(importer) => Value::String(importer.to_string()),
+                            None => Value::Null,
+                        },
+                        Value::Bool(resolved),
+                    ];
+                    Box::pin(async move {
+                        let answer = bridge.call(id, "external", args, Vec::new(), None).await?;
+                        Ok(matches!(answer, Value::Bool(true)))
+                    })
+                },
+            )))
+        }
         _ => None,
     };
 
@@ -375,25 +398,33 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
     let resolve_field = |name: &str| resolve.as_ref().and_then(|r| field(r, name)).cloned();
 
     Ok(Options {
-        cwd: Some(cwd),
-        input,
-        external,
-        platform: get("platform")
-            .as_ref()
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        conditions: string_list(resolve_field("conditionNames").as_ref()),
-        main_fields: string_list(resolve_field("mainFields").as_ref()),
-        alias: alias_list(resolve_field("alias").as_ref()),
-        extensions: string_list(resolve_field("extensions").as_ref()),
-        define: pairs(get("define").as_ref()),
-        plugins: plugins(get("plugins").as_ref())?,
-        minify: matches!(get("minify"), Some(Value::Bool(true))),
-        treeshake: match get("treeshake") {
-            Some(Value::Bool(on)) => Some(on),
-            _ => None,
+        bundler: crate::bundler::Options {
+            cwd: Some(cwd),
+            input,
+            external,
+            // `neutral` is this runtime, and the default for the same reason it
+            // is the subcommand's: a program bundling here is bundling for here
+            // unless it says otherwise.
+            platform: match get("platform").as_ref().and_then(Value::as_str) {
+                Some("browser") => crate::resolve::Target::Browser,
+                Some("node") => crate::resolve::Target::Node,
+                _ => crate::resolve::Target::Server,
+            },
+            conditions: string_list(resolve_field("conditionNames").as_ref()),
+            main_fields: string_list(resolve_field("mainFields").as_ref()),
+            alias: alias_list(resolve_field("alias").as_ref()),
+            extensions: string_list(resolve_field("extensions").as_ref()),
+            define: pairs(get("define").as_ref()),
+            minify: matches!(get("minify"), Some(Value::Bool(true))),
+            treeshake: match get("treeshake") {
+                Some(Value::Bool(on)) => Some(on),
+                _ => None,
+            },
+            preserve_modules: None,
+            preserve_modules_root: None,
+            output: output_options(Some(&options)),
         },
-        output: output_options(Some(&options)),
+        plugins: plugins(get("plugins").as_ref())?,
     })
 }
 

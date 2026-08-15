@@ -53,7 +53,30 @@ is the point, since none of the three has any business in a deployment.
 
   This is the second divergence of its kind between the two paths, after
   `runtime:build` not installing the CSS Modules pass. Both were found by
-  looking, not by a test failing.
+  looking, not by a test failing — so the fix went one step further, below.
+
+### Changed
+
+- **There is one place a build becomes the bundler's options.** Both
+  divergences above were two translations of the same idea drifting apart, and
+  finding them by reading the two side by side is not a way of finding bugs.
+  `crates/dev-cli/src/bundler.rs` now owns the option types every build in this
+  binary describes itself with, and is the only place in the crate that
+  constructs a `BundlerOptions`. The `build` subcommand, the client bundle it
+  emits for a browser, and `runtime:build` fill in the same struct and call the
+  same translation. It is checkable by grep rather than by reading.
+
+  Two things follow, both visible:
+
+  - **`--lib` is a target rather than a flag.** The library rules — assert no
+    condition, define nothing, preserve modules, externalise everything that is
+    not its own source — sit with the other targets instead of as `if lib`
+    branches through a long struct literal.
+  - **A `--lib` build is neutral even when its target says `browser`.** It used
+    to take the browser platform, whose aliasing follows a package's `browser`
+    field — which bakes the consumer's environment into a published package, the
+    same objection that already stopped a library asserting conditions or
+    defining `NODE_ENV`.
 
 ## [0.2.0] - 2026-08-15
 

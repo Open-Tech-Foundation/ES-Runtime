@@ -19,91 +19,24 @@
 //! runtime per rebuild would be paying for it forty times a minute.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rolldown::{
-    BundlerBuilder, BundlerOptions, InputItem, IsExternal, OutputFormat, Platform,
-    RawMinifyOptions, ResolveOptions, SourceMapType, TreeshakeOptions,
-};
-use rolldown_common::CodeSplittingMode;
+use rolldown::BundlerBuilder;
 use tokio::sync::{mpsc, oneshot};
 
 use super::plugin::{Bridge, JsPlugin};
 
-/// Everything `build()` was given, in a form that can cross a thread.
-#[derive(Default)]
+pub use crate::bundler::{External, OutputOptions};
+
+/// Everything `build()` was given.
+///
+/// The bundler half is [`crate::bundler::Options`], which every build in this
+/// binary describes itself with; the plugins are the guest's own, declared
+/// against this project's contract and dispatched back into the isolate.
 pub struct Options {
-    pub cwd: Option<PathBuf>,
-    /// Entries, as `(name, import)`. A name is what the chunk is called; most
-    /// callers pass one nameless entry.
-    pub input: Vec<(Option<String>, String)>,
-    pub external: Option<External>,
-    pub platform: Option<String>,
-    pub conditions: Vec<String>,
-    pub main_fields: Vec<String>,
-    /// `find` → the replacements tried in order, rolldown's own alias shape.
-    pub alias: Vec<(String, Vec<String>)>,
-    pub extensions: Vec<String>,
-    pub define: Vec<(String, String)>,
+    pub bundler: crate::bundler::Options,
     pub plugins: Vec<Arc<crate::guest::build::contract::Plugin>>,
-    pub minify: bool,
-    pub treeshake: Option<bool>,
-    pub output: OutputOptions,
-}
-
-/// The half of the options that describes what comes *out*, which
-/// `generate()`/`write()` may override per call.
-#[derive(Clone, Default)]
-pub struct OutputOptions {
-    pub format: Option<String>,
-    pub dir: Option<String>,
-    pub file: Option<String>,
-    pub entry_filenames: Option<String>,
-    pub chunk_filenames: Option<String>,
-    pub asset_filenames: Option<String>,
-    /// `false` puts everything reachable in one chunk, dynamic `import()`
-    /// included — the setting a dev server that serves chunks from memory needs
-    /// when it is building one route at a time.
-    pub code_splitting: Option<bool>,
-    pub sourcemap: Option<String>,
-    pub banner: Option<String>,
-    pub footer: Option<String>,
-}
-
-impl OutputOptions {
-    /// Fields the caller set here win; the rest stay as `build()` left them.
-    fn over(self, base: &OutputOptions) -> OutputOptions {
-        OutputOptions {
-            format: self.format.or_else(|| base.format.clone()),
-            dir: self.dir.or_else(|| base.dir.clone()),
-            file: self.file.or_else(|| base.file.clone()),
-            entry_filenames: self
-                .entry_filenames
-                .or_else(|| base.entry_filenames.clone()),
-            chunk_filenames: self
-                .chunk_filenames
-                .or_else(|| base.chunk_filenames.clone()),
-            asset_filenames: self
-                .asset_filenames
-                .or_else(|| base.asset_filenames.clone()),
-            code_splitting: self.code_splitting.or(base.code_splitting),
-            sourcemap: self.sourcemap.or_else(|| base.sourcemap.clone()),
-            banner: self.banner.or_else(|| base.banner.clone()),
-            footer: self.footer.or_else(|| base.footer.clone()),
-        }
-    }
-}
-
-/// What `external` was: a list of specifiers, or a function in the guest.
-#[derive(Clone)]
-pub enum External {
-    List(Vec<String>),
-    /// The guest's handle for the predicate, called through the same bridge as
-    /// a plugin hook. A predicate rather than a list is not a nicety: a dev
-    /// server externalises `/__route/*` — a shape, not a set.
-    Predicate(f64),
 }
 
 /// One chunk of a finished build.
@@ -316,7 +249,7 @@ async fn run(
     bridge: Arc<Bridge>,
 ) -> Result<Built, String> {
     // What `generate()`/`write()` said wins; what only `build()` said stands.
-    let output = output.over(&options.output);
+    let output = output.over(&options.bundler.output);
     // Whatever a plugin says through `this.warn()` during this build. Rolldown
     // routes those to `on_log` and nowhere else, so without a sink here a
     // plugin's diagnostics would go to the same place as a `console.log` in a
@@ -333,6 +266,7 @@ async fn run(
     // exact failure that follows from our own passes and the guest's plugins
     // being two unrelated concepts. One list, in one order, is the fix.
     let cwd = options
+        .bundler
         .cwd
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -340,7 +274,7 @@ async fn run(
         vec![Arc::new(crate::cssmodules::CssModules::new(
             &cwd,
             crate::cssmodules::Collected::new(),
-            options.minify,
+            options.bundler.minify,
         ))];
     // Then one per declaration, each carrying its own filters. Built per build
     // rather than kept, because a build is where they are used and the options
@@ -351,7 +285,10 @@ async fn run(
     }));
 
     let mut bundler = BundlerBuilder::default()
-        .with_options(bundler_options(options, output, bridge, logs.clone())?)
+        .with_options(crate::bundler::translate(&options.bundler, output, {
+            let logs = logs.clone();
+            Some(Arc::new(move |line| logs.lock().expect("logs").push(line)))
+        })?)
         .with_plugins(plugins)
         .build()
         .map_err(reported!())?;
@@ -409,156 +346,5 @@ async fn run(
         assets,
         watch_files,
         warnings,
-    })
-}
-
-/// Translates the guest's options into rolldown's.
-fn bundler_options(
-    options: &Options,
-    output: OutputOptions,
-    bridge: Arc<Bridge>,
-    logs: Arc<std::sync::Mutex<Vec<String>>>,
-) -> Result<BundlerOptions, String> {
-    let input: Vec<InputItem> = options
-        .input
-        .iter()
-        .map(|(name, import)| InputItem {
-            name: name.clone(),
-            import: import.clone(),
-        })
-        .collect();
-    if input.is_empty() {
-        return Err("build: input is required".to_string());
-    }
-
-    let external = match &options.external {
-        None => None,
-        Some(External::List(list)) => Some(IsExternal::from(list.clone())),
-        // Every specifier the bundler meets is a question for the guest. The
-        // answers are not cached here: the predicate is the guest's, and a
-        // bundler that remembered its answers would be deciding when it stopped
-        // being asked.
-        Some(External::Predicate(id)) => {
-            let id = *id;
-            Some(IsExternal::Fn(Some(Arc::new(
-                move |specifier: &str, importer: Option<&str>, resolved: bool| {
-                    let bridge = bridge.clone();
-                    let args = vec![
-                        es_runtime_cli_common::Value::String(specifier.to_string()),
-                        match importer {
-                            Some(importer) => {
-                                es_runtime_cli_common::Value::String(importer.to_string())
-                            }
-                            None => es_runtime_cli_common::Value::Null,
-                        },
-                        es_runtime_cli_common::Value::Bool(resolved),
-                    ];
-                    Box::pin(async move {
-                        let answer = bridge.call(id, "external", args, Vec::new(), None).await?;
-                        Ok(matches!(answer, es_runtime_cli_common::Value::Bool(true)))
-                    })
-                },
-            ))))
-        }
-    };
-
-    // The same defaults the `build` subcommand asserts, from the same place.
-    // A guest bundling a server entry without naming a condition used to get
-    // none, so a package handed it the `node:` build of itself and the failure
-    // arrived at runtime, in a bundle that had built cleanly.
-    let target = match options.platform.as_deref() {
-        Some("browser") => crate::resolve::Target::Browser,
-        Some("node") => crate::resolve::Target::Node,
-        _ => crate::resolve::Target::Server,
-    };
-    let resolve = ResolveOptions {
-        condition_names: Some(crate::resolve::conditions(
-            target,
-            options.conditions.clone(),
-        )),
-        // Naming them replaces ours; there is one ordered list and a caller who
-        // wrote one means it. Not naming them takes the default rather than
-        // nothing, which is the divergence this closes.
-        main_fields: if options.main_fields.is_empty() {
-            crate::resolve::main_fields(target)
-        } else {
-            Some(options.main_fields.clone())
-        },
-        extensions: (!options.extensions.is_empty()).then(|| options.extensions.clone()),
-        alias: (!options.alias.is_empty()).then(|| {
-            options
-                .alias
-                .iter()
-                .map(|(find, to)| {
-                    (
-                        find.clone(),
-                        to.iter().map(|t| Some(t.clone())).collect::<Vec<_>>(),
-                    )
-                })
-                .collect()
-        }),
-        ..ResolveOptions::default()
-    };
-
-    Ok(BundlerOptions {
-        input: Some(input),
-        cwd: options.cwd.clone(),
-        external,
-        platform: Some(match target {
-            crate::resolve::Target::Browser => Platform::Browser,
-            crate::resolve::Target::Node => Platform::Node,
-            // Neither a browser nor Node, which is what this runtime is: saying
-            // either would pull in that platform's `main` fields and aliases.
-            // The conditions above are how a package's Web-API build is picked
-            // instead.
-            crate::resolve::Target::Server => Platform::Neutral,
-        }),
-        format: match output.format.as_deref() {
-            Some("cjs") => Some(OutputFormat::Cjs),
-            Some("iife") => Some(OutputFormat::Iife),
-            Some("umd") => Some(OutputFormat::Umd),
-            _ => Some(OutputFormat::Esm),
-        },
-        dir: output.dir,
-        file: output.file,
-        entry_filenames: output.entry_filenames.map(Into::into),
-        chunk_filenames: output.chunk_filenames.map(Into::into),
-        asset_filenames: output.asset_filenames.map(Into::into),
-        code_splitting: output.code_splitting.map(CodeSplittingMode::Bool),
-        sourcemap: match output.sourcemap.as_deref() {
-            Some("inline") => Some(SourceMapType::Inline),
-            Some("hidden") => Some(SourceMapType::Hidden),
-            Some("external" | "true") => Some(SourceMapType::File),
-            _ => None,
-        },
-        banner: output
-            .banner
-            .map(|text| rolldown_common::AddonOutputOption::String(Some(text))),
-        footer: output
-            .footer
-            .map(|text| rolldown_common::AddonOutputOption::String(Some(text))),
-        define: (!options.define.is_empty()).then(|| options.define.iter().cloned().collect()),
-        minify: options.minify.then_some(RawMinifyOptions::Bool(true)),
-        treeshake: match options.treeshake {
-            Some(false) => TreeshakeOptions::Boolean(false),
-            _ => TreeshakeOptions::default(),
-        },
-        resolve: Some(resolve),
-        // Where `this.warn()` ends up. Info and debug are dropped: a build that
-        // returned every `this.debug()` as a warning would train the consumer
-        // to ignore the list.
-        on_log: Some(rolldown_common::OnLog::new(Arc::new(
-            move |level, log: rolldown_common::Log| {
-                if matches!(level, rolldown_common::LogLevel::Warn) {
-                    let line = match &log.plugin {
-                        Some(plugin) => format!("{plugin}: {}", log.message),
-                        None => log.message.clone(),
-                    };
-                    logs.lock().expect("logs").push(line);
-                }
-                Box::pin(async { Ok(()) })
-            },
-        ))),
-        ..BundlerOptions::default()
     })
 }

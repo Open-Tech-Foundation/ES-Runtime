@@ -59,13 +59,9 @@
 //!   a typed contract; a build that emitted only JavaScript would leave every
 //!   author reaching for a second tool.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use rolldown::{
-    BundlerOptions, InputItem, IsExternal, OutputFormat, Platform, RawMinifyOptions,
-    ResolveOptions, TreeshakeOptions,
-};
+use rolldown::InputItem;
 
 /// What `esdev build` was asked to do.
 pub struct BuildConfig {
@@ -421,7 +417,6 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         )]
     };
     define.extend(config.defines);
-    let define: HashMap<String, String> = define.into_iter().collect();
 
     // Same reasoning for conditions: `worker` picks which build of a dependency
     // is inlined, and a library inlines none of them.
@@ -432,71 +427,23 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     // build written for somewhere without a `document`. Conditions match in the
     // order the *package author* wrote them (D40), so the wrong one being
     // present at all is enough to win.
-    let target = match config.platform {
-        crate::config::Platform::Server => crate::resolve::Target::Server,
-        crate::config::Platform::Browser => crate::resolve::Target::Browser,
-    };
-    // A library externalises everything that is not its own source, so there is
-    // nothing left for a condition to pick between — and baking one in would
-    // publish a package that had already chosen for its consumer.
-    let conditions = if config.lib {
-        config.conditions.clone()
+    let target = if config.lib {
+        crate::resolve::Target::Library
     } else {
-        crate::resolve::conditions(target, config.conditions.clone())
+        match config.platform {
+            crate::config::Platform::Server => crate::resolve::Target::Server,
+            crate::config::Platform::Browser => crate::resolve::Target::Browser,
+        }
     };
 
     let lib = config.lib;
-    let options = BundlerOptions {
-        input: Some(inputs),
+    let options = crate::bundler::Options {
+        input: inputs.into_iter().map(|i| (i.name, i.import)).collect(),
         cwd: Some(cwd.clone()),
-        dir: Some(out_dir.to_string_lossy().into_owned()),
-        entry_filenames: Some(filenames.clone().into()),
-        // Only meaningful for `--lib`, where a module that is not an entry is
-        // still a file somebody may import. Left at the same pattern so the
-        // emitted tree mirrors the source tree exactly, with no hashes in it —
-        // a hashed filename is unimportable and unpublishable.
-        chunk_filenames: lib.then(|| filenames.clone().into()),
-        preserve_modules: lib.then_some(true),
-        preserve_modules_root: preserve_root
-            .as_ref()
-            .map(|root| root.to_string_lossy().into_owned()),
-        format: Some(OutputFormat::Esm),
-        // Not a browser and not Node: this runtime is neither, and saying either
-        // would pull in that platform's `main` fields and aliases. The
-        // conditions above are how a package's Web-API build is selected, which
-        // is the part `platform` would otherwise be doing by implication.
-        //
-        // A browser target is the exception, because there it is simply true —
-        // and the aliases that come with it (a package's `browser` field, which
-        // predates `exports` and is still how a good deal of the registry
-        // redirects away from `node:` builtins) are the point of saying so.
-        platform: Some(match config.platform {
-            crate::config::Platform::Server => Platform::Neutral,
-            crate::config::Platform::Browser => Platform::Browser,
-        }),
-        resolve: Some(ResolveOptions {
-            condition_names: Some(conditions),
-            main_fields: crate::resolve::main_fields(target),
-            ..ResolveOptions::default()
-        }),
-        // The setting a hand-written config gets wrong. `runtime:fs` is served
-        // by the runtime and has no file behind it; inlining it would produce a
-        // bundle that dies on its first import.
-        //
-        // A library externalises everything that is not its own source as well.
-        // That is the difference between publishing a package and publishing a
-        // private copy of the registry: a consumer can dedupe, override or patch
-        // a dependency they still have, and can do none of those to one that was
-        // inlined into a file they did not write.
-        external: Some(IsExternal::Fn(Some(std::sync::Arc::new(
-            move |specifier: &str, _importer: Option<&str>, _resolved: bool| {
-                let is_external =
-                    specifier.starts_with("runtime:") || (lib && !is_local(specifier));
-                Box::pin(async move { Ok(is_external) })
-            },
-        )))),
-        define: Some(define.into_iter().collect()),
-        minify: config.minify.then_some(RawMinifyOptions::Bool(true)),
+        platform: target,
+        conditions: config.conditions.clone(),
+        define,
+        minify: config.minify,
         // **A library keeps every export it wrote.** Tree-shaking asks "what
         // does the entry use?", and for an application that is the whole
         // question — nothing else will ever run. For a library it is the wrong
@@ -510,12 +457,35 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         // the consumer rather than anything the build said. Whatever really is
         // dead here, the consumer's own build removes — it can only shake what
         // it was given.
-        treeshake: if lib {
-            TreeshakeOptions::Boolean(false)
-        } else {
-            TreeshakeOptions::default()
+        treeshake: lib.then_some(false),
+        // Only meaningful for `--lib`, where a module that is not an entry is
+        // still a file somebody may import.
+        preserve_modules: lib.then_some(true),
+        preserve_modules_root: preserve_root
+            .as_ref()
+            .map(|root| root.to_string_lossy().into_owned()),
+        // The setting a hand-written config gets wrong. `runtime:fs` is served
+        // by the runtime and has no file behind it; inlining it would produce a
+        // bundle that dies on its first import.
+        //
+        // A library externalises everything that is not its own source as well.
+        // That is the difference between publishing a package and publishing a
+        // private copy of the registry: a consumer can dedupe, override or patch
+        // a dependency they still have, and can do none of those to one that was
+        // inlined into a file they did not write.
+        external: Some(crate::bundler::External::when(move |specifier, _, _| {
+            specifier.starts_with("runtime:") || (lib && !is_local(specifier))
+        })),
+        output: crate::bundler::OutputOptions {
+            dir: Some(out_dir.to_string_lossy().into_owned()),
+            entry_filenames: Some(filenames.clone()),
+            // Left at the same pattern as an entry so the emitted tree mirrors
+            // the source tree exactly, with no hashes in it — a hashed filename
+            // is unimportable and unpublishable.
+            chunk_filenames: lib.then(|| filenames.clone()),
+            ..crate::bundler::OutputOptions::default()
         },
-        ..BundlerOptions::default()
+        ..crate::bundler::Options::default()
     };
 
     // The same CSS Modules plugin the browser build runs, and for the same
@@ -528,8 +498,9 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     // path relative to the project root, so both builds arrive at it
     // independently and neither has to tell the other. What the browser build
     // writes is the one copy.
+    let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
     let mut bundler = rolldown::BundlerBuilder::default()
-        .with_options(options)
+        .with_options(translated)
         .with_plugins(vec![std::sync::Arc::new(
             crate::cssmodules::CssModules::new(
                 &cwd,
@@ -628,54 +599,44 @@ pub async fn bundle_browser_entries(
         node_env(dev).to_string(),
     )];
     define.extend(defines);
-    let condition_names = crate::resolve::conditions(crate::resolve::Target::Browser, conditions);
 
     let names: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
-    let options = BundlerOptions {
-        input: Some(
-            entries
-                .into_iter()
-                .map(|(name, import)| InputItem {
-                    name: Some(name),
-                    import,
-                })
-                .collect(),
-        ),
+    let options = crate::bundler::Options {
+        input: entries
+            .into_iter()
+            .map(|(name, import)| (Some(name), import))
+            .collect(),
         cwd: Some(root.to_path_buf()),
-        dir: Some(out_dir.to_string_lossy().into_owned()),
-        // Written under the entry's own name and hashed *afterwards*, below.
-        // Nothing imports an entry — a chunk is imported by it, never the other
-        // way round — so renaming one once it is written breaks no reference,
-        // and it keeps this from having to read the bundler's own report of
-        // what it called things.
-        entry_filenames: Some("[name].js".to_string().into()),
-        // A chunk is always hashed: nothing names one, so there is no filename
-        // to keep stable, and a shared chunk that changed without its name
-        // changing is a browser running two halves of two builds.
-        chunk_filenames: Some("[name]-[hash].js".to_string().into()),
-        format: Some(OutputFormat::Esm),
-        platform: Some(Platform::Browser),
-        resolve: Some(ResolveOptions {
-            condition_names: Some(condition_names),
-            main_fields: crate::resolve::main_fields(crate::resolve::Target::Browser),
-            ..ResolveOptions::default()
-        }),
-        define: Some(
-            define
-                .into_iter()
-                .collect::<HashMap<_, _>>()
-                .into_iter()
-                .collect(),
-        ),
-        minify: minify.then_some(RawMinifyOptions::Bool(true)),
-        ..BundlerOptions::default()
+        platform: crate::resolve::Target::Browser,
+        conditions,
+        define,
+        minify,
+        output: crate::bundler::OutputOptions {
+            dir: Some(out_dir.to_string_lossy().into_owned()),
+            // Written under the entry's own name and hashed *afterwards*,
+            // below. Nothing imports an entry — a chunk is imported by it,
+            // never the other way round — so renaming one once it is written
+            // breaks no reference, and it keeps this from having to read the
+            // bundler's own report of what it called things.
+            entry_filenames: Some("[name].js".to_string()),
+            // A chunk is always hashed: nothing names one, so there is no
+            // filename to keep stable, and a shared chunk that changed without
+            // its name changing is a browser running two halves of two builds.
+            chunk_filenames: Some("[name]-[hash].js".to_string()),
+            ..crate::bundler::OutputOptions::default()
+        },
+        ..crate::bundler::Options::default()
     };
 
     // The one plugin: a `.module.css` import becomes its name mapping, and the
     // scoped CSS is pushed into `styles` for the caller to write out. See
     // [`crate::cssmodules`].
     let mut bundler = rolldown::BundlerBuilder::default()
-        .with_options(options)
+        .with_options(crate::bundler::translate(
+            &options,
+            options.output.clone(),
+            None,
+        )?)
         .with_plugins(vec![std::sync::Arc::new(
             crate::cssmodules::CssModules::new(root, styles.clone(), minify),
         )])

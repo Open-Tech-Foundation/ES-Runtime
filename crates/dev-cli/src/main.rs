@@ -39,6 +39,7 @@ use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 
 mod build;
+mod bundler;
 mod config;
 mod create;
 mod css;
