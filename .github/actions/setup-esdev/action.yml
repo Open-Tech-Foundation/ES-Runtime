@@ -1,0 +1,26 @@
+name: Set up esdev
+description: >
+  Installs the esdev development binary and puts it on PATH. The JS packages
+  build with it — `esdev build --lib src` is what turns their TypeScript into
+  the modules that ship.
+inputs:
+  version:
+    description: >
+      Release to install, as `0.1.0` or `esdev@0.1.0`. Defaults to the latest.
+    default: ""
+runs:
+  using: composite
+  steps:
+    # The released binary rather than a source build: compiling V8 to bundle a
+    # module tree would dominate the job, and this exercises our installer too.
+    #
+    # The repository is spelled out rather than taken from `github.repository`,
+    # so the action installs esdev even when a workflow elsewhere uses it.
+    - name: install esdev
+      shell: bash
+      env:
+        ESDEV_VERSION: ${{ inputs.version }}
+      run: |
+        curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh \
+          | bash -s -- --only=esdev
+        echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"

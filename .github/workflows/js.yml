@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - uses: ./.github/actions/tsr
+      - uses: ./.github/actions/setup-tsr
       - run: tsr install
       - run: tsr lint:ci
 
@@ -87,9 +87,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-      - uses: ./.github/actions/tsr
-        with:
-          esdev: "true"
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - run: tsr install
       - run: tsr test:serialization
       # The bundle is committed (the runtime embeds it at compile time), so it
@@ -124,9 +123,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
-      - uses: ./.github/actions/tsr
-        with:
-          esdev: "true"
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun
       - run: tsr install
       - run: tsr typecheck
@@ -171,9 +169,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The debug binary, not release: these tests check behaviour rather than
       # speed, and a release build of v8 is not worth the minutes here.
-      - uses: ./.github/actions/tsr
-        with:
-          esdev: "true"
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - run: tsr build:esrun
       - run: tsr install
       - run: tsr typecheck

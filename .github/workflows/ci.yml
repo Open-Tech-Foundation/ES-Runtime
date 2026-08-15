@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: ./.github/actions/tsr
+      - uses: ./.github/actions/setup-tsr
       - run: tsr fmt
 
   clippy:
@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - uses: ./.github/actions/tsr
+      - uses: ./.github/actions/setup-tsr
       - run: tsr clippy
 
   # Behavioral tests run on all three tier-1 platforms: filesystem/path semantics
@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - uses: ./.github/actions/tsr
+      - uses: ./.github/actions/setup-tsr
       - run: tsr test
       # One platform is enough for the conformance suite — it checks the driver,
       # not platform semantics — and the binary is already built above.
@@ -71,5 +71,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - uses: ./.github/actions/tsr
+      - uses: ./.github/actions/setup-tsr
       - run: tsr miri
