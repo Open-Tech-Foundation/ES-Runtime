@@ -67,7 +67,7 @@ use crate::config::Target;
 /// everything in it is content-hashed, which is the only thing that makes that
 /// safe. The HTML itself is *not* in it, because the HTML is the one file whose
 /// URL cannot change.
-const ASSET_DIR: &str = "assets";
+pub const ASSET_DIR: &str = "assets";
 
 /// What an HTML file references, and what is to be done with it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

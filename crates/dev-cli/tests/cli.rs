@@ -2896,6 +2896,117 @@ fn start_serves_a_frontend_project_and_reloads_it() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// **A browser-only edit does not restart the server.** Every rebuild used to
+/// SIGTERM the child and start it again, so editing a stylesheet cost every
+/// open connection and every warm cache the process had, to deliver a server
+/// byte for byte identical to the one just stopped.
+///
+/// The server is restarted when the build changed something it reads, and the
+/// browser is told to reload either way. Proved by a nonce fixed at startup: if
+/// the process is the same one, the nonce is the same one.
+#[test]
+fn a_browser_only_change_reloads_without_restarting_the_server() {
+    let dir = watch_dir("s_norestart");
+    let port = test_port("s_norestart");
+    let served = test_port("s_norestart_app");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    // The nonce is created once, when the module is evaluated. A restart is the
+    // only thing that can change it.
+    write_in(
+        &dir,
+        "src/server.mjs",
+        &format!(
+            "import {{ serve }} from 'runtime:http';\n\
+             const nonce = String(Math.random());\n\
+             serve({{ port: {served} }}, () => new Response('SERVER-A ' + nonce));\n"
+        ),
+    );
+    write_in(&dir, "src/main.mjs", "document.title = 'CLIENT-ONE';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body><div id=root></div></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "targets": {{
+                   "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }},
+                   "web": {{ "entry": "index.html", "outdir": "dist" }} }},
+                 "start": {{ "run": "server", "port": {port} }},
+                 "permissions": {{ "deny": ["all"], "allow": {{ "listen": ["{served}"] }} }} }}"#
+        ),
+    );
+
+    let (mut child, log) = start_in_logging(&dir, &[]);
+    let first = wait_for_http(served, "/", |body| body.contains("SERVER-A"));
+    assert!(first.contains("SERVER-A"), "never came up: {first}");
+    let nonce = nonce_of(&first);
+
+    // A browser-only edit. The client bundle is rebuilt…
+    write_in(&dir, "src/main.mjs", "document.title = 'CLIENT-TWO';\n");
+    let bundle = dir.join("dist/assets/main.js");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        if std::fs::read_to_string(&bundle)
+            .unwrap_or_default()
+            .contains("CLIENT-TWO")
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        std::fs::read_to_string(&bundle)
+            .unwrap_or_default()
+            .contains("CLIENT-TWO"),
+        "the client change never rebuilt\n{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    // …and the same process is still answering. Given a moment, because a
+    // restart would take one.
+    std::thread::sleep(Duration::from_secs(2));
+    let after = http_get(served, "/").unwrap_or_default();
+    assert!(after.contains("SERVER-A"), "{after}");
+    assert_eq!(
+        nonce_of(&after),
+        nonce,
+        "a browser-only change restarted the server"
+    );
+
+    // A server edit still restarts it, which is the other half of the promise.
+    write_in(
+        &dir,
+        "src/server.mjs",
+        &format!(
+            "import {{ serve }} from 'runtime:http';\n\
+             const nonce = String(Math.random());\n\
+             serve({{ port: {served} }}, () => new Response('SERVER-B ' + nonce));\n"
+        ),
+    );
+    let restarted = wait_for_http(served, "/", |body| body.contains("SERVER-B"));
+    assert!(
+        restarted.contains("SERVER-B"),
+        "a server change did not restart it: {restarted}"
+    );
+
+    stop_supervisor(&mut child);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The digits after `SERVER-x ` in a response body.
+fn nonce_of(response: &str) -> String {
+    let at = response.rfind("SERVER-").expect("a marked body");
+    response[at..]
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("")
+        .to_string()
+}
+
 /// The promise that makes the loop usable: a syntax error mid-edit costs a
 /// message, not the server you were about to fix it on.
 #[test]

@@ -60,6 +60,25 @@ is the point, since none of the three has any business in a deployment.
   every pass we had written ourselves. The contract moved to the crate root,
   since it was never guest-only and a path is a claim.
 
+- **`esdev start` restarts the server only when the build changed something it
+  reads.** Every rebuild used to `SIGTERM` the child and start it again, so
+  editing a stylesheet or a browser component cost every open connection, every
+  warm cache the process had, and a window where requests were refused — to
+  deliver a server byte for byte identical to the one just stopped.
+
+  The build still runs on every change and the browser is still told to reload.
+  What is conditional is the restart: after the build, esdev compares the
+  **contents** of the run target's output and everything the build left beside
+  it — its own `server.js`, the `index.html` a server splices its render into,
+  a manifest it loads at startup — against what was there before. The client
+  asset directory is excluded, because nothing in it is read by the server; the
+  browser fetches it over HTTP from a URL that has not changed.
+
+  Contents rather than timestamps, because a rebuild rewrites `server.js`
+  whether or not a byte of it changed, and a modification time would say
+  "different" every time. A child that is *not* running is started whatever the
+  comparison says — the developer is fixing the reason it stopped.
+
 - **`esdev start` finds a free port instead of refusing to start.** It bound
   5173 and failed if anything was there, so a second project in a second
   terminal — an ordinary afternoon — stopped at

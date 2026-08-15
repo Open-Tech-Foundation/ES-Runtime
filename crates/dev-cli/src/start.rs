@@ -207,6 +207,9 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             Woken::Changed => {}
         }
 
+        // What the server was reading, before the build replaces any of it.
+        let before = output.as_deref().map(fingerprint);
+
         // **Rebuilt before anything is stopped.** A syntax error mid-edit is
         // the most ordinary event there is, and the server you were about to
         // fix it on should still be answering — including while the build runs,
@@ -214,14 +217,27 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         if !rebuild(&project, &watched, port).await {
             continue;
         }
-        if let Some(process) = &mut child {
-            crate::watch::stop(process, config.grace).await;
-        }
-        if let Some(output) = &output {
-            child = spawn(&exe, output, &permissions, &root)?;
+
+        // **Restarted only if the build changed something it reads.** Editing a
+        // stylesheet or a browser component rebuilds the client bundle and
+        // leaves `server.js` byte for byte identical, and stopping a healthy
+        // server to start the same one again costs every open connection, every
+        // warm cache the process had, and a window where requests are refused —
+        // to deliver nothing. A child that is not running is started whatever
+        // the answer, because the developer is fixing the reason it stopped.
+        let restarting = child.is_none() || before != output.as_deref().map(fingerprint);
+        if restarting {
+            if let Some(process) = &mut child {
+                crate::watch::stop(process, config.grace).await;
+            }
+            if let Some(output) = &output {
+                child = spawn(&exe, output, &permissions, &root)?;
+            }
         }
         // After the restart, not before: a page told to reload while the server
-        // is still coming back gets a connection refused and stays blank.
+        // is still coming back gets a connection refused and stays blank. Sent
+        // either way — the browser has new bundles to fetch whether or not the
+        // server moved.
         let _ = reload.send(());
     }
 }
@@ -312,6 +328,60 @@ async fn wait_for_change(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
 }
 
 /// Where the output that `start.run` names lands.
+/// A fingerprint of everything the running server might read.
+///
+/// Its own output, and whatever else the build left **beside** it — the
+/// template a server splices its render into, a manifest it loads at startup —
+/// because a server reads from its own directory and the runtime resolves a
+/// relative path against the entry module's.
+///
+/// The client asset directory is left out, and it is the whole point: it is
+/// where every stylesheet and browser bundle lands, so including it would make
+/// every CSS edit look like a reason to restart. Nothing in there is read by
+/// the server; the browser fetches it over HTTP, from a URL that has not
+/// changed.
+///
+/// **Contents, not timestamps.** Every rebuild rewrites `server.js` whether or
+/// not a byte of it changed, so a modification time would say "different" every
+/// time and this would be the unconditional restart it replaces. Reading a
+/// megabyte twice is nothing beside the build that just produced it.
+fn fingerprint(output: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    let Some(dir) = output.parent() else {
+        return 0;
+    };
+    collect(dir, &mut entries);
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Walks `dir`, skipping the client assets. Unreadable is empty: a directory
+/// the build has not written yet is a fingerprint that changes once it has.
+fn collect(dir: &Path, into: &mut Vec<(PathBuf, Vec<u8>)>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            if path
+                .file_name()
+                .is_some_and(|name| name == crate::html::ASSET_DIR)
+            {
+                continue;
+            }
+            collect(&path, into);
+        } else if let Ok(bytes) = std::fs::read(&path) {
+            into.push((path, bytes));
+        }
+    }
+}
+
 fn running_output(project: &Project, name: &str) -> Result<PathBuf, String> {
     let target = project
         .targets
