@@ -16,7 +16,13 @@ runs:
     #
     # The repository is spelled out rather than taken from `github.repository`,
     # so the action installs esdev even when a workflow elsewhere uses it.
+    #
+    # Two steps rather than one: `install.sh` refuses anything but Linux and
+    # macOS, so a `curl | bash` alone fails a windows runner outright. The
+    # `--only=esdev` argument is `ES_RUNTIME_ONLY` on that side, because a
+    # script piped into `iex` is given no arguments to read.
     - name: install esdev
+      if: runner.os != 'Windows'
       shell: bash
       env:
         ESDEV_VERSION: ${{ inputs.version }}
@@ -24,3 +30,12 @@ runs:
         curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh \
           | bash -s -- --only=esdev
         echo "$HOME/.es-runtime/bin" >> "$GITHUB_PATH"
+    - name: install esdev
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        ESDEV_VERSION: ${{ inputs.version }}
+        ES_RUNTIME_ONLY: esdev
+      run: |
+        irm https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.ps1 | iex
+        Add-Content -Path $env:GITHUB_PATH -Value "$HOME\.es-runtime\bin"
