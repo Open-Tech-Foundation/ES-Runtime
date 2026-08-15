@@ -462,9 +462,28 @@ fn bundler_options(
         }
     };
 
+    // The same defaults the `build` subcommand asserts, from the same place.
+    // A guest bundling a server entry without naming a condition used to get
+    // none, so a package handed it the `node:` build of itself and the failure
+    // arrived at runtime, in a bundle that had built cleanly.
+    let target = match options.platform.as_deref() {
+        Some("browser") => crate::resolve::Target::Browser,
+        Some("node") => crate::resolve::Target::Node,
+        _ => crate::resolve::Target::Server,
+    };
     let resolve = ResolveOptions {
-        condition_names: (!options.conditions.is_empty()).then(|| options.conditions.clone()),
-        main_fields: (!options.main_fields.is_empty()).then(|| options.main_fields.clone()),
+        condition_names: Some(crate::resolve::conditions(
+            target,
+            options.conditions.clone(),
+        )),
+        // Naming them replaces ours; there is one ordered list and a caller who
+        // wrote one means it. Not naming them takes the default rather than
+        // nothing, which is the divergence this closes.
+        main_fields: if options.main_fields.is_empty() {
+            crate::resolve::main_fields(target)
+        } else {
+            Some(options.main_fields.clone())
+        },
         extensions: (!options.extensions.is_empty()).then(|| options.extensions.clone()),
         alias: (!options.alias.is_empty()).then(|| {
             options
@@ -485,13 +504,15 @@ fn bundler_options(
         input: Some(input),
         cwd: options.cwd.clone(),
         external,
-        platform: match options.platform.as_deref() {
-            Some("browser") => Some(Platform::Browser),
-            Some("node") => Some(Platform::Node),
+        platform: Some(match target {
+            crate::resolve::Target::Browser => Platform::Browser,
+            crate::resolve::Target::Node => Platform::Node,
             // Neither a browser nor Node, which is what this runtime is: saying
             // either would pull in that platform's `main` fields and aliases.
-            _ => Some(Platform::Neutral),
-        },
+            // The conditions above are how a package's Web-API build is picked
+            // instead.
+            crate::resolve::Target::Server => Platform::Neutral,
+        }),
         format: match output.format.as_deref() {
             Some("cjs") => Some(OutputFormat::Cjs),
             Some("iife") => Some(OutputFormat::Iife),

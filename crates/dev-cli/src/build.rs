@@ -126,28 +126,6 @@ pub struct BuildConfig {
     pub dts_bundle: Option<String>,
 }
 
-/// The `exports` conditions a build asserts before the user adds any.
-///
-/// `import` and `default` are rolldown's own and always present. `worker` is
-/// ours, and it is the one that matters: it is the key a Web-API-targeting
-/// package uses for the build that does not reach for `node:` modules — React's
-/// `react-dom/server` resolves to its Web Streams implementation under it, and
-/// to a `node:stream` one without it.
-///
-/// This is deliberately *not* the runtime's condition set. D40 keeps that
-/// standards-only (`import`/`default`) and that stays true; a condition changes
-/// which code runs, so the place to choose one is a build the developer ran on
-/// purpose, not a server resolving imports under load.
-const DEFAULT_CONDITIONS: &[&str] = &["worker"];
-
-/// The conditions a **browser** target asserts instead.
-///
-/// The other half of the same story: `browser` is the key a package uses for
-/// the build that expects a `document` and a `window`. A client bundle built
-/// with `worker` asserted gets the one that expects neither, and the failure is
-/// at runtime in someone's browser rather than here.
-const BROWSER_CONDITIONS: &[&str] = &["browser"];
-
 /// A bundler failure, in the shape a person reads.
 ///
 /// Rolldown's own `Display` is the message alone — "Unexpected token" — which
@@ -454,21 +432,18 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     // build written for somewhere without a `document`. Conditions match in the
     // order the *package author* wrote them (D40), so the wrong one being
     // present at all is enough to win.
-    let mut conditions: Vec<String> = if config.lib {
-        Vec::new()
-    } else {
-        match config.platform {
-            crate::config::Platform::Server => DEFAULT_CONDITIONS
-                .iter()
-                .map(|c| (*c).to_string())
-                .collect(),
-            crate::config::Platform::Browser => BROWSER_CONDITIONS
-                .iter()
-                .map(|c| (*c).to_string())
-                .collect(),
-        }
+    let target = match config.platform {
+        crate::config::Platform::Server => crate::resolve::Target::Server,
+        crate::config::Platform::Browser => crate::resolve::Target::Browser,
     };
-    conditions.extend(config.conditions);
+    // A library externalises everything that is not its own source, so there is
+    // nothing left for a condition to pick between — and baking one in would
+    // publish a package that had already chosen for its consumer.
+    let conditions = if config.lib {
+        config.conditions.clone()
+    } else {
+        crate::resolve::conditions(target, config.conditions.clone())
+    };
 
     let lib = config.lib;
     let options = BundlerOptions {
@@ -499,12 +474,9 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             crate::config::Platform::Server => Platform::Neutral,
             crate::config::Platform::Browser => Platform::Browser,
         }),
-        // `Platform::Neutral` leaves these empty, which breaks any package old
-        // enough to have no `exports` map. ESM first, then the CommonJS entry —
-        // which is fine, because converting it is the point.
         resolve: Some(ResolveOptions {
             condition_names: Some(conditions),
-            main_fields: Some(vec!["module".to_string(), "main".to_string()]),
+            main_fields: crate::resolve::main_fields(target),
             ..ResolveOptions::default()
         }),
         // The setting a hand-written config gets wrong. `runtime:fs` is served
@@ -656,11 +628,7 @@ pub async fn bundle_browser_entries(
         node_env(dev).to_string(),
     )];
     define.extend(defines);
-    let mut condition_names: Vec<String> = BROWSER_CONDITIONS
-        .iter()
-        .map(|c| (*c).to_string())
-        .collect();
-    condition_names.extend(conditions);
+    let condition_names = crate::resolve::conditions(crate::resolve::Target::Browser, conditions);
 
     let names: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
     let options = BundlerOptions {
@@ -689,7 +657,7 @@ pub async fn bundle_browser_entries(
         platform: Some(Platform::Browser),
         resolve: Some(ResolveOptions {
             condition_names: Some(condition_names),
-            main_fields: Some(vec!["module".to_string(), "main".to_string()]),
+            main_fields: crate::resolve::main_fields(crate::resolve::Target::Browser),
             ..ResolveOptions::default()
         }),
         define: Some(
@@ -1092,13 +1060,5 @@ mod tests {
         assert!(err.contains("is a file"), "{err}");
         assert!(dir.join("bundle.js").exists());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The condition that decides whether a package hands over its Web-API build
-    /// or its `node:` one. Losing it would not fail the build — it would produce
-    /// a bundle that imports `node:stream` and dies at runtime.
-    #[test]
-    fn the_worker_condition_is_asserted_by_default() {
-        assert!(DEFAULT_CONDITIONS.contains(&"worker"));
     }
 }

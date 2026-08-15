@@ -2608,8 +2608,8 @@ serve(output[0].code);          // never written to disk
 | --- | --- | --- | --- |
 | `input` | `string \| string[] \| Record<string, string>` | — | The entry, or entries. |
 | `external` | `string[] \| (id, importer, resolved) => boolean` | — | What to leave unbundled. A predicate as well as a list: a dev server externalises a shape (`/__route/*`), not a set. |
-| `platform` | `"neutral" \| "browser" \| "node"` | `neutral` | Which environment the output runs in; decides `exports` conditions. |
-| `resolve` | `{ alias, extensions, conditionNames, mainFields }` | — | Resolution. |
+| `platform` | `"neutral" \| "browser" \| "node"` | `neutral` | Which environment the output runs in; decides `exports` conditions — see below. |
+| `resolve` | `{ alias, extensions, conditionNames, mainFields }` | — | Resolution. `conditionNames` is **appended** to the platform's; `mainFields` replaces. |
 | `define` | `Record<string, string>` | — | Compile-time replacements. |
 | `plugins` | `Plugin[]` | `[]` | See below. |
 | `minify` / `treeshake` | `boolean` | `false` / `true` | |
@@ -2618,6 +2618,33 @@ serve(output[0].code);          // never written to disk
 Output options — `format`, `dir`, `file`, `codeSplitting`, `sourcemap`,
 `entryFileNames`, `chunkFileNames`, `assetFileNames`, `banner`, `footer` — may
 be given here or per call; the per-call ones win.
+
+**Resolution defaults are the same ones `esdev build` asserts**, from the same
+place, because a project that builds one way through the subcommand and another
+way through this module is the worst kind of build bug: nothing fails, and the
+bundle dies later on an import.
+
+| `platform` | Conditions asserted | `mainFields` |
+| --- | --- | --- |
+| `neutral` (default) | `worker` | `["module", "main"]` |
+| `browser` | `browser` | `["module", "main"]` |
+| `node` | none of ours | the bundler's own |
+
+`worker` is the key a Web-API-targeting package uses for the build that does not
+reach for `node:` modules — React's `react-dom/server` resolves to its Web
+Streams implementation under it, and to a `node:stream` one without. `browser`
+is the other half of that: a client bundle built with `worker` asserted gets the
+build that expects no `document`. The two are alternatives rather than
+additions, because conditions match in the order the *package author* wrote them
+(D40), so the wrong one being present at all is enough to win.
+
+`mainFields` exists because a neutral platform leaves it empty, which fails to
+resolve any package old enough to predate `exports` — and a good deal of the
+registry is.
+
+This is deliberately **not** the runtime's own condition set, which D40 keeps
+standards-only. A condition changes which code runs, so the place to choose one
+is a build somebody ran on purpose, not a server resolving imports under load.
 
 ### `Bundle`
 

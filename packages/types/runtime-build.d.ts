@@ -161,8 +161,18 @@ declare module "runtime:build" {
     alias?: Record<string, string | string[]>;
     /** Extensions tried for an extensionless specifier. */
     extensions?: string[];
-    /** `exports` conditions, in the order they are matched. */
+    /**
+     * Extra `exports` conditions, **appended** to the ones the platform
+     * already asserts — `worker` for `neutral`, `browser` for `browser` — so
+     * naming one of your own cannot silently drop the condition that decides
+     * whether a package hands over its Web build or its `node:` one.
+     */
     conditionNames?: string[];
+    /**
+     * `package.json` fields to fall back on when a package has no `exports`
+     * map. Naming them **replaces** the default `["module", "main"]`: there is
+     * one ordered list and a caller who writes one means it.
+     */
     mainFields?: string[];
   }
 
@@ -192,7 +202,12 @@ declare module "runtime:build" {
      * dev server externalises a shape (`/__route/*`) rather than a set.
      */
     external?: string | string[] | ((id: string, importer: string | null, resolved: boolean) => boolean);
-    /** Which environment the output runs in. Decides `exports` conditions. */
+    /**
+     * Which environment the output runs in. Decides `exports` conditions:
+     * `neutral` (the default, and what this runtime is) asserts `worker`,
+     * `browser` asserts `browser`, and `node` leaves resolution to the
+     * bundler's own knowledge of Node. The same defaults `esdev build` uses.
+     */
     platform?: "neutral" | "browser" | "node";
     resolve?: ResolveOptions;
     /** Compile-time replacements: `{ "process.env.NODE_ENV": '"development"' }`. */

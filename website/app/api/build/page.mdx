@@ -52,7 +52,7 @@ serve(output[0].code);      // never written to disk
 | `input` | `string \| string[] \| Record<string, string>` | The entry, or entries. |
 | `external` | `string[] \| (id, importer, resolved) => boolean` | What to leave unbundled. A **predicate** as well as a list — a dev server externalises a shape, not a set. |
 | `platform` | `"neutral" \| "browser" \| "node"` | Which environment the output runs in; decides `exports` conditions. Default `neutral`, which is what this runtime is. |
-| `resolve` | `{ alias, extensions, conditionNames, mainFields }` | Resolution. |
+| `resolve` | `{ alias, extensions, conditionNames, mainFields }` | Resolution. `conditionNames` is **appended** to the platform's, `mainFields` replaces them. |
 | `define` | `Record<string, string>` | Compile-time replacements. |
 | `plugins` | `Plugin[]` | See below. |
 | `minify`, `treeshake` | `boolean` | |
@@ -61,6 +61,30 @@ serve(output[0].code);      // never written to disk
 Output options (`format`, `dir`, `codeSplitting`, `sourcemap`, `entryFileNames`,
 …) may be given here or per call to `generate()`/`write()`; the per-call ones
 win.
+
+### What a platform asserts
+
+The same resolution defaults `esdev build` uses, from the same place — a project
+that resolves one way through the subcommand and another way through this module
+is a build bug nothing reports, and the bundle dies later on an import.
+
+| `platform` | Conditions | `mainFields` |
+| --- | --- | --- |
+| `neutral` (default) | `worker` | `["module", "main"]` |
+| `browser` | `browser` | `["module", "main"]` |
+| `node` | none of ours | the bundler's own |
+
+`worker` is the key a Web-API-targeting package uses for the build that does not
+reach for `node:` modules: `react-dom/server` resolves to its Web Streams
+implementation under it, and to a `node:stream` one without. `browser` is the
+other half — a client bundle built with `worker` asserted gets the build that
+expects no `document`. They are alternatives, not additions, because conditions
+match in the order the *package author* wrote them, so the wrong one being
+present at all is enough to win.
+
+`mainFields` is what resolves a package too old to have an `exports` map. A
+neutral platform leaves it empty, so without it such a package does not resolve
+at all.
 
 ## Bundle
 

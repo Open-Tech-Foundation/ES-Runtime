@@ -24,6 +24,37 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A guest build resolves what `esdev build` resolves.** `esdev build` asserts
+  the `worker` condition and the `module`/`main` fields; `runtime:build`
+  asserted neither unless the caller named them, because it translated its
+  options in a second place. Two silent wrong builds came out of that gap, and
+  neither failed anything at build time:
+
+  - A package with an `exports` map handed the guest its **`node:` build**
+    where the subcommand got its Web build — `react-dom/server` resolving to
+    the `node:stream` implementation instead of the Web Streams one, which
+    fails at runtime, in the request.
+  - A package too old to have an `exports` map **did not resolve at all**, and
+    survived into the output as a bare `import { x } from "legacy"` — a bundle
+    referring to something that is not there.
+
+  The defaults now live in `crates/dev-cli/src/resolve.rs` and all three build
+  paths read them from it: the subcommand, the client bundle it emits for a
+  browser, and `runtime:build`. `platform: "neutral"` (the default) asserts
+  `worker`, `"browser"` asserts `browser`, and `"node"` leaves resolution to the
+  bundler's own knowledge of Node.
+
+  A caller's `resolve.conditionNames` **append** to the target's — matching what
+  `--conditions` does on the subcommand, so naming one cannot cost you `worker`
+  — and `resolve.mainFields` **replace** them, because there is one ordered list
+  and a caller who writes one means it.
+
+  This is the second divergence of its kind between the two paths, after
+  `runtime:build` not installing the CSS Modules pass. Both were found by
+  looking, not by a test failing.
+
 ## [0.2.0] - 2026-08-15
 
 ### Added

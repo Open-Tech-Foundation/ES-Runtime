@@ -3560,6 +3560,173 @@ fn regex_find(text: &str) -> String {
     rest[..end].to_string()
 }
 
+/// Writes a project with two packages a bundler can only resolve correctly if
+/// it asserts something about where the output runs: one that offers three
+/// builds of itself behind `exports` conditions, and one old enough to have no
+/// `exports` map at all.
+fn write_resolution_fixture(dir: &Path) {
+    let dual = dir.join("node_modules/dual");
+    std::fs::create_dir_all(&dual).expect("create the dual package");
+    write_in(
+        &dual,
+        "package.json",
+        r#"{
+  "name": "dual",
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "worker": "./worker.js",
+      "browser": "./browser.js",
+      "default": "./node.js"
+    }
+  }
+}
+"#,
+    );
+    write_in(&dual, "worker.js", "export const where = 'worker-build';\n");
+    write_in(
+        &dual,
+        "browser.js",
+        "export const where = 'browser-build';\n",
+    );
+    write_in(&dual, "node.js", "export const where = 'node-build';\n");
+
+    let legacy = dir.join("node_modules/legacy");
+    std::fs::create_dir_all(&legacy).expect("create the legacy package");
+    write_in(
+        &legacy,
+        "package.json",
+        r#"{
+  "name": "legacy",
+  "version": "1.0.0",
+  "module": "./index.mjs",
+  "main": "./index.cjs"
+}
+"#,
+    );
+    write_in(
+        &legacy,
+        "index.mjs",
+        "export const legacy = 'legacy-esm';\n",
+    );
+    write_in(
+        &legacy,
+        "index.cjs",
+        "module.exports = { legacy: 'legacy-cjs' };\n",
+    );
+
+    write_in(
+        dir,
+        "app-entry.js",
+        "import { where } from 'dual';\nimport { legacy } from 'legacy';\nconsole.log(where, legacy);\n",
+    );
+}
+
+/// **A guest build asserts what the subcommand asserts.** The two used to
+/// disagree: `esdev build` names the `worker` condition and the `module`/`main`
+/// fields, and `runtime:build` named neither unless the caller did — so the
+/// same project resolved to a package's `node:` build one way and its Web build
+/// the other. Nothing fails at build time when that happens; the bundle is
+/// produced and dies later on an import this runtime does not have.
+#[test]
+fn runtime_build_asserts_the_same_conditions_as_the_subcommand() {
+    let dir = build_dir("rb_conditions");
+    write_resolution_fixture(&dir);
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({ input: "app-entry.js" });
+const { output } = await bundle.generate({});
+console.log("code", JSON.stringify(output[0].code));
+"#,
+    );
+
+    let from_module = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(from_module.status.success(), "{}", stderr(&from_module));
+    let from_module = stdout(&from_module);
+
+    let from_subcommand = esdev_in(&dir)
+        .args(["build", "app-entry.js", "--out=out/x.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(
+        from_subcommand.status.success(),
+        "{}",
+        stderr(&from_subcommand)
+    );
+    let written = std::fs::read_to_string(dir.join("out/x.js")).expect("read the bundle");
+
+    for (what, code) in [("runtime:build", &from_module), ("esdev build", &written)] {
+        assert!(
+            code.contains("worker-build"),
+            "{what} resolved `dual` to the wrong build: {code}"
+        );
+        assert!(
+            !code.contains("node-build"),
+            "{what} took the package's Node build: {code}"
+        );
+        assert!(
+            code.contains("legacy-esm"),
+            "{what} could not resolve a package with no `exports` map: {code}"
+        );
+    }
+}
+
+/// A browser build takes the `browser` key rather than the `worker` one, on
+/// both paths. Asserting `worker` for a browser hands over a build written for
+/// somewhere with no `document`, and the failure is in someone's browser.
+#[test]
+fn runtime_build_asserts_browser_for_a_browser_platform() {
+    let dir = build_dir("rb_conditions_browser");
+    write_resolution_fixture(&dir);
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({ input: "app-entry.js", platform: "browser" });
+const { output } = await bundle.generate({});
+console.log("code", JSON.stringify(output[0].code));
+"#,
+    );
+
+    let run = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(run.status.success(), "{}", stderr(&run));
+    let code = stdout(&run);
+    assert!(code.contains("browser-build"), "{code}");
+    assert!(!code.contains("worker-build"), "{code}");
+}
+
+/// Naming a condition adds to what we assert rather than replacing it. A caller
+/// that wants `development` should not lose the condition that decides which
+/// half of React it gets.
+#[test]
+fn runtime_build_appends_the_callers_conditions() {
+    let dir = build_dir("rb_conditions_extra");
+    write_resolution_fixture(&dir);
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({
+  input: "app-entry.js",
+  resolve: { conditionNames: ["development"] },
+});
+const { output } = await bundle.generate({});
+console.log("code", JSON.stringify(output[0].code));
+"#,
+    );
+
+    let run = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(run.status.success(), "{}", stderr(&run));
+    let code = stdout(&run);
+    assert!(code.contains("worker-build"), "{code}");
+}
+
 /// A plugin that throws fails the build **with its own message**. The hook ran
 /// on a different thread from the bundler; an error that arrived as "build
 /// failed" would be the worst possible outcome of that.

@@ -51,6 +51,7 @@ mod html;
 mod inspect;
 mod install;
 mod prompt;
+mod resolve;
 mod start;
 mod test;
 mod trace;
