@@ -1,6 +1,6 @@
 {
   "name": "@opentf/esrun-redis",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Redis client and runtime:db driver for esrun.",
   "type": "module",
   "sideEffects": ["./dist/batch.js", "./dist/connection.js", "./dist/pool.js"],

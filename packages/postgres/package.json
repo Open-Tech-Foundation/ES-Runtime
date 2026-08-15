@@ -1,6 +1,6 @@
 {
   "name": "@opentf/esrun-postgres",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "PostgreSQL client and runtime:db driver for esrun.",
   "type": "module",
   "sideEffects": false,

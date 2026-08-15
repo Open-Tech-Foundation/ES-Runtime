@@ -13,6 +13,8 @@ runtime is `runtime:db`'s driver contract, and the `engines.esrun` range in
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-15
+
 ### Added
 
 - **A Redis driver — the first `runtime:db` backend that never speaks SQL.** One

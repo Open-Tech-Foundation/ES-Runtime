@@ -19,6 +19,8 @@ runtime itself.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-15
+
 ### Added
 
 - **`esdev` is installed by the one-liner.** The install script places both
