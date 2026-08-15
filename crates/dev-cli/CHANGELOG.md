@@ -7,12 +7,17 @@ are recorded here. The format follows
 `esdev` is versioned **separately from `esrun`** and from the Rust crates: it is
 a tool rather than a contract, and its command line moves at its own pace. The
 runtime it runs your program on is `esrun`'s — same prelude, same snapshot, same
-providers, same capability enforcement — so what changes here is everything
-*around* a run, never what the JS sees. The one deliberate difference is the
-default grant: `esdev` starts from every capability and `esrun` from none
-(DECISIONS D65), so that an inner loop needs no flags and a deployment states
-what it may reach. See the root [CHANGELOG.md](../../CHANGELOG.md) for the
-runtime itself.
+providers, same capability enforcement. So what changes here is everything
+*around* a run, plus the development-only `runtime:` modules `esdev` adds on top
+of the runtime's own; the standard library itself is `esrun`'s and changes in the
+root [CHANGELOG.md](../../CHANGELOG.md).
+
+Two things differ deliberately, and only these two. The **default grant**:
+`esdev` starts from every capability and `esrun` from none (DECISIONS D65), so
+that an inner loop needs no flags and a deployment states what it may reach. And
+the **extra modules**: `runtime:build`, `runtime:test` and `runtime:watch` exist
+only in this binary, so code that imports one does not run under `esrun` — which
+is the point, since none of the three has any business in a deployment.
 
 `esdev` is **not a deployment target**: ship the artifact and run it under
 `esrun`, which has no development surface to attack.
@@ -22,6 +27,151 @@ runtime itself.
 ## [0.2.0] - 2026-08-15
 
 ### Added
+
+- **Three `runtime:` modules that only this binary has.** `esdev` now serves
+  modules of its own on top of the runtime's, through the seam `esrun` 0.25.0
+  added (`Runtime::register_module`). They are development surface, so `esrun`
+  does not merely leave them unwired — it does not contain them, and importing
+  one there fails at load with *unknown built-in module*. Ship the artifact, not
+  the tool that built it.
+
+- **`runtime:build` — the bundler, callable from a program.**
+  rolldown is already inside `esdev`; it is what `esdev build` runs. What was
+  missing was a way for *guest code* to reach it — and without that, a
+  framework's dev server has to import a bundler from npm, which is a napi
+  addon this runtime does not load, so the dev server has to be a Node program.
+
+  ```js
+  import { build } from "runtime:build";
+
+  const bundle = await build({
+    input: "app/main.jsx",
+    external: (id) => id.startsWith("/__route/"),
+    plugins: [mdx()],
+  });
+  const { output, watchFiles } = await bundle.generate({ codeSplitting: false });
+  serve(output[0].code);            // never written to disk
+  ```
+
+  **Real plugin hooks, taking real functions.** `buildStart`, `resolveId`,
+  `load`, `transform`, `buildEnd`, with rollup's arguments and rollup's `this`
+  — `this.resolve()`, `this.addWatchFile()`, `this.emitFile()`, `this.warn()`.
+  Piping source through a subprocess was considered and cannot work:
+  `resolveId` + `load` serve modules that exist on no disk, and there is
+  nothing to pipe.
+
+  **`watchFiles` comes back with the output**, including whatever a plugin
+  declared it depends on. Paired with `runtime:watch`, that is what lets a dev
+  server drop the three cached chunks a save invalidated and keep the other
+  thirty-seven.
+
+  The bundler runs on a thread of its own with a multi-threaded runtime, so its
+  parallel graph walk is not serialized onto the isolate's thread. Hooks cannot
+  follow it there — an isolate belongs to one thread — so a hook posts a request
+  and waits, and the guest's pump answers it. Several are in flight at once.
+
+- **`runtime:build`'s plugin system is the project's own, not the bundler's
+  passed through.** A `runtime:` module is a versioned contract, and an API
+  defined by a third party's Rust trait moves when that trait moves — a hook
+  renamed in a bundler's patch release would be a breaking change in this
+  runtime's standard library. There is now a contract layer between them:
+  rolldown is an implementation of it, named in exactly one file.
+
+  ```js
+  const mdx = {
+    name: "mdx",
+    transform: {
+      filter: { id: /\.mdx$/ },
+      handler(code, id, ctx) {
+        const { js, meta } = compile(code, id);
+        return { code: js, type: "jsx", dependsOn: [meta] };
+      },
+    },
+  };
+  ```
+
+  Five hooks — `start`, `resolve`, `load`, `transform`, `end` — and four things
+  in the shape are deliberately not rollup's:
+
+  - **A filter is declarative**, and matched on the host's side. In rollup a
+    hook returning `null` costs a function call; here it costs a round trip into
+    the isolate, so an unfiltered `transform` is one crossing *per module in the
+    graph*. A pattern the host cannot evaluate stops filtering rather than
+    failing — excluding modules a plugin was meant to see is the expensive way
+    to be wrong.
+  - **Dependencies are returned** (`dependsOn`), not declared by calling
+    `this.addWatchFile()`. A call you can forget produces a build that serves
+    stale output; a field of the value you return does not fail that way.
+    Relative paths resolve like any other path in a run.
+  - **A virtual module says `virtual: true`**, instead of being signalled by a
+    NUL byte glued to the front of its id.
+  - **The context is the last argument, not `this`** — so an arrow-function
+    handler keeps it.
+
+  Plus `order: "pre" | "post"`, which rolldown supports and was never surfaced.
+
+  **Breaking, and with no fallback:** a hook is an object carrying a `handler`.
+  Rollup's bare-function shorthand is refused, with a message saying what to
+  write instead; so is a misspelled hook name (which names the one it was
+  nearly), a filter on a whole-build hook, a `code` filter on anything but
+  `transform`, and an unknown `order`. All of it is checked by `build()`, at the
+  line that wrote the declaration.
+
+- **`runtime:test` — the test API, imported rather than ambient.**
+
+  ```js
+  import { test, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
+
+  test("adds", () => assertEquals(add(2, 3), 5));
+  ```
+
+  **Breaking:** `test` and the four assertions are no longer globals. A test
+  file must import them. Every test file in this repository and in the `esdev
+  create` templates was updated; the API itself is unchanged.
+
+  They were globals prepended to each test file's own source, folded onto a
+  single physical line so the file's line 1 stayed line 1, with an epilogue
+  appended to await and report. Three things were wrong with that, and an
+  import fixes all of them: this runtime hands out no ambient names anywhere
+  else; only the *entry* was wrapped, so a shared `test-helpers.ts` beside the
+  test file could not call `assertEquals`; and there was nowhere to declare
+  them, so a `.ts` test file referenced five undeclared names and `tsc
+  --noEmit` failed on a suite that ran perfectly.
+
+  The tally moved into the host, which removes the appended epilogue too — so
+  what runs is now byte for byte the file on disk. Two things follow:
+
+  - **`esdev app.test.ts` works on its own.** A test file is an ordinary
+    module, and any run that imported `runtime:test` prints the same report.
+  - **A test that never settles is a failure**, reported as *"the test never
+    finished"*. The epilogue used to `await` every pending promise, so such a
+    test hung the file forever.
+
+- **`runtime:watch` — file-change events in guest JS.** A dev
+  server cannot answer a save the way `esdev --watch` does. That watcher
+  `SIGTERM`s the program and starts another, which is right for *rerun this
+  script* and wrong for a server holding forty compiled chunks, an open
+  websocket to a browser and a warm compile server: it has to **stay up** and
+  drop only what changed.
+
+  ```js
+  import { watch } from "runtime:watch";
+
+  const changes = watch(["app", "lib"], { recursive: true });
+  for await (const { kind, path } of changes) {
+    invalidate(path);
+    for (const dep of rebuild()) changes.add(dep);   // the set grows as it runs
+  }
+  ```
+
+  The watch set is mutable because it is not knowable up front — which files a
+  bundle depends on is known only after it is built. Events are debounced per
+  path, so one editor save is one event rather than three, and what a burst adds
+  up to is reported honestly: create-then-write is a create, and the
+  remove-then-create every editor does on save is a modification.
+
+  Gated on `FileRead` and scoped by the same `--allow-read` list as reading —
+  watching a directory tells you which files exist and when they are touched.
 
 - **`esdev` is installed by the one-liner.** The install script places both
   binaries into `~/.es-runtime/bin`; `--only=esdev` (or `$env:ES_RUNTIME_ONLY`
@@ -57,6 +207,15 @@ runtime itself.
   means the same thing whichever binary reads it. `"deny": ["all"]` still
   parses; the React template drops it. A block that subtracts writes
   `"allow": {"all": true}` alongside its denials.
+
+### Fixed
+
+- **A guest build now runs the same owned passes as `esdev build`.**
+  `runtime:build` installed only the guest's plugins, while the `build`
+  subcommand also installs this project's CSS Modules pass — so the same project
+  produced a scoped `styles.button` from one path and an unscoped one from the
+  other, and markup that did not match its own stylesheet. Both paths now build
+  through one plugin list.
 
 ## [0.1.0] - 2026-08-13
 
