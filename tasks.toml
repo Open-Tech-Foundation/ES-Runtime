@@ -143,6 +143,12 @@ run = "cargo build -p es-runtime-cli"
 run = "bun run dev"
 dir = "website"
 
+# Re-reads the two binaries' versions out of Cargo.toml into the module the site
+# imports. Run it after a version bump: nothing else notices that the navbar
+# badge and the install page have fallen behind the tags.
+[tasks.versions]
+run = "bun scripts/site-versions.mjs"
+
 # --- aggregates --------------------------------------------------------------
 
 # Sequential by design: test:unit reads what build wrote.

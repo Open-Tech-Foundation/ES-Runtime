@@ -5,6 +5,9 @@ description: Install esrun and esdev — prebuilt, checksum-verified binaries, o
 
 import { Tabs, CodeBlock, Callout } from "@opentf/web-docs";
 
+import Versions from "../../../components/Versions.jsx";
+import PinCommand from "../../../components/PinCommand.jsx";
+
 export const installTabs = [
   {
     label: "Linux / macOS",
@@ -58,12 +61,11 @@ $env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
 
 ## Pinning a version
 
-Each binary is released under its own tag — `esrun@0.24.0`, `esdev@0.1.0` — and
-each is pinned independently.
+Each binary is released under its own tag and is pinned independently. Latest:
 
-```sh
-ESRUN_VERSION=0.24.0 ESDEV_VERSION=0.1.0 curl -fsSL .../install.sh | bash
-```
+<Versions />
+
+<PinCommand />
 
 `ES_RUNTIME_INSTALL` overrides the install prefix.
 

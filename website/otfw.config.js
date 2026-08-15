@@ -1,5 +1,7 @@
 import { defineDocsConfig } from "@opentf/web-docs/config";
 
+import versions from "./src/versions.js";
+
 const GITHUB = "https://github.com/Open-Tech-Foundation/ES-Runtime";
 
 export default defineDocsConfig({
@@ -8,8 +10,10 @@ export default defineDocsConfig({
 
   docs: {
     title: "ES-Runtime",
-    // Bump on each release, to match the workspace Cargo.toml.
-    version: "v0.22.0",
+    // The navbar badge is `esrun`'s — it is the product a visitor came for, and
+    // one badge is all the chrome has room for. `esdev` ships its own version
+    // where it is the subject: components/Versions.jsx.
+    version: `v${versions.esrun}`,
     github: GITHUB,
     // Enables the per-page "Edit this page" link (with `lastUpdated`).
     repoUrl: GITHUB,
