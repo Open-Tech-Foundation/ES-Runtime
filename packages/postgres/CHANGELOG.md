@@ -13,6 +13,8 @@ the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime itself.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-15
+
 ### Added
 
 - **A PostgreSQL driver, and no new Rust for it.** The package's export *is* the

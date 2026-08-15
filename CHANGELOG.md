@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-08-15
+
 ### Added
 
 - **`runtime:build`'s plugin system is the project's own, not the bundler's
