@@ -173,6 +173,117 @@ is the point, since none of the three has any business in a deployment.
   Gated on `FileRead` and scoped by the same `--allow-read` list as reading —
   watching a directory tells you which files exist and when they are touched.
 
+- **`esdev create` asks on a terminal** (D70): which template, and whether to
+  install. Away from one — a pipe, a CI job, anything with `CI` set — it takes
+  the defaults and says nothing, because a prompt in a script is a script that
+  hangs.
+
+  Every question has a flag, so nothing is only reachable by answering one:
+
+  ```sh
+  esdev create my-app --template=api --install=bun
+  esdev create my-app --yes            # defaults, no questions
+  esdev create my-app --no-install
+  ```
+
+  Only package managers this machine actually has are offered, detected by
+  running `--version` rather than walking `PATH`. Unattended runs still install
+  nothing: D64's objection was to *guessing* which package manager a project
+  uses, and asking resolves that at the root.
+
+- **Three more templates** for `esdev create`, so it offers a real choice:
+
+  | | |
+  | --- | --- |
+  | `api` | A JSON API — routing on `URLPattern`, validation, error mapping. **No dependencies**, 9.9 KB bundled |
+  | `vanilla` | TypeScript and the DOM, no framework |
+  | `lib` | A publishable package — module tree preserved, `.d.ts` emitted, `exports` wired |
+
+  Each is dependency-free, which is the point of an `api` template on a server
+  runtime: `URLPattern`, `Request`, `Response` and `crypto.randomUUID()` are all
+  web standards this runtime already has, so a router is a table and a loop. Its
+  permission line grants **no filesystem at all** — not even read.
+
+  Having no React also means nothing reaches CommonJS, so `esdev test` can run
+  every module: 20 tests in `api`, 9 in `lib`, covering the router's 405-with-
+  `Allow`, the error-to-response mapping, the validation, and the retry
+  backoff's abort path.
+
+  A new end-to-end test scaffolds every dependency-free template and runs its
+  own suite and build, because a template is a project nobody builds until
+  somebody depends on it.
+
+- **`esdev build` bundles stylesheets** (D67). A `<link rel="stylesheet">` in an
+  `index.html` target is now an entry, the way a `<script type="module">`
+  already was: it and everything it `@import`s become one hashed file, and a
+  relative `url()` is followed so fonts and images travel with the stylesheet
+  instead of arriving as 404s once it moves to `/assets`. `--minify` drops
+  comments and collapses whitespace.
+
+  The hash is computed **after** `url()` substitution, so editing an `@import`ed
+  file changes the entry's URL. Hashing the source would have left a stale-cache
+  bug visible only in production.
+
+  **It adds no dependency.** The pipeline is a real implementation of
+  [CSS Syntax Level 3](https://www.w3.org/TR/css-syntax-3/) — tokenizer, syntax
+  tree, parser, printer — with the `@import` and `url()` passes on top. It stays
+  small because it follows the spec's own two-layer design: the *generic*
+  grammar every rule obeys is closed and complete, so the tree has no selector
+  or media-query type and holds `@property`, `@container` and whatever ships
+  next year without knowing anything about them.
+
+  It is **lossless by construction**: every token keeps its verbatim text and
+  nothing is discarded, so `print(parse(x)) == x` for any input, valid CSS or
+  not. A pass that does not touch something cannot change it — which is the
+  guarantee that makes CSS tooling safe to run in a build.
+
+  lightningcss was used first and withdrawn: it is MPL-2.0, and while that
+  licence never reached `esrun` or anyone's application, it would have meant a
+  standing seven-crate copyleft exception in a `deny.toml` that opens by
+  refusing copyleft. `deny.toml` is back to `exceptions = []`.
+
+- **CSS Modules** (D69). A `*.module.css` imported from JavaScript is scoped to
+  the file that declares it, and the import resolves to the mapping:
+
+  ```js
+  import styles from "./Button.module.css";  // { button: "button_a1b2c3d4" }
+  ```
+
+  Class selectors, id selectors and `@keyframes` are renamed — the animation
+  references too, since a renamed `@keyframes` with an un-renamed reference is
+  an animation that silently stops running. `:global(…)` opts a name out, and
+  the wrapper is removed on the way through.
+
+  The scoped name is derived from the file's **path**, not its contents or a
+  counter. So a server build and a browser build arrive at the same name without
+  talking to each other (SSR hydrates cleanly), two machines building one commit
+  agree, and editing a component does not rename its classes.
+
+  Every module's CSS is collected into **one hashed stylesheet, linked from the
+  document** — never injected from script. Injecting costs a flash of unstyled
+  content, puts styling behind script execution, and needs
+  `style-src 'unsafe-inline'`, which the React template's own policy does not
+  grant.
+
+  **`composes`** reuses a class without repeating its rules, in all three forms
+  — `composes: a b` (same file), `composes: a from "./x.module.css"`, and
+  `composes: a from global`. The mapping's value becomes a list of class names
+  and the element carries all of them. It is **transitive**: composing a class
+  that itself composes gets the whole chain, because a class only styles an
+  element that actually carries it. Cycles are refused, and a composed module's
+  rules are emitted even though nothing imported it.
+
+  **A plain `import "./x.css"`** — anything not `.module.css` — is emitted
+  unscoped. That is what third-party stylesheets need: a library's own
+  JavaScript emits its class names as hardcoded strings, so scoping them would
+  rename half of a contract the library has with itself. The alternative, copying
+  the file out of `node_modules` and `<link>`ing it, goes stale on the next
+  upgrade.
+
+  Not included, deliberately: syntax lowering and vendor prefixing (nesting and
+  `color-mix()` are supported across the target browsers), value-level
+  minification, and per-file typed class names.
+
 - **`esdev` is installed by the one-liner.** The install script places both
   binaries into `~/.es-runtime/bin`; `--only=esdev` (or `$env:ES_RUNTIME_ONLY`
   on Windows) installs just this one, and `ESDEV_VERSION` pins it.
@@ -183,16 +294,79 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **`esdev test` assertions compare properly** — and the second argument to
+  `assertThrows` / `assertRejects` is now what the error must be, not a label.
+
+  `assertEquals` compared through `JSON.stringify`, which *throws* on a
+  `BigInt` — so on this runtime the assertion an int64 test most needs could
+  not be written. It also rendered a `Uint8Array` as `{"0":1,"1":2}` instead of
+  comparing bytes, and cared about object key order. It now walks the values:
+  `BigInt` and `NaN`, typed arrays and `ArrayBuffer` as bytes, `Map` and `Set`
+  by contents, objects by key set, and cycles terminate.
+
+  ```ts
+  assertEquals(reader.int64(), -9223372036854775808n);   // used to throw
+  assertThrows(() => s.decode("M", bytes), /field number 0/);
+  assertThrows(() => validateTitle(body), HttpError, "accepted a string");
+  ```
+
+  **Breaking:** `assertThrows(fn, "TypeError")` used to treat `"TypeError"` as
+  the text to print on failure, so it asserted nothing — any throw passed. It
+  is now the expectation (an error name or message substring, a `RegExp` over
+  the message, or a constructor for an `instanceof` check), and the failure
+  label moved to the third argument. Every call site in this repository was
+  already written the new way.
+
+- **`.ts` stack traces name the line you wrote.** The harness is folded onto one
+  physical line so it cannot renumber the file, but it was being prepended
+  *before* type-stripping — and the stripper re-prints through oxc's codegen,
+  which unfolded it again. An assertion on line 2 of a `.ts` file reported line
+  44. Stripping now happens first. `.js` was never affected.
+
+- **The `react` template is rebuilt on react-router 8** (D68), and is now a
+  starting point rather than a demonstration. A real route table — nested
+  layouts, dynamic segments, per-route loaders, error boundaries — read by the
+  server, the browser and the prerender step alike. A loader that throws a
+  `Response` produces a real status, so a 404 is a 404 rather than a 200 that
+  says "not found".
+
+  The server does what a deployed one has to: a Content-Security-Policy with a
+  per-response nonce (the one inline script is admitted by nonce, never
+  `'unsafe-inline'`), `nosniff`, `referrer-policy` and `permissions-policy`;
+  `SIGTERM` closes the listener and drains before exiting; immutable caching on
+  hashed assets; a `/healthz` that touches neither router nor data source; and
+  one JSON log line per request.
+
+  Fixed along the way, all silent: `globalThis.process.env.PORT` was read on a
+  runtime that has no `process` global and was `undefined` forever (it is now
+  `env` from `runtime:process`, granted `--allow-env=PORT`); a 404 shipped the
+  client bundle with no matching route, so `entry.client.tsx` threw into the
+  console of every 404; `render.tsx` claimed to stream the head first and did
+  not; and the README named a test file that did not exist and told the reader
+  to run `<pm> install`, a placeholder nothing substitutes.
+
+  `src/serialize.ts` is gone — `<StaticRouterProvider>` emits the hydration
+  script itself, escaped, and takes the nonce. The template's most
+  security-sensitive hand-rolled code is now the library's.
+
 - **`esrun` now grants nothing by default; `esdev` still grants everything**
-  (DECISIONS D65). This is the one place the two binaries differ, and it is
-  deliberate: a dev loop that dies on an unnamed capability at every `--watch`
-  save is the friction D59 put this binary here to absorb. The flags, scope
-  lists, rules and error text are one implementation in
-  `es-runtime-cli-common`, parameterised by a single baseline.
+  (DECISIONS D65). Along with the modules above, this is where the two binaries
+  differ, and it is deliberate: a dev loop that dies on an unnamed capability at
+  every `--watch` save is the friction D59 put this binary here to absorb. The
+  flags, scope lists, rules and error text are one implementation in
+  `es-runtime-cli-common`, parameterised by a single baseline — so the two
+  cannot drift on what `--allow-net=…` means, only on where a flagless line
+  starts.
 
   `--allow-all` / `-A` is accepted here and restates the default, mirroring
   `--deny-all` on `esrun`. `--allow-<name>` still requires `--deny-all`, because
   against "everything granted" there is nothing for it to add.
+
+  Three things keep the gap visible rather than letting a permissive dev loop
+  hide what a deployment will need: `esdev --trace-permissions` prints the
+  `esrun` line a run needs; `esdev start` spawns its child under `esdev.json`'s
+  `permissions`, so a real project's dev loop already runs under the production
+  grant; and `esdev create` scaffolds that block from the first commit.
 
 - **`--trace-permissions` prints a shorter line.** It used to emit
   `esrun --deny-all --allow-read --allow-net app.js`; the `--deny-all` is now a
@@ -216,6 +390,28 @@ is the point, since none of the three has any business in a deployment.
   produced a scoped `styles.button` from one path and an unscoped one from the
   other, and markup that did not match its own stylesheet. Both paths now build
   through one plugin list.
+
+- **The React template's Content-Security-Policy blocked its own live reload.**
+  `esdev start` injects its reload client as an inline script that cannot carry
+  a per-response nonce, and serves its endpoint from another loopback port — so
+  `script-src 'nonce-…'` and `connect-src 'self'` blocked the two halves and the
+  page silently never updated on a save. A development build now allows inline
+  script (dropping the nonce, since a policy that carries one *ignores*
+  `'unsafe-inline'`) and admits loopback on any port. The production policy is
+  unchanged.
+
+  The dev/production flag is now passed into `src/http/` rather than read there.
+  Those modules have no imports on purpose, so `esdev test` can run them
+  unbundled — where `process.env.NODE_ENV` has been replaced by nothing and
+  there is no `process` global to fall back on.
+
+- **The React template's error page rendered unstyled.** A route's
+  `ErrorBoundary` replaces its own route's element, and the boundary sits on the
+  layout — so a 404 arrived with no shell, no masthead, and no way back except
+  the browser's Back button.
+
+- Markdown backticks in the template's sample posts rendered literally, there
+  being no markdown renderer; a `<Link>` styled as a button was underlined.
 
 ## [0.1.0] - 2026-08-13
 
