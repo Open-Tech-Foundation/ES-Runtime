@@ -60,6 +60,30 @@ is the point, since none of the three has any business in a deployment.
   every pass we had written ourselves. The contract moved to the crate root,
   since it was never guest-only and a path is a claim.
 
+- **`esdev start` finds a free port instead of refusing to start.** It bound
+  5173 and failed if anything was there, so a second project in a second
+  terminal — an ordinary afternoon — stopped at
+  *cannot bind 127.0.0.1:5173: Address already in use*.
+
+  A port nobody named is a convenience, so it now takes 5173 when it is free
+  and any free port when it is not, printing the one it settled on:
+
+  ```
+  esdev: serving dist on http://127.0.0.1:39481
+  esdev: 5173 was taken; use --port to pin one
+  ```
+
+  A port that **was** named — `--port=8080`, or `"port": 8080` in `esdev.json`
+  — still binds that one or fails, and the failure now says what to do about
+  it. Moving quietly off a port somebody chose would leave a bookmark, a proxy
+  rule or a second terminal pointing at whatever is already there. `--port=0`
+  asks for a free one explicitly, which is what a script reading the printed
+  URL should pass.
+
+  This is esdev's own endpoint — the one serving your output and the reload
+  stream. The port your *server* listens on is your server's: it reads it from
+  `PORT`, and `esdev.json`'s `permissions` is what says which one it may have.
+
 ### Fixed
 
 - **A guest build resolves what `esdev build` resolves.** `esdev build` asserts

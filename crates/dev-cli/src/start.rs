@@ -54,6 +54,43 @@ use crate::devserver::{DevServer, RELOAD_PATH};
 /// this number, and there is nothing to gain by being novel about it.
 const DEFAULT_PORT: u16 = 5173;
 
+/// Binds the endpoint, and reports the port it actually got.
+///
+/// **A port that was named is a promise, and a port that was not is a
+/// convenience.** So the two cases are deliberately not the same:
+///
+/// * `--port=8080`, or `"port": 8080` in `esdev.json`, binds *that* port or
+///   fails. Something is already there, and moving quietly to another one would
+///   leave a bookmark, a proxy rule or a second terminal pointing at whatever
+///   that something is. The message names what to do about it.
+/// * Nothing named binds [`DEFAULT_PORT`] if it can, and any free port if it
+///   cannot. A second project in a second terminal is an ordinary afternoon,
+///   and refusing to start over a number nobody chose is the tool inventing a
+///   problem. The port it settled on is printed, because it is now the only
+///   place the URL exists.
+///
+/// `--port=0` asks for the second behaviour explicitly, and is what a script
+/// that reads the printed URL should pass.
+fn bind(wanted: Option<u16>) -> Result<(std::net::TcpListener, u16), String> {
+    let listener = match wanted {
+        Some(port) => std::net::TcpListener::bind(crate::devserver::address(port)).map_err(|e| {
+            format!(
+                "cannot bind 127.0.0.1:{port}: {e}\n\n                 Something is already listening there. Stop it, or start on \
+                 another port with `--port=<n>` — or drop the flag and let \
+                 esdev pick a free one."
+            )
+        })?,
+        None => std::net::TcpListener::bind(crate::devserver::address(DEFAULT_PORT))
+            .or_else(|_| std::net::TcpListener::bind(crate::devserver::address(0)))
+            .map_err(|e| format!("cannot bind a port on 127.0.0.1: {e}"))?,
+    };
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("cannot read the port just bound: {e}"))?
+        .port();
+    Ok((listener, port))
+}
+
 /// What `esdev start` was asked to do.
 pub struct StartConfig {
     /// The project, and everything it builds.
@@ -66,14 +103,12 @@ pub struct StartConfig {
 /// Runs the dev loop until the user interrupts it.
 pub async fn start(config: StartConfig) -> Result<(), String> {
     let project = Arc::new(config.project);
-    let port = project.start.port.unwrap_or(DEFAULT_PORT);
     let serve = serve_dir(&project)?;
 
     // Bound before the first build, so a port already in use is an error at the
     // top rather than after a build the developer then has to watch happen
     // again.
-    let listener = std::net::TcpListener::bind(crate::devserver::address(port))
-        .map_err(|e| format!("cannot bind 127.0.0.1:{port}: {e}"))?;
+    let (listener, port) = bind(project.start.port)?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot bind 127.0.0.1:{port}: {e}"))?;
@@ -115,6 +150,9 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             dir.strip_prefix(&root).unwrap_or(dir).display()
         ),
         None => eprintln!("esdev: reload endpoint on http://127.0.0.1:{port}{RELOAD_PATH}"),
+    }
+    if project.start.port.is_none() && port != DEFAULT_PORT {
+        eprintln!("esdev: {DEFAULT_PORT} was taken; use --port to pin one");
     }
     eprintln!("esdev: watching {}", root.display());
 

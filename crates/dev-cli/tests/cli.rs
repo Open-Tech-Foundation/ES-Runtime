@@ -2698,6 +2698,127 @@ fn wait_for_http(port: u16, path: &str, done: impl Fn(&str) -> bool) -> String {
     last
 }
 
+/// Runs `esdev start` with extra flags, keeping its stderr in a file so a test
+/// can read what it announced. The port is in there and nowhere else when
+/// esdev picked it.
+fn start_in_logging(dir: &Path, args: &[&str]) -> (std::process::Child, PathBuf) {
+    let log = dir.join("esdev.log");
+    let file = std::fs::File::create(&log).expect("create the log");
+    let mut command = esdev_in(dir);
+    command
+        .arg("start")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::from(file));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    (command.spawn().expect("spawn esdev start"), log)
+}
+
+/// Waits for the `http://127.0.0.1:<port>` esdev printed, and returns the port.
+fn announced_port(log: &Path) -> u16 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while std::time::Instant::now() < deadline {
+        let text = std::fs::read_to_string(log).unwrap_or_default();
+        if let Some(at) = text.find("http://127.0.0.1:") {
+            let rest = &text[at + "http://127.0.0.1:".len()..];
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            if !digits.is_empty()
+                && rest.len() > digits.len()
+                && let Ok(port) = digits.parse::<u16>()
+            {
+                return port;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!(
+        "esdev never announced a port:\n{}",
+        std::fs::read_to_string(log).unwrap_or_default()
+    );
+}
+
+/// **A port nobody named is a convenience, and esdev finds another when the
+/// usual one is taken.** Two projects open in two terminals is an ordinary
+/// afternoon; refusing to start over a number the developer never chose is the
+/// tool inventing a problem.
+#[test]
+fn start_finds_a_free_port_when_none_was_named() {
+    let dir = watch_dir("s_freeport");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.mjs", "document.title = 'FREE';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body><div id=root></div></body></html>\n",
+    );
+    // No `port` key, so nothing named one.
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+
+    // The default, held for the length of the test. If this fails, something
+    // else on the machine already has it — which is the same precondition.
+    let blocker = std::net::TcpListener::bind(("127.0.0.1", 5173));
+
+    let (mut child, log) = start_in_logging(&dir, &[]);
+    let port = announced_port(&log);
+    assert_ne!(port, 5173, "esdev bound the port that was taken");
+
+    let document = wait_for_http(port, "/", |body| body.contains("<div id=root>"));
+    assert!(document.contains("200 OK"), "{document}");
+    assert!(
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("5173 was taken"),
+        "esdev moved without saying so"
+    );
+
+    stop_supervisor(&mut child);
+    drop(blocker);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **A port that *was* named is a promise.** Moving quietly off it would leave
+/// a bookmark, a proxy rule or a second terminal pointing at whatever is
+/// already there, so this fails and says what to do instead.
+#[test]
+fn start_refuses_a_named_port_that_is_taken() {
+    let dir = watch_dir("s_takenport");
+    let port = test_port("s_takenport");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.mjs", "document.title = 'X';\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body><div id=root></div></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "index.html", "outdir": "dist" } } }"#,
+    );
+
+    let _held = std::net::TcpListener::bind(("127.0.0.1", port)).expect("hold the port");
+    let out = esdev_in(&dir)
+        .args(["start", &format!("--port={port}")])
+        .output()
+        .expect("spawn esdev start");
+
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let err = stderr(&out);
+    assert!(err.contains(&format!("127.0.0.1:{port}")), "{err}");
+    assert!(err.contains("--port"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn start_needs_a_project_to_start() {
     let dir = build_dir("s_noconfig");

@@ -296,8 +296,11 @@ USAGE:
                                 keep both current
 
 OPTIONS:
-    --port=<n>                  The port esdev's own endpoint binds
-                                (default 5173, loopback only)
+    --port=<n>                  The port esdev's own endpoint binds, and it
+                                binds that one or fails. Without it, 5173 if
+                                free and any free port otherwise — the one it
+                                took is printed. Loopback only; 0 asks for
+                                any free port explicitly
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
