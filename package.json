@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "description": "The workspace root. The runtime itself is Rust; tasks are in tasks.toml.",
-  "packageManager": "bun@canary",
-  "_workspaces": "website/ and bench/ are deliberately not members and keep their own bun.lock. website/ must stay on lockfileVersion 1 — its deploy cannot read 2, and folding it in here would move its dependencies into this v2 lockfile and break the build. bench/ is the cross-runtime comparison clients, which have no business in the runtime's dependency graph.",
+  "packageManager": "bun@1.3.14",
+  "_workspaces": "website/ and bench/ are deliberately not members and keep their own bun.lock. Every lockfile here is version 1, which is all website/'s deploy can read: a canary bun writes 2 into a lockfile it creates from scratch, though it leaves an existing 1 alone — so `packageManager` names a released bun, and a regenerated lockfile has to come from one. bench/ is the cross-runtime comparison clients, which have no business in the runtime's dependency graph.",
   "workspaces": [
     "packages/*",
     "crates/runtime/js"

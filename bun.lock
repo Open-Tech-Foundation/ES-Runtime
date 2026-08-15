@@ -1,5 +1,5 @@
 {
-  "lockfileVersion": 2,
+  "lockfileVersion": 1,
   "configVersion": 1,
   "workspaces": {
     "": {
@@ -18,7 +18,7 @@
     },
     "packages/postgres": {
       "name": "@opentf/esrun-postgres",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "devDependencies": {
         "@opentf/esrun-types": "workspace:*",
         "typescript": "^7.0.2",
@@ -26,7 +26,7 @@
     },
     "packages/redis": {
       "name": "@opentf/esrun-redis",
-      "version": "0.0.1",
+      "version": "0.1.0",
       "devDependencies": {
         "@opentf/esrun-types": "workspace:*",
         "typescript": "^7.0.2",
@@ -34,7 +34,7 @@
     },
     "packages/types": {
       "name": "@opentf/esrun-types",
-      "version": "0.0.1",
+      "version": "0.1.0",
     },
   },
   "packages": {
