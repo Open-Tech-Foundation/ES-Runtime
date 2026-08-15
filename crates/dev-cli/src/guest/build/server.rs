@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rolldown::BundlerBuilder;
 use tokio::sync::{mpsc, oneshot};
 
-use super::plugin::{Bridge, JsPlugin};
+use crate::adapter::Adapter;
+
+use super::plugin::{Bridge, GuestPass};
 
 pub use crate::bundler::{External, OutputOptions};
 
@@ -36,7 +38,7 @@ pub use crate::bundler::{External, OutputOptions};
 /// against this project's contract and dispatched back into the isolate.
 pub struct Options {
     pub bundler: crate::bundler::Options,
-    pub plugins: Vec<Arc<crate::guest::build::contract::Plugin>>,
+    pub plugins: Vec<Arc<crate::contract::Plugin>>,
 }
 
 /// One chunk of a finished build.
@@ -270,18 +272,19 @@ async fn run(
         .cwd
         .clone()
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let mut plugins: Vec<rolldown::plugin::__inner::SharedPluginable> =
-        vec![Arc::new(crate::cssmodules::CssModules::new(
+    let mut plugins: Vec<rolldown::plugin::__inner::SharedPluginable> = vec![Arc::new(
+        Adapter::new(Arc::new(crate::cssmodules::CssModules::new(
             &cwd,
             crate::cssmodules::Collected::new(),
             options.bundler.minify,
-        ))];
+        ))),
+    )];
     // Then one per declaration, each carrying its own filters. Built per build
     // rather than kept, because a build is where they are used and the options
     // they came from outlive them.
     plugins.extend(options.plugins.iter().map(|declared| {
-        Arc::new(JsPlugin::new(bridge.clone(), Arc::clone(declared)))
-            as rolldown::plugin::__inner::SharedPluginable
+        let pass = Arc::new(GuestPass::new(bridge.clone(), Arc::clone(declared)));
+        Arc::new(Adapter::new(pass)) as rolldown::plugin::__inner::SharedPluginable
     }));
 
     let mut bundler = BundlerBuilder::default()

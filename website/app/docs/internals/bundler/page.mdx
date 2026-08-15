@@ -35,8 +35,8 @@ have to carry a bundler, and a deployment has nothing to bundle.
 
 ```text
   build.js, build.rs    the API and the ops
-  contract              what a plugin is — ours, versioned with runtime:
-  plugin.rs, server.rs  the adapter, and the only place rolldown is named
+  contract.rs           what a pass is — ours, versioned with runtime:
+  adapter.rs, server.rs the adapter, and where rolldown is named
 ```
 
 The first version of this had no middle layer: guest plugins were rolldown's
@@ -55,6 +55,28 @@ from the module — markup that did not match its own stylesheet, depending on
 which path built it. That is what follows from our passes and the guest's
 plugins being two unrelated concepts glued to a third party's trait. One
 contract, one list, one order is the fix.
+
+### Two implementations, which is what makes it a contract
+
+A contract with one implementation always fits. For a while this one had
+exactly that: a guest plugin implemented it, and our own CSS Modules pass was
+still written against rolldown's trait — so the layer was a translation of one
+thing into another, not a shared idea.
+
+Both are `Pass` implementations now. A guest plugin answers a hook by posting a
+message to another thread and waiting for the isolate; the CSS pass answers by
+returning. Nothing downstream can tell which it has, and one adapter carries
+both — so replacing the bundler is one file for our passes as well as for other
+people's.
+
+**It caught something immediately.** A hook *returns* the files it depends on,
+where rolldown's trait has you call `this.addWatchFile()` or forget. The CSS
+pass had forgotten: a `.module.css` that `@import`s another file, or reaches
+one through `composes … from`, depends on a file **nothing imports** — the
+reference is inside the CSS, and only our own CSS bundler follows it. Neither
+reached `watchFiles`, so a `--watch` save to one rebuilt nothing and the page
+kept the rules it had. Writing the pass against a shape where dependencies are
+part of the answer is what surfaced it.
 
 ### What a backend must provide
 

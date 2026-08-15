@@ -724,6 +724,17 @@ This is the second divergence of this class found between the two paths — the 
 
 Two things fell out of doing it. `--lib` became a **target** (`Target::Library`) rather than a flag threaded through the option-building, which puts the library rules — assert no condition, define nothing, preserve modules, externalise everything — in the same table as the other targets instead of as `if lib` branches scattered through one long struct literal; a library build is also neutral now, where before it took the browser platform's aliasing if its target said `browser`, which would have baked the consumer's environment into a published package. And the guest's `external` predicate binds to its bridge where the options are read rather than where they are translated, which is what let the shared type stay free of anything guest-shaped.
 
+**Amendment (the contract has two implementations, 2026-08-15).** The claim this project made when it took the plugin API off the bundler was that our own passes and a guest's plugin are the same kind of thing. It was not true. `CssModules` — the pass that scopes a `.module.css` and is the reason a component's `styles.button` matches the stylesheet the browser fetched — was written against **rolldown's** trait, while the contract it was supposed to share had exactly one implementation: the guest. A contract with one implementation always fits, which is the same as saying it has not been tested.
+
+It is now a `contract::Pass`, and everything that follows from that is the point:
+
+* **`contract::Pass` and `contract::Context` are traits, not a parsed declaration.** The contract used to describe only what a guest *declares*; it now describes what a pass *is* and what a hook may ask of a build while it runs. A guest plugin answers a hook by posting a message to another thread and waiting; the CSS pass answers by returning. Nothing downstream can tell which it has.
+* **One adapter.** `crate::adapter` takes any `Pass` and hands back something the bundler will call — filters, ordering, the NUL-prefix notation for virtual ids, declared dependencies, and the three flavours of plugin context, all in one place. Swapping the bundler is now one file for *both* kinds of pass, where before it was one file plus every pass we had written ourselves.
+* **The contract moved to the crate root.** It sat under `guest/build/` when only the guest implemented it. It is not guest-only, and a path is a claim.
+* **The CSS pass declares a filter instead of checking an id.** `if !args.id.ends_with(".css") { return }` became a declared `Filter`, which is the same statement in the place the machinery can read it.
+
+**A bug this found and fixed.** A hook returning the files it depends on is a contract feature the bundler's trait has no equivalent for — you call `this.addWatchFile()` or you forget. The CSS pass had no way to say it, so it never did: an `@import`ed stylesheet and a `composes … from` target were **invisible to every consumer of `watchFiles`**. Nothing imports either — the reference is inside the CSS, and only our own bundler follows it — so a `--watch` save to one of them rebuilt nothing and the page kept the rules it had. `css::bundle::Bundled` now reports which files it read, the `composes` recursion accumulates them across the chain, and the pass returns them as `dependsOn`. Verified end to end through `runtime:build`'s `watchFiles`, and the test fails without it.
+
 ---
 
 ### D70 — `esdev create` asks, when there is somebody to ask · *Proposed (2026-08-14)* · *amends D64's "no prompts, no install"*

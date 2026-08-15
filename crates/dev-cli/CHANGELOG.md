@@ -24,6 +24,42 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **There is one place a build becomes the bundler's options.** Both
+  divergences above were two translations of the same idea drifting apart, and
+  finding them by reading the two side by side is not a way of finding bugs.
+  `crates/dev-cli/src/bundler.rs` now owns the option types every build in this
+  binary describes itself with, and is the only place in the crate that
+  constructs a `BundlerOptions`. The `build` subcommand, the client bundle it
+  emits for a browser, and `runtime:build` fill in the same struct and call the
+  same translation. It is checkable by grep rather than by reading.
+
+  Two things follow, both visible:
+
+  - **`--lib` is a target rather than a flag.** The library rules — assert no
+    condition, define nothing, preserve modules, externalise everything that is
+    not its own source — sit with the other targets instead of as `if lib`
+    branches through a long struct literal.
+  - **A `--lib` build is neutral even when its target says `browser`.** It used
+    to take the browser platform, whose aliasing follows a package's `browser`
+    field — which bakes the consumer's environment into a published package, the
+    same objection that already stopped a library asserting conditions or
+    defining `NODE_ENV`.
+
+- **This toolchain's own passes go through the plugin contract too.** When
+  `runtime:build`'s plugin API stopped being the bundler's, the claim was that
+  our passes and a guest's plugin are the same kind of thing. They were not:
+  the CSS Modules pass was written against **rolldown's** trait, and the
+  contract had exactly one implementation — which is the same as saying it had
+  never been tested.
+
+  It is a `Pass` now, like a plugin declared in JavaScript is a `Pass`. One
+  list, one order, one set of filter rules, one adapter — so swapping the
+  bundler is one file for both kinds of pass, where before it was one file plus
+  every pass we had written ourselves. The contract moved to the crate root,
+  since it was never guest-only and a path is a claim.
+
 ### Fixed
 
 - **A guest build resolves what `esdev build` resolves.** `esdev build` asserts
@@ -53,30 +89,19 @@ is the point, since none of the three has any business in a deployment.
 
   This is the second divergence of its kind between the two paths, after
   `runtime:build` not installing the CSS Modules pass. Both were found by
-  looking, not by a test failing — so the fix went one step further, below.
+  looking, not by a test failing — which is why the fix went further than the
+  defaults, under **Changed** above.
 
-### Changed
+- **An `@import`ed stylesheet is watched.** A `.module.css` that `@import`s
+  another file, or reaches one through `composes … from`, depends on a file
+  **nothing imports** — the reference is inside the CSS, and only this project's
+  own CSS bundler follows it. Neither reached `watchFiles`, so a `--watch` save
+  to one of them rebuilt nothing and the page kept the rules it had.
 
-- **There is one place a build becomes the bundler's options.** Both
-  divergences above were two translations of the same idea drifting apart, and
-  finding them by reading the two side by side is not a way of finding bugs.
-  `crates/dev-cli/src/bundler.rs` now owns the option types every build in this
-  binary describes itself with, and is the only place in the crate that
-  constructs a `BundlerOptions`. The `build` subcommand, the client bundle it
-  emits for a browser, and `runtime:build` fill in the same struct and call the
-  same translation. It is checkable by grep rather than by reading.
-
-  Two things follow, both visible:
-
-  - **`--lib` is a target rather than a flag.** The library rules — assert no
-    condition, define nothing, preserve modules, externalise everything that is
-    not its own source — sit with the other targets instead of as `if lib`
-    branches through a long struct literal.
-  - **A `--lib` build is neutral even when its target says `browser`.** It used
-    to take the browser platform, whose aliasing follows a package's `browser`
-    field — which bakes the consumer's environment into a published package, the
-    same objection that already stopped a library asserting conditions or
-    defining `NODE_ENV`.
+  This is the first thing the contract caught rather than the reviewer: a hook
+  *returns* what it depends on, and the pass had nowhere to put it while it was
+  written against a trait where you call `this.addWatchFile()` or you forget.
+  It forgot.
 
 ## [0.2.0] - 2026-08-15
 

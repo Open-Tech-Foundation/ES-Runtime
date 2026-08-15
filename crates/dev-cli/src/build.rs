@@ -501,13 +501,13 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
     let mut bundler = rolldown::BundlerBuilder::default()
         .with_options(translated)
-        .with_plugins(vec![std::sync::Arc::new(
-            crate::cssmodules::CssModules::new(
+        .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
+            std::sync::Arc::new(crate::cssmodules::CssModules::new(
                 &cwd,
                 crate::cssmodules::Collected::new(),
                 config.minify,
-            ),
-        )])
+            )),
+        ))])
         .build()
         .map_err(reported!())?;
     bundler.write().await.map_err(reported!())?;
@@ -637,9 +637,13 @@ pub async fn bundle_browser_entries(
             options.output.clone(),
             None,
         )?)
-        .with_plugins(vec![std::sync::Arc::new(
-            crate::cssmodules::CssModules::new(root, styles.clone(), minify),
-        )])
+        .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
+            std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                root,
+                styles.clone(),
+                minify,
+            )),
+        ))])
         .build()
         .map_err(reported!())?;
     bundler.write().await.map_err(reported!())?;

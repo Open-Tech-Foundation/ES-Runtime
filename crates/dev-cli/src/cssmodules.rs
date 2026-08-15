@@ -6,10 +6,13 @@
 //! stylesheet the JavaScript *imports* is not a file the document links; it is
 //! a module in the graph, and only the bundler knows the graph.
 //!
-//! # One rolldown plugin, one hook
+//! # One pass, one hook
 //!
-//! `transform` sees every module's source before it is parsed, and this
-//! replaces it for anything ending in `.css`:
+//! This is a [`Pass`](crate::contract::Pass) against this project's own plugin
+//! contract — the same contract a plugin written in guest JavaScript
+//! implements, and the same one adapted onto whatever bundler is underneath.
+//! It declares a `transform` filtered to `.css`, which the adapter matches
+//! before calling, and replaces the module's source:
 //!
 //! * **`*.module.css`** becomes a JavaScript object literal — the name mapping
 //!   — so the graph sees an ordinary module and the importing component gets
@@ -39,22 +42,17 @@
 //! deliberately does not grant. A `<link>` in the head is fetched in parallel
 //! with the bundle and blocks rendering exactly as a stylesheet should.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use rolldown::plugin::{
-    HookTransformArgs, HookTransformOutput, HookTransformReturn, HookUsage, Plugin,
-    SharedTransformPluginContext,
-};
-use rolldown_common::ModuleType;
+use crate::contract::{self, Answer, Filter, HookSpec, Hooks, ModuleResult, Pattern};
 
 /// The scoped CSS gathered during a bundler run, in the order the modules were
 /// transformed.
 ///
-/// Shared with the plugin rather than returned from it, because a rolldown hook
-/// has nowhere to return something the bundle does not contain.
+/// Shared with the pass rather than returned from it, because a hook has
+/// nowhere to return something the bundle does not contain.
 #[derive(Debug, Default, Clone)]
 pub struct Collected(Arc<Mutex<Vec<Sheet>>>);
 
@@ -112,6 +110,34 @@ impl Collected {
     }
 }
 
+/// The files read while turning one stylesheet into a module.
+///
+/// Shared because `composes … from` recurses into other modules, and every file
+/// any of them read belongs to the module the chain started at — that is the
+/// module whose rebuild has to be triggered.
+#[derive(Clone, Debug, Default)]
+struct Files(Arc<Mutex<Vec<PathBuf>>>);
+
+impl Files {
+    fn extend(&self, paths: Vec<PathBuf>) {
+        self.0
+            .lock()
+            .expect("no panic while holding the lock")
+            .extend(paths);
+    }
+
+    fn take(&self) -> Vec<String> {
+        let mut files = self.0.lock().expect("no panic while holding the lock");
+        let mut out: Vec<String> = files
+            .drain(..)
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
 /// Whether a module id names a CSS Modules stylesheet.
 ///
 /// The `.module.css` convention rather than a config key: it is what every
@@ -122,7 +148,14 @@ pub fn is_css_module(id: &str) -> bool {
     id.ends_with(".module.css")
 }
 
-/// The plugin that turns a `.module.css` import into its name mapping.
+/// The pass that turns a `.module.css` import into its name mapping.
+///
+/// **Written against [this project's own contract](crate::contract), not the
+/// bundler's trait.** It is a [`Pass`](contract::Pass) like a plugin declared in
+/// guest JavaScript is a `Pass`, goes into the same list in the same order,
+/// declares its filter the same declarative way, and reaches the build through
+/// the same context. Which means the claim that the bundler is replaceable
+/// covers our own passes too: they move with the adapter, not with rolldown.
 #[derive(Debug)]
 pub struct CssModules {
     /// The project root, so a scoped name depends on a path that is the same on
@@ -130,6 +163,7 @@ pub struct CssModules {
     root: PathBuf,
     collected: Collected,
     minify: bool,
+    hooks: Hooks,
 }
 
 impl CssModules {
@@ -138,45 +172,69 @@ impl CssModules {
             root: root.to_path_buf(),
             collected,
             minify,
+            // Declared rather than checked at the top of the hook. The contract
+            // matches it before the call, which for a pass in this binary saves
+            // a function call and for a pass in the isolate saves a round trip
+            // — and stating it in the declaration is what lets both be true of
+            // one adapter.
+            hooks: Hooks {
+                transform: Some(HookSpec {
+                    filter: Filter {
+                        id: vec![Pattern::Regex(
+                            regex::Regex::new(r"\.css$").expect("a literal pattern"),
+                        )],
+                        code: Vec::new(),
+                    },
+                    ..HookSpec::default()
+                }),
+                ..Hooks::default()
+            },
         }
     }
 }
 
-impl Plugin for CssModules {
-    fn name(&self) -> Cow<'static, str> {
-        Cow::Borrowed("esdev:css-modules")
+impl contract::Pass for CssModules {
+    fn name(&self) -> &str {
+        "esdev:css-modules"
     }
 
-    fn register_hook_usage(&self) -> HookUsage {
-        HookUsage::Transform
+    fn hooks(&self) -> &Hooks {
+        &self.hooks
     }
 
-    async fn transform(
-        &self,
-        _context: SharedTransformPluginContext,
-        args: &HookTransformArgs<'_>,
-    ) -> HookTransformReturn {
-        if !args.id.ends_with(".css") {
-            return Ok(None);
-        }
-        let path = Path::new(args.id);
-        let names = self
-            .stylesheet(path)
-            .map_err(|e| anyhow::anyhow!("{}: {e}", self.ident(path)))?;
+    fn transform<'a>(
+        &'a self,
+        _code: &'a str,
+        id: &'a str,
+        _ctx: &'a Arc<dyn contract::Context>,
+    ) -> Answer<'a, Option<ModuleResult>> {
+        Box::pin(async move {
+            let path = Path::new(id);
+            let read = Files::default();
+            let names = self
+                .stylesheet(path, &read)
+                .map_err(|e| format!("{}: {e}", self.ident(path)))?;
 
-        Ok(Some(HookTransformOutput {
-            code: Some(match names {
-                // A CSS Module hands its mapping to the importer.
-                Some(names) => module_source(&names),
-                // A plain stylesheet exports nothing. It still has to be a
-                // module: the import is what put the CSS in the build, so an
-                // empty one keeps that edge in the graph rather than letting
-                // tree-shaking decide the stylesheet was unused.
-                None => "export {};\n".to_string(),
-            }),
-            module_type: Some(ModuleType::Js),
-            ..HookTransformOutput::default()
-        }))
+            Ok(Some(ModuleResult {
+                code: match names {
+                    // A CSS Module hands its mapping to the importer.
+                    Some(names) => module_source(&names),
+                    // A plain stylesheet exports nothing. It still has to be a
+                    // module: the import is what put the CSS in the build, so
+                    // an empty one keeps that edge in the graph rather than
+                    // letting tree-shaking decide the stylesheet was unused.
+                    None => "export {};\n".to_string(),
+                },
+                module_type: Some("js".to_string()),
+                map: None,
+                // Every stylesheet this read that the graph cannot see: the
+                // files an `@import` chain pulled in, and the modules a
+                // `composes … from` reached. Nothing imports either, so without
+                // this a save to one of them rebuilds nothing and the page
+                // keeps the rules it had.
+                depends_on: read.take(),
+            }))
+        })
     }
 }
 
@@ -195,8 +253,13 @@ impl CssModules {
     /// Read from disk rather than from `args.code`, because a stylesheet may
     /// `@import` others and only [`crate::css::bundle`] resolves those — the
     /// bundler hands over one file's text and knows nothing about the rest.
-    fn stylesheet(&self, path: &Path) -> Result<Option<BTreeMap<String, String>>, String> {
+    fn stylesheet(
+        &self,
+        path: &Path,
+        read: &Files,
+    ) -> Result<Option<BTreeMap<String, String>>, String> {
         let bundled = crate::css::bundle::bundle(path)?;
+        read.extend(bundled.read_files);
 
         let (sheet, names) = if is_css_module(&path.to_string_lossy()) {
             let mut imports = Imports {
@@ -205,6 +268,7 @@ impl CssModules {
                 collected: self.collected.clone(),
                 minify: self.minify,
                 seen: vec![path.to_path_buf()],
+                read: read.clone(),
             };
             let scoped =
                 crate::css::modules::scope_with(bundled.sheet, &self.ident(path), &mut imports)?;
@@ -239,6 +303,10 @@ struct Imports {
     collected: Collected,
     minify: bool,
     seen: Vec<PathBuf>,
+    /// Everything read on the way, so the module that started it can say what
+    /// it depends on. A composed module is reachable from **no import**, so
+    /// nothing else in the build has heard of it.
+    read: Files,
 }
 
 impl crate::css::modules::Resolve for Imports {
@@ -267,6 +335,7 @@ impl crate::css::modules::Resolve for Imports {
         // output. `Collected::push` dedupes, so a module that is also imported
         // still appears once.
         let bundled = crate::css::bundle::bundle(&path)?;
+        self.read.extend(bundled.read_files);
         let mut deeper = Imports {
             from: path.parent().unwrap_or(Path::new(".")).to_path_buf(),
             root: self.root.clone(),
@@ -277,6 +346,7 @@ impl crate::css::modules::Resolve for Imports {
                 seen.push(path.clone());
                 seen
             },
+            read: self.read.clone(),
         };
         let scoped = crate::css::modules::scope_with(bundled.sheet, &ident, &mut deeper)?;
         self.collected.push(Sheet {

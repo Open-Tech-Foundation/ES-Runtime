@@ -56,6 +56,10 @@
 //!   bundler's plugin API can make that statement, because none of them has a
 //!   capability model to make it in.
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
 use es_runtime_cli_common::{OpError, Value};
 
 /// Which hook of a plugin a call is for.
@@ -202,6 +206,116 @@ pub struct Plugin {
     pub id: f64,
     pub name: String,
     pub hooks: Hooks,
+}
+
+/// What a hook's answer looks like on its way back: fallible, and possibly
+/// awaited. A pass that answers without waiting still spells it this way,
+/// because the caller cannot know which kind it has.
+pub type Answer<'a, T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
+
+/// What a hook may ask of the build while it is running.
+///
+/// The half of a plugin API that cannot be a return value: `resolve()` asks the
+/// build's own resolver a question *mid-hook*, and `emit()` adds to a build
+/// already under way. Stated as a trait so that both kinds of pass reach the
+/// build the same way — a pass in the guest isolate does it by posting to the
+/// host, a pass in this binary does it by calling a function, and neither knows
+/// which it is.
+pub trait Context: Send + Sync {
+    /// The build's own resolver. `None` is "nothing resolves", which is an
+    /// answer to branch on rather than an error to catch.
+    fn resolve<'a>(
+        &'a self,
+        specifier: &'a str,
+        importer: Option<&'a str>,
+        skip_self: bool,
+    ) -> Answer<'a, Option<ResolvedId>>;
+
+    /// An extra entry or asset, added to a build in flight. Returns the
+    /// reference the emitter can ask for the final file name by.
+    fn emit(&self, emit: Emit) -> Result<String, String>;
+
+    /// A diagnostic. `"warn"`, `"info"` or `"debug"`.
+    fn log(&self, level: &str, message: String);
+
+    /// A file the module being processed depends on. Prefer returning
+    /// [`ModuleResult::depends_on`]; this exists for the whole-build hooks,
+    /// which have no module to hang an answer on.
+    fn depends_on(&self, file: &str);
+
+    /// Where the build is running, for resolving a relative path a pass gave
+    /// us against the same directory everything else in a run resolves against.
+    fn cwd(&self) -> std::path::PathBuf;
+}
+
+/// A pass over a build, in this project's own vocabulary.
+///
+/// **Two kinds of thing implement this, and that is the point.** A plugin
+/// declared in guest JavaScript is one; this toolchain's own passes — the CSS
+/// Modules scoping, today — are the other. They are the same kind of object to
+/// everything downstream: one list, one order, one set of filters, one adapter
+/// onto whatever bundler is underneath.
+///
+/// Before this existed, our own passes were written against the bundler's trait
+/// and the guest's against this contract, which meant the contract had exactly
+/// one implementation. A contract with one implementation always fits. It also
+/// meant the two lists could drift, and they did: `runtime:build` shipped
+/// without the CSS pass the `build` subcommand installs, and one project
+/// produced two different builds depending on which door it came in.
+///
+/// Every hook defaults to "not mine", so a pass writes only what it does.
+pub trait Pass: Send + Sync + std::fmt::Debug {
+    /// For diagnostics, and for the `plugin` field of a warning.
+    fn name(&self) -> &str;
+
+    /// What this pass wants to be called for, and when. A hook it does not
+    /// declare is never called; a filter it declares is matched *before* the
+    /// call, which for a pass in the isolate is the difference between one
+    /// crossing and one crossing per module in the graph.
+    fn hooks(&self) -> &Hooks;
+
+    /// The build is starting. Returns files the whole build depends on that
+    /// nothing imports — a config file, a manifest.
+    fn start<'a>(&'a self, _ctx: &'a Arc<dyn Context>) -> Answer<'a, Vec<String>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    /// Where a specifier points. The id may name a module with no file behind
+    /// it; say so with [`Resolved::To::virtual_module`].
+    fn resolve<'a>(
+        &'a self,
+        _specifier: &'a str,
+        _importer: Option<&'a str>,
+        _is_entry: bool,
+        _ctx: &'a Arc<dyn Context>,
+    ) -> Answer<'a, Resolved> {
+        Box::pin(async { Ok(Resolved::Pass) })
+    }
+
+    /// The contents of a module, by id. `None` is "not mine".
+    fn load<'a>(
+        &'a self,
+        _id: &'a str,
+        _ctx: &'a Arc<dyn Context>,
+    ) -> Answer<'a, Option<ModuleResult>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// A module's contents, rewritten. `None` is "leave it alone".
+    fn transform<'a>(
+        &'a self,
+        _code: &'a str,
+        _id: &'a str,
+        _ctx: &'a Arc<dyn Context>,
+    ) -> Answer<'a, Option<ModuleResult>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// The build finished, or failed with `error`. A pass that started
+    /// something in [`Pass::start`] has to be told which.
+    fn end<'a>(&'a self, _error: Option<&'a str>, _ctx: &'a Arc<dyn Context>) -> Answer<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 /// What `resolve` answered.

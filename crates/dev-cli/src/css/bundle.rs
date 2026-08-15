@@ -48,6 +48,14 @@ pub struct Bundled {
     pub referenced: Vec<Referenced>,
     /// How many files were merged into it, the entry included.
     pub sources: usize,
+    /// Which files those were, entry first.
+    ///
+    /// A build knows it read the entry — something imported it. It cannot know
+    /// about the rest, because an `@import` chain is inside the stylesheet and
+    /// this is the only thing that follows it. Without this list, editing an
+    /// imported stylesheet changes nothing on a `--watch` save and the page
+    /// keeps the rules it had.
+    pub read_files: Vec<PathBuf>,
 }
 
 /// Reads `entry` and everything it imports.
@@ -56,6 +64,7 @@ pub fn bundle(entry: &Path) -> Result<Bundled, String> {
         sheet: Stylesheet::default(),
         referenced: Vec::new(),
         sources: 0,
+        read_files: Vec::new(),
     };
     let mut stack = Vec::new();
     let items = read(entry, &mut out, &mut stack)?;
@@ -89,8 +98,9 @@ fn read(file: &Path, out: &mut Bundled, stack: &mut Vec<PathBuf>) -> Result<Vec<
         std::fs::read_to_string(file).map_err(|e| format!("cannot read {}: {e}", display(file)))?;
     let dir = file.parent().unwrap_or(Path::new(".")).to_path_buf();
 
-    stack.push(canonical);
+    stack.push(canonical.clone());
     out.sources += 1;
+    out.read_files.push(canonical);
 
     let mut sheet = parse(&source);
     // `url()` first, while `dir` still means this file's directory.

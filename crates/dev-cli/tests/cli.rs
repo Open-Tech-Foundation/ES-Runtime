@@ -3727,6 +3727,59 @@ console.log("code", JSON.stringify(output[0].code));
     assert!(code.contains("worker-build"), "{code}");
 }
 
+/// **This toolchain's own passes go through the same contract.** The CSS
+/// Modules pass used to be written against the bundler's trait, which meant the
+/// contract had one implementation and no way to check that it was a contract
+/// at all. It is a `Pass` now, and this is the observable consequence: it
+/// returns the stylesheets it read through `dependsOn`, so they arrive in the
+/// guest's `watchFiles` beside everything the module graph found by itself.
+///
+/// Nothing imports an `@import`ed stylesheet or a `composes … from` target —
+/// the reference is inside the CSS — so before this a save to either rebuilt
+/// nothing and the page kept the rules it had.
+#[test]
+fn runtime_build_watches_the_stylesheets_a_css_module_read() {
+    let dir = build_dir("rb_css_deps");
+    write_in(&dir, "base.css", ".shared { padding: 4px; }\n");
+    write_in(
+        &dir,
+        "shared.module.css",
+        ".pill { border-radius: 999px; }\n",
+    );
+    write_in(
+        &dir,
+        "s.module.css",
+        "@import \"./base.css\";\n.button { composes: pill from \"./shared.module.css\"; color: red; }\n",
+    );
+    write_in(
+        &dir,
+        "app-entry.js",
+        "import styles from './s.module.css';\nconsole.log(styles.button);\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({ input: "app-entry.js" });
+const { watchFiles } = await bundle.generate({});
+for (const file of watchFiles) console.log("watch", file);
+"#,
+    );
+
+    let run = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(run.status.success(), "{}", stderr(&run));
+    let watched = stdout(&run);
+    assert!(
+        watched.contains("base.css"),
+        "the @import'ed stylesheet is not watched: {watched}"
+    );
+    assert!(
+        watched.contains("shared.module.css"),
+        "the composed module is not watched: {watched}"
+    );
+}
+
 /// A plugin that throws fails the build **with its own message**. The hook ran
 /// on a different thread from the bundler; an error that arrived as "build
 /// failed" would be the worst possible outcome of that.

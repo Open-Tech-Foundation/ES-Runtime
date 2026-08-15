@@ -13,16 +13,25 @@
 //! # Three layers, and the middle one is the point
 //!
 //! ```text
-//!   build.js + this file  the API and the ops
-//!   contract              what a plugin is — ours, versioned with runtime:
-//!   plugin.rs, server.rs  the adapter, and the only place rolldown is named
+//!   build.js + this file       the API and the ops
+//!   crate::contract            what a pass is — ours, versioned with runtime:
+//!   crate::adapter, server.rs  the adapter, and where rolldown is named
 //! ```
 //!
 //! The bundler is an *implementation* of the contract, not the definition of
 //! it. A guest-visible API defined by a third party's trait moves when that
 //! trait moves — and a hook renamed in a bundler's patch release would be a
-//! breaking change in this runtime's standard library. [`contract`] states what
-//! a backend must be able to do; [`plugin`] is what makes rolldown do it.
+//! breaking change in this runtime's standard library.
+//! [`contract`](crate::contract) states what a backend must be able to do;
+//! [`adapter`](crate::adapter) is what makes rolldown do it.
+//!
+//! The contract is **not guest-only**, which is why it sits at the crate root
+//! rather than under this module. This toolchain's own passes implement it too
+//! — [`CssModules`](crate::cssmodules::CssModules) is a
+//! [`Pass`](crate::contract::Pass) exactly as a plugin declared in JavaScript
+//! is — so both go into one list, in one order, under one set of filter rules,
+//! through one adapter. A contract with a single implementation always fits;
+//! this one has two, and they are as different as an implementation gets.
 //!
 //! # What a subprocess could not do
 //!
@@ -55,7 +64,6 @@
 //! reaches the host through the same gated ops as any other program. A plugin
 //! that reads a file needs `FileRead` like anything else does.
 
-pub mod contract;
 pub mod plugin;
 pub mod server;
 
@@ -69,6 +77,7 @@ use es_runtime_cli_common::{
 use es_runtime_common::{Capability, ExceptionClass, IntoException};
 use tokio::sync::mpsc;
 
+use crate::contract;
 use plugin::{Bridge, HookCall, HookReply};
 use server::{BuildServer, External, Options, OutputOptions};
 
@@ -241,7 +250,8 @@ impl HostExtension for BuildExtension {
                 let Some(ctx) = this.bridge.context(call) else {
                     return Err(context_expired());
                 };
-                let found = plugin::ctx_resolve(&ctx, &specifier, importer.as_deref(), skip_self)
+                let found = ctx
+                    .resolve(&specifier, importer.as_deref(), skip_self)
                     .await
                     .map_err(build_error)?;
                 Ok(match found {
@@ -263,9 +273,7 @@ impl HostExtension for BuildExtension {
                 return Err(context_expired());
             };
             let request = contract::emit(&file).map_err(OpError::type_error)?;
-            plugin::ctx_emit(&ctx, request)
-                .map(Value::String)
-                .map_err(build_error)
+            ctx.emit(request).map(Value::String).map_err(build_error)
         }));
 
         // this.warn(message) / this.info(message) / this.debug(message)
@@ -277,7 +285,7 @@ impl HostExtension for BuildExtension {
             let Some(ctx) = this.bridge.context(call) else {
                 return Err(context_expired());
             };
-            plugin::ctx_log(&ctx, &level, message);
+            ctx.log(&level, message);
             Ok(Value::Undefined)
         }));
 

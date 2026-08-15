@@ -38,9 +38,11 @@ use es_runtime_cli_common::diagnostics::print_error;
 use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 
+mod adapter;
 mod build;
 mod bundler;
 mod config;
+mod contract;
 mod create;
 mod css;
 mod cssmodules;
