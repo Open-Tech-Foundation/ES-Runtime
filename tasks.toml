@@ -134,6 +134,15 @@ deps = ["test:postgres", "test:redis"]
 [tasks."build:esrun"]
 run = "cargo build -p es-runtime-cli"
 
+# --- the website -------------------------------------------------------------
+
+# website/ is deliberately not a workspace member (package.json's `_workspaces`
+# says why), so it keeps its own node_modules and this runs in its directory
+# rather than through `packages`. Long-lived: it serves until interrupted.
+[tasks."dev:website"]
+run = "bun run dev"
+dir = "website"
+
 # --- aggregates --------------------------------------------------------------
 
 # Sequential by design: test:unit reads what build wrote.

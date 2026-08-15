@@ -327,19 +327,19 @@ export default function SandboxDiagram() {
         <g className={has(run, "net") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 0s">
           <circle cx="0" cy={L.net} r="4.5" />
         </g>
-        <g className={has(run, "read") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 0.9s">
+        <g className={has(run, "read") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 0.5s">
           <circle cx="0" cy={L.read} r="4.5" />
         </g>
-        <g className={has(run, "listen") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 1.8s">
+        <g className={has(run, "listen") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 1s">
           <circle cx="0" cy={L.listen} r="4.5" />
         </g>
-        <g className={has(run, "write") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 2.7s">
+        <g className={has(run, "write") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 1.5s">
           <circle cx="0" cy={L.write} r="4.5" />
         </g>
-        <g className={has(run, "env") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 3.6s">
+        <g className={has(run, "env") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 2s">
           <circle cx="0" cy={L.env} r="4.5" />
         </g>
-        <g className={has(run, "run") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 4.5s">
+        <g className={has(run, "run") ? PASS_PULSE : BLOCK_PULSE} style="animation-delay: 2.5s">
           <circle cx="0" cy={L.run} r="4.5" />
         </g>
 
@@ -413,31 +413,31 @@ export default function SandboxDiagram() {
             </g>
           )}
           {!has(run, "read") && (
-            <g className="esr-deny" style="animation-delay: 0.9s">
+            <g className="esr-deny" style="animation-delay: 0.5s">
               <line x1="367" y1={L.read - 7} x2="381" y2={L.read + 7} />
               <line x1="381" y1={L.read - 7} x2="367" y2={L.read + 7} />
             </g>
           )}
           {!has(run, "listen") && (
-            <g className="esr-deny" style="animation-delay: 1.8s">
+            <g className="esr-deny" style="animation-delay: 1s">
               <line x1="367" y1={L.listen - 7} x2="381" y2={L.listen + 7} />
               <line x1="381" y1={L.listen - 7} x2="367" y2={L.listen + 7} />
             </g>
           )}
           {!has(run, "write") && (
-            <g className="esr-deny" style="animation-delay: 2.7s">
+            <g className="esr-deny" style="animation-delay: 1.5s">
               <line x1="367" y1={L.write - 7} x2="381" y2={L.write + 7} />
               <line x1="381" y1={L.write - 7} x2="367" y2={L.write + 7} />
             </g>
           )}
           {!has(run, "env") && (
-            <g className="esr-deny" style="animation-delay: 3.6s">
+            <g className="esr-deny" style="animation-delay: 2s">
               <line x1="367" y1={L.env - 7} x2="381" y2={L.env + 7} />
               <line x1="381" y1={L.env - 7} x2="367" y2={L.env + 7} />
             </g>
           )}
           {!has(run, "run") && (
-            <g className="esr-deny" style="animation-delay: 4.5s">
+            <g className="esr-deny" style="animation-delay: 2.5s">
               <line x1="367" y1={L.run - 7} x2="381" y2={L.run + 7} />
               <line x1="381" y1={L.run - 7} x2="367" y2={L.run + 7} />
             </g>

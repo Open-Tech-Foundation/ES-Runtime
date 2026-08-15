@@ -184,9 +184,15 @@ button:not(:disabled),
  * translateX on a <g> rather than animating `cx`: transforms on a group are
  * universally supported, and one unit is one user unit in the viewBox.
  *
- * One cycle is 5.4s and the six lanes are staggered 0.9s apart, which is also
- * how often the component picks a new command line — so a lane is re-armed
- * between flights rather than mid-flight. */
+ * One cycle is 5.4s, which is also how often the component picks a new command
+ * line — and a new one rebuilds these elements, restarting every animation from
+ * zero. So the whole stagger *plus* one flight has to fit inside the cycle, not
+ * just the stagger: a lane still in the air when the 5.4s is up is cut off and
+ * never finishes. A passing pulse lands at 52% (2.81s), so the last lane can be
+ * delayed no more than 2.59s — hence 0.5s apart across six lanes and not 0.9s,
+ * which spent the entire cycle on the stagger alone and left the last lane with
+ * 0.9s to do 2.81s of travel. Its refusal mark, due at 19% (5.53s), never
+ * appeared at all. */
 @keyframes esr-pass {
   0% {
     transform: translateX(200px);
