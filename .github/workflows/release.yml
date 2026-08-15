@@ -29,8 +29,10 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - id: check
         run: |
           echo "should_release=$(otf-release check --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis --exclude-package es-runtime-cli --exclude-package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
@@ -50,8 +52,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - id: set
         run: echo "matrix=$(otf-release matrix --package es-runtime-cli)" >> "$GITHUB_OUTPUT"
 
@@ -76,14 +78,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - name: Install otf-release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.38.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.ps1 | iex
       - name: Build es-runtime-cli
         run: otf-release build --package es-runtime-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
@@ -102,8 +104,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - id: set
         run: echo "matrix=$(otf-release matrix --package es-runtime-dev-cli)" >> "$GITHUB_OUTPUT"
 
@@ -128,14 +130,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - name: Install otf-release
         if: runner.os == 'Windows'
         shell: pwsh
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.ps1 | iex
+          OTF_RELEASE_VERSION: v0.38.0
+        run: irm https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.ps1 | iex
       - name: Build es-runtime-dev-cli
         run: otf-release build --package es-runtime-dev-cli --target ${{ matrix.name }}/${{ matrix.arch }}
       - uses: actions/upload-artifact@v4
@@ -152,22 +154,21 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
-      - uses: ./.github/actions/tsr
-        with:
-          esdev: "true"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - name: Build @opentf/esrun-postgres
         run: tsr build
         working-directory: packages/postgres
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - name: Publish
         run: otf-release publish --package @opentf/esrun-postgres
         env:
@@ -183,22 +184,21 @@ jobs:
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
-      - uses: ./.github/actions/tsr
-        with:
-          esdev: "true"
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - name: Build @opentf/esrun-redis
         run: tsr build
         working-directory: packages/redis
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - name: Publish
         run: otf-release publish --package @opentf/esrun-redis
         env:
@@ -228,8 +228,10 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
+      - uses: ./.github/actions/setup-tsr
+      - uses: ./.github/actions/setup-esdev
       - name: Publish
         run: otf-release publish --exclude-package @opentf/esrun-postgres --exclude-package @opentf/esrun-redis
         env:
@@ -250,8 +252,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -275,8 +277,8 @@ jobs:
       - name: Install otf-release
         shell: bash
         env:
-          OTF_RELEASE_VERSION: v0.36.0
-        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.36.0/install.sh | bash
+          OTF_RELEASE_VERSION: v0.38.0
+        run: curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/release/v0.38.0/install.sh | bash
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

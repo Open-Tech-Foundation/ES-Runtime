@@ -19,9 +19,15 @@ github_release_notes = "curated-changelog"
 
 [hooks]
 
+[[setup]]
+uses = "./.github/actions/setup-tsr"
+
+[[setup]]
+uses = "./.github/actions/setup-esdev"
+
 [publish.ignore_paths]
-es-runtime-common = []
-es-runtime-default-providers = []
+es-runtime-cli = []
+es-runtime = []
 "@opentf/esrun-postgres" = [
     "**/*.md",
     "**/__tests__/**",
@@ -30,17 +36,6 @@ es-runtime-default-providers = []
     "**/test/**",
     "**/tests/**",
 ]
-"@opentf/esrun-types" = [
-    "**/*.md",
-    "**/__tests__/**",
-    "**/*.test.*",
-    "**/*.spec.*",
-    "**/test/**",
-    "**/tests/**",
-]
-es-runtime-cli = []
-es-runtime-providers = []
-es-runtime = []
 "@opentf/esrun-redis" = [
     "**/*.md",
     "**/__tests__/**",
@@ -49,6 +44,17 @@ es-runtime = []
     "**/test/**",
     "**/tests/**",
 ]
+es-runtime-default-providers = []
+es-runtime-common = []
+"@opentf/esrun-types" = [
+    "**/*.md",
+    "**/__tests__/**",
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/test/**",
+    "**/tests/**",
+]
+es-runtime-providers = []
 es-runtime-engine = []
 
 [[package]]
@@ -81,6 +87,7 @@ manifest = "packages/types/package.json"
 [[package]]
 name = "es-runtime-cli"
 adapter = "crates.io"
+setup = []
 mode = "build-only"
 matrix = true
 command = "cargo build --release --target {triple}"
@@ -139,6 +146,7 @@ ext = ".exe"
 [[package]]
 name = "es-runtime-dev-cli"
 adapter = "crates.io"
+setup = []
 mode = "build-only"
 matrix = true
 command = "cargo build --release --target {triple}"
