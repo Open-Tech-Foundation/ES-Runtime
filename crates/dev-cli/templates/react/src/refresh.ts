@@ -26,6 +26,11 @@
  * The whole file is behind a `NODE_ENV` check that the build replaces with a
  * literal, so a release build drops it, its import of `react-refresh` with it.
  */
+// `export {}` makes this a module, which is what allows the top-level `await`
+// below — and it is a module in every sense that matters already, since the
+// import above it is what the whole file exists to perform.
+export {};
+
 if (process.env.NODE_ENV !== "production") {
   const runtime = await import("react-refresh/runtime");
 

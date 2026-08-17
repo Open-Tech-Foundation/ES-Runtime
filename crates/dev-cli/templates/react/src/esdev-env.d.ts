@@ -79,3 +79,57 @@ declare function assertRejects(
   expected?: ExpectedError,
   message?: string,
 ): Promise<void>;
+
+/**
+ * `import.meta.hot` — the hot-replacement API, present when `esdev start --hot`
+ * built this bundle and `undefined` otherwise.
+ *
+ * Optional on purpose: the same source is built for production, where there is
+ * nothing to replace, so `if (import.meta.hot)` is how a module says "only in
+ * the dev loop" and typechecks in both.
+ */
+interface EsdevHot {
+  /** Re-run this module in place. With a callback, it is called afterwards. */
+  accept(callback?: (module: Record<string, unknown>) => void): void;
+  /** Re-run *that dependency* and tell this module, with its new exports. */
+  accept(dependency: string, callback?: (module: Record<string, unknown>) => void): void;
+  /** The same, for several. */
+  accept(dependencies: string[], callback?: (module: Record<string, unknown>) => void): void;
+  /**
+   * Aborted immediately before this module is replaced.
+   *
+   * The tidiest teardown there is, because everything on the platform already
+   * takes one: `addEventListener(e, fn, { signal: import.meta.hot.signal })`
+   * needs no cleanup code at all, and the same line is correct in a production
+   * build where the signal is never aborted.
+   */
+  readonly signal: AbortSignal;
+  /** Made once, and returned on every replacement after. */
+  keep<T>(key: string, make: () => T): T;
+  /** Run before this module is replaced. `signal` covers most of what this is for. */
+  dispose(callback: (data: Record<string, unknown>) => void): void;
+  /** Survives replacement. `keep` is usually what you want instead. */
+  readonly data: Record<string, unknown>;
+  /** Refuse replacement: any change reaching this module reloads the page. */
+  decline(): void;
+  /** "I cannot handle this after all" — try again from this module's importers. */
+  invalidate(): void;
+}
+
+interface ImportMeta {
+  readonly hot?: EsdevHot;
+}
+
+/**
+ * React's Fast Refresh runtime, which ships no types of its own.
+ *
+ * Only what `src/refresh.ts` uses. The transform's output calls these through
+ * globals rather than by importing them, so this is the whole surface a project
+ * touches by hand.
+ */
+declare module "react-refresh/runtime" {
+  export function injectIntoGlobalHook(global: unknown): void;
+  export function createSignatureFunctionForTransform(): (type: unknown) => unknown;
+  export function register(type: unknown, id: string): void;
+  export function performReactRefresh(): void;
+}
