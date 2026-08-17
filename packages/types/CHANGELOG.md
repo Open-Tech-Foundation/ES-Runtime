@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-17
+
 ### Added
 
 - **`import.meta.hot`**, the hot-replacement API `esdev start` provides:

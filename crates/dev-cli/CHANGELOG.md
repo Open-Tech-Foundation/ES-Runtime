@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-17
+
 ### Changed
 
 - **Hot replacement is on by default.** `esdev start` patches a changed module
