@@ -103,15 +103,27 @@ npm run dev
 ```
 
 Builds the browser bundle, serves `dist/`, and on every save rebuilds and
-reloads the page. A build that fails leaves the last good one being served.
+patches the change into the page you have open. A build that fails leaves the
+last good one being served.
 
 **The prerender does not run in development**, deliberately: rendering every
 route on every keystroke buys nothing, because what you are looking at is the
 same components with the same loaders. The pages that come out of
 `npm run build` are the pages you were just looking at.
 
-It is a full page load, not hot module replacement — component state does not
-survive a save. Router state does, because it is in the URL.
+**Edit a component and it re-renders with its state intact** — a counter keeps
+counting, a form keeps what you typed. That is React Fast Refresh, on by default
+(`npm run dev -- --no-hot` turns it off).
+
+A change nothing can absorb still reloads the page: editing a module that no
+component boundary covers, or the document itself. And any module can take part
+directly, React or not:
+
+```js
+import.meta.hot.accept();                                    // replace me
+import.meta.hot.keep("cache", () => new Map());              // survive replacement
+addEventListener("x", fn, { signal: import.meta.hot.signal }); // torn down for me
+```
 
 ## Permissions
 

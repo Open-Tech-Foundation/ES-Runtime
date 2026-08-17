@@ -201,12 +201,23 @@ imports.
 npm run dev
 ```
 
-Builds, runs `src/server.tsx`, and on every save rebuilds, restarts and reloads
-the page. A build that fails leaves the running server alone.
+Builds, runs `src/server.tsx`, and on every save rebuilds and patches the change
+into the page you have open. A build that fails leaves the running server alone.
 
 The port is your `listen` grant's — 8080 — unless something already has it, in
 which case it moves and says so, so two of these run side by side. `npm run dev
 -- --port=3000` pins one.
 
-It is a full page load, not hot module replacement — component state does not
-survive a save. Router state does, because it is in the URL.
+**Edit a component and it re-renders with its state intact** — a counter keeps
+counting, a form keeps what you typed. That is React Fast Refresh, on by default
+(`npm run dev -- --no-hot` turns it off).
+
+A change nothing can absorb still reloads the page: editing a module that no
+component boundary covers, or the document itself. And any module can take part
+directly, React or not:
+
+```js
+import.meta.hot.accept();                                    // replace me
+import.meta.hot.keep("cache", () => new Map());              // survive replacement
+addEventListener("x", fn, { signal: import.meta.hot.signal }); // torn down for me
+```

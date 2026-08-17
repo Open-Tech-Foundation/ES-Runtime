@@ -1,6 +1,6 @@
 ---
 title: esdev start
-description: The dev loop — build what esdev.json describes, run it, rebuild on change, reload the browser.
+description: The dev loop — build what esdev.json describes, run it, and patch each change into the running page.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -12,11 +12,14 @@ esdev start
 ```
 
 It is [`esdev build`](/docs/esdev/build) on a loop. A dev build differs from a
-release build in **two ways** — `process.env.NODE_ENV` is `"development"`, and
-nothing is content-hashed — and in nothing else. Dev and prod disagreeing about
-how a module resolves is the failure this toolchain exists to prevent.
+release build in three ways and no more: `process.env.NODE_ENV` is
+`"development"`, nothing is content-hashed, and the browser bundle is built so a
+module can be replaced in place. Dev and prod disagreeing about how a module
+*resolves* is the failure this toolchain exists to prevent, and none of the three
+touches that.
 
-On a change: rebuild, restart the server, tell the browser.
+On a change: rebuild, restart the server if its bundle moved, and patch the page
+— or reload it, if nothing accepted the change.
 
 ## The server is yours
 
@@ -51,30 +54,15 @@ answers *during* it.
 
 ## The update channel
 
-Every built document gets a few lines that open a `WebSocket` against
-`ws://127.0.0.1:<port>/@esdev/hmr` and act on what arrives. It is esdev's
-endpoint, not your application's — nothing dev-only ends up in your source, and
-the file you edit is never written to.
+Every built document gets a few lines that open a WebSocket to
+`ws://127.0.0.1:<port>/@esdev/hmr` and act on what arrives — a module patch, a
+stylesheet swap, or a reload. It is esdev's endpoint rather than your
+application's, so nothing dev-only reaches your source and the file you edit is
+never written to.
 
-Today one message crosses it, `{"type":"reload"}`, and the page reloads. It is a
-socket rather than the event stream it used to be because of what it is being
-built to carry: a hot update is a module's source, which is multi-line
-JavaScript that a line protocol would have to re-encode on every save — and an
-event stream runs out of connections at about six tabs of one origin, after
-which the seventh silently stops updating.
-
-What that cost is a reconnect loop, which `EventSource` used to provide for
-free. The injected client backs off from 250 ms to a 5 s ceiling, because a dev
-server being restarted is the ordinary case rather than a failure.
-
-The message is sent **after** the restart. A page told to reload while the
-server is still coming back gets a connection refused and stays blank.
-
-<Callout type="note" title="Full reload, not HMR">
-  Nothing is preserved across it — your form, your open modal, your scroll
-  position all reset. What buys that back is hot module replacement, which needs
-  a transform callable from JavaScript, and esdev has none yet.
-</Callout>
+An update is sent **after** a restart finishes, so a page never fetches from a
+server still coming back up. The client reconnects on its own, backing off to a
+5 s ceiling, because a restarted dev server is the ordinary case.
 
 ## Options
 
@@ -94,131 +82,108 @@ there is no `run`.
 
 ## The port
 
-There is one, and it is the one you open. When your project runs a server of its
-own that is *your server's* port; when it does not — a static site, a single-page
-app — esdev is what you open, so it is esdev's.
+`--port` is the port you open. With a `run` target that is your server's; without
+one esdev serves the output, so it is esdev's.
 
-**One you named is a promise** and fails if it is taken. **One you did not is a
-convenience** — it takes the port your `listen` grant names, or a free one if
-that is busy, and prints where it went.
-
-esdev's own endpoint on a fullstack project is not a port you deal with. It
-carries one message to the page, the build writes its address into the page, and
-it takes a free one. There is no flag for it because there is nobody to type
-one.
+A port you name is a promise and fails if it is taken. One you do not name takes
+what your `listen` grant says, or a free one, and prints where it went:
 
 ```
 esdev: 8080 was taken; use --port to pin one
 esdev: the app is on http://localhost:33407
 ```
 
-Your server's port moves only when the project says enough for the move to be
-safe, and both halves are grants you were already writing:
+Your server's port moves only when the project has said enough for the move to be
+safe, and both halves are grants you already write:
 
 ```json
 "permissions": { "allow": { "listen": ["8080"], "env": ["PORT"] } }
 ```
 
-One port and no more, so there is a port to move — and `PORT`, so the server can
-be told which one it got. The rewritten grant is the same capability with a
-different number, never a wider one, so development still runs under the
-deployment's grant. A project shaped any other way is left exactly as it is.
-
-That is what lets two projects be in development at once without either of them
-being about a number nobody chose.
+One port, so there is one to move — and `PORT`, so the server can be told which
+one it got. The rewritten grant is the same capability with a different number,
+so development still runs under the deployment's grant. A project shaped any
+other way is left alone, which is what lets two of them run at once.
 
 ## Hot module replacement
 
-`esdev start` replaces a changed module in the running page instead of reloading
-it (`--no-hot` opts out). It is **not tied to any
-framework**: what a page does with an update is decided by `import.meta.hot`,
-which any framework — or none — can hook into.
+A changed module is patched into the running page instead of reloading it, so
+scroll position, open dialogs and half-filled forms survive a save. `--no-hot`
+opts out.
+
+It is not tied to a framework. A module opts in with `import.meta.hot`:
 
 ```js
 import { render } from "./view.js";
 
 render();
 
-import.meta.hot.accept();          // "replace me in place"
+import.meta.hot.accept();
 ```
 
-Change that module and the page keeps its scroll position, its open dialogs and
-whatever was typed into a form. Change something nothing accepts and the page
-reloads, which is the right answer: a module that says nothing about how to
-replace itself has not earned being replaced.
+If nothing on the way up accepts a change, the page reloads.
 
 ### The API
 
 | | |
 | --- | --- |
-| `accept()` | This module can be re-run in place |
-| `accept(cb)` | …and call `cb(newExports)` afterwards |
-| `accept(dep, cb)` | Re-run *that dependency* and tell me, with its new exports |
+| `accept()` | Re-run this module in place |
+| `accept(cb)` | …and call `cb(newExports)` after |
+| `accept(dep, cb)` | Re-run **that dependency** and call `cb(itsNewExports)` |
 | `accept([deps], cb)` | The same, for several |
-| `signal` | An `AbortSignal`, aborted just before this module is replaced |
-| `keep(key, make)` | A value made once and returned on every replacement after |
-| `dispose(cb)` | Run before this module is replaced, with `data` |
-| `data` | A bag that survives replacement |
-| `decline()` | Refuse replacement: any change reaching this module reloads |
-| `invalidate()` | "I cannot handle this after all" — try again from the importers |
+| `signal` | `AbortSignal`, aborted just before this module is replaced |
+| `keep(key, make)` | Made once, returned on every replacement after |
+| `dispose(cb)` | Runs before replacement, with `data` |
+| `data` | An object that survives replacement |
+| `decline()` | Refuse replacement — any change reaching here reloads |
+| `invalidate()` | Hand the update up to this module's importers |
 
-`accept(dep)` re-runs **the dependency**, not the accepting module. That is the
-contract every bundler in this space shares, and it is worth knowing rather than
-discovering: the acceptor is notified, it does not restart.
+`import.meta.hot` is `undefined` in a production build, so `if (import.meta.hot)`
+is how a module says "dev only" and still typechecks.
 
-### `signal`, and why it is not another `dispose`
+### Cleanup, without cleanup code
 
-The commonest hot-reload bug in any framework is a listener or a timer added on
-every re-run and removed on none, so the twentieth save has twenty of them. The
-usual cure is remembering to write a `dispose` that undoes by hand what the
-module did.
-
-The platform already solved this, and the whole platform already takes the
-solution as an argument:
+`signal` is aborted just before your module is replaced. Anything that takes one
+tears itself down:
 
 ```js
 addEventListener("resize", onResize, { signal: import.meta.hot.signal });
 ```
 
-That listener is now correct under replacement with **no HMR-specific code at
-all** — the same line works in a production build, where the signal is simply
-never aborted. `fetch`, observers, and any library that accepts a signal come
-along for free.
-
-For anything that does not take one, the signal is still the hook:
+That line is also correct in production, where the signal is never aborted. For
+APIs that do not take a signal:
 
 ```js
 const timer = setInterval(tick, 1000);
 import.meta.hot.signal.addEventListener("abort", () => clearInterval(timer));
 ```
 
-### `keep`, and why it is not `data`
-
-Carrying state across a replacement usually means writing into a bag in
-`dispose` and reading it back at the top of the module — two places that have to
-agree, where the failure when they do not is silent state loss. `keep` is one
-call site:
+### State across replacements
 
 ```js
 const cache = import.meta.hot.keep("cache", () => new Map());
 ```
 
-Made once, returned every time after. `dispose` and `data` are both still here,
-because an integration ported from elsewhere expects them.
+Made once, returned every time after — one call site, where `dispose` + `data`
+is two that have to agree.
 
 ### React
 
-The react template has it wired up: edit a component and it re-renders with its
-`useState` intact. That is React Fast Refresh, enabled by `"refresh": "react"` on
-the target in `esdev.json`, and it is an ordinary consumer of the API above — the
-refresh runs as an `accept` callback. A framework with another scheme writes its
-own pass rather than asking esdev to learn about it.
+Already wired up in the react template: edit a component and it re-renders with
+its `useState` intact. It is React Fast Refresh, turned on by `"refresh": "react"`
+on the target:
+
+```json
+"web": { "entry": "index.html", "outdir": "dist", "refresh": "react" }
+```
+
+Under it, the refresh is an ordinary `accept` callback — a framework with its own
+scheme writes its own pass rather than esdev learning about it.
 
 <Callout type="note" title="What it costs">
-  rolldown's dev mode forces treeshaking off, so the react template's dev bundle
-  goes from 870 KB to 1.45 MB and a rebuild costs about 20 ms more. Both are
-  development only — nothing you ship is affected. `--no-hot` turns it off and
-  goes back to reloading the page.
+  Dev mode turns treeshaking off, so the react template's dev bundle goes from
+  870 KB to 1.45 MB and a rebuild costs ~20 ms more. Development only — nothing
+  you ship changes.
 </Callout>
 
 ## What is watched
