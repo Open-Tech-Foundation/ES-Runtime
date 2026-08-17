@@ -26,6 +26,29 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **`esdev create` asks with a menu you can arrow through.** The questions were
+  a numbered list read off stdin, which made choosing a template an exercise in
+  counting lines and typing a digit. They are now drawn with
+  [ratatui](https://ratatui.rs) into an **inline viewport**: arrow keys (or
+  `j`/`k`) to move, `1`–`9` to jump, Enter to take it, Esc to cancel.
+
+  Inline, and deliberately not the alternate screen. The menu is drawn where the
+  cursor already is and is replaced in place by a single line naming the answer,
+  so what is left in the scrollback afterwards is a transcript of what was asked
+  and what was chosen. A full-screen TUI would hand the terminal back empty and
+  take the record of a command that writes a project to disk with it.
+
+  Esc at "which template?" now **cancels**, writing nothing and exiting zero —
+  it does not silently mean "the default". Esc at "install the dependencies?"
+  means no install, because by then the project is already on disk and
+  cancelling the question is not cancelling the project.
+
+  Nothing about the non-interactive path moved: the gate is still a TTY on both
+  stdin and stderr with no `CI` set, every question still has a flag, colour
+  still honours `NO_COLOR`, and a terminal that refuses raw mode still gets the
+  numbered list.
+
+
 - **There is one place a build becomes the bundler's options.** Both
   divergences above were two translations of the same idea drifting apart, and
   finding them by reading the two side by side is not a way of finding bugs.

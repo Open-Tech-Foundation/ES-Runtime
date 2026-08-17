@@ -336,6 +336,19 @@ html5gum = "0.8.4"
 # candidates, per D7 — a pre-release is taken only when it is the only option
 # (as `turso_core` is), and here it is not.
 notify = "8.2.0"
+# The interactive half of `esdev create`. ratatui rather than a numbered list
+# read off stdin: choosing a template and a mode is a menu, and a menu nobody
+# can arrow through is one people count lines in. Confined to `dev-cli` —
+# `esrun` asks nothing and must carry no code that could ask.
+#
+# Drawn into an **inline viewport**, never the alternate screen. A scaffolder
+# runs once, and its questions belong in the scrollback beside the answers they
+# were given; taking over the screen and handing it back would leave the person
+# who ran it with no record of what they chose.
+#
+# MIT, and the backend is the only feature taken: `crossterm` is what reads the
+# keys, and it is already the terminal layer every other Rust TUI would bring.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 # Debug info dominates `target/` disk on a V8-sized dependency graph (tens of
 # GB). Keep it lean: our own crates keep line tables so panic backtraces still
 # resolve to file:line; dependencies — the bulk, rarely stepped through — carry

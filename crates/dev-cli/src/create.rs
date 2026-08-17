@@ -100,7 +100,13 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     // the prompt leaves no directory behind.
     let template = match &config.template {
         Some(named) => named.clone(),
-        None if crate::prompt::interactive() => ask_template(),
+        // Esc at the first question, before anything has been written. Nothing
+        // to undo, nothing to report, and an exit status of zero: a person who
+        // changed their mind did not hit an error.
+        None if crate::prompt::interactive() => match ask_template() {
+            Some(template) => template,
+            None => return Ok(String::new()),
+        },
         None => DEFAULT_TEMPLATE.to_string(),
     };
 
@@ -231,7 +237,7 @@ fn next_steps(dir: &str, template: &str, installed: Option<crate::install::Manag
 }
 
 /// Which template, asked on a terminal.
-fn ask_template() -> String {
+fn ask_template() -> Option<String> {
     let choices: Vec<crate::prompt::Choice<'_>> = TEMPLATES
         .iter()
         .map(|(name, _)| crate::prompt::Choice {
@@ -247,9 +253,8 @@ fn ask_template() -> String {
         .position(|choice| choice.name == DEFAULT_TEMPLATE)
         .unwrap_or(0);
 
-    choices[crate::prompt::select("Which template?", &choices, default)]
-        .name
-        .to_string()
+    let chosen = crate::prompt::select("Which template?", &choices, default)?;
+    Some(choices[chosen].name.to_string())
 }
 
 /// Whether to install, and with what.
@@ -274,7 +279,10 @@ fn ask_install() -> Option<crate::install::Manager> {
         description: "write the files and stop",
     });
 
-    let chosen = crate::prompt::select("Install the dependencies?", &choices, 0);
+    // Esc lands on the same answer `skip` does: the project is already on disk
+    // by now, and cancelling the *install* question is not cancelling the
+    // project. Either way the next steps say how to install it.
+    let chosen = crate::prompt::select("Install the dependencies?", &choices, 0)?;
     available.get(chosen).copied()
 }
 

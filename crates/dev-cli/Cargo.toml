@@ -56,6 +56,10 @@ regex.workspace = true
 anyhow.workspace = true
 # `--watch`. The events only; the restart policy is ours.
 notify.workspace = true
+# `esdev create`'s questions. See the workspace manifest for why a TUI is worth
+# a dependency here and why it draws inline. Nothing else in esdev takes the
+# terminal over: every other command prints lines.
+ratatui.workspace = true
 # An `index.html` target: the script and link tags in it are the build's inputs,
 # and the file esdev writes is the same one with those references pointing at
 # what was built — spliced by byte span, so nothing else in it moves. Same
