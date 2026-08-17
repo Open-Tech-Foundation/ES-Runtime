@@ -2724,6 +2724,25 @@ fn two_module_scripts_that_would_collide_are_refused() {
 /// `esdev start` runs the application as a child of its own, so killing only
 /// the supervisor leaves that child holding a port — and, having inherited the
 /// test harness's stdout, holding the harness open too. The whole group goes.
+/// An `esdev start` that stops when it goes out of scope.
+///
+/// On `Drop` rather than at the end of a passing test, and the difference is not
+/// tidiness. An assertion that fires unwinds past any explicit stop, leaving a
+/// supervisor running and holding the port this test derived from its own name.
+/// The *next* run then talks to the previous run's dev server, serving the
+/// previous run's `dist`, and fails for a reason that has nothing to do with the
+/// code — on a machine where the first failure has already been fixed. This cost
+/// an afternoon once, and it cost it twice.
+struct Supervisor(Option<std::process::Child>);
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            stop_supervisor(&mut child);
+        }
+    }
+}
+
 fn stop_supervisor(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
@@ -2739,7 +2758,7 @@ fn stop_supervisor(child: &mut std::process::Child) {
 }
 
 /// A supervisor in a process group of its own, with its output discarded.
-fn start_in(dir: &Path) -> std::process::Child {
+fn start_in(dir: &Path) -> Supervisor {
     let mut command = esdev_in(dir);
     command
         .arg("start")
@@ -2750,7 +2769,7 @@ fn start_in(dir: &Path) -> std::process::Child {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command.spawn().expect("spawn esdev start")
+    Supervisor(Some(command.spawn().expect("spawn esdev start")))
 }
 
 /// A port unlikely to collide with anything else on the machine, derived from
@@ -2800,7 +2819,7 @@ fn wait_for_http(port: u16, path: &str, done: impl Fn(&str) -> bool) -> String {
 /// Runs `esdev start` with extra flags, keeping its stderr in a file so a test
 /// can read what it announced. The port is in there and nowhere else when
 /// esdev picked it.
-fn start_in_logging(dir: &Path, args: &[&str]) -> (std::process::Child, PathBuf) {
+fn start_in_logging(dir: &Path, args: &[&str]) -> (Supervisor, PathBuf) {
     let log = dir.join("esdev.log");
     let file = std::fs::File::create(&log).expect("create the log");
     let mut command = esdev_in(dir);
@@ -2814,7 +2833,10 @@ fn start_in_logging(dir: &Path, args: &[&str]) -> (std::process::Child, PathBuf)
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    (command.spawn().expect("spawn esdev start"), log)
+    (
+        Supervisor(Some(command.spawn().expect("spawn esdev start"))),
+        log,
+    )
 }
 
 /// Waits for the `http://127.0.0.1:<port>` esdev printed, and returns the port.
@@ -2867,7 +2889,7 @@ fn start_finds_a_free_port_when_none_was_named() {
     // else on the machine already has it — which is the same precondition.
     let blocker = std::net::TcpListener::bind(("127.0.0.1", 5173));
 
-    let (mut child, log) = start_in_logging(&dir, &[]);
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
     let port = announced_port(&log);
     assert_ne!(port, 5173, "esdev bound the port that was taken");
 
@@ -2880,7 +2902,6 @@ fn start_finds_a_free_port_when_none_was_named() {
         "esdev moved without saying so"
     );
 
-    stop_supervisor(&mut child);
     drop(blocker);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2951,7 +2972,7 @@ fn start_serves_a_frontend_project_and_reloads_it() {
         ),
     );
 
-    let mut child = start_in(&dir);
+    let _supervisor = start_in(&dir);
 
     let document = wait_for_http(port, "/", |body| body.contains("<div id=root>"));
     assert!(document.contains("200 OK"), "{document}");
@@ -2992,7 +3013,6 @@ fn start_serves_a_frontend_project_and_reloads_it() {
     let rebuilt = wait_for_http(port, "/assets/main.js", |body| body.contains("SECOND"));
     assert!(rebuilt.contains("SECOND"), "the change never landed");
 
-    stop_supervisor(&mut child);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3040,7 +3060,7 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
         ),
     );
 
-    let (mut child, log) = start_in_logging(&dir, &[]);
+    let (_supervisor, log) = start_in_logging(&dir, &[]);
     let first = wait_for_http(served, "/", |body| body.contains("SERVER-A"));
     assert!(first.contains("SERVER-A"), "never came up: {first}");
     let nonce = nonce_of(&first);
@@ -3092,7 +3112,6 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
         "a server change did not restart it: {restarted}"
     );
 
-    stop_supervisor(&mut child);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3131,7 +3150,7 @@ fn a_failed_build_leaves_the_running_server_alone() {
         ),
     );
 
-    let mut child = start_in(&dir);
+    let _supervisor = start_in(&dir);
     let alive = wait_for_http(served, "/", |body| body.contains("ALIVE"));
     assert!(alive.contains("ALIVE"), "the server never came up: {alive}");
 
@@ -3160,7 +3179,6 @@ fn a_failed_build_leaves_the_running_server_alone() {
     let fixed = wait_for_http(served, "/", |body| body.contains("FIXED"));
     assert!(fixed.contains("FIXED"), "the fix never landed: {fixed}");
 
-    stop_supervisor(&mut child);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
