@@ -15,47 +15,84 @@ npm run dev
 ```
 
 What you get is a project with its `esdev.json` written, its entry named by the
-script tag in its `index.html`, and a deploy line that is already narrow:
+script tag in its `index.html`, its `runtime:` types installed and wired into
+`tsconfig.json`, and — for a project that runs a server — a deploy line that is
+already narrow:
 
 ```sh
 esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 \
       --allow-signals=SIGTERM,SIGINT dist/server.js
 ```
 
+A project that deploys to a static host has no such line, because it runs
+nothing. Which of the two you get is the [mode](#modes).
+
 ## Templates
 
 ```sh
 esdev create --list
-esdev create my-app --template=react
+esdev create my-app --template=react --mode=fullstack
 ```
 
 | | |
 | --- | --- |
-| `react` | React + react-router — server-rendered, hydrated, prerenderable to static HTML |
-| `api` | A JSON API — routing, validation, error handling. **No dependencies** |
+| `react` | React + react-router — a static site, or an app with a server of its own |
+| `api` | A JSON API — routing, validation, error handling. **Nothing it ships depends on** |
 | `vanilla` | TypeScript and the DOM — no framework |
 | `lib` | A publishable package — module tree, `.d.ts`, `exports` wired |
 
-The `react` template is a route table with loaders, nested layouts, dynamic
-segments and error boundaries, served by a file you own: a Content-Security-Policy
-with a per-response nonce, a `SIGTERM` that drains before it exits, immutable
-caching on hashed assets, and one JSON log line per request.
+Both `react` modes are a route table with loaders, nested layouts, dynamic
+segments and error boundaries. What differs is what runs it — see
+[Modes](#modes).
 
 They are **baked into the binary**, so `create` works offline and always writes
 a project the `esdev` that wrote it can build. Nothing is downloaded.
 
+## Modes
+
+Some templates are two projects wearing one name. `react` is: an app with a
+server of its own is not the same project as a site that deploys to a static
+host — different files, a different `esdev.json`, and in one case no
+capabilities at all. Scaffolding the union of them and leaving you to delete
+half is how a starter ends up shipping a server nobody runs.
+
+| | `--mode=static` (default) | `--mode=fullstack` |
+| --- | --- | --- |
+| **Runs in production** | Nothing | `src/server.tsx`, under `esrun` |
+| **`npm run build`** | Every route prerendered to `dist/static/` | Server and browser bundles into `dist/` |
+| **`npm run build:spa`** | One shell, routed in the browser | — |
+| **Grants** | None — nothing runs | `read`, `env`, `listen`, `signals` |
+| **Deploy** | Any static host | `dist/`, whole |
+
+SSG and SPA are one mode on purpose. Which of the two a site wants is a
+deployment decision that moves with the content, and both come out of the same
+routes and components with no file edited — the switch is which script you run.
+Which routes are prerendered is `staticPaths()` in `src/paths.ts`, and a route
+left out of it is rendered in the browser instead.
+
+A `fullstack` project is a file you own answering requests: a
+Content-Security-Policy with a per-response nonce, a `SIGTERM` that drains
+before it exits, immutable caching on hashed assets, `HEAD` answered with the
+headers and nothing after them, and one JSON log line per request.
+
 ## It asks, or it writes files and stops
 
-On a terminal it asks which template and whether to install:
+On a terminal it asks which template, which mode if that template has more than
+one, and whether to install — as a menu you arrow through:
 
 ```
-Which template?
-  1) api      A JSON API — routing, validation, error handling. No dependencies
-  2) lib      A publishable TypeScript package — module tree, .d.ts
-  3) react    React + react-router — server-rendered, hydrated (default)
-  4) vanilla  TypeScript and the DOM — no framework
->
+? Which template?
+    api      A JSON API — routing, validation, error handling
+    lib      A publishable TypeScript package — module tree, .d.ts
+  ❯ react    React + react-router — a static site, or an app with a server  (default)
+    vanilla  TypeScript and the DOM — no framework
+  ↑/↓ move · 1-9 jump · enter select · esc cancel
 ```
+
+It is drawn where the cursor already is and is replaced in place by one line
+naming the answer, so the scrollback is left holding a transcript of what was
+asked and what was chosen rather than a cleared screen. `Esc` at the first
+question cancels: nothing is written, and the exit status is zero.
 
 Away from one — a pipe, a CI job, anything with `CI` set — it takes the
 defaults and says nothing. A prompt in a script is a script that hangs.
@@ -63,6 +100,7 @@ defaults and says nothing. A prompt in a script is a script that hangs.
 **Every question has a flag**, so nothing is only reachable by answering one:
 
 ```sh
+esdev create my-app --template=react --mode=fullstack
 esdev create my-app --template=api --install=bun
 esdev create my-app --yes            # defaults, no questions
 esdev create my-app --no-install
@@ -90,6 +128,7 @@ error: my-app is not empty.
 | | |
 | --- | --- |
 | `--template=<name>` | Which template (default `react`) |
+| `--mode=<name>` | Which shape of it, where it has more than one: `static` or `fullstack` |
 | `--install[=<manager>]` | Install after writing: `npm`, `bun`, `pnpm`, `yarn` |
 | `--no-install` | Write the files and stop |
 | `-y`, `--yes` | Take every default; never ask |

@@ -128,6 +128,31 @@ takes a release build of a project whose day to day is unminified.
 one is: the bundle runs, and what it writes is the output. It runs in a child
 process, after every target is built.
 
+## A whole build clears what it owns
+
+Output filenames are content-hashed, so `app-1a2b.js` becoming `app-9f8e.js`
+leaves the old one behind for ever — and beside it whatever `esdev start` wrote,
+which is *not* hashed and so is never overwritten either. Deploying that ships
+every build the directory has ever seen, and a stale URL still reaches a version
+of the app nobody is testing. So `esdev build` empties each `outdir` before it
+writes.
+
+Three things it does not do, all for the same reason — the build has to own what
+it clears:
+
+- **`--target=<name>` never clears.** It writes into a directory it may share
+  with another target's output, and clearing it would delete a bundle this run
+  is not going to write again.
+- **`esdev start` never clears.** It rebuilds on a keystroke into stable
+  filenames, so nothing accumulates, and emptying the directory a page is being
+  served from is a page that fails to load for reasons unrelated to your code.
+- **An `out` file's directory is never cleared.** `out` names one file in a
+  directory that may hold other builds and other people's files; such a file is
+  removed only when it happens to sit inside another target's `outdir`, and a
+  whole build writes it again on the way past.
+
+An `outdir` that holds the project itself is refused rather than emptied.
+
 ## Assets and the deployment
 
 A relative path resolves against the **entry module's** directory, so a server
@@ -249,8 +274,10 @@ theirs to make and `--lib` makes none of them.
 | **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
 
 Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
-your project is refused rather than emptied; an application build never cleans,
-since its `--out` is one file in a directory that may hold other things.
+your project is refused rather than emptied; a single-entry application build
+never cleans, since its `--out` is one file in a directory that may hold other
+things. (A whole-project build does clear its `outdir`s — see
+[above](#a-whole-build-clears-what-it-owns).)
 
 ## Declarations
 
