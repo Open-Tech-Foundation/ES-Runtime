@@ -632,76 +632,241 @@ pub async fn build(
 ///
 /// rolldown injects the other half — the module graph, the factory registry and
 /// the module cache — and stops there. Its patch assembler says why, and it is
-/// worth quoting because it is the whole of this function's reason to exist:
-/// *"no driver tail: the client walks its own graph, removes from its cache, and
+/// worth quoting because it is this function's whole reason to exist: *"no
+/// driver tail: the client walks its own graph, removes from its cache, and
 /// re-runs from the factory map."* Loading a patch registers new factories and
-/// changes nothing else. **Deciding what to re-run is ours.**
+/// changes nothing else. **Deciding what to re-run is ours, and so is the API a
+/// framework hooks into.**
 ///
 /// # The walk
 ///
-/// From each changed module, climb the importer graph looking for a module that
-/// called `import.meta.hot.accept`. **A bare `accept()` counts** — it is the
-/// commonest spelling by far, and it means "re-run me, I need no notification",
-/// so it registers a callback that does nothing rather than no callback at all.
-/// Treating it as "did not accept" would send the page through a reload for the
-/// one form most modules use. That module is a *boundary*: re-running it
-/// picks up the new code below it, so everything from the change up to and
-/// including it is dropped from the cache and the boundary is re-run.
+/// From each changed module, climb the importer graph looking for a module
+/// willing to be re-run — one that called `accept()` for itself, or
+/// `accept(dep)` naming the importee the change came through. That module is a
+/// *boundary*: everything from the change up to it is dropped and the boundary
+/// re-runs.
 ///
-/// Reaching a module with no importers means the climb hit an entry without
-/// finding anyone willing to be re-run, and the only correct answer left is to
-/// reload the page. That is not a failure — it is what should happen when a
-/// module says nothing about how to replace it.
+/// Reaching a module with no importers means the climb hit an entry with nobody
+/// willing, and the answer is a reload. That is not a failure — it is what
+/// should happen when nothing says how to replace itself.
 ///
-/// **It does not open a socket.** The page already has one, from the script
-/// [`reload_client`] injects, and that script runs first: it is a classic script
-/// at the end of the body, and the bundle is a deferred module. So the socket is
-/// shared, a page holds one connection, and this half only has to say what to do
-/// when a patch lands.
+/// Re-running is `initModule`, not `loadExports`. The runtime is explicit that
+/// `initModule` is *"the one re-execution gate"*; `loadExports` only reads the
+/// cache and returns `{}` when it is empty. Using the latter after dropping the
+/// cache is a walk that finds its boundary, drops everything, then runs none of
+/// it — the page keeps its state, calls the callback, and shows the old code.
+///
+/// # Two things here that the ecosystem does not have
+///
+/// **`import.meta.hot.signal` is an `AbortSignal`,** aborted immediately before
+/// the module is replaced. The commonest hot-reload bug in any framework is a
+/// listener or a timer registered on every re-run and torn down on none, so the
+/// twentieth save has twenty of them; the usual cure is remembering to write a
+/// `dispose` callback that undoes by hand what the module did. The platform
+/// already solved this, generally, and the whole web platform already takes the
+/// solution as an argument:
+///
+/// ```js
+/// addEventListener("resize", onResize, { signal: import.meta.hot.signal });
+/// ```
+///
+/// That listener is now correct under replacement with **no HMR-specific code
+/// at all** — the same line works in a plain build, where the signal is simply
+/// never aborted. `fetch`, `addEventListener`, observers and any well-written
+/// library accept a signal, so the fix generalises without this runtime knowing
+/// what any of them are. It is the same instinct as the rest of this project:
+/// reach for the standard name rather than invent a branded one.
+///
+/// **`import.meta.hot.keep(key, make)` is one call site, not two.** Carrying
+/// state across a replacement conventionally means writing into a bag in
+/// `dispose` and reading it back at the top of the module — two places that
+/// have to agree, and the failure when they do not is silent state loss. Here
+/// the value is made once and returned every time after:
+///
+/// ```js
+/// const cache = import.meta.hot.keep("cache", () => new Map());
+/// ```
+///
+/// `dispose(cb)` and `data` are both still here, because a framework porting an
+/// integration from elsewhere expects them and there is no reason to make it
+/// rewrite what already works.
 fn hot_runtime() -> String {
     String::from(
-        "\
-        class EsdevHotContext {\
-          constructor(id){this.moduleId=id;this.acceptCallbacks=[];}\
-          accept(cb){this.acceptCallbacks.push({deps:[this.moduleId],fn:cb||function(){}});}\
-          invalidate(){location.reload();}\
-        }\
-        class EsdevRuntime extends DevRuntime {\
-          constructor(id){super(id);this.moduleHotContexts=new Map();}\
-          createModuleHotContext(id){\
-            var c=new EsdevHotContext(id);this.moduleHotContexts.set(id,c);return c;\
-          }\
-          esdevApply(changedIds){\
-            var seen=new Set(),boundaries=[],queue=changedIds.slice();\
-            while(queue.length){\
-              var id=queue.shift();\
-              if(seen.has(id))continue;\
-              seen.add(id);\
-              var ctx=this.moduleHotContexts.get(id);\
-              if(ctx&&ctx.acceptCallbacks.length){boundaries.push(id);continue;}\
-              var importers=this.getImporters(id)||[];\
-              if(!importers.length)return false;\
-              for(var i=0;i<importers.length;i++)queue.push(importers[i]);\
-            }\
-            if(!boundaries.length)return false;\
-            var callbacks=boundaries.map(function(id){\
-              var ctx=this.moduleHotContexts.get(id);\
-              return {id:id,fns:ctx?ctx.acceptCallbacks.map(function(a){return a.fn;}):[]};\
-            },this);\
-            seen.forEach(function(id){this.removeModuleCache(id);},this);\
-            for(var b=0;b<callbacks.length;b++){\
-              var exports=this.initModule(callbacks[b].id);\
-              for(var f=0;f<callbacks[b].fns.length;f++)callbacks[b].fns[f](exports);\
-            }\
-            return true;\
-          }\
-        }\
-        globalThis.__rolldown_runtime__ ??= new EsdevRuntime('esdev');\
-        (globalThis.__esdev_hot ||= {}).apply=function(changedIds){\
-          try{return __rolldown_runtime__.esdevApply(changedIds);}\
-          catch(e){console.error('[esdev] hot update failed, reloading',e);return false;}\
-        };\
-        ",
+        r#"
+class EsdevHot {
+  constructor(id, runtime, store) {
+    this.moduleId = id;
+    this._runtime = runtime;
+    this._store = store;
+    this.acceptCallbacks = [];
+    this.disposeCallbacks = [];
+    this.declined = false;
+    this._aborter = new AbortController();
+    // The bag `dispose` writes into and the next instance reads. Kept on the
+    // store rather than on this context, because this context is what a
+    // replacement throws away.
+    this.data = store.data;
+  }
+  /** Aborted just before this module instance is replaced. */
+  get signal() { return this._aborter.signal; }
+  /**
+   * `accept()` / `accept(cb)` accept this module. `accept(dep, cb)` and
+   * `accept([deps], cb)` accept a change arriving through those importees --
+   * rolldown rewrites the specifiers to stable ids at build time, so what
+   * arrives here is already what the graph is keyed by.
+   */
+  accept(first, second) {
+    if (first === undefined || typeof first === "function") {
+      this.acceptCallbacks.push({ deps: [this.moduleId], fn: first || function () {} });
+      return;
+    }
+    var deps = Array.isArray(first) ? first : [first];
+    this.acceptCallbacks.push({ deps: deps, fn: second || function () {} });
+  }
+  /** Run before this instance is dropped. `signal` covers most of what this is for. */
+  dispose(fn) { this.disposeCallbacks.push(fn); }
+  /** Refuse replacement outright: any change reaching this module reloads. */
+  decline() { this.declined = true; }
+  /** Made once, returned on every replacement after. */
+  keep(key, make) {
+    if (!this._store.kept.has(key)) this._store.kept.set(key, make());
+    return this._store.kept.get(key);
+  }
+  /** "I cannot handle this after all" -- try again from this module's importers. */
+  invalidate() { this._runtime.esdevInvalidate(this.moduleId); }
+  /** Called by the runtime, immediately before this instance is dropped. */
+  _retire() {
+    for (var i = 0; i < this.disposeCallbacks.length; i++) {
+      try { this.disposeCallbacks[i](this.data); }
+      catch (e) { console.error("[esdev] a dispose callback threw", e); }
+    }
+    this._aborter.abort();
+  }
+}
+
+class EsdevRuntime extends DevRuntime {
+  constructor(id) {
+    super(id);
+    this.moduleHotContexts = new Map();
+    // Per module and outliving every instance of it: what `keep` holds and what
+    // `data` is. A replacement makes a new context, never a new store.
+    this._stores = new Map();
+    this._invalidated = null;
+  }
+  _storeFor(id) {
+    if (!this._stores.has(id)) this._stores.set(id, { data: {}, kept: new Map() });
+    return this._stores.get(id);
+  }
+  createModuleHotContext(id) {
+    var context = new EsdevHot(id, this, this._storeFor(id));
+    this.moduleHotContexts.set(id, context);
+    return context;
+  }
+  esdevInvalidate(id) {
+    // Outside an update there is nothing to re-walk, so the honest answer is a
+    // reload; during one it is a second attempt from this module's importers.
+    if (this._invalidated) this._invalidated.push(id);
+    else location.reload();
+  }
+  /**
+   * The modules to re-run for `changedIds`, or `null` when nobody accepts and
+   * the page has to reload.
+   */
+  _boundaries(changedIds, skip) {
+    var seen = new Set(), drop = new Set(), plan = [], queue = [], i;
+    for (i = 0; i < changedIds.length; i++) queue.push([changedIds[i], null]);
+    while (queue.length) {
+      var step = queue.shift(), id = step[0], via = step[1];
+      if (seen.has(id)) continue;
+      seen.add(id);
+      var context = this.moduleHotContexts.get(id);
+      if (context && context.declined) return null;
+      if (context && !skip.has(id)) {
+        var selfFns = [], depFns = [], entry;
+        for (i = 0; i < context.acceptCallbacks.length; i++) {
+          entry = context.acceptCallbacks[i];
+          if (entry.deps.indexOf(id) > -1) selfFns.push(entry.fn);
+          else if (via && entry.deps.indexOf(via) > -1) depFns.push(entry.fn);
+        }
+        // Accepting *itself*: this module re-runs, and its callbacks are told
+        // with its own new exports.
+        if (selfFns.length) {
+          drop.add(id);
+          plan.push({ rerun: id, fns: selfFns });
+          continue;
+        }
+        // Accepting a *dependency*: the dependency re-runs and this module is
+        // told, with the dependency's new exports. It does not re-run itself --
+        // which is not a shortcut but the contract, and rolldown builds to the
+        // same one: a patch for `accept(dep)` ships the dep's factory and not
+        // this module's, so re-running this module is not merely wrong, it is
+        // impossible.
+        if (depFns.length) {
+          drop.add(via);
+          plan.push({ rerun: via, fns: depFns });
+          continue;
+        }
+      }
+      // Nothing here accepts, so the change is someone else's to handle. What
+      // this module holds is stale either way, so it is dropped and re-made by
+      // whoever above it does accept.
+      drop.add(id);
+      var importers = this.getImporters(id) || [];
+      if (!importers.length) return null;
+      for (i = 0; i < importers.length; i++) queue.push([importers[i], id]);
+    }
+    return plan.length ? { drop: drop, plan: plan } : null;
+  }
+  _rerun(found) {
+    var self = this, i;
+    // Captured before anything is dropped: re-running installs a new context,
+    // and the callbacks that asked to be told belong to the old one.
+    var pending = found.plan.map(function (step) {
+      return { rerun: step.rerun, fns: step.fns.slice() };
+    });
+    found.drop.forEach(function (id) {
+      var context = self.moduleHotContexts.get(id);
+      if (context) context._retire();
+      self.removeModuleCache(id);
+    });
+    for (i = 0; i < pending.length; i++) {
+      var exports;
+      try { exports = this.initModule(pending[i].rerun); }
+      catch (e) { console.error("[esdev] re-running " + pending[i].rerun + " failed", e); return false; }
+      for (var f = 0; f < pending[i].fns.length; f++) {
+        try { pending[i].fns[f](exports); }
+        catch (e) { console.error("[esdev] an accept callback threw", e); return false; }
+      }
+    }
+    return true;
+  }
+  esdevApply(changedIds) {
+    var ids = changedIds.slice(), skip = new Set(), rounds = 0;
+    this._invalidated = [];
+    try {
+      // Bounded: a module that invalidates every time would otherwise walk for
+      // ever, and a reload is a fine answer to a graph that cannot settle.
+      while (rounds++ < 8) {
+        var found = this._boundaries(ids, skip);
+        if (!found || !this._rerun(found)) return false;
+        if (!this._invalidated.length) return true;
+        ids = this._invalidated.slice();
+        for (var i = 0; i < ids.length; i++) skip.add(ids[i]);
+        this._invalidated = [];
+      }
+      return false;
+    } finally {
+      this._invalidated = null;
+    }
+  }
+}
+
+globalThis.__rolldown_runtime__ ??= new EsdevRuntime("esdev");
+(globalThis.__esdev_hot ||= {}).apply = function (changedIds) {
+  try { return __rolldown_runtime__.esdevApply(changedIds); }
+  catch (e) { console.error("[esdev] hot update failed, reloading", e); return false; }
+};
+"#,
     )
 }
 

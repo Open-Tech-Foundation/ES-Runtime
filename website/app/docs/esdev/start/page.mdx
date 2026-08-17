@@ -127,6 +127,93 @@ deployment's grant. A project shaped any other way is left exactly as it is.
 That is what lets two projects be in development at once without either of them
 being about a number nobody chose.
 
+## Hot module replacement
+
+`esdev start --hot` builds the browser bundle so a changed module can be
+replaced in the running page instead of reloading it. It is **not tied to any
+framework**: what a page does with an update is decided by `import.meta.hot`,
+which any framework — or none — can hook into.
+
+```js
+import { render } from "./view.js";
+
+render();
+
+import.meta.hot.accept();          // "replace me in place"
+```
+
+Change that module and the page keeps its scroll position, its open dialogs and
+whatever was typed into a form. Change something nothing accepts and the page
+reloads, which is the right answer: a module that says nothing about how to
+replace itself has not earned being replaced.
+
+### The API
+
+| | |
+| --- | --- |
+| `accept()` | This module can be re-run in place |
+| `accept(cb)` | …and call `cb(newExports)` afterwards |
+| `accept(dep, cb)` | Re-run *that dependency* and tell me, with its new exports |
+| `accept([deps], cb)` | The same, for several |
+| `signal` | An `AbortSignal`, aborted just before this module is replaced |
+| `keep(key, make)` | A value made once and returned on every replacement after |
+| `dispose(cb)` | Run before this module is replaced, with `data` |
+| `data` | A bag that survives replacement |
+| `decline()` | Refuse replacement: any change reaching this module reloads |
+| `invalidate()` | "I cannot handle this after all" — try again from the importers |
+
+`accept(dep)` re-runs **the dependency**, not the accepting module. That is the
+contract every bundler in this space shares, and it is worth knowing rather than
+discovering: the acceptor is notified, it does not restart.
+
+### `signal`, and why it is not another `dispose`
+
+The commonest hot-reload bug in any framework is a listener or a timer added on
+every re-run and removed on none, so the twentieth save has twenty of them. The
+usual cure is remembering to write a `dispose` that undoes by hand what the
+module did.
+
+The platform already solved this, and the whole platform already takes the
+solution as an argument:
+
+```js
+addEventListener("resize", onResize, { signal: import.meta.hot.signal });
+```
+
+That listener is now correct under replacement with **no HMR-specific code at
+all** — the same line works in a production build, where the signal is simply
+never aborted. `fetch`, observers, and any library that accepts a signal come
+along for free.
+
+For anything that does not take one, the signal is still the hook:
+
+```js
+const timer = setInterval(tick, 1000);
+import.meta.hot.signal.addEventListener("abort", () => clearInterval(timer));
+```
+
+### `keep`, and why it is not `data`
+
+Carrying state across a replacement usually means writing into a bag in
+`dispose` and reading it back at the top of the module — two places that have to
+agree, where the failure when they do not is silent state loss. `keep` is one
+call site:
+
+```js
+const cache = import.meta.hot.keep("cache", () => new Map());
+```
+
+Made once, returned every time after. `dispose` and `data` are both still here,
+because an integration ported from elsewhere expects them.
+
+<Callout type="note" title="Still a flag">
+  `--hot` is opt-in while it settles. rolldown's dev mode forces treeshaking
+  off, so the react template's dev bundle goes from 870 KB to 1.45 MB and a
+  rebuild costs about 20 ms more. The react template itself has no `accept` yet,
+  so a component edit still reloads — React needs Fast Refresh to keep hooks
+  state across a swap, which is a plugin rather than something esdev knows about.
+</Callout>
+
 ## What is watched
 
 The project root, minus `node_modules`, `.git`, `dist`, `target`, `.cache` and

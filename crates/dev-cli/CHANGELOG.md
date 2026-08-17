@@ -61,6 +61,50 @@ is the point, since none of the three has any business in a deployment.
   update when a module accepts (proving no reload happened) and is gone when
   none does (proving the fallback fires), with the DOM correct either way.
 
+- **`import.meta.hot` is a full API, and it is framework-agnostic.** Nothing in
+  it knows what React is; any framework — or none — hooks into the same surface:
+
+  | | |
+  | --- | --- |
+  | `accept()` / `accept(cb)` | re-run this module in place |
+  | `accept(dep, cb)` / `accept([deps], cb)` | re-run *that dependency* and notify me with its new exports |
+  | `signal` | an `AbortSignal`, aborted just before this module is replaced |
+  | `keep(key, make)` | a value made once and returned on every replacement after |
+  | `dispose(cb)` / `data` | the conventional pair, for integrations ported from elsewhere |
+  | `decline()` | refuse replacement; any change reaching this module reloads |
+  | `invalidate()` | give up and try again from this module's importers |
+
+  **`signal` is the one worth knowing about.** The commonest hot-reload bug
+  anywhere is a listener or timer added on every re-run and removed on none, so
+  the twentieth save has twenty; the usual cure is remembering to hand-write a
+  `dispose` that undoes what the module did. The platform already solved this
+  generally, and the whole platform already takes the solution as an argument:
+
+  ```js
+  addEventListener("resize", onResize, { signal: import.meta.hot.signal });
+  ```
+
+  That line is correct under replacement with no HMR-specific code at all, and
+  it still works in a production build, where the signal is never aborted.
+  `fetch`, observers and any library taking a signal come along for free.
+
+  **`keep` is one call site where `data` is two.** Carrying state across a
+  replacement conventionally means writing a bag in `dispose` and reading it at
+  the top of the module — two places that must agree, failing silently when they
+  do not. `const cache = import.meta.hot.keep("cache", () => new Map())` is made
+  once and returned every time after.
+
+  `accept(dep)` re-runs **the dependency**, not the acceptor — the contract the
+  ecosystem shares, and the one rolldown builds to: a patch for `accept(dep)`
+  ships the dependency's factory and not the acceptor's, so re-running the
+  acceptor is not merely wrong but impossible.
+
+  Every form verified in Chrome: `keep` surviving two consecutive replacements,
+  exactly one listener firing after three module instances registered one
+  (the earlier two aborted by `signal`), `dispose` writing into `data` for the
+  next instance, `accept(dep)` receiving the dependency's new exports, and
+  `decline()` reloading.
+
 ### Changed
 
 - **The dev loop's reload channel is a WebSocket at `/@esdev/hmr`.** It was
