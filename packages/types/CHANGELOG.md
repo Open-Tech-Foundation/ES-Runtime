@@ -13,6 +13,27 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`import.meta.hot`**, the hot-replacement API `esdev start` provides:
+  `accept` in its four forms, `signal`, `keep`, `dispose`, `data`, `decline` and
+  `invalidate`.
+
+  Not a `runtime:` module, and here for the same reason `runtime:build` is — the
+  surface exists only under `esdev`, and a project written against it still has
+  to typecheck. It is **optional** (`hot?`), because `esrun` injects nothing and
+  a deployed build has no such property, which makes `if (import.meta.hot)` the
+  shape that compiles for both.
+
+### Changed
+
+- **`runtime:build`'s options say what they do.** `conditions` are *appended* to
+  the ones the platform already asserts (`worker` for `neutral`, `browser` for
+  `browser`), `mainFields` *replaces* the default `["module", "main"]`, and
+  `platform` decides which conditions those are. No type changed shape; what
+  changed is that the ones that were easy to read backwards now say which way
+  they go.
+
 ## [0.1.0] - 2026-08-15
 
 ### Added

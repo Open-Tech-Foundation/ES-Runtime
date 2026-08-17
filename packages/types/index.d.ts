@@ -23,3 +23,4 @@
 /// <reference path="./runtime-build.d.ts" />
 /// <reference path="./runtime-test.d.ts" />
 /// <reference path="./runtime-watch.d.ts" />
+/// <reference path="./esdev-hot.d.ts" />
