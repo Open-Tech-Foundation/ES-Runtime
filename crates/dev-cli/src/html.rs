@@ -640,7 +640,11 @@ pub async fn build(
 /// # The walk
 ///
 /// From each changed module, climb the importer graph looking for a module that
-/// called `import.meta.hot.accept`. That module is a *boundary*: re-running it
+/// called `import.meta.hot.accept`. **A bare `accept()` counts** — it is the
+/// commonest spelling by far, and it means "re-run me, I need no notification",
+/// so it registers a callback that does nothing rather than no callback at all.
+/// Treating it as "did not accept" would send the page through a reload for the
+/// one form most modules use. That module is a *boundary*: re-running it
 /// picks up the new code below it, so everything from the change up to and
 /// including it is dropped from the cache and the boundary is re-run.
 ///
@@ -659,7 +663,7 @@ fn hot_runtime() -> String {
         "\
         class EsdevHotContext {\
           constructor(id){this.moduleId=id;this.acceptCallbacks=[];}\
-          accept(cb){if(cb)this.acceptCallbacks.push({deps:[this.moduleId],fn:cb});}\
+          accept(cb){this.acceptCallbacks.push({deps:[this.moduleId],fn:cb||function(){}});}\
           invalidate(){location.reload();}\
         }\
         class EsdevRuntime extends DevRuntime {\
@@ -686,7 +690,7 @@ fn hot_runtime() -> String {
             },this);\
             seen.forEach(function(id){this.removeModuleCache(id);},this);\
             for(var b=0;b<callbacks.length;b++){\
-              var exports=this.loadExports(callbacks[b].id);\
+              var exports=this.initModule(callbacks[b].id);\
               for(var f=0;f<callbacks[b].fns.length;f++)callbacks[b].fns[f](exports);\
             }\
             return true;\
