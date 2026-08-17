@@ -299,7 +299,13 @@ oxc = { version = "0.144.0", features = [
 #
 # The Rust API is the less-travelled path (rolldown's supported surface is its
 # napi binding), so it is pinned exactly rather than floated.
-rolldown = "=1.2.3"
+# `experimental` is on for one thing: HMR. `compute_hmr_update_for_file_changes`
+# and the `HmrPatch`/`HmrBoundary` types behind it are the module-swap engine —
+# which is a module graph, a boundary search and a per-module registry we would
+# otherwise be writing ourselves, against a bundler that already has all three.
+# Nothing else in the feature is used, and the flag stays confined to `dev-cli`
+# like the bundler itself.
+rolldown = { version = "=1.2.3", features = ["experimental"] }
 # The types a rolldown *plugin* speaks — `ModuleType` for what a transform hook
 # says it produced, and anyhow's `Result`, which is the error type rolldown's
 # hook signatures use. Both are already in the graph via `rolldown` itself, so

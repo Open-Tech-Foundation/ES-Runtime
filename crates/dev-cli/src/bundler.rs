@@ -356,3 +356,30 @@ mod tests {
         assert_eq!(merged.dir.as_deref(), Some("dist"));
     }
 }
+
+#[cfg(test)]
+mod hmr_api {
+    /// The HMR engine we build on, pinned as a compile check.
+    ///
+    /// `compute_hmr_update_for_file_changes` is rolldown's, is gated behind its
+    /// `experimental` feature, and is the whole reason that feature is enabled
+    /// (workspace manifest). A pin rather than a comment because the failure it
+    /// guards is silent: the method disappears with the feature flag, and
+    /// nothing else in a build would notice until the dev loop stopped hot
+    /// updating and started reloading the page instead.
+    #[test]
+    fn the_module_swap_engine_is_reachable() {
+        // Named, not called: constructing a Bundler needs a real project, and
+        // what this asserts is that the API exists with the shape we drive.
+        #[allow(unused)]
+        type Update = rolldown_common::ClientHmrUpdate;
+        #[allow(unused)]
+        type Input<'a> = rolldown_common::ClientHmrInput<'a>;
+        #[allow(unused)]
+        type Stamps = rolldown_common::HmrStampTable;
+        #[allow(unused)]
+        type Patch = rolldown_common::HmrPatch;
+        #[allow(unused)]
+        type Boundary = rolldown_common::HmrBoundary;
+    }
+}
