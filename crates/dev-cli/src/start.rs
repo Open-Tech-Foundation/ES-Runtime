@@ -289,17 +289,23 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         .watch(&root, RecursiveMode::Recursive)
         .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
 
+    let paint = crate::style::Palette::stderr();
+    let tag = paint.dim("esdev:");
+    if project.start.port.is_none() && port != DEFAULT_PORT {
+        eprintln!("{tag} {DEFAULT_PORT} was taken; use --port to pin one");
+    }
     match &serve {
         Some(dir) => eprintln!(
-            "esdev: serving {} on http://127.0.0.1:{port}",
-            dir.strip_prefix(&root).unwrap_or(dir).display()
+            "{tag} serving {} on {}",
+            dir.strip_prefix(&root).unwrap_or(dir).display(),
+            paint.cyan(format_args!("http://127.0.0.1:{port}"))
         ),
-        None => eprintln!("esdev: reload endpoint on http://127.0.0.1:{port}{RELOAD_PATH}"),
+        None => eprintln!(
+            "{tag} reload endpoint on {}",
+            paint.cyan(format_args!("http://127.0.0.1:{port}{RELOAD_PATH}"))
+        ),
     }
-    if project.start.port.is_none() && port != DEFAULT_PORT {
-        eprintln!("esdev: {DEFAULT_PORT} was taken; use --port to pin one");
-    }
-    eprintln!("esdev: watching {}", root.display());
+    eprintln!("{tag} watching {}", paint.dim(root.display()));
 
     let run = project.start.run.clone();
     let watched = project.start.watch.clone();
@@ -321,9 +327,12 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // The reason before the result, so the line a developer's eye lands on
         // is the URL rather than an aside about a port they are leaving behind.
         if let Some(asked) = app.moved_from {
-            eprintln!("esdev: {asked} was taken; use --app-port to pin one");
+            eprintln!("{tag} {asked} was taken; use --app-port to pin one");
         }
-        eprintln!("esdev: the app is on http://localhost:{}", app.port);
+        eprintln!(
+            "{tag} the app is on {}",
+            paint.cyan(format_args!("http://localhost:{}", app.port))
+        );
     }
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 

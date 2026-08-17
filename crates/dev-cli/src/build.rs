@@ -866,7 +866,8 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
         BuildRequest::Single(config) => {
             let verb = if config.lib { "built" } else { "bundled" };
             let written = build(*config).await?;
-            println!("{verb} → {written}");
+            let paint = crate::style::Palette::stdout();
+            println!("{} {} {written}", paint.green(verb), paint.dim("→"));
             return Ok(());
         }
         BuildRequest::Project(project) => project,
@@ -930,7 +931,8 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
             copy_assets(&target.assets, &project.project.dir, &out_dir)
                 .map_err(|e| format!("target \"{}\": {e}", target.name))?;
-            println!("built → {written}");
+            let paint = crate::style::Palette::stdout();
+            println!("{} {} {written}", paint.green("built"), paint.dim("→"));
             continue;
         }
 
@@ -958,7 +960,8 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
         })
         .await
         .map_err(|e| format!("target \"{}\": {e}", target.name))?;
-        println!("bundled → {written}");
+        let paint = crate::style::Palette::stdout();
+        println!("{} {} {written}", paint.green("bundled"), paint.dim("→"));
     }
 
     // Every bundle exists before any of them runs. A prerender step renders the
@@ -970,7 +973,13 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
         run_output(&project.project.dir, &output)
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
-        println!("ran → {}", output.display());
+        let paint = crate::style::Palette::stdout();
+        println!(
+            "{} {} {}",
+            paint.green("ran"),
+            paint.dim("→"),
+            paint.cyan(output.display())
+        );
     }
     Ok(())
 }

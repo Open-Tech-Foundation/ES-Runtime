@@ -126,6 +126,18 @@ is the point, since none of the three has any business in a deployment.
   by whoever bundles it, if at all.
 
 
+- **esdev's own output is coloured.** Green for something produced (`built`,
+  `bundled`, `created`), cyan for somewhere to go or look (a path, a URL), bold
+  for a line to type, dim for the part you skip when skimming. Four colours, one
+  meaning each, so a build report or a dev-loop banner can be read at a glance
+  without being read.
+
+  Nothing is red: red belongs to the error block, and a status line reaching for
+  it is a status line competing with an actual failure. The gate is per stream
+  rather than per process — `esdev build > build.log` writes a plain log while
+  the `esdev start` in the next terminal stays coloured — and `NO_COLOR` turns it
+  all off.
+
 - **`esdev create` asks with a menu you can arrow through.** The questions were
   a numbered list read off stdin, which made choosing a template an exercise in
   counting lines and typing a digit. They are now drawn with

@@ -56,6 +56,7 @@ mod install;
 mod prompt;
 mod resolve;
 mod start;
+mod style;
 mod test;
 mod trace;
 mod transform;

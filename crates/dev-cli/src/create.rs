@@ -269,6 +269,7 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
         Some(mode) => format!("{template} ({mode})"),
         None => template.clone(),
     };
+    let paint = crate::style::Palette::stdout();
     if written == 0 {
         return Ok(format!(
             "nothing to write: {} already holds every file the {named} template has.\n",
@@ -276,15 +277,19 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
         ));
     }
     let mut report = format!(
-        "created {} from the {named} template ({written} file{})\n",
-        config.dir,
-        if written == 1 { "" } else { "s" },
+        "{} {} {}\n",
+        paint.green("created"),
+        paint.cyan(&config.dir),
+        paint.dim(format_args!(
+            "from the {named} template ({written} file{})",
+            if written == 1 { "" } else { "s" }
+        )),
     );
     if !skipped.is_empty() {
-        report.push_str(&format!(
+        report.push_str(&paint.dim(format_args!(
             "left alone, because they were already there: {}\n",
             skipped.join(", ")
-        ));
+        )));
     }
     // Reported before the install rather than after it, so the transcript reads
     // in the order things happened: what was written, then what installing it
@@ -322,12 +327,17 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
         None => None,
     };
 
-    report.push_str(&next_steps(&config.dir, &template, installed));
+    report.push_str(&next_steps(&config.dir, &template, installed, paint));
     Ok(report)
 }
 
 /// The lines printed after the project is written.
-fn next_steps(dir: &str, template: &str, installed: Option<crate::install::Manager>) -> String {
+fn next_steps(
+    dir: &str,
+    template: &str,
+    installed: Option<crate::install::Manager>,
+    paint: crate::style::Palette,
+) -> String {
     // The command that actually starts it, which is not the same for every
     // template: a library has nothing to run.
     let run = match template {
@@ -336,11 +346,18 @@ fn next_steps(dir: &str, template: &str, installed: Option<crate::install::Manag
     };
     let manager = installed.map_or("npm", |m| m.name);
 
-    let mut steps = format!("\n  cd {dir}\n");
+    // Bold, because these are lines to type rather than lines to read.
+    let mut steps = format!("\n  {}\n", paint.bold(format_args!("cd {dir}")));
     if installed.is_none() {
-        steps.push_str(&format!("  {manager} install\n"));
+        steps.push_str(&format!(
+            "  {}\n",
+            paint.bold(format_args!("{manager} install"))
+        ));
     }
-    steps.push_str(&format!("  {manager} run {run}\n"));
+    steps.push_str(&format!(
+        "  {}\n",
+        paint.bold(format_args!("{manager} run {run}"))
+    ));
     steps
 }
 
