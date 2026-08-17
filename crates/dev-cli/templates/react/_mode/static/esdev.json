@@ -2,7 +2,8 @@
   "targets": {
     "web": {
       "entry": "index.html",
-      "outdir": "dist"
+      "outdir": "dist",
+      "refresh": "react"
     },
     "prerender": {
       "entry": "src/prerender.tsx",

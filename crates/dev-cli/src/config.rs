@@ -112,6 +112,14 @@ pub struct Target {
     pub assets: Vec<String>,
     /// Whether to minify this target.
     pub minify: bool,
+    /// `"refresh": "react"` — the framework whose hot-reload scheme this
+    /// target's modules should be prepared for, applied in the dev loop only.
+    ///
+    /// A name rather than a boolean because the schemes are not one thing:
+    /// React's registers components and matches hook signatures, and another
+    /// framework's would do something else entirely. Only `"react"` is
+    /// implemented; an unknown name is refused rather than ignored.
+    pub refresh: Option<String>,
     /// Compile-time replacements, as `--define` makes them.
     pub define: Vec<(String, String)>,
     /// Extra `exports` conditions, as `--conditions` adds them.
@@ -182,6 +190,7 @@ const TARGET_KEYS: &[&str] = &[
     "define",
     "conditions",
     "then",
+    "refresh",
 ];
 
 /// The keys the file may carry at the top level.
@@ -401,6 +410,7 @@ fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
         minify: flag(map.get("minify"), file, &format!("{at}'s `minify`"))?,
         define: defines(map.get("define"), file, &at)?,
         conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
+        refresh: refresh(map.get("refresh"), file, &at)?,
         run_after_build,
     };
 
@@ -492,6 +502,27 @@ fn read_port(map: &Map<String, Value>, key: &str, file: &str) -> Result<Option<u
                 })?,
         )),
     }
+}
+
+/// `refresh`, checked against what is actually implemented.
+///
+/// Refused rather than ignored: a name that is quietly dropped is a project
+/// whose components stop keeping their state one day, with the reason sitting
+/// unread in a config file.
+fn refresh(value: Option<&Value>, file: &str, at: &str) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let name = string(value, file, &format!("{at}'s `refresh`"))?;
+    if name != "react" {
+        return Err(format!(
+            "{file}: {at}'s `refresh` is \"{name}\", and the only scheme implemented is \"react\".\n\n\
+             It names the framework whose hot-reload convention this target's modules \
+             are prepared for — React's registers components and matches hook \
+             signatures so a component keeps its state across an edit."
+        ));
+    }
+    Ok(Some(name.to_string()))
 }
 
 /// The error for a `start` key naming a target that is not there.

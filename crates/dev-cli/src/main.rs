@@ -54,6 +54,7 @@ mod html;
 mod inspect;
 mod install;
 mod prompt;
+mod refresh;
 mod resolve;
 mod start;
 mod style;

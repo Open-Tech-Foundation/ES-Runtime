@@ -106,6 +106,11 @@ pub struct Options {
     /// It costs a bundle that is not the one a release build produces, which is
     /// why it is `None` everywhere except the dev loop.
     pub hmr_runtime: Option<String>,
+    /// Whether to apply React's Fast Refresh transform — a `$RefreshReg$` call
+    /// per component and a `$RefreshSig$` signature per hook-using function.
+    /// The calls are meaningless on their own; what gives them meaning is the
+    /// per-module wrapper in [`crate::refresh`] and the runtime the app boots.
+    pub react_refresh: bool,
     /// One file out per module in, rather than one chunk per entry — what a
     /// published library needs, so that a subpath in an `exports` map names a
     /// real file.
@@ -256,6 +261,17 @@ pub fn translate(
             Some(false) => TreeshakeOptions::Boolean(false),
             _ => TreeshakeOptions::default(),
         },
+        transform: options
+            .react_refresh
+            .then(|| rolldown_common::BundlerTransformOptions {
+                jsx: Some(rolldown_common::Either::Right(
+                    rolldown_common::JsxOptions {
+                        refresh: Some(rolldown_common::Either::Left(true)),
+                        ..rolldown_common::JsxOptions::default()
+                    },
+                )),
+                ..rolldown_common::BundlerTransformOptions::default()
+            }),
         experimental: options.hmr_runtime.as_ref().map(|implement| {
             rolldown_common::ExperimentalOptions {
                 dev_mode: Some(rolldown_common::DevModeOptions {

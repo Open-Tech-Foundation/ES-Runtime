@@ -282,12 +282,16 @@ fn reload_client(port: u16) -> String {
          old.parentNode.insertBefore(next,old.nextSibling);\
          }})(links[i]);}}\
          }}\
-         function patch(m){{\
+         function patch(m,tries){{\
          var hot=globalThis.__esdev_hot;\
          if(!hot){{location.reload();return;}}\
          var el=document.createElement('script');\
          el.type='module';el.src=m.url;\
-         el.onerror=function(){{location.reload();}};\
+         el.onerror=function(){{\
+         el.remove();\
+         if((tries||0)<10)setTimeout(function(){{patch(m,(tries||0)+1);}},100);\
+         else location.reload();\
+         }};\
          el.onload=function(){{if(!hot.apply(m.changedIds))location.reload();}};\
          document.head.appendChild(el);\
          }}\
@@ -297,7 +301,7 @@ fn reload_client(port: u16) -> String {
          s.onmessage=function(e){{\
          var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
          if(m.type===\"css\")css();\
-         else if(m.type===\"patch\")patch(m);\
+         else if(m.type===\"patch\")patch(m,0);\
          else if(m.type===\"reload\")location.reload();\
          }};\
          s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
@@ -525,6 +529,10 @@ pub async fn build(
             defines,
             conditions,
             dev.filter(|dev| dev.hot).map(|_| hot_runtime()),
+            // Only in a hot dev loop. The transform's whole purpose is to keep
+            // a component's state across a replacement, and a build that
+            // replaces nothing has no state to keep.
+            dev.is_some_and(|dev| dev.hot) && target.refresh.as_deref() == Some("react"),
         )
         .await?
     };

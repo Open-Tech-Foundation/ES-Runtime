@@ -664,6 +664,7 @@ pub async fn bundle_browser_entries(
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
     hmr: Option<String>,
+    refresh: bool,
 ) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
@@ -680,7 +681,7 @@ pub async fn bundle_browser_entries(
     // bundler, and reusing it would apply the first run's options to the
     // second's inputs.
     let key = format!(
-        "{entries:?}|{}|{}|{minify}|{hash}|{define:?}|{conditions:?}",
+        "{entries:?}|{}|{}|{minify}|{hash}|{refresh}|{define:?}|{conditions:?}",
         root.display(),
         out_dir.display()
     );
@@ -695,6 +696,7 @@ pub async fn bundle_browser_entries(
         define,
         minify,
         hmr_runtime: hmr,
+        react_refresh: refresh,
         output: crate::bundler::OutputOptions {
             dir: Some(out_dir.to_string_lossy().into_owned()),
             // Written under the entry's own name and hashed *afterwards*,
@@ -723,7 +725,7 @@ pub async fn bundle_browser_entries(
     // made a fresh one each build would be reading an empty one.
     let styles = if dev {
         let held = warm().lock().await;
-        build_warm(held, &key, root, out_dir, &options, minify).await?
+        build_warm(held, &key, root, out_dir, &options, minify, refresh).await?
     } else {
         let styles = crate::cssmodules::Collected::new();
         let mut bundler = rolldown::BundlerBuilder::default()
@@ -732,13 +734,7 @@ pub async fn bundle_browser_entries(
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
-                std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                    root,
-                    styles.clone(),
-                    minify,
-                )),
-            ))])
+            .with_plugins(browser_plugins(root, &styles, minify, refresh))
             .build()
             .map_err(reported!())?;
         bundler.write().await.map_err(reported!())?;
@@ -760,6 +756,33 @@ pub async fn bundle_browser_entries(
         written.push((name, filename));
     }
     Ok((written, styles))
+}
+
+/// The passes a browser build runs, in the order they are declared.
+///
+/// Fast Refresh's wrapper only exists in a dev loop that asked for it: it makes
+/// every component module a hot boundary, which is exactly right when a page is
+/// being patched and pointless weight in anything shipped.
+fn browser_plugins(
+    root: &Path,
+    styles: &crate::cssmodules::Collected,
+    minify: bool,
+    refresh: bool,
+) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
+    let mut plugins: Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> =
+        vec![std::sync::Arc::new(crate::adapter::Adapter::new(
+            std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                root,
+                styles.clone(),
+                minify,
+            )),
+        ))];
+    if refresh {
+        plugins.push(std::sync::Arc::new(crate::adapter::Adapter::new(
+            std::sync::Arc::new(crate::refresh::ReactRefresh::new()),
+        )));
+    }
+    plugins
 }
 
 /// The browser bundler, held across the rebuilds of one `esdev start`.
@@ -834,6 +857,15 @@ pub struct Hot {
     pub filename: String,
     /// The modules that changed. The page walks its own graph from these.
     pub changed_ids: Vec<String>,
+}
+
+/// Where the patches are, for whoever is serving them.
+pub async fn patch_dir() -> Option<PathBuf> {
+    warm()
+        .lock()
+        .await
+        .as_ref()
+        .map(|warm| warm.out_dir.clone())
 }
 
 /// Computes a hot update for `changed`, writing the patch beside the bundle.
@@ -928,6 +960,7 @@ async fn build_warm(
     out_dir: &Path,
     options: &crate::bundler::Options,
     minify: bool,
+    refresh: bool,
 ) -> Result<Vec<crate::cssmodules::Sheet>, String> {
     if held.as_ref().is_none_or(|warm| warm.key != key) {
         let styles = crate::cssmodules::Collected::new();
@@ -937,13 +970,7 @@ async fn build_warm(
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
-                std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                    root,
-                    styles.clone(),
-                    minify,
-                )),
-            ))])
+            .with_plugins(browser_plugins(root, &styles, minify, refresh))
             .build()
             .map_err(reported!())?;
         *held = Some(Warm {

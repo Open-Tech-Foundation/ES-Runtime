@@ -7,6 +7,10 @@
  * file, and renders from nothing when a single-page build hands it an empty
  * root. The difference is one branch, below.
  */
+// **First, and it has to stay first.** It installs the hook React reads as
+// it initialises, and ES modules evaluate in import order. See src/refresh.ts.
+import "./refresh.ts";
+
 import { StrictMode } from "react";
 import { createRoot, hydrateRoot } from "react-dom/client";
 import { RouterProvider, createBrowserRouter, type HydrationState } from "react-router";

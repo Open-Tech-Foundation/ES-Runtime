@@ -6,7 +6,8 @@
     },
     "web": {
       "entry": "index.html",
-      "outdir": "dist"
+      "outdir": "dist",
+      "refresh": "react"
     }
   },
   "start": {

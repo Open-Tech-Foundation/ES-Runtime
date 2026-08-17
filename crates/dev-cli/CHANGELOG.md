@@ -26,6 +26,27 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **React components keep their state across an edit.** `esdev start --hot` on
+  the react template now applies React Fast Refresh: change a component and the
+  page shows it without reloading, with `useState`, scroll position and anything
+  typed into a form still there.
+
+  The split is deliberate. esdev owns the transform (oxc implements it, rolldown
+  exposes it) and the per-module wrapper, because both need the module graph.
+  The React half — the runtime bootstrap that must run before React itself
+  loads — is `src/refresh.ts` **in the template**, where React was chosen. And it
+  is an ordinary consumer of the generic API: the refresh runs as an
+  `import.meta.hot.accept` callback, so a framework with its own scheme writes
+  its own pass against the same contract.
+
+  Enabled per target with `"refresh": "react"` in `esdev.json`, applied in the
+  dev loop only. An unknown name is refused rather than ignored, because a
+  scheme that is silently dropped is a project whose components stop keeping
+  their state one day with the reason sitting unread in a config file.
+
+  Verified in Chrome on both template modes: a counter clicked to 3 still reads
+  3 after the component's markup is edited, with the edit visible and no reload.
+
 - **`esdev start --hot` hot-replaces a changed module instead of reloading the
   page.** A module that says `import.meta.hot.accept(cb)` is a boundary: when it
   or anything it imports changes, esdev computes a patch, the page loads it,

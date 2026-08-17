@@ -473,6 +473,16 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 )?;
             }
         }
+        // **Waited for, not assumed.** `spawn` returns when the process starts,
+        // not when it is listening, and the page's very next act is to fetch
+        // something from it — the patch, or the document. A page that arrives in
+        // that window gets a connection refused, and a hot update that cannot be
+        // fetched is a page that reloads: the one edit Fast Refresh exists for,
+        // answered by exactly what it exists to avoid.
+        if restarting && let Some(app) = &app {
+            wait_until_listening(app.port).await;
+        }
+
         // After the restart, not before: a page told to reload while the server
         // is still coming back gets a connection refused and stays blank. Sent
         // either way — the browser has new bundles to fetch whether or not the
@@ -484,22 +494,33 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // has no child, so it reads as "restarting" on every pass, and a
         // stylesheet edit would reload the page it could have swapped.
         let replaced_the_server = restarting && output.is_some();
-        // A hot patch is tried first and only when nothing coarser has already
-        // made the page's state worthless. A server that was replaced, or a
-        // build the page cannot be patched into, both end in a reload — so
-        // there is no point computing a patch the page is about to throw away.
+        // A hot patch is tried first, and a restarted server is not a reason to
+        // skip it. The page's state lives in the page: a stateless server coming
+        // back as a new process invalidates nothing the browser is holding, and
+        // in a fullstack project *every* component edit rebuilds the server
+        // bundle — so treating a restart as a reload would mean Fast Refresh
+        // never fired for the one project shape it was written for.
+        //
+        // The patch is still sent after the restart, because the page fetches it
+        // from the application's own server and a server still coming back
+        // refuses the connection.
         let update = match hot {
-            // A server that was replaced makes any patch moot: the process the
-            // page is talking to is a different one, so its state is stale
-            // however narrow the edit was.
-            Some(hot) if !replaced_the_server => Update::Patch {
+            Some(hot) => Update::Patch {
+                // Relative, so it is fetched from whatever origin the page is
+                // on. Absolute-to-esdev was tried and is worse: a module script
+                // is fetched under CORS *and* under the page's CSP, and the
+                // template runs its production policy in development on purpose
+                // — `script-src 'self'` refuses another origin, exactly as it
+                // should. What the application serves, the application serves.
                 url: format!("/{}/{}", crate::html::ASSET_DIR, hot.filename),
                 changed_ids: hot.changed_ids,
             },
-            _ if replaced_the_server => Update::Reload,
+            // A server that was replaced and no patch to offer: the browser has
+            // new bundles to fetch either way.
+            None if replaced_the_server => Update::Reload,
             // rolldown could not express this change as a patch, or there is no
             // graph to compute one against yet.
-            _ => update_for(&changed),
+            None => update_for(&changed),
         };
         let _ = reload.send(update);
     }
@@ -623,6 +644,28 @@ fn update_for(changed: &[PathBuf]) -> Update {
         Update::Css
     } else {
         Update::Reload
+    }
+}
+
+/// Blocks until something accepts on `port`, or long enough that waiting is
+/// clearly not the answer.
+///
+/// A connect, not a health check: what the page needs is a socket that answers,
+/// and a server that binds and then fails to route is a different problem with a
+/// different message. The bound is generous because a slow first request is
+/// better than a reload, and finite because a child that never binds must not
+/// wedge the dev loop — the page is told either way, and a page that reloads
+/// into a dead server shows the browser's own error, which is the truth.
+async fn wait_until_listening(port: u16) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 

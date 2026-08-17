@@ -66,6 +66,16 @@ use crate::inspect::{read_head, request_path, respond};
 /// The path the injected script connects to.
 pub const HMR_PATH: &str = "/@esdev/hmr";
 
+/// Where a hot patch is fetched from.
+///
+/// **esdev's endpoint, not the application's.** The patch is esdev's artifact
+/// and esdev's endpoint is the one thing in a dev loop that never restarts —
+/// where the application's server is stopped and started by the very rebuild
+/// that produced the patch, so a page fetching it from there raced the restart
+/// and got a connection refused. Which reloaded the page, silently, on exactly
+/// the edits hot replacement exists for.
+pub const PATCH_PREFIX: &str = "/@esdev/patch/";
+
 /// What the dev server tells a page after a build.
 ///
 /// An enum with one variant today, and that is the point of it being an enum:
@@ -158,6 +168,10 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
 
     if path == HMR_PATH {
         updates(stream, &head, server.reload.subscribe()).await;
+        return;
+    }
+    if let Some(name) = path.strip_prefix(PATCH_PREFIX) {
+        patch(&mut stream, name).await;
         return;
     }
     let Some(root) = &server.serve else {
@@ -349,6 +363,53 @@ async fn respond_bytes(
 /// decision nobody asked it to make.
 pub fn address(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
+}
+
+/// Serves one hot patch.
+///
+/// CORS-open, and it has to be: the page is usually on the application's port
+/// rather than this one, and a `<script type="module">` is fetched under CORS
+/// where a classic script is not. Without the header the patch loads on a
+/// frontend project and silently fails on a fullstack one.
+async fn patch(stream: &mut TcpStream, name: &str) {
+    // A name, not a path. The rest of this endpoint answers fixed strings; this
+    // is the only place a request says which file it wants, so it is the only
+    // place that can be asked for `../`.
+    let named = !name.is_empty()
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && name != "."
+        && name != "..";
+    let body = if named {
+        match crate::build::patch_dir().await {
+            Some(dir) => std::fs::read_to_string(dir.join(name)).ok(),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let Some(body) = body else {
+        let _ = respond(
+            stream,
+            "404 Not Found",
+            "text/plain; charset=utf-8",
+            "no such patch",
+        )
+        .await;
+        return;
+    };
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/javascript; charset=utf-8\r\n\
+         Content-Length: {}\r\n\
+         Cache-Control: no-store\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes()).await;
+    let _ = stream.write_all(body.as_bytes()).await;
 }
 
 /// A string, as a JSON string body.
