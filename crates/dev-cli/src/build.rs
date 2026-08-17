@@ -839,6 +839,13 @@ struct Warm {
     styles: crate::cssmodules::Collected,
 }
 
+/// How many patch files stay on disk.
+///
+/// Enough that a page which was told about one can still fetch it after several
+/// more saves — a tab on a slow machine, a paused debugger, a second browser —
+/// and few enough that a directory served to a browser does not fill with them.
+const PATCHES_KEPT: usize = 8;
+
 /// What one dev loop has told the browser so far.
 struct HmrSession {
     /// Module stable id → the rebuild stamp of the copy the page holds.
@@ -849,6 +856,15 @@ struct HmrSession {
     /// Names the next `hmr_patch_N.js`. Shared with rolldown, which increments
     /// it as it builds one.
     next_patch: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// The patches still on disk, oldest first.
+    ///
+    /// They are never overwritten — each one is a new number — so without this
+    /// a long afternoon leaves hundreds of them in the directory the browser is
+    /// served from. Deleting the newest few is not safe: a page told about a
+    /// patch fetches it a moment later, and a slow tab, a paused debugger or a
+    /// second browser can still be reaching for one. So a few are kept and the
+    /// rest go.
+    written: std::collections::VecDeque<String>,
 }
 
 /// A hot update, ready to hand to the page.
@@ -859,13 +875,28 @@ pub struct Hot {
     pub changed_ids: Vec<String>,
 }
 
-/// Where the patches are, for whoever is serving them.
-pub async fn patch_dir() -> Option<PathBuf> {
-    warm()
-        .lock()
-        .await
-        .as_ref()
-        .map(|warm| warm.out_dir.clone())
+/// Forgets what the browser has been sent, so the next patch carries all of it.
+///
+/// Called when a page connects. The ship map records what *has been delivered*,
+/// and a patch is trimmed against it — so a tab that arrives later, having
+/// loaded a bundle rather than the patches before it, is missing exactly the
+/// factories the next patch assumes it already has. It cannot apply that patch
+/// and reloads itself, which is safe and costs it its state.
+///
+/// Forgetting is the cheap half of the fix: the next patch is computed as though
+/// nothing had been delivered, so it carries what the newest page needs, and the
+/// pages that already had those modules are handed a superset — which is what
+/// rolldown ships anyway, and what the client's own graph walk is built to
+/// filter. One slightly larger patch per page opened, against a page that would
+/// otherwise have been reloaded.
+///
+/// The thorough half is a ship map per client, which this deliberately is not.
+pub async fn forget_shipped() {
+    if let Some(warm) = warm().lock().await.as_mut()
+        && let Some(session) = warm.hmr.as_mut()
+    {
+        session.shipped.clear();
+    }
 }
 
 /// Computes a hot update for `changed`, writing the patch beside the bundle.
@@ -886,6 +917,7 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
         shipped: rustc_hash::FxHashMap::default(),
         stamps: rolldown_common::HmrStampTable::default(),
         next_patch: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        written: std::collections::VecDeque::new(),
     });
 
     let mut files: rolldown_utils::indexmap::FxIndexMap<
@@ -934,6 +966,12 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
             // next patch assuming a module the page never got.
             for (id, stamp) in patch.carried {
                 session.shipped.insert(id, stamp);
+            }
+            session.written.push_back(patch.filename.clone());
+            while session.written.len() > PATCHES_KEPT {
+                if let Some(old) = session.written.pop_front() {
+                    let _ = std::fs::remove_file(out_dir.join(old));
+                }
             }
             Some(Hot {
                 filename: patch.filename,
@@ -1100,12 +1138,12 @@ pub struct Dev {
     /// registered with a runtime instead of scope-hoisted into one another, and
     /// `import.meta.hot` on each.
     ///
-    /// Opt-in while the half that *applies* a patch is still being written.
-    /// Turning it on is not free and the cost lands immediately: treeshaking is
-    /// forced off, so the react template's dev bundle goes from 870 KB to
-    /// 1.45 MB, and a rebuild costs about 20 ms more. Both are worth it for hot
-    /// updates and neither is worth it for nothing, which is why this is a flag
-    /// and not yet a default.
+    /// On by default, and `--no-hot` turns it off. It is not free — rolldown's
+    /// dev mode forces treeshaking off, so the react template's dev bundle goes
+    /// from 870 KB to 1.45 MB and a rebuild costs about 20 ms more — but what it
+    /// buys is the state in the page surviving a save, which is the difference
+    /// between editing a form and refilling it. Both numbers are development
+    /// only; nothing shipped is affected either way.
     pub hot: bool,
 }
 

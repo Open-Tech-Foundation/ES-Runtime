@@ -129,8 +129,8 @@ being about a number nobody chose.
 
 ## Hot module replacement
 
-`esdev start --hot` builds the browser bundle so a changed module can be
-replaced in the running page instead of reloading it. It is **not tied to any
+`esdev start` replaces a changed module in the running page instead of reloading
+it (`--no-hot` opts out). It is **not tied to any
 framework**: what a page does with an update is decided by `import.meta.hot`,
 which any framework — or none — can hook into.
 
@@ -206,12 +206,19 @@ const cache = import.meta.hot.keep("cache", () => new Map());
 Made once, returned every time after. `dispose` and `data` are both still here,
 because an integration ported from elsewhere expects them.
 
-<Callout type="note" title="Still a flag">
-  `--hot` is opt-in while it settles. rolldown's dev mode forces treeshaking
-  off, so the react template's dev bundle goes from 870 KB to 1.45 MB and a
-  rebuild costs about 20 ms more. The react template itself has no `accept` yet,
-  so a component edit still reloads — React needs Fast Refresh to keep hooks
-  state across a swap, which is a plugin rather than something esdev knows about.
+### React
+
+The react template has it wired up: edit a component and it re-renders with its
+`useState` intact. That is React Fast Refresh, enabled by `"refresh": "react"` on
+the target in `esdev.json`, and it is an ordinary consumer of the API above — the
+refresh runs as an `accept` callback. A framework with another scheme writes its
+own pass rather than asking esdev to learn about it.
+
+<Callout type="note" title="What it costs">
+  rolldown's dev mode forces treeshaking off, so the react template's dev bundle
+  goes from 870 KB to 1.45 MB and a rebuild costs about 20 ms more. Both are
+  development only — nothing you ship is affected. `--no-hot` turns it off and
+  goes back to reloading the page.
 </Callout>
 
 ## What is watched

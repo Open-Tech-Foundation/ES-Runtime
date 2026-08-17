@@ -249,7 +249,8 @@ fn any_free() -> std::io::Result<u16> {
 pub struct StartConfig {
     /// The project, and everything it builds.
     pub project: Project,
-    /// `--hot`: build the browser bundle so it can be patched in place.
+    /// Whether a change is patched into the running page rather than reloading
+    /// it. On unless `--no-hot`.
     pub hot: bool,
     /// How long a child gets to drain before it is killed — `--shutdown-grace`,
     /// the same number production uses.

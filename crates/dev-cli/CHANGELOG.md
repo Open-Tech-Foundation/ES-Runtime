@@ -24,6 +24,23 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **Hot replacement is on by default.** `esdev start` patches a changed module
+  into the running page; `--no-hot` goes back to reloading it. What it costs is
+  development-only — rolldown's dev mode forces treeshaking off, so the react
+  template's dev bundle goes from 870 KB to 1.45 MB and a rebuild costs about
+  20 ms more — and what it buys is the state in the page surviving a save.
+  Nothing shipped is affected either way.
+
+- **Two pages of the same app both stay hot.** A patch is trimmed against what
+  has already been delivered, so a tab opened later — holding a bundle rather
+  than the patches before it — could not apply the next one and reloaded itself.
+  A page connecting now clears that record, so the next patch carries what the
+  newest page needs and the older ones are handed a superset, which is what their
+  own graph walk is built to filter. Verified with two tabs and two edits: both
+  keep their state.
+
 ### Added
 
 - **React components keep their state across an edit.** `esdev start --hot` on

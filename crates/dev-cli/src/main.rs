@@ -323,11 +323,11 @@ OPTIONS:
                                 it: your `listen` grant's port, or 5173 for a
                                 frontend project, and any free port if that is
                                 taken — the one it took is printed
-    --hot                       Build the browser bundle so a change can be
-                                patched into the running page. Incomplete: the
-                                bundle is hot-capable but nothing applies a
-                                patch yet, and it costs a bigger dev bundle
-                                (treeshaking is forced off) and ~20ms a rebuild
+    --no-hot                    Reload the page on a change instead of patching
+                                the changed module into it. Hot replacement is
+                                on by default; turning it off makes the dev
+                                bundle smaller and rebuilds slightly faster,
+                                and costs you your component state on every save
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
@@ -1089,7 +1089,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
     let mut port: Option<u16> = None;
-    let mut hot = false;
+    let mut hot = true;
     let mut options = RunOptions::default();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
@@ -1102,9 +1102,9 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                 println!("{START_USAGE}");
                 std::process::exit(0);
             }
-            "--hot" => {
+            "--no-hot" => {
                 reject_value(flag, value)?;
-                hot = true;
+                hot = false;
             }
             "--config" => config_path = Some(require_value(flag, value)?.to_string()),
             "--port" => {
