@@ -161,7 +161,7 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
                 // It is gone; there is nothing to stop. Hold here until
                 // something changes, so the watcher outlives the program.
                 match coalesce(&mut rx).await {
-                    Some(()) => true,
+                    Some(_) => true,
                     None => return Ok(()),
                 }
             }
@@ -185,9 +185,14 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
 
 /// Blocks until a change arrives, then swallows the burst that follows it.
 ///
+/// Returns **everything the burst carried**, in the order it arrived, because
+/// what changed decides what the page is told: a stylesheet can be swapped in
+/// place, and anything else is a reload. A caller that only needs to know
+/// *that* something changed can ignore the list.
+///
 /// `None` means the watcher is gone, which can only happen at shutdown.
-pub async fn coalesce(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
-    rx.recv().await?;
+pub async fn coalesce<T>(rx: &mut mpsc::UnboundedReceiver<T>) -> Option<Vec<T>> {
+    let mut burst = vec![rx.recv().await?];
     // The cap starts with the burst, not with each event in it, so a stream of
     // changes cannot push it back for ever.
     let hold_until = tokio::time::Instant::now() + MAX_HOLD;
@@ -198,11 +203,11 @@ pub async fn coalesce(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
         let quiet = tokio::time::timeout(SETTLE, rx.recv());
         match tokio::time::timeout_at(hold_until, quiet).await {
             // Another event: the save is still landing, so the lull restarts.
-            Ok(Ok(Some(()))) => {}
+            Ok(Ok(Some(change))) => burst.push(change),
             // A lull, or the watcher stopped — either way the burst is over.
-            Ok(Ok(None) | Err(_)) => return Some(()),
+            Ok(Ok(None) | Err(_)) => return Some(burst),
             // Still arriving, and the cap is up. Build what is there.
-            Err(_) => return Some(()),
+            Err(_) => return Some(burst),
         }
     }
 }
@@ -342,9 +347,10 @@ mod tests {
         }
 
         let started = std::time::Instant::now();
-        assert_eq!(coalesce(&mut rx).await, Some(()));
-        // One answer for the three, and the wait was the lull rather than a
-        // fixed delay per event.
+        let burst = coalesce(&mut rx).await.expect("a burst");
+        // One answer for the three, carrying all three, and the wait was the
+        // lull rather than a fixed delay per event.
+        assert_eq!(burst.len(), 3);
         assert!(rx.try_recv().is_err(), "events were left unclaimed");
         assert!(
             started.elapsed() < MAX_HOLD,
@@ -371,7 +377,7 @@ mod tests {
         });
 
         let started = std::time::Instant::now();
-        assert_eq!(coalesce(&mut rx).await, Some(()));
+        assert!(coalesce(&mut rx).await.is_some());
         let waited = started.elapsed();
         flood.abort();
 
@@ -390,7 +396,7 @@ mod tests {
     async fn a_dropped_watcher_ends_the_wait() {
         let (tx, mut rx) = mpsc::unbounded_channel::<()>();
         drop(tx);
-        assert_eq!(coalesce(&mut rx).await, None);
+        assert!(coalesce(&mut rx).await.is_none());
     }
 
     /// The loop this cost an afternoon: a child process *reading* the entry

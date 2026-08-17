@@ -74,6 +74,10 @@ pub const HMR_PATH: &str = "/@esdev/hmr";
 /// the module patch are new variants rather than a new protocol.
 #[derive(Clone, Copy, Debug)]
 pub enum Update {
+    /// Only stylesheets changed. The page keeps everything it has — scroll
+    /// position, an open dialog, whatever was typed into a form — and fetches
+    /// its stylesheets again.
+    Css,
     /// Nothing finer-grained is available: load the page again.
     Reload,
 }
@@ -86,6 +90,7 @@ impl Update {
     /// for that would be a dependency for a brace.
     fn as_message(self) -> String {
         match self {
+            Self::Css => "{\"type\":\"css\"}".to_string(),
             Self::Reload => "{\"type\":\"reload\"}".to_string(),
         }
     }

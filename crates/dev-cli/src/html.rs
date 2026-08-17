@@ -251,25 +251,44 @@ pub fn hashed_name(path: &Path, bytes: &[u8]) -> String {
 /// It is `esdev`'s endpoint rather than the application's, so no template ships
 /// dev-only code and nothing has to be stripped from it later.
 fn reload_client(port: u16) -> String {
-    // Reconnection is the whole of this, and it is why it is not one line.
-    // `EventSource`, which this used to be, retries on its own; a WebSocket does
-    // not, and a dev server that restarts is the *ordinary* case rather than the
-    // failure — so a page that gave up after the first drop would look broken
-    // for the rest of the session.
+    // Two things live in here, and both are worth the bytes.
     //
-    // Backoff, because the socket also fails while esdev is down and a tight
-    // retry would spin a core; capped, because a developer who fixes the thing
-    // and comes back should not then wait a minute for the page to notice.
+    // **Reconnection**, because `EventSource` used to provide it and a
+    // WebSocket does not, and a dev server being restarted is the ordinary case
+    // rather than a failure — a page that gave up after the first drop would
+    // look broken for the rest of the session. Backoff, because the socket also
+    // fails while esdev is down and a tight retry would spin a core; capped,
+    // because somebody who fixes the thing should not then wait a minute for the
+    // page to notice.
+    //
+    // **The stylesheet swap**, which is the whole point of a `css` update: the
+    // replacement is inserted and only then is the old one removed, on its
+    // `load`. Removing first would leave the document unstyled for a frame,
+    // which is a flash of white on every save — worse than the reload this is
+    // avoiding. The old link is also removed on `error`, or a stylesheet that
+    // 404s would leave two of them behind on every save until the page had a
+    // hundred.
     format!(
         "\n<script>\
          (function(){{\
          var wait=250;\
+         function css(){{\
+         var links=document.querySelectorAll('link[rel=\"stylesheet\"]');\
+         for(var i=0;i<links.length;i++){{(function(old){{\
+         var next=old.cloneNode();\
+         next.href=old.href.split('?')[0]+'?t='+Date.now();\
+         var drop=function(){{if(old.parentNode)old.parentNode.removeChild(old);}};\
+         next.onload=drop;next.onerror=drop;\
+         old.parentNode.insertBefore(next,old.nextSibling);\
+         }})(links[i]);}}\
+         }}\
          function open(){{\
          var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
          s.onopen=function(){{wait=250;}};\
          s.onmessage=function(e){{\
          var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
-         if(m.type===\"reload\")location.reload();\
+         if(m.type===\"css\")css();\
+         else if(m.type===\"reload\")location.reload();\
          }};\
          s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
          s.onerror=function(){{s.close();}};\

@@ -299,17 +299,22 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     let root = project.dir.clone();
     let ignored = output_dirs(&project);
     let scope = root.clone();
-    let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+    // The *paths*, not just the fact of a change: a stylesheet can be swapped
+    // into a running page and everything else has to reload it, and only the
+    // path says which this was.
+    let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
     // Held for the duration: dropping the watcher stops the thread behind it.
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
         if let Ok(event) = res
             && crate::watch::is_change(&event.kind)
-            && event
+        {
+            for path in event
                 .paths
                 .iter()
-                .any(|path| is_source(path, &scope, &ignored))
-        {
-            let _ = tx.send(());
+                .filter(|path| is_source(path, &scope, &ignored))
+            {
+                let _ = tx.send(path.clone());
+            }
         }
     })
     .map_err(|e| format!("cannot start the file watcher: {e}"))?;
@@ -404,7 +409,10 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 }
             }
         };
-        match woken {
+        // The paths come out of the match rather than being counted and thrown
+        // away: the loop's tail decides what to tell the page, and only what
+        // changed says whether a stylesheet swap will do.
+        let changed = match woken {
             Woken::Interrupted => {
                 if let Some(process) = &mut child {
                     crate::watch::stop(process, config.grace).await;
@@ -412,8 +420,8 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 return Ok(());
             }
             Woken::Exited => continue,
-            Woken::Changed => {}
-        }
+            Woken::Changed(paths) => paths,
+        };
 
         // What the server was reading, before the build replaces any of it.
         let before = output.as_deref().map(fingerprint);
@@ -452,24 +460,37 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // is still coming back gets a connection refused and stays blank. Sent
         // either way — the browser has new bundles to fetch whether or not the
         // server moved.
-        let _ = reload.send(Update::Reload);
+        //
+        // A restart makes the question moot: the process the page is talking to
+        // is a new one, so whatever it had is stale however narrow the edit was.
+        // `restarting` alone will not do — a project with no server of its own
+        // has no child, so it reads as "restarting" on every pass, and a
+        // stylesheet edit would reload the page it could have swapped.
+        let replaced_the_server = restarting && output.is_some();
+        let _ = reload.send(if replaced_the_server {
+            Update::Reload
+        } else {
+            update_for(&changed)
+        });
     }
 }
 
 /// Why the loop woke up.
 enum Woken {
-    /// A watched file changed.
-    Changed,
+    /// Watched files changed, and these are they — a stylesheet can be swapped
+    /// into the running page and anything else cannot, so the paths travel with
+    /// the wake rather than being counted and thrown away.
+    Changed(Vec<PathBuf>),
     /// The server exited on its own.
     Exited,
     /// ^C, or the watcher went away.
     Interrupted,
 }
 
-impl From<Option<()>> for Woken {
-    fn from(change: Option<()>) -> Self {
+impl From<Option<Vec<PathBuf>>> for Woken {
+    fn from(change: Option<Vec<PathBuf>>) -> Self {
         match change {
-            Some(()) => Self::Changed,
+            Some(changed) => Self::Changed(changed),
             None => Self::Interrupted,
         }
     }
@@ -547,8 +568,40 @@ async fn interrupt() {
 }
 
 /// Blocks until a change arrives, then swallows the burst that follows it.
-async fn wait_for_change(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
+async fn wait_for_change(rx: &mut mpsc::UnboundedReceiver<PathBuf>) -> Option<Vec<PathBuf>> {
     crate::watch::coalesce(rx).await
+}
+
+/// What to tell the page about a burst of changes.
+///
+/// **A stylesheet is the one thing that can be replaced in a page that is
+/// already running.** Its content is not addressed by anything the document
+/// holds — no component owns it, no state depends on it — so re-fetching it and
+/// swapping the `<link>` is indistinguishable from having built it that way,
+/// and it costs none of what a reload costs: scroll position, an open dialog,
+/// whatever was typed into a form.
+///
+/// Anything else is a reload, and mixtures are too. A burst containing a
+/// stylesheet *and* a component is a burst whose module graph moved, and
+/// swapping only the styles would leave a page half updated — which is worse
+/// than reloading, because it looks like it worked.
+fn update_for(changed: &[PathBuf]) -> Update {
+    if !changed.is_empty() && changed.iter().all(|path| is_stylesheet(path)) {
+        Update::Css
+    } else {
+        Update::Reload
+    }
+}
+
+/// Whether a path is a stylesheet, by extension.
+///
+/// `.module.css` counts: a CSS Module's class names are derived from its
+/// *path*, so editing its contents renames nothing and what comes out is the
+/// same stylesheet with different rules in it.
+fn is_stylesheet(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
 }
 
 /// Where the output that `start.run` names lands.
@@ -693,6 +746,60 @@ mod tests {
 
     fn flags(list: &[&str]) -> Vec<String> {
         list.iter().map(ToString::to_string).collect()
+    }
+
+    fn paths(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    /// A stylesheet is the one thing that can be replaced in a page that is
+    /// already running, so it is the one thing that does not cost a reload.
+    #[test]
+    fn a_stylesheet_only_burst_is_swapped_rather_than_reloaded() {
+        assert!(matches!(
+            update_for(&paths(&["styles/app.css"])),
+            Update::Css
+        ));
+        // Several, which is what an `@import` chain saved at once looks like.
+        assert!(matches!(
+            update_for(&paths(&["styles/app.css", "src/app/Callout.module.css"])),
+            Update::Css
+        ));
+        // A CSS Module counts: its class names come from its *path*, so editing
+        // its contents renames nothing and the output is the same stylesheet.
+        assert!(matches!(
+            update_for(&paths(&["src/app/Callout.module.css"])),
+            Update::Css
+        ));
+        assert!(matches!(
+            update_for(&paths(&["styles/APP.CSS"])),
+            Update::Css
+        ));
+    }
+
+    /// Anything else moved the module graph, and so did a burst that merely
+    /// *contained* something else — swapping only the styles there would leave
+    /// a page half updated, which is worse than reloading it, because it looks
+    /// like it worked.
+    #[test]
+    fn anything_but_a_stylesheet_reloads() {
+        assert!(matches!(
+            update_for(&paths(&["src/app/Home.tsx"])),
+            Update::Reload
+        ));
+        assert!(matches!(
+            update_for(&paths(&["index.html"])),
+            Update::Reload
+        ));
+        assert!(matches!(
+            update_for(&paths(&["styles/app.css", "src/app/Home.tsx"])),
+            Update::Reload
+        ));
+        // A file with no extension at all, which is not a stylesheet by any
+        // reading and must not be treated as one by an `unwrap_or(true)`.
+        assert!(matches!(update_for(&paths(&["Makefile"])), Update::Reload));
+        // And a wake carrying nothing is not an invitation to swap nothing.
+        assert!(matches!(update_for(&[]), Update::Reload));
     }
 
     /// The ordinary shape: one port granted, `PORT` readable, nothing holding

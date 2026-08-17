@@ -24,6 +24,26 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **A stylesheet edit no longer reloads the page.** `esdev start` now looks at
+  *what* changed: a burst of nothing but `.css` files sends `{"type":"css"}` and
+  the page re-fetches its stylesheets in place, keeping scroll position, an open
+  dialog, and whatever was typed into a form. Anything else still reloads.
+
+  The replacement `<link>` is inserted before the old one is removed, and the
+  old one goes on the new one's `load` — removing first would leave the document
+  unstyled for a frame, which is a flash of white on every save and worse than
+  the reload it replaces.
+
+  It is deliberately conservative. A burst containing a stylesheet *and* a
+  component reloads, because that burst moved the module graph and a page with
+  new styles over old components is half updated — which is worse than reloading,
+  since it looks like it worked. A restart of your server reloads for the same
+  reason: the process the page is talking to is a different one. `.module.css`
+  counts as a stylesheet, because a CSS Module's class names come from its path,
+  so editing its contents renames nothing.
+
 ### Changed
 
 - **The dev loop's reload channel is a WebSocket at `/@esdev/hmr`.** It was
