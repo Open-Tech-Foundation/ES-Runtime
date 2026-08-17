@@ -436,7 +436,7 @@ pub fn request_path(head: &str) -> Option<String> {
 
 /// The `Sec-WebSocket-Key` of an upgrade request, or `None` if this is an
 /// ordinary GET.
-fn websocket_key(head: &str) -> Option<String> {
+pub fn websocket_key(head: &str) -> Option<String> {
     let mut upgrading = false;
     let mut key = None;
     for line in head.lines().skip(1) {

@@ -375,7 +375,7 @@ PORTS
     nobody chose.
 
 RELOAD
-    Every built document gets a few lines that open an EventSource against
+    Every built document gets a few lines that open a WebSocket against
     esdev and reload when a build lands. It is esdev's endpoint rather than
     your application's, so nothing dev-only is in your source, and it is in the
     output only — the file you edit is never written to.

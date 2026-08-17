@@ -16,24 +16,80 @@
 //! no transform, no middleware — those would be a second, different way to run
 //! the app, which is what this design is arranged to avoid.
 //!
-//! # The reload stream
+//! # The update channel
 //!
-//! `GET /@esdev/reload` is an event stream that says `reload` after each
-//! successful rebuild. It is esdev's rather than the application's, so no
-//! template carries dev-only code, and it is CORS-open because the page it
-//! talks to is usually on the application's port rather than this one.
+//! `GET /@esdev/hmr` is a **WebSocket** carrying one message per successful
+//! rebuild. It is esdev's rather than the application's, so no template carries
+//! dev-only code, and it accepts any origin because the page it talks to is
+//! usually on the application's port rather than this one.
+//!
+//! ## Why a WebSocket and not the event stream it used to be
+//!
+//! Only one of these reasons is about today, and it is the weakest: what a
+//! rebuild has to say is `reload`, which fits in a line of `text/event-stream`
+//! perfectly well. The other two are about what this channel is being built to
+//! carry.
+//!
+//! **A hot update is a module's source**, which is multi-line JavaScript. SSE is
+//! a line protocol, so every patch would have to be JSON-escaped or split across
+//! `data:` lines — a re-encoding on the hot path, for ever, to fit a shape the
+//! payload does not have.
+//!
+//! **And SSE runs out of connections.** HTTP/1.1 caps a browser at roughly six
+//! per origin and a stream holds one open for as long as the page is; the
+//! seventh tab of your own app simply stops hot updating, with nothing anywhere
+//! saying why. A silent failure a developer would reasonably blame on their own
+//! code is not a thing to build a foundation on.
+//!
+//! What SSE gave up in exchange is real: `EventSource` reconnects on its own,
+//! and a dev server restarts constantly. That is bought back by hand, in the
+//! client below — the one part of this worth reading twice.
+//!
+//! The handshake and framing cost nothing here: `--inspect` already speaks
+//! WebSocket in its server role, in this binary, on this accept loop
+//! ([`crate::inspect`]).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use futures_util::{SinkExt, StreamExt};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
+use tokio_tungstenite::tungstenite::protocol::Role;
 
 use crate::inspect::{read_head, request_path, respond};
 
 /// The path the injected script connects to.
-pub const RELOAD_PATH: &str = "/@esdev/reload";
+pub const HMR_PATH: &str = "/@esdev/hmr";
+
+/// What the dev server tells a page after a build.
+///
+/// An enum with one variant today, and that is the point of it being an enum:
+/// the transport, the client's dispatch and the broadcast channel are all
+/// already shaped for a message that says *what* changed, so the CSS swap and
+/// the module patch are new variants rather than a new protocol.
+#[derive(Clone, Copy, Debug)]
+pub enum Update {
+    /// Nothing finer-grained is available: load the page again.
+    Reload,
+}
+
+impl Update {
+    /// The message as it goes over the wire.
+    ///
+    /// Written by hand rather than derived: it is two fields on the far side of
+    /// a socket from a `JSON.parse` in a string literal, and a serde dependency
+    /// for that would be a dependency for a brace.
+    fn as_message(self) -> String {
+        match self {
+            Self::Reload => "{\"type\":\"reload\"}".to_string(),
+        }
+    }
+}
 
 /// What the endpoint serves.
 pub struct DevServer {
@@ -41,7 +97,7 @@ pub struct DevServer {
     /// doing it.
     pub serve: Option<PathBuf>,
     /// Told after every successful rebuild.
-    pub reload: broadcast::Sender<()>,
+    pub reload: broadcast::Sender<Update>,
 }
 
 /// Accepts connections until the process ends.
@@ -71,8 +127,8 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
     // The query string belongs to the page, not to the file it names.
     let path = target.split(['?', '#']).next().unwrap_or("/").to_string();
 
-    if path == RELOAD_PATH {
-        stream_reloads(stream, server.reload.subscribe()).await;
+    if path == HMR_PATH {
+        updates(stream, &head, server.reload.subscribe()).await;
         return;
     }
     let Some(root) = &server.serve else {
@@ -89,30 +145,58 @@ async fn handle(mut stream: TcpStream, server: std::sync::Arc<DevServer>) {
 }
 
 /// Holds the connection open, writing an event per rebuild.
-async fn stream_reloads(mut stream: TcpStream, mut reload: broadcast::Receiver<()>) {
-    let head = "HTTP/1.1 200 OK\r\n\
-         Content-Type: text/event-stream\r\n\
-         Cache-Control: no-store\r\n\
-         Connection: keep-alive\r\n\
-         Access-Control-Allow-Origin: *\r\n\r\n";
-    if stream.write_all(head.as_bytes()).await.is_err() {
+async fn updates(mut stream: TcpStream, head: &str, mut reload: broadcast::Receiver<Update>) {
+    // Not an upgrade, so not this endpoint. Answered rather than dropped: this
+    // is the URL somebody reaches for when they want to know whether the dev
+    // server is up, and a closed connection tells them nothing.
+    let Some(key) = crate::inspect::websocket_key(head) else {
+        let _ = respond(
+            &mut stream,
+            "426 Upgrade Required",
+            "text/plain; charset=utf-8",
+            "esdev's update channel is a WebSocket.",
+        )
+        .await;
+        return;
+    };
+
+    let accept = derive_accept_key(key.as_bytes());
+    let handshake = format!(
+        "HTTP/1.1 101 Switching Protocols\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
+    if stream.write_all(handshake.as_bytes()).await.is_err() {
         return;
     }
+    let socket = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+    let (mut sink, mut incoming) = socket.split();
+
     loop {
-        match reload.recv().await {
-            Ok(()) => {
-                if stream.write_all(b"data: reload\n\n").await.is_err() {
+        tokio::select! {
+            update = reload.recv() => {
+                let message = match update {
+                    Ok(update) => update,
+                    // The page missed a rebuild, or several. Whatever they were,
+                    // the state it is in now is stale, and the answer that is
+                    // correct for every combination is to start over.
+                    Err(broadcast::error::RecvError::Lagged(_)) => Update::Reload,
+                    Err(broadcast::error::RecvError::Closed) => return,
+                };
+                if sink.send(Message::Text(message.as_message().into())).await.is_err() {
                     return;
                 }
             }
-            // Lagged: the page missed a rebuild or several, and the answer to
-            // every one of them is the same single word.
-            Err(broadcast::error::RecvError::Lagged(_)) => {
-                if stream.write_all(b"data: reload\n\n").await.is_err() {
-                    return;
-                }
-            }
-            Err(broadcast::error::RecvError::Closed) => return,
+            // Nothing is expected from the page — the ship map that decides what
+            // a patch contains is the server's own record, so a client has
+            // nothing to report. This arm exists because the socket has to be
+            // *polled* for its pong to be sent and for a close to be noticed,
+            // and a channel nobody reads is a connection that never ends.
+            frame = incoming.next() => match frame {
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
+                Some(Ok(_)) => {}
+            },
         }
     }
 }

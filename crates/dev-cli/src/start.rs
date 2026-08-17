@@ -65,7 +65,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::build::{BuildRequest, Dev, ProjectBuild};
 use crate::config::{Output, Project};
-use crate::devserver::{DevServer, RELOAD_PATH};
+use crate::devserver::{DevServer, HMR_PATH, Update};
 
 /// The port the endpoint binds when the config does not say.
 ///
@@ -332,8 +332,8 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
             paint.cyan(format_args!("http://127.0.0.1:{port}"))
         ),
         None => eprintln!(
-            "{tag} reload endpoint on {}",
-            paint.cyan(format_args!("http://127.0.0.1:{port}{RELOAD_PATH}"))
+            "{tag} update channel on {}",
+            paint.cyan(format_args!("ws://127.0.0.1:{port}{HMR_PATH}"))
         ),
     }
     eprintln!("{tag} watching {}", paint.dim(root.display()));
@@ -452,7 +452,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // is still coming back gets a connection refused and stays blank. Sent
         // either way — the browser has new bundles to fetch whether or not the
         // server moved.
-        let _ = reload.send(());
+        let _ = reload.send(Update::Reload);
     }
 }
 

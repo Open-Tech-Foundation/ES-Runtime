@@ -2963,12 +2963,13 @@ fn start_serves_a_frontend_project_and_reloads_it() {
         document.contains(r#"href="/assets/styles.css""#),
         "{document}"
     );
-    // The reload client is esdev's, and it is in the output only.
-    assert!(document.contains("EventSource"), "{document}");
+    // The update client is esdev's, and it is in the output only.
+    assert!(document.contains("WebSocket"), "{document}");
+    assert!(document.contains("/@esdev/hmr"), "{document}");
     assert!(
         !std::fs::read_to_string(dir.join("index.html"))
             .expect("read source")
-            .contains("EventSource"),
+            .contains("WebSocket"),
         "the source document was written to"
     );
 

@@ -243,21 +243,41 @@ pub fn hashed_name(path: &Path, bytes: &[u8]) -> String {
 /// The few lines that make a document reload itself, injected only by the dev
 /// loop.
 ///
-/// **Server-sent events, not a WebSocket.** All that has to cross is "it
-/// changed": one direction, one message, no protocol to speak. `EventSource`
-/// gets that with no handshake, and reconnects on its own by specification —
-/// which is the property that matters here, because the thing it is connected
-/// to is a build tool that the developer will restart. A WebSocket would need
-/// framing on this side and a reconnect loop on that one, to carry a string.
+/// **A WebSocket**, and it was server-sent events until the channel started
+/// being built to carry hot updates rather than the word "reload". Why it
+/// changed is [`crate::devserver`]'s to explain; what it costs is here, and it
+/// is the reconnect loop `EventSource` used to provide for free.
 ///
 /// It is `esdev`'s endpoint rather than the application's, so no template ships
 /// dev-only code and nothing has to be stripped from it later.
 fn reload_client(port: u16) -> String {
+    // Reconnection is the whole of this, and it is why it is not one line.
+    // `EventSource`, which this used to be, retries on its own; a WebSocket does
+    // not, and a dev server that restarts is the *ordinary* case rather than the
+    // failure — so a page that gave up after the first drop would look broken
+    // for the rest of the session.
+    //
+    // Backoff, because the socket also fails while esdev is down and a tight
+    // retry would spin a core; capped, because a developer who fixes the thing
+    // and comes back should not then wait a minute for the page to notice.
     format!(
         "\n<script>\
-         (new EventSource(\"http://127.0.0.1:{port}/@esdev/reload\"))\
-         .onmessage=()=>location.reload();\
-         </script>\n"
+         (function(){{\
+         var wait=250;\
+         function open(){{\
+         var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
+         s.onopen=function(){{wait=250;}};\
+         s.onmessage=function(e){{\
+         var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
+         if(m.type===\"reload\")location.reload();\
+         }};\
+         s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
+         s.onerror=function(){{s.close();}};\
+         }}\
+         open();\
+         }})();\
+         </script>\n",
+        path = crate::devserver::HMR_PATH
     )
 }
 

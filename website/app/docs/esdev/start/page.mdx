@@ -49,12 +49,23 @@ in a dev loop; it should cost you a message.
 The rebuild happens **before** anything is stopped, so the old server also
 answers *during* it.
 
-## Reload
+## The update channel
 
-Every built document gets a few lines that open an `EventSource` against esdev
-and reload when a build lands. It is esdev's endpoint, not your application's —
-nothing dev-only ends up in your source, and the file you edit is never written
-to.
+Every built document gets a few lines that open a `WebSocket` against
+`ws://127.0.0.1:<port>/@esdev/hmr` and act on what arrives. It is esdev's
+endpoint, not your application's — nothing dev-only ends up in your source, and
+the file you edit is never written to.
+
+Today one message crosses it, `{"type":"reload"}`, and the page reloads. It is a
+socket rather than the event stream it used to be because of what it is being
+built to carry: a hot update is a module's source, which is multi-line
+JavaScript that a line protocol would have to re-encode on every save — and an
+event stream runs out of connections at about six tabs of one origin, after
+which the seventh silently stops updating.
+
+What that cost is a reconnect loop, which `EventSource` used to provide for
+free. The injected client backs off from 250 ms to a 5 s ceiling, because a dev
+server being restarted is the ordinary case rather than a failure.
 
 The message is sent **after** the restart. A page told to reload while the
 server is still coming back gets a connection refused and stays blank.

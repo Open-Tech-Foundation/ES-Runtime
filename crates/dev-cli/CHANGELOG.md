@@ -26,6 +26,29 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **The dev loop's reload channel is a WebSocket at `/@esdev/hmr`.** It was
+  server-sent events at `/@esdev/reload`, which was the right shape for a channel
+  carrying one word and the wrong one for what it is being built to carry.
+
+  Two reasons, neither about today. A hot update is a **module's source** —
+  multi-line JavaScript — and SSE is a line protocol, so every patch would be
+  JSON-escaped or split across `data:` lines on the hot path for ever. And SSE
+  **runs out of connections**: HTTP/1.1 caps a browser at roughly six per origin
+  and a stream holds one open for as long as the page is, so the seventh tab of
+  your own app simply stops updating with nothing saying why.
+
+  The handshake and framing cost nothing here — `--inspect` already speaks
+  WebSocket in its server role, in this binary, on this accept loop. What it cost
+  is the reconnect loop `EventSource` provided for free: the injected client now
+  backs off from 250 ms to a 5 s ceiling, because a dev server being restarted is
+  the ordinary case rather than a failure.
+
+  The message is typed (`{"type":"reload"}`) rather than a bare word, so the CSS
+  swap and the module patch that follow are new variants rather than a new
+  protocol. A plain `GET` of the endpoint answers `426 Upgrade Required` rather
+  than hanging up, since that URL is what somebody reaches for to check whether
+  the dev server is alive.
+
 - **A save reaches the browser in 238 ms instead of 340 ms.** 120 ms of that
   cycle was `--watch`'s settle window — a fixed wait after every change, so that
   one editor save (a truncate, a write, sometimes a rename) became one rebuild
