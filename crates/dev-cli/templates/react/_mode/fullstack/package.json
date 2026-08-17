@@ -1,0 +1,24 @@
+{
+  "name": "{{name}}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "esdev start",
+    "build": "esdev build --minify",
+    "build:debug": "esdev build",
+    "start": "esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 --allow-signals=SIGTERM,SIGINT dist/server.js",
+    "test": "esdev test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-router": "^8.3.0"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "^0.1.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.0"
+  }
+}

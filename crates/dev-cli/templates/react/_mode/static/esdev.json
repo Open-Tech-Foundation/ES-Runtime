@@ -1,0 +1,16 @@
+{
+  "targets": {
+    "web": {
+      "entry": "index.html",
+      "outdir": "dist"
+    },
+    "prerender": {
+      "entry": "src/prerender.tsx",
+      "out": "dist/prerender.js",
+      "then": "run"
+    }
+  },
+  "start": {
+    "watch": ["web"]
+  }
+}

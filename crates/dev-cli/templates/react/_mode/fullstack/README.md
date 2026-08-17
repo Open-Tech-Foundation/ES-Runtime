@@ -1,15 +1,21 @@
 # {{name}}
 
-A React app on the ES Runtime: server-rendered, hydrated in the browser, and
-prerenderable to static HTML — one project, one build.
+A React app on the ES Runtime, with a server of its own: rendered per request,
+hydrated in the browser, and running under a named set of capabilities in
+development and in production alike.
 
 ```sh
 npm install
-npm run dev      # http://localhost:8080
+npm run dev      # the port it prints
 ```
 
 Swap `npm` for `bun`, `pnpm` or `yarn` throughout; nothing here depends on which
 you use.
+
+> No server needed — a site, a docs set, a marketing page, an app that talks to
+> an API somebody else runs? That is the other half of this template, and it
+> deploys to any static host:
+> `esdev create my-app --template=react --mode=static`.
 
 ## What is here
 
@@ -17,8 +23,7 @@ you use.
 | --- | --- |
 | `src/routes.tsx` | **The app in one file** — paths, loaders, components, page titles |
 | `src/server.tsx` | **What production runs** |
-| `src/render.tsx` | One render, streamed — shared by the server and the static build |
-| `src/prerender.tsx` | Writes every route to `dist/static/` |
+| `src/render.tsx` | One render, streamed |
 | `src/app/` | The components |
 | `src/http/` | Content types, security headers, escaping — the parts worth testing |
 | `src/data/` | Stands in for your database or API |
@@ -49,18 +54,23 @@ if (!post) throw new Response("Not Found", { status: 404 });
 That reaches the browser as a real 404, with your `ErrorBoundary` rendered into
 it — not a soft 404 that returns 200 and tells search engines the page exists.
 
-## The three ways to ship it
+## Shipping it
 
-One `npm run build` produces all three. Pick the one you want.
+```sh
+npm run build    # server bundle, browser bundle, hashed assets — all into dist/
+npm start        # or the esrun line below, anywhere you like
+```
 
-| | Deploy | Run |
-| --- | --- | --- |
-| **Server-rendered** | `dist/` | `esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 dist/server.js` |
-| **Static** | `dist/static/` | any static host |
-| **Single-page** | `dist/index.html` + `dist/assets/` | any static host, with a fallback to `index.html` |
+What you deploy is `dist/`, whole, and what runs it is:
 
-The client entry hydrates what the server rendered, or renders from scratch when
-it finds an empty root — which is what lets one bundle serve all three.
+```sh
+esrun --allow-read=./dist --allow-env=PORT --allow-listen=8080 \
+      --allow-signals=SIGTERM,SIGINT dist/server.js
+```
+
+That is the same command `npm start` runs and the same bundle `npm run dev` ran,
+so nothing about the deployment is a path this project has not already taken.
+`PORT` overrides the port; the grant has to name it too.
 
 ## Permissions
 
@@ -97,8 +107,8 @@ production is a grant nobody has tested.
 
 `styles/app.css` is linked from `index.html`. esdev resolves its `@import`s at
 build time into one hashed file, and follows `url()` so fonts and images travel
-with the stylesheet. `npm run build -- --minify` drops comments and collapses
-whitespace.
+with the stylesheet. `npm run build` minifies; `npm run build:debug` does not,
+if you want to read the output.
 
 Nesting and `color-mix()` are written as-is and shipped as-is — they are
 supported everywhere this targets, so nothing lowers them.
@@ -158,12 +168,10 @@ without waiting for the bundle.
 
 ## Types for `runtime:`
 
-Your editor will not know what `runtime:http` is until the definitions are
-installed. One command adds them and wires up `tsconfig.json`:
-
-```sh
-esdev --install-types
-```
+`@opentf/esrun-types` is already a dev dependency and already named in
+`tsconfig.json`, so `npm run typecheck` works on a fresh clone. If you ever need
+to re-wire it — a new tsconfig, a moved project — `esdev --install-types` does
+both halves again.
 
 Types are for your editor and `npm run typecheck`; `esdev` erases them and never
 checks them.
@@ -189,7 +197,8 @@ npm run dev
 ```
 
 Builds, runs `src/server.tsx`, and on every save rebuilds, restarts and reloads
-the page. A build that fails leaves the running server alone.
+the page. A build that fails leaves the running server alone. The port is chosen
+for you unless `PORT` says otherwise, so two of these can run side by side.
 
 It is a full page load, not hot module replacement — component state does not
 survive a save. Router state does, because it is in the URL.

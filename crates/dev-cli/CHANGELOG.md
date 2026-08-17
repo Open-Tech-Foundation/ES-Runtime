@@ -26,6 +26,46 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **The `react` template is one project again, not three.** It used to build a
+  server, a browser bundle *and* a prerendered site from every scaffold, and
+  leave you to work out which of the three you were shipping. It now comes in
+  two modes, asked at `esdev create` and settled once:
+
+  | `--mode=static` | `--mode=fullstack` |
+  | --- | --- |
+  | No server. `npm run build` prerenders every route to `dist/static/`; `npm run build:spa` builds the shell alone | A server of its own in `src/server.tsx`, rendered per request |
+  | Nothing to grant, because nothing runs in production | `read`/`env`/`listen`/`signals`, the same in development and production |
+  | Deploys to any static host | Deploys `dist/`, run under `esrun` |
+
+  SSG and SPA are both `static`, on purpose: which one a site wants is a
+  deployment decision that can change with the content, and both come out of the
+  same routes and components with no file edited. Which routes are prerendered is
+  `staticPaths()` in `src/paths.ts`; a route left out of it is rendered in the
+  browser instead, so a mostly-static site with a couple of client-only routes is
+  the same project with a shorter list.
+
+  Neither mode carries the other's files. A static project has no `src/server.tsx`
+  and no response-header module; a fullstack project has no prerender step. The
+  static build no longer runs in `esdev start` either — rendering every route on
+  every keystroke buys nothing when the components and loaders are the same ones
+  already on screen.
+
+  A template directory may now hold `_mode/<name>/`, and a scaffold is everything
+  outside it plus one mode's files with the prefix stripped; an overlay may add a
+  file or replace a shared one. `esdev create --list` names the modes and what
+  each one weighs.
+
+- **Every template's `npm run typecheck` works on a fresh scaffold.** They
+  declared the script but not the types it needs, so the first run reported a
+  dozen unresolved `runtime:*` imports until somebody found
+  `esdev --install-types` in the README. `@opentf/esrun-types` is now a dev
+  dependency and is already named in `tsconfig.json`'s `types`.
+
+- **Templates build minified.** `npm run build` passes `--minify`; the
+  unminified build is still there as `npm run build:debug` when you want to read
+  the output. What a starter's `build` script produces is what people deploy.
+
+
 - **`esdev create` asks with a menu you can arrow through.** The questions were
   a numbered list read off stdin, which made choosing a template an exercise in
   counting lines and typing a digit. They are now drawn with

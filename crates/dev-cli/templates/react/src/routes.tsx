@@ -111,16 +111,3 @@ export const routes: RouteObject[] = [
     ],
   },
 ];
-
-/**
- * Every path the prerender step can write as a file.
- *
- * A static build has to know its own URLs, and a route table with a `:slug` in
- * it does not: `posts/:slug` is a pattern, and only the data behind it says
- * which pages exist. So the expansion happens here, next to the table it
- * expands, rather than in the build script where it would drift.
- */
-export async function staticPaths(): Promise<string[]> {
-  const posts = await listPosts();
-  return ["/", "/posts", ...posts.map((post) => `/posts/${post.slug}`)];
-}

@@ -251,18 +251,22 @@ USAGE:
     esdev create <dir>          Write a new project into <dir>
     esdev create <dir> --template=<name>
                                 ...from a particular template
-    esdev create --list         List the templates
+    esdev create <dir> --template=<name> --mode=<name>
+                                ...in a particular shape, where one exists
+    esdev create --list         List the templates and their modes
     esdev create -h, --help     Show this help
 
 OPTIONS:
     --template=<name>           Which template (default: react)
+    --mode=<name>               Which shape of that template, where it has more
+                                than one: react is static or fullstack
     --force                     Write into a directory that already holds
                                 something. It still never replaces a file
     --install[=<manager>]       Install dependencies after writing: npm, bun,
                                 pnpm or yarn (default npm)
     --no-install                Write the files and stop
     -y, --yes                   Take every default; never ask
-    --list                      List the templates and exit
+    --list                      List the templates and their modes, and exit
 
 WHAT YOU GET
     A project with its esdev.json written, its entry named by the script tag in
@@ -273,8 +277,22 @@ WHAT YOU GET
     The templates are baked into this binary, so `create` works offline and
     always writes a project this esdev can build.
 
+MODES
+    Some templates are two projects wearing one name, and scaffolding the union
+    of them leaves you deleting half. `react` is one:
+
+        --mode=static       No server. Prerendered HTML (npm run build) or a
+                            single-page app (npm run build:spa), on any static
+                            host. Nothing to grant, because nothing runs.
+        --mode=fullstack    A server of its own, rendered per request, under the
+                            capabilities esdev.json names.
+
+    Which one is a deployment decision, so it is asked once, here, and the
+    project you get is only that one.
+
 ASKING
-    On a terminal it asks which template and whether to install. Everywhere
+    On a terminal it asks which template, which mode if that template has more
+    than one, and whether to install. Everywhere
     else — a pipe, a CI job, anything with CI set — it takes the defaults and
     says nothing, because a prompt in a script is a script that hangs.
 
@@ -968,6 +986,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     // `None` means "not said", which on a terminal becomes a question and
     // away from one becomes the default. A flag is always an answer.
     let mut template: Option<String> = None;
+    let mut mode: Option<String> = None;
     let mut install: Option<Option<String>> = None;
     let mut force = false;
     for arg in args {
@@ -984,6 +1003,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
                 std::process::exit(0);
             }
             "--template" => template = Some(require_value(flag, value)?.to_string()),
+            "--mode" => mode = Some(require_value(flag, value)?.to_string()),
             // `--install` alone means "with npm"; `--install=bun` names one.
             "--install" => {
                 install = Some(Some(value.unwrap_or(create::DEFAULT_MANAGER).to_string()));
@@ -997,6 +1017,10 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
             "-y" | "--yes" => {
                 reject_value(flag, value)?;
                 template.get_or_insert_with(|| DEFAULT_TEMPLATE.to_string());
+                // Left as `None` on purpose: the default *mode* depends on
+                // which template this turned out to be, and only `create` knows
+                // that. What `--yes` promises is that nothing is asked, and an
+                // unsaid mode away from a prompt is already the default.
                 install.get_or_insert(None);
             }
             "--force" => {
@@ -1021,6 +1045,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
     Ok(CreateConfig {
         dir: dirs.remove(0),
         template,
+        mode,
         force,
         install,
     })

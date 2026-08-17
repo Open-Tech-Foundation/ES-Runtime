@@ -14,7 +14,7 @@ import { join } from "runtime:path";
 
 import { here } from "./document.ts";
 import { render } from "./render.tsx";
-import { staticPaths } from "./routes.tsx";
+import { staticPaths } from "./paths.ts";
 
 /**
  * Written beside the server build rather than over it.

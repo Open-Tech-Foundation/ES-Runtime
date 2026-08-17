@@ -11,14 +11,31 @@
 //! # It asks, or it writes files and stops
 //!
 //! Which of those depends on whether anybody is there. On a terminal it asks
-//! two questions — which template, and whether to install — and away from one
-//! it writes the files and says nothing, because every other command here is a
-//! flag grammar that works unattended and `create` stays one whenever it cannot
-//! see a person ([`crate::prompt::interactive`]).
+//! up to three questions — which template, which *mode* if that template has
+//! more than one shape, and whether to install — and away from one it writes
+//! the files and says nothing, because every other command here is a flag
+//! grammar that works unattended and `create` stays one whenever it cannot see
+//! a person ([`crate::prompt::interactive`]).
 //!
 //! **Everything a prompt asks has a flag**, so the interactive path is a
 //! convenience over the scriptable one and never the only way to an answer.
 //! `--template=api --install=bun` is the same run with nothing to type.
+//!
+//! # A template can have modes
+//!
+//! Some stacks are two projects wearing one name. `react` is: an app with a
+//! server of its own is not the same project as a site that deploys to a static
+//! host — different files, different `esdev.json`, a different set of
+//! capabilities, and in one case none at all. Scaffolding the union of them and
+//! leaving the user to delete half is how a starter ends up shipping a server
+//! nobody runs and a permission nobody needs.
+//!
+//! So a template directory may hold `_mode/<name>/`, and what gets written is
+//! everything outside `_mode/` plus one mode's files with that prefix stripped.
+//! A mode may add files the shared part does not have (`src/server.tsx`), and
+//! may replace one it does (`package.json`, `esdev.json`, `README.md`) — the
+//! overlay wins, because that is what makes a mode able to say something
+//! different about the same project.
 //!
 //! D64 refused to install at all, and the reason it gave was exact: there is no
 //! lockfile yet to say which package manager this project uses, and guessing
@@ -51,7 +68,7 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "react",
-        "React + react-router — server-rendered, hydrated, prerenderable to static HTML",
+        "React + react-router — a static site, or an app with a server of its own",
     ),
     (
         "lib",
@@ -62,6 +79,78 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
         "TypeScript and the DOM — no framework, no dependencies",
     ),
 ];
+
+/// Where a template keeps the files that belong to one mode and not the others.
+///
+/// A directory rather than a naming convention on each file, so a mode is
+/// something you can read by listing one directory — and so adding a file to a
+/// mode is putting it where the others are rather than remembering a suffix.
+const MODE_PREFIX: &str = "_mode/";
+
+/// The templates that come in more than one shape, and what the shapes are.
+///
+/// The first mode listed is the default: what `--mode` unsaid resolves to away
+/// from a terminal, and what the menu starts on when there is one. `static` is
+/// first for `react` deliberately — it is the one with nothing to deploy but
+/// files, so it is the smaller thing to be handed when nobody expressed a
+/// preference.
+const MODES: &[(&str, &[(&str, &str)])] = &[(
+    "react",
+    &[
+        (
+            "static",
+            "No server — prerendered HTML or a single-page app, on any static host",
+        ),
+        (
+            "fullstack",
+            "A server of its own — rendered per request, under named capabilities",
+        ),
+    ],
+)];
+
+/// The modes a template has, or `None` when it has one shape.
+fn modes(template: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    MODES
+        .iter()
+        .find(|(name, _)| *name == template)
+        .map(|(_, modes)| *modes)
+}
+
+/// The mode taken when nothing said and nobody was asked.
+fn default_mode(template: &str) -> Option<&'static str> {
+    modes(template)
+        .and_then(|modes| modes.first())
+        .map(|(name, _)| *name)
+}
+
+/// The files one mode of a template is written from.
+///
+/// Everything outside `_mode/`, plus the chosen mode's files with the prefix
+/// stripped. The overlay is applied second and wins, so a mode can replace a
+/// shared file as well as add one.
+fn files_for<'a>(files: &'a [TemplateFile], mode: Option<&str>) -> Vec<(String, &'a [u8])> {
+    let overlay = mode.map(|mode| format!("{MODE_PREFIX}{mode}/"));
+    let mut written: Vec<(String, &[u8])> = Vec::new();
+
+    for (path, contents) in files {
+        let path = match path.strip_prefix(MODE_PREFIX) {
+            // A mode's file, for whichever mode. It is written only if it is
+            // this one's, and then under the path it has inside the mode.
+            Some(_) => match overlay.as_ref().and_then(|p| path.strip_prefix(p.as_str())) {
+                Some(within) => within.to_string(),
+                None => continue,
+            },
+            None => (*path).to_string(),
+        };
+        match written.iter_mut().find(|(existing, _)| *existing == path) {
+            Some(entry) => entry.1 = contents,
+            None => written.push((path, contents)),
+        }
+    }
+
+    written.sort_by(|a, b| a.0.cmp(&b.0));
+    written
+}
 
 /// A file whose name in the template is not the name it is written under.
 ///
@@ -78,6 +167,9 @@ pub struct CreateConfig {
     pub dir: String,
     /// Which template, or `None` to ask (or take the default).
     pub template: Option<String>,
+    /// Which mode of that template, or `None` to ask (or take the default).
+    /// Meaningless — and refused — for a template that has only one shape.
+    pub mode: Option<String>,
     /// Whether to write into a directory that already holds something.
     pub force: bool,
     /// Which package manager to install with, `Some(None)` for an explicit
@@ -116,6 +208,15 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
         .map(|(_, files)| *files)
         .ok_or_else(|| format!("there is no {template} template.\n\n{}", list().trim_end()))?;
 
+    // After the template, because which modes exist depends on which template
+    // it is — and still before anything is written, for the same reason.
+    let mode = match resolve_mode(&template, config.mode.as_deref())? {
+        Mode::Chosen(mode) => Some(mode),
+        Mode::None => None,
+        Mode::Cancelled => return Ok(String::new()),
+    };
+    let files = files_for(files, mode.as_deref());
+
     let target = PathBuf::from(&config.dir);
     if target.is_file() {
         return Err(format!(
@@ -139,11 +240,11 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     let name = package_name(&target);
     let mut written = 0usize;
     let mut skipped = Vec::new();
-    for (path, contents) in files {
+    for (path, contents) in &files {
         let path = RENAMED
             .iter()
             .find(|(from, _)| from == path)
-            .map_or(*path, |(_, to)| *to);
+            .map_or(path.as_str(), |(_, to)| *to);
         let destination = target.join(path);
         if destination.exists() {
             skipped.push(path.to_string());
@@ -161,14 +262,21 @@ pub fn create(config: &CreateConfig) -> Result<String, String> {
     // holds the whole project is a no-op somebody asked for — but reporting it
     // as "created" would be a lie about a command whose entire job is to write
     // files.
+    // The mode is part of the template's name in every message, because
+    // "the react template" is two different projects and a report that does not
+    // say which one is a report that cannot be checked.
+    let named = match &mode {
+        Some(mode) => format!("{template} ({mode})"),
+        None => template.clone(),
+    };
     if written == 0 {
         return Ok(format!(
-            "nothing to write: {} already holds every file the {template} template has.\n",
+            "nothing to write: {} already holds every file the {named} template has.\n",
             config.dir
         ));
     }
     let mut report = format!(
-        "created {} from the {template} template ({written} file{})\n",
+        "created {} from the {named} template ({written} file{})\n",
         config.dir,
         if written == 1 { "" } else { "s" },
     );
@@ -234,6 +342,84 @@ fn next_steps(dir: &str, template: &str, installed: Option<crate::install::Manag
     }
     steps.push_str(&format!("  {manager} run {run}\n"));
     steps
+}
+
+/// What resolving `--mode` came to.
+enum Mode {
+    /// This template has modes, and this is the one.
+    Chosen(String),
+    /// This template has one shape.
+    None,
+    /// Esc at the question.
+    Cancelled,
+}
+
+/// The mode to write, from the flag, a question, or the default.
+///
+/// Naming a mode for a template that has none is refused rather than ignored: a
+/// flag that silently does nothing is one somebody will keep passing, and keep
+/// believing.
+fn resolve_mode(template: &str, asked_for: Option<&str>) -> Result<Mode, String> {
+    let Some(modes) = modes(template) else {
+        return match asked_for {
+            Some(mode) => Err(format!(
+                "the {template} template has no modes, so --mode={mode} means nothing here.\n\n\
+                 Modes exist where one template is really two projects; {}.",
+                what_has_modes()
+            )),
+            None => Ok(Mode::None),
+        };
+    };
+
+    if let Some(mode) = asked_for {
+        if !modes.iter().any(|(name, _)| *name == mode) {
+            return Err(format!(
+                "the {template} template has no {mode} mode.\n\n{}",
+                describe_modes(template).trim_end()
+            ));
+        }
+        return Ok(Mode::Chosen(mode.to_string()));
+    }
+
+    if !crate::prompt::interactive() {
+        return Ok(Mode::Chosen(
+            default_mode(template)
+                .expect("a template with modes has a default")
+                .to_string(),
+        ));
+    }
+
+    let choices: Vec<crate::prompt::Choice<'_>> = modes
+        .iter()
+        .map(|(name, description)| crate::prompt::Choice { name, description })
+        .collect();
+    match crate::prompt::select("Which mode?", &choices, 0) {
+        Some(chosen) => Ok(Mode::Chosen(choices[chosen].name.to_string())),
+        None => Ok(Mode::Cancelled),
+    }
+}
+
+/// The templates that have modes, for an error message that has to name them.
+fn what_has_modes() -> String {
+    let names: Vec<&str> = MODES.iter().map(|(name, _)| *name).collect();
+    match names.as_slice() {
+        [] => "no template here has any".to_string(),
+        [one] => format!("only {one} does"),
+        many => format!("{} do", many.join(", ")),
+    }
+}
+
+/// One template's modes, as a list somebody can choose from.
+fn describe_modes(template: &str) -> String {
+    let Some(modes) = modes(template) else {
+        return String::new();
+    };
+    let width = modes.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+    let mut report = format!("Modes of {template}:\n");
+    for (name, description) in modes {
+        report.push_str(&format!("  {name:<width$}  {description}\n"));
+    }
+    report
 }
 
 /// Which template, asked on a terminal.
@@ -340,10 +526,26 @@ pub fn list() -> String {
             .iter()
             .find(|(template, _)| template == name)
             .map_or("", |(_, description)| *description);
-        report.push_str(&format!(
-            "  {name:<10} {description} ({} files)\n",
-            files.len()
-        ));
+
+        // A template with modes has no single file count — the modes have one
+        // each — so it names them instead, on the lines under it.
+        match modes(name) {
+            None => report.push_str(&format!(
+                "  {name:<10} {description} ({} files)\n",
+                files.len()
+            )),
+            Some(modes) => {
+                report.push_str(&format!("  {name:<10} {description}\n"));
+                for (mode, mode_description) in modes {
+                    let count = files_for(files, Some(mode)).len();
+                    let flag = format!("--mode={mode}");
+                    report.push_str(&format!(
+                        "  {:<10}   {flag:<18} {mode_description} ({count} files)\n",
+                        ""
+                    ));
+                }
+            }
+        }
     }
     report
 }
@@ -352,30 +554,123 @@ pub fn list() -> String {
 mod tests {
     use super::*;
 
+    /// The files of one template in one mode, as `create` would write them.
+    fn resolved(template: &str, mode: Option<&str>) -> Vec<String> {
+        let (_, files) = TEMPLATES
+            .iter()
+            .find(|(name, _)| *name == template)
+            .expect("the template is embedded");
+        files_for(files, mode)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+
     /// The point of the build script: a template that is not in the binary is
     /// a `create` that cannot work, and nothing else would notice.
     #[test]
     fn the_templates_are_in_the_binary() {
-        let (name, files) = TEMPLATES
-            .iter()
-            .find(|(name, _)| *name == DEFAULT_TEMPLATE)
-            .expect("the default template is embedded");
-        assert_eq!(*name, "react");
+        assert_eq!(DEFAULT_TEMPLATE, "react");
+        let paths = resolved(DEFAULT_TEMPLATE, default_mode(DEFAULT_TEMPLATE));
 
         for expected in [
             "package.json",
             "esdev.json",
             "index.html",
-            "src/server.tsx",
+            "src/routes.tsx",
             "src/entry.client.tsx",
             "_gitignore",
         ] {
             assert!(
-                files.iter().any(|(path, _)| *path == expected),
-                "{expected} is not in the template: {:?}",
-                files.iter().map(|(path, _)| *path).collect::<Vec<_>>()
+                paths.iter().any(|path| path == expected),
+                "{expected} is not in the template: {paths:?}"
             );
         }
+    }
+
+    /// The whole point of a mode: what you get is one project, not the union of
+    /// two with the other half left for you to delete.
+    #[test]
+    fn a_mode_writes_its_own_files_and_not_the_others() {
+        let statik = resolved("react", Some("static"));
+        let full = resolved("react", Some("fullstack"));
+
+        assert!(statik.contains(&"src/prerender.tsx".to_string()));
+        assert!(statik.contains(&"src/paths.ts".to_string()));
+        assert!(
+            !statik.iter().any(|path| path == "src/server.tsx"),
+            "a static project has no server: {statik:?}"
+        );
+        assert!(
+            !statik
+                .iter()
+                .any(|path| path.starts_with("src/http/headers")),
+            "a static project sets no response headers: {statik:?}"
+        );
+
+        assert!(full.contains(&"src/server.tsx".to_string()));
+        assert!(full.contains(&"src/http/headers.ts".to_string()));
+        assert!(
+            !full.iter().any(|path| path == "src/prerender.tsx"),
+            "a fullstack project renders per request, so it prerenders nothing: {full:?}"
+        );
+
+        // The shared half really is shared, rather than duplicated per mode.
+        for both in ["src/routes.tsx", "index.html", "styles/app.css"] {
+            assert!(statik.contains(&both.to_string()) && full.contains(&both.to_string()));
+        }
+    }
+
+    /// A mode replaces a shared file rather than being written beside it —
+    /// otherwise the two esdev.json files would race and one would win by sort
+    /// order.
+    #[test]
+    fn a_mode_writes_each_path_once() {
+        for mode in ["static", "fullstack"] {
+            let paths = resolved("react", Some(mode));
+            let mut sorted = paths.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(
+                sorted.len(),
+                paths.len(),
+                "{mode} writes a path twice: {paths:?}"
+            );
+            // And no overlay path escapes with its prefix still on it.
+            assert!(
+                !paths.iter().any(|path| path.starts_with(MODE_PREFIX)),
+                "{mode} leaked a _mode/ path: {paths:?}"
+            );
+        }
+    }
+
+    /// Every mode must produce a project, which starts with the two files that
+    /// say what it is and how to build it.
+    #[test]
+    fn every_mode_of_every_template_is_a_whole_project() {
+        for (template, modes) in MODES {
+            for (mode, _) in *modes {
+                let paths = resolved(template, Some(mode));
+                for required in ["package.json", "esdev.json", "README.md"] {
+                    assert!(
+                        paths.iter().any(|path| path == required),
+                        "{template} ({mode}) has no {required}: {paths:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Naming a mode a template does not have is refused rather than ignored.
+    #[test]
+    fn a_mode_that_is_not_one_is_refused() {
+        assert!(resolve_mode("react", Some("ssr")).is_err());
+        assert!(resolve_mode("api", Some("static")).is_err());
+        assert!(matches!(
+            resolve_mode("react", Some("static")),
+            Ok(Mode::Chosen(mode)) if mode == "static"
+        ));
+        assert!(matches!(resolve_mode("api", None), Ok(Mode::None)));
     }
 
     /// What a *running* template leaves behind is not the template. Embedding
