@@ -94,13 +94,6 @@ pub struct Start {
     /// output itself, it is esdev's listener. Either way it is the address a
     /// developer types, which is why it has the plain name.
     pub port: Option<u16>,
-    /// The port esdev's own endpoint binds when the application has one of its
-    /// own — the reload stream, and nothing else. Loopback, always.
-    ///
-    /// Rarely set: nobody types this address, so its default of "5173, or any
-    /// free port" is almost always right. It exists for a test or a firewall
-    /// that needs it fixed.
-    pub reload_port: Option<u16>,
 }
 
 /// One thing a project builds.
@@ -200,7 +193,7 @@ const TOP_LEVEL_KEYS: &[&str] = &["$schema", "targets", "start", "permissions"];
 /// command that uses it has not been written yet is deliberate: a typo in
 /// `start` should be reported by the build that read the file, not held until
 /// the day somebody runs the other command.
-const START_KEYS: &[&str] = &["run", "watch", "serve", "port", "reloadPort"];
+const START_KEYS: &[&str] = &["run", "watch", "serve", "port"];
 
 /// Loads the project config: the one `--config` named, or `./esdev.json`.
 ///
@@ -478,13 +471,11 @@ fn read_start(value: &Value, targets: &[Target], file: &str) -> Result<Start, St
         Some(serve) => Some(string(serve, file, "`start`'s `serve`")?.to_string()),
     };
     let port = read_port(map, "port", file)?;
-    let reload_port = read_port(map, "reloadPort", file)?;
     Ok(Start {
         run,
         watch,
         serve,
         port,
-        reload_port,
     })
 }
 

@@ -70,9 +70,10 @@ is the point, since none of the three has any business in a deployment.
   port your `listen` grant names, or a free one if that is busy, and prints what
   it settled on. The child is handed it as `PORT`.
 
-  esdev's endpoint keeps `--reload-port` / `"reloadPort"`, for a test or a
-  firewall that needs it fixed. Unset it takes 5173 or any free port silently,
-  because on a fullstack project nobody reads that address.
+  esdev's own endpoint on a fullstack project is no longer a port you deal with:
+  it carries one message to the page, the build writes its address into the page,
+  and it takes a free one. There is no flag for it, because there is nobody to
+  type one.
 
   A port is moved only for a project that says enough for the move to be safe,
   and both halves are grants that were already being written: `"listen":
@@ -83,8 +84,8 @@ is the point, since none of the three has any business in a deployment.
   runs under the deployment's grant.
 
   **Breaking:** `--port` and `"start": { "port": … }` mean the application's port
-  now for a project with a `run` target. If you were pinning esdev's endpoint,
-  rename it to `--reload-port` / `"reloadPort"`.
+  now for a project with a `run` target. Pinning esdev's endpoint is gone; it
+  always takes a free one.
 
 ### Changed
 

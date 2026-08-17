@@ -322,10 +322,6 @@ OPTIONS:
                                 it: your `listen` grant's port, or 5173 for a
                                 frontend project, and any free port if that is
                                 taken — the one it took is printed
-    --reload-port=<n>           The port esdev's own endpoint binds when your
-                                project runs a server of its own. Nobody types
-                                this address; set it only if something needs it
-                                fixed. Loopback only
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
@@ -354,11 +350,14 @@ THE SERVER IS YOURS
     index.html fallback for client-side routes, and nothing else.
 
 PORTS
-    --port is the port you open. When your project runs a server of its own
-    that is your server's; esdev's own endpoint is plumbing -- it carries one
-    message to the page, nobody types its address, and it takes a free port
-    quietly. A frontend project has no such server, so there esdev is what you
-    open and --port is its listener.
+    There is one, and it is the one you open. When your project runs a server
+    of its own that is your server's port; when it does not -- a static site, a
+    single-page app -- esdev is what you open, so it is esdev's.
+
+    esdev's own endpoint on a fullstack project is not a port you deal with. It
+    carries one message to the page, the build writes its address into the page,
+    and it takes a free one. There is no flag for it because there is nobody to
+    type one.
 
     Either way the rule is the same: one you named is a promise and fails if it
     is taken, one you did not is a convenience and moves out of the way,
@@ -1084,7 +1083,6 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
     let mut port: Option<u16> = None;
-    let mut reload_port: Option<u16> = None;
     let mut options = RunOptions::default();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
@@ -1105,12 +1103,6 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                         format!("--port={given} is not a port number (1 to 65535).")
                     })?);
             }
-            "--reload-port" => {
-                let given = require_value(flag, value)?;
-                reload_port = Some(given.parse::<u16>().map_err(|_| {
-                    format!("--reload-port={given} is not a port number (1 to 65535).")
-                })?);
-            }
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
         }
     }
@@ -1127,9 +1119,6 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     // A flag beats the file, the same way it does for a build.
     if let Some(port) = port {
         project.start.port = Some(port);
-    }
-    if let Some(port) = reload_port {
-        project.start.reload_port = Some(port);
     }
     Ok(StartConfig {
         project,

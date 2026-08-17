@@ -3006,7 +3006,6 @@ fn start_serves_a_frontend_project_and_reloads_it() {
 #[test]
 fn a_browser_only_change_reloads_without_restarting_the_server() {
     let dir = watch_dir("s_norestart");
-    let port = test_port("s_norestart");
     let served = test_port("s_norestart_app");
     std::fs::create_dir_all(dir.join("src")).expect("create src");
     // The nonce is created once, when the module is evaluated. A restart is the
@@ -3035,7 +3034,7 @@ fn a_browser_only_change_reloads_without_restarting_the_server() {
             r#"{{ "targets": {{
                    "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }},
                    "web": {{ "entry": "index.html", "outdir": "dist" }} }},
-                 "start": {{ "run": "server", "reloadPort": {port} }},
+                 "start": {{ "run": "server" }},
                  "permissions": {{ "deny": ["all"], "allow": {{ "listen": ["{served}"] }} }} }}"#
         ),
     );
@@ -3111,7 +3110,6 @@ fn nonce_of(response: &str) -> String {
 #[test]
 fn a_failed_build_leaves_the_running_server_alone() {
     let dir = watch_dir("s_broken");
-    let port = test_port("s_broken");
     let served = test_port("s_broken_app");
     std::fs::create_dir_all(dir.join("src")).expect("create src");
     write_in(
@@ -3127,7 +3125,7 @@ fn a_failed_build_leaves_the_running_server_alone() {
         "esdev.json",
         &format!(
             r#"{{ "targets": {{ "server": {{ "entry": "src/server.mjs", "out": "dist/server.js" }} }},
-                 "start": {{ "run": "server", "reloadPort": {port} }},
+                 "start": {{ "run": "server" }},
                  "permissions": {{ "deny": ["all"], "allow": {{ "listen": ["{served}"] }} }} }}"#
         ),
     );

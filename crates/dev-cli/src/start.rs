@@ -274,7 +274,11 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // top rather than after a build the developer then has to watch happen
     // again.
     let (listener, port) = bind(if opens_its_own {
-        project.start.reload_port
+        // Nothing to pin it to and nothing asking for one. On a project with a
+        // server of its own this endpoint carries one message to the page, its
+        // address is written into the page by the build, and no human ever types
+        // it — so it takes a free port and says nothing about which.
+        None
     } else {
         project.start.port
     })?;

@@ -70,7 +70,6 @@ server is still coming back gets a connection refused and stays blank.
 | | |
 | --- | --- |
 | `--port=<n>` | The port you open |
-| `--reload-port=<n>` | esdev's own endpoint, when your project runs a server (**loopback only**) |
 | `--config=<path>` | Read this instead of `./esdev.json` |
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
 
@@ -82,22 +81,20 @@ server is still coming back gets a connection refused and stays blank.
 what you want at 40 ms a build. `serve` overrides the directory served when
 there is no `run`.
 
-## Ports
+## The port
 
-There are two, and only one of them is yours to think about.
+There is one, and it is the one you open. When your project runs a server of its
+own that is *your server's* port; when it does not — a static site, a single-page
+app — esdev is what you open, so it is esdev's.
 
-**`--port` is the port you open.** When your project runs a server of its own
-that is *your server's* port. When it does not — a static site, a single-page
-app — esdev is what you open, so it is esdev's listener. Either way it is the
-address you type, which is why it has the plain name.
+**One you named is a promise** and fails if it is taken. **One you did not is a
+convenience** — it takes the port your `listen` grant names, or a free one if
+that is busy, and prints where it went.
 
-esdev's own endpoint on a fullstack project is plumbing: it carries one message
-to the page, nobody types its address, and it takes 5173 or any free port
-quietly. `--reload-port` pins it, for a test or a firewall that needs it fixed.
-
-Both follow the same rule: **one you named is a promise and fails if it is
-taken; one you did not is a convenience and moves out of the way**, printing
-what it took.
+esdev's own endpoint on a fullstack project is not a port you deal with. It
+carries one message to the page, the build writes its address into the page, and
+it takes a free one. There is no flag for it because there is nobody to type
+one.
 
 ```
 esdev: 8080 was taken; use --port to pin one
