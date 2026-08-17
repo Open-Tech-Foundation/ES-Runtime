@@ -26,6 +26,26 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **Two projects can be in development at once.** `esdev start --port` moved
+  esdev's own endpoint out of the way when it was busy, but the *application's*
+  port never moved: both projects ran their server on whatever `esdev.json`
+  granted — 8080, because that is what the template came with — and the second
+  one died on a bound address.
+
+  The application's port now follows the same rule the endpoint does.
+  `--app-port=3000` is a promise and fails if something holds it; an unnamed port
+  takes the one the project's `listen` grant names, or a free one if that is
+  busy, and prints what it settled on. The port is handed to the child as `PORT`.
+
+  It moves a port only for a project that says enough to be moved safely, and
+  both halves are grants that were already being written: `"listen": ["8080"]`,
+  one port and no more, so there is a port to move; and `"env": ["PORT"]`, so
+  the server can be told which one it got. Anything shaped differently is left
+  exactly as it was. The rewritten grant is the same capability with a different
+  number and never a wider one, so development still runs under the deployment's
+  grant.
+
+
 - **`HEAD` no longer hangs the react template's server.** The router accepted
   `HEAD` alongside `GET` and then answered it with a streamed body, so the
   status and headers arrived and the connection sat there waiting for bytes that

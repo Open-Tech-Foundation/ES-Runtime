@@ -35,6 +35,19 @@
 //! the most ordinary event in a dev loop, and the right response to it is a
 //! message and the server you already had — not a dead port and a browser that
 //! cannot load the page that would tell you what you broke.
+//!
+//! # Two ports, and neither of them fights for one
+//!
+//! There are two: esdev's own endpoint ([`bind`]) and the port the application
+//! binds ([`app_port`]). They are separate things and are settled separately —
+//! `--port` is the endpoint's, `--app-port` is the application's — but they
+//! follow the same rule, which is that **a port that was named is a promise and
+//! a port that was not is a convenience.**
+//!
+//! Before this, only the endpoint moved. Two projects open in two terminals both
+//! ran their server on whatever `esdev.json` granted, so the second one died on
+//! a bound port — on a number the developer had not chosen and had no reason to
+//! be thinking about.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -91,10 +104,142 @@ fn bind(wanted: Option<u16>) -> Result<(std::net::TcpListener, u16), String> {
     Ok((listener, port))
 }
 
+/// The grant a project's application port is written as.
+const LISTEN: &str = "--allow-listen=";
+
+/// Where the application's own server listens in development, and the grant
+/// that lets it.
+#[derive(Debug)]
+struct AppPort {
+    /// The port, handed to the child as `PORT`.
+    port: u16,
+    /// The port the project asked for, when it is not the one it got.
+    moved_from: Option<u16>,
+    /// The project's permissions with the `listen` grant pointed at `port`.
+    permissions: Vec<String>,
+}
+
+/// Settles the port the application will listen on.
+///
+/// # Why esdev has an opinion about this at all
+///
+/// Because otherwise two projects fight over one number. The application reads
+/// `PORT` and falls back to whatever it was written with — 8080, usually — and
+/// its `listen` grant names that same port, so a second project started in a
+/// second terminal dies on a bound address. Nobody chose 8080; it came with the
+/// template.
+///
+/// So the same rule the endpoint follows applies here: `--app-port=3000` is a
+/// **promise** and fails if something holds it, and an unnamed port is a
+/// **convenience** — the project's own is tried first, and if it is busy a free
+/// one is taken and printed.
+///
+/// # It only does this for a project shaped to be told
+///
+/// Two things have to be true, and both are things the project already says:
+/// the `listen` grant narrows to exactly one port, and `env` grants `PORT`.
+/// Without the first there is no port to move; without the second the child
+/// cannot be told which port it got, and setting the variable would move the
+/// grant out from under a server still binding its old number. A project that
+/// is not shaped that way is left entirely alone — which is what every backend
+/// that binds a socket by some other name needs.
+///
+/// # The grant moves with it
+///
+/// The rewritten flag is the same grant with a different number, not a wider
+/// one: `--allow-listen=8080` becomes `--allow-listen=8137`. The property this
+/// project protects — that development runs under the deployment's grant, so a
+/// capability nobody tested is never added on the way to production — is about
+/// *which* capabilities, and this changes none of them. The move is printed, so
+/// what is running is never a port only esdev knows about.
+fn app_port(permissions: &[String], wanted: Option<u16>) -> Result<Option<AppPort>, String> {
+    let granted = permissions
+        .iter()
+        .position(|flag| flag.starts_with(LISTEN))
+        .and_then(|at| {
+            permissions[at][LISTEN.len()..]
+                .parse::<u16>()
+                .ok()
+                .map(|port| (at, port))
+        });
+    let tells_the_child = permissions.iter().any(|flag| {
+        flag == "--allow-env" || flag.strip_prefix("--allow-env=").is_some_and(names_port)
+    });
+
+    let Some((at, granted)) = granted.filter(|_| tells_the_child) else {
+        return match wanted {
+            None => Ok(None),
+            Some(port) => Err(format!(
+                "--app-port={port} needs the project to say where its server listens, and                  {} does not.\n\n                 Two things make a port movable, and both are grants you already write:                  `\"listen\": [\"8080\"]`, one port and no more, so there is a port to                  move — and `\"env\": [\"PORT\"]`, so the server can be told which one                  it got.",
+                crate::config::FILE_NAME
+            )),
+        };
+    };
+
+    let port = match wanted {
+        // Named, so it is a promise: something else holding it is an error
+        // rather than a reason to quietly serve on a different address.
+        Some(port) => {
+            free(port).map_err(|e| {
+                format!(
+                    "cannot start the app on port {port}: {e}\n\n                     Something is already listening there. Stop it, or name another                      with `--app-port=<n>` — or drop the flag and let esdev pick."
+                )
+            })?;
+            port
+        }
+        None => match free(granted) {
+            Ok(()) => granted,
+            // Taken. A second project in a second terminal is an ordinary
+            // afternoon, and refusing to start over a number that came with the
+            // template is the tool inventing a problem.
+            Err(_) => {
+                any_free().map_err(|e| format!("cannot find a free port for the app: {e}"))?
+            }
+        },
+    };
+
+    let mut permissions = permissions.to_vec();
+    permissions[at] = format!("{LISTEN}{port}");
+    Ok(Some(AppPort {
+        port,
+        moved_from: (port != granted).then_some(granted),
+        permissions,
+    }))
+}
+
+/// Whether an `--allow-env` scope list includes `PORT`.
+fn names_port(scopes: &str) -> bool {
+    scopes.split(',').any(|name| name.trim() == "PORT")
+}
+
+/// Whether a port can be listened on, by listening on it and letting go.
+///
+/// Racy by construction — something can take it between here and the child's
+/// own bind — and that is the same race every tool that picks a port runs. The
+/// alternative is binding it here and passing the socket down, which would make
+/// esdev part of how the application listens, and the whole point is that it is
+/// not.
+///
+/// `0.0.0.0` rather than loopback, because that is what the templates bind and a
+/// port is only free if it is free the way the child will ask for it.
+fn free(port: u16) -> std::io::Result<()> {
+    std::net::TcpListener::bind(("0.0.0.0", port)).map(drop)
+}
+
+/// A port nothing is listening on, chosen by the operating system.
+fn any_free() -> std::io::Result<u16> {
+    std::net::TcpListener::bind(("0.0.0.0", 0))?
+        .local_addr()
+        .map(|addr| addr.port())
+}
+
 /// What `esdev start` was asked to do.
 pub struct StartConfig {
     /// The project, and everything it builds.
     pub project: Project,
+    /// The port to run the application on — `--app-port`. `None` takes the one
+    /// the project's `listen` grant names, or a free one if that is busy.
+    pub app_port: Option<u16>,
     /// How long a child gets to drain before it is killed — `--shutdown-grace`,
     /// the same number production uses.
     pub grace: Duration,
@@ -158,18 +303,41 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     let run = project.start.run.clone();
     let watched = project.start.watch.clone();
-    let permissions = project.permissions.clone();
     let output = match &run {
         Some(name) => Some(running_output(&project, name)?),
         None => None,
     };
+    // Only for a project that runs a server of its own. A frontend project has
+    // no child to give a port to, and esdev is already serving its output.
+    let app = match &output {
+        Some(_) => app_port(&project.permissions, config.app_port)?,
+        None => None,
+    };
+    let permissions = app.as_ref().map_or_else(
+        || project.permissions.clone(),
+        |app| app.permissions.clone(),
+    );
+    if let Some(app) = &app {
+        // The reason before the result, so the line a developer's eye lands on
+        // is the URL rather than an aside about a port they are leaving behind.
+        if let Some(asked) = app.moved_from {
+            eprintln!("esdev: {asked} was taken; use --app-port to pin one");
+        }
+        eprintln!("esdev: the app is on http://localhost:{}", app.port);
+    }
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 
     // The first build is allowed to fail like any other: the loop below is what
     // a developer fixes it in.
     let built = rebuild(&project, &watched, port).await;
     let mut child = match (&output, built) {
-        (Some(output), true) => spawn(&exe, output, &permissions, &root)?,
+        (Some(output), true) => spawn(
+            &exe,
+            output,
+            &permissions,
+            &root,
+            app.as_ref().map(|a| a.port),
+        )?,
         _ => None,
     };
 
@@ -231,7 +399,13 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
                 crate::watch::stop(process, config.grace).await;
             }
             if let Some(output) = &output {
-                child = spawn(&exe, output, &permissions, &root)?;
+                child = spawn(
+                    &exe,
+                    output,
+                    &permissions,
+                    &root,
+                    app.as_ref().map(|a| a.port),
+                )?;
             }
         }
         // After the restart, not before: a page told to reload while the server
@@ -299,8 +473,18 @@ fn spawn(
     output: &Path,
     permissions: &[String],
     root: &Path,
+    port: Option<u16>,
 ) -> Result<Option<Child>, String> {
-    let child = Command::new(exe)
+    let mut command = Command::new(exe);
+    // Set rather than merely allowed: the child reads `PORT` and falls back to
+    // whatever number it was written with, and that fallback is the one two
+    // projects collide on. Nothing is overridden that the developer chose — a
+    // `PORT` already in the environment is what [`app_port`] would have found
+    // busy, or is the port it settled on.
+    if let Some(port) = port {
+        command.env("PORT", port.to_string());
+    }
+    let child = command
         .args(permissions)
         .arg(output)
         .current_dir(root)
@@ -466,6 +650,127 @@ fn is_source(path: &Path, root: &Path, outputs: &[PathBuf]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flags(list: &[&str]) -> Vec<String> {
+        list.iter().map(ToString::to_string).collect()
+    }
+
+    /// The ordinary shape: one port granted, `PORT` readable, nothing holding
+    /// it. The app gets the port the project asked for, and the grant still
+    /// names exactly that port.
+    #[test]
+    fn a_free_granted_port_is_the_one_the_app_gets() {
+        let granted = any_free().expect("a free port");
+        let permissions = flags(&[
+            "--deny-all",
+            "--allow-read=./dist",
+            "--allow-env=PORT",
+            &format!("--allow-listen={granted}"),
+        ]);
+
+        let app = app_port(&permissions, None)
+            .expect("settled")
+            .expect("a movable port");
+        assert_eq!(app.port, granted);
+        assert_eq!(app.moved_from, None);
+        assert!(
+            app.permissions
+                .contains(&format!("--allow-listen={granted}"))
+        );
+        // Nothing else about the grant moved.
+        assert!(app.permissions.contains(&"--allow-read=./dist".to_string()));
+        assert_eq!(app.permissions.len(), permissions.len());
+    }
+
+    /// The collision this exists for: a second project whose granted port is
+    /// held by the first. It moves, it says so, and its grant follows it.
+    #[test]
+    fn a_taken_port_moves_and_takes_its_grant_with_it() {
+        let held = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("hold a port");
+        let taken = held.local_addr().expect("its address").port();
+        let permissions = flags(&["--allow-env=PORT", &format!("--allow-listen={taken}")]);
+
+        let app = app_port(&permissions, None)
+            .expect("settled")
+            .expect("a movable port");
+        assert_ne!(app.port, taken);
+        assert_eq!(app.moved_from, Some(taken));
+        assert!(
+            app.permissions
+                .contains(&format!("--allow-listen={}", app.port))
+        );
+        assert!(
+            !app.permissions.contains(&format!("--allow-listen={taken}")),
+            "the old port is still granted: {:?}",
+            app.permissions
+        );
+    }
+
+    /// A named port is a promise, so a busy one is an error rather than a
+    /// quiet move to an address nobody is pointing at.
+    #[test]
+    fn a_named_port_that_is_taken_is_an_error() {
+        let held = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("hold a port");
+        let taken = held.local_addr().expect("its address").port();
+        let permissions = flags(&["--allow-env=PORT", "--allow-listen=8080"]);
+
+        let refused = app_port(&permissions, Some(taken)).expect_err("refused");
+        assert!(refused.contains("--app-port"), "{refused}");
+    }
+
+    /// The two halves that make a port movable. Without either of them the
+    /// project is left exactly as it was — a backend that binds by some other
+    /// name is not something esdev should be rewriting.
+    #[test]
+    fn a_project_that_does_not_say_where_it_listens_is_left_alone() {
+        // No `listen` grant at all.
+        assert!(
+            app_port(&flags(&["--allow-env=PORT"]), None)
+                .expect("settled")
+                .is_none()
+        );
+        // A grant that is not one port: a host, or several.
+        assert!(
+            app_port(
+                &flags(&["--allow-env=PORT", "--allow-listen=8080,9090"]),
+                None
+            )
+            .expect("settled")
+            .is_none()
+        );
+        assert!(
+            app_port(&flags(&["--allow-env=PORT", "--allow-listen"]), None)
+                .expect("settled")
+                .is_none()
+        );
+        // No way to tell the child which port it got.
+        assert!(
+            app_port(&flags(&["--allow-listen=8080"]), None)
+                .expect("settled")
+                .is_none()
+        );
+        assert!(
+            app_port(&flags(&["--allow-env=HOME", "--allow-listen=8080"]), None)
+                .expect("settled")
+                .is_none()
+        );
+        // An unnarrowed env grant covers PORT, so that one is movable.
+        assert!(
+            app_port(&flags(&["--allow-env", "--allow-listen=8080"]), None)
+                .expect("settled")
+                .is_some()
+        );
+    }
+
+    /// Asking for a port on a project that cannot be told about one is refused
+    /// with the two grants that would make it work, rather than accepted and
+    /// silently ignored.
+    #[test]
+    fn naming_a_port_a_project_cannot_use_says_what_is_missing() {
+        let refused = app_port(&flags(&["--allow-listen=8080"]), Some(3000)).expect_err("refused");
+        assert!(refused.contains("listen"), "{refused}");
+        assert!(refused.contains("PORT"), "{refused}");
+    }
 
     #[test]
     fn the_build_s_own_output_is_not_a_change() {

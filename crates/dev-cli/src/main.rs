@@ -319,6 +319,10 @@ OPTIONS:
                                 free and any free port otherwise — the one it
                                 took is printed. Loopback only; 0 asks for
                                 any free port explicitly
+    --app-port=<n>              The port *your server* listens on, and it gets
+                                that one or fails. Without it, the port your
+                                `listen` grant names if free and any free port
+                                otherwise — the one it took is printed
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
@@ -345,6 +349,23 @@ THE SERVER IS YOURS
     A project with no server of its own — a static site, a single-page app —
     has nothing to run, so esdev serves the output directory itself: files, an
     index.html fallback for client-side routes, and nothing else.
+
+TWO PORTS
+    esdev's endpoint (--port) and your server's (--app-port) are different
+    ports and are settled separately, by the same rule: one you named is a
+    promise and fails if it is taken, one you did not is a convenience and
+    moves out of the way.
+
+    Your server's port is moved only when the project says enough for it to be
+    moved safely, and both halves are grants you already write:
+
+        \"listen\": [\"8080\"]     one port and no more, so there is one to move
+        \"env\": [\"PORT\"]        so the server can be told which one it got
+
+    The rewritten grant is the same capability with a different number, never a
+    wider one. A project shaped any other way is left exactly as it is — so two
+    of these run side by side without either of them being about a number
+    nobody chose.
 
 RELOAD
     Every built document gets a few lines that open an EventSource against
@@ -1055,6 +1076,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
     let mut port: Option<u16> = None;
+    let mut app_port: Option<u16> = None;
     let mut options = RunOptions::default();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
@@ -1075,6 +1097,12 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                         format!("--port={given} is not a port number (1 to 65535).")
                     })?);
             }
+            "--app-port" => {
+                let given = require_value(flag, value)?;
+                app_port = Some(given.parse::<u16>().map_err(|_| {
+                    format!("--app-port={given} is not a port number (1 to 65535).")
+                })?);
+            }
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
         }
     }
@@ -1094,6 +1122,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     }
     Ok(StartConfig {
         project,
+        app_port,
         grace: options.shutdown_grace,
     })
 }
