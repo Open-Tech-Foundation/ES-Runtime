@@ -26,6 +26,25 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **A save reaches the browser in 238 ms instead of 340 ms.** 120 ms of that
+  cycle was `--watch`'s settle window — a fixed wait after every change, so that
+  one editor save (a truncate, a write, sometimes a rename) became one rebuild
+  rather than three. The window is right; its length was not. Those events land
+  within a millisecond or two of each other, so **30 ms** clears them with an
+  order of magnitude to spare, and the window still restarts on every event, so
+  it is a lull rather than a delay. An editor that straggles past it costs one
+  wasted rebuild, and a build that fails changes nothing.
+
+  A burst can no longer hold a rebuild off indefinitely either: anything writing
+  a steady stream into a watched tree — `git checkout`, an install, a formatter
+  walking the project — used to reset the lull on every event, so the rebuild
+  never came and the dev loop looked like it had stopped working. It is now
+  capped at 500 ms: build what is there, and build again when the stream ends.
+
+  Measured on the react fullstack template with a release binary: cold
+  `esdev start` to serving a real request is 237 ms, a full build of both
+  targets is 153 ms, and save-to-server-back-up went from 340 ms to 238 ms.
+
 - **The react template answers `HEAD` with the headers and stops.** Every route
   is handled as though it were `GET` and the body is dropped once, centrally
   (`src/http/method.ts`), rather than in each handler.

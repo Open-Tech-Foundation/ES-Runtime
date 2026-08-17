@@ -76,12 +76,29 @@ const ASSET_EXTENSIONS: &[&str] = &[
     "webmanifest",
 ];
 
-/// How long to wait for the filesystem to go quiet before restarting.
+/// How long the filesystem must be **quiet** before a change is acted on.
 ///
 /// One editor save is several events — a truncate, a write, sometimes a rename
-/// over the top — and restarting on the first would start a run against a
-/// half-written file.
-const DEBOUNCE: Duration = Duration::from_millis(120);
+/// over the top — and acting on the first would build against a half-written
+/// file. So the window restarts on every event and only a genuine lull ends it.
+///
+/// It is short because it is a *lull*, not a delay: the events of one save land
+/// within a millisecond or two of each other, so 30 ms clears them with an order
+/// of magnitude to spare, and the 120 ms this used to be was 120 ms added to
+/// every save a developer makes — a third of the whole rebuild cycle spent
+/// deliberately waiting. An editor that somehow straggles past the window costs
+/// one wasted rebuild, and a build that fails changes nothing.
+const SETTLE: Duration = Duration::from_millis(30);
+
+/// The longest a burst may hold a rebuild off.
+///
+/// Without it the window is extendable without limit, so anything producing a
+/// steady stream of events — `git checkout` across a large tree, an install
+/// writing into a watched directory, a formatter walking the project — keeps
+/// resetting the lull and the rebuild never happens. The bound turns that into
+/// *rebuild now, and again when the stream ends*, which is a wasted build rather
+/// than a dev loop that appears to have stopped working.
+const MAX_HOLD: Duration = Duration::from_millis(500);
 
 /// What `--watch` needs to do its job.
 pub struct WatchConfig {
@@ -171,12 +188,21 @@ pub async fn supervise(config: WatchConfig) -> Result<(), String> {
 /// `None` means the watcher is gone, which can only happen at shutdown.
 pub async fn coalesce(rx: &mut mpsc::UnboundedReceiver<()>) -> Option<()> {
     rx.recv().await?;
-    // Coalesce: keep draining until the filesystem has been quiet for a beat.
+    // The cap starts with the burst, not with each event in it, so a stream of
+    // changes cannot push it back for ever.
+    let hold_until = tokio::time::Instant::now() + MAX_HOLD;
+
+    // Keep draining until the filesystem has been quiet for a beat — or until
+    // waiting for that beat has itself become the delay.
     loop {
-        match tokio::time::timeout(DEBOUNCE, rx.recv()).await {
-            Ok(Some(())) => {}
-            // Quiet, or the watcher stopped — either way the burst is over.
-            Ok(None) | Err(_) => return Some(()),
+        let quiet = tokio::time::timeout(SETTLE, rx.recv());
+        match tokio::time::timeout_at(hold_until, quiet).await {
+            // Another event: the save is still landing, so the lull restarts.
+            Ok(Ok(Some(()))) => {}
+            // A lull, or the watcher stopped — either way the burst is over.
+            Ok(Ok(None) | Err(_)) => return Some(()),
+            // Still arriving, and the cap is up. Build what is there.
+            Err(_) => return Some(()),
         }
     }
 }
@@ -304,6 +330,68 @@ fn is_watchable(path: &Path, root: &Path, extensions: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The lull is what ends a burst, so the events of one save — which land
+    /// within a millisecond or two of each other — become one rebuild.
+    #[tokio::test]
+    async fn one_save_is_one_rebuild() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        // A truncate, a write, a rename: what an editor actually does.
+        for _ in 0..3 {
+            tx.send(()).expect("send");
+        }
+
+        let started = std::time::Instant::now();
+        assert_eq!(coalesce(&mut rx).await, Some(()));
+        // One answer for the three, and the wait was the lull rather than a
+        // fixed delay per event.
+        assert!(rx.try_recv().is_err(), "events were left unclaimed");
+        assert!(
+            started.elapsed() < MAX_HOLD,
+            "a settled burst waited out the cap: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A stream that never stops — `git checkout` across a tree, an install
+    /// writing into a watched directory — must not hold the rebuild off for
+    /// ever. Without the cap the lull restarts on every event and the dev loop
+    /// looks like it has stopped working.
+    #[tokio::test]
+    async fn a_burst_that_never_ends_is_still_built() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        // Faster than the lull, so it can never be reached.
+        let flood = tokio::spawn(async move {
+            loop {
+                if tx.send(()).is_err() {
+                    return;
+                }
+                tokio::time::sleep(SETTLE / 3).await;
+            }
+        });
+
+        let started = std::time::Instant::now();
+        assert_eq!(coalesce(&mut rx).await, Some(()));
+        let waited = started.elapsed();
+        flood.abort();
+
+        assert!(waited >= MAX_HOLD, "it gave up before the cap: {waited:?}");
+        // Bounded by the cap rather than by the stream, with room for a loaded
+        // machine's scheduling.
+        assert!(
+            waited < MAX_HOLD * 4,
+            "the cap did not bound it: {waited:?}"
+        );
+    }
+
+    /// A watcher that has gone away is not a change, and waiting on one for
+    /// ever is how a shutdown hangs.
+    #[tokio::test]
+    async fn a_dropped_watcher_ends_the_wait() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<()>();
+        drop(tx);
+        assert_eq!(coalesce(&mut rx).await, None);
+    }
 
     /// The loop this cost an afternoon: a child process *reading* the entry
     /// raises `Access(Open)`, so a watcher that restarts on any event restarts
