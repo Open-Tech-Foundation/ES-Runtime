@@ -24,6 +24,19 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **The react template answers `HEAD` with the headers and stops.** Every route
+  is handled as though it were `GET` and the body is dropped once, centrally
+  (`src/http/method.ts`), rather than in each handler.
+
+  This is not a hang being fixed — the server never writes a body for a HEAD,
+  and an earlier report that the template's `HEAD /` and `HEAD /assets/…` timed
+  out does not reproduce. What it changes is what the handler leaves behind: an
+  asset response is an open file being streamed, and handing it to a server that
+  will not read it kept the handle alive until the collector got to it. It is
+  now cancelled at once, and a page that nobody will receive is not rendered.
+
 ### Fixed
 
 - **A release build clears the directories it owns.** Output filenames are
@@ -62,19 +75,6 @@ is the point, since none of the three has any business in a deployment.
   grant.
 
 
-- **`HEAD` no longer hangs the react template's server.** The router accepted
-  `HEAD` alongside `GET` and then answered it with a streamed body, so the
-  status and headers arrived and the connection sat there waiting for bytes that
-  a HEAD response must not carry — for pages and for assets alike. Anything that
-  probes with `HEAD` first hit it: a health checker, a link checker, a CDN
-  revalidating a cached asset, `curl -I`.
-
-  The body is now dropped once, centrally, over whatever a handler returned
-  (`src/http/method.ts`), rather than in each handler — the rule is about the
-  method, not about the page, and a handler that has to remember it is one that
-  will eventually forget. The dropped stream is cancelled rather than abandoned,
-  so an asset response does not leak the file handle it was reading from.
-
 ### Changed
 
 - **The `react` template is one project again, not three.** It used to build a
@@ -106,15 +106,24 @@ is the point, since none of the three has any business in a deployment.
   file or replace a shared one. `esdev create --list` names the modes and what
   each one weighs.
 
-- **Every template's `npm run typecheck` works on a fresh scaffold.** They
-  declared the script but not the types it needs, so the first run reported a
-  dozen unresolved `runtime:*` imports until somebody found
-  `esdev --install-types` in the README. `@opentf/esrun-types` is now a dev
-  dependency and is already named in `tsconfig.json`'s `types`.
+- **Every template's `npm run typecheck` works on a fresh scaffold.** All four
+  declared the script but not what it needs, so the first run reported a dozen
+  unresolved `runtime:*` imports until somebody found `esdev --install-types` in
+  a README — and on `api`, `lib` and `vanilla` there was no `typescript` either,
+  so it depended on one being installed globally. Both are dev dependencies now,
+  and `@opentf/esrun-types` is named in `tsconfig.json`'s `types`.
+
+  `api`, `lib` and `vanilla` therefore have a `devDependencies` block where they
+  had none. Their claim is unchanged and is now stated as what it always meant:
+  **nothing they ship depends on anything.** A compiler and a set of `.d.ts`
+  files are not loaded by anything that runs, and the alternative was a
+  `typecheck` script that did not work.
 
 - **Templates build minified.** `npm run build` passes `--minify`; the
   unminified build is still there as `npm run build:debug` when you want to read
   the output. What a starter's `build` script produces is what people deploy.
+  `lib` is the exception and stays unminified — a published package is minified
+  by whoever bundles it, if at all.
 
 
 - **`esdev create` asks with a menu you can arrow through.** The questions were

@@ -1,9 +1,9 @@
 # {{name}}
 
-A publishable TypeScript package. **No dependencies, no bundler config.**
+A publishable TypeScript package. **Nothing it ships depends on, and no bundler config.**
 
 ```sh
-npm install       # nothing to install, but it writes the lockfile
+npm install       # TypeScript and the runtime: types, both dev-only
 npm test
 npm run build     # → dist/, with .d.ts beside each module
 ```
@@ -79,3 +79,9 @@ npm test
 `esdev test` runs each file directly. There is no framework, no config, and no
 build step between the source and the test — a test imports the module beside
 it, including ones the package does not export.
+
+## Types for `runtime:`
+
+`@opentf/esrun-types` is already a dev dependency and already named in
+`tsconfig.json`, so `npm run typecheck` works on a fresh clone. Types are for
+your editor and that command; `esdev` erases them and never checks them.

@@ -1,10 +1,17 @@
 /**
  * A response with its body dropped, for a `HEAD` request.
  *
- * HEAD is GET without the body: same status, same headers, and **nothing after
- * them**. A handler that streams a body anyway leaves the client waiting for
- * bytes that a HEAD response may not carry — which is what a health checker, a
- * link checker, a CDN revalidating a cached asset and `curl -I` all do first.
+ * HEAD is GET without the body: same status, same headers, and nothing after
+ * them. The server already holds that up — a body handed to it for a HEAD is
+ * not written to the wire — so this is not what stops a client waiting. What it
+ * does is make the response *be* what is sent, which buys two things.
+ *
+ * **The stream is closed rather than dropped.** An asset response is an open
+ * file being read; handing it to a server that will not read it leaves the
+ * handle alive until the collector gets to it. Cancelling gives it back now.
+ *
+ * **A body nobody will send is not produced.** Rendering a page is work, and on
+ * a HEAD it is work whose entire output is discarded a layer down.
  *
  * Done here, once, over whatever a route returned, rather than in each handler:
  * the rule is about the *method*, not about the page, and a handler that has to

@@ -64,7 +64,7 @@ include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 const DESCRIPTIONS: &[(&str, &str)] = &[
     (
         "api",
-        "A JSON API — routing, validation, error handling. No dependencies",
+        "A JSON API — routing, validation, error handling. Nothing it ships depends on",
     ),
     (
         "react",
@@ -72,11 +72,11 @@ const DESCRIPTIONS: &[(&str, &str)] = &[
     ),
     (
         "lib",
-        "A publishable TypeScript package — module tree, .d.ts, no dependencies",
+        "A publishable TypeScript package — module tree, .d.ts, no runtime deps",
     ),
     (
         "vanilla",
-        "TypeScript and the DOM — no framework, no dependencies",
+        "TypeScript and the DOM — no framework, nothing it ships depends on",
     ),
 ];
 

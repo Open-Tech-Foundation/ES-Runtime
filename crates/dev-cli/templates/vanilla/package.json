@@ -4,8 +4,13 @@
   "type": "module",
   "scripts": {
     "dev": "esdev start",
-    "build": "esdev build",
+    "build": "esdev build --minify",
+    "build:debug": "esdev build",
     "test": "esdev test",
     "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "^0.1.0",
+    "typescript": "^5.9.0"
   }
 }

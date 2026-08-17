@@ -1,10 +1,10 @@
 # {{name}}
 
-A JSON API on the ES Runtime. **No dependencies** — not one.
+A JSON API on the ES Runtime. **Nothing it ships depends on** — not one package.
 
 ```sh
-npm install       # nothing to install, but it writes the lockfile
-npm run dev       # http://localhost:8080
+npm install       # TypeScript and the runtime: types, both dev-only
+npm run dev       # the port it prints
 ```
 
 Swap `npm` for `bun`, `pnpm` or `yarn`; nothing here depends on which you use.
@@ -24,14 +24,17 @@ curl -X DELETE localhost:8080/tasks/<id>
 | `src/http.ts` | Responses, and the one error type that becomes one |
 | `src/tasks.ts` | The resource, and the `Map` standing in for your database |
 
-## Zero dependencies is the point
+## Zero *runtime* dependencies is the point
 
 `URLPattern`, `Request`, `Response`, `URL`, `crypto.randomUUID()` — every one is
 a web standard this runtime already has. A router is a table and a loop.
 
 That is not minimalism for its own sake. Every dependency in a server is code
 you did not read running with everything you were granted, and this template
-exists partly to show how little you need.
+exists partly to show how little you need. What `package.json` does list is
+TypeScript and the `runtime:` type definitions: neither is shipped, neither is
+loaded by anything that runs, and both exist so `npm run typecheck` works on a
+fresh clone.
 
 ## What it is allowed to do
 
@@ -103,3 +106,9 @@ before the process exits, which is what a rolling deploy needs.
 `src/tasks.ts` holds a `Map`. Swap it for `runtime:db`, or a `fetch` to a
 service, and no handler changes — but **add the capability it needs to
 `esdev.json`**, or the first query fails with the permission it was denied.
+
+## Types for `runtime:`
+
+`@opentf/esrun-types` is already a dev dependency and already named in
+`tsconfig.json`, so `npm run typecheck` works on a fresh clone. Types are for
+your editor and that command; `esdev` erases them and never checks them.

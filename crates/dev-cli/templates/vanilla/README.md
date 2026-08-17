@@ -1,9 +1,9 @@
 # {{name}}
 
-TypeScript and the DOM. **No framework, no dependencies.**
+TypeScript and the DOM. **No framework, and nothing it ships depends on.**
 
 ```sh
-npm install       # nothing to install, but it writes the lockfile
+npm install       # TypeScript and the runtime: types, both dev-only
 npm run dev       # http://localhost:5173
 ```
 
@@ -83,3 +83,9 @@ rendering on a server and nothing to deploy but files.
 
 If you want either, `esdev create --template=react` starts from a route table
 and a server that renders it.
+
+## Types for `runtime:`
+
+`@opentf/esrun-types` is already a dev dependency and already named in
+`tsconfig.json`, so `npm run typecheck` works on a fresh clone. Types are for
+your editor and that command; `esdev` erases them and never checks them.

@@ -17,5 +17,9 @@
     "test": "esdev test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@opentf/esrun-types": "^0.1.0",
+    "typescript": "^5.9.0"
   }
 }
