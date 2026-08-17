@@ -26,6 +26,24 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`esdev start --hot` builds a browser bundle that can be patched** — modules
+  registered with a runtime instead of scope-hoisted into one another, and
+  `import.meta.hot` on each. This is the foundation for hot module replacement
+  and **not yet HMR**: the bundle is hot-capable, patches can be generated, and
+  nothing applies one, so a save still reloads the page.
+
+  It is a flag rather than the default because its cost lands the moment it is
+  on and the payoff has not arrived. rolldown's dev mode forces treeshaking off,
+  so the react template's dev bundle goes from 870 KB to 1.45 MB, and a rebuild
+  costs about 20 ms more. Both are worth it for hot updates; neither is worth it
+  for nothing.
+
+  What remains is the part rolldown deliberately leaves to its consumers. A
+  generated patch registers new factories and stops — *"no driver tail: the
+  client walks its own graph, removes from its cache, and re-runs from the
+  factory map"* — so the boundary walk, the accept callbacks and the decision to
+  fall back to a reload are esdev's to write.
+
 - **A stylesheet edit no longer reloads the page.** `esdev start` now looks at
   *what* changed: a burst of nothing but `.css` files sends `{"type":"css"}` and
   the page re-fetches its stylesheets in place, keeping scroll position, an open

@@ -410,6 +410,9 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             cwd: Some(cwd),
             input,
             external,
+            // `runtime:build` builds; the dev loop that hot-updates a browser is
+            // `esdev start`'s, and a program calling this one is not one.
+            hmr_runtime: None,
             // `neutral` is this runtime, and the default for the same reason it
             // is the subcommand's: a program bundling here is bundling for here
             // unless it says otherwise.

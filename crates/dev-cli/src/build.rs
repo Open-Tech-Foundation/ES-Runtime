@@ -663,6 +663,7 @@ pub async fn bundle_browser_entries(
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
+    hmr: Option<String>,
 ) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
@@ -693,6 +694,7 @@ pub async fn bundle_browser_entries(
         conditions,
         define,
         minify,
+        hmr_runtime: hmr,
         output: crate::bundler::OutputOptions {
             dir: Some(out_dir.to_string_lossy().into_owned()),
             // Written under the entry's own name and hashed *afterwards*,
@@ -943,6 +945,17 @@ pub struct Dev {
     /// The port esdev's own endpoint is on, so a document can be given the few
     /// lines that reload it.
     pub reload_port: u16,
+    /// Whether to build the browser bundle in rolldown's dev mode — modules
+    /// registered with a runtime instead of scope-hoisted into one another, and
+    /// `import.meta.hot` on each.
+    ///
+    /// Opt-in while the half that *applies* a patch is still being written.
+    /// Turning it on is not free and the cost lands immediately: treeshaking is
+    /// forced off, so the react template's dev bundle goes from 870 KB to
+    /// 1.45 MB, and a rebuild costs about 20 ms more. Both are worth it for hot
+    /// updates and neither is worth it for nothing, which is why this is a flag
+    /// and not yet a default.
+    pub hot: bool,
 }
 
 /// Where a target's bundle lands.

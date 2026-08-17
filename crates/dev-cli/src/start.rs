@@ -249,6 +249,8 @@ fn any_free() -> std::io::Result<u16> {
 pub struct StartConfig {
     /// The project, and everything it builds.
     pub project: Project,
+    /// `--hot`: build the browser bundle so it can be patched in place.
+    pub hot: bool,
     /// How long a child gets to drain before it is killed — `--shutdown-grace`,
     /// the same number production uses.
     pub grace: Duration,
@@ -374,7 +376,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     // The first build is allowed to fail like any other: the loop below is what
     // a developer fixes it in.
-    let built = rebuild(&project, &watched, port).await;
+    let built = rebuild(&project, &watched, port, config.hot).await;
     let mut child = match (&output, built) {
         (Some(output), true) => spawn(
             &exe,
@@ -430,7 +432,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // the most ordinary event there is, and the server you were about to
         // fix it on should still be answering — including while the build runs,
         // which is why the stop is here and not above.
-        if !rebuild(&project, &watched, port).await {
+        if !rebuild(&project, &watched, port, config.hot).await {
             continue;
         }
 
@@ -501,7 +503,7 @@ impl From<Option<Vec<PathBuf>>> for Woken {
 /// The error is printed rather than returned, because in a loop a failed build
 /// is a message and not an exit: the developer is mid-edit, and the tool's job
 /// is to still be there when they finish.
-async fn rebuild(project: &Arc<Project>, watched: &[String], port: u16) -> bool {
+async fn rebuild(project: &Arc<Project>, watched: &[String], port: u16, hot: bool) -> bool {
     let targets = if watched.is_empty() {
         None
     } else {
@@ -513,7 +515,10 @@ async fn rebuild(project: &Arc<Project>, watched: &[String], port: u16) -> bool 
         minify: false,
         defines: Vec::new(),
         conditions: Vec::new(),
-        dev: Some(Dev { reload_port: port }),
+        dev: Some(Dev {
+            reload_port: port,
+            hot,
+        }),
     }));
     match crate::build::run(request).await {
         Ok(()) => true,

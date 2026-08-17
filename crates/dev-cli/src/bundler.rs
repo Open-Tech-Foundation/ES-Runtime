@@ -96,6 +96,16 @@ pub struct Options {
     pub define: Vec<(String, String)>,
     pub minify: bool,
     pub treeshake: Option<bool>,
+    /// The dev-mode transport to compile in, when this build is feeding a hot
+    /// dev loop. `Some` turns rolldown's HMR codegen on: modules are registered
+    /// with a runtime instead of being scope-hoisted into one another, and
+    /// `import.meta.hot` exists. The string is the *transport half* of the
+    /// client runtime — rolldown injects the graph walk and expects a Rust
+    /// consumer to supply the part that talks to a server.
+    ///
+    /// It costs a bundle that is not the one a release build produces, which is
+    /// why it is `None` everywhere except the dev loop.
+    pub hmr_runtime: Option<String>,
     /// One file out per module in, rather than one chunk per entry — what a
     /// published library needs, so that a subpath in an `exports` map names a
     /// real file.
@@ -246,6 +256,15 @@ pub fn translate(
             Some(false) => TreeshakeOptions::Boolean(false),
             _ => TreeshakeOptions::default(),
         },
+        experimental: options.hmr_runtime.as_ref().map(|implement| {
+            rolldown_common::ExperimentalOptions {
+                dev_mode: Some(rolldown_common::DevModeOptions {
+                    implement: Some(implement.clone()),
+                    ..rolldown_common::DevModeOptions::default()
+                }),
+                ..rolldown_common::ExperimentalOptions::default()
+            }
+        }),
         resolve: Some(resolve),
         // Where `this.warn()` ends up. Info and debug are dropped: a build that
         // reported every `this.debug()` as a warning would train whoever reads

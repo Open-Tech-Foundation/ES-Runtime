@@ -322,6 +322,11 @@ OPTIONS:
                                 it: your `listen` grant's port, or 5173 for a
                                 frontend project, and any free port if that is
                                 taken — the one it took is printed
+    --hot                       Build the browser bundle so a change can be
+                                patched into the running page. Incomplete: the
+                                bundle is hot-capable but nothing applies a
+                                patch yet, and it costs a bigger dev bundle
+                                (treeshaking is forced off) and ~20ms a rebuild
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
@@ -1083,6 +1088,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
     let mut port: Option<u16> = None;
+    let mut hot = false;
     let mut options = RunOptions::default();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
@@ -1094,6 +1100,10 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                 reject_value(flag, value)?;
                 println!("{START_USAGE}");
                 std::process::exit(0);
+            }
+            "--hot" => {
+                reject_value(flag, value)?;
+                hot = true;
             }
             "--config" => config_path = Some(require_value(flag, value)?.to_string()),
             "--port" => {
@@ -1122,6 +1132,7 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     }
     Ok(StartConfig {
         project,
+        hot,
         grace: options.shutdown_grace,
     })
 }

@@ -514,6 +514,8 @@ pub async fn build(
             minify,
             defines,
             conditions,
+            dev.filter(|dev| dev.hot)
+                .map(|dev| hot_runtime(dev.reload_port)),
         )
         .await?
     };
@@ -614,6 +616,37 @@ pub async fn build(
         if styled == 1 { "" } else { "s" },
         if copied == 1 { "" } else { "s" }
     ))
+}
+
+/// The transport half of the client's hot-update runtime, compiled into the
+/// browser bundle.
+///
+/// rolldown injects the other half — the module graph, the factory registry and
+/// the boundary walk — and expects a Rust consumer to supply the part that
+/// talks to a server, because the server is the consumer's. This is that part.
+///
+/// **It does not open a socket.** The page already has one, from the script
+/// [`reload_client`] injects, and that script runs first: it is a classic script
+/// at the end of the body, and the bundle is a deferred module. So the socket is
+/// shared, and a page holds one connection rather than one per bundle.
+fn hot_runtime(port: u16) -> String {
+    let _ = port;
+    String::from(
+        "\
+        class EsdevHotContext {\
+          constructor(id){this.moduleId=id;this.acceptCallbacks=[];}\
+          accept(cb){if(cb)this.acceptCallbacks.push({deps:[this.moduleId],fn:cb});}\
+          invalidate(){}\
+        }\
+        class EsdevRuntime extends DevRuntime {\
+          constructor(id){super(id);this.moduleHotContexts=new Map();}\
+          createModuleHotContext(id){\
+            var c=new EsdevHotContext(id);this.moduleHotContexts.set(id,c);return c;\
+          }\
+        }\
+        globalThis.__rolldown_runtime__ ??= new EsdevRuntime('esdev');\
+        ",
+    )
 }
 
 #[cfg(test)]
