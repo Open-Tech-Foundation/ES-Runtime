@@ -382,4 +382,15 @@ mod hmr_api {
         #[allow(unused)]
         type Boundary = rolldown_common::HmrBoundary;
     }
+
+    /// A warm bundler has to be *held* — across rebuilds, across tasks — and
+    /// rolldown's HMR refuses to work without one ("HMR requires to run at
+    /// least one bundle before invalidation"). Holding it in a `static` needs
+    /// both bounds, so they are asserted rather than discovered halfway
+    /// through the plumbing.
+    #[test]
+    fn a_bundler_can_be_held_across_tasks() {
+        fn assert_send<T: Send>() {}
+        assert_send::<rolldown::Bundler>();
+    }
 }

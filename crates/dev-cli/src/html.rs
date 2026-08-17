@@ -459,12 +459,13 @@ pub async fn build(
         }
     }
 
-    // Filled by the bundler's CSS Modules plugin: what the JavaScript imported
-    // has no place in a JavaScript bundle, so it arrives here to be written as
-    // a stylesheet and linked below.
-    let styles = crate::cssmodules::Collected::new();
-    let bundled = if modules.is_empty() {
-        Vec::new()
+    // Collected by the bundler's CSS Modules plugin: what the JavaScript
+    // imported has no place in a JavaScript bundle, so it comes back here to be
+    // written as a stylesheet and linked below. Returned rather than filled into
+    // a handle passed down, because in the dev loop the plugin outlives the
+    // build and keeps whichever handle it was constructed with.
+    let (bundled, sheets) = if modules.is_empty() {
+        (Vec::new(), Vec::new())
     } else {
         crate::build::bundle_browser_entries(
             modules,
@@ -474,7 +475,6 @@ pub async fn build(
             minify,
             defines,
             conditions,
-            &styles,
         )
         .await?
     };
@@ -499,12 +499,12 @@ pub async fn build(
     // than injected from script: a `<style>` written at runtime costs a flash
     // of unstyled content and needs `style-src 'unsafe-inline'`, which the
     // template's own policy does not grant.
-    if !styles.is_empty() {
+    if !sheets.is_empty() {
         // Each sheet's `url()`s are still placeholders. They are substituted
         // here, for the same reason a `<link>`ed stylesheet's are: the CSS is
         // about to move into `assets/`, and a relative `url()` moves with it.
         let mut parts = Vec::new();
-        for sheet in styles.take() {
+        for sheet in sheets {
             let mut code = sheet.code;
             for referenced in &sheet.referenced {
                 let bytes = std::fs::read(&referenced.path)

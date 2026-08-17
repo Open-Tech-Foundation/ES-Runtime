@@ -663,8 +663,7 @@ pub async fn bundle_browser_entries(
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
-    styles: &crate::cssmodules::Collected,
-) -> Result<Vec<(String, String)>, String> {
+) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
     let hash = !dev;
@@ -675,6 +674,15 @@ pub async fn bundle_browser_entries(
     define.extend(defines);
 
     let names: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
+    // Everything that shapes the build, before any of it is moved into the
+    // options. A held bundler whose settings no longer match is the wrong
+    // bundler, and reusing it would apply the first run's options to the
+    // second's inputs.
+    let key = format!(
+        "{entries:?}|{}|{}|{minify}|{hash}|{define:?}|{conditions:?}",
+        root.display(),
+        out_dir.display()
+    );
     let options = crate::bundler::Options {
         input: entries
             .into_iter()
@@ -703,24 +711,37 @@ pub async fn bundle_browser_entries(
     };
 
     // The one plugin: a `.module.css` import becomes its name mapping, and the
-    // scoped CSS is pushed into `styles` for the caller to write out. See
+    // scoped CSS is pushed into a collector for the caller to write out. See
     // [`crate::cssmodules`].
-    let mut bundler = rolldown::BundlerBuilder::default()
-        .with_options(crate::bundler::translate(
-            &options,
-            options.output.clone(),
-            None,
-        )?)
-        .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
-            std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                root,
-                styles.clone(),
-                minify,
-            )),
-        ))])
-        .build()
-        .map_err(reported!())?;
-    bundler.write().await.map_err(reported!())?;
+    //
+    // In the dev loop the bundler and its plugin are *held* between rebuilds
+    // ([`warm`]); everywhere else they are built for this run and dropped with
+    // it. Which is why the collector is the bundler's rather than the caller's:
+    // a held plugin keeps the handle it was constructed with, so a caller that
+    // made a fresh one each build would be reading an empty one.
+    let styles = if dev {
+        let held = warm().lock().await;
+        build_warm(held, &key, root, &options, minify).await?
+    } else {
+        let styles = crate::cssmodules::Collected::new();
+        let mut bundler = rolldown::BundlerBuilder::default()
+            .with_options(crate::bundler::translate(
+                &options,
+                options.output.clone(),
+                None,
+            )?)
+            .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
+                std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                    root,
+                    styles.clone(),
+                    minify,
+                )),
+            ))])
+            .build()
+            .map_err(reported!())?;
+        bundler.write().await.map_err(reported!())?;
+        styles.take()
+    };
 
     let mut written = Vec::new();
     for name in names {
@@ -736,7 +757,90 @@ pub async fn bundle_browser_entries(
             .map_err(|e| format!("cannot name {filename}: {e}"))?;
         written.push((name, filename));
     }
-    Ok(written)
+    Ok((written, styles))
+}
+
+/// The browser bundler, held across the rebuilds of one `esdev start`.
+///
+/// # Why it is held at all
+///
+/// Two reasons, and the second is the one that makes it necessary rather than
+/// nice. A rebuild re-walks a module graph it has already walked, which is work
+/// the bundler's own cache can skip. And **rolldown's HMR refuses to run without
+/// it** — `compute_hmr_update_for_file_changes` needs the bundler that produced
+/// the bundle the browser is currently running, and errors with *"HMR requires
+/// to run at least one bundle before invalidation"* against a fresh one.
+///
+/// # Why a static rather than an argument
+///
+/// It belongs to the process, there can only ever be one dev loop in one, and
+/// reaching it from `bundle_browser_entries` means threading a handle down
+/// through `start`, `run` and `html::build` for a value with exactly one
+/// instance. That is D71's reasoning for the test tally, and it holds here for
+/// the same reason.
+///
+/// A `tokio::sync::Mutex` because a `Bundler` is `Send` but not `Sync`, and
+/// because it is held across an `await`.
+static WARM: std::sync::OnceLock<tokio::sync::Mutex<Option<Warm>>> = std::sync::OnceLock::new();
+
+fn warm() -> &'static tokio::sync::Mutex<Option<Warm>> {
+    WARM.get_or_init(|| tokio::sync::Mutex::new(None))
+}
+
+/// A held bundler, and what it was built for.
+struct Warm {
+    /// Every build setting that shaped it. A run whose settings differ is a
+    /// different build, and reusing a bundler across that would silently apply
+    /// the first run's options to the second's inputs.
+    key: String,
+    bundler: rolldown::Bundler,
+    /// The plugin's collector, drained after each build. Held here because the
+    /// plugin holds the handle it was constructed with, and the plugin is
+    /// inside the bundler.
+    styles: crate::cssmodules::Collected,
+}
+
+/// Builds the browser entries on the held bundler, making one if there is none
+/// or if the settings have changed.
+async fn build_warm(
+    mut held: tokio::sync::MutexGuard<'_, Option<Warm>>,
+    key: &str,
+    root: &Path,
+    options: &crate::bundler::Options,
+    minify: bool,
+) -> Result<Vec<crate::cssmodules::Sheet>, String> {
+    if held.as_ref().is_none_or(|warm| warm.key != key) {
+        let styles = crate::cssmodules::Collected::new();
+        let bundler = rolldown::BundlerBuilder::default()
+            .with_options(crate::bundler::translate(
+                options,
+                options.output.clone(),
+                None,
+            )?)
+            .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
+                std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                    root,
+                    styles.clone(),
+                    minify,
+                )),
+            ))])
+            .build()
+            .map_err(reported!())?;
+        *held = Some(Warm {
+            key: key.to_string(),
+            bundler,
+            styles,
+        });
+    }
+
+    let warm = held.as_mut().expect("just built");
+    // A failed build must not leave the next one reading half a graph, and
+    // rolldown keeps its own cache coherent across a failure — so the handle
+    // stays held either way and the error is simply reported.
+    warm.bundler.write().await.map_err(reported!())?;
+    // Drained, not read: the same collector serves every rebuild, and sheets
+    // left in it would be emitted again next time.
+    Ok(warm.styles.take())
 }
 
 /// Copies a target's `assets` into its output directory, and reports how many.

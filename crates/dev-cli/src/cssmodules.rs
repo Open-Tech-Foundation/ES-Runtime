@@ -88,13 +88,6 @@ impl Collected {
         collected
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0
-            .lock()
-            .expect("no panic while holding the lock")
-            .is_empty()
-    }
-
     /// Records a stylesheet, once.
     ///
     /// A module can arrive twice — imported by a component *and* named by
@@ -449,7 +442,9 @@ mod tests {
         let codes: Vec<String> = collected.take().into_iter().map(|s| s.code).collect();
         assert_eq!(codes, [".a{}", ".b{}"]);
         // …and taking drains, so a second build does not inherit the first's.
-        assert!(collected.is_empty());
+        // The dev loop depends on this: it holds one bundler, and so one
+        // plugin, and so one collector, across every rebuild.
+        assert!(collected.take().is_empty());
     }
 
     /// A plain `.css` is a module too, or tree-shaking decides the stylesheet
