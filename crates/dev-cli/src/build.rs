@@ -308,6 +308,80 @@ fn clean_output(out_dir: &Path, source_root: &Path) -> Result<(), String> {
         .map_err(|e| format!("cannot clear {}: {e}", out_dir.display()))
 }
 
+/// Empties the directories a whole-project release build is about to write.
+///
+/// # Why a build has to do this at all
+///
+/// Because output filenames are content-hashed and inputs change. `app-1a2b.js`
+/// becomes `app-9f8e.js` and the old one stays, for ever, in the directory that
+/// gets deployed — and beside it whatever `esdev start` left, which is *not*
+/// hashed and so is a file with an ordinary name that nothing will ever
+/// overwrite. What ships is then bigger than the build, and a cache or a
+/// hand-edited URL can still reach a version of the app nobody is testing.
+///
+/// # Only when the build owns everything it is clearing
+///
+/// Two conditions, and both are about ownership rather than tidiness:
+///
+/// * **Every target is being built.** `--target=web` writes one target's output
+///   into a directory that may be shared with another's, and clearing it would
+///   delete a bundle this run is not going to rebuild.
+/// * **It is not the dev loop.** `esdev start` rebuilds on a keystroke into
+///   files with stable names, so nothing accumulates — and clearing the
+///   directory a page is being served from, once a save, is a page that fails to
+///   load for reasons that have nothing to do with the code.
+///
+/// Only `outdir` directories are cleared. `out` names one file in a directory
+/// the build does not own ([`crate::config::Output`]); such a file is deleted
+/// here only when it happens to sit inside another target's `outdir`, and a
+/// whole-project build writes it again on the way past.
+///
+/// A directory that holds the project root is refused rather than cleared. It is
+/// the same keystroke `--lib` guards against, arriving by a different route:
+/// `"outdir": "."` is a config away from `"outdir": "dist"`.
+fn clean_targets(
+    project: &ProjectBuild,
+    selected: &[&crate::config::Target],
+) -> Result<(), String> {
+    if project.targets.is_some() || project.dev.is_some() {
+        return Ok(());
+    }
+    let root = project
+        .project
+        .dir
+        .canonicalize()
+        .unwrap_or_else(|_| project.project.dir.clone());
+
+    for target in selected {
+        let crate::config::Output::Dir(dir) = &target.output else {
+            continue;
+        };
+        let out = project.project.dir.join(dir);
+        let Ok(resolved) = out.canonicalize() else {
+            // Nothing there yet, which is the first build and needs no clearing.
+            continue;
+        };
+        if root.starts_with(&resolved) {
+            return Err(format!(
+                "target \"{}\": `outdir` is {}, which holds the project itself.\n\n\
+                 A build empties the directory it writes into, and that would empty \
+                 everything else here too. Name a directory the build owns: \
+                 \"outdir\": \"dist\".",
+                target.name,
+                out.display()
+            ));
+        }
+        std::fs::remove_dir_all(&resolved).map_err(|e| {
+            format!(
+                "target \"{}\": cannot clear {}: {e}",
+                target.name,
+                out.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 /// Bundles `config` and reports what was written.
 pub async fn build(config: BuildConfig) -> Result<String, String> {
     let cwd = match &config.root {
@@ -824,6 +898,8 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             })
             .collect::<Result<Vec<_>, _>>()?,
     };
+
+    clean_targets(&project, &selected)?;
 
     for target in &selected {
         let mut defines = target.define.clone();

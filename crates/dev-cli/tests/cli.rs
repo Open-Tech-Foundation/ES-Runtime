@@ -1061,6 +1061,105 @@ fn an_application_build_leaves_the_rest_of_the_directory_alone() {
     assert!(dir.join("dist/keep-me.txt").exists(), "{}", stdout(&out));
 }
 
+/// A hashed filename changes when its contents do, and the old one has nothing
+/// to overwrite it. Without this, what gets deployed is every build the
+/// directory has ever seen — plus whatever `esdev start` left, which is not
+/// hashed and so is never replaced either.
+#[test]
+fn a_whole_project_build_clears_the_directories_it_owns() {
+    let dir = build_dir("b_clean_targets");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/server.ts", "console.log('server');\n");
+    write_in(&dir, "src/app.ts", "console.log('app');\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": {
+              "server": { "entry": "src/server.ts", "out": "dist/server.js" },
+              "web": { "entry": "src/app.ts", "outdir": "dist" } } }"#,
+    );
+    std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+    write_in(&dir, "dist/app-0000dead.js", "a build from last week\n");
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        !dir.join("dist/app-0000dead.js").exists(),
+        "the stale bundle is still there: {}",
+        stdout(&out)
+    );
+    // And everything this build wrote is present, including the `out` file that
+    // sits inside the directory the `outdir` target cleared.
+    assert!(dir.join("dist/server.js").exists(), "{}", stdout(&out));
+    assert!(dir.join("dist/app.js").exists(), "{}", stdout(&out));
+}
+
+/// Building one target does not own the directory it shares with another, so
+/// clearing it would delete a bundle this run is not going to write again.
+#[test]
+fn building_one_target_leaves_the_other_s_output_alone() {
+    let dir = build_dir("b_clean_one_target");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/server.ts", "console.log('server');\n");
+    write_in(&dir, "src/app.ts", "console.log('app');\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": {
+              "server": { "entry": "src/server.ts", "out": "dist/server.js" },
+              "web": { "entry": "src/app.ts", "outdir": "dist" } } }"#,
+    );
+
+    assert!(
+        esdev_in(&dir)
+            .arg("build")
+            .output()
+            .expect("spawn esdev build")
+            .status
+            .success()
+    );
+    let out = esdev_in(&dir)
+        .args(["build", "--target=web"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        dir.join("dist/server.js").exists(),
+        "--target=web deleted the server bundle: {}",
+        stdout(&out)
+    );
+}
+
+/// The keystroke `--lib` guards against, arriving through the config instead.
+#[test]
+fn an_outdir_that_holds_the_project_is_refused_rather_than_emptied() {
+    let dir = build_dir("b_clean_refuses_root");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.ts", "console.log('app');\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "web": { "entry": "src/app.ts", "outdir": "." } } }"#,
+    );
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(
+        stderr(&out).contains("holds the project"),
+        "{}",
+        stderr(&out)
+    );
+    // Nothing was deleted on the way to the refusal.
+    assert!(dir.join("src/app.ts").exists());
+    assert!(dir.join("esdev.json").exists());
+}
+
 // ---------------------------------------------------------------------------
 // `esdev build --lib --dts-bundle` (DECISIONS D59)
 //
@@ -3160,7 +3259,7 @@ fn create_refuses_a_directory_that_holds_something() {
         "{ \"name\": \"mine\" }\n"
     );
     // …and the rest of the project was written around it.
-    assert!(dir.join("src/server.tsx").is_file());
+    assert!(dir.join("src/routes.tsx").is_file());
 
     let _ = std::fs::remove_dir_all(&parent);
 }
@@ -3224,6 +3323,121 @@ fn every_dependency_free_template_passes_its_own_tests() {
     let _ = std::fs::remove_dir_all(&parent);
 }
 
+/// A mode is the whole project, not a preset on top of one. What you get is the
+/// files that mode needs and none of the other's — otherwise a starter ships a
+/// server nobody runs and a permission nobody needs, and the person scaffolding
+/// is left deleting half of it.
+#[test]
+fn each_mode_writes_its_own_project_and_none_of_the_other() {
+    let parent = watch_dir("c_modes");
+
+    for (mode, mine, theirs) in [
+        ("static", "src/prerender.tsx", "src/server.tsx"),
+        ("fullstack", "src/server.tsx", "src/prerender.tsx"),
+    ] {
+        let dir = parent.join(mode);
+        let out = esdev_in(&parent)
+            .args([
+                "create",
+                mode,
+                "--template=react",
+                &format!("--mode={mode}"),
+            ])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn esdev create");
+        assert!(out.status.success(), "{mode}: {}", stderr(&out));
+        assert!(
+            stdout(&out).contains(&format!("react ({mode}) template")),
+            "{mode}: {}",
+            stdout(&out)
+        );
+
+        assert!(dir.join(mine).is_file(), "{mode} has no {mine}");
+        assert!(
+            !dir.join(theirs).exists(),
+            "{mode} was written with {theirs}, which belongs to the other mode"
+        );
+        // The shared half is in both, rather than duplicated into each.
+        assert!(dir.join("src/routes.tsx").is_file(), "{mode} has no routes");
+
+        // And the tests it ships pass — the react template's own suite needs no
+        // node_modules, which is what makes this checkable here at all.
+        let tested = esdev_in(&dir)
+            .arg("test")
+            .output()
+            .expect("spawn esdev test");
+        assert!(
+            tested.status.success(),
+            "the react ({mode}) template's own tests failed:\n{}{}",
+            stdout(&tested),
+            stderr(&tested)
+        );
+    }
+
+    // A static project has nothing to run in production, so it grants nothing
+    // and names no server; a fullstack one does both.
+    let statik = std::fs::read_to_string(parent.join("static/esdev.json")).expect("read");
+    assert!(!statik.contains("permissions"), "{statik}");
+    // `"run":` rather than `"run"` — the prerender target says `"then": "run"`,
+    // which is a target that is executed after the build, not a server.
+    assert!(!statik.contains("\"run\":"), "{statik}");
+    let full = std::fs::read_to_string(parent.join("fullstack/esdev.json")).expect("read");
+    assert!(full.contains("\"run\": \"server\""), "{full}");
+    assert!(
+        full.contains("--allow") || full.contains("listen"),
+        "{full}"
+    );
+
+    // Both ways of getting a static build are scripts on the project, so the
+    // SSG/SPA choice is made per deploy rather than at scaffold time.
+    let scripts = std::fs::read_to_string(parent.join("static/package.json")).expect("read");
+    assert!(
+        scripts.contains("\"build\": \"esdev build --minify\""),
+        "{scripts}"
+    );
+    assert!(scripts.contains("build:spa"), "{scripts}");
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
+/// A mode that is not one is refused rather than ignored, and so is a mode on a
+/// template that has only one shape — a flag that silently does nothing is one
+/// somebody keeps passing, and keeps believing.
+#[test]
+fn a_mode_that_does_not_exist_is_refused() {
+    let parent = watch_dir("c_bad_mode");
+
+    let unknown = esdev_in(&parent)
+        .args(["create", "nope", "--template=react", "--mode=ssr"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(!unknown.status.success(), "{}", stdout(&unknown));
+    // The message names the modes there are.
+    assert!(stderr(&unknown).contains("static"), "{}", stderr(&unknown));
+    assert!(
+        stderr(&unknown).contains("fullstack"),
+        "{}",
+        stderr(&unknown)
+    );
+    assert!(!parent.join("nope").exists(), "it wrote a project anyway");
+
+    let modeless = esdev_in(&parent)
+        .args(["create", "nope", "--template=api", "--mode=static"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn esdev create");
+    assert!(!modeless.status.success(), "{}", stdout(&modeless));
+    assert!(
+        stderr(&modeless).contains("no modes"),
+        "{}",
+        stderr(&modeless)
+    );
+
+    let _ = std::fs::remove_dir_all(&parent);
+}
+
 /// A prompt in a script is a script that hangs, which is the whole reason the
 /// interactive path is gated. These run with stdin closed — the shape every CI
 /// job has — and must answer without asking anything.
@@ -3238,7 +3452,13 @@ fn create_never_asks_when_nobody_is_there() {
         .output()
         .expect("spawn esdev create");
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("react template"), "{}", stdout(&out));
+    // The default mode, named — "the react template" is two projects, and a
+    // report that does not say which one cannot be checked.
+    assert!(
+        stdout(&out).contains("react (static) template"),
+        "{}",
+        stdout(&out)
+    );
     // The next steps tell them to install, because this run did not.
     assert!(stdout(&out).contains("npm install"), "{}", stdout(&out));
     assert!(
@@ -3285,7 +3505,11 @@ fn every_question_has_a_flag() {
         .output()
         .expect("spawn esdev create");
     assert!(yes.status.success(), "{}", stderr(&yes));
-    assert!(stdout(&yes).contains("react template"), "{}", stdout(&yes));
+    assert!(
+        stdout(&yes).contains("react (static) template"),
+        "{}",
+        stdout(&yes)
+    );
 
     // A package manager that is not one is named as such, before anything runs.
     let unknown = esdev_in(&parent)

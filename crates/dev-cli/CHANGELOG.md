@@ -26,6 +26,22 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **A release build clears the directories it owns.** Output filenames are
+  content-hashed, so `app-1a2b.js` becoming `app-9f8e.js` left the old one in
+  `dist` for ever — and beside it whatever `esdev start` had written, which is
+  *not* hashed and so was never overwritten either. What shipped was every build
+  the directory had ever seen, and a stale URL still reached a version of the app
+  nobody was testing.
+
+  Only `outdir` directories are cleared, only when **every** target is being
+  built, and never for the dev loop. `--target=web` writes into a directory it
+  may share with another target's output, and clearing it would delete a bundle
+  that run is not going to write again; `esdev start` rebuilds on a keystroke
+  into stable filenames, where nothing accumulates and clearing would break the
+  page being served. An `outdir` that holds the project itself is refused rather
+  than emptied.
+
+
 - **Two projects can be in development at once.** `esdev start --port` moved
   esdev's own endpoint out of the way when it was busy, but the *application's*
   port never moved: both projects ran their server on whatever `esdev.json`
