@@ -18,6 +18,7 @@ import { here } from "./document.ts";
 import { render } from "./render.tsx";
 import { ASSET_PREFIX, cacheControl, contentType, isAssetName } from "./http/assets.ts";
 import { nonce, securityHeaders } from "./http/headers.ts";
+import { withoutBody } from "./http/method.ts";
 
 // `unmask` because an env entry can arrive as a `Secret` — a wrapper that keeps
 // a value out of logs and stack traces. PORT is not one, and `unmask` on a
@@ -88,7 +89,7 @@ const server = serve({ port, hostname: "0.0.0.0" }, async (request) => {
   const url = new URL(request.url);
   const started = performance.now();
 
-  const response = await handle(request, url).catch((error: unknown) => {
+  const answer = await handle(request, url).catch((error: unknown) => {
     // The last line of defence. Something threw where nothing should, and the
     // one thing that must not happen is the connection hanging.
     console.error(`unhandled ${request.method} ${url.pathname}:`, error);
@@ -97,6 +98,12 @@ const server = serve({ port, hostname: "0.0.0.0" }, async (request) => {
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
   });
+
+  // HEAD is answered by every handler as though it were GET, and the body is
+  // dropped here — once, over all of them. The alternative is each handler
+  // remembering, and the one that forgets leaves a health checker or a `curl -I`
+  // waiting on bytes that never come.
+  const response = request.method === "HEAD" ? withoutBody(answer) : answer;
 
   // One line per request, in a shape a log collector can parse. `console.log`
   // rather than a logging dependency: a line of JSON on stdout is what every

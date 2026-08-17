@@ -25,7 +25,7 @@ you use.
 | `src/server.tsx` | **What production runs** |
 | `src/render.tsx` | One render, streamed |
 | `src/app/` | The components |
-| `src/http/` | Content types, security headers, escaping — the parts worth testing |
+| `src/http/` | Content types, security headers, HEAD, escaping — the parts worth testing |
 | `src/data/` | Stands in for your database or API |
 | `styles/app.css` | The stylesheet. `@import` works; esdev bundles it |
 | `index.html` | The document. Your meta tags, and the two markers the server fills |
@@ -101,6 +101,10 @@ production is a grant nobody has tested.
 - **A `/healthz` that touches nothing.** A health check that renders a page
   reports on the renderer, and one that queries a database takes the instance
   down when the database blinks.
+- **`HEAD` answers with the headers and stops.** Every route is handled as
+  though it were `GET` and the body is dropped once, centrally — so a health
+  checker, a link checker or a `curl -I` gets the status, the type and the size
+  without waiting on a body that is never sent.
 - **One JSON log line per request**, which is what a log collector can read.
 
 ## Styling
@@ -188,7 +192,8 @@ testing needs a bundling step esdev does not have yet.
 
 What that leaves is worth having anyway, and `src/http/` is factored for it: the
 content-type table, the asset-name check that stops path traversal, the HTML
-escaping, and the CSP all sit behind pure functions with no imports.
+escaping, the CSP, and the HEAD rule all sit behind pure functions with no
+imports.
 
 ## The development loop
 

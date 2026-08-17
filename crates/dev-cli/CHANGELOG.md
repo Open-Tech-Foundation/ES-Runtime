@@ -24,6 +24,21 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`HEAD` no longer hangs the react template's server.** The router accepted
+  `HEAD` alongside `GET` and then answered it with a streamed body, so the
+  status and headers arrived and the connection sat there waiting for bytes that
+  a HEAD response must not carry — for pages and for assets alike. Anything that
+  probes with `HEAD` first hit it: a health checker, a link checker, a CDN
+  revalidating a cached asset, `curl -I`.
+
+  The body is now dropped once, centrally, over whatever a handler returned
+  (`src/http/method.ts`), rather than in each handler — the rule is about the
+  method, not about the page, and a handler that has to remember it is one that
+  will eventually forget. The dropped stream is cancelled rather than abandoned,
+  so an asset response does not leak the file handle it was reading from.
+
 ### Changed
 
 - **The `react` template is one project again, not three.** It used to build a
