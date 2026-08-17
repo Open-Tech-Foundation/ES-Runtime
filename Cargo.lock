@@ -1531,6 +1531,7 @@ name = "es-runtime-dev-cli"
 version = "0.2.0"
 dependencies = [
  "anyhow",
+ "arcstr",
  "es-runtime-cli-common",
  "es-runtime-common",
  "es-runtime-providers",
@@ -1543,6 +1544,8 @@ dependencies = [
  "rolldown",
  "rolldown_common",
  "rolldown_sourcemap",
+ "rolldown_utils",
+ "rustc-hash",
  "rustix 1.1.4",
  "serde_json",
  "tokio",

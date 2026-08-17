@@ -282,12 +282,22 @@ fn reload_client(port: u16) -> String {
          old.parentNode.insertBefore(next,old.nextSibling);\
          }})(links[i]);}}\
          }}\
+         function patch(m){{\
+         var hot=globalThis.__esdev_hot;\
+         if(!hot){{location.reload();return;}}\
+         var el=document.createElement('script');\
+         el.type='module';el.src=m.url;\
+         el.onerror=function(){{location.reload();}};\
+         el.onload=function(){{if(!hot.apply(m.changedIds))location.reload();}};\
+         document.head.appendChild(el);\
+         }}\
          function open(){{\
          var s=new WebSocket(\"ws://127.0.0.1:{port}{path}\");\
          s.onopen=function(){{wait=250;}};\
          s.onmessage=function(e){{\
          var m;try{{m=JSON.parse(e.data);}}catch(_){{return;}}\
          if(m.type===\"css\")css();\
+         else if(m.type===\"patch\")patch(m);\
          else if(m.type===\"reload\")location.reload();\
          }};\
          s.onclose=function(){{setTimeout(open,wait);wait=Math.min(wait*2,5000);}};\
@@ -514,8 +524,7 @@ pub async fn build(
             minify,
             defines,
             conditions,
-            dev.filter(|dev| dev.hot)
-                .map(|dev| hot_runtime(dev.reload_port)),
+            dev.filter(|dev| dev.hot).map(|_| hot_runtime()),
         )
         .await?
     };
@@ -622,29 +631,72 @@ pub async fn build(
 /// browser bundle.
 ///
 /// rolldown injects the other half — the module graph, the factory registry and
-/// the boundary walk — and expects a Rust consumer to supply the part that
-/// talks to a server, because the server is the consumer's. This is that part.
+/// the module cache — and stops there. Its patch assembler says why, and it is
+/// worth quoting because it is the whole of this function's reason to exist:
+/// *"no driver tail: the client walks its own graph, removes from its cache, and
+/// re-runs from the factory map."* Loading a patch registers new factories and
+/// changes nothing else. **Deciding what to re-run is ours.**
+///
+/// # The walk
+///
+/// From each changed module, climb the importer graph looking for a module that
+/// called `import.meta.hot.accept`. That module is a *boundary*: re-running it
+/// picks up the new code below it, so everything from the change up to and
+/// including it is dropped from the cache and the boundary is re-run.
+///
+/// Reaching a module with no importers means the climb hit an entry without
+/// finding anyone willing to be re-run, and the only correct answer left is to
+/// reload the page. That is not a failure — it is what should happen when a
+/// module says nothing about how to replace it.
 ///
 /// **It does not open a socket.** The page already has one, from the script
 /// [`reload_client`] injects, and that script runs first: it is a classic script
 /// at the end of the body, and the bundle is a deferred module. So the socket is
-/// shared, and a page holds one connection rather than one per bundle.
-fn hot_runtime(port: u16) -> String {
-    let _ = port;
+/// shared, a page holds one connection, and this half only has to say what to do
+/// when a patch lands.
+fn hot_runtime() -> String {
     String::from(
         "\
         class EsdevHotContext {\
           constructor(id){this.moduleId=id;this.acceptCallbacks=[];}\
           accept(cb){if(cb)this.acceptCallbacks.push({deps:[this.moduleId],fn:cb});}\
-          invalidate(){}\
+          invalidate(){location.reload();}\
         }\
         class EsdevRuntime extends DevRuntime {\
           constructor(id){super(id);this.moduleHotContexts=new Map();}\
           createModuleHotContext(id){\
             var c=new EsdevHotContext(id);this.moduleHotContexts.set(id,c);return c;\
           }\
+          esdevApply(changedIds){\
+            var seen=new Set(),boundaries=[],queue=changedIds.slice();\
+            while(queue.length){\
+              var id=queue.shift();\
+              if(seen.has(id))continue;\
+              seen.add(id);\
+              var ctx=this.moduleHotContexts.get(id);\
+              if(ctx&&ctx.acceptCallbacks.length){boundaries.push(id);continue;}\
+              var importers=this.getImporters(id)||[];\
+              if(!importers.length)return false;\
+              for(var i=0;i<importers.length;i++)queue.push(importers[i]);\
+            }\
+            if(!boundaries.length)return false;\
+            var callbacks=boundaries.map(function(id){\
+              var ctx=this.moduleHotContexts.get(id);\
+              return {id:id,fns:ctx?ctx.acceptCallbacks.map(function(a){return a.fn;}):[]};\
+            },this);\
+            seen.forEach(function(id){this.removeModuleCache(id);},this);\
+            for(var b=0;b<callbacks.length;b++){\
+              var exports=this.loadExports(callbacks[b].id);\
+              for(var f=0;f<callbacks[b].fns.length;f++)callbacks[b].fns[f](exports);\
+            }\
+            return true;\
+          }\
         }\
         globalThis.__rolldown_runtime__ ??= new EsdevRuntime('esdev');\
+        (globalThis.__esdev_hot ||= {}).apply=function(changedIds){\
+          try{return __rolldown_runtime__.esdevApply(changedIds);}\
+          catch(e){console.error('[esdev] hot update failed, reloading',e);return false;}\
+        };\
         ",
     )
 }

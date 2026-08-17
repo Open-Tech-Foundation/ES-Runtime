@@ -723,7 +723,7 @@ pub async fn bundle_browser_entries(
     // made a fresh one each build would be reading an empty one.
     let styles = if dev {
         let held = warm().lock().await;
-        build_warm(held, &key, root, &options, minify).await?
+        build_warm(held, &key, root, out_dir, &options, minify).await?
     } else {
         let styles = crate::cssmodules::Collected::new();
         let mut bundler = rolldown::BundlerBuilder::default()
@@ -791,6 +791,20 @@ fn warm() -> &'static tokio::sync::Mutex<Option<Warm>> {
 
 /// A held bundler, and what it was built for.
 struct Warm {
+    /// The HMR session: what has been shipped to the page, when each module was
+    /// last rendered, and the counter that names the next patch file.
+    ///
+    /// **One session, not one per page.** rolldown's API takes a list of clients
+    /// with a ship map each, because two tabs opened at different times can
+    /// legitimately need different patches. esdev keeps one: the pages of a dev
+    /// loop have almost always loaded the same bundle, and the one that has not
+    /// is caught on the other side — a patch whose factories do not fit the
+    /// graph a page holds makes that page reload itself. A registry of clients
+    /// is a real thing to want and it is not worth its weight yet.
+    hmr: Option<HmrSession>,
+    /// Where the bundle is written, and so where a patch has to go: the page
+    /// fetches it from the same directory it fetched the bundle from.
+    out_dir: PathBuf,
     /// Every build setting that shaped it. A run whose settings differ is a
     /// different build, and reusing a bundler across that would silently apply
     /// the first run's options to the second's inputs.
@@ -802,12 +816,116 @@ struct Warm {
     styles: crate::cssmodules::Collected,
 }
 
+/// What one dev loop has told the browser so far.
+struct HmrSession {
+    /// Module stable id → the rebuild stamp of the copy the page holds.
+    shipped: rustc_hash::FxHashMap<arcstr::ArcStr, u32>,
+    /// When each module was last rendered, which is how rolldown decides what a
+    /// patch has to carry.
+    stamps: rolldown_common::HmrStampTable,
+    /// Names the next `hmr_patch_N.js`. Shared with rolldown, which increments
+    /// it as it builds one.
+    next_patch: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// A hot update, ready to hand to the page.
+pub struct Hot {
+    /// The patch file, relative to the output directory.
+    pub filename: String,
+    /// The modules that changed. The page walks its own graph from these.
+    pub changed_ids: Vec<String>,
+}
+
+/// Computes a hot update for `changed`, writing the patch beside the bundle.
+///
+/// `Ok(None)` means there is nothing to hot-apply and the caller should fall
+/// back to a reload — either rolldown said so (a change no patch can represent,
+/// like a tsconfig that re-transforms every module) or there is no held bundler
+/// to compute against, which is the first build.
+///
+/// The patch is *written*, not returned: rolldown hands back the code and the
+/// name it should have, and leaves the writing to whoever is serving it — which
+/// is us, out of the same directory the bundle is served from.
+pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
+    let mut held = warm().lock().await;
+    let warm = held.as_mut()?;
+    let out_dir = warm.out_dir.clone();
+    let session = warm.hmr.get_or_insert_with(|| HmrSession {
+        shipped: rustc_hash::FxHashMap::default(),
+        stamps: rolldown_common::HmrStampTable::default(),
+        next_patch: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+    });
+
+    let mut files: rolldown_utils::indexmap::FxIndexMap<
+        String,
+        rolldown_common::WatcherChangeKind,
+    > = rolldown_utils::indexmap::FxIndexMap::default();
+    for path in changed {
+        files.insert(
+            path.to_string_lossy().into_owned(),
+            rolldown_common::WatcherChangeKind::Update,
+        );
+    }
+
+    let clients = [rolldown_common::ClientHmrInput {
+        client_id: "esdev",
+        shipped: &session.shipped,
+    }];
+    let updates = warm
+        .bundler
+        .compute_hmr_update_for_file_changes(
+            &files,
+            &clients,
+            &mut session.stamps,
+            std::sync::Arc::clone(&session.next_patch),
+            false,
+        )
+        .await;
+    let updates = match updates {
+        Ok(updates) => updates,
+        // Reported rather than swallowed. A patch that cannot be computed is a
+        // page that reloads, which looks exactly like a dev loop with no hot
+        // updates at all — so the one thing that must not happen is this failing
+        // quietly.
+        Err(errors) => {
+            eprintln!("esdev: no hot update ({errors:?})");
+            return None;
+        }
+    };
+
+    let update = updates.into_iter().next()?;
+    match update.update {
+        rolldown_common::HmrUpdate::Patch(patch) => {
+            std::fs::write(out_dir.join(&patch.filename), &patch.code).ok()?;
+            // Only once the patch is on disk: the ship map records what the page
+            // *can* have, and recording a delivery that failed would leave the
+            // next patch assuming a module the page never got.
+            for (id, stamp) in patch.carried {
+                session.shipped.insert(id, stamp);
+            }
+            Some(Hot {
+                filename: patch.filename,
+                changed_ids: patch.changed_ids,
+            })
+        }
+        // Something no patch can express. Its reason is rolldown's own words,
+        // and it is the sort of thing a developer wants to see rather than a
+        // page that reloads for no stated cause.
+        rolldown_common::HmrUpdate::FullReload { reason } => {
+            eprintln!("esdev: reloading — {reason}");
+            None
+        }
+        rolldown_common::HmrUpdate::Noop => None,
+    }
+}
+
 /// Builds the browser entries on the held bundler, making one if there is none
 /// or if the settings have changed.
 async fn build_warm(
     mut held: tokio::sync::MutexGuard<'_, Option<Warm>>,
     key: &str,
     root: &Path,
+    out_dir: &Path,
     options: &crate::bundler::Options,
     minify: bool,
 ) -> Result<Vec<crate::cssmodules::Sheet>, String> {
@@ -832,6 +950,12 @@ async fn build_warm(
             key: key.to_string(),
             bundler,
             styles,
+            out_dir: out_dir.to_path_buf(),
+            // A new bundler is a new graph, so whatever the page was told about
+            // the old one is worthless. Starting the session empty is what stops
+            // a patch being computed against a ship map for a build that no
+            // longer exists.
+            hmr: None,
         });
     }
 

@@ -26,41 +26,40 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
-- **`esdev start --hot` builds a browser bundle that can be patched** — modules
-  registered with a runtime instead of scope-hoisted into one another, and
-  `import.meta.hot` on each. This is the foundation for hot module replacement
-  and **not yet HMR**: the bundle is hot-capable, patches can be generated, and
-  nothing applies one, so a save still reloads the page.
+- **`esdev start --hot` hot-replaces a changed module instead of reloading the
+  page.** A module that says `import.meta.hot.accept(cb)` is a boundary: when it
+  or anything it imports changes, esdev computes a patch, the page loads it,
+  walks its own import graph up to that boundary, drops the affected modules from
+  its cache, re-runs the boundary and calls the callback — with no page load, so
+  scroll position, open dialogs and typed-in state all survive.
 
-  It is a flag rather than the default because its cost lands the moment it is
-  on and the payoff has not arrived. rolldown's dev mode forces treeshaking off,
-  so the react template's dev bundle goes from 870 KB to 1.45 MB, and a rebuild
-  costs about 20 ms more. Both are worth it for hot updates; neither is worth it
-  for nothing.
+  When nothing on the way up accepts, the page reloads. That is not a failure: a
+  module that says nothing about how to replace it has not earned being replaced,
+  and reloading is the correct answer. The same fallback catches a patch that
+  fails to load or throws while applying.
 
-  What remains is the part rolldown deliberately leaves to its consumers. A
-  generated patch registers new factories and stops — *"no driver tail: the
-  client walks its own graph, removes from its cache, and re-runs from the
-  factory map"* — so the boundary walk, the accept callbacks and the decision to
-  fall back to a reload are esdev's to write.
+  The bundle is built in rolldown's dev mode, so modules are registered with a
+  runtime rather than scope-hoisted into one another. The boundary walk is
+  esdev's: rolldown's patch assembler is explicit that it ships no driver —
+  *"the client walks its own graph, removes from its cache, and re-runs from the
+  factory map"* — so what a patch does on arrival is entirely the consumer's to
+  decide.
 
-- **A stylesheet edit no longer reloads the page.** `esdev start` now looks at
-  *what* changed: a burst of nothing but `.css` files sends `{"type":"css"}` and
-  the page re-fetches its stylesheets in place, keeping scroll position, an open
-  dialog, and whatever was typed into a form. Anything else still reloads.
+  It stays a flag, for now, because dev mode forces treeshaking off: the react
+  template's dev bundle goes from 870 KB to 1.45 MB and a rebuild costs about
+  20 ms more. And the react template has no `accept` in it yet, so a component
+  edit still reloads — React needs Fast Refresh to keep hooks state across a
+  swap, which is a plugin rather than anything esdev knows about.
 
-  The replacement `<link>` is inserted before the old one is removed, and the
-  old one goes on the new one's `load` — removing first would leave the document
-  unstyled for a frame, which is a flash of white on every save and worse than
-  the reload it replaces.
+  **One session, not one per page.** rolldown's API takes a list of clients with
+  a ship map each, because two tabs opened at different times can need different
+  patches. esdev keeps one and broadcasts: the pages of a dev loop have almost
+  always loaded the same bundle, and the one that has not reloads itself when the
+  patch does not fit its graph.
 
-  It is deliberately conservative. A burst containing a stylesheet *and* a
-  component reloads, because that burst moved the module graph and a page with
-  new styles over old components is half updated — which is worse than reloading,
-  since it looks like it worked. A restart of your server reloads for the same
-  reason: the process the page is talking to is a different one. `.module.css`
-  counts as a stylesheet, because a CSS Module's class names come from its path,
-  so editing its contents renames nothing.
+  Verified in Chrome, driven over CDP: a marker set on `window` survives the
+  update when a module accepts (proving no reload happened) and is gone when
+  none does (proving the fallback fires), with the DOM correct either way.
 
 ### Changed
 

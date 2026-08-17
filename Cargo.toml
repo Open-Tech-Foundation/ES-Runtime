@@ -318,6 +318,15 @@ rolldown_common = "=1.2.3"
 # sends has to become this type. Already in the graph via rolldown; pinned with
 # it, since a hook signature and its types travel together.
 rolldown_sourcemap = "=1.2.3"
+# The types `compute_hmr_update_for_file_changes` speaks: the changed-file map it
+# takes, the ship map each client carries, and the interned module id both are
+# keyed by. Named here because a hot update is assembled in our code and has to
+# hand rolldown its own vocabulary to do it — all three are already in the graph
+# via rolldown itself, so this adds no crate. Pinned with it for the same reason
+# `rolldown_common` is: these are the types its signatures name.
+rolldown_utils = "=1.2.3"
+rustc-hash = "2.1.3"
+arcstr = "1.2.0"
 anyhow = "1.0.104"
 
 

@@ -428,6 +428,21 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // What the server was reading, before the build replaces any of it.
         let before = output.as_deref().map(fingerprint);
 
+        // **Before the rebuild, not after.** A hot update is computed by
+        // scanning what changed against the graph the page is running; a full
+        // build consumes exactly that change first, so asking afterwards gets
+        // an honest answer to the wrong question — nothing changed since the
+        // last build — and every save falls back to a reload.
+        //
+        // The full build still happens, and has to: what is on disk is what a
+        // hard refresh and every page opened after this one will load, and a
+        // patch updates neither.
+        let hot = if config.hot && !changed.is_empty() {
+            crate::build::hot_update(&changed).await
+        } else {
+            None
+        };
+
         // **Rebuilt before anything is stopped.** A syntax error mid-edit is
         // the most ordinary event there is, and the server you were about to
         // fix it on should still be answering — including while the build runs,
@@ -469,11 +484,24 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // has no child, so it reads as "restarting" on every pass, and a
         // stylesheet edit would reload the page it could have swapped.
         let replaced_the_server = restarting && output.is_some();
-        let _ = reload.send(if replaced_the_server {
-            Update::Reload
-        } else {
-            update_for(&changed)
-        });
+        // A hot patch is tried first and only when nothing coarser has already
+        // made the page's state worthless. A server that was replaced, or a
+        // build the page cannot be patched into, both end in a reload — so
+        // there is no point computing a patch the page is about to throw away.
+        let update = match hot {
+            // A server that was replaced makes any patch moot: the process the
+            // page is talking to is a different one, so its state is stale
+            // however narrow the edit was.
+            Some(hot) if !replaced_the_server => Update::Patch {
+                url: format!("/{}/{}", crate::html::ASSET_DIR, hot.filename),
+                changed_ids: hot.changed_ids,
+            },
+            _ if replaced_the_server => Update::Reload,
+            // rolldown could not express this change as a patch, or there is no
+            // graph to compute one against yet.
+            _ => update_for(&changed),
+        };
+        let _ = reload.send(update);
     }
 }
 

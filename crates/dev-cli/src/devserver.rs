@@ -72,8 +72,17 @@ pub const HMR_PATH: &str = "/@esdev/hmr";
 /// the transport, the client's dispatch and the broadcast channel are all
 /// already shaped for a message that says *what* changed, so the CSS swap and
 /// the module patch are new variants rather than a new protocol.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum Update {
+    /// A hot patch: the page loads it, then walks its own graph from
+    /// `changed_ids` to decide what to re-run — or reloads itself if nothing on
+    /// the way up accepted the change.
+    Patch {
+        /// Where the page fetches the patch from.
+        url: String,
+        /// The modules the patch replaces.
+        changed_ids: Vec<String>,
+    },
     /// Only stylesheets changed. The page keeps everything it has — scroll
     /// position, an open dialog, whatever was typed into a form — and fetches
     /// its stylesheets again.
@@ -88,8 +97,23 @@ impl Update {
     /// Written by hand rather than derived: it is two fields on the far side of
     /// a socket from a `JSON.parse` in a string literal, and a serde dependency
     /// for that would be a dependency for a brace.
-    fn as_message(self) -> String {
+    fn as_message(&self) -> String {
         match self {
+            Self::Patch { url, changed_ids } => {
+                // Two strings and a list of them, so `JSON.parse` on the far
+                // side has something to parse. Ids come from module paths, which
+                // can hold a quote or a backslash on a filesystem that allows
+                // one, so they are escaped rather than trusted.
+                let ids = changed_ids
+                    .iter()
+                    .map(|id| format!("\"{}\"", escape_json(id)))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(
+                    "{{\"type\":\"patch\",\"url\":\"{}\",\"changedIds\":[{ids}]}}",
+                    escape_json(url)
+                )
+            }
             Self::Css => "{\"type\":\"css\"}".to_string(),
             Self::Reload => "{\"type\":\"reload\"}".to_string(),
         }
@@ -325,6 +349,24 @@ async fn respond_bytes(
 /// decision nobody asked it to make.
 pub fn address(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
+}
+
+/// A string, as a JSON string body.
+///
+/// The two characters that end a JSON string early, plus the control range that
+/// is not allowed in one raw. Enough for module ids and a URL this code built —
+/// and deliberately not a JSON library, for one field of one message.
+fn escape_json(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
