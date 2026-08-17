@@ -202,8 +202,11 @@ npm run dev
 ```
 
 Builds, runs `src/server.tsx`, and on every save rebuilds, restarts and reloads
-the page. A build that fails leaves the running server alone. The port is chosen
-for you unless `PORT` says otherwise, so two of these can run side by side.
+the page. A build that fails leaves the running server alone.
+
+The port is your `listen` grant's — 8080 — unless something already has it, in
+which case it moves and says so, so two of these run side by side. `npm run dev
+-- --port=3000` pins one.
 
 It is a full page load, not hot module replacement — component state does not
 survive a save. Router state does, because it is in the URL.

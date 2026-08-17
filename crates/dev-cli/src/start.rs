@@ -39,15 +39,21 @@
 //! # Two ports, and neither of them fights for one
 //!
 //! There are two: esdev's own endpoint ([`bind`]) and the port the application
-//! binds ([`app_port`]). They are separate things and are settled separately —
-//! `--port` is the endpoint's, `--app-port` is the application's — but they
-//! follow the same rule, which is that **a port that was named is a promise and
-//! a port that was not is a convenience.**
+//! binds ([`app_port`]). Both follow the same rule — **a port that was named is
+//! a promise and a port that was not is a convenience** — and only one of them
+//! has a flag.
 //!
-//! Before this, only the endpoint moved. Two projects open in two terminals both
-//! ran their server on whatever `esdev.json` granted, so the second one died on
-//! a bound port — on a number the developer had not chosen and had no reason to
-//! be thinking about.
+//! `--port` is **the port you open**, which is the application's whenever the
+//! project has a server of its own. esdev's endpoint is plumbing: it carries one
+//! message to the page, nobody types its address, and it takes a free port
+//! quietly. A frontend project has no server of its own, so there esdev *is*
+//! what is being opened and `--port` is this listener's.
+//!
+//! Before this, `--port` was the endpoint's in every case and only the endpoint
+//! moved. Two projects open in two terminals both ran their server on whatever
+//! `esdev.json` granted, so the second one died on a bound port — on a number
+//! the developer had not chosen and had no reason to be thinking about, with the
+//! one flag named after ports pointing somewhere else.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -113,7 +119,9 @@ const LISTEN: &str = "--allow-listen=";
 struct AppPort {
     /// The port, handed to the child as `PORT`.
     port: u16,
-    /// The port the project asked for, when it is not the one it got.
+    /// The port the project asked for, when nothing named one and it was busy.
+    /// A port that *was* named and then moved would be a broken promise, so
+    /// there is no such case: it is an error instead.
     moved_from: Option<u16>,
     /// The project's permissions with the `listen` grant pointed at `port`.
     permissions: Vec<String>,
@@ -129,7 +137,7 @@ struct AppPort {
 /// second terminal dies on a bound address. Nobody chose 8080; it came with the
 /// template.
 ///
-/// So the same rule the endpoint follows applies here: `--app-port=3000` is a
+/// So the same rule the endpoint follows applies here: `--port=3000` is a
 /// **promise** and fails if something holds it, and an unnamed port is a
 /// **convenience** — the project's own is tried first, and if it is busy a free
 /// one is taken and printed.
@@ -202,7 +210,11 @@ fn app_port(permissions: &[String], wanted: Option<u16>) -> Result<Option<AppPor
     permissions[at] = format!("{LISTEN}{port}");
     Ok(Some(AppPort {
         port,
-        moved_from: (port != granted).then_some(granted),
+        // Only an unnamed port can have moved. `--port=3000` on a project
+        // granting 8080 is not 8080 being taken — it is the port that was asked
+        // for, and reporting it as a fallback would read as a warning about
+        // something the developer did on purpose.
+        moved_from: (wanted.is_none() && port != granted).then_some(granted),
         permissions,
     }))
 }
@@ -237,9 +249,6 @@ fn any_free() -> std::io::Result<u16> {
 pub struct StartConfig {
     /// The project, and everything it builds.
     pub project: Project,
-    /// The port to run the application on — `--app-port`. `None` takes the one
-    /// the project's `listen` grant names, or a free one if that is busy.
-    pub app_port: Option<u16>,
     /// How long a child gets to drain before it is killed — `--shutdown-grace`,
     /// the same number production uses.
     pub grace: Duration,
@@ -250,10 +259,25 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     let project = Arc::new(config.project);
     let serve = serve_dir(&project)?;
 
+    // **`--port` is the port you open**, and which process that is depends on
+    // the project. A project with a server of its own opens *that*, and esdev's
+    // endpoint beside it is plumbing — it carries one message to the page and
+    // nobody types its address. A frontend project has no such server, so esdev
+    // is the one being opened and the flag is this listener's.
+    //
+    // The alternative — `--port` for the endpoint and a second flag for the
+    // application — gives the name everybody's dev server uses to the one thing
+    // here that is not a dev server.
+    let opens_its_own = project.start.run.is_some();
+
     // Bound before the first build, so a port already in use is an error at the
     // top rather than after a build the developer then has to watch happen
     // again.
-    let (listener, port) = bind(project.start.port)?;
+    let (listener, port) = bind(if opens_its_own {
+        project.start.reload_port
+    } else {
+        project.start.port
+    })?;
     listener
         .set_nonblocking(true)
         .map_err(|e| format!("cannot bind 127.0.0.1:{port}: {e}"))?;
@@ -291,7 +315,10 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
 
     let paint = crate::style::Palette::stderr();
     let tag = paint.dim("esdev:");
-    if project.start.port.is_none() && port != DEFAULT_PORT {
+    // Only where the flag exists to act on. On a project that runs its own
+    // server this listener has no flag and no reader, so a note about which port
+    // it landed on is noise about plumbing.
+    if !opens_its_own && project.start.port.is_none() && port != DEFAULT_PORT {
         eprintln!("{tag} {DEFAULT_PORT} was taken; use --port to pin one");
     }
     match &serve {
@@ -316,7 +343,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
     // Only for a project that runs a server of its own. A frontend project has
     // no child to give a port to, and esdev is already serving its output.
     let app = match &output {
-        Some(_) => app_port(&project.permissions, config.app_port)?,
+        Some(_) => app_port(&project.permissions, project.start.port)?,
         None => None,
     };
     let permissions = app.as_ref().map_or_else(
@@ -327,7 +354,7 @@ pub async fn start(config: StartConfig) -> Result<(), String> {
         // The reason before the result, so the line a developer's eye lands on
         // is the URL rather than an aside about a port they are leaving behind.
         if let Some(asked) = app.moved_from {
-            eprintln!("{tag} {asked} was taken; use --app-port to pin one");
+            eprintln!("{tag} {asked} was taken; use --port to pin one");
         }
         eprintln!(
             "{tag} the app is on {}",
@@ -713,6 +740,20 @@ mod tests {
             "the old port is still granted: {:?}",
             app.permissions
         );
+    }
+
+    /// A port that was named is the port that was asked for, whatever the grant
+    /// says — so it is not reported as a fallback from one.
+    #[test]
+    fn a_named_port_is_not_reported_as_a_move() {
+        let free = any_free().expect("a free port");
+        let permissions = flags(&["--allow-env=PORT", "--allow-listen=8080"]);
+
+        let app = app_port(&permissions, Some(free))
+            .expect("settled")
+            .expect("a movable port");
+        assert_eq!(app.port, free);
+        assert_eq!(app.moved_from, None, "a deliberate port read as a fallback");
     }
 
     /// A named port is a promise, so a busy one is an error rather than a

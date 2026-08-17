@@ -315,15 +315,17 @@ USAGE:
                                 keep both current
 
 OPTIONS:
-    --port=<n>                  The port esdev's own endpoint binds, and it
-                                binds that one or fails. Without it, 5173 if
-                                free and any free port otherwise — the one it
-                                took is printed. Loopback only; 0 asks for
-                                any free port explicitly
-    --app-port=<n>              The port *your server* listens on, and it gets
-                                that one or fails. Without it, the port your
-                                `listen` grant names if free and any free port
-                                otherwise — the one it took is printed
+    --port=<n>                  The port you open, and it gets that one or
+                                fails. For a project with a server of its own
+                                that is your server's port; for a frontend
+                                project it is the one esdev serves on. Without
+                                it: your `listen` grant's port, or 5173 for a
+                                frontend project, and any free port if that is
+                                taken — the one it took is printed
+    --reload-port=<n>           The port esdev's own endpoint binds when your
+                                project runs a server of its own. Nobody types
+                                this address; set it only if something needs it
+                                fixed. Loopback only
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
@@ -351,11 +353,16 @@ THE SERVER IS YOURS
     has nothing to run, so esdev serves the output directory itself: files, an
     index.html fallback for client-side routes, and nothing else.
 
-TWO PORTS
-    esdev's endpoint (--port) and your server's (--app-port) are different
-    ports and are settled separately, by the same rule: one you named is a
-    promise and fails if it is taken, one you did not is a convenience and
-    moves out of the way.
+PORTS
+    --port is the port you open. When your project runs a server of its own
+    that is your server's; esdev's own endpoint is plumbing -- it carries one
+    message to the page, nobody types its address, and it takes a free port
+    quietly. A frontend project has no such server, so there esdev is what you
+    open and --port is its listener.
+
+    Either way the rule is the same: one you named is a promise and fails if it
+    is taken, one you did not is a convenience and moves out of the way,
+    printing where it went.
 
     Your server's port is moved only when the project says enough for it to be
     moved safely, and both halves are grants you already write:
@@ -1077,7 +1084,7 @@ fn parse_create(args: impl Iterator<Item = String>) -> Result<CreateConfig, Stri
 fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String> {
     let mut config_path: Option<String> = None;
     let mut port: Option<u16> = None;
-    let mut app_port: Option<u16> = None;
+    let mut reload_port: Option<u16> = None;
     let mut options = RunOptions::default();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
@@ -1098,10 +1105,10 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                         format!("--port={given} is not a port number (1 to 65535).")
                     })?);
             }
-            "--app-port" => {
+            "--reload-port" => {
                 let given = require_value(flag, value)?;
-                app_port = Some(given.parse::<u16>().map_err(|_| {
-                    format!("--app-port={given} is not a port number (1 to 65535).")
+                reload_port = Some(given.parse::<u16>().map_err(|_| {
+                    format!("--reload-port={given} is not a port number (1 to 65535).")
                 })?);
             }
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
@@ -1121,9 +1128,11 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     if let Some(port) = port {
         project.start.port = Some(port);
     }
+    if let Some(port) = reload_port {
+        project.start.reload_port = Some(port);
+    }
     Ok(StartConfig {
         project,
-        app_port,
         grace: options.shutdown_grace,
     })
 }

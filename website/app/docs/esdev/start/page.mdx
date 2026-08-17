@@ -69,24 +69,40 @@ server is still coming back gets a connection refused and stays blank.
 
 | | |
 | --- | --- |
-| `--port=<n>` | esdev's own endpoint (default `5173`, **loopback only**) |
-| `--app-port=<n>` | The port *your server* listens on |
+| `--port=<n>` | The port you open |
+| `--reload-port=<n>` | esdev's own endpoint, when your project runs a server (**loopback only**) |
 | `--config=<path>` | Read this instead of `./esdev.json` |
 | `--shutdown-grace=<ms>` | How long the server may drain on a restart |
 
 ```json
-"start": { "run": "server", "watch": ["server", "web"], "serve": "dist", "port": 5173 }
+"start": { "run": "server", "watch": ["server", "web"], "serve": "dist", "port": 8080 }
 ```
 
 `watch` narrows what gets rebuilt; leaving it out rebuilds everything, which is
 what you want at 40 ms a build. `serve` overrides the directory served when
 there is no `run`.
 
-## Two ports
+## Ports
 
-esdev's endpoint and your server's are different ports, settled separately by
-the same rule: **one you named is a promise and fails if it is taken; one you
-did not is a convenience and moves out of the way**, printing what it took.
+There are two, and only one of them is yours to think about.
+
+**`--port` is the port you open.** When your project runs a server of its own
+that is *your server's* port. When it does not — a static site, a single-page
+app — esdev is what you open, so it is esdev's listener. Either way it is the
+address you type, which is why it has the plain name.
+
+esdev's own endpoint on a fullstack project is plumbing: it carries one message
+to the page, nobody types its address, and it takes 5173 or any free port
+quietly. `--reload-port` pins it, for a test or a firewall that needs it fixed.
+
+Both follow the same rule: **one you named is a promise and fails if it is
+taken; one you did not is a convenience and moves out of the way**, printing
+what it took.
+
+```
+esdev: 8080 was taken; use --port to pin one
+esdev: the app is on http://localhost:33407
+```
 
 Your server's port moves only when the project says enough for the move to be
 safe, and both halves are grants you were already writing:

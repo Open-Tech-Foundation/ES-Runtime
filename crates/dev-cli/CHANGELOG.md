@@ -55,25 +55,36 @@ is the point, since none of the three has any business in a deployment.
   than emptied.
 
 
-- **Two projects can be in development at once.** `esdev start --port` moved
+- **Two projects can be in development at once, and `--port` is the port you
+  open.** Both halves of that were wrong before. `esdev start --port` moved
   esdev's own endpoint out of the way when it was busy, but the *application's*
   port never moved: both projects ran their server on whatever `esdev.json`
   granted — 8080, because that is what the template came with — and the second
-  one died on a bound address.
+  one died on a bound address. And `--port`, the name every dev server uses for
+  the address you type, pointed at the endpoint, which is the one thing here
+  nobody types.
 
-  The application's port now follows the same rule the endpoint does.
-  `--app-port=3000` is a promise and fails if something holds it; an unnamed port
-  takes the one the project's `listen` grant names, or a free one if that is
-  busy, and prints what it settled on. The port is handed to the child as `PORT`.
+  `--port` is now **the port you open**: your server's when the project has a
+  `run` target, esdev's listener when it does not. It follows the rule the
+  endpoint always had — named is a promise and fails if taken, unnamed takes the
+  port your `listen` grant names, or a free one if that is busy, and prints what
+  it settled on. The child is handed it as `PORT`.
 
-  It moves a port only for a project that says enough to be moved safely, and
-  both halves are grants that were already being written: `"listen": ["8080"]`,
-  one port and no more, so there is a port to move; and `"env": ["PORT"]`, so
-  the server can be told which one it got. Anything shaped differently is left
-  exactly as it was. The rewritten grant is the same capability with a different
-  number and never a wider one, so development still runs under the deployment's
-  grant.
+  esdev's endpoint keeps `--reload-port` / `"reloadPort"`, for a test or a
+  firewall that needs it fixed. Unset it takes 5173 or any free port silently,
+  because on a fullstack project nobody reads that address.
 
+  A port is moved only for a project that says enough for the move to be safe,
+  and both halves are grants that were already being written: `"listen":
+  ["8080"]`, one port and no more, so there is a port to move; and `"env":
+  ["PORT"]`, so the server can be told which one it got. Anything shaped
+  differently is left exactly as it was. The rewritten grant is the same
+  capability with a different number and never a wider one, so development still
+  runs under the deployment's grant.
+
+  **Breaking:** `--port` and `"start": { "port": … }` mean the application's port
+  now for a project with a `run` target. If you were pinning esdev's endpoint,
+  rename it to `--reload-port` / `"reloadPort"`.
 
 ### Changed
 
