@@ -24,6 +24,17 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A scaffolded project gets the current type definitions.** Every template
+  pinned `@opentf/esrun-types` to `^0.1.0`, and a caret on a `0.x` version does
+  not cross the minor — so every project created after the definitions shipped
+  0.2.0 quietly kept resolving 0.1.x, and typed against a runtime older than the
+  binary sitting beside it. The templates ask for `latest`, which is what
+  `esdev --install-types` has always done: it names no version, so the two doors
+  into the same package now agree. Two tests hold it — one that no template
+  pins the package, one that every template depends on it at all.
+
 ## [0.3.0] - 2026-08-17
 
 ### Changed

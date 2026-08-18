@@ -717,6 +717,52 @@ mod tests {
         assert_eq!(package_name(Path::new("///")), "app");
     }
 
+    /// The type definitions track the runtime, so a scaffold wants whatever is
+    /// current — not whatever was current when the template was written.
+    ///
+    /// This was a pin (`^0.1.0`), and a caret on a `0.x` version does not cross
+    /// the minor: every project scaffolded after `@opentf/esrun-types` 0.2.0
+    /// shipped would have quietly kept resolving 0.1.x, with types describing a
+    /// runtime older than the binary beside them. `esdev --install-types` names
+    /// no version and has always got the latest, so this is also the two doors
+    /// agreeing.
+    #[test]
+    fn the_types_package_is_never_pinned_in_a_template() {
+        for (name, files) in TEMPLATES {
+            for (path, contents) in *files {
+                if !path.ends_with("package.json") {
+                    continue;
+                }
+                let manifest: serde_json::Value = serde_json::from_slice(contents)
+                    .unwrap_or_else(|e| panic!("{name}/{path}: {e}"));
+                let Some(version) = manifest
+                    .get("devDependencies")
+                    .and_then(|deps| deps.get("@opentf/esrun-types"))
+                    .and_then(serde_json::Value::as_str)
+                else {
+                    continue;
+                };
+                assert_eq!(
+                    version, "latest",
+                    "{name}/{path} pins the type definitions to {version:?}"
+                );
+            }
+        }
+    }
+
+    /// Every template carries them, so a new one that forgets is caught here
+    /// rather than by whoever scaffolds it and finds no `runtime:` completions.
+    #[test]
+    fn every_template_depends_on_the_type_definitions() {
+        for (name, files) in TEMPLATES {
+            let found = files.iter().any(|(path, contents)| {
+                path.ends_with("package.json")
+                    && String::from_utf8_lossy(contents).contains("@opentf/esrun-types")
+            });
+            assert!(found, "{name} has no @opentf/esrun-types dev dependency");
+        }
+    }
+
     #[test]
     fn the_list_names_every_embedded_template() {
         let listed = list();

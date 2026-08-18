@@ -19,7 +19,7 @@
     "prepublishOnly": "npm run build"
   },
   "devDependencies": {
-    "@opentf/esrun-types": "^0.1.0",
+    "@opentf/esrun-types": "latest",
     "typescript": "^5.9.0"
   }
 }

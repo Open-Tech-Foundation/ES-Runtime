@@ -15,7 +15,7 @@
     "react-router": "^8.3.0"
   },
   "devDependencies": {
-    "@opentf/esrun-types": "^0.1.0",
+    "@opentf/esrun-types": "latest",
     "react-refresh": "^0.18.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
