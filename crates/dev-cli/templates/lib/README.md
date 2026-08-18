@@ -1,11 +1,13 @@
 # {{name}}
 
-A publishable TypeScript package. **Nothing it ships depends on, and no bundler config.**
+A publishable TypeScript package built with the
+[ES Runtime](https://esrun.opentechf.org) toolchain. **Nothing it ships depends
+on, and there is no bundler config.**
 
 ```sh
-npm install       # TypeScript and the runtime: types, both dev-only
+npm install       # TypeScript and the runtime's types, both dev-only
 npm test
-npm run build     # → dist/, with .d.ts beside each module
+npm run build     # → dist/, with a .d.ts beside each module
 ```
 
 ## What is here
@@ -13,9 +15,16 @@ npm run build     # → dist/, with .d.ts beside each module
 | | |
 | --- | --- |
 | `src/index.ts` | **The public surface.** Everything a consumer can reach is re-exported here |
-| `src/result.ts` | An example module |
-| `src/retry.ts` | A second one, with behaviour worth testing |
+| `src/greeting.ts` | **Start here.** The one module this package has |
 | `package.json` | `exports` points at `dist/`, `files` publishes only that |
+
+## Commands
+
+| | |
+| --- | --- |
+| `npm test` | `esdev test` — every `*.test.ts` |
+| `npm run build` | `esdev build --lib src` |
+| `npm run typecheck` | `tsc --noEmit`. esdev erases types and never checks them |
 
 ## A library is not an application
 
@@ -23,65 +32,24 @@ npm run build     # → dist/, with .d.ts beside each module
 
 | | |
 | --- | --- |
-| **Module structure is kept** | One file in, one file out. That is what makes a subpath `exports` map possible, keeps a stack trace pointing at a module, and lets a test import an internal file the package does not export |
+| **Module structure is kept** | One file in, one file out — what makes a subpath `exports` map possible and keeps a stack trace pointing at a module |
 | **Dependencies stay external** | Inlining one ships a private copy your consumer cannot dedupe, override or patch |
-| **Nothing is defined, no condition asserted** | `NODE_ENV` and `worker` are your *consumer's* build's call. Baking them in freezes their environment into your package |
+| **Nothing is defined, no condition asserted** | `NODE_ENV` and `worker` are your *consumer's* build's call |
 | **`.d.ts` travels with the `.js`** | A library is a typed contract |
 
-## The declarations come from your annotations
+## Annotate every export
 
-They are **derived, never inferred** — which is what makes emitting them fast
-and exact. The cost is one rule:
+The declarations are **derived, never inferred**, which is what makes emitting
+them fast and exact. The cost is one rule: a function whose return type is left
+to inference cannot be emitted, and the build says so rather than guessing.
+`tsconfig.json` turns on `isolatedDeclarations`, so `npm run typecheck` reports
+it before the build does.
 
-```ts
-export function ok<T>(value: T): Ok<T> { … }   // ✅ annotated
-export function ok<T>(value: T) { … }          // ❌ the build says so
-```
+## Docs
 
-`tsconfig.json` sets `isolatedDeclarations`, so your editor tells you before the
-build does.
+[esrun.opentechf.org/docs](https://esrun.opentechf.org/docs) ·
+[API](https://esrun.opentechf.org/api) ·
+[GitHub](https://github.com/Open-Tech-Foundation/ES-Runtime)
 
-## The public surface is one file
-
-`package.json`'s `exports` names `dist/index.js` and nothing else. A module not
-re-exported from `src/index.ts` is internal: it can be renamed or deleted
-without a major version, because nothing could have imported it.
-
-Add a second entry point deliberately:
-
-```json
-"exports": {
-  ".":       { "types": "./dist/index.d.ts",  "default": "./dist/index.js" },
-  "./retry": { "types": "./dist/retry.d.ts",  "default": "./dist/retry.js" }
-}
-```
-
-That works *because* module structure is preserved — `./retry` has to be a real
-file for a consumer to import it.
-
-## Publishing
-
-```sh
-npm version minor
-npm publish
-```
-
-`prepublishOnly` runs the build, so what is published is always current. `files`
-is `["dist"]`, so `src/` and the tests stay out of the tarball — check with
-`npm pack --dry-run`.
-
-## Tests
-
-```sh
-npm test
-```
-
-`esdev test` runs each file directly. There is no framework, no config, and no
-build step between the source and the test — a test imports the module beside
-it, including ones the package does not export.
-
-## Types for `runtime:`
-
-`@opentf/esrun-types` is already a dev dependency and already named in
-`tsconfig.json`, so `npm run typecheck` works on a fresh clone. Types are for
-your editor and that command; `esdev` erases them and never checks them.
+Part of the [Open Tech Foundation](https://github.com/Open-Tech-Foundation)
+ecosystem.
