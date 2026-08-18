@@ -28,6 +28,7 @@ const NAV = [
       { title: "Starting a project", path: "/docs/esdev/create" },
       { title: "TypeScript setup", path: "/docs/esdev/typescript" },
       { title: "Bundling", path: "/docs/esdev/build" },
+      { title: "Writing a plugin", path: "/docs/esdev/plugins" },
       { title: "The dev loop", path: "/docs/esdev/start" },
       { title: "Testing", path: "/docs/esdev/test" },
       { title: "Debugging", path: "/docs/esdev/debugging" },

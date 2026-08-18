@@ -100,7 +100,7 @@ at all.
 | Field | Type | Description |
 | --- | --- | --- |
 | `output` | `(OutputChunk \| OutputAsset)[]` | Chunks carry `code`, `fileName`, `isEntry`, `moduleIds`, `imports`, `dynamicImports`, `map`. |
-| `watchFiles` | `string[]` | Every file the build read, **plus** every file a plugin declared with `this.addWatchFile()`. |
+| `watchFiles` | `string[]` | Every file the build read, **plus** every file a plugin returned as [`dependsOn`](#dependson). |
 | `warnings` | `string[]` | The bundler's warnings and the plugins'. |
 
 `watchFiles` is the reason this returns more than code. Paired with
@@ -111,15 +111,12 @@ cache.
 
 ## Plugins
 
-The plugin system is **ours**, not the bundler's passed through. That matters
-for a reason beyond taste: the `runtime:` namespace is a versioned contract, and
-an API defined by a third party's trait moves when that trait moves. rolldown is
-an *implementation* of what follows, not the definition of it.
-
-A plugin is an object with a name and hooks. **A hook is an object carrying a
-`handler`** — there is one form, and rollup's bare-function shorthand is
-refused, because accepting it would make the filter, the order and the context
-argument optional extras on somebody else's design.
+A plugin is an object with a `name` and hooks; **a hook is an object carrying a
+`handler`**, and rollup's bare-function shorthand is refused. The system is this
+project's own rather than the bundler's passed through — see
+[Writing a plugin](/docs/esdev/plugins) for how, and
+[Internals: the bundler bridge](/docs/internals/bundler) for why and what it
+costs.
 
 ```js
 const mdx = {
@@ -144,120 +141,81 @@ const mdx = {
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
 
-Five, against rollup's twenty-odd. Each one is a promise a future bundler behind
-this has to keep, so the list is short deliberately and grows only when
-something cannot be written without it. `null` means *not mine* — the one
-convention worth keeping, because a hook has to be able to decline. Everything
-else must be the object: a bare string of code is refused with a message saying
-so.
+`null` or nothing means *not mine*, and the next plugin gets a turn. Anything
+else must be the object — a bare string of code is refused by name. Data comes
+first and the context last, with nothing positional between them.
 
-`resolve` + `load` together are how a **virtual module** works — a specifier
-that exists on no disk, whose content the plugin invents. That is why this is a
-plugin API and not a "pipe source through a subprocess" protocol: there is
-nothing to pipe.
+### A hook's answer
 
-### filter — and why it matters more here
+| Field | Hooks | Description |
+| --- | --- | --- |
+| `code` | `load`, `transform` | **Required.** The module's source. |
+| `type` | `load`, `transform` | How to treat it — `"js"`, `"jsx"`, `"ts"`, `"css"`, … Omitted, the extension decides. |
+| `map` | `load`, `transform` | A source map: an object, or the JSON string every tool that makes one already produces. |
+| `dependsOn` | any | Files this answer depends on that the graph cannot discover. Relative paths resolve like every other path in a run and land in `watchFiles` absolute. |
+| `id` | `resolve` | Where the specifier points. |
+| `external` | `resolve` | `true`, `"absolute"` or `"relative"`. |
+| `virtual` | `resolve` | There is no file behind this id; do not go looking for one. |
 
-```js
-transform: {
-  filter: { id: /\.mdx$/, code: /^---/ },
-  handler(code, id, ctx) { … },
-}
-```
+<span id="dependson"></span>
+
+`dependsOn` is **returned rather than declared through a side effect** — there
+is no `this.addWatchFile()` — because a dependency you can forget to declare
+produces a build that serves stale output.
+
+### filter
 
 | | |
 | --- | --- |
-| `filter.id` | a string (**exact**), a `RegExp`, or an array of either |
+| `filter.id` | a string (**exact**), a `RegExp`, or an array of either. On `resolve`, matched against the specifier |
 | `filter.code` | the same, matched against the source — `transform` only |
-| both given | a module has to satisfy each |
+| both given | a module has to satisfy each; within one, any pattern will do |
 
-In rollup a hook that returns `null` costs a function call. Here it costs a
-**round trip into your isolate**, so an unfiltered `transform` is one crossing
-*per module in the graph* — four hundred of them on a middling app, to reach a
-plugin that wanted one `.mdx` file. The filter is matched on the host's side,
-before anything crosses, which is why it is declarative rather than a predicate
-you write.
-
-A pattern the host cannot evaluate (JavaScript's regular expressions are larger
-than what the matcher supports — lookbehind, backreferences) stops filtering
-rather than failing: the hook is called for everything, and your own code
-decides. Excluding modules a plugin was meant to see is the expensive way to be
-wrong.
-
-### dependsOn — dependencies are returned, not declared
-
-```js
-load: {
-  filter: { id: "@app/nav" },
-  async handler(id, ctx) {
-    return {
-      code: `export default ${JSON.stringify(await readNav())};`,
-      dependsOn: ["docs/_meta.js"],     // imported by nothing; watched anyway
-    };
-  },
-}
-```
-
-Rollup has `this.addWatchFile()` — a call you can forget to make, and forgetting
-it produces a build that serves stale output, which is the failure hardest to
-notice and worst to debug. Here they are a field of the value you return.
-Relative paths resolve like every other path in a run, and land in
-`watchFiles` as the same absolute path the graph reports.
-
-### virtual — no NUL-byte convention
-
-```js
-resolve: {
-  filter: { id: "@app/nav" },
-  handler: () => ({ id: "@app/nav", virtual: true }),
-}
-```
-
-Rollup signals "there is no file behind this id" by prefixing it with a NUL
-byte, and every bundler descended from it inherited the convention. Say
-`virtual: true` instead; the notation is the backend's business, applied and
-stripped where it belongs, and your `load` filter still matches the id you
-named.
+Matched on the host's side, before anything crosses into the isolate — so an
+unfiltered `transform` costs one crossing **per module in the graph**. A pattern
+the matcher cannot evaluate (lookbehind, backreferences) stops filtering rather
+than failing, and the hook is called for everything. `start` and `end` run once
+for the whole build and cannot be filtered.
 
 ### order
 
-```js
-transform: { order: "pre", filter: { id: /\.mdx$/ }, handler }
-```
-
-`"pre"` runs before the unordered plugins, `"post"` after. For when one pass has
-to see a module before another does.
+`"pre"` runs before the unordered plugins, `"post"` after; within a group,
+declaration order. Anything else is refused.
 
 ### ctx — the last argument, not `this`
 
 | Member | Description |
 | --- | --- |
-| `ctx.resolve(source, importer?)` | Asks the bundler's resolver, mid-hook. `null` if nothing resolves. |
-| `ctx.emit({ type, … })` | Adds a chunk or asset to a running build; returns a reference id. |
-| `ctx.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`. |
+| `ctx.resolve(source, importer?, options?)` | Asks the build's resolver, mid-hook. `null` if nothing resolves. Pass `{ skipSelf: true }` from inside a `resolve` hook, or it re-enters your own. |
+| `ctx.emit({ type, … })` | Adds a chunk (`{ type: "chunk", id }`) or an asset (`{ type: "asset", source, fileName? }`) to a running build; returns a reference id. |
+| `ctx.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`, prefixed with the plugin's name. |
 | `ctx.error(msg)` | Fails the build. Throws — it does not return. |
 | `ctx.isEntry` | On `resolve`: whether the specifier is an entry. |
 
-The context is an **argument**, so an arrow-function handler keeps it. Rollup's
-context-as-`this` is silently lost by an arrow, and a hook whose `this.resolve`
-is undefined fails a long way from the arrow that caused it.
+An argument, so an arrow-function handler keeps it. Live only while its hook
+runs: stashing `ctx` and calling it later throws.
 
-It is live only while its hook runs. Stashing `ctx` and calling `resolve()`
-later throws — by then it may name a build that no longer exists.
+### Rejections
 
-### A plugin is guest code
+Every declaration is read when `build()` is called, so a bad one rejects there
+rather than at `generate()`.
 
-It runs in your isolate, under the same capability model as the rest of your
-program: a plugin that reads a file needs `FileRead`, like anything else. No
-other bundler's plugin API can say what a plugin is *allowed* to do, because
-none of them has a capability model to say it in.
+| Written | Message |
+| --- | --- |
+| a bare function as a hook | `a hook is an object, not a function — write { handler(...) {} }, optionally with filter and order` |
+| an unknown hook name | `unknown hook "transfrom". Did you mean "transform"?` |
+| `filter` on `start`/`end` | `this hook runs once, for the whole build, so it cannot be filtered` |
+| `filter.code` off `transform` | `only transform can filter on code — it is the only hook given any` |
+| `order` other than pre/post | `order must be "pre" or "post", got "first"` |
+| a string from `load`/`transform` | `must return an object or null — return { code } instead` |
 
 <Callout type="note" title="Where hooks run">
-  The bundler works on threads of its own; a hook runs **here**, in your
-  isolate, and the bundler waits for it. Several hooks can be in flight at once,
-  so a slow plugin holds up its own module rather than the whole build — but a
-  hook that blocks the isolate synchronously blocks everything, your server
-  included. Keep them `async`.
+  A plugin is guest code in **your** isolate, under the capability model: one
+  that reads a file needs `FileRead`. The bundler works on threads of its own
+  and waits for each hook; several can be in flight at once, so a slow plugin
+  holds up its own module rather than the build — but a hook that blocks the
+  isolate synchronously blocks everything, your server included. Keep them
+  `async`.
 </Callout>
 
 ## Example: a dev server that rebuilds one route

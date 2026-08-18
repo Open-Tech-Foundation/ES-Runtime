@@ -1,0 +1,286 @@
+---
+title: Writing a plugin
+description: esdev's own plugin system — five hooks running in your isolate, declarative filters, and dependencies that are returned rather than declared.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# Writing a plugin
+
+A plugin is how you put your own code inside a build: invent a module that has
+no file, rewrite one that does, or tell the watcher about a file the graph could
+never have found. The system is **this project's own** — rolldown is behind it,
+but nothing rolldown names reaches through, because the `runtime:` namespace is
+a versioned contract and an API defined by somebody else's trait moves when
+that trait moves.
+
+<Callout type="info" title="Plugins are a `runtime:build` thing">
+  They are written in JavaScript and passed to [`build()`](/api/build), so they
+  exist for a program that bundles — a framework's dev server, a site
+  generator. There is no plugin field in `esdev.json` and no `--plugin` flag on
+  [`esdev build`](/docs/esdev/build): a plugin is a function, and a config file
+  that is read to decide permissions cannot execute one. And because
+  `runtime:build` is esdev-only, none of this is in the binary that serves
+  production.
+</Callout>
+
+## A plugin is an object
+
+It has a `name` and some hooks. **A hook is an object carrying a `handler`** —
+there is one form, and rollup's bare-function shorthand is refused rather than
+accepted, because taking both would make the filter, the order and the context
+argument optional extras on somebody else's design.
+
+```js
+const text = {
+  name: "text",
+  transform: {
+    filter: { id: /\.txt$/ },
+    handler(code, id, ctx) {
+      return {
+        code: `export default ${JSON.stringify(code.trim())};`,
+        type: "js",
+      };
+    },
+  },
+};
+```
+
+That is a complete, working plugin: it makes `import greeting from
+"./hello.txt"` mean the file's contents. Hand it to a build and run it —
+
+```js
+import { build } from "runtime:build";
+
+const bundle = await build({ input: "app/main.js", plugins: [text] });
+const { output } = await bundle.generate({ format: "esm", codeSplitting: false });
+console.log(output[0].code);
+await bundle.close();
+```
+
+```sh
+esdev build.mjs
+```
+
+Returning `null` — or nothing — means *not mine*, and the next plugin gets a
+turn. It is the one rollup convention worth keeping, because a hook has to be
+able to decline. Anything else must be the object: a bare string of code is
+refused by name.
+
+`type` is worth the eight characters. It says how the code you just returned
+should be treated, and omitting it leaves that to the **extension** — which for
+`.txt` is not JavaScript, so the module you carefully wrote comes out the far
+side as a string literal instead of an `export`. Set it whenever the code you
+return is a different language from the file it came from: `"js"`, `"jsx"`,
+`"ts"`, `"css"`.
+
+## The five hooks
+
+| Hook | Handler | Returns |
+| --- | --- | --- |
+| `start` | `(ctx)` | `{ dependsOn }`, or nothing |
+| `resolve` | `(source, importer, ctx)` | `{ id, external?, virtual? }`, or `null` |
+| `load` | `(id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
+| `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
+| `end` | `(error, ctx)` | nothing |
+
+Five, against rollup's twenty-odd. Each is a promise whatever bundler sits
+behind this has to keep, so the list is short on purpose. Data comes first and
+the context comes last, with nothing positional in between: anything one
+particular hook needs to say — `isEntry`, on a resolve — rides on the context
+rather than shifting the signature.
+
+## Always write a filter
+
+```js
+transform: {
+  filter: { id: /\.mdx$/, code: /^---/ },
+  handler(code, id, ctx) { … },
+}
+```
+
+| | |
+| --- | --- |
+| `filter.id` | a string (**exact**, not a substring), a `RegExp`, or an array of either |
+| `filter.code` | the same, matched against the source — `transform` only |
+| both given | a module has to satisfy each; within one, any pattern will do |
+
+This is the part with no equivalent in rollup, and the part that decides whether
+your dev server feels fast. In rollup a hook that returns `null` costs a
+function call. Here it costs a **round trip into your isolate**, so an
+unfiltered `transform` is one crossing *per module in the graph* — four hundred
+of them on a middling app, to reach the one `.mdx` file you wanted. The filter
+is matched on the host's side, before anything crosses.
+
+A pattern the matcher cannot evaluate — JavaScript's regular expressions are
+larger than what it supports, so lookbehind and backreferences are out — stops
+filtering rather than failing. The hook is then called for everything and your
+own code decides, because excluding modules a plugin was meant to see is the
+expensive way to be wrong.
+
+`start` and `end` run once for the whole build, with no module in hand, so a
+filter on either is refused rather than ignored.
+
+## A module with no file
+
+`resolve` says where a specifier points; `load` says what is there. Together
+they are a **virtual module** — a specifier that exists on no disk, whose
+contents the plugin invents.
+
+```js
+const nav = {
+  name: "nav",
+  resolve: {
+    filter: { id: "@app/nav" },
+    handler: () => ({ id: "@app/nav", virtual: true }),
+  },
+  load: {
+    filter: { id: "@app/nav" },
+    async handler(id, ctx) {
+      return {
+        code: `export default ${JSON.stringify(await readNav())};`,
+        dependsOn: ["docs/_meta.js"],
+      };
+    },
+  },
+};
+```
+
+`virtual: true` is how you say there is no file behind the id. Rollup signals
+that by gluing a NUL byte to the front of the id, and every bundler descended
+from it inherited the convention; here the notation is the backend's business,
+applied and stripped where it belongs, so your `load` filter still matches the
+id you actually wrote.
+
+## dependsOn, or you will serve stale output
+
+`docs/_meta.js` above is imported by nothing. The graph cannot discover it, so
+without a word from the plugin a change to it rebuilds nothing — and the failure
+shows up as a page that is quietly out of date, which is the worst kind to
+debug.
+
+Rollup's answer is `this.addWatchFile()`, a call you can forget to make. Here
+the dependency is **a field of the value you return**, which is not forgettable
+in the same way. Relative paths resolve like every other path in a run, and come
+back absolute:
+
+```text
+--- watchFiles --- ["/app/docs/_meta.js", "/app/main.js", "/app/hello.txt"]
+```
+
+`start` is where a whole-build dependency goes — a config file, a manifest —
+since it has no module to hang an answer on:
+
+```js
+start: { handler: () => ({ dependsOn: ["esdev.json"] }) }
+```
+
+## The context
+
+The last argument of every handler, never `this`.
+
+| Member | Description |
+| --- | --- |
+| `ctx.resolve(source, importer?, options?)` | Asks the build's own resolver, mid-hook. `null` when nothing resolves. |
+| `ctx.emit({ type, … })` | Adds a chunk or an asset to a build already running; returns a reference id. |
+| `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
+| `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
+| `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |
+
+It is an argument so that an arrow-function handler keeps it. Rollup's
+context-as-`this` is silently lost by an arrow, and a hook whose `this.resolve`
+is undefined fails a long way from the arrow that caused it.
+
+It is also live only while its hook runs. Stash `ctx` and call it later and it
+throws — by then it may name a build that no longer exists.
+
+<Callout type="warning" title="Calling ctx.resolve from your own resolve hook">
+  Pass `{ skipSelf: true }`, or your hook resolves through itself and the build
+  never finishes:
+
+  ```js
+  const found = await ctx.resolve(source, importer, { skipSelf: true });
+  ```
+</Callout>
+
+`emit` puts a file beside the output, or adds an entry to a build in flight:
+
+```js
+ctx.emit({ type: "asset", fileName: "meta.json", source: '{"built":true}' });
+ctx.emit({ type: "chunk", id: "/app/admin.js" });
+```
+
+## order
+
+```js
+transform: { order: "pre", filter: { id: /\.mdx$/ }, handler }
+```
+
+`"pre"` runs before the unordered plugins and `"post"` after, for when one pass
+has to see a module before another does. Within a group, plugins run in the
+order you listed them.
+
+```text
+order: pre-one -> normal -> post-one
+```
+
+## What the build hands back
+
+```js
+const { output, watchFiles, warnings } = await bundle.generate({ format: "esm" });
+```
+
+`watchFiles` is every file the build read **plus** every file a plugin declared,
+which is what makes an incremental dev server possible: pair it with
+[`runtime:watch`](/api/watch) and drop the three cached chunks whose
+dependencies changed rather than all forty. `warnings` carries the bundler's and
+yours.
+
+## When you get it wrong
+
+The declaration is checked when `build()` is called, not at the `generate()`
+three lines later, so the rejection lands on the line that wrote it.
+
+| Written | What it says |
+| --- | --- |
+| `transform(code, id) {}` | `p.transform: a hook is an object, not a function — write { handler(...) {} }, optionally with filter and order` |
+| `transfrom: { … }` | `p: unknown hook "transfrom". Did you mean "transform"?` |
+| `start: { filter: … }` | `p.start: this hook runs once, for the whole build, so it cannot be filtered` |
+| `load: { filter: { code: … } }` | `p.load: only transform can filter on code — it is the only hook given any` |
+| `order: "first"` | `p.transform: order must be "pre" or "post", got "first"` |
+| `handler: () => "export {}"` | `transform must return an object or null — return { code } instead` |
+
+A handler that throws fails the build with what it threw, stack and all — a
+plugin error arriving as a bare "build failed" would be the worst outcome of
+running hooks on a different thread from the bundler.
+
+## Where your plugin actually runs
+
+In **your** isolate, under the same capability model as the rest of your
+program: a plugin that reads a file needs `FileRead`, like anything else. No
+other bundler's plugin API can state what a plugin is allowed to do, because
+none of them has a capability model to state it in.
+
+The bundler works on threads of its own and posts each hook call over; several
+can be in flight at once, so a slow plugin holds up its own module rather than
+the whole build. A hook that blocks the isolate *synchronously* blocks
+everything, your server included — so keep handlers `async` and do the waiting
+with `await`.
+
+<Callout type="note" title="Your plugins are not the only passes">
+  esdev's own CSS Modules scoping and React Fast Refresh are written against
+  this same contract and travel in the same ordered list as yours. That is what
+  keeps it honest: a contract with one implementation always fits, and before
+  these shared it, `runtime:build` shipped without the CSS pass the `build`
+  subcommand installed — one project, two different builds depending which door
+  it came in.
+</Callout>
+
+## See also
+
+- [`runtime:build`](/api/build) — the options, the `Bundle`, and every field of
+  a hook's answer
+- [Internals: the bundler bridge](/docs/internals/bundler) — how a hook call
+  gets from a parallel Rust bundler into a single-threaded isolate and back,
+  and what it costs
+- [`runtime:watch`](/api/watch) — the other half of an incremental dev server
