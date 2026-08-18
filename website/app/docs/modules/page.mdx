@@ -135,6 +135,32 @@ pattern capture cannot be used to walk out.
   root is refused, even via symlink — the sandbox is the default, not an option.
 </Callout>
 
+### The project root
+
+One directory answers two questions: how far up the `node_modules` walk goes, and
+what the filesystem jail is anchored to. It is detected from the entry file — the
+nearest ancestor holding a `package.json` or a `node_modules` directory — with
+one exception that matters: **a directory inside `node_modules` is never a
+root**. An installed package's `package.json` describes a dependency, not a
+project, so running an installed program by its own path anchors at the tree that
+installed it, where its hoisted dependencies live:
+
+```sh
+esrun node_modules/@acme/cli/src/cli.js   # root: the project, not @acme/cli
+```
+
+`--root=<dir>` names the root instead, for the layouts detection cannot infer —
+a workspace whose packages sit under a `node_modules` installed at the top:
+
+```sh
+esrun --root=. packages/app/server.js
+```
+
+The named root must exist and must contain the entry, and both are checked
+before the program starts. It moves the jail as well as the walk: a wider root
+is a wider filesystem, which is why it is a flag on the command line and
+nothing guest code can reach.
+
 ## The runtime: scheme
 
 Built-in host APIs are not globals. They are imported under the `runtime:`

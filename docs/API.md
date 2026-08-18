@@ -235,6 +235,29 @@ is guessed. Bare specifiers resolve through `node_modules`, honouring the
 package's `exports` map; symlinks resolve to their real path (pnpm's store works
 as-is), and every resolved module is confined to the project root.
 
+### The project root
+
+One directory answers two questions: how far up the `node_modules` walk goes, and
+what the [filesystem jail](#capabilities) is anchored to. It is detected from
+the entry file — the nearest ancestor holding a `package.json` or a
+`node_modules` directory — with one exception that matters: **a directory inside
+`node_modules` is never a root**. An installed package's own `package.json`
+describes a dependency, not a project, so running `node_modules/@acme/cli/cli.js`
+anchors at the tree that *installed* `@acme/cli`, which is where a package
+manager hoists the dependencies that package imports.
+
+`--root=<dir>` names it instead, for the layouts detection cannot infer:
+
+```sh
+esrun --root=. packages/app/server.js     # a workspace: deps live at the top
+```
+
+The named root must exist and must contain the entry; both are checked before
+the program starts, because the alternative is a run that reports every import
+as escaping a root the user typed themselves. It moves the jail as well as the
+walk — a wider root is a wider filesystem, which is why it is a flag on the
+command line and nothing guest code can reach.
+
 ### Conditions
 
 The conditions asserted are **`import` and `default`** — the standard ones, and

@@ -279,6 +279,13 @@ project root. Paths are canonicalized to their real location before the check, s
 a symlink cannot be used to escape the jail. This is on by default and is not
 currently optional.
 
+The root is detected from the entry file: the nearest ancestor holding a
+`package.json` or a `node_modules` directory, never a directory inside
+`node_modules` (an installed package is a dependency, not a project). `--root=<dir>`
+names it instead — it widens the jail as well as the module walk, which is why
+only the command line can set it and guest code can never move it. See
+[The project root](/docs/modules#the-project-root).
+
 <Callout type="danger" title="Root jail in action">
   Untrusted JS calls `file("../../etc/passwd")` → the **FileRead** capability
   check and **Root Jail** check run in the trusted Rust host → the path

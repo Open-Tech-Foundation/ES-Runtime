@@ -661,6 +661,26 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D79 — An installed package is not a project root · *Proposed (2026-08-18)* · *amends D25, D24*
+
+**Context:** A field report, and a blocker for anything installed from npm: `esdev node_modules/@acme/cli/src/cli.js` could not import `leftpad`, with `no node_modules/leftpad under the project root <proj>/node_modules/@acme/cli`. The root is detected as the nearest ancestor of the entry holding a `package.json` or a `node_modules` (D25), and an installed package has a `package.json` — so the detection stopped inside the dependency, and the `node_modules` walk, which stops at the root, could never reach the sibling directory the package manager hoists into. Every package manager hoists; the entry point of any installed CLI therefore could not run. No flag helped, because none of them move the loader: `--allow-read=/` widens `runtime:fs` and `--import-policy` only narrows what an already-reachable module may be.
+
+The bug is a category error in the detection rule. `package.json` means "a package is here", and the two questions "which package is this file in" and "where does this project begin" have the same answer only outside `node_modules`.
+
+**Decision (maintainer sign-off pending):**
+
+- **A directory inside `node_modules` is never a project root.** Detection skips any candidate with a `node_modules` path component and keeps walking, so an installed program anchors at the tree that installed it. The walk stays bounded without a special case: the parent of the outermost `node_modules` contains one by construction, so it always matches.
+
+- **`--root=<dir>` names the root when detection cannot infer it** — D24's deferred "relax flag", arrived at from the other direction. It sets one thing, not two: the same directory bounds the `node_modules` walk and anchors the filesystem jail, because a project that resolves modules from one tree and reads files from another is two sandboxes with one name. A workspace whose packages are entries and whose dependencies are installed at the top is the case it exists for.
+
+- **The root is checked before the program starts:** it must exist, be a directory, and contain the entry. A root the entry is outside of is a mistake, and left to the loader it would surface as *every* import escaping a root the user typed themselves — one mistake reported a hundred times, in a message about the wrong thing.
+
+- **`esdev`'s watcher asks the loader's rule rather than copying it.** `watch_root` walked to the nearest `package.json` itself, with a comment claiming it matched the loader; it now calls `detect_root` and honours `--root`, so what is watched and what can be imported cannot drift apart.
+
+**Consequences:** an npm-installed program runs under both binaries, resolving hoisted, nested and pnpm-symlinked dependencies alike; the jail moves out with it, from the package to the project, which is a wider default reach for that entry and exactly the tree the program was installed into. `--root` widens both walls at once and only from the command line, so nothing guest code does can move it. The not-found message names the flag, since "the root is above where I looked" is the remaining reason a package that is installed is not found. Verified by the reported reproduction end to end (failing before, passing after), 2 unit tests and 4 CLI tests — hoisted resolution, the jail still holding above the project, `--root` reaching a workspace top, and both up-front `--root` refusals. **Not solved here:** `data:`/`blob:` imports remain rejected, and remote modules remain out (D22) — those are what the loader may load, not where it may look.
+
+---
+
 ### D78 — A build that fails changes nothing · *Proposed (2026-08-18)* · *amends D59's "the build owns its output"*
 
 **Context:** `esdev build` wrote straight into `dist`, and a whole-project release build **emptied `dist` first** — the rule from D59 and the `--lib` build before it, and a rule with a real reason: output filenames are content-hashed, so `app-1a2b.js` becoming `app-9f8e.js` leaves the old one in the deployed directory for ever. Put together, those two make a failure destructive twice over, which the react static template demonstrates without any help: with no `node_modules` the browser assets, the `index.html` and the prerender bundle are all written, and then the `then: "run"` step exits non-zero. What is in `dist` at that moment is a site whose pages were never rendered, sitting where the deployment that *did* work used to be. Nothing about the directory says so, and in CI it is what gets uploaded.
