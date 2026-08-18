@@ -4,10 +4,11 @@
 //! The wiring itself — the default tokio providers, the [`Runtime`], the module
 //! load and the drive loop — lives in `es-runtime-cli-common` and is shared with
 //! `esdev`, so a program behaves identically under either binary (SPEC.md §8).
-//! What remains here is `esrun`'s own command line: its flags and its `upgrade`
-//! subcommand. Nothing here is for development — the TypeScript definitions used
-//! to be installed from this binary and now belong to `esdev`, which is the one
-//! a developer runs (D59).
+//! What remains here is `esrun`'s own command line: its flags, and the
+//! `upgrade` subcommand it shares with `esdev` (`cli_common::upgrade`). Nothing
+//! here is for development — the TypeScript definitions used to be installed
+//! from this binary and now belong to `esdev`, which is the one a developer
+//! runs (D59).
 //!
 //! Every input runs as an ES module: `import`/`export` and top-level `await`
 //! work. Imports resolve via `NodeModuleLoader`: relative/absolute paths and
@@ -46,231 +47,66 @@ use es_runtime_cli_common::{Config, Source};
 const USAGE: &str = "\
 esrun — run JavaScript (ES modules) on the ES-Runtime
 
-Every flag is either `--flag` or `--flag=value`. A value is never a separate
-argument: `--timeout=500`, not `--timeout 500`.
+Every flag is `--flag` or `--flag=value`. A value is never a separate argument:
+`--timeout=500`, not `--timeout 500`. Flags come before the file; everything
+after it belongs to the script, readable as `args` from runtime:process.
 
 USAGE:
-    esrun <file>                Run a JavaScript module file
+    esrun [options] <file> [args...]
+                                Run a JavaScript module file
     esrun -e=<code>             Run an inline module snippet
-    esrun --allow-<name>        Grant one capability; repeatable
-                                <name> is one of: read, write, imports, net,
-                                listen, env, run, signals, workers
-    esrun --allow-all, -A       Grant every capability (unsandboxed)
-    esrun --deny-<name>         Take one back; requires --allow-all; repeatable
-    esrun --deny-all            Grant nothing — the default, said outright
-    esrun --allow-<name>=<list> Grant it narrowed to a comma-separated list:
-                                read/write (paths), net/listen (addresses),
-                                run (programs), env (variable names),
-                                signals (signal names). imports and workers
-                                take no list — a worker's own grant is set at
-                                the spawn, `new Worker(url, { permissions })`
-    esrun --import-policy=<file>
-                                JSON policy for what may be loaded (allow/deny
-                                lists of packages and paths)
-    esrun -t=<ms>, --timeout=<ms>
-                                Stop execution after <ms> ms (watchdog, SPEC §4)
-    esrun --max-heap=<mb>       Heap ceiling in megabytes, for this agent and as
-                                the ceiling its workers inherit. Default: sized
-                                from the container's memory limit, or the host's
-                                memory when there is none
-    esrun --env-file=<path>     Load env vars from a .env file
-    esrun --env-override        Let --env-file values override the OS environment
-    esrun --shutdown-grace=<ms> How long in-flight HTTP requests may finish after
-                                ^C/SIGTERM (default 10000)
     esrun upgrade               Update esrun to the latest release
     esrun -h, --help            Show this help
     esrun -v, --version         Show the version
 
-Inputs run as ES modules: import/export and top-level await work. Imports
-resolve as local files (relative/absolute paths or file: URLs) and as bare
-specifiers through node_modules (ES module packages only — CommonJS packages
-and node: builtins are rejected; nothing is installed). Static and dynamic
-import() both work; import attributes (`with { type: \"json\" }`) are supported.
-Remote (`https://`) modules are explicitly unsupported to enforce a local-only security model.
-The full WinterTC surface is available (console, URL, fetch, crypto, streams,
-encoding, timers, events).
+PERMISSIONS:
+    --allow-<name>[=<list>]     Grant one capability, optionally narrowed to a
+                                comma-separated list; repeatable. <name> is one
+                                of: read, write, imports, net, listen, env, run,
+                                signals, workers
+    -A, --allow-all             Grant every capability (unsandboxed)
+    --deny-<name>               Take one back; requires --allow-all; repeatable
+    --deny-all                  Grant nothing — the default, said outright
+    --import-policy=<file>      JSON policy for what may be *loaded*, which is a
+                                separate question from what running code reaches
 
-Nothing is granted by default: a run reaches what it was named on the command
-line that started it, and nothing else. Widen it in one of two ways, never both —
-each has a single direction, so no flag ever overrides another:
+OPTIONS:
+    -t, --timeout=<ms>          Stop execution after <ms> (watchdog, SPEC §4)
+    --max-heap=<mb>             Heap ceiling in megabytes, for this agent and as
+                                the ceiling its workers inherit. Default: sized
+                                from the container's memory limit, or the host's
+    --env-file=<path>           Load env vars from a .env file
+    --env-override              ...and let them override the OS environment
+    --shutdown-grace=<ms>       How long in-flight HTTP requests may finish
+                                after ^C/SIGTERM (default 10000)
 
-    esrun --allow-net --allow-read app.js  # nothing, plus these
-    esrun --allow-net=api.example.com app.js   # ...and only there
-    esrun --allow-all --deny-run app.js    # everything, minus these
+Nothing is granted by default: a run reaches what the command line that started
+it named, and nothing else. Widen it in one of two directions, never both, so
+no flag ever overrides another:
 
---deny-<name> requires --allow-all (with nothing granted, there is nothing for
-it to take away). A denied operation throws NotAllowedError; importing a
-runtime: module always works. With no flags at all a run is a single file: it
-can compute, but cannot read, write, import another file, reach the network,
-read the environment, or spawn anything — a multi-file program needs at least
---allow-imports. Ask from JS with `permissions.has(name)` from runtime:process.
+    esrun app.js                              # granted nothing
+    esrun --allow-net --allow-read app.js     # nothing, plus these
+    esrun --allow-net=api.example.com app.js  # ...and only there
+    esrun --allow-all --deny-run app.js       # everything, minus these
 
-A scope list narrows a grant. --allow-env=HOME,PATH hides every other variable;
---allow-run=git,ls refuses to spawn anything else; --allow-net=api.example.com
-refuses every other host, on every redirect hop as well as the first request;
---allow-listen=127.0.0.1:8080 refuses every other bind; --allow-read=./data
-refuses every other path; --allow-signals=SIGTERM refuses to watch anything
-else.
+A scope list narrows a grant: hosts for net/listen, paths for read/write,
+programs for run, variable names for env, signal names for signals. Matching is
+exact, after canonicalization — example.com does not admit api.example.com, and
+there are no wildcards. A denied operation throws NotAllowedError; importing a
+runtime: module always works. Ask from JS with `permissions.has(name)` from
+runtime:process.
 
-An address is a host, a host:port, or a bare port (any interface); [::1]:8080
-for IPv6. A path is absolute or relative to the working directory and covers its
-subtree. Matching is exact — example.com does not admit api.example.com, ./app
-does not admit ./app-secrets, and there are no wildcards. Paths are checked
-after canonicalization, so a symlink cannot walk out of a list, and a path list
-narrows the root jail; a path outside it adds that subtree, which is how a run
-reaches a certificate or a CA bundle the project does not contain.
+Inputs run as ES modules: import/export, top-level await and import attributes
+work. Imports resolve as local files and as bare specifiers through
+node_modules (ES module packages only — CommonJS and node: builtins are
+rejected, and nothing is installed). Remote (https://) modules are deliberately
+unsupported. The WinterTC surface is there: console, URL, fetch, crypto,
+streams, encoding, timers, events.
 
-Entries are comma-separated and trimmed (`--allow-env=\"A, B\"` ≡
-`--allow-env=A,B`); an empty entry is an error. Denials take no value at all: a
-scope narrows a grant, so it is written --allow-<name>=<list>.
-
-What may be *loaded* is a separate question from what running code may reach, so
-it is a separate mechanism: --import-policy=<file> takes JSON with \"allow\"
-and/or \"deny\" lists of package names and paths. Deny wins; omitting \"allow\"
-permits everything not denied; paths resolve relative to the policy file. The
-imports capability decides whether the loader runs at all, the policy decides
-what it may resolve — so a policy is not a way around --deny-imports.
-
-Permission flags must come before the script; after it they would be the
-script's own arguments.
-
-Everything after <file> (or the -e code) belongs to the script, readable as
-`args` from runtime:process.";
-
-/// The repository releases are published from.
-const REPO: &str = "Open-Tech-Foundation/ES-Runtime";
-
-/// This repository's releases, as `esrun` versions.
-///
-/// A [`ReleaseSource`] rather than self_update's built-in github backend, and it
-/// is the tag format that forces it. Each binary is released under its own tag —
-/// `esrun@0.24.0`, `esdev@0.1.0` — so:
-///
-/// - `/releases/latest` answers with whichever binary was published most
-///   recently. It returned `esdev@0.1.0` the day esdev first shipped, which is
-///   an esrun upgrade looking for an esrun archive in an esdev release.
-/// - the built-in backend derives a version by stripping a leading `v` from the
-///   tag, so `esrun@0.24.0` fails to parse as semver. In a *listing* that means
-///   the tag is silently skipped — leaving only the pre-0.24 `v0.23.0` tags
-///   visible, so `upgrade` would offer a **downgrade**.
-///
-/// Both are fixed in the same place: list the releases, keep the ones tagged for
-/// this binary, and report each one's bare version. The download URLs travel
-/// with the assets, so the tag never has to round-trip through a version parser.
-struct EsrunReleases;
-
-impl EsrunReleases {
-    /// The bare semver a release tag carries, or `None` if the tag is not one of
-    /// esrun's.
-    ///
-    /// Two spellings are esrun's: the current `esrun@<version>`, and the
-    /// pre-0.24 bare `v<version>` (release.toml's `legacy_tag_formats`), which
-    /// still has to resolve so an old binary can upgrade out of it. Anything
-    /// else — an `esdev@` tag, a rolling tag — is not.
-    fn version_of(tag: &str) -> Option<&str> {
-        tag.strip_prefix("esrun@").or_else(|| {
-            tag.strip_prefix('v')
-                .filter(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
-        })
-    }
-}
-
-impl self_update::ReleaseSource for EsrunReleases {
-    fn get_releases(&self) -> self_update::Result<Vec<self_update::Release>> {
-        // Newest-first, which is the order this trait asks for. 100 is the
-        // API's maximum page size and far more history than an upgrade needs.
-        let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
-        let body = reqwest::blocking::Client::builder()
-            // GitHub rejects a request with no user agent.
-            .user_agent(concat!("esrun/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .map_err(self_update::errors::Error::transport)?
-            .get(&url)
-            .send()
-            .and_then(reqwest::blocking::Response::error_for_status)
-            .and_then(reqwest::blocking::Response::text)
-            .map_err(self_update::errors::Error::transport)?;
-
-        let listing: serde_json::Value =
-            serde_json::from_str(&body).map_err(self_update::errors::Error::invalid_response)?;
-
-        let mut releases = Vec::new();
-        for entry in listing.as_array().into_iter().flatten() {
-            let Some(version) = entry["tag_name"].as_str().and_then(Self::version_of) else {
-                continue;
-            };
-            let mut release = self_update::Release::builder();
-            release.version(version);
-            for asset in entry["assets"].as_array().into_iter().flatten() {
-                if let (Some(name), Some(url)) = (
-                    asset["name"].as_str(),
-                    asset["browser_download_url"].as_str(),
-                ) {
-                    release.asset(self_update::ReleaseAsset::new(name, url));
-                }
-            }
-            // A tag that is not semver after the prefix is skipped rather than
-            // failing the whole listing — one malformed release should not make
-            // `upgrade` unusable.
-            if let Ok(release) = release.build() {
-                releases.push(release);
-            }
-        }
-        Ok(releases)
-    }
-}
-
-/// `esrun upgrade` — find the latest GitHub release for this target, download +
-/// extract it, and replace the running binary in place (the same outcome as
-/// re-running install.sh, but built in). HTTPS via rustls.
-///
-/// Only `esrun` upgrades itself. `esdev` is a development binary installed
-/// alongside it, and a tool that rewrites its own executable is one more thing
-/// that can go wrong on a machine where the fix is re-running the installer.
-// Returns a `String` error (not a boxed `dyn Error`) so the result is `Send` and
-// can cross the OS-thread boundary this runs on (see the `"upgrade"` dispatch).
-fn upgrade() -> Result<String, String> {
-    // Release assets are named `esrun-<os>-<arch>.{tar.gz,zip}` by the
-    // otf-release tool (see release.toml), e.g. `esrun-linux-x86-64.tar.gz`.
-    // self_update selects the asset whose name contains its configured `target`,
-    // so build that `<os>-<arch>` token for the running platform rather than
-    // using the default Rust target triple.
-    let os = if cfg!(target_os = "windows") {
-        "windows"
-    } else if cfg!(target_os = "macos") {
-        "macos"
-    } else {
-        "linux"
-    };
-    let arch = if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else {
-        "x86-64"
-    };
-    let target = format!("{os}-{arch}");
-
-    let status = self_update::backends::custom::Update::configure()
-        .source(EsrunReleases)
-        .bin_name("esrun")
-        .target(&target)
-        // The archive holds the binary at its root, so `{{ bin }}` alone (which
-        // self_update fills with the bin name plus the platform `.exe` suffix on
-        // Windows) is the in-archive path.
-        .bin_path_in_archive("{{ bin }}")
-        // Disambiguate the archive from any same-target sidecar by extension.
-        .asset_identifier(if cfg!(windows) { ".zip" } else { ".tar.gz" })
-        .current_version(env!("CARGO_PKG_VERSION"))
-        .show_download_progress(true)
-        .build()
-        .map_err(|e| e.to_string())?
-        .update()
-        .map_err(|e| e.to_string())?;
-    Ok(if status.is_updated() {
-        format!("Upgraded esrun to {}.", status.version())
-    } else {
-        format!("esrun is already up to date ({}).", status.version())
-    })
-}
+    Every flag in full:  https://esrun.opentechf.org/api/cli
+    The capabilities:    https://esrun.opentechf.org/docs/security
+    The modules:         https://esrun.opentechf.org/api
+";
 
 /// Parses `esrun`'s command line.
 ///
@@ -318,21 +154,7 @@ fn parse_args() -> Result<Config, String> {
             }
             "upgrade" => {
                 reject_value(flag, value)?;
-                // `self_update` drives its own blocking HTTP runtime; running it
-                // inside this `#[tokio::main]` context would drop that runtime
-                // from within an async context and panic. Run it on a dedicated
-                // OS thread, off the tokio runtime.
-                let result = std::thread::spawn(upgrade)
-                    .join()
-                    .unwrap_or_else(|_| Err("the upgrade thread panicked".to_string()));
-                match result {
-                    Ok(msg) => println!("{msg}"),
-                    Err(e) => {
-                        eprintln!("error: upgrade failed: {e}");
-                        std::process::exit(1);
-                    }
-                }
-                std::process::exit(0);
+                es_runtime_cli_common::upgrade::run_and_exit("esrun", env!("CARGO_PKG_VERSION"));
             }
             "-v" | "-V" | "--version" => {
                 reject_value(flag, value)?;
@@ -477,24 +299,5 @@ async fn main() -> ExitCode {
             print_error(&err);
             ExitCode::FAILURE
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::EsrunReleases;
-
-    /// The tag filter is the whole fix: an `esdev@` tag must not look like an
-    /// esrun version, or `upgrade` downloads the wrong binary's release.
-    #[test]
-    fn only_esruns_own_tags_carry_a_version() {
-        assert_eq!(EsrunReleases::version_of("esrun@0.24.0"), Some("0.24.0"));
-        // The pre-0.24 format, still resolvable so an old binary can leave it.
-        assert_eq!(EsrunReleases::version_of("v0.23.0"), Some("0.23.0"));
-
-        assert_eq!(EsrunReleases::version_of("esdev@0.1.0"), None);
-        assert_eq!(EsrunReleases::version_of("nightly"), None);
-        // `v` followed by a word is a name, not a version — `vnext` is not 'next'.
-        assert_eq!(EsrunReleases::version_of("vnext"), None);
     }
 }

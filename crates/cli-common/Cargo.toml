@@ -17,6 +17,13 @@ tokio = { workspace = true, features = ["rt", "macros", "time", "signal"] }
 # Canonicalizing the entry path / inline-snippet base into a file: module
 # specifier (the referrer the entry's imports resolve against).
 url.workspace = true
+# `<binary> upgrade` — self-update from GitHub releases. Both binaries are
+# installed together and released together, so they upgrade through one module.
+self_update.workspace = true
+# The release listing, parsed rather than pattern-matched. Both already in the
+# tree (via `es-runtime` and `reqwest`), so naming them here costs nothing.
+serde_json.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 
 # build.rs runs V8 to bake the prelude snapshot once, here, so that both
 # binaries share one blob instead of each paying for its own snapshot build

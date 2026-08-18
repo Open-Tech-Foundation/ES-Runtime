@@ -94,6 +94,14 @@ fn reports_its_own_name_in_version_and_help() {
     // The boundary is part of the help, not just the docs: this binary is not a
     // deployment target and the usage text has to say so.
     assert!(text.contains("not a deployment target"), "{text}");
+    // Every subcommand is reachable from the help; `upgrade` is the newest and
+    // the one nothing else would tell you about.
+    for command in ["create", "start", "build", "test", "upgrade"] {
+        assert!(
+            text.contains(command),
+            "{command} is not in the help:\n{text}"
+        );
+    }
 }
 
 /// The help for `esdev test` is where the test API is learned, and it described
@@ -285,22 +293,35 @@ fn max_heap_of_zero_is_rejected() {
     assert!(stderr(&out).contains("no heap at all"), "{}", stderr(&out));
 }
 
-/// `esrun`'s subcommands are deliberately not `esdev`'s: shipping `upgrade` in
-/// two binaries would give a machine two things to keep in step, and `types`
-/// belongs with the runtime that documents them.
+/// `types` was never `esdev`'s — it belongs with the runtime that documents
+/// them — and `upgrade` now is: install.sh installs both binaries, so a
+/// developer whose esdev is stale had no way to move it but the installer
+/// (D77).
 #[test]
-fn esrun_only_subcommands_are_not_silently_accepted() {
-    for subcommand in ["upgrade", "types"] {
-        let out = esdev().arg(subcommand).output().expect("spawn esdev");
-        // Treated as a path (it is a bare word), so it fails as a missing file
-        // rather than doing something surprising.
-        assert!(!out.status.success(), "{subcommand} should not succeed");
-        assert!(
-            stderr(&out).contains("cannot read") || stderr(&out).contains("cannot resolve"),
-            "{subcommand}: {}",
-            stderr(&out)
-        );
-    }
+fn types_is_refused_and_upgrade_is_a_subcommand() {
+    let types = esdev().arg("types").output().expect("spawn esdev");
+    // Treated as a path (it is a bare word), so it fails as a missing file
+    // rather than doing something surprising.
+    assert!(!types.status.success(), "types should not succeed");
+    assert!(
+        stderr(&types).contains("cannot read") || stderr(&types).contains("cannot resolve"),
+        "types: {}",
+        stderr(&types)
+    );
+
+    // `upgrade` reaches the network, so what is pinned here is that it is a
+    // subcommand rather than a path: a stray argument is refused by name, which
+    // a file path would not be.
+    let extra = esdev()
+        .args(["upgrade", "0.4.0"])
+        .output()
+        .expect("spawn esdev upgrade");
+    assert!(!extra.status.success());
+    assert!(
+        stderr(&extra).contains("takes no arguments"),
+        "{}",
+        stderr(&extra)
+    );
 }
 
 /// An uncaught error is one block, and it names the file — the Phase 13 error

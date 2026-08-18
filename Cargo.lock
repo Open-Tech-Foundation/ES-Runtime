@@ -1464,9 +1464,6 @@ dependencies = [
  "es-runtime-cli-common",
  "es-runtime-common",
  "rcgen",
- "reqwest",
- "self_update",
- "serde_json",
  "tokio",
 ]
 
@@ -1478,6 +1475,9 @@ dependencies = [
  "es-runtime-common",
  "es-runtime-default-providers",
  "es-runtime-providers",
+ "reqwest",
+ "self_update",
+ "serde_json",
  "tokio",
  "url",
 ]

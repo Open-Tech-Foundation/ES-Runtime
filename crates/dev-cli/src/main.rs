@@ -95,121 +95,63 @@ enum Command {
 const USAGE: &str = "\
 esdev — the local development binary for the ES-Runtime
 
-Runs your service the way esrun will, with the tooling you need to get it there.
-Every flag is either `--flag` or `--flag=value`. A value is never a separate
-argument: `--timeout=500`, not `--timeout 500`.
+Runs your program the way esrun will, with the tooling to get it there. Every
+flag is `--flag` or `--flag=value`; a value is never a separate argument.
 
 USAGE:
-    esdev <file>                Run a module file — .js, .mjs, or .ts/.tsx/.jsx
-    esdev -e=<code>             Run an inline module snippet (JavaScript)
-    esdev --watch <file>        Run it, and rerun it when its source changes
-    esdev --inspect <file>      Run it with a debugger attached
-    esdev --trace-permissions <file>
-                                Run it, then print the permissions it used
-    esdev --install-types       Add the runtime: TypeScript definitions to this
+    esdev [options] <file>      Run a module — .js, .mjs, .ts, .tsx, .jsx
+    esdev -e=<code>             Run an inline module snippet
+    esdev <command> [...]       One of the commands below
+
+COMMANDS:
+    create <dir>                Write a new project that already works
+    start                       Build, run, and keep both current
+    build [entry]               Bundle to deploy, or --lib to publish
+    test [filter...]            Run the test files
+    upgrade                     Update esdev to the latest release
+
+    Each takes --help: `esdev build --help`.
+
+OPTIONS:
+    --watch                     Rerun the program when its source changes
+    --inspect[=<addr>]          Serve the Chrome DevTools Protocol (127.0.0.1:9229)
+    --inspect-brk[=<addr>]      ...and stop before the first statement
+    --trace-permissions         Run it, then print the esrun line it needs
+    --install-types             Add the runtime: TypeScript definitions to this
                                 project and wire up tsconfig.json
-    esdev create <dir>          Write a new project that already works
-                                (`esdev create --list` for the templates)
-    esdev start                 Build what esdev.json describes, run it, and
-                                keep both current (`esdev start --help`)
-    esdev test [filter...]      Run the test files (`esdev test --help`)
-    esdev build <entry>         Bundle an entry into one deployable ES module
-    esdev build --lib <srcdir>  Build a publishable library instead: a module
-                                tree and its .d.ts, dependencies left external
-                                (`esdev build --help` for its options)
-    esdev -h, --help            Show this help
-    esdev -v, --version         Show the version
+    -h, --help                  Show this help
+    -v, --version               Show the version
 
-WATCH:
-    --watch reruns the program in a fresh process on every change, so nothing
-    leaks between runs. A restart is a SIGTERM, which is the same graceful stop
-    production gets: a server stops accepting, answers the requests already in
-    flight, and only then exits — so a save while a request is open does not
-    drop it. --shutdown-grace bounds that wait, after which the process is
-    killed.
+RUN OPTIONS (esrun's, with one deliberate difference):
+    esdev grants every capability by default; esrun grants none. The vocabulary
+    and the rules are identical — only the starting point differs, so the inner
+    loop needs no flags and a deployment states what it may reach.
+    --trace-permissions turns one into the other.
 
-    Watched: the project root (nearest package.json) or the entry's directory,
-    minus node_modules, .git, dist, target and .cache, and only for source
-    extensions. A program that exits leaves the watcher up, waiting for the
-    next change.
-
-DEBUGGER:
-    --inspect[=<addr>]          Serve the Chrome DevTools Protocol, default
-                                127.0.0.1:9229. Attach with chrome://inspect,
-                                VS Code, or any CDP client
-    --inspect-brk[=<addr>]      ...and stop before the first statement, so a
-                                program that ends quickly can still be debugged
-
-    <addr> is a port (9229), an address (127.0.0.1) or both. Binding anywhere
-    but loopback is allowed and warned about: a debugger port is a way to run
-    code in this process regardless of what it was denied.
-
-    This is why there is a second binary at all. esrun has no --inspect and no
-    code that could serve one, and esdev only has it when the build asked:
-
-        ES_RUNTIME_INSPECTOR=1 cargo build --release -p es-runtime-dev-cli
-
-    A build without it accepts the flag and fails with that line, rather than
-    listening on nothing.
-
-PERMISSIONS:
-    --trace-permissions         Watch every capability the run reaches for, and
-                                print the esrun line that grants exactly those:
-
-                                  esrun --allow-read --allow-net app.js
-
-    What it records is the check itself, so it reports what the program *used*
-    rather than what it was given — including the ones it asked for and was
-    refused, which are listed and deliberately left out of the line. Workers are
-    traced into the same report; their grants are set at the spawn, which is
-    where they are hardest to get right.
-
-    Scopes are not traced: the line grants each capability unnarrowed. Narrow it
-    by hand (--allow-read=./data) once the trace has told you which you need.
-
-TYPESCRIPT & JSX:
-    .ts, .tsx, .mts, .cts and .jsx files are stripped to JavaScript as they
-    load — types erased, never checked (that is your editor's job, and
-    `tsc --noEmit`'s). A .js file is passed through untouched.
-
-    Import specifiers are left exactly as written, so a specifier must name the
-    file that exists: `import './app.ts'`, not './app.js'. Resolution is the
-    same as esrun's, because it is esrun's.
-
-    JSX compiles to the automatic runtime, `react/jsx-runtime` by default.
-    Point it elsewhere per file with a pragma:
-
-        /** @jsxImportSource remix/ui */
-
-    --install-types adds @opentf/esrun-types (the runtime: definitions, on npm)
-    as a dev dependency with the package manager your lockfile names, and adds
-    it to compilerOptions.types so an editor resolves `import … from
-    \"runtime:fs\"`. Types are for your editor and `tsc --noEmit`; esdev never
-    checks them.
-
-RUN OPTIONS (the same flags esrun takes, with one deliberate difference):
-    esdev grants every capability by default; esrun grants none. The vocabulary,
-    the scope lists and the rules are identical — only the starting point
-    differs, so that the inner loop needs no flags and a deployment states what
-    it may reach. --trace-permissions turns one into the other.
-
-    --allow-all, -A             Grant everything — the default, said outright
-    --deny-<name>               Deny one capability; repeatable
+    -A, --allow-all             Grant everything — the default, said outright
     --deny-all                  Run with no host access at all, as esrun does
-    --allow-<name>[=<list>]     Grant one back, optionally narrowed to a list;
-                                requires --deny-all. <name> is one of: read,
-                                write, imports, net, listen, env, run, signals,
-                                workers
+    --deny-<name>               Deny one capability; repeatable
+    --allow-<name>[=<list>]     Grant one back, optionally narrowed; requires
+                                --deny-all. <name> is one of: read, write,
+                                imports, net, listen, env, run, signals, workers
     --import-policy=<file>      JSON policy for what may be loaded
-    -t=<ms>, --timeout=<ms>     Stop execution after <ms> ms
+    -t, --timeout=<ms>          Stop execution after <ms>
     --max-heap=<mb>             Heap ceiling in megabytes
     --env-file=<path>           Load env vars from a .env file
-    --env-override              Let --env-file values override the OS environment
-    --shutdown-grace=<ms>       How long in-flight HTTP requests may finish after
-                                ^C/SIGTERM (default 10000)
+    --env-override              ...and let them override the OS environment
+    --shutdown-grace=<ms>       Drain time for in-flight requests on ^C (10000)
+
+TypeScript and JSX are stripped as they load — types erased, never checked. An
+import specifier must name the file that exists (`./app.ts`), because
+resolution here is esrun's.
 
 esdev is for your machine. It is not a deployment target: ship the artifact and
 run it under esrun, which has no development surface to attack.
+
+    Everything esdev does:  https://esrun.opentechf.org/docs/esdev
+    Capabilities:           https://esrun.opentechf.org/docs/security
+    The debugger:           https://esrun.opentechf.org/docs/esdev/debugging
+    TypeScript:             https://esrun.opentechf.org/docs/esdev/typescript
 ";
 
 const TEST_USAGE: &str = "\
@@ -244,62 +186,36 @@ const CREATE_USAGE: &str = "\
 esdev create — a project that already works
 
 USAGE:
-    esdev create <dir>          Write a new project into <dir>
-    esdev create <dir> --template=<name>
-                                ...from a particular template
-    esdev create <dir> --template=<name> --mode=<name>
-                                ...in a particular shape, where one exists
+    esdev create <dir> [options]
+                                Write a new project into <dir>
     esdev create --list         List the templates and their modes
     esdev create -h, --help     Show this help
 
 OPTIONS:
-    --template=<name>           Which template (default: react)
-    --mode=<name>               Which shape of that template, where it has more
-                                than one: react is static or fullstack
-    --force                     Write into a directory that already holds
-                                something. It still never replaces a file
-    --install[=<manager>]       Install dependencies after writing: npm, bun,
-                                pnpm or yarn (default npm)
+    --template=<name>           react (default), api, vanilla or lib
+    --mode=<name>               Which shape of it, where it has more than one:
+                                react is static (default) or fullstack
+    --install[=<manager>]       Install after writing: npm, bun, pnpm or yarn
     --no-install                Write the files and stop
     -y, --yes                   Take every default; never ask
-    --list                      List the templates and their modes, and exit
+    --force                     Write into a directory that already holds
+                                something. It still never replaces a file
 
-WHAT YOU GET
-    A project with its esdev.json written, its entry named by the script tag in
-    its index.html, and a permission line that is narrow from the first run:
+What you get is a project that runs and one page — its name, what it was built
+with, and the file to edit — with its esdev.json written, its entry named by
+the script tag in its index.html, and a permission line that is narrow from the
+first run. The templates are baked into this binary, so create works offline
+and always writes a project this esdev can build.
 
-        esrun --allow-read=./dist --allow-listen=8080 dist/server.js
+On a terminal it asks which template, which mode where there is a choice, and
+whether to install. Anywhere else — a pipe, a CI job — it takes the defaults,
+installs nothing and says nothing, because a prompt in a script is a script
+that hangs. Every question has a flag:
 
-    The templates are baked into this binary, so `create` works offline and
-    always writes a project this esdev can build.
+    esdev create my-app --template=api --install=bun
+    esdev create my-app --yes
 
-MODES
-    Some templates are two projects wearing one name, and scaffolding the union
-    of them leaves you deleting half. `react` is one:
-
-        --mode=static       No server. Prerendered HTML (npm run build) or a
-                            single-page app (npm run build:spa), on any static
-                            host. Nothing to grant, because nothing runs.
-        --mode=fullstack    A server of its own, rendered per request, under the
-                            capabilities esdev.json names.
-
-    Which one is a deployment decision, so it is asked once, here, and the
-    project you get is only that one.
-
-ASKING
-    On a terminal it asks which template, which mode if that template has more
-    than one, and whether to install. Everywhere
-    else — a pipe, a CI job, anything with CI set — it takes the defaults and
-    says nothing, because a prompt in a script is a script that hangs.
-
-    Every question has a flag, so nothing is only reachable by answering one:
-
-        esdev create my-app --template=api --install=bun
-        esdev create my-app --yes           (defaults, no questions)
-
-    Unattended it installs nothing. There is no lockfile yet to say which
-    package manager this project uses, and guessing wrong leaves the wrong one
-    behind — which is a reason not to guess, not a reason not to ask.
+    The templates:  https://esrun.opentechf.org/docs/esdev/create
 ";
 
 const START_USAGE: &str = "\
@@ -311,77 +227,26 @@ USAGE:
 
 OPTIONS:
     --port=<n>                  The port you open, and it gets that one or
-                                fails. For a project with a server of its own
-                                that is your server's port; for a frontend
-                                project it is the one esdev serves on. Without
-                                it: your `listen` grant's port, or 5173 for a
-                                frontend project, and any free port if that is
-                                taken — the one it took is printed
+                                fails. Without it: your `listen` grant's port,
+                                or 5173 for a frontend project — and any free
+                                port if that is taken, printed when it moves
     --no-hot                    Reload the page on a change instead of patching
-                                the changed module into it. Hot replacement is
-                                on by default; turning it off makes the dev
-                                bundle smaller and rebuilds slightly faster,
-                                and costs you your component state on every save
+                                the changed module into it
     --config=<path>             Read this instead of ./esdev.json
     --shutdown-grace=<ms>       How long the server may drain on a restart
     -h, --help                  Show this help
 
-WHAT IT DOES
-    It is `esdev build` on a loop. A dev build differs from a release build in
-    exactly two ways — process.env.NODE_ENV is \"development\", and nothing is
-    content-hashed — and in nothing else, because a dev and a prod that
-    disagree about how a module resolves is the failure this toolchain exists
-    to prevent.
+It is `esdev build` on a loop. A dev build differs from a release build in
+exactly two ways — process.env.NODE_ENV is \"development\", and nothing is
+content-hashed. A build that fails leaves everything running.
 
-    On a change: rebuild, restart the server, tell the browser to reload. A
-    build that fails leaves everything running — a syntax error mid-edit should
-    cost you a message, not the server you were about to fix it on.
+The server is yours: `\"start\": { \"run\": \"server\" }` names the target whose
+output esdev runs as a child process, under the config's `permissions`, and
+restarts with a SIGTERM — the same graceful stop production gets. It is the
+same file production runs; nothing wraps it. A project with no server of its
+own is served from its output directory instead, with an index.html fallback.
 
-THE SERVER IS YOURS
-    \"start\": { \"run\": \"server\" } names the target whose output is your
-    server. esdev runs that output as a child process, under the config's
-    `permissions`, and restarts it with a SIGTERM — the same graceful stop
-    production gets, so a request in flight when you save is answered rather
-    than dropped. It is the same file production runs: no dev server stands in
-    for it and nothing wraps it.
-
-    A project with no server of its own — a static site, a single-page app —
-    has nothing to run, so esdev serves the output directory itself: files, an
-    index.html fallback for client-side routes, and nothing else.
-
-PORTS
-    There is one, and it is the one you open. When your project runs a server
-    of its own that is your server's port; when it does not -- a static site, a
-    single-page app -- esdev is what you open, so it is esdev's.
-
-    esdev's own endpoint on a fullstack project is not a port you deal with. It
-    carries one message to the page, the build writes its address into the page,
-    and it takes a free one. There is no flag for it because there is nobody to
-    type one.
-
-    Either way the rule is the same: one you named is a promise and fails if it
-    is taken, one you did not is a convenience and moves out of the way,
-    printing where it went.
-
-    Your server's port is moved only when the project says enough for it to be
-    moved safely, and both halves are grants you already write:
-
-        \"listen\": [\"8080\"]     one port and no more, so there is one to move
-        \"env\": [\"PORT\"]        so the server can be told which one it got
-
-    The rewritten grant is the same capability with a different number, never a
-    wider one. A project shaped any other way is left exactly as it is — so two
-    of these run side by side without either of them being about a number
-    nobody chose.
-
-RELOAD
-    Every built document gets a few lines that open a WebSocket against
-    esdev and reload when a build lands. It is esdev's endpoint rather than
-    your application's, so nothing dev-only is in your source, and it is in the
-    output only — the file you edit is never written to.
-
-    Nothing is preserved across a reload: this is a full page load, not hot
-    module replacement.
+    The dev loop:  https://esrun.opentechf.org/docs/esdev/start
 ";
 
 const BUILD_USAGE: &str = "\
@@ -395,151 +260,50 @@ USAGE:
 OPTIONS:
     --config=<path>             Read this instead of ./esdev.json
     --target=<name>             Build one target from the file, not all of them
+    --out=<path>                Where to write it. A file for an application
+                                (default dist/<entry>.js), a directory for --lib
+    --minify                    Minify the output
+    --define=<name>=<value>     Replace <name> with <value> at build time.
+                                process.env.NODE_ENV defaults to \"production\"
+                                for an application, and to nothing for --lib
+    --conditions=<list>         Extra `exports` conditions, comma-separated
     --lib                       Build a library: keep the module structure,
                                 leave dependencies external, emit .d.ts
     --no-types                  --lib only: skip the .d.ts files
     --dts-bundle[=<entry>]      --lib only: link every declaration into one
-                                .d.ts instead of one beside each module.
-                                Default entry: <srcdir>/index.ts
-    --out=<path>                Where to write it. A file for an application
-                                (default dist/<entry>.js), a directory for --lib
-                                (default dist)
-    --minify                    Minify the output
-    --conditions=<list>         Extra `exports` conditions, comma-separated.
-                                These add to the defaults (import, default,
-                                worker — none of which --lib asserts)
-    --define=<name>=<value>     Replace <name> with <value> at build time.
-                                process.env.NODE_ENV defaults to \"production\"
-                                for an application, and to nothing for --lib
+                                .d.ts (default entry: <srcdir>/index.ts)
     -h, --help                  Show this help
 
 A PROJECT (esdev.json)
-    An application that renders on the server and hydrates in the browser is
-    two bundles from two entries with two shapes of output, and a command line
-    can only describe one of them. What a project builds is a property of the
-    project, so it lives in the project:
+    What a project builds is a property of the project, so it lives in the
+    project — one entry per target, because an app that renders on the server
+    and hydrates in the browser is two bundles a command line cannot describe:
 
         {
           \"targets\": {
-            \"server\":  { \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\",
-                        \"assets\": [\"index.html\", \"public\"] },
-            \"browser\": { \"entry\": \"src/entry.client.tsx\", \"outdir\": \"dist/client\",
-                        \"platform\": \"browser\" }
+            \"server\": { \"entry\": \"src/server.ts\", \"out\": \"dist/server.js\" },
+            \"web\":    { \"entry\": \"index.html\", \"outdir\": \"dist\" }
           }
         }
 
-    `esdev build` then builds all of them, and `--target=browser` one. Each
-    target takes:
+    An .html entry is a different kind of build: the tags in the document are
+    the inputs, and what is written out is the same document pointing at the
+    hashed results. A flag beats the file; naming an entry ignores it entirely.
+    esrun never reads esdev.json — the grant a service runs under belongs on
+    the command that deployed it.
 
-      entry       The module the bundle is rooted at — or an .html file, which
-                  is a different kind of build (see below)
-      out         One file …
-      outdir      … or a directory, which is what a browser target needs: a
-                  dynamic import() emits a chunk beside its entry
-      platform    \"server\" (this runtime, the default) or \"browser\", which
-                  decides whether a dependency hands over its `worker` build or
-                  its `browser` one
-      assets      Files and directories copied into the output. A file by name,
-                  a directory by its contents — so public/styles.css is served
-                  at /styles.css, and dist/ is the whole deployment
-      then        \"run\": execute the output once it is built. How a prerender
-                  step emits a directory of HTML without esdev knowing what a
-                  static site is
-      minify, define, conditions
-                  As the flags below, for this target alone
+AN APPLICATION vs A LIBRARY
+    A bundle has no imports left to resolve, so production needs no
+    --allow-imports. A library is an input to somebody else's build, so --lib
+    makes none of that build's decisions: module structure is kept file for
+    file, dependencies stay external, nothing is defined, no condition is
+    asserted, and a .d.ts is emitted from the annotations the source carries —
+    derived, never inferred, so an unannotated export fails the build.
 
-    A flag beats the file, so `--minify` takes a release build of a project
-    whose day to day is unminified. Naming an entry ignores the file entirely.
-
-    esrun never reads esdev.json. A production binary that picked up a
-    checked-in file granting itself capabilities is the thing the capability
-    model exists to prevent: the grant a service runs under belongs on the
-    command that deployed it.
-
-AN HTML ENTRY
-    A server bundle starts at a module, because the runtime does. The browser
-    starts at a document — so an .html entry is the build's input, and the tags
-    in it name the rest:
-
-        { \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }
-
-        <link rel=\"stylesheet\" href=\"./styles.css\">
-        <script type=\"module\" src=\"./src/entry.client.tsx\"></script>
-
-    A <script type=\"module\"> is an entry: it and everything it imports become
-    one browser bundle. Anything else a relative reference names — a stylesheet,
-    a favicon, an image, a classic script — is copied. Both are content-hashed
-    into <outdir>/assets, and the document is written out pointing at them:
-
-        <link rel=\"stylesheet\" href=\"/assets/styles-621d3b66.css\">
-        <script type=\"module\" src=\"/assets/entry.client-fccaa347.js\"></script>
-
-    Everything else in the file is untouched, byte for byte — the title, the
-    meta tags, the inline snippet. A relative path is an input; a rooted path
-    (/assets/vendor.js), a URL and a data: URI are left exactly as written,
-    which is the escape hatch for anything the build should keep out of.
-
-APPLICATION (the default)
-    The bundle is ES modules, `runtime:*` imports are left for the runtime to
-    serve, and CommonJS dependencies are converted on the way in — which is how
-    a package that ships CJS becomes runnable without esrun learning `require`.
-
-    It also shortens what production must be granted. An unbundled program needs
-    --allow-imports so the loader can walk node_modules; a bundle has no imports
-    left to resolve:
-
-        esrun --allow-imports --allow-listen=8080 app.js  # unbundled
-        esrun --allow-listen=8080 dist/app.js             # bundled
-
-LIBRARY (--lib)
-    A library is not the end of the line — it is an input to somebody else's
-    build, so the four decisions above are theirs to make and --lib makes none
-    of them:
-
-        esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
-
-    * A directory, not an entry. Every module under it is built, the way tsc
-      builds a rootDir — because which modules a consumer may import is
-      decided by your `exports` map, not by what an entry happens to reach.
-      Nothing is tree-shaken away: an export no current caller uses is not
-      dead code here, it is the API. Skipped: *.test.* and .d.ts files.
-    * The output directory is emptied first, because the build owns it: a
-      stale file left in dist is a file your package publishes. An --out that
-      holds your source or your project is refused rather than emptied. An
-      application build does not clean — its --out is one file, in a directory
-      that may hold other things.
-    * Dependencies stay external, so a consumer can still dedupe, override or
-      patch one. Only relative and absolute imports are emitted.
-    * Module structure is preserved, file for file, so a subpath in your
-      `exports` map is a real file and a stack trace names a module.
-    * Nothing is defined and no condition asserted: NODE_ENV and `worker`
-      belong to the build that consumes this, not to this one.
-    * A .d.ts is emitted beside each module, derived from the annotations the
-      source already carries — never inferred, the same contract type-stripping
-      has. An exported signature that does not state its type fails the build
-      with the list, rather than getting a guessed declaration nobody can see is
-      wrong. --no-types opts out.
-
-ONE DECLARATION FILE (--dts-bundle)
-    A package whose exports map has a single entry wants one index.d.ts rather
-    than a mirror of a source layout nobody outside it should have to know:
-
-        esdev build --lib src --dts-bundle    # → dist/index.d.ts
-
-    Everything reachable from the entry's exports is inlined; a colliding name
-    is renamed (Options, Options$1) and every site of it rewritten; a type
-    reachable only through a public one is inlined but not exported, so the
-    package's surface stays what you wrote; dependencies stay imports, the same
-    line --lib draws for JavaScript; and JSDoc travels byte for byte, because
-    that is what an editor shows on hover.
-
-    A construct that cannot be linked into one file — a namespace import,
-    export =, a module augmentation — stops the build and names itself. A .d.ts
-    is believed: nothing runs it and no test covers it, so a wrong one is worse
-    than none. Build without --dts-bundle and it stands as written.
-
-    Keep the per-module .d.ts if your exports map has subpaths: `@you/pkg/pool`
-    has to find a real pool.d.ts.
+    Targets, an HTML entry, --lib and --dts-bundle in full:
+        https://esrun.opentechf.org/docs/esdev/build
+    The plugin API (runtime:build):
+        https://esrun.opentechf.org/api/build
 ";
 
 /// Parses `esdev`'s command line.
@@ -565,6 +329,18 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "create" {
             return parse_create(argv).map(Command::Create);
+        }
+        if first == "upgrade" {
+            if let Some(extra) = argv.next() {
+                return Err(format!(
+                    "esdev upgrade takes no arguments; got {extra}.\n\n\
+                     It replaces this binary with the newest esdev release."
+                ));
+            }
+            // The same machinery `esrun upgrade` runs, on a thread of its own —
+            // self_update drives a blocking HTTP runtime, and dropping that from
+            // inside this `#[tokio::main]` context panics.
+            es_runtime_cli_common::upgrade::run_and_exit("esdev", env!("CARGO_PKG_VERSION"));
         }
     }
 

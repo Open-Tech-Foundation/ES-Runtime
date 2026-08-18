@@ -23,6 +23,7 @@ pub mod extension;
 pub mod permissions;
 pub mod run;
 pub mod shutdown;
+pub mod upgrade;
 
 pub use extension::{ExtensionContext, HostExtension, HostModule};
 pub use run::{Config, Inspector, Source, run};
