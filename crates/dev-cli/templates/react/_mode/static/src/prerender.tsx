@@ -55,7 +55,7 @@ for (const path of await staticPaths()) {
   await rendered.allReady;
   const html = await new Response(rendered.body).text();
 
-  // `/posts/x` becomes `posts/x/index.html`, so a host serves it at the same
+  // `/about` becomes `about/index.html`, so a host serves it at the same
   // URL the router uses. `/` is the one that is already an index.
   const file = path === "/" ? "index.html" : `${path.replace(/^\//, "")}/index.html`;
   await mkdir(join(out, dirOf(file)), { recursive: true });

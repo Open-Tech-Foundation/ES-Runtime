@@ -5,7 +5,7 @@
  * **One bundle serves all three ways of shipping this app.** It hydrates the
  * markup a server rendered, hydrates the markup the prerender step wrote to a
  * file, and renders from nothing when a single-page build hands it an empty
- * root. The difference is one branch, below.
+ * root. The difference is one branch, at the foot of the file.
  */
 // **First, and it has to stay first.** It installs the hook React reads as
 // it initialises, and ES modules evaluate in import order. See src/refresh.ts.

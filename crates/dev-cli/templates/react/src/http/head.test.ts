@@ -38,13 +38,13 @@ test("nothing matching falls back rather than throwing", () => {
 
 test("a route's meta becomes the tags that go in the head", () => {
   assertEquals(
-    head({ title: "Writing", description: "Posts and notes." }),
-    '<title>Writing</title><meta name="description" content="Posts and notes.">',
+    head({ title: "About", description: "Who made this." }),
+    '<title>About</title><meta name="description" content="Who made this.">',
   );
 });
 
 test("a description is optional", () => {
-  assertEquals(head({ title: "Writing" }), "<title>Writing</title>");
+  assertEquals(head({ title: "About" }), "<title>About</title>");
 });
 
 test("a title cannot close the tag it is inside", () => {

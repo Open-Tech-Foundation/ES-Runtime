@@ -145,15 +145,6 @@ async function handle(request: Request, url: URL): Promise<Response> {
     });
   }
 
-  // An API route, to show the shape. An ordinary handler on an ordinary
-  // `Request` — everything the platform gives you works here.
-  if (url.pathname === "/api/time") {
-    return Response.json(
-      { now: new Date().toISOString() },
-      { headers: { "cache-control": "no-store" } },
-    );
-  }
-
   return page(request);
 }
 

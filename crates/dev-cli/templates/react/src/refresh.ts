@@ -1,30 +1,15 @@
 /**
  * React Fast Refresh, booted before React is.
  *
- * # Why this file exists at all
+ * Re-running a module makes new function identities, and React treats a new
+ * identity as a different component — so without this an edit unmounts the tree
+ * and every `useState` in it. esdev applies the transform (`"refresh": "react"`
+ * in esdev.json); this is the half that knows what React is.
  *
- * `esdev start --hot` can replace a changed module in the running page. That is
- * enough for a plain module and not enough for a component: re-running a module
- * makes new function identities, and React treats a new identity as a different
- * component — so it unmounts the old tree and every `useState` in it goes with
- * it. The edit lands and the form you were filling in is empty.
- *
- * Fast Refresh is React's answer. esdev applies the transform and wraps each
- * component module (`"refresh": "react"` in `esdev.json`); this is the other
- * half, and it is here rather than in esdev because it is the half that knows
- * what React is.
- *
- * # Why it is imported first
- *
- * `injectIntoGlobalHook` has to run **before React loads**, because what it
- * installs is the hook React reads as it initialises. ES modules evaluate in
- * import order, so `entry.client.tsx` imports this one above everything else,
- * and that import must stay where it is.
- *
- * # It is not in your production bundle
- *
- * The whole file is behind a `NODE_ENV` check that the build replaces with a
- * literal, so a release build drops it, its import of `react-refresh` with it.
+ * **The import of this file must stay first in entry.client.tsx**:
+ * `injectIntoGlobalHook` installs the hook React reads as it initialises, and
+ * modules evaluate in import order. The whole file is behind a `NODE_ENV`
+ * check the build replaces with a literal, so a release build drops it.
  */
 // `export {}` makes this a module, which is what allows the top-level `await`
 // below — and it is a module in every sense that matters already, since the

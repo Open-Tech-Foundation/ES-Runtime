@@ -3,9 +3,7 @@
  *
  * It imports nothing, which is what makes it testable: `esdev test` runs each
  * file unbundled, and anything that reaches React reaches CommonJS, which the
- * runtime does not load. Everything here is a string in and a string out, and
- * the part that matters is escaping — so it lives where a test can reach it
- * rather than beside the file read in `src/document.ts`.
+ * runtime does not load.
  */
 
 /** What a route's `handle.meta` produces. */

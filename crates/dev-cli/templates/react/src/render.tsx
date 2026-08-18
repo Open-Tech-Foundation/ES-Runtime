@@ -2,17 +2,11 @@
  * One render — shared by the server and the prerender step, so a page cannot
  * come out one way live and another way static.
  *
- * # What react-router does here
- *
- * `createStaticHandler(routes).query(request)` runs the matching route's loader
- * and hands back a context: the data, the matched routes, and the status the
- * result implies. `createStaticRouter` turns that into a router the components
- * can read, and `<StaticRouterProvider>` renders it — emitting, at the end, the
- * `<script>` that carries the same data to the browser.
- *
- * That script is why `src/serialize.ts` no longer exists. Getting the escaping
- * right is genuinely fiddly (a post whose body contains `</script>` closes the
- * tag), and react-router already does it.
+ * `createStaticHandler(routes).query(request)` runs the matched route's loader
+ * and hands back the data, the matches and the status they imply;
+ * `<StaticRouterProvider>` renders that, and emits the `<script>` carrying the
+ * same data to the browser — escaping included, which is why nothing here
+ * serialises it by hand.
  */
 import { renderToReadableStream } from "react-dom/server.browser";
 import {
