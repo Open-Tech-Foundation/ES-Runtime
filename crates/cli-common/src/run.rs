@@ -270,8 +270,14 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     }
     let process = Arc::new(system_process);
     // Filesystem view for runtime:fs: relative paths resolve under the entry's
-    // directory, jailed to the same detected project root the loader uses (D25).
-    let fs_root = path::detect_root(&base_dir);
+    // directory, jailed to the same project root the loader uses (D25) —
+    // `--root=<dir>` if the operator named one, else detected from the entry
+    // (D79). One computation, shared, so the jail and the module walk cannot
+    // disagree about where the project begins.
+    let fs_root = match &options.root {
+        Some(dir) => explicit_root(dir, &base_dir)?,
+        None => path::detect_root(&base_dir),
+    };
     // `--allow-read=<paths>` / `--allow-write=<paths>` narrow the jail (D38).
     // Entries are resolved against the *working directory*, because that is
     // where the user typed them; the jail's own base is the entry file's
@@ -359,15 +365,15 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     .with_ports(Arc::new(ProcessPortHub::new()));
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
-    // entry's directory, from which it detects the sandbox root (the project
-    // root containing node_modules/package.json) — resolution is jailed under it
-    // by default (D25). Held behind an Arc so dynamic import() can reach it.
+    // entry's directory and rooted at the same project root the filesystem is
+    // jailed to — resolution is confined under it (D25), and the node_modules
+    // walk stops there. Held behind an Arc so dynamic import() can reach it.
     // `--import-policy=<file>` governs what the loader may resolve (D39) — a
     // layer above the `imports` capability, which governs whether it runs at
     // all. The entry file is unaffected: it is read before a loader exists, and
     // the user named it on the command line.
-    let mut loader_impl =
-        NodeModuleLoader::with_base_dir(&base_dir).map_err(|e| format!("module loader: {e}"))?;
+    let mut loader_impl = NodeModuleLoader::with_base_and_root(&base_dir, &fs_root)
+        .map_err(|e| format!("module loader: {e}"))?;
     if let Some(file) = &options.import_policy {
         loader_impl = loader_impl.with_policy(ImportPolicy::from_file(std::path::Path::new(file))?);
     }
@@ -646,6 +652,31 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     }
     let _ = &outcome;
     Ok(())
+}
+
+/// The project root a `--root=<dir>` names: canonicalized, and checked to be a
+/// directory that actually contains the program about to run (D79).
+///
+/// Both checks are here rather than left to the first failing import, because
+/// the alternative is a run that starts and then reports *every* relative
+/// specifier as escaping a root the user typed themselves — one mistake told a
+/// hundred times, in a message about the wrong thing.
+fn explicit_root(dir: &str, base_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let root = path::canonicalize(dir).map_err(|e| format!("--root={dir}: {e}"))?;
+    if !root.is_dir() {
+        return Err(format!("--root={dir} is not a directory"));
+    }
+    // `-e` bases the run at the working directory, which the OS may hand back
+    // through a symlink; compare on the one normal form the jail uses.
+    let base = path::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
+    if !path::within_root(&base, &root) {
+        return Err(format!(
+            "--root={dir} does not contain the entry ({}) — the root is the \
+             directory the program and its node_modules live under",
+            base.display()
+        ));
+    }
+    Ok(root)
 }
 
 /// Tells the capability observer, if there is one, that the run is over.

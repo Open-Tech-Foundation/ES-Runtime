@@ -763,6 +763,85 @@ fn an_installed_program_is_still_jailed_to_the_project() {
     assert!(err.contains("escapes the sandbox root"), "{err}");
 }
 
+/// A workspace package's own `package.json` makes it the detected root, so a
+/// dependency installed at the workspace top is out of reach. `--root=<dir>`
+/// says where the project really begins (D79).
+#[test]
+fn root_flag_anchors_resolution_at_the_workspace_top() {
+    let proj = std::env::temp_dir().join(format!("esrun-wsroot-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&proj);
+    let app = proj.join("packages/app");
+    let dep = proj.join("node_modules/shared");
+    std::fs::create_dir_all(&app).expect("mktemp");
+    std::fs::create_dir_all(&dep).expect("mktemp");
+    std::fs::write(proj.join("package.json"), r#"{ "name": "workspace" }"#).expect("seed");
+    std::fs::write(
+        app.join("package.json"),
+        r#"{ "name": "app", "type": "module" }"#,
+    )
+    .expect("seed");
+    std::fs::write(
+        app.join("main.mjs"),
+        "import { v } from 'shared'; console.log('APP=' + v);",
+    )
+    .expect("seed");
+    std::fs::write(
+        dep.join("package.json"),
+        r#"{ "name": "shared", "type": "module", "main": "index.js" }"#,
+    )
+    .expect("seed");
+    std::fs::write(dep.join("index.js"), "export const v = 'shared';").expect("seed");
+
+    // Detected root is the package itself: the workspace's node_modules is
+    // above it, and unreachable.
+    let without = esrun()
+        .arg(app.join("main.mjs"))
+        .output()
+        .expect("spawn esrun");
+    // Named root: the walk reaches the top of the workspace.
+    let with = esrun()
+        .arg(format!("--root={}", proj.display()))
+        .arg(app.join("main.mjs"))
+        .output()
+        .expect("spawn esrun");
+    let (without_err, with_out, with_err) = (stderr(&without), stdout(&with), stderr(&with));
+    let _ = std::fs::remove_dir_all(&proj);
+    assert!(!without.status.success(), "{without_err}");
+    assert!(without_err.contains("cannot find package"), "{without_err}");
+    assert!(with.status.success(), "stderr: {with_err}");
+    assert!(with_out.contains("APP=shared"), "{with_out}");
+}
+
+/// A `--root` that cannot be the root of this run is refused before the program
+/// starts, rather than surfacing later as every import escaping the jail.
+#[test]
+fn root_flag_is_checked_before_the_run() {
+    let missing = esrun()
+        .arg("--root=/no/such/directory")
+        .arg(fixture("main.mjs"))
+        .output()
+        .expect("spawn esrun");
+    assert!(!missing.status.success());
+    assert!(
+        stderr(&missing).contains("--root=/no/such/directory"),
+        "{}",
+        stderr(&missing)
+    );
+
+    // A root the entry is not inside is a mistake, not a narrower jail.
+    let elsewhere = esrun()
+        .arg(format!("--root={}", std::env::temp_dir().display()))
+        .arg(fixture("main.mjs"))
+        .output()
+        .expect("spawn esrun");
+    assert!(!elsewhere.status.success());
+    assert!(
+        stderr(&elsewhere).contains("does not contain the entry"),
+        "{}",
+        stderr(&elsewhere)
+    );
+}
+
 #[test]
 fn runtime_process_exposes_env_args_platform_cwd() {
     let out = esrun()

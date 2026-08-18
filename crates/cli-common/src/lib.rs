@@ -34,6 +34,11 @@ pub use run::{Config, Inspector, Source, run};
 /// command line, and it should need one dependency to state what its ops are.
 pub use es_runtime::{AsyncOp, FileSystem, OpDecl, OpError, OpResult, Value};
 
+/// Project-root detection, re-exported so a binary that has to agree with the
+/// module loader about where the project begins — `esdev`'s watcher decides what
+/// to watch — asks the loader's own rule rather than reimplementing it (D79).
+pub use es_runtime_default_providers::path;
+
 /// The debugger transport, re-exported so a binary that implements one does not
 /// have to name the engine crate to do it (`esdev`'s `--inspect` server is the
 /// only implementation there is).

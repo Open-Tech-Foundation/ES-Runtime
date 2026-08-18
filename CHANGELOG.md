@@ -21,6 +21,17 @@ namespace) is unstable and may change between minor releases until the API freez
   filesystem jail moves with it, from the package to the project (DECISIONS
   D79).
 
+### Added
+
+- **`--root=<dir>`** names the project root instead of detecting it — how far up
+  the `node_modules` walk goes, and what the filesystem jail is anchored to, in
+  one flag because they are one boundary. It exists for the layout detection
+  cannot infer: a workspace whose packages are entries and whose dependencies
+  are installed at the top (`esrun --root=. packages/app/server.js`). The named
+  root must exist and must contain the entry, both checked before the program
+  starts. `esdev` takes it too, and its `--watch` supervisor watches the root it
+  names (D79).
+
 ### Changed
 
 - **`esrun --help` is 62 lines instead of 93.** What it kept is the grammar,

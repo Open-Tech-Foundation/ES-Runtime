@@ -27,6 +27,11 @@ pub struct RunOptions {
     /// Import policy file, via `--import-policy` (D39). Never auto-discovered:
     /// like `--env-file`, nothing on disk is read unless it is named.
     pub import_policy: Option<String>,
+    /// The project root, via `--root=<dir>` (D79) — the directory module
+    /// resolution walks up to and the filesystem jail is anchored at. `None`
+    /// detects it from the entry file, which is right for a project and wrong
+    /// for a workspace whose packages live above it.
+    pub root: Option<String>,
     /// Whether `--env-file` values override the OS environment (`--env-override`).
     pub env_override: bool,
     /// How long in-flight HTTP requests get to finish after an interrupt, via
@@ -43,6 +48,7 @@ impl Default for RunOptions {
             timeout: None,
             env_file: None,
             import_policy: None,
+            root: None,
             env_override: false,
             shutdown_grace: DEFAULT_SHUTDOWN_GRACE,
             max_heap_bytes: None,
@@ -70,6 +76,9 @@ impl RunOptions {
             }
             "--import-policy" => {
                 self.import_policy = Some(require_value(flag, value)?.to_string());
+            }
+            "--root" => {
+                self.root = Some(require_value(flag, value)?.to_string());
             }
             "--env-override" => {
                 reject_value(flag, value)?;
@@ -106,6 +115,7 @@ impl RunOptions {
             "-t" | "--timeout"
                 | "--env-file"
                 | "--import-policy"
+                | "--root"
                 | "--env-override"
                 | "--max-heap"
                 | "--shutdown-grace"

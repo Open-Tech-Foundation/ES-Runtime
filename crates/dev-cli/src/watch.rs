@@ -108,6 +108,9 @@ pub struct WatchConfig {
     pub child_args: Vec<String>,
     /// The entry file, used to choose what to watch.
     pub entry: PathBuf,
+    /// `--root=<dir>`, if the user named one: the project root the child will
+    /// resolve modules under, and therefore the tree to watch (D79).
+    pub root: Option<PathBuf>,
     /// How long a child gets to drain before it is killed.
     pub grace: Duration,
 }
@@ -118,7 +121,7 @@ pub struct WatchConfig {
 /// program that exits — because it finished, or because it threw — leaves the
 /// supervisor waiting for the next change rather than exiting with it.
 pub async fn supervise(config: WatchConfig) -> Result<(), String> {
-    let root = watch_root(&config.entry);
+    let root = watch_root(&config.entry, config.root.as_deref());
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<()>();
@@ -256,29 +259,24 @@ fn request_termination(_pid: u32) -> bool {
     false
 }
 
-/// The directory to watch: the project root if there is one, else the entry's
-/// own directory.
+/// The directory to watch: `--root` if the user named one, else the project root
+/// the module loader would detect from the entry.
 ///
-/// "Project root" is the nearest ancestor holding a `package.json` — the same
-/// thing the module loader detects (D25), so what is watched and what can be
-/// imported agree.
-fn watch_root(entry: &Path) -> PathBuf {
+/// It is the loader's own rule, called rather than copied (D79), so what is
+/// watched and what can be imported cannot drift apart — including for an entry
+/// inside `node_modules`, where the project is the tree that installed it and
+/// not the package's own directory.
+fn watch_root(entry: &Path, root: Option<&Path>) -> PathBuf {
+    if let Some(root) = root {
+        return root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    }
     let start = entry
         .canonicalize()
         .unwrap_or_else(|_| entry.to_path_buf())
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let mut cursor = start.as_path();
-    loop {
-        if cursor.join("package.json").is_file() {
-            return cursor.to_path_buf();
-        }
-        match cursor.parent() {
-            Some(parent) => cursor = parent,
-            None => return start,
-        }
-    }
+    es_runtime_cli_common::path::detect_root(&start)
 }
 
 /// Whether an event means the file actually *changed*.
@@ -497,7 +495,7 @@ mod tests {
         std::fs::write(&entry, "").expect("write");
 
         assert_eq!(
-            watch_root(&entry),
+            watch_root(&entry, None),
             dir.canonicalize().expect("canonicalize")
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -512,7 +510,7 @@ mod tests {
         let entry = dir.join("lone.mjs");
         std::fs::write(&entry, "").expect("write");
 
-        let root = watch_root(&entry);
+        let root = watch_root(&entry, None);
         // Either the entry's directory, or a `package.json`-bearing ancestor of
         // the system temp dir if the machine happens to have one.
         assert!(

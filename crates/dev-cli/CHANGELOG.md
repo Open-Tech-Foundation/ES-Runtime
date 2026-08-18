@@ -26,6 +26,15 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
+- **`--root=<dir>`** names the project root rather than letting it be detected
+  from the entry: how far up the `node_modules` walk goes, and what the
+  filesystem jail is anchored to. `--watch` watches that root too, so what is
+  watched and what can be imported stay the same tree. The layout it exists for
+  is the workspace — packages as entries, dependencies installed at the top
+  (`esdev --root=. packages/app/server.ts`). The runtime half of this is
+  `esrun`'s and is described in the root
+  [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
+
 - **`esdev upgrade`** replaces this binary with the newest `esdev` release for
   your platform — the same command `esrun upgrade` has always been, now shared
   between the two rather than living in one of them.
