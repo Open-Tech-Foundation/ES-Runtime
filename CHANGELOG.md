@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-08-18
+
 ### Fixed
 
 - **An npm-installed program can find its dependencies.** Running a file inside
