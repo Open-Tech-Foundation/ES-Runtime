@@ -24,6 +24,28 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Changed
+
+- **A template is a scaffold, not a demo.** Every template shipped an
+  application inside it — a blog with three posts and a dynamic route, a task
+  manager with a store and hand-written validation, an item list with add and
+  remove, a `Result` type and a `retry` with backoff — and all of it had to be
+  read and deleted before the project could become the one it was created for.
+
+  What `esdev create` writes now is a project that runs and **one page**: its
+  name, a line saying what it was built with and who it comes from, the file to
+  edit, and three links. The `api` template answers the same in JSON on
+  `GET /`. `styles/theme.css` and `styles/app.css` are byte for byte the same
+  file in the `react` and `vanilla` templates.
+
+  What is kept is what a project needs on its first day and would otherwise be
+  assembled by hand: the route table, the layout, the error boundary that
+  renders a real 404, one render shared by the server and the static build, Fast
+  Refresh, the `URLPattern` router that tells a 405 from a 404, the security
+  headers, the `SIGTERM` drain, the JSON access log, and a permission line that
+  is already narrow. Each template keeps one test, since `esdev test` exits
+  non-zero when it discovers nothing. See DECISIONS D76.
+
 ### Fixed
 
 - **A scaffolded project gets the current type definitions.** Every template
