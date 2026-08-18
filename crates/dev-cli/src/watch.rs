@@ -321,10 +321,13 @@ pub fn is_asset(path: &Path, root: &Path) -> bool {
 fn is_watchable(path: &Path, root: &Path, extensions: &[&str]) -> bool {
     let ignored: HashSet<&str> = IGNORED_DIRS.iter().copied().collect();
     let relative = path.strip_prefix(root).unwrap_or(path);
-    if relative
-        .components()
-        .any(|c| ignored.contains(c.as_os_str().to_string_lossy().as_ref()))
-    {
+    if relative.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        // The staging directory a build writes into carries a pid, so it is
+        // matched by its prefix. Without this the dev loop watches its own
+        // half-finished output and rebuilds for ever.
+        ignored.contains(name.as_ref()) || name.starts_with(crate::staging::PREFIX)
+    }) {
         return false;
     }
     path.extension()

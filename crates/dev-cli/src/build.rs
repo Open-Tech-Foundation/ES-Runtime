@@ -246,23 +246,25 @@ fn is_local(specifier: &str) -> bool {
     specifier.starts_with('.') || Path::new(specifier).is_absolute()
 }
 
-/// Empties the output directory before a library build writes into it.
+/// Refuses an output directory a library build must not be allowed to replace.
 ///
 /// **A library build owns its output tree, so a stale file in it is a published
 /// file.** Delete a module from `src` and without this its `.js` and `.d.ts`
-/// stay in `dist` for ever — and `"files": ["dist"]` puts them in the tarball,
-/// where a consumer can still import a module the library no longer has. This is
-/// the `rm -rf dist` a hand-written build script always ends up growing, and the
-/// reason it grows it.
+/// would stay in `dist` for ever — and `"files": ["dist"]` puts them in the
+/// tarball, where a consumer can still import a module the library no longer
+/// has. So the directory is *replaced* rather than written into
+/// ([`crate::staging`]), which is the `rm -rf dist` a hand-written build script
+/// always grows, moved to the end where a failed build cannot benefit from it.
 ///
-/// Only `--lib` cleans. An application build's `--out` names a *file*, in a
-/// directory that may hold other builds and other people's files; emptying it
-/// would be a surprise with no upside, since the one file is overwritten anyway.
+/// Only `--lib` owns its output. An application build's `--out` names a *file*,
+/// in a directory that may hold other builds and other people's files; replacing
+/// it would be a surprise with no upside, since the one file is overwritten
+/// anyway.
 ///
 /// The refusals are the point of the function. `--out` is a path off a command
-/// line, and the difference between emptying `dist` and emptying `src` is one
+/// line, and the difference between replacing `dist` and replacing `src` is one
 /// keystroke.
-fn clean_output(out_dir: &Path, source_root: &Path) -> Result<(), String> {
+fn guard_replacement(out_dir: &Path, source_root: &Path) -> Result<(), String> {
     if !out_dir.exists() {
         return Ok(());
     }
@@ -283,68 +285,71 @@ fn clean_output(out_dir: &Path, source_root: &Path) -> Result<(), String> {
         .map_err(|e| format!("cannot read {}: {e}", source_root.display()))?;
     let cwd = std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
 
-    // Emptying the output would empty the input. `--out=src` is the whole
+    // Replacing the output would replace the input. `--out=src` is the whole
     // library, one keystroke away from `--out=dist`.
     if source.starts_with(&resolved) {
         return Err(format!(
-            "--out={} holds the source ({}), and a library build empties its \
-             output directory first.\n\n\
+            "--out={} holds the source ({}), and a library build replaces its \
+             output directory.\n\n\
              That would delete what it is about to build. Write somewhere the \
              build owns: --out=dist.",
             out_dir.display(),
             source_root.display()
         ));
     }
-    // …and emptying the project would take everything else in it too.
+    // …and replacing the project would take everything else in it too.
     if cwd.starts_with(&resolved) {
         return Err(format!(
-            "--out={} holds the working directory, and a library build empties \
-             its output directory first.\n\n\
+            "--out={} holds the working directory, and a library build replaces \
+             its output directory.\n\n\
              Name a directory the build owns: --out=dist.",
             out_dir.display()
         ));
     }
-    std::fs::remove_dir_all(&resolved)
-        .map_err(|e| format!("cannot clear {}: {e}", out_dir.display()))
+    Ok(())
 }
 
-/// Empties the directories a whole-project release build is about to write.
+/// The directories a whole-project release build **replaces** rather than
+/// writes into.
 ///
-/// # Why a build has to do this at all
+/// # Why a build has to replace anything at all
 ///
 /// Because output filenames are content-hashed and inputs change. `app-1a2b.js`
-/// becomes `app-9f8e.js` and the old one stays, for ever, in the directory that
-/// gets deployed — and beside it whatever `esdev start` left, which is *not*
-/// hashed and so is a file with an ordinary name that nothing will ever
+/// becomes `app-9f8e.js` and the old one would stay, for ever, in the directory
+/// that gets deployed — and beside it whatever `esdev start` left, which is
+/// *not* hashed and so is a file with an ordinary name that nothing will ever
 /// overwrite. What ships is then bigger than the build, and a cache or a
 /// hand-edited URL can still reach a version of the app nobody is testing.
 ///
-/// # Only when the build owns everything it is clearing
+/// The replacement happens at the end, when the staged build is moved into
+/// place ([`crate::staging`]). It used to happen at the start, and that is
+/// exactly how a failed build came to destroy the deployment that was working.
+///
+/// # Only when the build owns everything it is replacing
 ///
 /// Two conditions, and both are about ownership rather than tidiness:
 ///
 /// * **Every target is being built.** `--target=web` writes one target's output
-///   into a directory that may be shared with another's, and clearing it would
+///   into a directory that may be shared with another's, and replacing it would
 ///   delete a bundle this run is not going to rebuild.
-/// * **It is not the dev loop.** `esdev start` rebuilds on a keystroke into
-///   files with stable names, so nothing accumulates — and clearing the
-///   directory a page is being served from, once a save, is a page that fails to
-///   load for reasons that have nothing to do with the code.
+/// * **It is not the dev loop.** `esdev start` rebuilds one target at a time
+///   into files with stable names, so nothing accumulates — and a rebuild that
+///   replaced the directory would delete the other targets' output with it.
 ///
-/// Only `outdir` directories are cleared. `out` names one file in a directory
-/// the build does not own ([`crate::config::Output`]); such a file is deleted
-/// here only when it happens to sit inside another target's `outdir`, and a
+/// Only `outdir` directories are owned. `out` names one file in a directory the
+/// build does not own ([`crate::config::Output`]); such a file is replaced here
+/// only when it happens to sit inside another target's `outdir`, and a
 /// whole-project build writes it again on the way past.
 ///
-/// A directory that holds the project root is refused rather than cleared. It is
-/// the same keystroke `--lib` guards against, arriving by a different route:
+/// A directory that holds the project root is refused rather than replaced. It
+/// is the same keystroke `--lib` guards against, arriving by a different route:
 /// `"outdir": "."` is a config away from `"outdir": "dist"`.
-fn clean_targets(
+fn owned_dirs(
     project: &ProjectBuild,
     selected: &[&crate::config::Target],
-) -> Result<(), String> {
+) -> Result<Vec<PathBuf>, String> {
     if project.targets.is_some() || project.dev.is_some() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let root = project
         .project
@@ -352,34 +357,29 @@ fn clean_targets(
         .canonicalize()
         .unwrap_or_else(|_| project.project.dir.clone());
 
+    let mut owned = Vec::new();
     for target in selected {
         let crate::config::Output::Dir(dir) = &target.output else {
             continue;
         };
         let out = project.project.dir.join(dir);
-        let Ok(resolved) = out.canonicalize() else {
-            // Nothing there yet, which is the first build and needs no clearing.
-            continue;
-        };
-        if root.starts_with(&resolved) {
+        // A directory that is not there yet is the first build, which has
+        // nothing to replace and still owns where it is going.
+        if let Ok(resolved) = out.canonicalize()
+            && root.starts_with(&resolved)
+        {
             return Err(format!(
                 "target \"{}\": `outdir` is {}, which holds the project itself.\n\n\
-                 A build empties the directory it writes into, and that would empty \
+                 A build replaces the directory it owns, and that would delete \
                  everything else here too. Name a directory the build owns: \
                  \"outdir\": \"dist\".",
                 target.name,
                 out.display()
             ));
         }
-        std::fs::remove_dir_all(&resolved).map_err(|e| {
-            format!(
-                "target \"{}\": cannot clear {}: {e}",
-                target.name,
-                out.display()
-            )
-        })?;
+        owned.push(PathBuf::from(dir));
     }
-    Ok(())
+    Ok(owned)
 }
 
 /// Bundles `config` and reports what was written.
@@ -470,13 +470,6 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             }],
         )
     };
-
-    // Before anything is written, and only for `--lib`. It is also what makes
-    // the count below honest: the emitted modules are read back off disk, so a
-    // stale file left in place would be reported as one of them.
-    if let Some(root) = &preserve_root {
-        clean_output(&out_dir, root)?;
-    }
 
     // `process.env.NODE_ENV` first, so an explicit --define of the same name
     // overrides it rather than fighting it. A library defines nothing by
@@ -1171,7 +1164,7 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
     let project = match request {
         BuildRequest::Single(config) => {
             let verb = if config.lib { "built" } else { "bundled" };
-            let written = build(*config).await?;
+            let written = build_single(*config).await?;
             let paint = crate::style::Palette::stdout();
             println!("{} {} {written}", paint.green(verb), paint.dim("→"));
             return Ok(());
@@ -1206,9 +1199,38 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             .collect::<Result<Vec<_>, _>>()?,
     };
 
-    clean_targets(&project, &selected)?;
+    // Nothing is written where it is deployed until every target — and every
+    // step that runs after them — has succeeded. See [`crate::staging`].
+    let mut staging = crate::staging::Staging::new(&project.project.dir, project.dev.is_none())?;
+    for dir in owned_dirs(&project, &selected)? {
+        staging.own(dir);
+    }
 
-    for target in &selected {
+    match build_targets(&project, &selected, &staging).await {
+        // Everything worked, so everything moves. Until this line the output on
+        // disk is the last build that worked.
+        Ok(()) => staging.commit(),
+        // …and this one drops the staging directory with it. The note is worth
+        // the two lines: the paths in whatever the failing step printed name a
+        // directory that no longer exists, and a developer looking at an
+        // untouched `dist` should know it is untouched rather than stale.
+        Err(err) => Err(format!(
+            "{err}\n\n\
+             Nothing was written: a build stages its output and moves it into \
+             place only once every target and every step has succeeded, so what \
+             is deployed is still the last build that worked."
+        )),
+    }
+}
+
+/// Builds every selected target into `staging`, then runs the steps that run
+/// after a build — the order the whole file is about.
+async fn build_targets(
+    project: &ProjectBuild,
+    selected: &[&crate::config::Target],
+    staging: &crate::staging::Staging,
+) -> Result<(), String> {
+    for target in selected {
         let mut defines = target.define.clone();
         defines.extend(project.defines.iter().cloned());
         let mut conditions = target.conditions.clone();
@@ -1223,7 +1245,7 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
                     target.name
                 ));
             };
-            let out_dir = project.project.dir.join(dir);
+            let out_dir = staging.path(dir);
             let written = crate::html::build(
                 target,
                 &project.project.dir,
@@ -1238,13 +1260,22 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             copy_assets(&target.assets, &project.project.dir, &out_dir)
                 .map_err(|e| format!("target \"{}\": {e}", target.name))?;
             let paint = crate::style::Palette::stdout();
-            println!("{} {} {written}", paint.green("built"), paint.dim("→"));
+            println!(
+                "{} {} {}",
+                paint.green("built"),
+                paint.dim("→"),
+                staging.reveal(&written)
+            );
             continue;
         }
 
         let (out, out_dir) = match &target.output {
-            crate::config::Output::File(out) => (Some(out.clone()), None),
-            crate::config::Output::Dir(dir) => (None, Some(dir.clone())),
+            crate::config::Output::File(out) => {
+                (Some(staging.path(out).to_string_lossy().into_owned()), None)
+            }
+            crate::config::Output::Dir(dir) => {
+                (None, Some(staging.path(dir).to_string_lossy().into_owned()))
+            }
         };
         let written = build(BuildConfig {
             source: target.entry.clone(),
@@ -1265,29 +1296,76 @@ pub async fn run(request: BuildRequest) -> Result<(), String> {
             dts_bundle: None,
         })
         .await
-        .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+        .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
         let paint = crate::style::Palette::stdout();
-        println!("{} {} {written}", paint.green("bundled"), paint.dim("→"));
+        println!(
+            "{} {} {}",
+            paint.green("bundled"),
+            paint.dim("→"),
+            staging.reveal(&written)
+        );
     }
 
     // Every bundle exists before any of them runs. A prerender step renders the
     // pages of a site that the *browser* bundle is referenced from, so ordering
     // it after the whole build is the difference between generating HTML that
     // points at a file and HTML that points at one that does not exist yet.
-    for target in selected.iter().filter(|t| t.run_after_build) {
-        let output = output_path(target);
+    for target in selected.iter().filter(|target| target.run_after_build) {
+        let output = staging.path(output_path(target));
         run_output(&project.project.dir, &output)
             .await
-            .map_err(|e| format!("target \"{}\": {e}", target.name))?;
+            .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;
         let paint = crate::style::Palette::stdout();
         println!(
             "{} {} {}",
             paint.green("ran"),
             paint.dim("→"),
-            paint.cyan(output.display())
+            paint.cyan(staging.reveal(&output.to_string_lossy()))
         );
     }
     Ok(())
+}
+
+/// Builds one entry — or one library — named on the command line.
+///
+/// Staged like a project build, for the same reason and with one difference:
+/// what it writes is one file (plus whatever chunks that file's dynamic imports
+/// produce) in a directory the build does not own, so the staged output is moved
+/// *into* that directory rather than replacing it. `--lib` is the exception —
+/// a library's output tree is the build's, and a stale module left in it is a
+/// module the package publishes.
+async fn build_single(mut config: BuildConfig) -> Result<String, String> {
+    let root = match &config.root {
+        Some(root) => root.clone(),
+        None => {
+            std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?
+        }
+    };
+    let mut staging = crate::staging::Staging::new(&root, true)?;
+
+    if config.lib {
+        let out = PathBuf::from(config.out.clone().unwrap_or_else(|| "dist".to_string()));
+        // Against the real directory: what the refusals are about is the
+        // directory that is going to be replaced, not the one being written now.
+        guard_replacement(&root.join(&out), &root.join(&config.source))?;
+        staging.own(out.clone());
+        config.out = Some(staging.path(&out).to_string_lossy().into_owned());
+    } else if let Some(dir) = config.out_dir.clone() {
+        config.out_dir = Some(staging.path(dir).to_string_lossy().into_owned());
+    } else {
+        let out = config
+            .out
+            .as_ref()
+            .map_or_else(|| default_out(&config.source), PathBuf::from);
+        config.out = Some(staging.path(out).to_string_lossy().into_owned());
+    }
+
+    let written = build(config)
+        .await
+        .map_err(|e| staging.reveal(&e))
+        .map(|report| staging.reveal(&report))?;
+    staging.commit()?;
+    Ok(written)
 }
 
 /// Runs a built artifact as the next step of the build.
@@ -1360,7 +1438,7 @@ mod tests {
         assert_eq!(default_out("src/app.ts"), PathBuf::from("dist/app.js"));
     }
 
-    /// A directory of its own per test: these delete things.
+    /// A directory of its own per test: these write and delete things.
     fn clean_fixture(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("esdev_clean_{name}"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1370,37 +1448,41 @@ mod tests {
         dir
     }
 
+    /// An ordinary output directory is allowed, and — the half that changed
+    /// when staging arrived — is still there when the guard returns. Nothing is
+    /// deleted until the staged build is ready to take its place.
     #[test]
-    fn cleaning_empties_the_output_and_leaves_the_source() {
+    fn guarding_an_output_directory_deletes_nothing() {
         let dir = clean_fixture("ok");
-        std::fs::write(dir.join("dist/stale.js"), "gone").expect("write");
+        std::fs::write(dir.join("dist/stale.js"), "still here for now").expect("write");
 
-        clean_output(&dir.join("dist"), &dir.join("src")).expect("clean");
-        assert!(!dir.join("dist/stale.js").exists());
+        guard_replacement(&dir.join("dist"), &dir.join("src")).expect("guard");
+        assert!(dir.join("dist/stale.js").exists(), "the guard deleted it");
         assert!(dir.join("src/index.ts").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Nothing to clean is not an error — the first build of a project has no
+    /// Nothing there is not an error — the first build of a project has no
     /// output directory yet.
     #[test]
-    fn cleaning_a_directory_that_is_not_there_is_fine() {
+    fn guarding_a_directory_that_is_not_there_is_fine() {
         let dir = clean_fixture("absent");
-        clean_output(&dir.join("nowhere"), &dir.join("src")).expect("clean");
+        guard_replacement(&dir.join("nowhere"), &dir.join("src")).expect("guard");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The refusal that matters: `--out=src` differs from `--out=dist` by one
-    /// keystroke, and would delete the library rather than build it.
+    /// keystroke, and would replace the library rather than build it.
     #[test]
-    fn cleaning_refuses_to_empty_anything_holding_the_source() {
+    fn guarding_refuses_anything_holding_the_source() {
         let dir = clean_fixture("source");
 
-        let onto_itself = clean_output(&dir.join("src"), &dir.join("src")).expect_err("refused");
+        let onto_itself =
+            guard_replacement(&dir.join("src"), &dir.join("src")).expect_err("refused");
         assert!(onto_itself.contains("holds the source"), "{onto_itself}");
 
         // …and the parent of the source, which takes it with everything else.
-        let onto_parent = clean_output(&dir, &dir.join("src")).expect_err("refused");
+        let onto_parent = guard_replacement(&dir, &dir.join("src")).expect_err("refused");
         assert!(onto_parent.contains("holds the source"), "{onto_parent}");
 
         assert!(dir.join("src/index.ts").exists(), "the source was deleted");
@@ -1408,11 +1490,11 @@ mod tests {
     }
 
     #[test]
-    fn cleaning_refuses_a_path_that_is_a_file() {
+    fn guarding_refuses_a_path_that_is_a_file() {
         let dir = clean_fixture("file");
         std::fs::write(dir.join("bundle.js"), "x").expect("write");
 
-        let err = clean_output(&dir.join("bundle.js"), &dir.join("src")).expect_err("refused");
+        let err = guard_replacement(&dir.join("bundle.js"), &dir.join("src")).expect_err("refused");
         assert!(err.contains("is a file"), "{err}");
         assert!(dir.join("bundle.js").exists());
         let _ = std::fs::remove_dir_all(&dir);

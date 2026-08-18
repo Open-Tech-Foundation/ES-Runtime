@@ -1167,6 +1167,114 @@ fn an_application_build_leaves_the_rest_of_the_directory_alone() {
     assert!(dir.join("dist/keep-me.txt").exists(), "{}", stdout(&out));
 }
 
+/// Whether a build left its staging directory behind — one is created inside
+/// the project and removed whether the build worked or not.
+fn staging_left(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".esdev-build-")
+        })
+    })
+}
+
+/// **A failed build changes nothing.** The report that prompted this: a react
+/// static project with no `node_modules` wrote its browser assets, its
+/// `index.html` and its prerender bundle, and *then* failed in the prerender
+/// step — leaving a `dist` that is a site whose pages were never rendered, and
+/// leaving it where the previous, working deployment had been. In CI that is
+/// what gets uploaded.
+#[test]
+fn a_failed_build_leaves_the_previous_output_where_it_was() {
+    let dir = build_dir("b_fail_keeps");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.ts", "console.log('app');\n");
+    write_in(
+        &dir,
+        "src/prerender.ts",
+        "throw new Error('the step that fails after everything is written');\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": {
+              "web": { "entry": "src/app.ts", "outdir": "dist" },
+              "prerender": { "entry": "src/prerender.ts", "out": "dist/prerender.js",
+                             "then": "run" } } }"#,
+    );
+    std::fs::create_dir_all(dir.join("dist")).expect("create dist");
+    write_in(&dir, "dist/index.html", "the deployment that works\n");
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(!out.status.success(), "{}", stdout(&out));
+
+    // What was deployed is still deployed, whole …
+    assert_eq!(
+        std::fs::read_to_string(dir.join("dist/index.html")).expect("read"),
+        "the deployment that works\n"
+    );
+    // … and nothing of the build that failed is anywhere near it.
+    for partial in ["dist/app.js", "dist/prerender.js"] {
+        assert!(
+            !dir.join(partial).exists(),
+            "{partial} was left behind by a failed build:\n{}{}",
+            stdout(&out),
+            stderr(&out)
+        );
+    }
+    assert!(
+        !staging_left(&dir),
+        "the staging directory outlived the build"
+    );
+
+    // Said outright, because a `dist` that was left alone looks exactly like one
+    // that was rebuilt — and the paths in whatever the failing step printed name
+    // a directory that no longer exists.
+    assert!(
+        stderr(&out).contains("Nothing was written"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+/// The same property one step earlier: a target that cannot be bundled at all.
+/// The first target had already succeeded, and its output must not be visible
+/// either — half a deployment is not a deployment.
+#[test]
+fn a_target_that_fails_to_bundle_leaves_nothing_of_the_run() {
+    let dir = build_dir("b_fail_target");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/first.ts", "console.log('fine');\n");
+    write_in(&dir, "src/second.ts", "const broken = ;\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": {
+              "first": { "entry": "src/first.ts", "out": "dist/first.js" },
+              "second": { "entry": "src/second.ts", "out": "dist/second.js" } } }"#,
+    );
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(
+        !dir.join("dist/first.js").exists(),
+        "the target that worked was left behind by the run that did not:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !staging_left(&dir),
+        "the staging directory outlived the build"
+    );
+}
+
 /// A hashed filename changes when its contents do, and the old one has nothing
 /// to overwrite it. Without this, what gets deployed is every build the
 /// directory has ever seen — plus whatever `esdev start` left, which is not

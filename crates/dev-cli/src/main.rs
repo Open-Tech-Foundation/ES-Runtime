@@ -56,6 +56,7 @@ mod install;
 mod prompt;
 mod refresh;
 mod resolve;
+mod staging;
 mod start;
 mod style;
 mod test;
