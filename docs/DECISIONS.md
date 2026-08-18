@@ -661,6 +661,28 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D76 — A template is a scaffold, not a demo · *Proposed (2026-08-18)* · *amends D63, D64, D72*
+
+**Context:** D64 put templates in the binary and D63 and D72 gave the react one its shape, and both were arguing about the *machinery* — targets, an entry, a permission line, which of three deployables a scaffold should produce. Nobody argued about the content, so it accumulated: a blog with three posts, a list route and a dynamic one to hang loaders off; a task manager with an in-memory store, four CRUD handlers and hand-written validation; an item list with add and remove; a `Result` type and a `retry` with backoff; and a callout box whose reason to exist was demonstrating CSS Modules.
+
+Every line of it was written to *show* something, and all of it is documented on the site — where it can be read by somebody who wants it, and updated without shipping a new binary. In a scaffold it is somebody else's application, and the first thing anybody does with a scaffold is start writing theirs. So the content was a cost paid on every `esdev create`: read it, work out which files are the template and which are the example, delete the example, and hope nothing that stayed depended on what went.
+
+**Decision (maintainer sign-off pending):**
+
+- **What a template writes is a project that runs, and one page.** The project's name, one line saying what it was built with and who it comes from, the file to edit, and three links — docs, API, GitHub. The `api` template has no page and answers the same in JSON on `GET /`. That page exists to be deleted, and says so.
+
+- **The look is one look, shared.** `styles/theme.css` and `styles/app.css` are byte for byte the same file in the `react` and `vanilla` templates. Two copies of one page drifting apart is how a starter ends up with two.
+
+- **What is kept is what a project needs on its first day and would otherwise assemble by hand.** The route table, the layout, the error boundary that renders a real 404, one render shared by the server and the static build, Fast Refresh, the `URLPattern` router that tells a 405 from a 404, the security headers, the `SIGTERM` drain, the JSON access log, and a permission line that is already narrow. The line between this and an example is *whether deleting it leaves the project broken* — a CRUD handler is an example, a signal handler is not.
+
+- **One test per template stays.** `esdev test` exits non-zero when it discovers nothing, so a template with no test files scaffolds a project whose `npm test` fails on the first command. Each template keeps the smallest real test of a module it actually ships.
+
+- **The prose is trimmed to what a file needs to be understood.** Every file keeps a header saying what it is; the essays explaining the deleted examples went with them. The two warnings that cost something to rediscover — `refresh.ts` must be imported first, `$RefreshSig$` must be the real function — stay where they are.
+
+**Consequences:** `esdev create` writes a project somebody can start typing into rather than one they have to clear out first, and the templates stop being a second, unversioned copy of the documentation. Verified by scaffolding all four: `vanilla`, `api` and `lib` test and build; both `react` modes test, typecheck against a real install, and build — the static one prerenders its page, and the fullstack one, run under `esrun` with the grant its `esdev.json` names, answers `/` with the page, an unknown path with 404 and `/healthz` with ok; the `api` bundle answers `/` with its JSON, 404s an unknown path and returns a 405 carrying `Allow`. **Not solved here:** component testing, which still needs a bundling step `esdev test` does not have — so what each template tests is a module rather than a component, and the page itself is covered by nothing but the build.
+
+---
+
 ### D75 — The dev channel is a WebSocket, because of what it will carry · *Proposed (2026-08-17)* · *supersedes D62's transport choice*
 
 **Context:** D62 chose server-sent events for the reload channel and the argument was sound for what it carried: one direction, one word, and `EventSource` reconnects by specification — which matters when the far end is a build tool the developer restarts all day. A WebSocket would have meant framing on one side and a reconnect loop on the other, to deliver a string.

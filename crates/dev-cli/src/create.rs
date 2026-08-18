@@ -21,6 +21,15 @@
 //! convenience over the scriptable one and never the only way to an answer.
 //! `--template=api --install=bun` is the same run with nothing to type.
 //!
+//! # A template is a scaffold, not a demo
+//!
+//! What each one writes is a project that runs and **one page**, or for the API
+//! one route: the project's name, what it was built with and who it comes from,
+//! the file to edit, and three links. Nothing else. A blog, a task store or a
+//! counter is somebody else's application, and every line of it has to be read
+//! and then deleted before the project can become the one it was created for
+//! (D76).
+//!
 //! # A template can have modes
 //!
 //! Some stacks are two projects wearing one name. `react` is: an app with a
@@ -64,7 +73,7 @@ include!(concat!(env!("OUT_DIR"), "/templates.rs"));
 const DESCRIPTIONS: &[(&str, &str)] = &[
     (
         "api",
-        "A JSON API — routing, validation, error handling. Nothing it ships depends on",
+        "A JSON API — one route, a URLPattern router, a narrow grant. No deps",
     ),
     (
         "react",

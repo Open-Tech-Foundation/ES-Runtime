@@ -37,16 +37,28 @@ esdev create my-app --template=react --mode=fullstack
 | | |
 | --- | --- |
 | `react` | React + react-router — a static site, or an app with a server of its own |
-| `api` | A JSON API — routing, validation, error handling. **Nothing it ships depends on** |
+| `api` | A JSON API — one route, a `URLPattern` router. **Nothing it ships depends on** |
 | `vanilla` | TypeScript and the DOM — no framework |
 | `lib` | A publishable package — module tree, `.d.ts`, `exports` wired |
 
-Both `react` modes are a route table with loaders, nested layouts, dynamic
-segments and error boundaries. What differs is what runs it — see
-[Modes](#modes).
-
 They are **baked into the binary**, so `create` works offline and always writes
 a project the `esdev` that wrote it can build. Nothing is downloaded.
+
+## A template is a scaffold, not a demo
+
+What each one writes is a project that runs and **one page** — its name, what it
+was built with, the file to edit, three links — or for `api`, one route
+answering the same in JSON. That page is there to be deleted.
+
+Nothing else is in it: no blog, no task store, no counter. What is kept is the
+machinery a project needs on its first day and would otherwise have to be
+assembled — the route table, the error boundary that renders a real 404, one
+render shared by the server and the static build, Fast Refresh, the security
+headers, the `SIGTERM` drain, the access log, and a permission line that is
+already narrow.
+
+Both `react` modes are that one page on a route table, with the layout and the
+error boundary wired. What differs is what runs it — see [Modes](#modes).
 
 ## Modes
 
@@ -82,7 +94,7 @@ one, and whether to install — as a menu you arrow through:
 
 ```text
 ? Which template?
-    api      A JSON API — routing, validation, error handling
+    api      A JSON API — one route, a URLPattern router, a narrow grant
     lib      A publishable TypeScript package — module tree, .d.ts
   ❯ react    React + react-router — a static site, or an app with a server  (default)
     vanilla  TypeScript and the DOM — no framework
