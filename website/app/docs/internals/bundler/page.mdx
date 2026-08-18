@@ -1,9 +1,9 @@
 ---
-title: "Internals: The bundler bridge"
+title: "Internals: the bundler bridge"
 description: How runtime:build puts a parallel Rust bundler and a single-threaded V8 isolate in the same conversation — the inverted hook dispatch, what it costs, and why a subprocess could not do it.
 ---
 
-# Internals: The bundler bridge
+# Internals: the bundler bridge
 
 How `runtime:build` gets a bundler whose graph walk is parallel and an isolate
 that has exactly one thread to agree on who runs what, and when — and why the

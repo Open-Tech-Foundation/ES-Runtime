@@ -53,21 +53,21 @@ const NAV = [
       { title: "URLPattern", path: "/docs/urlpattern" },
       { title: "WebAssembly & WASI", path: "/docs/wasm" },
       { title: "Hashing", path: "/docs/guides/hashing" },
-      { title: "Securing Runtime", path: "/docs/guides/securing-runtime" },
+      { title: "Securing the runtime", path: "/docs/guides/securing-runtime" },
       {
         title: "Text serialization",
         items: [
-          { title: "XML Parser", path: "/docs/serialization/xml" },
-          { title: "YAML Parser", path: "/docs/serialization/yaml" },
-          { title: "TOML Parser", path: "/docs/serialization/toml" },
-          { title: "JSONL Parser", path: "/docs/serialization/jsonl" },
+          { title: "XML", path: "/docs/serialization/xml" },
+          { title: "YAML", path: "/docs/serialization/yaml" },
+          { title: "TOML", path: "/docs/serialization/toml" },
+          { title: "JSON Lines", path: "/docs/serialization/jsonl" },
         ],
       },
       {
         title: "Binary serialization",
         items: [
-          { title: "MessagePack Parser", path: "/docs/serialization/msgpack" },
-          { title: "Protobuf Parser", path: "/docs/serialization/protobuf" },
+          { title: "MessagePack", path: "/docs/serialization/msgpack" },
+          { title: "Protobuf", path: "/docs/serialization/protobuf" },
         ],
       },
     ],

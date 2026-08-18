@@ -1,11 +1,11 @@
 ---
-title: Databases
+title: "Internals: databases"
 description: Why runtime:db puts protocols in JavaScript and only an embedded engine in Rust, what the row encoding buys, and what it costs.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
-# Databases
+# Internals: databases
 
 `runtime:db` is built on one rule: **Rust owns transport and the embedded
 engine, JavaScript owns every protocol.** Adding a networked backend —

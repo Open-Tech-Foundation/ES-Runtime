@@ -387,7 +387,7 @@ import { serve } from "runtime:http";
 import { Hono } from "hono";
 
 const app = new Hono();
-app.get("/", (c) => c.text("Hello from Hono on ESRun!"));
+app.get("/", (c) => c.text("Hello from Hono on esrun!"));
 
 const server = serve({ port: 8080 }, app.fetch);
 const { port } = await server.addr;
