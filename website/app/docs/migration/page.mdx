@@ -328,22 +328,28 @@ const { code, stdout } = await new Command("git", {
 Instead of pulling third-party npm packages for common structured data formats, esrun includes high-performance zero-dependency serializers in `runtime:serialization`.
 
 ```js
+import { file } from "runtime:fs";
 import { YAML, MessagePack, TOML, XML, JSONL } from "runtime:serialization";
 
 // 1. YAML
 const config = YAML.parse(await file("./config.yaml").text());
-const yamlOut = YAML.stringify({ port: 8080, mode: "production" });
+const yamlOut = YAML.build({ port: 8080, mode: "production" });
 
-// 2. MessagePack (Binary)
+// 2. MessagePack (binary)
 const encoded = MessagePack.encode({ user: "alex", id: 42 });
 const decoded = MessagePack.decode(encoded);
 
 // 3. TOML
 const cargo = TOML.parse(await file("./Cargo.toml").text());
 
-// 4. XML & JSONL
+// 4. XML
 const xmlData = XML.parse("<app><name>esrun</name></app>");
-const jsonlRows = JSONL.parse("{\"id\":1}\n{\"id\":2}\n");
+
+// 5. JSONL is a stream, not a whole-document parse
+const rows = file("./events.jsonl")
+  .stream()
+  .pipeThrough(new JSONL.DecoderStream());
+for await (const row of rows) console.log(row.id);
 ```
 
 ---

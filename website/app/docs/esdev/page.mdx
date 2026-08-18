@@ -24,7 +24,7 @@ esdev --inspect app.ts        # attach a debugger
 esdev --trace-permissions app.ts   # print the esrun line to deploy with
 ```
 
-<Callout type="warn" title="Not a deployment target">
+<Callout type="warning" title="Not a deployment target">
   Ship the artifact and run it under `esrun`. `esdev` has a debugger port and a
   file watcher in it; `esrun` cannot be built with either.
 </Callout>

@@ -20,7 +20,7 @@ _not_ globals; they live in [runtime: modules](/docs/modules).
 | `queueMicrotask` | |
 | `structuredClone` | |
 | `reportError` | |
-| `navigator` | `userAgent` — `"ES-Runtime/<version>"` |
+| `navigator` | `userAgent` — `"ES-Runtime/<version>"`; `hardwareConcurrency` — the CPU count a [worker](/docs/guides/workers) pool is sized from |
 
 ## console
 
@@ -253,4 +253,4 @@ Node, Deno and Bun.
 | `process` / `Buffer` / `require` | Node.js globals — not provided (use `runtime:` modules) |
 | `SharedWorker` | shares one worker between documents, and there are none |
 | `localStorage` / `window` | browser globals — out of scope |
-| `navigator.*` beyond `userAgent` | document/device/permission surface — out of scope |
+| `navigator.*` beyond `userAgent` and `hardwareConcurrency` | document/device/permission surface — out of scope; a plausible answer would make a feature check pass and lie |

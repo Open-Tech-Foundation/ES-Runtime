@@ -101,7 +101,7 @@ Preopens are isolated from each other: `../` out of `/a` cannot reach `/b`, even
 though both are granted. Preopens occupy the lowest fds from `3` upward in
 insertion order, which is what a guest's libc walks at startup.
 
-<Callout type="warn" title="A WASI guest is not a way around --allow-read">
+<Callout type="warning" title="A WASI guest is not a way around --allow-read">
   `runtime:wasi` and [`runtime:fs`](/api/fs) are two doors onto one filesystem,
   under the same root jail and the same `--allow-read` / `--allow-write` scope
   lists.

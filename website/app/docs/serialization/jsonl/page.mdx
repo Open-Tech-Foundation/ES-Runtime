@@ -56,25 +56,26 @@ This is probably the most common production use case. You can continuously appen
 events to a log file as they occur.
 
 ```js
-import { JSONL } from 'runtime:serialization';
-import { file } from 'runtime:fs';
+import { JSONL } from "runtime:serialization";
+import { serve } from "runtime:http";
+import { file } from "runtime:fs";
 
 const log = new JSONL.EncoderStream();
 
-log.pipeTo(
-  file("access.log").writable({ append: true })
-);
+log.pipeTo(file("access.log").writable({ append: true }));
 
-// Append logs as events happen
-app.on("request", async req => {
+serve(async (request) => {
   await log.write({
     timestamp: Date.now(),
-    method: req.method,
-    path: req.path,
-    userId: req.userId,
+    method: request.method,
+    path: new URL(request.url).pathname,
   });
+  return new Response("ok");
 });
 ```
+
+`write()` resolves once the record is queued; `close()` flushes the last line
+and closes the destination.
 
 ### Example 2: API → JSONL
 
@@ -104,7 +105,11 @@ const users = await db.query(`
   FROM users
 `);
 
-for (const user of users.rows) {
+// `Rows` is async-iterable and streams a batch at a time, so a table larger
+// than memory exports at the cost of a batch.
+for await (const user of users) {
   await log.write(user);
 }
+
+await log.close();
 ```

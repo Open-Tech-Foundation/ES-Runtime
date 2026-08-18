@@ -2,5 +2,5 @@
 // Do not edit by hand — regenerate with: tsr versions
 export default {
   "esrun": "0.25.0",
-  "esdev": "0.2.0"
+  "esdev": "0.3.0"
 };
