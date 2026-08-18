@@ -7,15 +7,16 @@ import { Callout } from "@opentf/web-docs";
 
 # Error diagnostics
 
-ES-Runtime guarantees native exception class preservation and accurate stack
-trace reporting. Instead of swallowing errors as generic string blocks, the
-runtime retains exact subclasses (like `TypeError`, `DOMException`) and precise
-source mapping points.
+An exception keeps its class across the op boundary: a `TypeError` thrown in
+Rust arrives in JavaScript as a `TypeError`, and a `DOMException` keeps its
+`name`, rather than both flattening to a string. A `catch` can therefore branch
+on the type, and the frames report the file, line and column the throw came
+from.
 
 ## Stack traces
 
-When an unhandled exception or unhandled promise rejection bubbles to the top
-level, `esrun` elegantly formats the error trace in your CLI:
+When an unhandled exception or unhandled promise rejection reaches the top
+level, `esrun` prints the class, the message and the frames, and exits non-zero:
 
 ```text
 error: uncaught exception in my-script.mjs
@@ -24,7 +25,7 @@ TypeError: network connection refused
     at file:///path/to/script.mjs:2:1
 ```
 
-<Callout type="info" title="Good to know">
-  The CLI handles color formatting seamlessly and adjusts gracefully if piped
-  into other tools or if `NO_COLOR` is set.
+<Callout type="info" title="Colour is conditional">
+  The trace is coloured only when stderr is a terminal, so a piped or redirected
+  run gets plain text. Setting `NO_COLOR` turns it off in either case.
 </Callout>

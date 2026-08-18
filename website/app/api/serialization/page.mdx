@@ -7,11 +7,12 @@ import { Callout } from "@opentf/web-docs";
 
 # runtime:serialization
 
-Native parsers for JSONL, XML, YAML, TOML, and MessagePack. These operations run
-directly in Rust, avoiding JavaScript overhead and providing best-in-class
-performance.
+XML, YAML, TOML, MessagePack and JSONL parse in Rust — the text or bytes cross
+the op boundary once and a JavaScript value comes back. Protobuf is the
+exception: it is a reflective pure-JavaScript implementation, because a `.proto`
+is compiled at run time rather than by a build step.
 
-<Callout type="info" title="Capability: None (Pure Computation)">
+<Callout type="info" title="Capability: none">
   Exposed as an ES module under the `runtime:` scheme. Status: **Available**.
 </Callout>
 

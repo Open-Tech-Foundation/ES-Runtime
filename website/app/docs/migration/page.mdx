@@ -1,61 +1,68 @@
 ---
 title: Migration guide
-description: A complete, zero-flaw guide for migrating applications from Node.js, Bun, or Deno to esrun.
+description: Moving an application from Node.js, Bun, or Deno to esrun — what each host API becomes, and what has no equivalent.
 ---
 
 import { Callout } from "@opentf/web-docs";
 
 # Migration guide
 
-This guide covers everything you need to transition existing codebases from **Node.js**, **Bun**, or **Deno** to **esrun**.
+What each host API becomes when a codebase moves from **Node.js**, **Bun** or
+**Deno** to **esrun** — and, at the end, the parts that have no equivalent
+because they are [out of scope](/docs/scope).
 
-<Callout type="info" title="Core principle: No ambient host globals">
-  Unlike Node.js (`process`, `Buffer`), Bun (`Bun.*`), or Deno (`Deno.*`), esrun does not inject ambient host objects into the global scope. Standard Web APIs (`fetch`, `URL`, `WebCrypto`, `Temporal`, `Streams`) are global without imports, while all host-level system access is explicitly imported from the `runtime:` namespace.
+<Callout type="info" title="No ambient host globals">
+  Node.js has `process` and `Buffer`, Bun has `Bun.*`, Deno has `Deno.*`. esrun
+  puts nothing of its own in the global scope: standard Web APIs (`fetch`,
+  `URL`, `crypto`, `Temporal`, streams) are global because the platform says so,
+  and every host effect is imported from a `runtime:` module. Whatever a file
+  can reach is visible in its import list.
 </Callout>
 
----
+## Architectural and language differences
 
-## Architectural & Language Differences
+Three rules shape the port before any individual API does.
 
-Before refactoring specific APIs, keep these structural rules in mind:
+1. **ES modules only.** CommonJS — `require()`, `exports`, `module.exports` —
+   is not supported. A local specifier names a file that exists, extension
+   included (`import { config } from "./config.js"`); there is no extension
+   guessing. Top-level `await` works in every module. See
+   [Module system](/docs/modules).
 
-1. **Pure ES Modules Only (ESM)**:
-   - CommonJS (`require()`, `exports`, `module.exports`) is not supported.
-   - All local module imports must include explicit file extensions (`import { config } from "./config.js"`).
-   - Top-level `await` is natively supported across all modules.
+2. **Packages resolve, `node:` built-ins do not.** Anything installed in
+   `node_modules` by `bun`, `npm` or `pnpm` resolves normally
+   (`import { Hono } from "hono"`). Native addons (N-API) and `node:` modules
+   — `node:fs`, `node:child_process`, `node:os`, `node:http` — are not
+   provided; the tables below give the `runtime:` module that replaces each.
 
-2. **Package Resolution**:
-   - Packages installed in `node_modules` via standard package managers (`bun`, `npm`, `pnpm`) resolve normally (`import { Hono } from "hono"`).
-   - Node-specific native C++ addons (N-API) and `node:` built-in modules (`node:fs`, `node:child_process`, `node:os`, `node:http`) are not provided. Use the equivalent `runtime:` modules.
+3. **Deny by default.** A run reaches only what the command line named:
+   `--allow-read`, `--allow-net`, `--allow-env`, `--allow-run` and the rest are
+   how a service states what it may touch. Code that ran unrestricted elsewhere
+   needs that line written once — see
+   [Securing the runtime](/docs/guides/securing-runtime).
 
-3. **Capability & Sandboxing Model**:
-   - esrun is **deny-by-default**: a run reaches only what the command line named. `--allow-read`, `--allow-net`, `--allow-env`, `--allow-run` and the rest are how a service states what it may touch — see [Securing the runtime](/docs/guides/securing-runtime).
+## Quick reference
 
----
-
-## Quick Reference Table
-
-| Task / Feature | Node.js | Bun | Deno | esrun Equivalent |
+| Task | Node.js | Bun | Deno | esrun |
 | --- | --- | --- | --- | --- |
-| **Process Env** | `process.env.KEY` | `Bun.env.KEY` | `Deno.env.get("KEY")` | `import { env } from "runtime:process";`<br />`env.KEY` |
-| **CLI Args** | `process.argv.slice(2)` | `Bun.argv` | `Deno.args` | `import { args } from "runtime:process";`<br />`args` |
-| **Working Directory** | `process.cwd()` | `process.cwd()` | `Deno.cwd()` | `import { cwd } from "runtime:process";`<br />`cwd()` |
-| **Read Text File** | `fs.readFileSync(path, "utf8")` | `Bun.file(path).text()` | `Deno.readTextFile(path)` | `import { file } from "runtime:fs";`<br />`await file(path).text()` |
-| **Write File** | `fs.writeFileSync(path, data)` | `Bun.write(path, data)` | `Deno.writeTextFile(path, data)` | `import { write } from "runtime:fs";`<br />`await write(path, data)` |
-| **Module Path** | `__filename` / `__dirname` | `import.meta.filename` | `import.meta.filename` | `import { dirname, fromFileURL } from "runtime:path";`<br />`const __filename = fromFileURL(import.meta.url);` |
-| **Join Paths** | `path.join(...)` | `path.join(...)` | `path.join(...)` | `import { join } from "runtime:path";`<br />`join(...)` |
+| **Environment** | `process.env.KEY` | `Bun.env.KEY` | `Deno.env.get("KEY")` | `import { env } from "runtime:process";`<br />`env.KEY` |
+| **CLI arguments** | `process.argv.slice(2)` | `Bun.argv` | `Deno.args` | `import { args } from "runtime:process";`<br />`args` |
+| **Working directory** | `process.cwd()` | `process.cwd()` | `Deno.cwd()` | `import { cwd } from "runtime:process";`<br />`cwd()` |
+| **Read a text file** | `fs.readFileSync(path, "utf8")` | `Bun.file(path).text()` | `Deno.readTextFile(path)` | `import { file } from "runtime:fs";`<br />`await file(path).text()` |
+| **Write a file** | `fs.writeFileSync(path, data)` | `Bun.write(path, data)` | `Deno.writeTextFile(path, data)` | `import { write } from "runtime:fs";`<br />`await write(path, data)` |
+| **Module path** | `__filename` / `__dirname` | `import.meta.filename` | `import.meta.filename` | `import { dirname, fromFileURL } from "runtime:path";`<br />`const __filename = fromFileURL(import.meta.url);` |
+| **Join paths** | `path.join(...)` | `path.join(...)` | `path.join(...)` | `import { join } from "runtime:path";`<br />`join(...)` |
 | **Subprocesses** | `child_process.spawn()` | `Bun.spawn()` | `new Deno.Command()` | `import { Command } from "runtime:system";`<br />`new Command(...)` |
 | **UDP datagrams** | `dgram.createSocket("udp4")` | `Bun.udpSocket()` | `Deno.listenDatagram()` | `import { bind } from "runtime:net";`<br />`bind({ port })` — [mapping](/docs/guides/udp#coming-from-node-deno-or-bun) |
-| **WASI Guest** | `node:wasi` | `node:wasi` | `node:wasi` | `import { WASI } from "runtime:wasi"` |
-| **YAML / Serialization** | `js-yaml` (npm) | `js-yaml` (npm) | `js-yaml` (npm) | `import { YAML } from "runtime:serialization"` |
-
----
+| **WASI guest** | `node:wasi` | `node:wasi` | `node:wasi` | `import { WASI } from "runtime:wasi"` |
+| **YAML and other formats** | `js-yaml` (npm) | `js-yaml` (npm) | `js-yaml` (npm) | `import { YAML } from "runtime:serialization"` |
 
 ## Migrating from Node.js
 
-### 1. Environment & Process Globals
+### 1. Environment and process globals
 
-In Node.js, `process` is globally available. In esrun, import `env`, `args`, `cwd`, and `exit` explicitly from `runtime:process`.
+In Node.js `process` is ambient. In esrun, `env`, `args`, `cwd` and `exit` are
+imported from `runtime:process`, and reading any of them needs `--allow-env`.
 
 ```js
 // ❌ Node.js
@@ -73,9 +80,11 @@ const currentDir = cwd();
 exit(0);
 ```
 
-### 2. File System Operations (`node:fs`)
+### 2. Filesystem operations (`node:fs`)
 
-Replace synchronous and callback-based `node:fs` calls with the Promise-based, `Blob`-like surface in `runtime:fs`.
+Synchronous and callback `node:fs` calls become the promise-based, `Blob`-like
+surface in `runtime:fs`. Every path is resolved inside the project root jail,
+and reads and writes are two separate grants.
 
 ```js
 // ❌ Node.js
@@ -95,15 +104,16 @@ if (await cfg.exists()) {
   const text = await cfg.text();       // UTF-8 text
   const json = await cfg.json();       // Parsed JSON
   const bytes = await cfg.bytes();     // Uint8Array
-  
+
   await write("./out.txt", "processed");
   await write("./app.log", "done\n", { append: true });
 }
 ```
 
-### 3. Path Resolution (`__dirname`, `__filename`, `node:path`)
+### 3. Path resolution (`__dirname`, `__filename`, `node:path`)
 
-In ES modules, `__dirname` and `__filename` do not exist in global scope. Derive them cleanly using `import.meta.url` and `runtime:path`.
+`__dirname` and `__filename` are CommonJS, and `import.meta` here carries `url`
+and `resolve` only. Derive them from `import.meta.url` with `runtime:path`.
 
 ```js
 // ❌ Node.js (CommonJS)
@@ -118,7 +128,7 @@ const __dirname = dirname(__filename);
 const dbPath = join(__dirname, "data", "app.db");
 ```
 
-### 4. Subprocesses & Child Processes (`node:child_process`)
+### 4. Subprocesses (`node:child_process`)
 
 Replace `child_process.spawn()` or `exec()` with `Command` from `runtime:system`.
 
@@ -149,9 +159,10 @@ const child = await new Command("ffmpeg", {
 return new Response(child.stdout); // Web ReadableStream streams directly out
 ```
 
-### 5. Binary Data & Buffers (`node:buffer`)
+### 5. Binary data and buffers (`node:buffer`)
 
-Replace Node's `Buffer` with standard `Uint8Array`, `TextEncoder`/`TextDecoder`, and `btoa()`/`atob()`.
+`Buffer` becomes `Uint8Array`, with `TextEncoder`/`TextDecoder` for text and
+`btoa()`/`atob()` for base64.
 
 ```js
 // ❌ Node.js
@@ -168,7 +179,7 @@ const b64 = btoa(decoder.decode(bytes));
 const back = decoder.decode(encoder.encode(atob(b64)));
 ```
 
-### 6. Cryptography & Hashing (`node:crypto`)
+### 6. Cryptography and hashing (`node:crypto`)
 
 `createHash`, `createHmac` and `timingSafeEqual` become
 [`runtime:hashing`](/api/hashing); keys, signatures and ciphers become
@@ -213,13 +224,12 @@ if (await password.verify(input, user.hash) && password.needsRehash(user.hash)) 
 }
 ```
 
----
-
 ## Migrating from Bun
 
-esrun and Bun both prioritize high performance and modern Web standards. The key migration step is replacing ambient `Bun.*` globals with explicit `runtime:` imports.
+Bun's Web-standard surface carries over unchanged. What moves is the `Bun.*`
+namespace: each ambient global becomes an explicit `runtime:` import.
 
-### 1. File Handling (`Bun.file` & `Bun.write`)
+### 1. File handling (`Bun.file`, `Bun.write`)
 
 ```js
 // ❌ Bun
@@ -235,7 +245,7 @@ const json = await file("./data.json").json();
 await write("./out.txt", "data");
 ```
 
-### 2. Subprocesses (`Bun.spawn` & `Bun.$`)
+### 2. Subprocesses (`Bun.spawn`, `Bun.$`)
 
 ```js
 // ❌ Bun
@@ -252,7 +262,7 @@ const { stdout } = await new Command("git", {
 const text = new TextDecoder().decode(stdout).trim();
 ```
 
-### 3. Hashing & Passwords (`Bun.hash`, `Bun.CryptoHasher`, `Bun.password`)
+### 3. Hashing and passwords (`Bun.hash`, `Bun.CryptoHasher`, `Bun.password`)
 
 ```js
 // ❌ Bun
@@ -268,13 +278,14 @@ const digest = new Hasher("sha256").update("data").digest("hex");
 const stored = await password.hash(input);
 ```
 
----
-
 ## Migrating from Deno
 
-esrun shares Deno's commitment to Web APIs and capability-gated execution. Migration primarily involves replacing `Deno.*` namespaces with explicit `runtime:` modules and switching package resolution to `package.json` / `node_modules`.
+Deno is the closest starting point — Web APIs, and permissions on the command
+line. Two things move: the `Deno.*` namespace becomes `runtime:` imports, and
+resolution becomes `package.json` plus `node_modules` rather than
+`deno.json`.
 
-### 1. File Operations (`Deno.readTextFile`, `Deno.writeTextFile`)
+### 1. File operations (`Deno.readTextFile`, `Deno.writeTextFile`)
 
 ```js
 // ❌ Deno
@@ -290,7 +301,7 @@ await write("./out.txt", "content");
 await remove("./temp.txt");
 ```
 
-### 2. Process & Environment (`Deno.env`, `Deno.args`)
+### 2. Process and environment (`Deno.env`, `Deno.args`)
 
 ```js
 // ❌ Deno
@@ -321,11 +332,11 @@ const { code, stdout } = await new Command("git", {
 }).output();
 ```
 
----
+## Serialization without a package
 
-## Builtin Serialization Ecosystem
-
-Instead of pulling third-party npm packages for common structured data formats, esrun includes high-performance zero-dependency serializers in `runtime:serialization`.
+`js-yaml`, `@iarna/toml`, `fast-xml-parser` and `msgpackr` have no equivalent to
+install: the formats are in `runtime:serialization`, and the parsers for all but
+Protobuf run in Rust.
 
 ```js
 import { file } from "runtime:fs";
@@ -352,15 +363,29 @@ const rows = file("./events.jsonl")
 for await (const row of rows) console.log(row.id);
 ```
 
----
+## What does not port
 
-## Summary Checklist for Migration
+These are [non-goals](/docs/scope), not gaps waiting to be filled, so a port
+that depends on one needs a different shape rather than a workaround.
 
-<Callout type="tip" title="Pre-flight Migration Checklist">
-  1. Remove all CommonJS `require()` and `module.exports` in favor of standard `import`/`export`.
-  2. Ensure all local file import specifiers end with explicit file extensions (`.js`).
-  3. Replace `process.env` / `process.argv` with `import { env, args } from "runtime:process"`.
-  4. Replace `fs.readFileSync` / `Bun.file` / `Deno.readTextFile` with `import { file, write } from "runtime:fs"`.
-  5. Replace `child_process.spawn` / `Bun.spawn` / `Deno.Command` with `import { Command } from "runtime:system"`.
-  6. Convert `Buffer` manipulation to Web standard `Uint8Array`, `TextEncoder`, and `TextDecoder`.
+| What | Why, and what to do instead |
+| --- | --- |
+| `require()`, `module.exports` | No CommonJS at run time. [`esdev build`](/docs/esdev/build) converts a CJS dependency at build time, and esrun receives ordinary ESM. |
+| `import "https://…"` | Remote imports are rejected. Fetch data with `fetch` or `runtime:net`; code stays local and reviewable. |
+| Native addons (N-API), FFI | No addon ABI and no foreign-function interface. The host extends the runtime through providers, in Rust. |
+| `SharedWorker`, `data:`/`blob:` worker URLs | A worker's URL names a file. The dedicated [`Worker`](/docs/guides/workers) ships. |
+| `npm install` from the runtime | esrun resolves an existing `node_modules` tree and installs nothing — that stays your package manager's job. |
+| TypeScript, a bundler, a test runner, a watcher, a debugger | All of it is [esdev](/docs/esdev), the development binary, and none of it is in the one that serves production. |
+
+## Checklist
+
+<Callout type="tip" title="Before the first run">
+  1. Replace `require()` / `module.exports` with `import` / `export`.
+  2. Give every local specifier its file extension (`./config.js`, not `./config`).
+  3. `process.env`, `process.argv` → `import { env, args } from "runtime:process"`.
+  4. `fs.readFileSync`, `Bun.file`, `Deno.readTextFile` → `import { file, write } from "runtime:fs"`.
+  5. `child_process.spawn`, `Bun.spawn`, `Deno.Command` → `import { Command } from "runtime:system"`.
+  6. `Buffer` → `Uint8Array`, `TextEncoder`, `TextDecoder`.
+  7. Run it once under [`esdev --trace-permissions`](/docs/esdev/permissions) and
+     deploy with the `esrun` line it prints.
 </Callout>

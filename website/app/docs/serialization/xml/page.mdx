@@ -1,14 +1,13 @@
 ---
 title: XML
-description: A highly optimized native XML parser via runtime:serialization — parse, validate, build, and stream.
+description: A native XML parser in runtime:serialization — parse, validate, build, and stream.
 ---
 
 # XML
 
-ES-Runtime includes a highly optimized native XML parser accessible via the
-`runtime:serialization` module. These operations run directly in Rust, completely
-avoiding JavaScript garbage collection overhead and offering best-in-class
-performance.
+XML lives in `runtime:serialization` and runs in Rust: the string crosses the
+op boundary once and a JavaScript value comes back, so no intermediate document
+is built in the isolate for the collector to walk.
 
 ## Parsing XML
 
@@ -20,9 +19,13 @@ import { XML } from "runtime:serialization";
 const xmlData = `<user id="1"><name>Alice</name></user>`;
 
 const parsed = XML.parse(xmlData);
-console.log(parsed.name.$text); // "Alice"
-console.log(parsed["@id"]);     // "1"
+console.log(parsed.user.name.$text); // "Alice"
+console.log(parsed.user["@id"]);     // "1"
 ```
+
+The root element is a key like any other — `parse` returns the document, not the
+root's contents. An attribute is prefixed `@`, and an element's own text is
+`$text`.
 
 ## Validating XML
 
@@ -60,12 +63,13 @@ const built = XML.build(obj);
 console.log(built); // <user id="1"><name>Alice</name></user>
 ```
 
-### Streaming (XML.DecoderStream)
+## Streaming
 
-For massive multi-gigabyte XML datasets, ES-Runtime provides `XML.DecoderStream`.
-This is a standard Web `TransformStream` that consumes XML string chunks and
-incrementally yields fully-parsed JavaScript objects, achieving a near-zero
-memory footprint.
+`XML.DecoderStream` is a web `TransformStream` that takes XML chunks and emits
+one parsed object per **direct child of the root element** — one record at a
+time, so a document larger than memory never becomes a tree in the isolate. A
+single record that grows past 64 MiB unclosed is a `RangeError`, and nesting
+deeper than 256 levels is a parse error, on this path and on `parse`.
 
 ```js
 import { XML } from "runtime:serialization";
@@ -81,9 +85,9 @@ async function processMassiveFeed(fileStream) {
 }
 ```
 
-### Performance
+## Performance
 
-Because parsing happens directly within the Rust native core,
-`runtime:serialization` operates around 10% faster than `fast-xml-parser` running
-on Node.js or Bun, while utilizing half the memory. You can view the full
-benchmarks on the [Benchmarks](/docs/benchmarks) page.
+Measured against the parser each runtime would otherwise reach for —
+`fast-xml-parser` on Node.js and Deno, `llrt:xml` on LLRT — on the
+[Benchmarks](/docs/benchmarks#native-vs-third-party-parsers) page, which renders
+the committed results rather than a number typed here.

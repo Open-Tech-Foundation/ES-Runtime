@@ -11,7 +11,7 @@ import { Callout } from "@opentf/web-docs";
 the `wasm32-wasip1` toolchains emit: arguments, environment, clocks,
 randomness, stdio, process exit, and the filesystem.
 
-<Callout type="note" title="Capability: none to construct">
+<Callout type="info" title="Capability: none to construct">
   A `WASI` instance has no ambient authority — arguments, environment and
   directories come from the constructor and nowhere else, so building one grants
   nothing. The host operations it reaches are gated as usual: file calls need
