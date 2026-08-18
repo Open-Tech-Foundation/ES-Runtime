@@ -96,6 +96,50 @@ fn reports_its_own_name_in_version_and_help() {
     assert!(text.contains("not a deployment target"), "{text}");
 }
 
+/// The help for `esdev test` is where the test API is learned, and it described
+/// an ambient `test()` that D71 replaced with an import — so a file written from
+/// it failed with `ReferenceError: test is not defined`. Both halves are pinned:
+/// what the help says, and that a file written from it runs.
+#[test]
+fn test_help_documents_the_api_that_exists() {
+    let out = esdev()
+        .args(["test", "--help"])
+        .output()
+        .expect("spawn esdev test --help");
+    let text = stdout(&out);
+    assert!(text.contains(r#"from "runtime:test""#), "{text}");
+    assert!(!text.contains("globals already defined"), "{text}");
+
+    let dir = build_dir("t_help_api");
+    write_in(
+        &dir,
+        "help.test.ts",
+        "import { test, assert, assertEquals, assertThrows, assertRejects } from \"runtime:test\";\n\
+         test(\"it adds\", () => {\n\
+         \u{20}\u{20}assertEquals(1 + 1, 2);\n\
+         \u{20}\u{20}assert(true);\n\
+         \u{20}\u{20}assertThrows(() => {\n\
+         \u{20}\u{20}\u{20}\u{20}throw new TypeError(\"no\");\n\
+         \u{20}\u{20}}, TypeError);\n\
+         });\n\
+         test(\"it rejects\", async () => {\n\
+         \u{20}\u{20}await assertRejects(() => Promise.reject(new Error(\"nope\")));\n\
+         });\n",
+    );
+    let ran = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    assert!(
+        ran.status.success(),
+        "the documented API does not run:\n{}{}",
+        stdout(&ran),
+        stderr(&ran)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The capability model is the whole reason the two binaries are separate, so
 /// `esdev` must enforce it exactly as `esrun` does — a dev binary that quietly
 /// granted more would make every permission flag a developer tests with a lie.

@@ -216,34 +216,28 @@ const TEST_USAGE: &str = "\
 esdev test — run the test files
 
 USAGE:
-    esdev test [filter...]      Run every *.test.{js,mjs,ts,tsx,jsx} found
-    esdev test <filter>         ...whose path contains <filter>
+    esdev test [filter...]      Run every *.test.{js,mjs,ts,tsx,jsx} whose path
+                                contains a filter — or all of them, given none
     esdev test --file=<path>    Run exactly one file
     esdev test -h, --help       Show this help
 
 Each file runs in its own process, so one that wedges, exhausts its heap or
-calls exit() cannot decide the fate of the others, and a global left behind by
-one file is not visible to the next.
+calls exit() cannot decide the fate of the others. The file itself is the
+entry — it keeps its own path, its module resolution and its TypeScript — and
+imports what it uses from runtime:test:
 
-The file itself is the entry — it keeps its own path, its module resolution and
-its TypeScript — and arrives with the globals already defined:
+    import { test, assert, assertEquals, assertThrows, assertRejects } from \"runtime:test\";
 
-    test(name, fn)              fn may be async; failures are collected
-    assert(cond, msg?)
-    assertEquals(actual, expected, msg?)
-    assertThrows(fn, expected?, msg?)
-    assertRejects(fn, expected?, msg?)
+    test(\"it adds\", () => {
+      assertEquals(1 + 1, 2);
+    });
 
-assertEquals compares structurally: BigInt and NaN, typed arrays and
-ArrayBuffer by their bytes, Map and Set by contents, objects by their key set
-rather than key order, and cycles terminate.
+Nothing is ambient: there is no global `test`, and a file that calls one fails
+with a ReferenceError. Types come from @opentf/esrun-types
+(`esdev --install-types`). Exits non-zero if any file fails.
 
-The `expected` error is a string (matched against the error's name, or as a
-substring of its message), a RegExp (matched against the message), or a
-constructor (an instanceof check). Omit it to accept any throw.
-
-The same vocabulary the runtime's own conformance suite uses. Exits non-zero if
-any file fails.
+    The API:  https://esrun.opentechf.org/api/test
+    The how:  https://esrun.opentechf.org/docs/esdev/test
 ";
 
 const CREATE_USAGE: &str = "\
