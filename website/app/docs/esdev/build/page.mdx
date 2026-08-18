@@ -77,7 +77,7 @@ what `outdir` below is for.
   bundle's stack traces are currently unmapped.
 </Callout>
 
-# A project: `esdev.json`
+## A project: `esdev.json`
 
 A command line describes one bundle. An app that renders on the server and
 hydrates in the browser is two, from two entries, with two shapes of output —
@@ -116,7 +116,7 @@ esdev build src/app.ts           # ignores the file entirely
 string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
 takes a release build of a project whose day to day is unminified.
 
-## The three shapes
+### The three shapes
 
 | Stack | Targets |
 | --- | --- |
@@ -128,7 +128,7 @@ takes a release build of a project whose day to day is unminified.
 one is: the bundle runs, and what it writes is the output. It runs in a child
 process, after every target is built.
 
-## A whole build clears what it owns
+### A whole build clears what it owns
 
 Output filenames are content-hashed, so `app-1a2b.js` becoming `app-9f8e.js`
 leaves the old one behind for ever — and beside it whatever `esdev start` wrote,
@@ -153,7 +153,7 @@ it clears:
 
 An `outdir` that holds the project itself is refused rather than emptied.
 
-## Assets and the deployment
+### Assets and the deployment
 
 A relative path resolves against the **entry module's** directory, so a server
 bundle in `dist/` reading `index.html` reads `dist/index.html`. Assets are
@@ -161,7 +161,7 @@ copied there by the build, which is what makes `dist/` the whole deployment —
 a directory copied by its contents, so `public/styles.css` is served at
 `/styles.css` with nothing rewriting an href.
 
-## An HTML entry
+### An HTML entry
 
 A server bundle starts at a module, because the runtime does. The browser starts
 at a **document**.
@@ -203,7 +203,7 @@ become one hashed file, and a relative `url()` is followed, so fonts and images
 travel with the stylesheet instead of arriving as 404s once it moves to
 `/assets`. `--minify` drops comments and collapses whitespace.
 
-### CSS Modules
+#### CSS Modules
 
 A `*.module.css` imported from JavaScript is scoped to the file that declares
 it, and the import resolves to the mapping:
@@ -233,7 +233,7 @@ as hardcoded strings, so scoping them would break it.
   no per-file typed class names.
 </Callout>
 
-## Where the file is
+### Where the file is
 
 `./esdev.json`, or `--config=<path>` — paths inside it resolve against the
 file, not the working directory.
@@ -244,7 +244,7 @@ file, not the working directory.
   service runs under belongs on the command that deployed it.
 </Callout>
 
-## End to end
+### End to end
 
 React 19 streaming SSR behind Hono, from CommonJS packages, served by `esrun`
 with no filesystem or import access at all:
@@ -254,7 +254,7 @@ esdev build server.tsx --out=dist/server.js --minify
 esrun --allow-listen=8080 dist/server.js
 ```
 
-# Libraries: `--lib`
+## Libraries: `--lib`
 
 ```sh
 esdev build --lib src            # src/** → dist/**.js + dist/**.d.ts
@@ -279,7 +279,7 @@ never cleans, since its `--out` is one file in a directory that may hold other
 things. (A whole-project build does clear its `outdir`s — see
 [above](#a-whole-build-clears-what-it-owns).)
 
-## Declarations
+### Declarations
 
 Derived from what the source **says**, never from what a checker infers — the
 same contract type-stripping has. So an exported signature has to state its
@@ -294,7 +294,7 @@ A signature that does not fails the build with the list, rather than getting a
 guessed declaration nobody can see is wrong. TypeScript calls this rule
 [`isolatedDeclarations`](https://www.typescriptlang.org/tsconfig/#isolatedDeclarations).
 
-```
+```text
 error: 2 declarations could not be derived:
 
   src/index.ts:150:14  TS9010: Variable must have an explicit type annotation.
@@ -303,7 +303,7 @@ error: 2 declarations could not be derived:
 
 `--no-types` skips them.
 
-## One declaration file
+### One declaration file
 
 A package whose `exports` map has a single entry wants one `index.d.ts`, not a
 mirror of a source layout nobody outside it should have to know:
@@ -333,7 +333,7 @@ nothing runs it and no test covers it, so a wrong one is worse than none.
   ours, over oxc's parser and semantic analysis.
 </Callout>
 
-## Options
+### Library options
 
 | Flag | |
 | --- | --- |

@@ -20,7 +20,7 @@ alternative, the reasoning is recorded in `docs/DECISIONS.md` (D42–D45).
 Every stage below can be a place a connection stops making progress, so every
 stage has a bound.
 
-```
+```text
 listener.accept()
   │  ← blocked here while at maxConnections (permit)
   │  ← errors retried with 5ms→1s backoff, never fatal
@@ -331,7 +331,7 @@ demand, so logging one at a level people run with would hand every client a
 lever on your log volume; a scanner sweeping a public port would write the disk
 full. To see them:
 
-```bash
+```sh
 RUST_LOG=runtime::http=debug esrun server.js
 ```
 

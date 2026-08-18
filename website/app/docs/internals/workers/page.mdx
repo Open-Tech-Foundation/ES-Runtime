@@ -41,7 +41,7 @@ each of them by doing the work in a worker.
 The runtime spawns nothing. Starting an agent is an injected capability like
 every other reach outside the isolate:
 
-```
+```text
   new Worker(url)
     └▶ worker_spawn op  ── capability: workers
          └▶ WorkerHost provider
@@ -67,7 +67,7 @@ message.
 
 Instead the graph is serialized **on the JS side**, before the op:
 
-```
+```text
   worker.postMessage(msg, [buf])
     └▶ __structuredSerialize(msg)   engine builtin, V8 ValueSerializer
     └▶ __ops.worker_post(id, bytes) the op moves a byte array, as every op does

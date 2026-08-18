@@ -16,7 +16,7 @@ guide](/docs/guides/websocket). Framing is RFC 6455 via `tokio-tungstenite`.
 Each connection is owned by a **spawned actor task** holding the split stream and
 running a `select!` loop over two channels:
 
-```
+```text
     ws.send()   ──→ command channel (16) ──→ ┐
                                              ├─→ actor task ──→ socket
     ws.onmessage ←── inbound channel (16) ←──┘
@@ -265,7 +265,7 @@ client forcing `h2` does not.
 A failed handshake logs at `debug` on the `runtime::websocket` target, inside a
 `debug` span carrying the peer, so it is attributable to one client:
 
-```bash
+```sh
 RUST_LOG=runtime::websocket=debug esrun server.js
 ```
 

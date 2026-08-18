@@ -325,7 +325,7 @@ is why deploying either means hardcoding `--max-old-space-size`: in a 2 GiB
 container on a 64 GiB host they size for 64 GiB and get OOM-killed where a
 garbage collection would have done.
 
-```bash
+```sh
 esrun app.js                   # container limit, else host memory
 esrun --max-heap=512 app.js    # pin it
 ```
@@ -368,7 +368,7 @@ program's `console` output. `RUST_LOG` sets the filter.
 Targets are `runtime::http`, `runtime::net` and `runtime::websocket`. Colour is
 used only when stderr is a terminal, and `NO_COLOR` turns it off.
 
-```bash
+```sh
 RUST_LOG=runtime::http=debug esrun server.js
 ```
 

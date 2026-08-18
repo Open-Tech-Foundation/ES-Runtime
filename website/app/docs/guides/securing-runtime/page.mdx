@@ -52,7 +52,7 @@ see the environment.
 The first thing that breaks tells you what to grant. A capability denial names
 the flag word in parentheses:
 
-```
+```text
 NotAllowedError: capability denied: FileSystem (permission "imports")
 ```
 
@@ -142,7 +142,7 @@ which, and they are worth distinguishing in your alerting:
 
 What each looks like in practice:
 
-```
+```text
 NotAllowedError | ERR_CAPABILITY_DENIED | capability denied: Net (permission "net")
 Error           | ERR_PERMISSION_DENIED | example.com:443 is not an allowed address (fetch)
 Error           | ERR_PERMISSION_DENIED | /srv/app/secret.txt is not an allowed path (read)
@@ -198,7 +198,7 @@ esrun --allow-imports --import-policy=./import-policy.json server.js
 
 A refused import fails to load, by name:
 
-```
+```text
 module loading failed: package aws-sdk is denied by the import policy
 ```
 
@@ -229,7 +229,7 @@ A permission flag that is ignored would leave a run wider than the command line
 claims, so the parser never guesses. Each of these **fails the run** rather than
 starting one:
 
-```
+```text
 $ esrun app.js --allow-net
 error: --allow-net appears after app.js, where it is the script's own argument
 and does nothing to the run.

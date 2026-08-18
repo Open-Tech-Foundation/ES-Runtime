@@ -51,7 +51,7 @@ Two capabilities are needed to start a worker at all: `workers`, and `imports`
 to read its entry module. So `--allow-workers` alone is refused —
 and says so:
 
-```
+```text
 cannot start a worker from ./worker.js: reading its module needs the
 "imports" permission — add --allow-imports (capability denied: FileSystem)
 ```

@@ -5,23 +5,19 @@ description: Pure streaming JSONL encode/decode for data pipelines, analytics ex
 
 # JSON Lines (JSONL)
 
-In real-world systems, JSONL isn't just a file format—it's a persistent stream of
-records. That is the mental model most backend and data engineers use. It is less
-like "a file" and more like "a log that happens to be stored in a file."
+JSONL is a log that happens to be stored in a file: one JSON value per line,
+appended forever, read from either end. `runtime:serialization` treats it that
+way — there is no whole-document `parse`, only `JSONL.DecoderStream` and
+`JSONL.EncoderStream`, so a file larger than memory costs a line at a time.
 
-ES-Runtime provides pure streaming capabilities via `JSONL.DecoderStream` and
-`JSONL.EncoderStream` to build robust data pipelines, analytics exports, and AI
-datasets.
+## Reading
 
-## Reading JSONL Streams
-
-The `JSONL.DecoderStream` is a WHATWG TransformStream that safely decodes incoming
-text chunks, splitting them by newline and parsing each complete line into a
-JavaScript object.
+`JSONL.DecoderStream` is a web `TransformStream`: it takes text chunks, splits
+them on newlines, and emits each complete line as a parsed JavaScript value.
 
 ```js
-import { JSONL } from 'runtime:serialization';
-import { file } from 'runtime:fs';
+import { JSONL } from "runtime:serialization";
+import { file } from "runtime:fs";
 
 // Read a massive JSONL file natively from the file system
 const decoder = new JSONL.DecoderStream({
@@ -44,13 +40,18 @@ for await (const user of stream) {
 }
 ```
 
-## Writing JSONL Streams
+`onError` reports only what `skipInvalid` skipped. Without it a malformed line
+errors the stream — a `SyntaxError` naming the line number — and the callback
+never fires, which is the right default for a file that is supposed to be
+well-formed.
+
+## Writing
 
 Writing is handled by piping JavaScript objects through the
 `JSONL.EncoderStream`. This is typically used to append records continuously to a
 log.
 
-### Example 1: Application Logs
+### Example 1: an access log
 
 This is probably the most common production use case. You can continuously append
 events to a log file as they occur.
@@ -77,7 +78,7 @@ serve(async (request) => {
 `write()` resolves once the record is queued; `close()` flushes the last line
 and closes the destination.
 
-### Example 2: API → JSONL
+### Example 2: an API response
 
 Suppose you're collecting GitHub events to back up to a persistent log.
 
@@ -94,7 +95,7 @@ for (const event of events) {
 }
 ```
 
-### Example 3: Database → JSONL
+### Example 3: a database export
 
 Very common for database exports, analytics backups, and AI training dataset
 generation.
