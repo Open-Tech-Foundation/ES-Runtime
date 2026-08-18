@@ -85,10 +85,22 @@ fn add_dependency() -> (String, bool) {
 
 /// Which package manager this project uses.
 ///
-/// Decided by the lockfile, which is the only durable evidence: a `packageManager`
-/// field is often absent, and asking would make a one-command setup a two-step
-/// one. npm is the fallback because it is the one that is always there.
-#[derive(Debug, PartialEq, Eq)]
+/// Three sources, in the order of how much they mean:
+///
+/// 1. **`"packageManager"` in package.json** — the project *saying* which one
+///    it uses, the field corepack reads and every modern toolchain writes. It
+///    is first because it is a statement of intent rather than a trace, and
+///    because it is there before a lockfile is: a fresh clone, a scaffolded
+///    project, anything CI has not installed yet.
+/// 2. **The lockfile** — durable evidence of what actually installed. Still
+///    ahead of anything guessed, and the only source most older projects have.
+/// 3. **What is on this machine** — when the project says nothing either way,
+///    a manager that is installed beats one that is not.
+///
+/// npm is the last word rather than the first: it is the one usually there, and
+/// "usually" is exactly the assumption that produces `npm: command not found`
+/// in a container that ships only bun.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum PackageManager {
     Bun,
     Pnpm,
@@ -97,28 +109,90 @@ enum PackageManager {
 }
 
 impl PackageManager {
-    fn detect() -> PackageManager {
-        Self::from_lockfiles(|name| Path::new(name).exists())
+    /// The program's name, which is also the name it is declared under.
+    fn name(self) -> &'static str {
+        match self {
+            PackageManager::Bun => "bun",
+            PackageManager::Pnpm => "pnpm",
+            PackageManager::Yarn => "yarn",
+            PackageManager::Npm => "npm",
+        }
     }
 
-    /// The detection itself, over a predicate, so a test can ask it about a
-    /// project that does not exist on disk.
-    fn from_lockfiles(exists: impl Fn(&str) -> bool) -> PackageManager {
+    fn from_name(name: &str) -> Option<PackageManager> {
+        [
+            PackageManager::Bun,
+            PackageManager::Pnpm,
+            PackageManager::Yarn,
+            PackageManager::Npm,
+        ]
+        .into_iter()
+        .find(|manager| manager.name().eq_ignore_ascii_case(name))
+    }
+
+    fn detect() -> PackageManager {
+        Self::detected(
+            || std::fs::read_to_string("package.json").ok(),
+            |name| Path::new(name).exists(),
+            || {
+                crate::install::available()
+                    .into_iter()
+                    .map(|manager| manager.name)
+                    .collect()
+            },
+        )
+    }
+
+    /// The detection itself, over its three sources, so a test can ask it about
+    /// a project and a machine that do not exist.
+    fn detected(
+        manifest: impl Fn() -> Option<String>,
+        exists: impl Fn(&str) -> bool,
+        installed: impl Fn() -> Vec<&'static str>,
+    ) -> PackageManager {
+        if let Some(declared) = manifest().as_deref().and_then(Self::declared) {
+            return declared;
+        }
+        if let Some(locked) = Self::from_lockfiles(exists) {
+            return locked;
+        }
+        // Nothing said, so the question stops being "which does this project
+        // use" and becomes "which can this machine run".
+        if let Some(present) = installed().into_iter().find_map(Self::from_name) {
+            return present;
+        }
+        PackageManager::Npm
+    }
+
+    /// The `packageManager` field, as corepack defines it: a name, `@`, and a
+    /// version that may carry a hash — `bun@1.3.14`,
+    /// `pnpm@9.0.0+sha512.abc…`. Only the name is of any use here; which
+    /// *version* to run is corepack's business and not this command's.
+    ///
+    /// A field naming something this does not know — a manager added later, a
+    /// typo — is no answer rather than an error: the lockfile below may well
+    /// know, and a command whose whole job is installing one dev dependency
+    /// should not refuse over a field it merely failed to recognise.
+    fn declared(manifest: &str) -> Option<PackageManager> {
+        let manifest: serde_json::Value = serde_json::from_str(manifest).ok()?;
+        let declared = manifest.get("packageManager")?.as_str()?;
+        Self::from_name(declared.split('@').next()?.trim())
+    }
+
+    /// The lockfile, or `None` where there is not one yet.
+    fn from_lockfiles(exists: impl Fn(&str) -> bool) -> Option<PackageManager> {
         // Ordered by how specific the evidence is. A repository that has more
         // than one lockfile has a problem this command cannot solve; picking the
         // first match is at least deterministic.
-        for (lockfile, manager) in [
+        [
             ("bun.lock", PackageManager::Bun),
             ("bun.lockb", PackageManager::Bun),
             ("pnpm-lock.yaml", PackageManager::Pnpm),
             ("yarn.lock", PackageManager::Yarn),
             ("package-lock.json", PackageManager::Npm),
-        ] {
-            if exists(lockfile) {
-                return manager;
-            }
-        }
-        PackageManager::Npm
+        ]
+        .into_iter()
+        .find_map(|(lockfile, manager)| exists(lockfile).then_some(manager))
     }
 
     /// The command that adds a dev dependency, as `(program, args)`.
@@ -221,22 +295,94 @@ mod tests {
 
     use es_runtime_cli_common::Capability;
 
-    #[test]
-    fn a_lockfile_decides_the_package_manager() {
-        let detect =
-            |present: &'static str| PackageManager::from_lockfiles(move |name| name == present);
-        assert_eq!(detect("bun.lock"), PackageManager::Bun);
-        assert_eq!(detect("bun.lockb"), PackageManager::Bun);
-        assert_eq!(detect("pnpm-lock.yaml"), PackageManager::Pnpm);
-        assert_eq!(detect("yarn.lock"), PackageManager::Yarn);
-        assert_eq!(detect("package-lock.json"), PackageManager::Npm);
+    /// Nothing declared and nothing installed on the machine, so the answer is
+    /// whatever the sources under test say.
+    fn detect(manifest: &str, lockfile: &'static str) -> PackageManager {
+        let manifest = manifest.to_string();
+        PackageManager::detected(
+            move || Some(manifest.clone()),
+            move |name| name == lockfile,
+            Vec::new,
+        )
     }
 
     #[test]
-    fn a_project_with_no_lockfile_gets_npm() {
+    fn a_lockfile_decides_when_nothing_is_declared() {
+        assert_eq!(detect("{}", "bun.lock"), PackageManager::Bun);
+        assert_eq!(detect("{}", "bun.lockb"), PackageManager::Bun);
+        assert_eq!(detect("{}", "pnpm-lock.yaml"), PackageManager::Pnpm);
+        assert_eq!(detect("{}", "yarn.lock"), PackageManager::Yarn);
+        assert_eq!(detect("{}", "package-lock.json"), PackageManager::Npm);
+    }
+
+    /// The field a project writes before it has installed anything: a fresh
+    /// clone, a scaffold, a CI job at its first step. It is the project saying
+    /// which manager it uses, so it is read ahead of the traces of one.
+    #[test]
+    fn the_package_manager_field_is_read_first() {
+        let declared = |field: &str| {
+            detect(
+                &format!(r#"{{ "packageManager": "{field}" }}"#),
+                "package-lock.json",
+            )
+        };
+        assert_eq!(declared("bun@1.3.14"), PackageManager::Bun);
+        assert_eq!(declared("pnpm@9.0.0+sha512.abcdef"), PackageManager::Pnpm);
+        assert_eq!(declared("yarn@4.1.0"), PackageManager::Yarn);
+        // Corepack's own shape is `name@version`; a bare name is still a name.
+        assert_eq!(declared("bun"), PackageManager::Bun);
+    }
+
+    /// A field this does not recognise is not an error and not an answer: the
+    /// lockfile below may well know, and a command that installs one dev
+    /// dependency should not refuse over a field it merely failed to parse.
+    #[test]
+    fn an_unreadable_field_falls_through_to_the_lockfile() {
         assert_eq!(
-            PackageManager::from_lockfiles(|_| false),
+            detect(r#"{ "packageManager": "cnpm@1.0.0" }"#, "yarn.lock"),
+            PackageManager::Yarn
+        );
+        assert_eq!(
+            detect(r#"{ "packageManager": 7 }"#, "yarn.lock"),
+            PackageManager::Yarn
+        );
+        assert_eq!(
+            detect("{ not json at all", "yarn.lock"),
+            PackageManager::Yarn
+        );
+        // …and with no lockfile either, it reaches the machine and then npm.
+        assert_eq!(
+            detect(r#"{ "packageManager": "@" }"#, ""),
             PackageManager::Npm
+        );
+    }
+
+    /// With the project silent, the question is no longer which manager it uses
+    /// but which one can run at all. npm is the last word rather than the
+    /// first: a container that ships only bun has no npm to fall back to.
+    #[test]
+    fn nothing_declared_or_locked_takes_a_manager_that_is_installed() {
+        let on_this_machine = |installed: &'static [&'static str]| {
+            PackageManager::detected(
+                || Some("{}".to_string()),
+                |_| false,
+                move || installed.to_vec(),
+            )
+        };
+        assert_eq!(on_this_machine(&["bun", "yarn"]), PackageManager::Bun);
+        assert_eq!(on_this_machine(&["npm", "bun"]), PackageManager::Npm);
+        // Nothing at all: npm, and the failed spawn reports the line to run.
+        assert_eq!(on_this_machine(&[]), PackageManager::Npm);
+    }
+
+    /// A project with no package.json never reaches here — `install` refuses
+    /// first — but the reader is fallible for other reasons (permissions), and
+    /// that must not be a panic.
+    #[test]
+    fn an_unreadable_manifest_is_not_a_failure() {
+        assert_eq!(
+            PackageManager::detected(|| None, |name| name == "bun.lock", Vec::new),
+            PackageManager::Bun
         );
     }
 

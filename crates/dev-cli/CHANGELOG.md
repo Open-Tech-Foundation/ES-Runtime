@@ -39,6 +39,24 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **`--install-types` reads `"packageManager"` before it looks for a
+  lockfile.** Detection was lockfile-only, so a project that declares its
+  manager — the corepack field, which modern toolchains write and which is
+  there *before* anything has been installed — was installed with npm anyway,
+  leaving a `package-lock.json` in a bun project.
+
+  The order is now the declaration, then the lockfile, then whatever manager is
+  actually on the machine, and npm last. "npm is always there" is the
+  assumption that produces `npm: command not found` in a container that ships
+  only bun. A declared manager that is not installed is still the answer: it
+  prints the line to run rather than quietly using a different one, since
+  installing with the wrong manager is what leaves the wrong lockfile. A field
+  naming something unrecognised falls through to the lockfile rather than
+  failing.
+
+  `esdev create --install` is deliberately unchanged: it asks, and away from a
+  terminal it installs nothing (D70).
+
 - **A failed build no longer leaves half a deployment.** `esdev build` wrote
   straight into `dist`, and a whole-project build emptied `dist` first — so a
   build that failed halfway both destroyed the deployment that was working and

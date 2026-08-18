@@ -18,10 +18,24 @@ esdev --install-types
 ```
 
 It adds [`@opentf/esrun-types`](https://www.npmjs.com/package/@opentf/esrun-types)
-as a dev dependency, using the package manager your lockfile names (bun, pnpm,
-yarn, npm), and adds it to `compilerOptions.types` — creating a `tsconfig.json`
-if you don't have one, or merging into an existing one without touching your
-other settings.
+as a dev dependency and adds it to `compilerOptions.types` — creating a
+`tsconfig.json` if you don't have one, or merging into an existing one without
+touching your other settings.
+
+Which package manager it uses is decided in the order those answers are worth
+anything:
+
+| | |
+| --- | --- |
+| `"packageManager"` in `package.json` | The project *saying* which one it uses — the field corepack reads. It is there before a lockfile is: a fresh clone, a scaffold, a CI job at its first step |
+| The lockfile | `bun.lock`, `bun.lockb`, `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json` — evidence of what actually installed |
+| What is installed here | With the project silent, the question is which manager can run at all |
+
+npm is the last word rather than the first: "npm is always there" is exactly the
+assumption that produces `npm: command not found` in a container that ships only
+bun. A declared manager that is *not* installed is still the answer — it prints
+the line to run rather than reaching for a different one, because installing
+with the wrong manager leaves the wrong lockfile behind.
 
 ## What it configures
 
