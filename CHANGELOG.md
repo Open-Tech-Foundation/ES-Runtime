@@ -8,6 +8,19 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **An npm-installed program can find its dependencies.** Running a file inside
+  `node_modules` — the entry point of any installed CLI — anchored the project
+  root at the *package's* own `package.json`, so the `node_modules` walk stopped
+  inside the dependency and every hoisted package was unreachable
+  (`cannot find package "leftpad" … no node_modules/leftpad under the project
+  root <proj>/node_modules/@acme/cli`). A directory inside `node_modules` is now
+  never a project root: detection walks past it to the tree that installed the
+  package, where a package manager puts what that package imports. The
+  filesystem jail moves with it, from the package to the project (DECISIONS
+  D79).
+
 ### Changed
 
 - **`esrun --help` is 62 lines instead of 93.** What it kept is the grammar,

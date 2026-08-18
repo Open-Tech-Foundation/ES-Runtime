@@ -39,6 +39,13 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **An installed program can find its dependencies.** Running a file inside
+  `node_modules` — `esdev node_modules/@acme/cli/src/cli.js`, the entry point of
+  any installed CLI — stopped the project-root detection at the *package's* own
+  `package.json`, so the hoisted dependency beside it was unreachable and no
+  npm-installed program could run. Fixed in the shared loader, so both binaries
+  gain it; see the root [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
+
 - **`--install-types` reads `"packageManager"` before it looks for a
   lockfile.** Detection was lockfile-only, so a project that declares its
   manager — the corepack field, which modern toolchains write and which is

@@ -687,6 +687,82 @@ fn private_imports_and_self_reference_work() {
     );
 }
 
+/// A scratch project laid out the way a package manager leaves one: the program
+/// installed under `node_modules`, its dependency **hoisted** to the top of the
+/// tree beside it. Returns the project root.
+fn installed_program_tree(label: &str) -> PathBuf {
+    let proj = std::env::temp_dir().join(format!("esrun-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&proj);
+    let cli = proj.join("node_modules/@acme/cli");
+    let dep = proj.join("node_modules/leftpad");
+    std::fs::create_dir_all(cli.join("src")).expect("mktemp");
+    std::fs::create_dir_all(&dep).expect("mktemp");
+    std::fs::write(proj.join("package.json"), r#"{ "name": "app" }"#).expect("seed");
+    std::fs::write(
+        cli.join("package.json"),
+        r#"{ "name": "@acme/cli", "type": "module" }"#,
+    )
+    .expect("seed");
+    std::fs::write(
+        cli.join("src/cli.js"),
+        "import { pad } from 'leftpad'; console.log('CLI=' + pad('7'));",
+    )
+    .expect("seed");
+    std::fs::write(
+        dep.join("package.json"),
+        r#"{ "name": "leftpad", "type": "module", "main": "index.js" }"#,
+    )
+    .expect("seed");
+    std::fs::write(dep.join("index.js"), "export const pad = (s) => '00' + s;").expect("seed");
+    proj
+}
+
+/// The blocker this fix was reported for: running an npm-installed program by
+/// its own path could not reach a hoisted dependency, because the *package's*
+/// `package.json` was taken for the project root and the `node_modules` walk
+/// stopped inside the package (D79).
+#[test]
+fn an_installed_program_resolves_a_hoisted_dependency() {
+    let proj = installed_program_tree("hoisted");
+    let out = esrun()
+        .arg(proj.join("node_modules/@acme/cli/src/cli.js"))
+        .output()
+        .expect("spawn esrun");
+    let (s, err) = (stdout(&out), stderr(&out));
+    let _ = std::fs::remove_dir_all(&proj);
+    assert!(out.status.success(), "stderr: {err}");
+    assert!(s.contains("CLI=007"), "{s}");
+}
+
+/// The root moved out to the project; it did not go away. A module above the
+/// installing project is still refused.
+#[test]
+fn an_installed_program_is_still_jailed_to_the_project() {
+    let proj = installed_program_tree("hoisted-jail");
+    let outside = proj
+        .parent()
+        .expect("temp dir")
+        .join(format!("esrun-hoisted-secret-{}.mjs", std::process::id()));
+    std::fs::write(&outside, "export const s = 1;").expect("seed");
+    std::fs::write(
+        proj.join("node_modules/@acme/cli/src/cli.js"),
+        format!(
+            "import * as s from {:?}; console.log('READ', s);",
+            outside.to_string_lossy()
+        ),
+    )
+    .expect("seed");
+    let out = esrun()
+        .arg(proj.join("node_modules/@acme/cli/src/cli.js"))
+        .output()
+        .expect("spawn esrun");
+    let err = stderr(&out);
+    let _ = std::fs::remove_dir_all(&proj);
+    let _ = std::fs::remove_file(&outside);
+    assert!(!out.status.success(), "should exit non-zero: {err}");
+    assert!(err.contains("escapes the sandbox root"), "{err}");
+}
+
 #[test]
 fn runtime_process_exposes_env_args_platform_cwd() {
     let out = esrun()

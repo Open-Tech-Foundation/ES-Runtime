@@ -72,12 +72,33 @@ pub fn within_root(real: &Path, root: &Path) -> bool {
     real.starts_with(root)
 }
 
+/// Whether `dir` is a `node_modules` directory or lies inside one.
+///
+/// Such a directory is an *installed dependency*, never a project root: its
+/// `package.json` describes a package somebody else wrote, and the packages it
+/// imports are hoisted to the tree that installed it. Treating it as a root is
+/// what made a hoisted dependency unreachable (D79).
+fn is_installed_dependency(dir: &Path) -> bool {
+    dir.components()
+        .any(|c| c.as_os_str() == std::ffi::OsStr::new("node_modules"))
+}
+
 /// The sandbox root for `dir`: the nearest ancestor (including `dir`) containing
-/// `node_modules` or `package.json`, else `dir` — canonicalized so it can be
-/// compared against canonicalized resolved paths (D25).
+/// `node_modules` or `package.json` and not itself installed under a
+/// `node_modules`, else `dir` — canonicalized so it can be compared against
+/// canonicalized resolved paths (D25).
+///
+/// Skipping the installed ones is what makes `esrun node_modules/.bin/…`-shaped
+/// entries work: an installed CLI's own `package.json` is not a project root, so
+/// detection continues past it to the tree that installed the package — where
+/// its hoisted dependencies actually live (D79). The walk is still bounded: the
+/// parent of the outermost `node_modules` always contains one, so it matches.
 pub fn detect_root(dir: &Path) -> PathBuf {
     let start = canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
     for ancestor in start.ancestors() {
+        if is_installed_dependency(ancestor) {
+            continue;
+        }
         if ancestor.join("node_modules").is_dir() || ancestor.join("package.json").is_file() {
             return ancestor.to_path_buf();
         }
@@ -142,6 +163,34 @@ mod tests {
         std::fs::create_dir_all(proj.join("node_modules")).unwrap();
 
         assert_eq!(detect_root(&deep), canonicalize(&proj).unwrap());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// An installed package's own `package.json` is not a project root (D79):
+    /// running a file inside `node_modules` must anchor at the tree that
+    /// installed it, or every hoisted dependency is out of reach.
+    #[test]
+    fn detect_root_walks_past_an_installed_package() {
+        let base = std::env::temp_dir().join(format!("esrt-root-nm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let proj = base.join("proj");
+        let cli = proj.join("node_modules/@acme/cli");
+        std::fs::create_dir_all(cli.join("src")).unwrap();
+        std::fs::create_dir_all(proj.join("node_modules/leftpad")).unwrap();
+        std::fs::write(proj.join("package.json"), "{}").unwrap();
+        // The dependency has a manifest of its own — the marker that used to
+        // stop the walk one directory too deep.
+        std::fs::write(cli.join("package.json"), "{}").unwrap();
+
+        let root = canonicalize(&proj).unwrap();
+        assert_eq!(detect_root(&cli.join("src")), root);
+        assert_eq!(detect_root(&cli), root);
+        // Nested (unhoisted) installs anchor at the same place.
+        let nested = cli.join("node_modules/inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("package.json"), "{}").unwrap();
+        assert_eq!(detect_root(&nested), root);
+
         std::fs::remove_dir_all(&base).ok();
     }
 }
