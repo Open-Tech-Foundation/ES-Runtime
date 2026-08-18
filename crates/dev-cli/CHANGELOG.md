@@ -26,15 +26,6 @@ is the point, since none of the three has any business in a deployment.
 
 ### Added
 
-- **`--root=<dir>`** names the project root rather than letting it be detected
-  from the entry: how far up the `node_modules` walk goes, and what the
-  filesystem jail is anchored to. `--watch` watches that root too, so what is
-  watched and what can be imported stay the same tree. The layout it exists for
-  is the workspace — packages as entries, dependencies installed at the top
-  (`esdev --root=. packages/app/server.ts`). The runtime half of this is
-  `esrun`'s and is described in the root
-  [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
-
 - **`esdev upgrade`** replaces this binary with the newest `esdev` release for
   your platform — the same command `esrun upgrade` has always been, now shared
   between the two rather than living in one of them.
@@ -52,8 +43,13 @@ is the point, since none of the three has any business in a deployment.
   `node_modules` — `esdev node_modules/@acme/cli/src/cli.js`, the entry point of
   any installed CLI — stopped the project-root detection at the *package's* own
   `package.json`, so the hoisted dependency beside it was unreachable and no
-  npm-installed program could run. Fixed in the shared loader, so both binaries
-  gain it; see the root [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
+  npm-installed program could run.
+
+  The root is now the project containing the working directory rather than one
+  derived from the entry file, here and in `esrun` alike; `--watch` watches that
+  same root. Running a program from a directory whose project does not contain
+  it is now refused rather than silently rooted somewhere surprising. See the
+  root [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
 
 - **`--install-types` reads `"packageManager"` before it looks for a
   lockfile.** Detection was lockfile-only, so a project that declares its

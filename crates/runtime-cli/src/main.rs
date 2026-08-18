@@ -71,9 +71,6 @@ PERMISSIONS:
                                 separate question from what running code reaches
 
 OPTIONS:
-    --root=<dir>                The project root: where module resolution walks
-                                up to and the filesystem is jailed. Default: the
-                                nearest package.json/node_modules above the entry
     -t, --timeout=<ms>          Stop execution after <ms> (watchdog, SPEC §4)
     --max-heap=<mb>             Heap ceiling in megabytes, for this agent and as
                                 the ceiling its workers inherit. Default: sized
@@ -103,8 +100,8 @@ Inputs run as ES modules: import/export, top-level await and import attributes
 work. Imports resolve as local files and as bare specifiers through
 node_modules (ES module packages only — CommonJS and node: builtins are
 rejected, and nothing is installed), from the entry's directory up to the
-project root — `--root=<dir>` when that is somewhere else, such as the top of a
-workspace. Remote (https://) modules are deliberately
+project root — the project you run esrun in, which is also the filesystem jail
+and which nothing on the command line can move. Remote (https://) modules are deliberately
 unsupported. The WinterTC surface is there: console, URL, fetch, crypto,
 streams, encoding, timers, events.
 

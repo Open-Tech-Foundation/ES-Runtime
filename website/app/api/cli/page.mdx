@@ -28,8 +28,6 @@ esrun --deny-<name>         Take one back; requires --allow-all; repeatable
 esrun --deny-all            Grant nothing — the default, said outright
 esrun --import-policy=<file>
                             JSON policy for what may be loaded
-esrun --root=<dir>          The project root: where module resolution walks up
-                            to and the filesystem is jailed
 esrun -t=<ms>, --timeout=<ms>
                             Stop execution after <ms> ms (watchdog)
 esrun --max-heap=<mb>       Heap ceiling in megabytes, for this agent and as the
@@ -76,7 +74,6 @@ script that genuinely wants a flag esrun also knows.
 | `--deny-all` | Grant nothing — the default, said outright. Cannot be combined with `--allow-all`. |
 | `--allow-<name>=<list>` | Grant it narrowed to a comma-separated list: `read`/`write` (paths), `net`/`listen` (addresses), `run` (programs), `env` (variable names), `signals` (signal names). `imports` takes no list — see `--import-policy` — and neither does `workers`, whose scope is set at the spawn. See [Scoped grants](#scoped-grants). |
 | `--import-policy=<file>` | A JSON file of `"allow"` and/or `"deny"` lists of package names and paths, bounding what the module loader may resolve. Never auto-discovered. A second layer, not a substitute for the `imports` capability. See [Import policy](#import-policy). |
-| `--root=<dir>` | The project root: how far up the `node_modules` walk goes, and what the filesystem jail is anchored to. Default: the nearest ancestor of the entry holding a `package.json` or `node_modules`, skipping any directory inside `node_modules` — an installed package is never a root. The named root must exist and must contain the entry. See [The project root](/docs/modules#the-project-root). |
 | `--env-file=<path>` | Load environment variables from a single `.env` file into `runtime:process` env. No auto-discovery — a file is read only when passed. The OS environment wins on a conflict. Secret-bearing keys (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `*CREDENTIAL*`, `*AUTH*`) are masked. |
 | `--env-override` | Let `--env-file` values override the OS environment (default: OS wins). |
 | `--shutdown-grace=<ms>` | How long in-flight HTTP requests may finish after `^C`/`SIGTERM` before the process exits anyway. Default `10000`. See [Graceful shutdown](#graceful-shutdown). |
@@ -102,8 +99,9 @@ esrun -t=500 app.js
 # Load env vars from a .env file (OS env wins; --env-override flips it)
 esrun --env-file=.env app.js
 
-# A workspace: the package is the entry, the dependencies live at the top
-esrun --root=. packages/app/server.js
+# The project you run in is the project you get: from the workspace top, a
+# package resolves what is installed there
+cd <ws> && esrun packages/app/server.js
 
 # Give in-flight requests 30s to finish after SIGTERM
 esrun --shutdown-grace=30000 server.js

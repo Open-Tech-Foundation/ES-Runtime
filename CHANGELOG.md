@@ -16,21 +16,27 @@ namespace) is unstable and may change between minor releases until the API freez
   inside the dependency and every hoisted package was unreachable
   (`cannot find package "leftpad" … no node_modules/leftpad under the project
   root <proj>/node_modules/@acme/cli`). A directory inside `node_modules` is now
-  never a project root: detection walks past it to the tree that installed the
-  package, where a package manager puts what that package imports. The
-  filesystem jail moves with it, from the package to the project (DECISIONS
-  D79).
+  never a project root (DECISIONS D79).
 
-### Added
+### Changed
 
-- **`--root=<dir>`** names the project root instead of detecting it — how far up
-  the `node_modules` walk goes, and what the filesystem jail is anchored to, in
-  one flag because they are one boundary. It exists for the layout detection
-  cannot infer: a workspace whose packages are entries and whose dependencies
-  are installed at the top (`esrun --root=. packages/app/server.js`). The named
-  root must exist and must contain the entry, both checked before the program
-  starts. `esdev` takes it too, and its `--watch` supervisor watches the root it
-  names (D79).
+- **The project root is the one you run in.** It was detected from the entry
+  file's directory; it is now the project containing the **working directory** —
+  the nearest ancestor of the cwd holding a `package.json` or `node_modules`,
+  else the cwd itself. One directory still answers both questions it always
+  did: how far up the `node_modules` walk goes, and where the filesystem jail is
+  anchored.
+
+  An entry is a path someone typed, so a root derived from it is a boundary that
+  moves when the argument moves. Anchoring at the working directory makes the
+  sandbox something only a deliberate `cd` can widen — and it is why there is no
+  flag for this, deferred "relax flag" or otherwise (D79 withdraws D24's).
+
+  Two consequences to know: **an entry outside the working directory's project
+  is refused** before the program starts, with a message naming the root; and
+  **where you run from is what you get** — from a workspace top a package
+  resolves what is installed there, while from inside that package the package
+  is the project. `esdev --watch` watches the same root.
 
 ### Changed
 

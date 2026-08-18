@@ -3903,9 +3903,15 @@ fn runtime_watch_does_not_exist_under_esrun() {
         return;
     };
     let dir = watch_dir("w_esrun");
-    let app = write_in(&dir, "app.mjs", "import 'runtime:watch';\n");
+    write_in(&dir, "app.mjs", "import 'runtime:watch';\n");
 
-    let out = Command::new(esrun).arg(&app).output().expect("spawn esrun");
+    // From the project, as a program is run: the root is the working
+    // directory's project (D79), and an entry outside it is refused.
+    let out = Command::new(esrun)
+        .current_dir(&dir)
+        .arg("app.mjs")
+        .output()
+        .expect("spawn esrun");
     assert!(!out.status.success(), "{}", stdout(&out));
     assert!(
         stderr(&out).contains("unknown built-in module"),

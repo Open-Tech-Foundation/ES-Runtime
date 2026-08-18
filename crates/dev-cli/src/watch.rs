@@ -108,9 +108,6 @@ pub struct WatchConfig {
     pub child_args: Vec<String>,
     /// The entry file, used to choose what to watch.
     pub entry: PathBuf,
-    /// `--root=<dir>`, if the user named one: the project root the child will
-    /// resolve modules under, and therefore the tree to watch (D79).
-    pub root: Option<PathBuf>,
     /// How long a child gets to drain before it is killed.
     pub grace: Duration,
 }
@@ -121,7 +118,7 @@ pub struct WatchConfig {
 /// program that exits — because it finished, or because it threw — leaves the
 /// supervisor waiting for the next change rather than exiting with it.
 pub async fn supervise(config: WatchConfig) -> Result<(), String> {
-    let root = watch_root(&config.entry, config.root.as_deref());
+    let root = watch_root(&config.entry);
     let exe = std::env::current_exe().map_err(|e| format!("cannot find the esdev binary: {e}"))?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<()>();
@@ -259,24 +256,30 @@ fn request_termination(_pid: u32) -> bool {
     false
 }
 
-/// The directory to watch: `--root` if the user named one, else the project root
-/// the module loader would detect from the entry.
+/// The directory to watch: the project root the child will run under — the
+/// working directory's project (D79), which the supervisor shares with it.
 ///
-/// It is the loader's own rule, called rather than copied (D79), so what is
-/// watched and what can be imported cannot drift apart — including for an entry
-/// inside `node_modules`, where the project is the tree that installed it and
-/// not the package's own directory.
-fn watch_root(entry: &Path, root: Option<&Path>) -> PathBuf {
-    if let Some(root) = root {
-        return root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+/// It is the loader's own rule, called rather than copied, so what is watched
+/// and what can be imported cannot drift apart. The entry's own directory is
+/// the fallback for the one case the cwd cannot answer: a working directory
+/// that no longer exists.
+fn watch_root(entry: &Path) -> PathBuf {
+    match std::env::current_dir() {
+        Ok(cwd) => project_root(&cwd),
+        Err(_) => entry
+            .canonicalize()
+            .unwrap_or_else(|_| entry.to_path_buf())
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".")),
     }
-    let start = entry
-        .canonicalize()
-        .unwrap_or_else(|_| entry.to_path_buf())
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    es_runtime_cli_common::path::detect_root(&start)
+}
+
+/// The project containing `dir` — the loader's own rule, named separately so the
+/// tests below can state it without moving the process's working directory out
+/// from under every other test in this binary.
+fn project_root(dir: &Path) -> PathBuf {
+    es_runtime_cli_common::path::detect_root(dir)
 }
 
 /// Whether an event means the file actually *changed*.
@@ -485,33 +488,31 @@ mod tests {
         ));
     }
 
+    /// What is watched is the project the run was started in, not the tree
+    /// around the entry file: the same root the loader jails to (D79).
     #[test]
-    fn the_root_is_the_nearest_package_json() {
+    fn the_root_is_the_working_directorys_project() {
         let dir = std::env::temp_dir().join(format!("esdev-watch-root-{}", std::process::id()));
         let nested = dir.join("src/deep");
         std::fs::create_dir_all(&nested).expect("mkdir");
         std::fs::write(dir.join("package.json"), "{}").expect("write");
-        let entry = nested.join("app.mjs");
-        std::fs::write(&entry, "").expect("write");
 
-        assert_eq!(
-            watch_root(&entry, None),
-            dir.canonicalize().expect("canonicalize")
-        );
+        // Started anywhere inside the project, the whole project is watched.
+        let root = dir.canonicalize().expect("canonicalize");
+        assert_eq!(project_root(&nested), root);
+        assert_eq!(project_root(&dir), root);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Without a `package.json` anywhere above it, a lone script watches its own
-    /// directory rather than walking up to the filesystem root.
+    /// Without a `package.json` anywhere above it, a lone working directory
+    /// watches itself rather than walking up to the filesystem root.
     #[test]
-    fn a_rootless_entry_watches_its_own_directory() {
+    fn a_rootless_working_directory_watches_itself() {
         let dir = std::env::temp_dir().join(format!("esdev-watch-lone-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("mkdir");
-        let entry = dir.join("lone.mjs");
-        std::fs::write(&entry, "").expect("write");
 
-        let root = watch_root(&entry, None);
-        // Either the entry's directory, or a `package.json`-bearing ancestor of
+        let root = project_root(&dir);
+        // Either the directory itself, or a `package.json`-bearing ancestor of
         // the system temp dir if the machine happens to have one.
         assert!(
             root == dir.canonicalize().expect("canonicalize")

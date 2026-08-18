@@ -136,9 +136,6 @@ RUN OPTIONS (esrun's, with one deliberate difference):
                                 --deny-all. <name> is one of: read, write,
                                 imports, net, listen, env, run, signals, workers
     --import-policy=<file>      JSON policy for what may be loaded
-    --root=<dir>                The project root: where module resolution walks
-                                up to and the filesystem is jailed. Default: the
-                                nearest package.json/node_modules above the entry
     -t, --timeout=<ms>          Stop execution after <ms>
     --max-heap=<mb>             Heap ceiling in megabytes
     --env-file=<path>           Load env vars from a .env file
@@ -461,7 +458,6 @@ fn parse_args() -> Result<Command, String> {
                             .filter(|a| a != "--watch")
                             .collect(),
                         entry: std::path::PathBuf::from(path),
-                        root: options.root.as_deref().map(std::path::PathBuf::from),
                         grace: options.shutdown_grace,
                     }));
                 }

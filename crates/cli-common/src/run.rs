@@ -270,14 +270,24 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     }
     let process = Arc::new(system_process);
     // Filesystem view for runtime:fs: relative paths resolve under the entry's
-    // directory, jailed to the same project root the loader uses (D25) —
-    // `--root=<dir>` if the operator named one, else detected from the entry
-    // (D79). One computation, shared, so the jail and the module walk cannot
-    // disagree about where the project begins.
-    let fs_root = match &options.root {
-        Some(dir) => explicit_root(dir, &base_dir)?,
-        None => path::detect_root(&base_dir),
-    };
+    // directory, jailed to the project root of the **working directory** — the
+    // project the run was started in (D79). One computation, shared with the
+    // module loader below, so the jail and the `node_modules` walk cannot
+    // disagree about where the project begins. Nothing on the command line
+    // moves it: a sandbox whose boundary is an argument is a boundary the
+    // deployment line can widen by accident.
+    let fs_root = project_root()?;
+    // The entry belongs to the project being run. Checked here, once, because
+    // left to the loader it surfaces as *every* import escaping the root —
+    // one mistake reported a hundred times, in a message about the wrong thing.
+    if !path::within_root(&base_dir, &fs_root) {
+        return Err(format!(
+            "{} is outside the project root {} — run it from its own project \
+             (the root is the working directory's project, never an argument)",
+            base_dir.display(),
+            fs_root.display()
+        ));
+    }
     // `--allow-read=<paths>` / `--allow-write=<paths>` narrow the jail (D38).
     // Entries are resolved against the *working directory*, because that is
     // where the user typed them; the jail's own base is the entry file's
@@ -366,8 +376,9 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     // Module loader: relative/absolute/file: specifiers resolve as local files,
     // bare specifiers through node_modules (ESM packages only). Based at the
     // entry's directory and rooted at the same project root the filesystem is
-    // jailed to — resolution is confined under it (D25), and the node_modules
-    // walk stops there. Held behind an Arc so dynamic import() can reach it.
+    // jailed to — the working directory's project (D25, D79) — so resolution is
+    // confined under it and the node_modules walk stops there. Held behind an
+    // Arc so dynamic import() can reach it.
     // `--import-policy=<file>` governs what the loader may resolve (D39) — a
     // layer above the `imports` capability, which governs whether it runs at
     // all. The entry file is unaffected: it is read before a loader exists, and
@@ -654,29 +665,18 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     Ok(())
 }
 
-/// The project root a `--root=<dir>` names: canonicalized, and checked to be a
-/// directory that actually contains the program about to run (D79).
+/// The one root a run has: the project containing the **working directory** —
+/// the nearest ancestor of the cwd holding a `package.json` or `node_modules`,
+/// else the cwd itself (D79).
 ///
-/// Both checks are here rather than left to the first failing import, because
-/// the alternative is a run that starts and then reports *every* relative
-/// specifier as escaping a root the user typed themselves — one mistake told a
-/// hundred times, in a message about the wrong thing.
-fn explicit_root(dir: &str, base_dir: &std::path::Path) -> Result<std::path::PathBuf, String> {
-    let root = path::canonicalize(dir).map_err(|e| format!("--root={dir}: {e}"))?;
-    if !root.is_dir() {
-        return Err(format!("--root={dir} is not a directory"));
-    }
-    // `-e` bases the run at the working directory, which the OS may hand back
-    // through a symlink; compare on the one normal form the jail uses.
-    let base = path::canonicalize(base_dir).unwrap_or_else(|_| base_dir.to_path_buf());
-    if !path::within_root(&base, &root) {
-        return Err(format!(
-            "--root={dir} does not contain the entry ({}) — the root is the \
-             directory the program and its node_modules live under",
-            base.display()
-        ));
-    }
-    Ok(root)
+/// The cwd rather than the entry file, because the project a program belongs to
+/// is the one it is run from, and that is the only anchor guest code cannot
+/// reach and no flag can widen. An entry deep inside `node_modules` therefore
+/// resolves the dependencies hoisted beside it without the jail following the
+/// entry out to wherever it happens to live.
+fn project_root() -> Result<std::path::PathBuf, String> {
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
+    Ok(path::detect_root(&cwd))
 }
 
 /// Tells the capability observer, if there is one, that the run is over.

@@ -238,25 +238,32 @@ as-is), and every resolved module is confined to the project root.
 ### The project root
 
 One directory answers two questions: how far up the `node_modules` walk goes, and
-what the [filesystem jail](#capabilities) is anchored to. It is detected from
-the entry file — the nearest ancestor holding a `package.json` or a
-`node_modules` directory — with one exception that matters: **a directory inside
-`node_modules` is never a root**. An installed package's own `package.json`
-describes a dependency, not a project, so running `node_modules/@acme/cli/cli.js`
-anchors at the tree that *installed* `@acme/cli`, which is where a package
-manager hoists the dependencies that package imports.
+what the [filesystem jail](#capabilities) is anchored to. It is the project
+containing the **working directory** — the nearest ancestor of the cwd holding a
+`package.json` or a `node_modules` directory, else the cwd itself — with one
+exception: **a directory inside `node_modules` is never a root**. An installed
+package's `package.json` describes a dependency, not a project.
 
-`--root=<dir>` names it instead, for the layouts detection cannot infer:
+The working directory, not the entry file, because the project a program belongs
+to is the one it is run from, and that is the only anchor guest code cannot reach
+and no flag can widen. Two consequences worth stating plainly:
+
+- **An entry outside that project is refused** before the program starts, with a
+  message naming the root. The loader cannot be pointed at a tree the working
+  directory does not contain.
+- **Where you run from is what you get.** Run from a workspace and the workspace
+  is the project, so a package resolves what is installed at the top; run from
+  inside one of its packages and that package is the project, and the root does
+  not widen to reach past it.
 
 ```sh
-esrun --root=. packages/app/server.js     # a workspace: deps live at the top
+cd <proj> && esrun node_modules/@acme/cli/src/cli.js   # root: <proj>
+cd <ws>   && esrun packages/app/server.js              # root: <ws>
 ```
 
-The named root must exist and must contain the entry; both are checked before
-the program starts, because the alternative is a run that reports every import
-as escaping a root the user typed themselves. It moves the jail as well as the
-walk — a wider root is a wider filesystem, which is why it is a flag on the
-command line and nothing guest code can reach.
+There is no flag for this. A sandbox whose boundary is an argument is a boundary
+a deployment line can widen by accident, which is the opposite of what the jail
+is for.
 
 ### Conditions
 

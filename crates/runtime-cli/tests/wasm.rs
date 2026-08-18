@@ -106,9 +106,12 @@ fn write(dir: &Path, rel: &str, bytes: &[u8]) {
 fn run(dir: &Path, entry: &str) -> Output {
     // `--allow-all` is fixture: esrun grants nothing on its own (D65) and these
     // tests are about WebAssembly, not about the capability model.
+    // Run *from* the work directory: the project root is the working
+    // directory's project (D79), and an entry outside it is refused.
     Command::new(env!("CARGO_BIN_EXE_esrun"))
         .arg("--allow-all")
-        .arg(dir.join(entry))
+        .current_dir(dir)
+        .arg(entry)
         .output()
         .expect("failed to spawn esrun")
 }

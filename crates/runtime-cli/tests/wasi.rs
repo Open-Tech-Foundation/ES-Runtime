@@ -24,9 +24,15 @@ fn write(dir: &Path, rel: &str, bytes: &[u8]) {
 fn run(dir: &Path, entry: &str) -> Output {
     // `--allow-all` is fixture: esrun grants nothing on its own (D65) and these
     // tests are about WASI, not about the capability model.
+    //
+    // Run *from* the work directory, as a user runs a program from its project:
+    // the project root — the jail, and the `node_modules` walk's ceiling — is
+    // the working directory's project (D79), so an entry the cwd does not
+    // contain is refused before it starts.
     Command::new(env!("CARGO_BIN_EXE_esrun"))
         .arg("--allow-all")
-        .arg(dir.join(entry))
+        .current_dir(dir)
+        .arg(entry)
         .output()
         .expect("failed to spawn esrun")
 }
@@ -491,7 +497,8 @@ console.log("ENVCOUNT:", new DataView(memory.buffer).getUint32(0, true));
 
     let out = Command::new(env!("CARGO_BIN_EXE_esrun"))
         .arg("--allow-all")
-        .arg(dir.join("main.js"))
+        .current_dir(&dir)
+        .arg("main.js")
         .env("ESRUN_WASI_LEAK_CANARY", "should-not-appear")
         .output()
         .expect("failed to spawn esrun");

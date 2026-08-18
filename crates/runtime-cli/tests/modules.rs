@@ -725,7 +725,8 @@ fn installed_program_tree(label: &str) -> PathBuf {
 fn an_installed_program_resolves_a_hoisted_dependency() {
     let proj = installed_program_tree("hoisted");
     let out = esrun()
-        .arg(proj.join("node_modules/@acme/cli/src/cli.js"))
+        .current_dir(&proj)
+        .arg("node_modules/@acme/cli/src/cli.js")
         .output()
         .expect("spawn esrun");
     let (s, err) = (stdout(&out), stderr(&out));
@@ -753,7 +754,8 @@ fn an_installed_program_is_still_jailed_to_the_project() {
     )
     .expect("seed");
     let out = esrun()
-        .arg(proj.join("node_modules/@acme/cli/src/cli.js"))
+        .current_dir(&proj)
+        .arg("node_modules/@acme/cli/src/cli.js")
         .output()
         .expect("spawn esrun");
     let err = stderr(&out);
@@ -763,11 +765,11 @@ fn an_installed_program_is_still_jailed_to_the_project() {
     assert!(err.contains("escapes the sandbox root"), "{err}");
 }
 
-/// A workspace package's own `package.json` makes it the detected root, so a
-/// dependency installed at the workspace top is out of reach. `--root=<dir>`
-/// says where the project really begins (D79).
+/// The root is the project the run was started in: from the workspace top, a
+/// package resolves what is installed there; from inside the package, the
+/// package is the project and the root does not widen to reach it (D79).
 #[test]
-fn root_flag_anchors_resolution_at_the_workspace_top() {
+fn the_root_is_the_project_the_run_was_started_in() {
     let proj = std::env::temp_dir().join(format!("esrun-wsroot-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&proj);
     let app = proj.join("packages/app");
@@ -792,54 +794,52 @@ fn root_flag_anchors_resolution_at_the_workspace_top() {
     .expect("seed");
     std::fs::write(dep.join("index.js"), "export const v = 'shared';").expect("seed");
 
-    // Detected root is the package itself: the workspace's node_modules is
-    // above it, and unreachable.
-    let without = esrun()
-        .arg(app.join("main.mjs"))
+    // Run from the workspace: the walk reaches the top, because that is where
+    // the run started.
+    let from_top = esrun()
+        .current_dir(&proj)
+        .arg("packages/app/main.mjs")
         .output()
         .expect("spawn esrun");
-    // Named root: the walk reaches the top of the workspace.
-    let with = esrun()
-        .arg(format!("--root={}", proj.display()))
-        .arg(app.join("main.mjs"))
+    // Run from inside the package: the package *is* the project there, and the
+    // root does not quietly widen to the workspace above it.
+    let from_package = esrun()
+        .current_dir(&app)
+        .arg("main.mjs")
         .output()
         .expect("spawn esrun");
-    let (without_err, with_out, with_err) = (stderr(&without), stdout(&with), stderr(&with));
+    let (top_out, top_err) = (stdout(&from_top), stderr(&from_top));
+    let (pkg_out, pkg_err) = (stdout(&from_package), stderr(&from_package));
     let _ = std::fs::remove_dir_all(&proj);
-    assert!(!without.status.success(), "{without_err}");
-    assert!(without_err.contains("cannot find package"), "{without_err}");
-    assert!(with.status.success(), "stderr: {with_err}");
-    assert!(with_out.contains("APP=shared"), "{with_out}");
+    assert!(from_top.status.success(), "stderr: {top_err}");
+    assert!(top_out.contains("APP=shared"), "{top_out}");
+    assert!(!from_package.status.success(), "{pkg_out}");
+    assert!(
+        pkg_err.contains("cannot find package") && pkg_err.contains("packages/app"),
+        "{pkg_err}"
+    );
 }
 
-/// A `--root` that cannot be the root of this run is refused before the program
-/// starts, rather than surfacing later as every import escaping the jail.
+/// An entry outside the project the run started in is refused before the
+/// program starts. The loader cannot be pointed at a tree the working directory
+/// does not contain, which is the whole of the boundary (D79).
 #[test]
-fn root_flag_is_checked_before_the_run() {
-    let missing = esrun()
-        .arg("--root=/no/such/directory")
-        .arg(fixture("main.mjs"))
-        .output()
-        .expect("spawn esrun");
-    assert!(!missing.status.success());
-    assert!(
-        stderr(&missing).contains("--root=/no/such/directory"),
-        "{}",
-        stderr(&missing)
-    );
+fn an_entry_outside_the_project_is_refused() {
+    let elsewhere = std::env::temp_dir().join(format!("esrun-outside-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    std::fs::create_dir_all(&elsewhere).expect("mktemp");
+    std::fs::write(elsewhere.join("app.mjs"), "console.log('RAN');").expect("seed");
 
-    // A root the entry is not inside is a mistake, not a narrower jail.
-    let elsewhere = esrun()
-        .arg(format!("--root={}", std::env::temp_dir().display()))
-        .arg(fixture("main.mjs"))
+    // cwd is this crate; the entry is in the system temp directory.
+    let out = esrun()
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg(elsewhere.join("app.mjs"))
         .output()
         .expect("spawn esrun");
-    assert!(!elsewhere.status.success());
-    assert!(
-        stderr(&elsewhere).contains("does not contain the entry"),
-        "{}",
-        stderr(&elsewhere)
-    );
+    let err = stderr(&out);
+    let _ = std::fs::remove_dir_all(&elsewhere);
+    assert!(!out.status.success(), "should exit non-zero");
+    assert!(err.contains("outside the project root"), "{err}");
 }
 
 #[test]
