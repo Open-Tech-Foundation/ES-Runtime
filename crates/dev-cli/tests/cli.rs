@@ -324,6 +324,47 @@ fn types_is_refused_and_upgrade_is_a_subcommand() {
     );
 }
 
+/// A flag that is taken and dropped is one somebody keeps passing and keeps
+/// believing. `esdev start` does not run your program — it runs a build's
+/// output as a child, under esdev.json's grants — so the run-shaping flags it
+/// used to accept and ignore are refused by name. `--shutdown-grace` is the one
+/// that does apply: it bounds the drain on a restart.
+///
+/// Run in a directory with no esdev.json, so nothing here can start a server:
+/// the refused flags fail while parsing, and the kept one gets past parsing and
+/// fails on the missing file — which is exactly the difference being tested.
+#[test]
+fn start_refuses_the_run_flags_it_cannot_apply() {
+    let dir = build_dir("s_run_flags");
+
+    for flag in ["--timeout=500", "--max-heap=64", "--env-override"] {
+        let out = esdev_in(&dir)
+            .args(["start", flag])
+            .output()
+            .expect("spawn esdev start");
+        assert!(!out.status.success(), "{flag} was accepted");
+        assert!(
+            stderr(&out).contains("does not run your program"),
+            "{flag}: {}",
+            stderr(&out)
+        );
+    }
+
+    let grace = esdev_in(&dir)
+        .args(["start", "--shutdown-grace=100"])
+        .output()
+        .expect("spawn esdev start");
+    assert!(!grace.status.success());
+    assert!(stderr(&grace).contains("esdev.json"), "{}", stderr(&grace));
+    assert!(
+        !stderr(&grace).contains("does not run your program"),
+        "{}",
+        stderr(&grace)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An uncaught error is one block, and it names the file — the Phase 13 error
 /// model, reached through the shared printer rather than a second copy of it.
 #[test]

@@ -863,7 +863,13 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
     let mut options = RunOptions::default();
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
-        if options.try_flag(flag, value)? {
+        // One shared flag applies here, and it is the one a restart uses. The
+        // rest shape a *run*, and `start` does not run your program — it runs
+        // the target's output as a child, under what esdev.json grants. Taking
+        // them and dropping them would be a flag somebody keeps passing and
+        // keeps believing, so they fall through to the error below.
+        if flag == "--shutdown-grace" {
+            options.try_flag(flag, value)?;
             continue;
         }
         match flag {
@@ -883,6 +889,16 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
                     Some(given.parse::<u16>().map_err(|_| {
                         format!("--port={given} is not a port number (1 to 65535).")
                     })?);
+            }
+            flag if RunOptions::is_shared_flag(flag) => {
+                return Err(format!(
+                    "{flag} shapes a run, and `esdev start` does not run your program — it \
+                     builds what {} describes and runs the output as a child process, under \
+                     that file's `permissions`.\n\n\
+                     `esdev <file> {flag}=…` takes it, and what the child may reach is \
+                     `permissions` in that file.",
+                    config::FILE_NAME
+                ));
             }
             flag => return Err(format!("unknown option: {flag}\n\n{START_USAGE}")),
         }

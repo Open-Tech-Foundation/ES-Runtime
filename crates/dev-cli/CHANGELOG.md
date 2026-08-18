@@ -56,6 +56,13 @@ is the point, since none of the three has any business in a deployment.
 
 ### Changed
 
+- **`esdev start` refuses the run flags it was dropping.** `--timeout`,
+  `--max-heap`, `--env-file`, `--env-override` and `--import-policy` were
+  accepted and then ignored: `start` does not run your program, it runs a
+  build's output as a child process under `esdev.json`'s `permissions`. Each
+  now fails with where it belongs instead. `--shutdown-grace` is unchanged —
+  it is the one that applies, bounding the drain on a restart.
+
 - **`--help` is a map, not a manual.** `esdev --help` was 118 lines and its four
   subcommands another 328 between them — the port-selection rule, the reload
   channel, the `esdev.json` target keys, the case for `--dts-bundle`. All of it
