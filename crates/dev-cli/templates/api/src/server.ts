@@ -3,41 +3,47 @@
  *
  * `esdev start` builds it and runs it in development, `esrun` runs the same
  * bundle in production, and nothing stands between it and the request either
- * time. A `Request` comes in, a `Response` goes out, and everything in between
+ * time: a `Request` comes in, a `Response` goes out, and everything in between
  * is the platform.
  *
- * # What it is allowed to do
+ * It runs under exactly what `esdev.json` grants — in development too:
  *
  * ```
  * --allow-listen=8080 --allow-env=PORT --allow-signals=SIGTERM,SIGINT
  * ```
  *
- * **No filesystem at all** — not even read. No outbound network, no
- * subprocesses, no environment beyond one variable. If this process is ever
- * made to run somebody else's code, that is the whole of what it can reach.
- *
- * It runs under exactly that in development too. A grant that is only added for
- * production is a grant nobody has tested.
+ * **No filesystem at all**, no outbound network, no subprocesses, and one
+ * environment variable. A grant only added for production is a grant nobody
+ * has tested.
  */
 import { serve } from "runtime:http";
 import { env, exit, onSignal, unmask } from "runtime:process";
 
 import { json, toResponse } from "./http.ts";
 import { Router } from "./router.ts";
-import { createTask, deleteTask, listTasks, showTask } from "./tasks.ts";
 
 const port = Number(unmask(env.PORT ?? "8080"));
 
+// The route table. Add yours here; `path` is a `URLPattern` pathname, so
+// `/things/:id` and `/files/*` work without anything to install.
 const router = new Router([
-  { method: "GET", path: "/tasks", handle: listTasks },
-  { method: "POST", path: "/tasks", handle: createTask },
-  { method: "GET", path: "/tasks/:id", handle: showTask },
-  { method: "DELETE", path: "/tasks/:id", handle: deleteTask },
+  { method: "GET", path: "/", handle: index },
 
-  // Answers the load balancer without touching the store: a health check that
-  // queries the database takes the instance down when the database blinks.
+  // Answers the load balancer without touching anything a route depends on: a
+  // health check that queries the database takes the instance down when the
+  // database blinks.
   { method: "GET", path: "/healthz", handle: () => json({ ok: true }) },
 ]);
+
+/** The one route this API answers. Replace it with yours. */
+function index(): Response {
+  return json({
+    name: "{{name}}",
+    runtime: "ES Runtime",
+    org: "Open Tech Foundation",
+    docs: "https://esrun.opentechf.org/docs",
+  });
+}
 
 const server = serve({ port, hostname: "0.0.0.0" }, async (request) => {
   const url = new URL(request.url);

@@ -1,25 +1,20 @@
 /**
  * Responses, and the one error type that becomes one.
  *
- * # Errors are thrown, not returned
+ * A handler that threads an error value back through every call it makes ends
+ * up checking for it more often than it does anything else, so a failure is
+ * thrown and turned into a response in one place — `toResponse`.
  *
- * A handler that has to thread an error value back through every call it makes
- * ends up checking for it more often than it does anything else. Throwing an
- * [`HttpError`] lets the failure travel from wherever it was noticed to the one
- * place that turns it into a response, and every handler in between stays about
- * what it is for.
- *
- * The rule that makes that safe is that **only an `HttpError` carries a message
- * to the client**. Anything else is a bug, and a bug's message is written for
- * whoever will fix it: it names hostnames, paths, query fragments and sometimes
- * the data itself. [`toResponse`] gives those a flat 500 and leaves the detail
- * in the log, where the person who can act on it is already looking.
+ * The rule that makes that safe: **only an `HttpError` carries a message to the
+ * client.** Anything else is a bug, and a bug's message names hostnames, paths
+ * and sometimes the data itself. Those get a flat 500, and the detail stays in
+ * the log where whoever can act on it is already looking.
  */
 
 /** A failure with a status the client should be told about. */
 export class HttpError extends Error {
   readonly status: number;
-  /** Field-level detail for a 422, so a form can point at what was wrong. */
+  /** Field-level detail, so a client can point at what was wrong. */
   readonly details?: Record<string, string>;
 
   constructor(status: number, message: string, details?: Record<string, string>) {
@@ -36,11 +31,6 @@ export class HttpError extends Error {
   static badRequest(message: string, details?: Record<string, string>) {
     return new HttpError(400, message, details);
   }
-
-  /** 422: the request parsed, and what it said cannot be acted on. */
-  static invalid(details: Record<string, string>) {
-    return new HttpError(422, "Validation failed", details);
-  }
 }
 
 /** A JSON response. */
@@ -53,11 +43,6 @@ export function json(body: unknown, init: ResponseInit = {}): Response {
       ...init.headers,
     },
   });
-}
-
-/** `204`, for something that succeeded and has nothing to say. */
-export function noContent(): Response {
-  return new Response(null, { status: 204, headers: securityHeaders() });
 }
 
 /**
@@ -99,24 +84,4 @@ export function securityHeaders(): Record<string, string> {
     // Nothing here is a page, so nothing here should ever be framed.
     "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
   };
-}
-
-/**
- * The request's JSON body, or a 400 explaining why not.
- *
- * The content type is checked rather than assumed: a form post arriving at a
- * JSON endpoint should be told what is wrong, not fail on a parse error that
- * reads like a server bug.
- */
-export async function readJson(request: Request): Promise<unknown> {
-  const type = request.headers.get("content-type") ?? "";
-  if (!type.toLowerCase().includes("application/json")) {
-    throw HttpError.badRequest("Expected a JSON body (content-type: application/json)");
-  }
-  try {
-    return await request.json();
-  } catch {
-    // The parser's own message names an offset in bytes the client cannot see.
-    throw HttpError.badRequest("The request body is not valid JSON");
-  }
 }

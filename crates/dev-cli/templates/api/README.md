@@ -1,114 +1,55 @@
 # {{name}}
 
-A JSON API on the ES Runtime. **Nothing it ships depends on** — not one package.
+A JSON API on the [ES Runtime](https://esrun.opentechf.org). **Nothing it ships
+depends on**, and it starts with the permissions it needs and no others.
 
 ```sh
-npm install       # TypeScript and the runtime: types, both dev-only
-npm run dev       # the port it prints
+npm install       # TypeScript and the runtime's types, both dev-only
+npm run dev       # http://localhost:8080
+curl localhost:8080/
 ```
 
 Swap `npm` for `bun`, `pnpm` or `yarn`; nothing here depends on which you use.
-
-```sh
-curl localhost:8080/tasks
-curl -X POST localhost:8080/tasks -H 'content-type: application/json' -d '{"title":"Write it down"}'
-curl -X DELETE localhost:8080/tasks/<id>
-```
 
 ## What is here
 
 | | |
 | --- | --- |
-| `src/server.ts` | **What production runs** — the routes, the log line, the shutdown |
-| `src/router.ts` | Matching a request to a handler, on `URLPattern` |
-| `src/http.ts` | Responses, and the one error type that becomes one |
-| `src/tasks.ts` | The resource, and the `Map` standing in for your database |
+| `src/server.ts` | **Start here.** The route table, and what production runs |
+| `src/router.ts` | `URLPattern` matching — a table and a loop, no dependency |
+| `src/http.ts` | JSON responses, and the one error type that becomes one |
 
-## Zero *runtime* dependencies is the point
+## Commands
 
-`URLPattern`, `Request`, `Response`, `URL`, `crypto.randomUUID()` — every one is
-a web standard this runtime already has. A router is a table and a loop.
-
-That is not minimalism for its own sake. Every dependency in a server is code
-you did not read running with everything you were granted, and this template
-exists partly to show how little you need. What `package.json` does list is
-TypeScript and the `runtime:` type definitions: neither is shipped, neither is
-loaded by anything that runs, and both exist so `npm run typecheck` works on a
-fresh clone.
+| | |
+| --- | --- |
+| `npm run dev` | Build, run, rebuild and restart on save |
+| `npm test` | `esdev test` — every `*.test.ts` |
+| `npm run build` | → `dist/server.js` |
+| `npm start` | Run `dist/` with `esrun`, under the grants below |
+| `npm run typecheck` | `tsc --noEmit`. esdev erases types and never checks them |
 
 ## What it is allowed to do
 
-```
+`esdev.json` names it, and `npm run dev` runs the server under exactly the same
+line production does — a grant only added for production is a grant nobody has
+tested:
+
+```sh
 --allow-listen=8080 --allow-env=PORT --allow-signals=SIGTERM,SIGINT
 ```
 
-**No filesystem at all** — not even read. No outbound network, no subprocesses,
-no environment beyond one variable. If this process is ever made to run somebody
+No filesystem at all — not even read — no outbound network, no subprocesses,
+and one environment variable. If this process is ever made to run somebody
 else's code, that is the whole of what it can reach.
 
-It runs under exactly that in development too — there is no permissive
-development mode. A grant that is only added for production is a grant nobody
-has tested. `esdev --trace-permissions dist/server.js` prints the line for what
-a run actually used.
+`esdev --trace-permissions dist/server.js` prints what a run actually used.
 
-## Errors are thrown, not returned
+## Docs
 
-```ts
-if (!task) throw HttpError.notFound(`No task ${id}`);
-```
+[esrun.opentechf.org/docs](https://esrun.opentechf.org/docs) ·
+[API](https://esrun.opentechf.org/api) ·
+[GitHub](https://github.com/Open-Tech-Foundation/ES-Runtime)
 
-A handler that threads an error value back through every call ends up checking
-for it more often than it does anything else. Throwing lets the failure travel
-to the one place that turns it into a response.
-
-**Only an `HttpError` carries a message to the client.** Anything else is a bug,
-and a bug's message names hostnames, paths and sometimes the data itself — so it
-gets a flat 500 and the detail goes to the log.
-
-| Thrown | Response |
-| --- | --- |
-| `HttpError.notFound(…)` | 404 with your message |
-| `HttpError.badRequest(…)` | 400 |
-| `HttpError.invalid({ field: … })` | 422 with the fields that were wrong |
-| anything else | 500 `Internal Server Error`, logged |
-
-## Tests cover everything
-
-```sh
-npm test
-```
-
-There is no React here, so nothing reaches CommonJS and **`esdev test` can run
-every module**: the router, the error mapping, the JSON body reading, the
-validation. 20 tests, no test framework, no mocks.
-
-## Status codes it gets right
-
-- A path that exists but does not answer your method is **405 with an `Allow`
-  header**, not a 404. A client told only "no" learns nothing.
-- `HEAD` is answered by the `GET` route. A second implementation is a second
-  thing that can disagree with the first.
-- A created resource returns **201 with a `Location`**.
-- A delete returns **204** and no body.
-
-## Deploying it
-
-```sh
-npm run build
-esrun --allow-listen=8080 --allow-env=PORT --allow-signals=SIGTERM,SIGINT dist/server.js
-```
-
-One file. `SIGTERM` closes the listener and lets requests in flight finish
-before the process exits, which is what a rolling deploy needs.
-
-## Replacing the store
-
-`src/tasks.ts` holds a `Map`. Swap it for `runtime:db`, or a `fetch` to a
-service, and no handler changes — but **add the capability it needs to
-`esdev.json`**, or the first query fails with the permission it was denied.
-
-## Types for `runtime:`
-
-`@opentf/esrun-types` is already a dev dependency and already named in
-`tsconfig.json`, so `npm run typecheck` works on a fresh clone. Types are for
-your editor and that command; `esdev` erases them and never checks them.
+Part of the [Open Tech Foundation](https://github.com/Open-Tech-Foundation)
+ecosystem.

@@ -5,17 +5,9 @@
  * has** — so a router is a table and a loop rather than a dependency. Path
  * parameters, wildcards and optional segments all come from the platform.
  *
- * ```ts
- * { method: "GET", path: "/tasks/:id", handle: showTask }
- * ```
- *
- * # Why the method is matched separately
- *
- * A path that exists but does not answer this method is a **405**, not a 404 —
- * and the response has to say which methods it does answer. That distinction is
- * lost by a router keyed on `"GET /tasks/:id"`, which is why the two are kept
- * apart here: [`match`] reports "no such path" and "wrong method" as different
- * answers, because they are different answers.
+ * The method is matched separately because a path that exists but does not
+ * answer this method is a **405**, not a 404, and the response has to say which
+ * methods it does answer.
  */
 
 /** What a handler is given: the request, and whatever the path captured. */
