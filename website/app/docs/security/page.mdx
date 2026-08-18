@@ -279,12 +279,15 @@ project root. Paths are canonicalized to their real location before the check, s
 a symlink cannot be used to escape the jail. This is on by default and is not
 currently optional.
 
-The root is the project containing the **working directory**: the nearest
-ancestor of the cwd holding a `package.json` or a `node_modules` directory, never
-a directory inside `node_modules` (an installed package is a dependency, not a
-project). There is no flag for it — the boundary is where you run, so nothing on
-a deployment line can widen it, and an entry outside that project is refused
-before the program starts. See
+The root is **the working directory**, exactly — no walk up to a `package.json`,
+no marker file required, and no flag that moves it. The boundary is where you
+stand, so nothing on a deployment line can widen it, and an entry outside it is
+refused before the program starts.
+
+Two working directories are refused outright, because the jail they would create
+is the accident: a **filesystem root** (an image with no `WORKDIR`, a unit with
+no `WorkingDirectory=`) and the **home directory** (where cron starts). Both fail
+at startup naming the fix, rather than running with the machine open. See
 [The project root](/docs/modules#the-project-root).
 
 <Callout type="danger" title="Root jail in action">

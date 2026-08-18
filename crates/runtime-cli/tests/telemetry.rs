@@ -44,7 +44,8 @@ fn stderr_after_a_failed_handshake(name: &str, rust_log: Option<&str>) -> String
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_esrun"));
     // Fixture, not subject (D65): this is a test about tracing output.
-    cmd.arg("--allow-all")
+    cmd.current_dir(env!("CARGO_TARGET_TMPDIR"))
+        .arg("--allow-all")
         .arg(&app)
         .env("CERT", cert)
         .env("KEY", key)

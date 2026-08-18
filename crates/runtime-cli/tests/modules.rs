@@ -765,11 +765,11 @@ fn an_installed_program_is_still_jailed_to_the_project() {
     assert!(err.contains("escapes the sandbox root"), "{err}");
 }
 
-/// The root is the project the run was started in: from the workspace top, a
-/// package resolves what is installed there; from inside the package, the
-/// package is the project and the root does not widen to reach it (D79).
+/// The root is the working directory, exactly: from the workspace top a package
+/// resolves what is installed there, and from inside the package the root is
+/// that package — it never walks up to reach what is above it (D79).
 #[test]
-fn the_root_is_the_project_the_run_was_started_in() {
+fn the_root_is_the_directory_the_run_was_started_in() {
     let proj = std::env::temp_dir().join(format!("esrun-wsroot-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&proj);
     let app = proj.join("packages/app");
@@ -801,8 +801,8 @@ fn the_root_is_the_project_the_run_was_started_in() {
         .arg("packages/app/main.mjs")
         .output()
         .expect("spawn esrun");
-    // Run from inside the package: the package *is* the project there, and the
-    // root does not quietly widen to the workspace above it.
+    // Run from inside the package: the root is that directory, and does not
+    // quietly widen to the workspace above it.
     let from_package = esrun()
         .current_dir(&app)
         .arg("main.mjs")
@@ -840,6 +840,102 @@ fn an_entry_outside_the_project_is_refused() {
     let _ = std::fs::remove_dir_all(&elsewhere);
     assert!(!out.status.success(), "should exit non-zero");
     assert!(err.contains("outside the project root"), "{err}");
+}
+
+/// A working directory that is the filesystem root is refused, rather than run
+/// with every file on the machine inside the jail. This is the unset `WORKDIR` /
+/// missing `WorkingDirectory=` deployment, which must fail loudly (D79).
+#[test]
+fn a_filesystem_root_working_directory_is_refused() {
+    let out = esrun()
+        .current_dir("/")
+        .arg("-e=console.log('RAN')")
+        .output()
+        .expect("spawn esrun");
+    let err = stderr(&out);
+    assert!(
+        !out.status.success(),
+        "should exit non-zero: {}",
+        stdout(&out)
+    );
+    assert!(err.contains("whole filesystem"), "{err}");
+    // The message names the fix, because the fix is in a deployment file the
+    // reader is not looking at.
+    assert!(
+        err.contains("WORKDIR") && err.contains("WorkingDirectory"),
+        "{err}"
+    );
+}
+
+/// The home directory is refused for the same reason — it is cron's default
+/// working directory, and it holds every key and credential the user owns.
+#[test]
+fn a_home_working_directory_is_refused() {
+    let home = std::env::temp_dir().join(format!("esrun-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).expect("mktemp");
+    std::fs::write(home.join("app.mjs"), "console.log('RAN');").expect("seed");
+
+    let out = esrun()
+        .current_dir(&home)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .arg("app.mjs")
+        .output()
+        .expect("spawn esrun");
+    let (s, err) = (stdout(&out), stderr(&out));
+    // A directory *inside* the home directory is fine — only the home itself is
+    // refused, since being in it is what is always an accident.
+    let sub = home.join("app");
+    std::fs::create_dir_all(&sub).expect("mkdir");
+    std::fs::write(sub.join("app.mjs"), "console.log('RAN');").expect("seed");
+    let inside = esrun()
+        .current_dir(&sub)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .arg("app.mjs")
+        .output()
+        .expect("spawn esrun");
+    let (inside_out, inside_err) = (stdout(&inside), stderr(&inside));
+    let _ = std::fs::remove_dir_all(&home);
+
+    assert!(!out.status.success(), "should exit non-zero: {s}");
+    assert!(err.contains("home directory"), "{err}");
+    assert!(inside.status.success(), "stderr: {inside_err}");
+    assert!(inside_out.contains("RAN"), "{inside_out}");
+}
+
+/// No manifest is not an error: an image holding `dist/` and `node_modules/`
+/// and nothing else is an ordinary deployment, and the jail is that directory
+/// either way (D79).
+#[test]
+fn a_directory_without_a_package_json_is_a_project() {
+    let proj = std::env::temp_dir().join(format!("esrun-nomanifest-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&proj);
+    let dep = proj.join("node_modules/dep");
+    std::fs::create_dir_all(proj.join("dist")).expect("mktemp");
+    std::fs::create_dir_all(&dep).expect("mktemp");
+    std::fs::write(
+        dep.join("package.json"),
+        r#"{ "name": "dep", "type": "module", "main": "index.js" }"#,
+    )
+    .expect("seed");
+    std::fs::write(dep.join("index.js"), "export const v = 'dep';").expect("seed");
+    std::fs::write(
+        proj.join("dist/server.js"),
+        "import { v } from 'dep'; console.log('SERVER=' + v);",
+    )
+    .expect("seed");
+
+    let out = esrun()
+        .current_dir(&proj)
+        .arg("dist/server.js")
+        .output()
+        .expect("spawn esrun");
+    let (s, err) = (stdout(&out), stderr(&out));
+    let _ = std::fs::remove_dir_all(&proj);
+    assert!(out.status.success(), "stderr: {err}");
+    assert!(s.contains("SERVER=dep"), "{s}");
 }
 
 #[test]

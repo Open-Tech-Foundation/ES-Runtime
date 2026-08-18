@@ -270,20 +270,20 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     }
     let process = Arc::new(system_process);
     // Filesystem view for runtime:fs: relative paths resolve under the entry's
-    // directory, jailed to the project root of the **working directory** — the
-    // project the run was started in (D79). One computation, shared with the
-    // module loader below, so the jail and the `node_modules` walk cannot
-    // disagree about where the project begins. Nothing on the command line
-    // moves it: a sandbox whose boundary is an argument is a boundary the
-    // deployment line can widen by accident.
+    // directory, jailed to the **working directory** (D79). One computation,
+    // shared with the module loader below, so the jail and the `node_modules`
+    // walk cannot disagree about where the project begins. Nothing on the
+    // command line moves it: a sandbox whose boundary is an argument is a
+    // boundary the deployment line can widen by accident.
     let fs_root = project_root()?;
-    // The entry belongs to the project being run. Checked here, once, because
-    // left to the loader it surfaces as *every* import escaping the root —
-    // one mistake reported a hundred times, in a message about the wrong thing.
+    // The program belongs to the directory it is run from. Checked here, once,
+    // because left to the loader it surfaces as *every* import escaping the
+    // root — one mistake reported a hundred times, in a message about the
+    // wrong thing.
     if !path::within_root(&base_dir, &fs_root) {
         return Err(format!(
-            "{} is outside the project root {} — run it from its own project \
-             (the root is the working directory's project, never an argument)",
+            "{} is outside the project root {} — run it from its own directory \
+             (the sandbox is the working directory, never an argument)",
             base_dir.display(),
             fs_root.display()
         ));
@@ -665,18 +665,58 @@ async fn execute(bin: &'static str, config: Config) -> Result<(), String> {
     Ok(())
 }
 
-/// The one root a run has: the project containing the **working directory** —
-/// the nearest ancestor of the cwd holding a `package.json` or `node_modules`,
-/// else the cwd itself (D79).
+/// The one root a run has: **the working directory**, exactly (D79).
 ///
-/// The cwd rather than the entry file, because the project a program belongs to
-/// is the one it is run from, and that is the only anchor guest code cannot
-/// reach and no flag can widen. An entry deep inside `node_modules` therefore
-/// resolves the dependencies hoisted beside it without the jail following the
-/// entry out to wherever it happens to live.
+/// No walk and no marker file. The cwd rather than the entry file, because an
+/// entry is a path someone typed and a root derived from one moves when the
+/// argument moves; and the cwd *itself* rather than the project detected around
+/// it, because not walking is what makes the boundary safe — a `package.json`
+/// two directories up is not a permission, and looking for one only means the
+/// jail can silently be wider than the directory the operator is standing in.
+///
+/// A missing manifest is therefore not an error: an image holding `dist/` and
+/// `node_modules/` and no `package.json` is a perfectly ordinary deployment,
+/// and its jail is that directory either way.
+///
+/// Two working directories are refused instead, because they are enormous by
+/// nature and being in one is always an accident:
+/// - a **filesystem root** — an unset `WORKDIR` / missing `WorkingDirectory=`,
+///   where the jail would be every file on the machine;
+/// - the **home directory** — cron's default, where it would be every key,
+///   credential and profile the user owns.
 fn project_root() -> Result<std::path::PathBuf, String> {
     let cwd = std::env::current_dir().map_err(|e| format!("cannot read working directory: {e}"))?;
-    Ok(path::detect_root(&cwd))
+    let root = path::canonicalize(&cwd).unwrap_or(cwd);
+    if root.parent().is_none() {
+        return Err(format!(
+            "refusing to run with {} as the project root — the sandbox is the \
+             working directory, and this one is the whole filesystem.\n\n\
+             Set the application directory: WORKDIR in a container, \
+             WorkingDirectory= in a systemd unit, or cd there first.",
+            root.display()
+        ));
+    }
+    if home_dir().is_some_and(|home| home == root) {
+        return Err(format!(
+            "refusing to run with your home directory ({}) as the project root — \
+             the sandbox is the working directory, and that one holds every key \
+             and credential you own.\n\n\
+             Run from the application's own directory (cron starts in $HOME; \
+             give the job a cd, or the unit a WorkingDirectory=).",
+            root.display()
+        ));
+    }
+    Ok(root)
+}
+
+/// The user's home directory, canonicalized, from the environment the process
+/// was started in. `None` when it is unset or unreadable — one fewer directory
+/// refused, never a run blocked by a variable that was not there.
+fn home_dir() -> Option<std::path::PathBuf> {
+    let raw = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|value| !value.is_empty())?;
+    path::canonicalize(std::path::PathBuf::from(raw)).ok()
 }
 
 /// Tells the capability observer, if there is one, that the run is over.

@@ -138,26 +138,34 @@ pattern capture cannot be used to walk out.
 ### The project root
 
 One directory answers two questions: how far up the `node_modules` walk goes, and
-what the filesystem jail is anchored to. It is the project containing the
-**working directory** — the nearest ancestor of the cwd holding a `package.json`
-or a `node_modules` directory, else the cwd itself — never a directory inside
-`node_modules`, since an installed package's manifest describes a dependency
-rather than a project.
+what the filesystem jail is anchored to. It is **the working directory**, exactly
+— no walk, no marker file, and no flag that moves it.
 
-The working directory, not the entry file: the project a program belongs to is
-the one it is run from, and that is the only anchor guest code cannot reach and
-no flag can widen.
+The working directory rather than the entry file, because an entry is a path
+someone typed, and a root derived from one moves when the argument moves. The cwd
+itself rather than a project detected around it, because not walking is what
+makes the boundary safe.
 
 ```sh
 cd <proj> && esrun node_modules/@acme/cli/src/cli.js   # root: <proj>, so the
                                                        # CLI's hoisted deps resolve
-cd <ws>   && esrun packages/app/server.js              # root: <ws>
+cd /app   && esrun dist/server.js                      # root: /app, with or
+                                                       # without a package.json
 ```
 
 <Callout type="note" title="Where you run from is what you get">
-  An entry the working directory's project does not contain is refused before
-  the program starts. And running from inside a workspace package makes that
-  package the project — the root does not widen to reach the workspace above it.
+  An entry the working directory does not contain is refused before the program
+  starts. Run from a workspace and the workspace is the root; run from inside one
+  of its packages and that package is the root — it never widens to reach what is
+  above it.
+</Callout>
+
+<Callout type="warning" title="Two directories esrun will not run in">
+  A **filesystem root** (`/`) and your **home directory** are refused outright:
+  the jail would be the whole machine, or every credential you own. These are the
+  deployments that forgot `WORKDIR` / `WorkingDirectory=`, and the cron job that
+  starts in `$HOME` — so esrun stops and names the fix rather than running
+  unconfined.
 </Callout>
 
 ## The runtime: scheme

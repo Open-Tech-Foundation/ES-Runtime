@@ -256,30 +256,20 @@ fn request_termination(_pid: u32) -> bool {
     false
 }
 
-/// The directory to watch: the project root the child will run under — the
-/// working directory's project (D79), which the supervisor shares with it.
+/// The directory to watch: the working directory, which is the root the child
+/// runs under (D79) — the supervisor shares it with the process it starts.
 ///
-/// It is the loader's own rule, called rather than copied, so what is watched
-/// and what can be imported cannot drift apart. The entry's own directory is
-/// the fallback for the one case the cwd cannot answer: a working directory
-/// that no longer exists.
+/// The entry's own directory is the fallback for the one case the cwd cannot
+/// answer: a working directory that no longer exists.
 fn watch_root(entry: &Path) -> PathBuf {
-    match std::env::current_dir() {
-        Ok(cwd) => project_root(&cwd),
-        Err(_) => entry
+    std::env::current_dir().unwrap_or_else(|_| {
+        entry
             .canonicalize()
             .unwrap_or_else(|_| entry.to_path_buf())
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".")),
-    }
-}
-
-/// The project containing `dir` — the loader's own rule, named separately so the
-/// tests below can state it without moving the process's working directory out
-/// from under every other test in this binary.
-fn project_root(dir: &Path) -> PathBuf {
-    es_runtime_cli_common::path::detect_root(dir)
+            .unwrap_or_else(|| PathBuf::from("."))
+    })
 }
 
 /// Whether an event means the file actually *changed*.
@@ -486,38 +476,5 @@ mod tests {
             Path::new("/home/me/work/target/app/dist/x.js"),
             root
         ));
-    }
-
-    /// What is watched is the project the run was started in, not the tree
-    /// around the entry file: the same root the loader jails to (D79).
-    #[test]
-    fn the_root_is_the_working_directorys_project() {
-        let dir = std::env::temp_dir().join(format!("esdev-watch-root-{}", std::process::id()));
-        let nested = dir.join("src/deep");
-        std::fs::create_dir_all(&nested).expect("mkdir");
-        std::fs::write(dir.join("package.json"), "{}").expect("write");
-
-        // Started anywhere inside the project, the whole project is watched.
-        let root = dir.canonicalize().expect("canonicalize");
-        assert_eq!(project_root(&nested), root);
-        assert_eq!(project_root(&dir), root);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Without a `package.json` anywhere above it, a lone working directory
-    /// watches itself rather than walking up to the filesystem root.
-    #[test]
-    fn a_rootless_working_directory_watches_itself() {
-        let dir = std::env::temp_dir().join(format!("esdev-watch-lone-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("mkdir");
-
-        let root = project_root(&dir);
-        // Either the directory itself, or a `package.json`-bearing ancestor of
-        // the system temp dir if the machine happens to have one.
-        assert!(
-            root == dir.canonicalize().expect("canonicalize")
-                || root.join("package.json").is_file()
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -45,11 +45,11 @@ is the point, since none of the three has any business in a deployment.
   `package.json`, so the hoisted dependency beside it was unreachable and no
   npm-installed program could run.
 
-  The root is now the project containing the working directory rather than one
-  derived from the entry file, here and in `esrun` alike; `--watch` watches that
-  same root. Running a program from a directory whose project does not contain
-  it is now refused rather than silently rooted somewhere surprising. See the
-  root [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
+  The root is now the working directory itself rather than one derived from the
+  entry file, here and in `esrun` alike; `--watch` watches that same directory.
+  Running a program from somewhere else — or in a filesystem root, or in your
+  home directory — is refused rather than silently rooted somewhere surprising.
+  See the root [CHANGELOG.md](../../CHANGELOG.md) (DECISIONS D79).
 
 - **`--install-types` reads `"packageManager"` before it looks for a
   lockfile.** Detection was lockfile-only, so a project that declares its

@@ -15,28 +15,38 @@ namespace) is unstable and may change between minor releases until the API freez
   root at the *package's* own `package.json`, so the `node_modules` walk stopped
   inside the dependency and every hoisted package was unreachable
   (`cannot find package "leftpad" … no node_modules/leftpad under the project
-  root <proj>/node_modules/@acme/cli`). A directory inside `node_modules` is now
-  never a project root (DECISIONS D79).
+  root <proj>/node_modules/@acme/cli`). `cd <proj> && esrun
+  node_modules/@acme/cli/src/cli.js` now resolves what a package manager hoisted
+  beside it (DECISIONS D79).
 
 ### Changed
 
-- **The project root is the one you run in.** It was detected from the entry
-  file's directory; it is now the project containing the **working directory** —
-  the nearest ancestor of the cwd holding a `package.json` or `node_modules`,
-  else the cwd itself. One directory still answers both questions it always
-  did: how far up the `node_modules` walk goes, and where the filesystem jail is
-  anchored.
+- **The sandbox is the directory you run in.** The project root — the
+  `node_modules` walk's ceiling and the filesystem jail, one directory for both
+  — was detected by walking up from the entry file. It is now **the working
+  directory, exactly**: no walk, no marker file, no flag.
 
-  An entry is a path someone typed, so a root derived from it is a boundary that
-  moves when the argument moves. Anchoring at the working directory makes the
-  sandbox something only a deliberate `cd` can widen — and it is why there is no
-  flag for this, deferred "relax flag" or otherwise (D79 withdraws D24's).
+  An entry is a path someone typed, so a root derived from one moves when the
+  argument moves; and a root *detected* by walking is one a stray `package.json`
+  two directories up can silently widen. Neither is a boundary. The working
+  directory is the one anchor guest code cannot reach, no argument can shift,
+  and an operator can read off their shell prompt.
 
-  Two consequences to know: **an entry outside the working directory's project
-  is refused** before the program starts, with a message naming the root; and
-  **where you run from is what you get** — from a workspace top a package
-  resolves what is installed there, while from inside that package the package
-  is the project. `esdev --watch` watches the same root.
+  A missing `package.json` is **not** an error — an image with `dist/` and
+  `node_modules/` and no manifest is an ordinary deployment, and the jail is
+  that directory either way.
+
+- **`esrun` refuses to run in a filesystem root or your home directory.** These
+  are the two working directories that are enormous by nature: `/` is what an
+  image with no `WORKDIR` and a systemd unit with no `WorkingDirectory=` give
+  you, and `$HOME` is where cron starts. Anchoring the jail there would put
+  every file on the machine, or every credential you own, inside it — so the run
+  stops at startup and names the fix instead.
+
+- **An entry outside the working directory is refused**, with a message naming
+  the root, rather than starting and then reporting every import as escaping a
+  jail. A program is run from its own directory: `esrun /srv/app/server.js` from
+  `/` is now an error.
 
 ### Changed
 

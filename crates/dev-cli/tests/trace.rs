@@ -30,6 +30,9 @@ fn stderr(out: &Output) -> String {
 /// Runs `esdev --trace-permissions <entry>` and returns everything it said.
 fn trace(entry: &Path, extra: &[&str]) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_esdev"))
+        // The sandbox is the working directory (D79): run from where the
+        // fixtures live.
+        .current_dir(env!("CARGO_TARGET_TMPDIR"))
         .arg("--trace-permissions")
         .args(extra)
         .arg(entry)
@@ -95,6 +98,7 @@ fn the_line_it_prints_is_the_line_that_runs_and_the_smallest_one() {
 
     // Sufficient: the line runs the program.
     let out = Command::new(&esrun)
+        .current_dir(env!("CARGO_TARGET_TMPDIR"))
         .args(&args[..args.len() - 1])
         .arg(&app)
         .output()
@@ -115,6 +119,7 @@ fn the_line_it_prints_is_the_line_that_runs_and_the_smallest_one() {
             .filter(|a| a != dropped)
             .collect();
         let out = Command::new(&esrun)
+            .current_dir(env!("CARGO_TARGET_TMPDIR"))
             .args(&kept)
             .arg(&app)
             .output()

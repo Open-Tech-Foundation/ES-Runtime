@@ -238,32 +238,41 @@ as-is), and every resolved module is confined to the project root.
 ### The project root
 
 One directory answers two questions: how far up the `node_modules` walk goes, and
-what the [filesystem jail](#capabilities) is anchored to. It is the project
-containing the **working directory** — the nearest ancestor of the cwd holding a
-`package.json` or a `node_modules` directory, else the cwd itself — with one
-exception: **a directory inside `node_modules` is never a root**. An installed
-package's `package.json` describes a dependency, not a project.
+what the [filesystem jail](#capabilities) is anchored to. It is **the working
+directory**, exactly — no walk, no marker file, nothing on the command line that
+moves it.
 
-The working directory, not the entry file, because the project a program belongs
-to is the one it is run from, and that is the only anchor guest code cannot reach
-and no flag can widen. Two consequences worth stating plainly:
+The working directory rather than the entry file, because an entry is a path
+someone typed and a root derived from one moves when the argument moves. The cwd
+*itself* rather than a project detected around it, because not walking is what
+makes the boundary safe: a `package.json` two directories up is not a permission,
+and looking for one only means the jail can be wider than the directory the
+operator is standing in.
 
-- **An entry outside that project is refused** before the program starts, with a
-  message naming the root. The loader cannot be pointed at a tree the working
-  directory does not contain.
-- **Where you run from is what you get.** Run from a workspace and the workspace
-  is the project, so a package resolves what is installed at the top; run from
-  inside one of its packages and that package is the project, and the root does
-  not widen to reach past it.
+A missing `package.json` is therefore not an error. An image holding `dist/` and
+`node_modules/` and no manifest is an ordinary deployment, and its jail is that
+directory either way.
+
+Two working directories are **refused**, before the program starts, because they
+are enormous by nature and being in one is always an accident:
+
+| Refused cwd | The deployment that produces it |
+| ----------- | ------------------------------- |
+| a filesystem root (`/`, `C:\`) | no `WORKDIR` in the image, no `WorkingDirectory=` in the unit — the jail would be every file on the machine |
+| the home directory | cron, which starts there — the jail would be every key and credential the user owns |
+
+An entry the working directory does not contain is refused too, with a message
+naming the root: the loader cannot be pointed at a tree you are not in.
 
 ```sh
 cd <proj> && esrun node_modules/@acme/cli/src/cli.js   # root: <proj>
 cd <ws>   && esrun packages/app/server.js              # root: <ws>
+cd /app   && esrun dist/server.js                      # root: /app, manifest or not
 ```
 
-There is no flag for this. A sandbox whose boundary is an argument is a boundary
-a deployment line can widen by accident, which is the opposite of what the jail
-is for.
+Where you run from is what you get: run from a workspace and the workspace is the
+root, so a package resolves what is installed at the top; run from inside that
+package and the package is the root, and it does not widen to reach past it.
 
 ### Conditions
 

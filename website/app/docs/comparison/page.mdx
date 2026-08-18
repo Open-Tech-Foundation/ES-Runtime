@@ -248,8 +248,8 @@ esrun's nine denial names — `read`, `write`, `imports`, `net`, `listen`, `env`
   library and the CLI, with no flag to turn it off. No other runtime here has an
   equivalent; their permission flags are the only confinement. It is also the one
   place esrun's `node_modules` walk differs from theirs: Node, Deno and Bun walk
-  up to the filesystem root, esrun stops at the project you run in — and there is
-  no flag to move it, because a boundary an argument can widen is not one.
+  up to the filesystem root, esrun stops at the directory you run in — and there
+  is no flag to move it, because a boundary an argument can widen is not one.
 - **It embeds.** esrun is a Rust library with a driven event loop and no owned
   thread, designed to run inside a host application — a use case the others do not
   target.

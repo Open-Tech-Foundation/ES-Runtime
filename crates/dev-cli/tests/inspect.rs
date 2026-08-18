@@ -36,7 +36,11 @@ fn write(name: &str, contents: &str) -> PathBuf {
 }
 
 fn esdev() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_esdev"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_esdev"));
+    // Run *from* the directory these fixtures are written into: the sandbox is
+    // the working directory (D79), so a program is run from where it lives.
+    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command
 }
 
 /// Whether this build has an inspector at all — and, when it does not, the

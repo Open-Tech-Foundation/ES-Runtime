@@ -28,6 +28,9 @@ fn write(name: &str, contents: &str) -> PathBuf {
 fn esrun() -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_esrun"));
     command.arg("--allow-all");
+    // Run *from* the directory these fixtures are written into: the sandbox is
+    // the working directory (D79), so a program is run from where it lives.
+    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
     command
 }
 

@@ -26,7 +26,11 @@ fn write(name: &str, contents: &str) -> PathBuf {
 }
 
 fn esdev() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_esdev"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_esdev"));
+    // The sandbox is the working directory (D79): run from the directory these
+    // fixtures are written into, as a user runs a program from its own.
+    command.current_dir(env!("CARGO_TARGET_TMPDIR"));
+    command
 }
 
 /// Another workspace binary from the same target directory, or `None` if it has
@@ -489,7 +493,11 @@ fn esrun_still_refuses_the_typescript_that_esdev_runs() {
         eprintln!("skipping: esrun is not built beside esdev");
         return;
     };
-    let prod = Command::new(esrun).arg(&app).output().expect("spawn esrun");
+    let prod = Command::new(esrun)
+        .current_dir(app.parent().expect("fixture dir"))
+        .arg(app.file_name().expect("entry"))
+        .output()
+        .expect("spawn esrun");
     assert!(
         !prod.status.success(),
         "esrun ran TypeScript — the transform has leaked into production"
@@ -567,7 +575,8 @@ fn build_bundles_a_graph_into_one_file() {
         return;
     };
     let ran = Command::new(esrun)
-        .arg(&bundle)
+        .current_dir(bundle.parent().expect("bundle dir"))
+        .arg(bundle.file_name().expect("bundle"))
         .output()
         .expect("spawn esrun");
     assert!(ran.status.success(), "{}", stderr(&ran));
@@ -601,7 +610,8 @@ fn build_leaves_runtime_modules_for_the_runtime_to_serve() {
         return;
     };
     let ran = Command::new(esrun)
-        .arg(dir.join("dist/app.js"))
+        .current_dir(&dir)
+        .arg("dist/app.js")
         .output()
         .expect("spawn esrun");
     assert!(ran.status.success(), "{}", stderr(&ran));
@@ -747,8 +757,9 @@ fn a_commonjs_dependency_is_converted_rather_than_refused() {
     // esrun refuses this package unbundled — that is D22, and it stays true.
     if let Some(esrun) = sibling_binary("esrun") {
         let refused = Command::new(esrun)
+            .current_dir(&dir)
             .arg("--allow-imports")
-            .arg(dir.join("app.mjs"))
+            .arg("app.mjs")
             .output()
             .expect("spawn esrun");
         assert!(!refused.status.success());
@@ -770,7 +781,8 @@ fn a_commonjs_dependency_is_converted_rather_than_refused() {
         return;
     };
     let ran = Command::new(esrun)
-        .arg(dir.join("dist/app.js"))
+        .current_dir(&dir)
+        .arg("dist/app.js")
         .output()
         .expect("spawn esrun");
     assert!(ran.status.success(), "{}", stderr(&ran));
@@ -794,8 +806,9 @@ fn a_bundle_runs_without_the_imports_capability() {
     };
     // Unbundled under --deny-all: the loader cannot run.
     let unbundled = Command::new(&esrun)
+        .current_dir(&dir)
         .arg("--deny-all")
-        .arg(dir.join("app.mjs"))
+        .arg("app.mjs")
         .output()
         .expect("spawn esrun");
     assert!(!unbundled.status.success());
@@ -808,8 +821,9 @@ fn a_bundle_runs_without_the_imports_capability() {
 
     // Bundled under the same --deny-all: nothing left to import.
     let bundled = Command::new(&esrun)
+        .current_dir(&dir)
         .arg("--deny-all")
-        .arg(dir.join("dist/app.js"))
+        .arg("dist/app.js")
         .output()
         .expect("spawn esrun");
     assert!(bundled.status.success(), "{}", stderr(&bundled));
@@ -965,8 +979,9 @@ fn lib_keeps_an_export_no_other_module_uses() {
          console.log(UNUSED_BY_THE_ENTRY.join(','));\n",
     );
     let ran = Command::new(esrun)
+        .current_dir(&dir)
         .arg("--allow-imports")
-        .arg(dir.join("consumer.mjs"))
+        .arg("consumer.mjs")
         .output()
         .expect("spawn esrun");
     assert!(ran.status.success(), "{}", stderr(&ran));
@@ -2141,7 +2156,11 @@ fn runtime_test_does_not_exist_under_esrun() {
     let dir = build_dir("t_esrun");
     let app = write_in(&dir, "app.mjs", "import 'runtime:test';\n");
 
-    let out = Command::new(esrun).arg(&app).output().expect("spawn esrun");
+    let out = Command::new(esrun)
+        .current_dir(app.parent().expect("fixture dir"))
+        .arg(app.file_name().expect("entry"))
+        .output()
+        .expect("spawn esrun");
     assert!(!out.status.success(), "{}", stdout(&out));
     assert!(
         stderr(&out).contains("unknown built-in module"),
@@ -4568,7 +4587,11 @@ fn runtime_build_does_not_exist_under_esrun() {
     let dir = build_dir("rb_esrun");
     let app = write_in(&dir, "app.mjs", "import 'runtime:build';\n");
 
-    let out = Command::new(esrun).arg(&app).output().expect("spawn esrun");
+    let out = Command::new(esrun)
+        .current_dir(app.parent().expect("fixture dir"))
+        .arg(app.file_name().expect("entry"))
+        .output()
+        .expect("spawn esrun");
     assert!(!out.status.success(), "{}", stdout(&out));
     assert!(
         stderr(&out).contains("unknown built-in module"),
