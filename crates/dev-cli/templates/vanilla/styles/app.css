@@ -1,8 +1,7 @@
 /* The stylesheet index.html links, and the only one it needs to.
  *
- * esdev follows @import at build time and emits a single hashed file. Component
- * styling lives in *.module.css beside the code that uses it; this file is the
- * baseline those sit on. */
+ * esdev follows @import at build time and emits a single hashed file, so the
+ * split between this and theme.css costs nothing at runtime. */
 
 @import "./theme.css";
 
@@ -14,7 +13,7 @@
 
 body {
   margin: 0;
-  padding: 0 0.75rem;
+  padding: 0 var(--step);
   background: var(--paper);
   color: var(--ink);
   font: 16px/1.65 var(--sans);
@@ -22,38 +21,53 @@ body {
 }
 
 .shell {
-  max-width: 34rem;
+  max-width: var(--measure);
   margin: 0 auto;
-  padding-block: 3rem 4rem;
+  padding-block: 4rem;
 }
 
 h1 {
   font-size: clamp(1.75rem, 1.2rem + 2vw, 2.35rem);
+  line-height: 1.15;
   letter-spacing: -0.025em;
-  margin: 0 0 0.4rem;
+  margin: 0 0 0.5rem;
 }
 
 .lede {
   color: var(--muted);
-  margin: 0 0 2rem;
+  font-size: 1.075rem;
+  margin: 0 0 1.5rem;
 }
 
-.pending {
-  color: var(--muted);
-  font-style: italic;
+.edit {
+  margin: 0 0 2.5rem;
 }
 
-button {
-  cursor: pointer;
-  font: inherit;
-  font-weight: 520;
-  padding: 0.5rem 0.95rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--raised);
-  color: var(--ink);
+a {
+  color: var(--accent);
+  text-underline-offset: 0.15em;
+}
 
-  &:hover {
-    border-color: color-mix(in oklab, var(--accent) 50%, var(--line));
+code {
+  font: 0.875em var(--mono);
+  background: color-mix(in oklab, var(--ink) 8%, transparent);
+  padding: 0.15em 0.4em;
+  border-radius: 0.35em;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding-top: var(--step);
+  border-top: 1px solid var(--line);
+
+  a {
+    color: var(--muted);
+    text-decoration: none;
+
+    &:hover {
+      color: var(--ink);
+    }
   }
 }

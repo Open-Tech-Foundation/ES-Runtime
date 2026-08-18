@@ -9,17 +9,8 @@
     <script type="module" src="./src/main.ts"></script>
   </head>
   <body>
-    <main class="shell">
-      <h1>{{name}}</h1>
-      <p class="lede">
-        TypeScript, the DOM, and nothing else. No framework, no dependencies.
-      </p>
-
-      <!-- Rendered by src/main.ts. Static markup until the module runs, which
-           is why there is something here rather than an empty div. -->
-      <section id="app" aria-live="polite">
-        <p class="pending">Loading…</p>
-      </section>
-    </main>
+    <!-- The script tag above is what makes src/main.ts a build input, and this
+         is what it renders into. -->
+    <main class="shell" id="app"></main>
   </body>
 </html>

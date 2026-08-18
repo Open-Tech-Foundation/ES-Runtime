@@ -1,9 +1,7 @@
 /* The stylesheet index.html links, and the only one it needs to.
  *
  * esdev follows @import at build time and emits a single hashed file, so the
- * split below costs nothing at runtime. Nesting and color-mix() are shipped as
- * written: they are supported everywhere this targets, so nothing rewrites
- * them. */
+ * split between this and theme.css costs nothing at runtime. */
 
 @import "./theme.css";
 
@@ -25,71 +23,24 @@ body {
 .shell {
   max-width: var(--measure);
   margin: 0 auto;
-  padding-block: 2.5rem 4rem;
+  padding-block: 4rem;
 }
-
-/* --- masthead ------------------------------------------------------------ */
-
-.masthead {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--step);
-  align-items: baseline;
-  justify-content: space-between;
-  padding-bottom: var(--step);
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 2rem;
-}
-
-.wordmark {
-  font-weight: 640;
-  letter-spacing: -0.015em;
-  text-decoration: none;
-  color: inherit;
-}
-
-nav {
-  display: flex;
-  gap: 1.25rem;
-
-  a {
-    color: var(--muted);
-    text-decoration: none;
-    padding-block: 0.15rem;
-    border-bottom: 2px solid transparent;
-
-    &:hover {
-      color: var(--ink);
-    }
-
-    /* react-router sets aria-current on the active NavLink, so the styling
-     * hangs off the accessibility state rather than a second class name. */
-    &[aria-current="page"] {
-      color: var(--ink);
-      border-bottom-color: var(--accent);
-    }
-  }
-}
-
-/* --- prose --------------------------------------------------------------- */
 
 h1 {
   font-size: clamp(1.75rem, 1.2rem + 2vw, 2.35rem);
   line-height: 1.15;
   letter-spacing: -0.025em;
-  margin: 0 0 0.4rem;
-}
-
-h2 {
-  font-size: 1.15rem;
-  letter-spacing: -0.01em;
-  margin: 2.25rem 0 0.5rem;
+  margin: 0 0 0.5rem;
 }
 
 .lede {
   color: var(--muted);
   font-size: 1.075rem;
-  margin: 0 0 2rem;
+  margin: 0 0 1.5rem;
+}
+
+.edit {
+  margin: 0 0 2.5rem;
 }
 
 a {
@@ -104,101 +55,19 @@ code {
   border-radius: 0.35em;
 }
 
-/* --- cards --------------------------------------------------------------- */
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  padding-top: var(--step);
+  border-top: 1px solid var(--line);
 
-.cards {
-  display: grid;
-  gap: var(--step);
-  padding: 0;
-  margin: 0;
-  list-style: none;
-}
-
-.card {
-  display: block;
-  padding: 1.1rem 1.25rem;
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  text-decoration: none;
-  color: inherit;
-  transition:
-    border-color 120ms ease,
-    transform 120ms ease;
-
-  &:hover {
-    border-color: color-mix(in oklab, var(--accent) 50%, var(--line));
-    transform: translateY(-1px);
-  }
-
-  h3 {
-    margin: 0 0 0.2rem;
-    font-size: 1rem;
-    letter-spacing: -0.01em;
-  }
-
-  p {
-    margin: 0;
+  a {
     color: var(--muted);
-    font-size: 0.925rem;
-  }
-}
+    text-decoration: none;
 
-/* --- controls ------------------------------------------------------------ */
-
-button,
-.button {
-  cursor: pointer;
-  font: inherit;
-  font-weight: 520;
-  /* `.button` is worn by a <Link>, which is an <a> and underlines by default.
-     A control that looks like a button should not also look like prose. */
-  text-decoration: none;
-  display: inline-block;
-  padding: 0.5rem 0.95rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--raised);
-  color: var(--ink);
-
-  &:hover {
-    border-color: color-mix(in oklab, var(--accent) 50%, var(--line));
-  }
-}
-
-.button-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--accent-ink);
-}
-
-/* --- states -------------------------------------------------------------- */
-
-.meta {
-  color: var(--muted);
-  font-size: 0.875rem;
-}
-
-.error-code {
-  font: 600 0.8rem/1 var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--danger);
-  margin: 0 0 0.5rem;
-}
-
-.pending {
-  color: var(--muted);
-  font-style: italic;
-}
-
-/* The router sets this while a navigation is in flight. A slow loader is then
- * visible without any state of our own. */
-.navigating {
-  cursor: progress;
-
-  .shell {
-    opacity: 0.6;
-    transition: opacity 180ms ease 120ms;
+    &:hover {
+      color: var(--ink);
+    }
   }
 }
