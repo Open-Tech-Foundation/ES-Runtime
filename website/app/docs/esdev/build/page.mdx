@@ -128,30 +128,55 @@ takes a release build of a project whose day to day is unminified.
 one is: the bundle runs, and what it writes is the output. It runs in a child
 process, after every target is built.
 
-### A whole build clears what it owns
+### A failed build changes nothing
+
+Nothing lands where it is deployed until the whole build has worked. Every
+output path is mirrored under one staging directory beside the project
+(`.esdev-build-<pid>-<n>`), and the build runs there — bundles, assets, the
+document, and any `then: "run"` step, which writes beside its own bundle and so
+writes into staging too. Only once every target and every step has succeeded
+does anything move into place.
+
+So a build that fails halfway leaves **the last build that worked**, whole, and
+leaves nothing of its own. Without this, a prerender step that exits non-zero
+left a `dist` full of bundles for a site whose pages were never rendered —
+where the working deployment used to be. In CI that is what gets uploaded.
+
+```text
+error: target "prerender": dist/prerender.js exited 1
+
+Nothing was written: a build stages its output and moves it into place only
+once every target and every step has succeeded, so what is deployed is still
+the last build that worked.
+```
+
+### A whole build replaces what it owns
 
 Output filenames are content-hashed, so `app-1a2b.js` becoming `app-9f8e.js`
-leaves the old one behind for ever — and beside it whatever `esdev start` wrote,
-which is *not* hashed and so is never overwritten either. Deploying that ships
-every build the directory has ever seen, and a stale URL still reaches a version
-of the app nobody is testing. So `esdev build` empties each `outdir` before it
-writes.
+would leave the old one behind for ever — and beside it whatever `esdev start`
+wrote, which is *not* hashed and so is never overwritten either. Deploying that
+ships every build the directory has ever seen, and a stale URL still reaches a
+version of the app nobody is testing. So a whole-project `esdev build` **takes
+the place of** each `outdir`: the staged directory replaces it at the end, and
+nothing stale survives.
 
-Three things it does not do, all for the same reason — the build has to own what
-it clears:
+Three things it does not replace, all for the same reason — the build has to own
+what it replaces. Each of those is *overlaid* instead: the staged files move
+into place, and whatever else is there is left alone.
 
-- **`--target=<name>` never clears.** It writes into a directory it may share
-  with another target's output, and clearing it would delete a bundle this run
+- **`--target=<name>` never replaces.** It writes into a directory it may share
+  with another target's output, and replacing it would delete a bundle this run
   is not going to write again.
-- **`esdev start` never clears.** It rebuilds on a keystroke into stable
-  filenames, so nothing accumulates, and emptying the directory a page is being
-  served from is a page that fails to load for reasons unrelated to your code.
-- **An `out` file's directory is never cleared.** `out` names one file in a
+- **`esdev start` never replaces**, and does not stage at all. It rebuilds into
+  a directory a page is being served from while that page runs, and writes its
+  hot updates there for the page to fetch — moving that directory at the end of
+  every build would cost a full reload per save.
+- **An `out` file's directory is never replaced.** `out` names one file in a
   directory that may hold other builds and other people's files; such a file is
-  removed only when it happens to sit inside another target's `outdir`, and a
+  replaced only when it happens to sit inside another target's `outdir`, and a
   whole build writes it again on the way past.
 
-An `outdir` that holds the project itself is refused rather than emptied.
+An `outdir` that holds the project itself is refused rather than replaced.
 
 ### Assets and the deployment
 
@@ -266,7 +291,7 @@ theirs to make and `--lib` makes none of them.
 | | |
 | --- | --- |
 | **A directory, not an entry** | Every module under it is built, the way `tsc` builds a `rootDir`. Your `exports` map decides what a consumer may import, not what an entry reaches. |
-| **The output is emptied first** | The build owns it. A stale file in `dist` is a file `"files": ["dist"]` publishes. |
+| **The output is replaced** | The build owns it. A stale file in `dist` is a file `"files": ["dist"]` publishes — and a build that fails replaces nothing. |
 | **Nothing is tree-shaken** | An export no current caller uses is not dead code — it is the API. |
 | **Dependencies stay external** | Only relative and absolute imports are emitted, so a consumer can still dedupe, override or patch. |
 | **Module structure preserved** | A subpath in `exports` is a real file, and a stack trace names a module. |
@@ -274,10 +299,10 @@ theirs to make and `--lib` makes none of them.
 | **`.d.ts` beside each module** | Derived from the annotations your source already carries. |
 
 Skipped: `*.test.*` and `.d.ts` files. An `--out` that holds your source or
-your project is refused rather than emptied; a single-entry application build
-never cleans, since its `--out` is one file in a directory that may hold other
-things. (A whole-project build does clear its `outdir`s — see
-[above](#a-whole-build-clears-what-it-owns).)
+your project is refused rather than replaced; a single-entry application build
+replaces nothing, since its `--out` is one file in a directory that may hold
+other things. (A whole-project build does replace its `outdir`s — see
+[above](#a-whole-build-replaces-what-it-owns).)
 
 ### Declarations
 

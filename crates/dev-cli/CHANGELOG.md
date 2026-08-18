@@ -39,6 +39,28 @@ is the point, since none of the three has any business in a deployment.
 
 ### Fixed
 
+- **A failed build no longer leaves half a deployment.** `esdev build` wrote
+  straight into `dist`, and a whole-project build emptied `dist` first — so a
+  build that failed halfway both destroyed the deployment that was working and
+  left the fragments of the one that did not. The react static template shows
+  it exactly: with no `node_modules`, the browser assets, the `index.html` and
+  the prerender bundle are all written, and then the prerender step exits
+  non-zero. What is left is a site whose pages were never rendered, and in CI
+  it is what gets uploaded.
+
+  The build now runs in a staging directory beside the project and moves its
+  output into place only once every target and every `"then": "run"` step has
+  succeeded. A failure removes the staging directory and says what it did not
+  do — a `dist` that was left alone looks exactly like one that was rebuilt.
+
+  A whole-project build still *replaces* each `outdir`, so nothing stale
+  survives; that is the old up-front emptying, moved to the end where a failed
+  build cannot benefit from it. `--target=`, a single entry and an `out` file
+  are overlaid instead, leaving whatever else is in the directory alone.
+  `esdev start` is unchanged: the dev loop writes in place, because it rebuilds
+  into a directory a running page is being served from and fetches its hot
+  updates out of it. See DECISIONS D78.
+
 - **`esdev test --help` documented an API that no longer exists.** It said a
   test file "arrives with the globals already defined" and listed `test`,
   `assert`, `assertEquals`, `assertThrows` and `assertRejects`. Those became
