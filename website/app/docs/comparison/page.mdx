@@ -246,7 +246,11 @@ esrun's nine denial names — `read`, `write`, `imports`, `net`, `listen`, `env`
 - **Always-on filesystem jail.** File access — including module resolution — is
   confined to a project root that can't be escaped, even via symlink, in both the
   library and the CLI, with no flag to turn it off. No other runtime here has an
-  equivalent; their permission flags are the only confinement.
+  equivalent; their permission flags are the only confinement. It is also the one
+  place esrun's `node_modules` walk differs from theirs: Node, Deno and Bun walk
+  up to the filesystem root, esrun stops at the project. `--root=<dir>` says
+  where that is when detection cannot tell — a workspace whose dependencies are
+  installed above the package being run.
 - **It embeds.** esrun is a Rust library with a driven event loop and no owned
   thread, designed to run inside a host application — a use case the others do not
   target.
