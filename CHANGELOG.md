@@ -8,6 +8,18 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Changed
+
+- **`esrun --help` is 62 lines instead of 93.** What it kept is the grammar,
+  the permission vocabulary, the flags and the four lines that show how a grant
+  is widened; what it lost is the prose the site holds in one place —
+  scope-matching semantics, the import-policy format, the module-resolution
+  rules — each now a URL at the foot of the help. `esrun upgrade`'s
+  implementation moved to `cli-common` unchanged in behaviour, so that `esdev`
+  can upgrade itself through the same code (DECISIONS D77); which release each
+  binary resolves is still decided by its own tag prefix.
+
+
 ## [0.25.0] - 2026-08-15
 
 ### Added

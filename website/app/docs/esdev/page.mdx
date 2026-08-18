@@ -14,14 +14,16 @@ narrowness is what makes `--allow-listen=8080` a statement rather than a hope,
 and it bills your inner loop. `esdev` is the binary that pays it.
 
 ```sh
+esdev create my-app           # scaffold a project that already runs
+esdev start                   # the dev loop: build, run, rebuild, reload
 esdev app.ts                  # TypeScript, JSX, run
 esdev --watch server.ts       # rerun on change, drain on restart
 esdev test                    # run the test files
 esdev build server.ts         # one deployable ES module
 esdev build --lib src         # a publishable library, with its .d.ts
-esdev build --lib src --dts-bundle   # ...its types linked into one file
 esdev --inspect app.ts        # attach a debugger
 esdev --trace-permissions app.ts   # print the esrun line to deploy with
+esdev upgrade                 # update esdev to the latest release
 ```
 
 <Callout type="warning" title="Not a deployment target">
@@ -55,15 +57,28 @@ that grants exactly what a run reached for. See
 
 ## Get it
 
+The [installer](/docs/install) places both binaries, and `esdev` updates itself
+from there:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Open-Tech-Foundation/ES-Runtime/main/install.sh | bash
+esdev upgrade                            # ...and later
+```
+
+`esdev upgrade` replaces the running binary with the newest `esdev` release for
+your platform — the same thing `esrun upgrade` does for the other one, and the
+same outcome as re-running the installer. Each resolves its own release: the
+two are versioned separately and tagged separately.
+
+From source, which is the only way to get the debugger:
+
 ```sh
 cargo build-dev                          # → target/release/esdev
 ES_RUNTIME_INSPECTOR=1 cargo build-dev   # ...with the debugger
 ```
 
-`esdev` is a separate binary; the `esrun` install script does not place it.
-`--inspect` needs the second line — the debugger is compiled in only when the
-build asks for it, and a build without it says so instead of listening on
-nothing.
+`--inspect` needs the second line — it is compiled in only when the build asks
+for it, and a build without it says so instead of listening on nothing.
 
 ## TypeScript & JSX
 
@@ -158,17 +173,24 @@ a value is never a separate argument — and they come **before** the script.
 
 | Subcommand | |
 | --- | --- |
+| `esdev create <dir>` | [Scaffold a project that already runs](/docs/esdev/create) |
+| `esdev start` | [The dev loop: build, run, rebuild, reload](/docs/esdev/start) |
 | `esdev test [filter...]` | [Run the test files](/docs/esdev/test) |
 | `esdev build <entry>` | [Bundle into one ES module](/docs/esdev/build) |
 | `esdev build --lib <srcdir>` | [Build a publishable library](/docs/esdev/build#libraries-lib) |
+| `esdev upgrade` | Replace this binary with the latest `esdev` release |
+
+Each subcommand takes `--help`, and every `--help` is short on purpose: the
+grammar and the flags, then a link to the page that has the rest.
 
 ## What it deliberately is not
 
 No formatter and no linter: `oxlint` and `oxfmt` are npm binaries that already
 work, and neither `oxc_formatter` nor `oxc_linter` is published as a usable
 library crate. No package installer — `esrun` resolves an existing
-`node_modules` and installs nothing, which is correct. No task runner, and no browser dev
-server with HMR: `esdev build`'s own need is one deployable file, not an asset
-graph. What `esdev` does offer, rather than build one, is the bundler and the
-watcher as modules — so the framework that wants a dev server can be a program
-on this runtime instead of a Node script.
+`node_modules` and installs nothing, which is correct. No task runner. And no
+*framework's* dev server: [`esdev start`](/docs/esdev/start) is the build on a
+loop for the project in front of it, not an asset graph somebody else's router
+plugs into. What `esdev` offers instead is the bundler and the watcher as
+modules — so the framework that wants one can be a program on this runtime
+rather than a Node script.

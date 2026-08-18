@@ -71,16 +71,18 @@ Each binary is released under its own tag and is pinned independently. Latest:
 
 ## Upgrade
 
-`esrun upgrade` updates that binary in place — no reinstall needed.
+Each binary updates itself in place — no reinstall needed.
 
 ```sh
-# Built in — downloads the latest release and replaces the binary.
+# Downloads the latest release for this platform and replaces the binary.
 esrun upgrade
+esdev upgrade
 ```
 
-`esdev` has no self-upgrade: re-run the installer to move it. A tool that
-rewrites its own executable is one more thing to go wrong on a machine where
-re-running one command is the fix.
+They are versioned and tagged separately, so each resolves its own newest
+release: `esrun upgrade` never moves `esdev`, and neither will pick up the
+other's archive because the release published most recently happened to be the
+other one's. A binary already current says so and changes nothing.
 
 ## Uninstall
 

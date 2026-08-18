@@ -24,7 +24,53 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev upgrade`** replaces this binary with the newest `esdev` release for
+  your platform — the same command `esrun upgrade` has always been, now shared
+  between the two rather than living in one of them.
+
+  `install.sh` places both binaries and has since `esdev` shipped, so the
+  binary a developer runs all day was the one they could not update from the
+  tool itself. Each side resolves *its own* release: the two are tagged
+  separately (`esrun@0.25.0`, `esdev@0.3.0`), and asking GitHub for the latest
+  release would answer with whichever was published most recently — which is
+  how an `esdev` upgrade would otherwise download `esrun`'s archive.
+
+### Fixed
+
+- **`esdev test --help` documented an API that no longer exists.** It said a
+  test file "arrives with the globals already defined" and listed `test`,
+  `assert`, `assertEquals`, `assertThrows` and `assertRejects`. Those became
+  imports from `runtime:test` in 0.2.0, so a file written from the help failed
+  on its first line with `ReferenceError: test is not defined`.
+
+  The help now shows the import, says outright that nothing is ambient, and
+  links the reference and the guide. A test writes the file the help shows and
+  runs it, so the claim cannot go stale again in silence.
+
+- **The same five declarations were copied into every template's
+  `src/esdev-env.d.ts`**, where they were worse than stale: `tsc` accepted a
+  file the runner rejects. Deleted — `@opentf/esrun-types` has declared
+  `runtime:test` since it shipped, and every template already depends on it.
+
 ### Changed
+
+- **`--help` is a map, not a manual.** `esdev --help` was 118 lines and its four
+  subcommands another 328 between them — the port-selection rule, the reload
+  channel, the `esdev.json` target keys, the case for `--dts-bundle`. All of it
+  is on the site, where it is one copy and can be corrected without shipping a
+  binary, so each `--help` keeps the grammar, the flags and the shape of the
+  command, and ends with the URL that has the rest.
+
+  | | before | after |
+  | --- | --- | --- |
+  | `esdev --help` | 118 | 60 |
+  | `esdev create --help` | 60 | 34 |
+  | `esdev start --help` | 80 | 29 |
+  | `esdev build --help` | 156 | 55 |
+  | `esdev test --help` | 32 | 26 |
+
 
 - **A template is a scaffold, not a demo.** Every template shipped an
   application inside it — a blog with three posts and a dynamic route, a task

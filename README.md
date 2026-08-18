@@ -43,8 +43,8 @@ $env:ES_RUNTIME_ONLY = 'esrun'; irm .../install.ps1 | iex
 ```
 
 Each binary is released under its own tag — `esrun@0.24.0`, `esdev@0.1.0` — and
-pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. `esrun upgrade`
-updates that binary in place.
+pins independently with `ESRUN_VERSION` / `ESDEV_VERSION`. `esrun upgrade` and
+`esdev upgrade` each update their own binary in place.
 
 Or build from source — self-contained binaries, no extra files or asset
 directory:

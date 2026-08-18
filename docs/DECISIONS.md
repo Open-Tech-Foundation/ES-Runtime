@@ -661,6 +661,24 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D77 — Both binaries upgrade themselves, and a `--help` is a map, not a manual · *Proposed (2026-08-18)* · *reverses D64-era "esrun only", amends D59*
+
+**Context:** Two findings, a day apart, with one cause. `esdev test --help` described five ambient globals — `test`, `assert`, `assertEquals`, `assertThrows`, `assertRejects` — that **D71 replaced with `runtime:test` imports a release earlier**. A file written from that help fails on its first line with `ReferenceError: test is not defined`, and nothing caught it: the templates had been updated, the site had been updated, the runtime's own suite had been updated, and the help had not. It was wrong because it was long — 93 lines for `esrun`, 118 for `esdev`, and another 328 across the four `esdev` subcommands, most of it prose that also exists on the site, where a reader can find it and where correcting it does not mean shipping a binary.
+
+The second is `esrun upgrade` with no `esdev upgrade`. The original reasoning (`main.rs`: *"a tool that rewrites its own executable is one more thing that can go wrong on a machine where the fix is re-running the installer"*) was written when `esrun` was the binary an installer placed. `install.sh` has installed **both** since `esdev` shipped — same releases, same asset naming, `--only=` to opt out — so the asymmetry now means the development binary is the one a developer cannot update from the tool itself.
+
+**Decision (maintainer sign-off pending):**
+
+- **`esdev upgrade`, and one implementation of it.** `cli_common::upgrade` lists the repository's releases, keeps the tags belonging to the binary that asked, and hands `self_update` this platform's asset. The tag filter is not an optimisation: `/releases/latest` answers with whichever binary was published most recently, so an unfiltered upgrade of either would cheerfully install the other. Only `esrun` reads the pre-0.24 bare `v<version>` tags, because only `esrun` was ever released under one.
+
+- **A `--help` names things; it does not explain them.** What stays is the grammar, the flags, the shape of the command, and a URL. What goes is everything a page holds better: the port-selection rule, the reload channel, the `esdev.json` target keys, the argument for `--dts-bundle`, the scope-matching semantics. `esrun --help` is 62 lines and `esdev --help` 60, and each subcommand's is between 26 and 55.
+
+- **The help is testable, so it is tested.** The claim `esdev test --help` makes is now pinned by a test that writes the file the help shows and runs it. A help text that documents an API is a contract with the same standing as a type definition, and it had been treated as prose.
+
+**Consequences:** a developer can update either binary from the binary, and neither help text can drift as far again without a test failing. The five ambient declarations were deleted from every template's `esdev-env.d.ts` and from the runtime's own test directory, where they were worse than merely stale — they made `tsc` accept a file the runner rejects; `@opentf/esrun-types` has declared `runtime:test` since it shipped. **Not solved here:** nothing pins the *rest* of either help against the code — the flag tables are still prose that a new flag can be left out of; and `esdev upgrade` cannot tell a developer their `esrun` beside it is now a different release, because neither binary reads the other's version.
+
+---
+
 ### D76 — A template is a scaffold, not a demo · *Proposed (2026-08-18)* · *amends D63, D64, D72*
 
 **Context:** D64 put templates in the binary and D63 and D72 gave the react one its shape, and both were arguing about the *machinery* — targets, an entry, a permission line, which of three deployables a scaffold should produce. Nobody argued about the content, so it accumulated: a blog with three posts, a list route and a dynamic one to hang loaders off; a task manager with an in-memory store, four CRUD handlers and hand-written validation; an item list with add and remove; a `Result` type and a `retry` with backoff; and a callout box whose reason to exist was demonstrating CSS Modules.
