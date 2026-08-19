@@ -13,6 +13,63 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:workers` — the durable-worker surface**, in a declaration file of
+  its own (`runtime-workers.d.ts`), referenced from `index.d.ts`.
+
+  `DurableWorker` and `DurableRef<T>` are the pair that carries the design into
+  the type system: `Cart.get("u_42")` is a *reference*, not an instance, so
+  every method on it comes back as a promise whether the class wrote it `async`
+  or not — which is what a call that crosses into the runtime actually is.
+
+  With them: `DurableState` and `DurableContext`, the collection surface
+  (`DurableCollection`, `DurableQuery`, `DurableSchema`, `DurableWhere`,
+  `DurableTest`, `DurableField`, `DurableKeyRange`), the alarm surface
+  (`DurableAlarm`, `AlarmScheduler`, `AlarmOptions`), `DurableWorkerInfo`,
+  `DurableConfig`, `configure()`, and `DurableError` with its `DurableErrorCode`
+  table. See the root [CHANGELOG.md](../../CHANGELOG.md) for the runtime side
+  (DECISIONS D80–D82).
+
+- **`runtime:process`: `stdout` and `stderr`.** A `StdStream` — `write(chunk)`
+  for exactly those bytes with **no newline added**, plus `isTTY`, `columns` and
+  `rows`. The size members are `number | undefined`, deliberately: a host that
+  cannot answer says so rather than reporting a plausible 80, and the type is
+  what makes a caller write `stdout.columns ?? 60`.
+
+- **`runtime:test`: the lifecycle hooks.** `beforeAll`, `afterAll`, `beforeEach`
+  and `afterEach`, and the `Hook` type they take.
+
+- **`runtime:build`: what a failed build is.** `BuildError` and `BuildFailure` —
+  `errors` is the whole batch, each with `message`, `id`, `plugin`, `kind`,
+  `line`, `column` and `frame`. The nullable members are typed `| null` rather
+  than optional, because a diagnostic that pointed at no place still carries the
+  field.
+
+- **`runtime:build`: the `bundle` hook**, with `BundledFile` — the discriminated
+  union of `{ type: "chunk", … }` and `{ type: "asset", fileName }` a plugin is
+  handed after the graph is split. It carries no `code`, and the type says so.
+
+- **`runtime:build`: `facadeModuleId` on `OutputChunk`** — the module a chunk
+  *is*, `string | null`.
+
+- **`runtime:build`: `PluginJsx`**, the `jsx` a plugin declares alongside its
+  hooks — what it needs the *compiler* to do, which no hook signature can
+  express.
+
+- **`runtime:build`: `PluginContext` gains `type` and `refresh`.** Both
+  optional, because both are present only for the hook and the build that has
+  them: `type` on `transform`, `refresh` only while the dev loop is running that
+  target hot.
+
+### Changed
+
+- **`test()`'s documentation says tests run one at a time.** No signature moved.
+  The old doc comment promised the opposite — *"tests are not queued: each one
+  starts when `test()` is called"* — which is now false, and a doc comment that
+  is false about ordering is worse than none: it is what a reader reaches for
+  before writing a suite that shares a database.
+
 ## [0.2.0] - 2026-08-17
 
 ### Added
