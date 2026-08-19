@@ -8,6 +8,54 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:workers` — durable workers.** State that outlives the process, in
+  `esrun`'s own SQLite, with no service to run beside it (DECISIONS D80).
+
+  ```js
+  import { DurableWorker } from "runtime:workers";
+
+  export class Cart extends DurableWorker {
+    async add(item) {
+      const items = this.state.get("items") ?? [];
+      items.push(item);
+      this.state.set("items", items);
+      return items.length;        // held back until that write commits
+    }
+  }
+
+  await Cart.get("u_42").add({ sku: "A1" });
+  ```
+
+  A durable worker is **addressed, not spawned**: name one and the runtime opens
+  it, runs one call at a time against it, closes it when it goes idle, and finds
+  its state where it was left the next time anyone names it.
+
+  - **A call's result is not delivered until the writes it made have
+    committed.** A crash is then a call that never returned, never one that
+    returned a lie — and that gate is what makes coalescing the writes safe.
+    Held to by a test that `SIGKILL`s a real process after five acknowledged
+    appends and finds five.
+  - **Reads are synchronous.** The key/value state is resident, so
+    `state.get(k)` is a map lookup rather than an await. Which is only sound
+    with a real ceiling, so there is one: 1 MiB a worker and 128 KiB a value,
+    refused at the write.
+  - **Anything `structuredClone` carries can be stored** — `Date`, `Map`,
+    `Set`, typed arrays, `BigInt`, cycles — not only what JSON survives.
+  - **One process per directory**, enforced by the engine's own exclusive lock
+    on the state files, so nothing goes stale when a process is killed. A
+    second process is refused by name (`ERR_DURABLE_LOCKED`) until the first
+    exits.
+  - **No new capability and no new Rust.** State is files: `--allow-read` and
+    `--allow-write`, under the same jail everything else uses. The module is
+    guest JavaScript over `runtime:db`, `runtime:fs` and `runtime:hashing`.
+
+  Shards (a worker on a `Worker` of its own), collections (declared, indexed
+  state) and alarms (a durable timer) are the phases after this one, and are
+  absent rather than present as options that do nothing.
+
+
 ## [0.26.0] - 2026-08-18
 
 ### Fixed

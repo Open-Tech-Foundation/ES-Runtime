@@ -95,6 +95,7 @@ const NAV = [
       { title: "The fetch client", path: "/docs/internals/fetch" },
       { title: "WebSockets", path: "/docs/internals/websockets" },
       { title: "Workers", path: "/docs/internals/workers" },
+      { title: "Durable workers", path: "/docs/internals/durable-workers" },
       { title: "The filesystem", path: "/docs/internals/filesystem" },
       { title: "Databases", path: "/docs/internals/database" },
       { title: "Paths", path: "/docs/internals/path" },

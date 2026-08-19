@@ -1,0 +1,184 @@
+---
+title: runtime:workers
+description: Durable workers — addressable state that outlives the process, in esrun's own SQLite.
+---
+
+import { Callout } from "@opentf/web-docs";
+
+# runtime:workers
+
+Durable workers: state that outlives the process, in `esrun`'s own SQLite, with
+no service to run beside it.
+
+A durable worker is **addressed, not spawned**. You name one; the runtime opens
+it on demand, runs one call at a time against it, and closes it when it has been
+idle. Its state is still there for the next process to name it.
+
+<Callout type="info" title="Capability: FileRead / FileWrite">
+  State is files, so it needs `--allow-read` and `--allow-write` exactly as
+  `runtime:db` does — under the same root jail and the same allowlists. The
+  module adds no capability of its own. Status: **Available**.
+</Callout>
+
+## Import
+
+```js
+import { DurableWorker, configure, shutdown } from "runtime:workers";
+```
+
+```js
+// workers.js
+import { DurableWorker } from "runtime:workers";
+
+export class Cart extends DurableWorker {
+  async add(item) {
+    const items = this.state.get("items") ?? [];
+    items.push(item);
+    this.state.set("items", items);
+    return items.length;             // held back until that write commits
+  }
+  async items() {
+    return this.state.get("items") ?? [];
+  }
+}
+```
+
+```js
+// server.js
+import { serve } from "runtime:http";
+import { Cart } from "./workers.js";
+
+serve(async (request) => {
+  const cart = Cart.get(new URL(request.url).pathname.slice(1)); // no I/O yet
+  return Response.json(await cart.items());
+});
+```
+
+<Callout type="warning" title="A DurableWorker is not a Worker">
+  The HTML `Worker` is a thread with an isolate and a message port. A
+  `DurableWorker` is a unit of state and single-threaded execution, and today it
+  runs on the agent that addressed it.
+</Callout>
+
+## What it guarantees
+
+| | |
+| --- | --- |
+| One call at a time | Calls to one worker queue in its mailbox and run in order — no lock to take, no race to lose. |
+| Reads are synchronous | State is resident in the worker's heap, so `state.get(k)` is a map lookup, not an await. |
+| Writes are gated | A call's result is not handed back until the writes it made have committed. |
+| The runtime owns the schema | No DDL, no SQL, no migration script. |
+| One process per directory | A second is refused with `ERR_DURABLE_LOCKED` until the first exits. |
+
+## Exports
+
+| Export | Type | Description |
+| --- | --- | --- |
+| `DurableWorker` | `class` | The base class. Extend it. |
+| `configure` | `function` | `configure(options?)` — settings, before the first worker is used. |
+| `shutdown` | `async function` | Closes every open worker and releases the directory. |
+| `DurableError`, `DurableErrorCode` | `class`, `object` | The failures, and their stable codes. |
+
+## The class
+
+| Member | |
+| --- | --- |
+| `this.state` | Its key/value state — see below |
+| `this.id` | The id it was addressed by |
+| `this.ctx` | `{ id, name, signal }`; `signal` aborts when it is being closed |
+| `start()` | After the state is loaded, before the first call |
+| `stop(reason)` | Before it is closed: `"idle"`, `"shutdown"` or `"deleted"` |
+| `static durableName` | The storage name, when the class name is not the right one |
+
+`new Cart()` throws — a durable worker is addressed, because which state an
+instance holds is the runtime's to decide. A **minified build needs
+`static durableName`**: a mangled class name would address a different file.
+
+| Static | |
+| --- | --- |
+| `Cart.get(id)` | A reference. Nothing is opened until a method is called on it. |
+| `Cart.delete(id)` | Closes it if open, then deletes its state. Resolves to whether there was any. |
+| `Cart.list({ limit, after })` | `{ id, createdAt, lastActive, bytes, live }`, most recently active first. |
+
+Arguments and results cross by **structured clone**, so what may be passed is
+the same rule it will be when a worker runs on a shard of its own. Lifecycle
+hooks are not callable through a reference, and neither is anything the class
+does not have — a `TypeError` from the call, not a promise that never settles.
+
+## `state`
+
+Anything `structuredClone` carries can be stored — `Date`, `Map`, `Set`, typed
+arrays, `BigInt`, cycles — not only what JSON survives.
+
+| | |
+| --- | --- |
+| `get(key)` | **Synchronous.** The value, or `undefined`. |
+| `set(key, value)` | Resolves when durable; visible to `get` immediately. |
+| `has(key)`, `size`, `bytes` | Synchronous. |
+| `setMany(entries)`, `getMany(keys)`, `deleteMany(keys)`, `clear()` | A batch is one transaction. |
+| `keys({ prefix, start, end, limit, reverse })` | Sorted keys. Synchronous. |
+| `list(range)` | `[key, value]` pairs, same narrowing. |
+| `sync()` | Waits for every write so far. |
+
+Mutating what `get` returns changes nothing on disk — a value is stored by
+`set`, not by being touched.
+
+<Callout type="warning" title="The gate covers the result, not the world">
+  Before a side effect that leaves the process mid-call — a `fetch`, a message —
+  `await state.sync()` first, or make it the value you return.
+</Callout>
+
+State is resident, so its ceiling is real: **1 MiB a worker, 128 KiB a value**,
+refused at the write with `ERR_DURABLE_STATE_TOO_LARGE`. What grows without
+bound belongs in a database of its own — [`runtime:db`](/api/db) is right there.
+
+## `configure(options)`
+
+Optional. With no call the defaults apply; it must come before the first worker
+is used, since these decide where state lives.
+
+| Option | Default | |
+| --- | --- | --- |
+| `dir` | `"./.durable"` | Where state lives, inside the working directory |
+| `evictAfter` | `30000` | How long a worker may idle before it is closed |
+| `maxLive` | `128` | How many may be open at once |
+| `mailbox` | `1024` | How many calls may wait on one worker |
+| `stateLimit` / `valueLimit` | 1 MiB / 128 KiB | The ceilings above |
+
+## `shutdown()`
+
+Closes every open worker — flushing, running `stop()` — and releases the
+directory. Results are gated on their writes, so an abrupt exit loses nothing
+that was acknowledged; `shutdown()` is how a process *asks* to stop, which is
+what gives `stop()` a chance to run.
+
+It installs no signal handler, because doing that switches off `esrun`'s own
+HTTP drain. An application that wants both wires them together:
+
+```js
+import { exit, onSignal } from "runtime:process";
+import { shutdown } from "runtime:workers";
+
+onSignal("SIGTERM", async () => {
+  await server.stop();
+  await shutdown();
+  exit(143);
+});
+```
+
+## Errors
+
+| Code | Meaning |
+| --- | --- |
+| `ERR_DURABLE_LOCKED` | Another process has this directory open. |
+| `ERR_DURABLE_BUSY` | The mailbox is full — more calls waiting than `mailbox` allows. |
+| `ERR_DURABLE_STATE_TOO_LARGE` | A value, or a worker's whole state, is over the limit. |
+| `ERR_DURABLE_STATE_FORMAT` | State written by a newer runtime, in a format this build cannot read. |
+| `ERR_DURABLE_SHUTDOWN` | Shutting down, or that worker has been closed. |
+
+## Not yet
+
+Shards (a worker on a `Worker` of its own, with a watchdog and a memory
+ceiling), collections (declared, indexed, queryable state), and alarms (a
+durable timer that survives a restart). Each arrives with its own phase rather
+than as an option that does nothing today.

@@ -1,0 +1,187 @@
+---
+title: "Internals: Durable workers"
+description: Why a durable worker's result waits for its writes, why its state is resident and capped, which process owns a directory, and what each of those costs.
+---
+
+# Internals: Durable workers
+
+How `runtime:workers` behaves underneath: what "durable" is actually promising,
+where the state lives, who is allowed to open it, and what each decision costs.
+
+For signatures see the [API reference](/api/workers). The reasoning and the
+rejected alternatives are [DECISIONS D80](https://github.com/Open-Tech-Foundation/ES-Runtime/blob/main/docs/DECISIONS.md).
+
+## The gate is the design
+
+A durable worker's method can write and return. The write is committed to SQLite
+asynchronously; the return value is **not handed to the caller until that commit
+has happened**.
+
+```js
+async add(item) {
+  const items = this.state.get("items") ?? [];
+  items.push(item);
+  this.state.set("items", items);   // not awaited
+  return items.length;              // the caller waits for the commit anyway
+}
+```
+
+That ordering is the whole promise. A process that dies mid-call is a call that
+**never returned** — not one that returned something the disk never heard about.
+It is also what makes coalescing safe: several `set`s in one call become one
+transaction, because nothing has left the process yet to be contradicted.
+
+What the gate does *not* cover is a side effect issued in the middle of a call —
+a `fetch`, a message on a port, a row written to another database. Those leave
+before the method returns, so the gate has not run yet.
+
+```js
+await this.state.sync();        // …then the effect
+await fetch(webhook, { method: "POST", body });
+```
+
+This is the same shape Cloudflare's output gate has, and the same caveat.
+
+**Measured.** A test kills a real `esrun` with `SIGKILL` after five
+acknowledged appends and finds five on restart. It is in
+`crates/runtime-cli/tests/durable_workers.rs`, and it fails if the gate is
+removed.
+
+## Why the state is resident, and therefore capped
+
+`state.get(k)` is synchronous — a `Map` lookup, not an await. That is possible
+because the whole key/value page is read when the worker is opened and kept in
+its heap.
+
+Resident state has a memory cost that somebody has to bound, so it is bounded
+out loud: **1 MiB per worker, 128 KiB per value**, refused at the `set` with
+`ERR_DURABLE_STATE_TOO_LARGE` rather than nudged with a warning. A soft cap on a
+resident cache is an unbounded cache with a comment.
+
+The consequence is a boundary you can state: durable-worker state is *the small,
+hot thing a request needs immediately* — a cart, a session, a counter, a cursor.
+Anything that accumulates belongs in [`runtime:db`](/api/db), which is in the
+same runtime and needs the same grants.
+
+## The value format
+
+Values are stored as **structured-clone bytes** — the same serialization
+`postMessage` and `structuredClone` already use — so a `Date` comes back a
+`Date`, a `Map` a `Map`, a `BigInt` a `BigInt`, and a cyclic object cyclic.
+
+| | `Date` | `Map` | `Set` | `BigInt` | cycles |
+| --- | --- | --- | --- | --- | --- |
+| JSON | string | `{}` | `[]` | throws | throws |
+| MessagePack (`runtime:serialization`) | string | object | array | throws | — |
+| Structured clone | `Date` | `Map` | `Set` | `BigInt` | kept |
+
+Those MessagePack rows are measured, not assumed, which is why the choice was
+made once rather than deferred: changing the format later means rewriting every
+worker's file, and a data migration is a far worse thing to owe than a decision.
+
+A codec tag is stored beside every value. State written by a newer runtime, in a
+format this build does not know, is refused by name
+(`ERR_DURABLE_STATE_FORMAT`) rather than handed to a deserializer that will
+misread it.
+
+A `set` that stores what is already stored **writes nothing**: the encoded bytes
+are compared with what is on disk first. That comparison is worth its cost
+because the storing is the expensive half — a commit that changes a page costs
+milliseconds against one that changes none — and "read it, put it back" is what
+a handler written over resident state does all day.
+
+## One process owns a directory
+
+Each worker's state is its own SQLite database, under
+`<dir>/<class>/<xx>/<hash>.db`, with a `_registry.db` beside them holding the
+catalog of what exists.
+
+The file name is a hash of the id, never the id. An id is a string a program
+chose: it may hold slashes, it may be 400 characters, and on macOS and Windows
+`Cart` and `cart` are the same file. The id itself is stored inside the file and
+checked when it is opened, so a hash collision is an error rather than two
+workers quietly sharing a state.
+
+**A directory belongs to one process, and nothing in this module arranges that.**
+The embedded engine takes an exclusive lock on a database file for as long as it
+is open, and the operating system drops it when the process ends. So the
+guarantee needs no heartbeat, cannot be lost while it is held, and leaves nothing
+stale behind when a process is killed — the three ways an advisory lock file goes
+wrong. What the module adds is the sentence: an engine `Locking error` about a
+file the caller never named becomes `ERR_DURABLE_LOCKED`, naming the directory.
+
+The cost is stated rather than hidden: **two processes cannot share a durable
+directory at all**, not even to read. A second one is refused until the first
+exits — which is the correct behaviour for an overlapping redeploy, and a real
+constraint for anything that wanted two readers.
+
+### One connection is one conversation
+
+Each worker's database has exactly one writer — its own flush — but the catalog
+is shared by every worker in the process, and twelve materializing at once would
+put twelve statements on one connection. The embedded engine does not refuse
+that; it **panics** from its WAL, which panic containment turns into a
+JavaScript exception a caller cannot act on. So every catalog statement goes
+through one queue. It is a small thing that took a flaky test to find, and it is
+an argument for the file-per-worker layout that was not the reason for it.
+
+## The mailbox
+
+Calls to one worker queue and run one at a time, in the order they were made.
+There is no lock to take, because there is nothing to take it against: the state
+has exactly one reader and one writer, and they are the same call.
+
+The queue is bounded (`mailbox`, 1024 by default). Past it a call is refused with
+`ERR_DURABLE_BUSY` rather than waited on — a queue that grows without limit is a
+failure that has been hidden rather than reported.
+
+Two workers of the same class are two mailboxes. Work on one is not work on the
+other, which is the reason to address state by worker rather than by row.
+
+**A cycle deadlocks.** A worker calling back into one that is calling it waits
+forever, because a mailbox is strictly one at a time and nothing yet detects the
+cycle. It is written down here rather than discovered in production.
+
+## Eviction has no timer
+
+A worker that has been idle past `evictAfter` is closed: its writes are flushed,
+`stop("idle")` runs, and its database handle is released. It is opened again,
+with its state, the next time it is addressed.
+
+That sweep runs **when work arrives**, never on a timer. This runtime's timers
+keep the process alive, so a repeating sweep would be a reason a program could
+never exit — a script that used one durable worker would sit there for the whole
+idle window with nothing to do. The cost is that a worker alone in a quiet
+process stays open until something else happens, which costs one file handle.
+
+## What this is not
+
+Not an actor model. The [non-goal](/docs/scope) — no process model, scheduler,
+preemption, mailboxes or supervisors — is about the **runtime**, and it stands:
+nothing in the Rust crates gained a scheduler, nothing preempts, and no agent
+gained a mailbox. A durable worker is a value in guest JavaScript with a queue in
+front of it. The runtime still does not decide when your code runs.
+
+The module is written in JavaScript over `runtime:db`, `runtime:fs` and
+`runtime:hashing`, and adds no capability and no Rust. That is the same rule
+`runtime:db`'s driver kit set for database backends, applied to the layer above
+them.
+
+## Not yet
+
+**Shards.** Today a worker runs on the agent that addressed it. The next phase
+puts it on a `Worker` of its own — which brings a real memory ceiling, a
+watchdog that can `terminate()` a worker stuck in a loop, and a failure domain
+smaller than the process. Placement is a shard problem rather than a
+thread-per-worker one for a reason that is arithmetic rather than taste: an
+isolate costs **megabytes of heap and an OS thread**, so a thousand live workers
+would be gigabytes and a thousand threads.
+
+**Collections.** Declared, indexed, queryable state, for what the resident
+ceiling will not hold.
+
+**Alarms.** A durable timer that survives a restart.
+
+Durable *execution* — retries, a step journal, workflows — is deliberately not
+planned as a second subsystem. With alarms and workers in place it is a class on
+top of this primitive.

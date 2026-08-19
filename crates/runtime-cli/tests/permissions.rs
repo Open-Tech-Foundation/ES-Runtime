@@ -620,6 +620,7 @@ fn runtime_modules_import_even_under_deny_all() {
          import 'runtime:net'; import 'runtime:http'; import 'runtime:websocket'; \
          import 'runtime:serialization'; import 'runtime:hashing'; \
          import 'runtime:system'; import 'runtime:wasi'; \
+         import 'runtime:db'; import 'runtime:workers'; \
          console.log('all imported');",
     );
     assert!(out.status.success(), "stderr: {}", stderr(&out));

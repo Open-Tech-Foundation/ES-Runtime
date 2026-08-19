@@ -12,7 +12,7 @@
 /// added to one and forgotten in the other is a test failure, not a gap in the
 /// "imports never need a capability" guarantee (D26/D38).
 #[cfg(test)]
-pub(crate) const NAMES: [&str; 11] = [
+pub(crate) const NAMES: [&str; 12] = [
     "runtime:process",
     "runtime:path",
     "runtime:fs",
@@ -24,6 +24,7 @@ pub(crate) const NAMES: [&str; 11] = [
     "runtime:hashing",
     "runtime:system",
     "runtime:wasi",
+    "runtime:workers",
 ];
 
 /// The baked source for a `runtime:` built-in module, or `None` if the
@@ -41,6 +42,7 @@ pub(crate) fn source(specifier: &str) -> Option<&'static str> {
         "runtime:hashing" => Some(include_str!("runtime_modules/hashing.js")),
         "runtime:system" => Some(include_str!("runtime_modules/system.js")),
         "runtime:wasi" => Some(include_str!("runtime_modules/wasi.js")),
+        "runtime:workers" => Some(include_str!("runtime_modules/workers.js")),
         _ => None,
     }
 }

@@ -20,6 +20,7 @@ const NAV = [
       { title: "runtime:serialization", path: "/api/serialization" },
       { title: "runtime:hashing", path: "/api/hashing" },
       { title: "runtime:system", path: "/api/system" },
+      { title: "runtime:workers", path: "/api/workers" },
       { title: "runtime:wasi", path: "/api/wasi" },
       { title: "runtime:build", path: "/api/build" },
       { title: "runtime:test", path: "/api/test" },
