@@ -298,12 +298,23 @@ function describe(plugin, index) {
   const handlers = {};
   const hooks = {};
   for (const key of Object.keys(plugin)) {
-    if (key === "name") continue;
+    if (key === "name" || key === "jsx") continue;
     if (!HOOKS.includes(key)) unknownHook(name, key);
     hooks[key] = hookOf(name, key, plugin[key]);
     handlers[key] = plugin[key].handler;
   }
-  return { id: register(handlers), name, hooks };
+  // What the plugin needs the **compiler** to do, which no hook can express: a
+  // hook is handed source and hands source back, and the JSX pass runs inside
+  // the bundler where a plugin cannot reach it.
+  //
+  //   jsx: { refresh: true }
+  //
+  // asks for the component registrations a refresh scheme matches components up
+  // by — finding those needs the syntax tree the compiler already has. It is
+  // honoured only in a hot dev build of a target that named a `refresh` scheme,
+  // because the registrations call globals only a hot loop installs.
+  const jsx = plugin.jsx == null ? undefined : { refresh: plugin.jsx.refresh === true };
+  return { id: register(handlers), name, hooks, ...(jsx ? { jsx } : {}) };
 }
 
 // The options, with every function replaced by the handle the host calls back

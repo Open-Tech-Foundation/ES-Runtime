@@ -211,6 +211,32 @@ pub struct Plugin {
     pub id: f64,
     pub name: String,
     pub hooks: Hooks,
+    /// What the plugin needs the **compiler** to do, which no hook can express.
+    pub jsx: Jsx,
+}
+
+/// The JSX transform options a plugin asks the build for.
+///
+/// The one thing a plugin genuinely cannot do for itself. A hook is handed a
+/// module's source and hands source back, and that is enough for almost
+/// everything — but the compiler's own JSX pass runs *inside* the bundler, and
+/// a plugin has no way to reach it.
+///
+/// Which matters for exactly one feature, and it is the feature that made this
+/// necessary: a component-refresh scheme needs the compiler to insert a
+/// registration per component and a signature per hook-using function, because
+/// finding those requires the syntax tree the compiler already has and a plugin
+/// does not. The per-module half a plugin writes itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Jsx {
+    /// Insert the component registrations a refresh scheme's runtime matches
+    /// components up by.
+    ///
+    /// Honoured **only in a hot dev build of a target that named a refresh
+    /// scheme**, and that is a safety property rather than a policy: the
+    /// registrations call globals that only a hot loop installs, so emitting
+    /// them into a release build would ship calls to something undefined.
+    pub refresh: bool,
 }
 
 /// What a hook's answer looks like on its way back: fallible, and possibly
@@ -592,9 +618,22 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
         .unwrap_or("plugin")
         .to_string();
 
+    // What the compiler has to do for this plugin, which no hook can say.
+    let jsx = Jsx {
+        refresh: matches!(
+            field(value, "jsx").and_then(|jsx| field(jsx, "refresh")),
+            Some(Value::Bool(true))
+        ),
+    };
+
     let mut hooks = Hooks::default();
     let Some(Value::Object(declared)) = field(value, "hooks") else {
-        return Ok(Plugin { id, name, hooks });
+        return Ok(Plugin {
+            id,
+            name,
+            hooks,
+            jsx,
+        });
     };
     for (key, spec) in declared {
         let hook = match key.as_str() {
@@ -616,7 +655,12 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             Hook::Bundle => hooks.bundle = Some(spec),
         }
     }
-    Ok(Plugin { id, name, hooks })
+    Ok(Plugin {
+        id,
+        name,
+        hooks,
+        jsx,
+    })
 }
 
 fn hook_spec(plugin: &str, hook: Hook, value: &Value) -> Result<HookSpec, OpError> {

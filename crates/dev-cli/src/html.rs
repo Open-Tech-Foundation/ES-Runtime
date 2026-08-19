@@ -437,6 +437,7 @@ pub async fn build(
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
+    jsx: crate::contract::Jsx,
 ) -> Result<String, String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
@@ -534,11 +535,16 @@ pub async fn build(
             defines,
             conditions,
             dev.filter(|dev| dev.hot).map(|_| hot_runtime()),
-            // Only in a hot dev loop. The transform's whole purpose is to keep
-            // a component's state across a replacement, and a build that
-            // replaces nothing has no state to keep.
-            dev.is_some_and(|dev| dev.hot)
-                && target.refresh.as_deref() == Some(crate::config::BUILT_IN_REFRESH),
+            // Only in a hot dev loop, and only for a target that named a
+            // refresh scheme. The registrations the compiler inserts call
+            // globals that only a hot loop installs, so emitting them anywhere
+            // else would ship calls to something undefined — and a build that
+            // replaces nothing has no component state to keep anyway.
+            if dev.is_some_and(|dev| dev.hot) && target.refresh.is_some() {
+                jsx
+            } else {
+                crate::contract::Jsx::default()
+            },
             plugins,
         )
         .await?

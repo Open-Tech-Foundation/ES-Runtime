@@ -91,6 +91,32 @@ the context comes last, with nothing positional in between: anything one
 particular hook needs to say — `isEntry`, on a resolve — rides on the context
 rather than shifting the signature.
 
+## jsx: what only the compiler can do
+
+Not a hook. A hook is handed a module's source and hands source back, which is
+enough for almost everything — but the JSX pass runs *inside* the bundler, and
+your plugin has no way to reach it.
+
+```js
+export default {
+  name: "react-refresh",
+  jsx: { refresh: true },
+  transform: { filter: { id: /\.[jt]sx$/ }, handler },
+};
+```
+
+`jsx.refresh` asks for a registration per component and a signature per
+hook-using function — what a component-refresh scheme matches components up by
+so an edit re-renders in place instead of remounting. Finding those needs the
+syntax tree the compiler already has. **The per-module half is yours**, in a
+`transform`: the registrations are a global call, and it has to mean "register
+under this module's id" while this module is evaluating.
+
+It is honoured **only in a hot dev build of a target that named a
+[`refresh`](/docs/esdev/start#another-frameworks-scheme) scheme** — the calls it
+inserts reach globals that only a hot loop installs, so emitting them into a
+release build would ship calls to something undefined.
+
 ## Always write a filter
 
 ```js

@@ -4414,20 +4414,28 @@ fn runtime_build_host_is_refused_when_nothing_is_driving_a_build() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The plugin a `refresh` scheme is written as: it installs its per-module
-/// wrapper only when a scheme was named, and reads which one from `ctx.refresh`.
+/// A hot-reload scheme, written the way esdev expects one: **as a plugin**.
+///
+/// esdev implements none and knows the name of none. It provides the generic
+/// half — `import.meta.hot`, the update channel, and the compiler's component
+/// registrations on request — and a framework's scheme is this.
 fn refresh_plugin(dir: &Path) {
+    std::fs::create_dir_all(dir.join("plugins")).expect("create plugins");
     write_in(
         dir,
-        "plugin.mjs",
+        "plugins/refresh.mjs",
         r#"
 export default {
   name: "otfw-refresh",
+  // The half a plugin cannot do for itself: finding the components to register
+  // needs the syntax tree the compiler already has.
+  jsx: { refresh: true },
   transform: {
-    filter: { id: /\.mjs$/ },
+    filter: { id: /\.[jt]sx?$/ },
     handler(code, id, ctx) {
-      // The whole of the feature: a wrapper that makes every module a hot
-      // boundary is exactly wrong in anything shipped.
+      // A wrapper that makes every module a hot boundary is exactly wrong in
+      // anything shipped, so it goes in only where a scheme was named and the
+      // loop is running it hot.
       if (ctx.refresh !== "otfw") return null;
       return { code: `globalThis.__otfw_hot = ${JSON.stringify(ctx.refresh)};\n${code}` };
     },
@@ -4440,12 +4448,22 @@ export default {
 fn refresh_project(dir: &Path, port: Option<u16>) {
     std::fs::create_dir_all(dir.join("src")).expect("create src");
     refresh_plugin(dir);
-    write_in(dir, "src/main.mjs", "document.title = 'app';\n");
+    // JSX, so the compiler's half has a component to register.
+    write_in(
+        dir,
+        "src/Home.jsx",
+        "export function Home() {\n  return <h1>hi</h1>;\n}\n",
+    );
+    write_in(
+        dir,
+        "src/main.jsx",
+        "import { Home } from './Home.jsx';\nglobalThis.Home = Home;\n",
+    );
     write_in(
         dir,
         "index.html",
         "<!doctype html><html><head>\
-         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <script type=\"module\" src=\"./src/main.jsx\"></script></head>\
          <body><div id=root></div></body></html>\n",
     );
     let start = port.map_or_else(String::new, |port| {
@@ -4455,9 +4473,9 @@ fn refresh_project(dir: &Path, port: Option<u16>) {
         dir,
         "esdev.json",
         &format!(
-            r#"{{ "plugins": ["./plugin.mjs"],
-                 "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
-                                        "refresh": "otfw" }} }}{start} }}"#
+            r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
+                                        "refresh": "otfw",
+                                        "plugins": ["./plugins/refresh.mjs"] }} }}{start} }}"#
         ),
     );
 }
@@ -4478,21 +4496,28 @@ fn a_release_build_tells_a_plugin_no_refresh_scheme() {
         .filter_map(Result::ok)
         .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
         .collect::<String>();
-    assert!(bundle.contains("document.title"), "nothing was built");
+    assert!(bundle.contains("Home"), "nothing was built");
     assert!(
         !bundle.contains("__otfw_hot"),
         "a release build installed a hot-reload wrapper: {bundle}"
+    );
+    // The compiler's half is gated on the same thing, and has to be: the
+    // registrations reach globals only a hot loop installs, so shipping them
+    // would ship calls to something undefined.
+    assert!(
+        !bundle.contains("$RefreshReg$"),
+        "a release build got the compiler's registrations: {bundle}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// **`refresh` names a scheme a plugin can implement, and the plugin is told
-/// which.** `"react"` is the one esdev implements and was for a while the only
-/// name the config would take — so every other framework took a full page
-/// reload on each edit. Accepting the name was half of it; a plugin that cannot
-/// learn the name, or that the loop is hot, has to guess, and the only safe
-/// guess is to do nothing.
+/// **A hot-reload scheme is a plugin, and esdev knows nothing about any of
+/// them.** `"react"` was for a while the only name the config would take *and*
+/// the only implementation, both inside esdev — so every other framework took a
+/// full page reload on each edit. Both halves a scheme needs are generic now:
+/// the plugin is told which scheme (`ctx.refresh`) and the compiler is asked
+/// for the component registrations by the plugin's own declaration.
 #[test]
 fn the_hot_dev_loop_tells_a_plugin_which_refresh_scheme() {
     let dir = watch_dir("s_refresh");
@@ -4502,9 +4527,17 @@ fn the_hot_dev_loop_tells_a_plugin_which_refresh_scheme() {
     let _supervisor = start_in(&dir);
 
     let bundle = wait_for_http(port, "/assets/main.js", |body| body.contains("__otfw_hot"));
+    // The plugin's half: it was told which scheme, so it installed its wrapper.
     assert!(
         bundle.contains(r#"__otfw_hot = "otfw""#),
         "the scheme never reached the plugin: {bundle}"
+    );
+    // The compiler's half: `jsx: { refresh: true }` on the plugin's own
+    // declaration asked for the registrations, and nothing in esdev knows what
+    // framework asked or why.
+    assert!(
+        bundle.contains("$RefreshReg$(_c,"),
+        "the compiler never inserted the registrations: {bundle}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

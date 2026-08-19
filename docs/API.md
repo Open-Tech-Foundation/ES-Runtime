@@ -3160,6 +3160,24 @@ plugin after it; and the bytes are what `generate()` already returns, so copying
 every chunk into the isolate on each rebuild would be a cost paid by a hook that
 wanted the shape.
 
+A plugin may also declare `jsx`, which is not a hook — it is what the plugin
+needs the **compiler** to do, and no hook can express it:
+
+```js
+const refresh = {
+  name: "react-refresh",
+  jsx: { refresh: true },
+  transform: { filter: { id: /\.[jt]sx$/ }, handler },
+};
+```
+
+`jsx.refresh` asks for a registration per component and a signature per
+hook-using function — what a component-refresh scheme matches components up by.
+Finding them needs the syntax tree the compiler already has, so a plugin cannot
+do it; the per-module half it writes itself. It is honoured **only in a hot dev
+build of a target that named a `refresh` scheme in `esdev.json`**, because the calls
+inserted reach globals that only a hot loop installs.
+
 Each hook may declare, alongside its handler:
 
 | Key | |

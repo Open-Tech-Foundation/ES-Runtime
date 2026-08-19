@@ -210,11 +210,15 @@ pub struct Options {
     /// It costs a bundle that is not the one a release build produces, which is
     /// why it is `None` everywhere except the dev loop.
     pub hmr_runtime: Option<String>,
-    /// Whether to apply React's Fast Refresh transform — a `$RefreshReg$` call
-    /// per component and a `$RefreshSig$` signature per hook-using function.
-    /// The calls are meaningless on their own; what gives them meaning is the
-    /// per-module wrapper in [`crate::refresh`] and the runtime the app boots.
-    pub react_refresh: bool,
+    /// What the compiler's JSX pass is asked to do, by the plugins on this
+    /// build ([`crate::contract::Jsx`]).
+    ///
+    /// The one thing a plugin cannot do for itself: the JSX pass runs inside
+    /// the bundler, and finding the components a refresh scheme has to register
+    /// needs the syntax tree the compiler already has. What the registrations
+    /// *mean* is the plugin's own business — the per-module wrapper it writes,
+    /// and the runtime the app boots.
+    pub jsx: crate::contract::Jsx,
     /// One file out per module in, rather than one chunk per entry — what a
     /// published library needs, so that a subpath in an `exports` map names a
     /// real file.
@@ -366,7 +370,8 @@ pub fn translate(
             _ => TreeshakeOptions::default(),
         },
         transform: options
-            .react_refresh
+            .jsx
+            .refresh
             .then(|| rolldown_common::BundlerTransformOptions {
                 jsx: Some(rolldown_common::Either::Right(
                     rolldown_common::JsxOptions {

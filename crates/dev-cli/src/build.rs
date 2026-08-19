@@ -646,7 +646,7 @@ pub async fn bundle_browser_entries(
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
     hmr: Option<String>,
-    refresh: bool,
+    jsx: crate::contract::Jsx,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
@@ -664,7 +664,7 @@ pub async fn bundle_browser_entries(
     // bundler, and reusing it would apply the first run's options to the
     // second's inputs.
     let key = format!(
-        "{entries:?}|{}|{}|{minify}|{hash}|{refresh}|{define:?}|{conditions:?}|{}",
+        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{define:?}|{conditions:?}|{}",
         root.display(),
         out_dir.display(),
         // A plugin list that changed is a different build, and a warm bundler
@@ -686,7 +686,7 @@ pub async fn bundle_browser_entries(
         define,
         minify,
         hmr_runtime: hmr,
-        react_refresh: refresh,
+        jsx,
         output: crate::bundler::OutputOptions {
             dir: Some(out_dir.to_string_lossy().into_owned()),
             // Written under the entry's own name and hashed *afterwards*,
@@ -715,10 +715,7 @@ pub async fn bundle_browser_entries(
     // made a fresh one each build would be reading an empty one.
     let styles = if dev {
         let held = warm().lock().await;
-        build_warm(
-            held, &key, root, out_dir, &options, minify, refresh, plugins,
-        )
-        .await?
+        build_warm(held, &key, root, out_dir, &options, minify, plugins).await?
     } else {
         let styles = crate::cssmodules::Collected::new();
         let mut bundler = rolldown::BundlerBuilder::default()
@@ -727,7 +724,7 @@ pub async fn bundle_browser_entries(
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(browser_plugins(root, &styles, minify, refresh, plugins))
+            .with_plugins(browser_plugins(root, &styles, minify, plugins))
             .build()
             .map_err(reported!())?;
         bundler.write().await.map_err(reported!())?;
@@ -760,23 +757,16 @@ fn browser_plugins(
     root: &Path,
     styles: &crate::cssmodules::Collected,
     minify: bool,
-    refresh: bool,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
-    let mut plugins = installed(
+    installed(
         std::sync::Arc::new(crate::cssmodules::CssModules::new(
             root,
             styles.clone(),
             minify,
         )),
         configured,
-    );
-    if refresh {
-        plugins.push(std::sync::Arc::new(crate::adapter::Adapter::new(
-            std::sync::Arc::new(crate::refresh::ReactRefresh::new()),
-        )));
-    }
-    plugins
+    )
 }
 
 /// This toolchain's own pass, then the project's, through one adapter each.
@@ -1018,7 +1008,6 @@ async fn build_warm(
     out_dir: &Path,
     options: &crate::bundler::Options,
     minify: bool,
-    refresh: bool,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<Vec<crate::cssmodules::Sheet>, String> {
     if held.as_ref().is_none_or(|warm| warm.key != key) {
@@ -1029,7 +1018,7 @@ async fn build_warm(
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(browser_plugins(root, &styles, minify, refresh, plugins))
+            .with_plugins(browser_plugins(root, &styles, minify, plugins))
             .build()
             .map_err(reported!())?;
         *held = Some(Warm {
@@ -1303,6 +1292,9 @@ async fn build_targets(
                 defines,
                 conditions,
                 &plugins,
+                host.as_ref()
+                    .map(|host| host.jsx(&target.plugins))
+                    .unwrap_or_default(),
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;

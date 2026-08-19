@@ -158,8 +158,31 @@ declare module "runtime:build" {
    * model as the rest of the program, so a plugin that reads a file needs
    * `FileRead`.
    */
+  /**
+   * What a plugin needs the **compiler** to do, which no hook can express.
+   *
+   * A hook is handed a module's source and hands source back, and that is
+   * enough for almost everything — but the JSX pass runs *inside* the bundler,
+   * and a plugin has no way to reach it.
+   */
+  export interface PluginJsx {
+    /**
+     * Insert a registration per component and a signature per hook-using
+     * function — what a component-refresh scheme matches components up by.
+     * Finding them needs the syntax tree the compiler already has; the
+     * per-module half you write yourself, in a `transform`.
+     *
+     * Honoured **only in a hot dev build of a target that named a `refresh`
+     * scheme**, because the calls it inserts reach globals that only a hot loop
+     * installs.
+     */
+    refresh?: boolean;
+  }
+
   export interface Plugin {
     name?: string;
+    /** What the compiler has to do for this plugin. */
+    jsx?: PluginJsx;
     start?: WholeBuildHook<(ctx: PluginContext) => void | { dependsOn?: string[] } | Promise<void | { dependsOn?: string[] }>>;
     resolve?: Hook<
       (source: string, importer: string | null, ctx: PluginContext) =>

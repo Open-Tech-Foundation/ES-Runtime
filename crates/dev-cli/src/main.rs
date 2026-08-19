@@ -55,7 +55,6 @@ mod inspect;
 mod install;
 mod plugins;
 mod prompt;
-mod refresh;
 mod resolve;
 mod staging;
 mod start;

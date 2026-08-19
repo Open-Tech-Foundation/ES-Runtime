@@ -516,6 +516,16 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
     let resolve = get("resolve");
     let resolve_field = |name: &str| resolve.as_ref().and_then(|r| field(r, name)).cloned();
 
+    // Read before the options are built, because what the compiler does for a
+    // plugin is decided by the plugin's own declaration and the bundler is
+    // built before any hook runs.
+    let declared = plugins(get("plugins").as_ref())?;
+    let jsx = declared
+        .iter()
+        .fold(contract::Jsx::default(), |wanted, plugin| contract::Jsx {
+            refresh: wanted.refresh || plugin.jsx.refresh,
+        });
+
     Ok(Options {
         bundler: crate::bundler::Options {
             cwd: Some(cwd),
@@ -524,7 +534,10 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             // `runtime:build` builds; the dev loop that hot-updates a browser is
             // `esdev start`'s, and a program calling this one is not one.
             hmr_runtime: None,
-            react_refresh: false,
+            // A program calling `build()` describes its own build, and what the
+            // compiler has to do for its plugins comes from *their* own
+            // declarations rather than from an option here.
+            jsx,
             // `neutral` is this runtime, and the default for the same reason it
             // is the subcommand's: a program bundling here is bundling for here
             // unless it says otherwise.
@@ -547,7 +560,7 @@ async fn parse_options(state: &BuildState, options: Value) -> Result<Options, Op
             preserve_modules_root: None,
             output: output_options(Some(&options)),
         },
-        plugins: plugins(get("plugins").as_ref())?,
+        plugins: declared,
     })
 }
 

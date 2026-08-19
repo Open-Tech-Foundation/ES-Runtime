@@ -3,7 +3,8 @@
     "web": {
       "entry": "index.html",
       "outdir": "dist",
-      "refresh": "react"
+      "refresh": "react",
+      "plugins": ["./plugins/react-refresh.mjs"]
     },
     "prerender": {
       "entry": "src/prerender.tsx",

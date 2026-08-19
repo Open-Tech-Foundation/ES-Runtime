@@ -70,6 +70,19 @@ pub struct PluginHost {
 }
 
 impl PluginHost {
+    /// What the **compiler** has to do for this target's plugins.
+    ///
+    /// Read from the declarations rather than from a hook, because it decides
+    /// how the bundler is built and the bundler is built before any hook runs.
+    pub fn jsx(&self, which: &[usize]) -> contract::Jsx {
+        which.iter().filter_map(|i| self.plugins.get(*i)).fold(
+            contract::Jsx::default(),
+            |wanted, plugin| contract::Jsx {
+                refresh: wanted.refresh || plugin.jsx.refresh,
+            },
+        )
+    }
+
     /// The passes a target's plugin indices name, in the order they were
     /// declared.
     ///

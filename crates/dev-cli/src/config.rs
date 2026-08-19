@@ -138,13 +138,16 @@ pub struct Target {
     pub assets: Vec<String>,
     /// Whether to minify this target.
     pub minify: bool,
-    /// `"refresh": "react"` — the framework whose hot-reload scheme this
-    /// target's modules should be prepared for, applied in the dev loop only.
+    /// `"refresh": "<scheme>"` — the hot-reload scheme this target's modules
+    /// should be prepared for, applied in the dev loop only.
     ///
     /// A name rather than a boolean because the schemes are not one thing:
     /// React's registers components and matches hook signatures, and another
-    /// framework's would do something else entirely. Only `"react"` is
-    /// implemented; an unknown name is refused rather than ignored.
+    /// framework's does something else entirely. **esdev implements none of
+    /// them.** It provides the generic half — `import.meta.hot`, the update
+    /// channel, and the compiler's component registrations on request — and the
+    /// name is what a plugin reads (as `ctx.refresh`) to know which scheme it is
+    /// installing, and that this build is the hot one.
     pub refresh: Option<String>,
     /// Compile-time replacements, as `--define` makes them.
     pub define: Vec<(String, String)>,
@@ -644,27 +647,21 @@ fn plugin_spec(value: &Value, file: &str, at: &str) -> Result<PluginSpec, String
     })
 }
 
-/// The scheme esdev implements itself. Others come from plugins.
-pub const BUILT_IN_REFRESH: &str = "react";
-
-/// `refresh`, checked against what can actually implement it.
+/// `refresh`, checked against what could actually implement it.
 ///
 /// A name is refused rather than ignored, because a name that is quietly
 /// dropped is a project whose components stop keeping their state one day, with
 /// the reason sitting unread in a config file.
 ///
-/// **But esdev is no longer the only thing that can implement one.** `"react"`
-/// is built in ([`crate::refresh`]) and was for a while the only name allowed,
-/// which meant every framework that was not React got a full page reload on
-/// every edit while the React template kept its state — not because the
-/// mechanism was missing (`import.meta.hot` is the same for everyone) but
-/// because the config would not let the target say it had a scheme. A plugin
-/// can now write the per-module half itself, against the same
-/// [`Pass`](crate::contract::Pass) `react-refresh` uses.
-///
-/// So an unknown name is accepted **when the target has plugins**, and refused
-/// when it does not — where there is nothing that could implement it, the name
-/// is a typo, and saying so is the whole point of checking.
+/// **esdev implements no scheme, and knows the name of none.** It used to
+/// implement React's, and `"react"` was for a while the only name this would
+/// accept — which meant every other framework took a full page reload on each
+/// edit, not because the mechanism was missing but because the config would not
+/// let a target say it had a scheme. Both halves of that are gone: the React
+/// pass moved out into a plugin the template loads, and what is left here is
+/// generic. A scheme is a plugin, so a target that names one and has no plugins
+/// has named something nothing can implement — which is the one case worth
+/// refusing, and the only check left.
 fn refresh(
     value: Option<&Value>,
     file: &str,
@@ -675,15 +672,15 @@ fn refresh(
         return Ok(None);
     };
     let name = string(value, file, &format!("{at}'s `refresh`"))?;
-    if name != BUILT_IN_REFRESH && !has_plugins {
+    if !has_plugins {
         return Err(format!(
-            "{file}: {at}'s `refresh` is \"{name}\", and the only scheme esdev \
-             implements is \"{BUILT_IN_REFRESH}\".\n\n\
-             It names the framework whose hot-reload convention this target's modules \
-             are prepared for — React's registers components and matches hook \
-             signatures so a component keeps its state across an edit. Another \
-             framework's is a `plugins` entry: a transform against the same contract, \
-             and the name here is what tells it the dev loop is hot."
+            "{file}: {at}'s `refresh` is \"{name}\", and this target has no plugins \
+             that could implement it.\n\n\
+             It names the hot-reload convention this target's modules are prepared \
+             for — registering components, matching hook signatures, whatever the \
+             framework's scheme is. esdev provides the generic half (`import.meta.hot` \
+             and the update channel); the scheme itself is a `plugins` entry, which \
+             reads this name as `ctx.refresh`."
         ));
     }
     Ok(Some(name.to_string()))
@@ -1028,32 +1025,38 @@ mod tests {
         assert!(refused.contains("list of plugins"), "{refused}");
     }
 
-    /// `refresh` names a scheme, and esdev implements one. A name it does not
-    /// know is a typo when nothing could implement it — and a plugin's job when
-    /// the target has plugins, which is what stopped every non-React framework
-    /// from having a hot loop at all.
+    /// `refresh` names a scheme, and **esdev implements none**. It provides
+    /// the generic half — `import.meta.hot`, the update channel — and a scheme
+    /// is a plugin. So a target that names one and has no plugins has named
+    /// something nothing can implement, which is the one case worth refusing:
+    /// a `refresh` that silently did nothing is a project whose components
+    /// stop keeping their state one day, with the reason unread in a config
+    /// file.
     #[test]
-    fn an_unknown_refresh_scheme_needs_a_plugin_that_could_implement_it() {
+    fn a_refresh_scheme_needs_a_plugin_that_could_implement_it() {
         let refused =
             read(r#"{ "targets": { "web": { "entry": "index.html", "refresh": "otfw" } } }"#)
                 .expect_err("no plugin to implement it");
         assert!(
-            refused.contains("only scheme esdev implements"),
+            refused.contains("no plugins that could implement"),
             "{refused}"
         );
 
-        let accepted = read(
-            r#"{ "plugins": ["./plugins/otfw.js"],
-                 "targets": { "web": { "entry": "index.html", "refresh": "otfw" } } }"#,
-        )
-        .expect("a plugin can implement it");
-        assert_eq!(accepted.targets[0].refresh.as_deref(), Some("otfw"));
-
-        // The built-in still needs nothing.
+        // React is not privileged. It was the only name this took for a while,
+        // and it is now a plugin like any other — the react template's own.
         let react =
             read(r#"{ "targets": { "web": { "entry": "index.html", "refresh": "react" } } }"#)
-                .expect("the built-in scheme");
-        assert_eq!(react.targets[0].refresh.as_deref(), Some("react"));
+                .expect_err("react is not built in either");
+        assert!(react.contains("no plugins that could implement"), "{react}");
+
+        for scheme in ["otfw", "react"] {
+            let accepted = read(&format!(
+                r#"{{ "plugins": ["./plugins/{scheme}.js"],
+                     "targets": {{ "web": {{ "entry": "index.html", "refresh": "{scheme}" }} }} }}"#
+            ))
+            .expect("a plugin can implement it");
+            assert_eq!(accepted.targets[0].refresh.as_deref(), Some(scheme));
+        }
     }
 
     /// The same default the command line has: a config that omits `out` and a
