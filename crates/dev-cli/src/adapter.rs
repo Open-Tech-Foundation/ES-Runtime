@@ -34,7 +34,8 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use rolldown::plugin::{
-    HookBuildEndArgs, HookBuildStartArgs, HookLoadArgs, HookLoadOutput, HookLoadReturn,
+    HookBuildEndArgs, HookBuildStartArgs, HookGenerateBundleArgs, HookLoadArgs, HookLoadOutput,
+    HookLoadReturn,
     HookNoopReturn, HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn, HookTransformArgs,
     HookTransformOutput, HookTransformOutputMap, HookTransformReturn, HookUsage, Plugin,
     PluginContext, PluginHookMeta, PluginOrder, SharedLoadPluginContext,
@@ -210,6 +211,9 @@ impl Adapter {
         if hooks.end.is_some() {
             usage |= HookUsage::BuildEnd;
         }
+        if hooks.bundle.is_some() {
+            usage |= HookUsage::GenerateBundle;
+        }
         Adapter { pass, usage }
     }
 
@@ -259,6 +263,10 @@ impl Plugin for Adapter {
 
     fn build_end_meta(&self) -> Option<PluginHookMeta> {
         self.order(Hook::End)
+    }
+
+    fn generate_bundle_meta(&self) -> Option<PluginHookMeta> {
+        self.order(Hook::Bundle)
     }
 
     async fn build_start(
@@ -388,6 +396,57 @@ impl Plugin for Adapter {
             .map_err(|e| anyhow!(e))?;
         Ok(())
     }
+
+    async fn generate_bundle(
+        &self,
+        ctx: &PluginContext,
+        args: &mut HookGenerateBundleArgs<'_>,
+    ) -> HookNoopReturn {
+        let output = produced(args.bundle);
+        let ctx: Arc<dyn contract::Context> = Arc::new(HookCtx::Plain(ctx.clone()));
+        self.pass
+            .bundle(&output, &ctx)
+            .await
+            .map_err(|e| anyhow!(e))?;
+        Ok(())
+    }
+}
+
+/// What the build produced, in the contract's vocabulary.
+///
+/// Read from the backend's listing and copied, rather than handed over: the
+/// contract's [`bundle`](contract::Pass::bundle) is read-only, and a `&mut Vec`
+/// crossing into an isolate could not be anything else anyway.
+fn produced(bundle: &[rolldown_common::Output]) -> Vec<contract::Output> {
+    bundle
+        .iter()
+        .map(|output| match output {
+            rolldown_common::Output::Chunk(chunk) => contract::Output::Chunk {
+                file_name: chunk.filename.to_string(),
+                name: chunk.name.to_string(),
+                is_entry: chunk.is_entry,
+                is_dynamic_entry: chunk.is_dynamic_entry,
+                facade_module_id: chunk
+                    .facade_module_id
+                    .as_ref()
+                    .map(|id| guest_id(&id.to_string()).to_string()),
+                module_ids: chunk
+                    .module_ids
+                    .iter()
+                    .map(|id| guest_id(&id.to_string()).to_string())
+                    .collect(),
+                imports: chunk.imports.iter().map(ToString::to_string).collect(),
+                dynamic_imports: chunk
+                    .dynamic_imports
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            },
+            rolldown_common::Output::Asset(asset) => contract::Output::Asset {
+                file_name: asset.filename.to_string(),
+            },
+        })
+        .collect()
 }
 
 /// Hands the backend the files a hook said its module depends on.

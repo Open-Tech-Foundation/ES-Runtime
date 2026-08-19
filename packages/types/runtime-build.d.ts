@@ -154,7 +154,33 @@ declare module "runtime:build" {
       (code: string, id: string, ctx: PluginContext) => ModuleResult | Promise<ModuleResult>
     >;
     end?: WholeBuildHook<(error: string | null, ctx: PluginContext) => void | Promise<void>>;
+    bundle?: WholeBuildHook<
+      (output: BundledFile[], ctx: PluginContext) => void | Promise<void>
+    >;
   }
+
+  /**
+   * One file a build produced, as the `bundle` hook describes it.
+   *
+   * The graph, not the bytes: no `code`, because `generate()` already hands the
+   * code back and copying every chunk into this isolate on every rebuild is a
+   * price a hook that wanted the shape should not pay.
+   */
+  export type BundledFile =
+    | {
+        type: "chunk";
+        fileName: string;
+        name: string;
+        isEntry: boolean;
+        isDynamicEntry: boolean;
+        /** The module this chunk *is*; `null` for a shared chunk. */
+        facadeModuleId: string | null;
+        moduleIds: string[];
+        /** The chunks it imports, by file name — the edges a preload walks. */
+        imports: string[];
+        dynamicImports: string[];
+      }
+    | { type: "asset"; fileName: string };
 
   export interface ResolveOptions {
     /** `find` → what to try instead, in order. */

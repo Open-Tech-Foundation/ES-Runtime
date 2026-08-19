@@ -4018,6 +4018,48 @@ fn runtime_watch_does_not_exist_under_esrun() {
 // `runtime:build` — the bundler, from guest JS (the other esdev-only module).
 // ---------------------------------------------------------------------------
 
+/// A plugin can see what the build **produced**. `end` fires when the module
+/// graph is finished, before there are chunks at all — which is why it is
+/// handed `null` — so route-level modulepreload had no seam to hang on unless
+/// the program itself called `build()`.
+#[test]
+fn runtime_build_hands_a_plugin_the_chunks_it_produced() {
+    let dir = build_dir("rb_bundle");
+    write_in(&dir, "dep.js", "export const x = 1;\n");
+    write_in(
+        &dir,
+        "main.js",
+        "import { x } from './dep.js';\nglobalThis.lazy = () => import('./dep.js');\nconsole.log(x);\n",
+    );
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+let seen = null;
+const plugin = {
+  name: "preload",
+  bundle: { handler: (output) => { seen = output; } },
+};
+const bundle = await build({ input: "main.js", plugins: [plugin] });
+await bundle.generate({ format: "esm" });
+const entry = seen.find((o) => o.type === "chunk" && o.isEntry);
+console.log(
+  seen.length > 0,
+  entry.fileName,
+  entry.facadeModuleId.endsWith("main.js"),
+  entry.moduleIds.some((id) => id.endsWith("dep.js")),
+  entry.code === undefined,
+);
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("true main.js true true true"), "{text}");
+}
+
 /// A failed build says **where**. It used to be a string — the module id, a
 /// colon and "Unexpected token" — so an overlay could name the file and then
 /// had to stop; the bundler computed the line, the column and the frame all

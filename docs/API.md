@@ -3099,11 +3099,27 @@ const mdx = {
 | `load` | `(id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
+| `bundle` | `(output, ctx)` | nothing |
 
-Five, against rollup's twenty-odd: each is a promise a future backend has to
+Six, against rollup's twenty-odd: each is a promise a future backend has to
 keep, so the list is short deliberately. `null` means *not mine*; anything else
 must be the object, and a bare string of code is refused with a message saying
 so. `resolve` + `load` together are what makes a **virtual module** possible.
+
+`bundle` is what the build **produced**, before any of it is written: one entry
+per chunk (`{ type: "chunk", fileName, name, isEntry, isDynamicEntry,
+facadeModuleId, moduleIds, imports, dynamicImports }`) or asset (`{ type:
+"asset", fileName }`). Route-level `modulepreload` is the case it exists for —
+which chunk an entry became, what went into it, and what it imports do not exist
+until the graph has been split, which is *after* `end`. That is why `end` is
+handed `null` rather than the bundle: it fires when the graph is finished, when
+there are no chunks yet.
+
+It is **read-only**, and carries no `code`. Rollup lets a plugin rewrite chunks
+there, which is how one plugin comes to invalidate the source maps of every
+plugin after it; and the bytes are what `generate()` already returns, so copying
+every chunk into the isolate on each rebuild would be a cost paid by a hook that
+wanted the shape.
 
 Each hook may declare, alongside its handler:
 

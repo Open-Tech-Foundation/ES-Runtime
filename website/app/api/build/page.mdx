@@ -166,7 +166,7 @@ const mdx = {
 };
 ```
 
-### The five hooks
+### The six hooks
 
 | Hook | Handler | Returns |
 | --- | --- | --- |
@@ -175,10 +175,42 @@ const mdx = {
 | `load` | `(id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
+| `bundle` | `(output, ctx)` | nothing |
 
 `null` or nothing means *not mine*, and the next plugin gets a turn. Anything
 else must be the object — a bare string of code is refused by name. Data comes
 first and the context last, with nothing positional between them.
+
+### bundle: what the build produced
+
+`bundle` runs once, after the graph has been split into chunks and before any of
+it is written. Each entry is a chunk — `{ type: "chunk", fileName, name,
+isEntry, isDynamicEntry, facadeModuleId, moduleIds, imports, dynamicImports }` —
+or an asset, `{ type: "asset", fileName }`.
+
+Route-level `modulepreload` is the case it exists for: which chunk an entry
+became, what went into it and what it imports do not exist until the split, and
+the split happens *after* `end`. That is why `end` is handed `null` and not the
+bundle — it fires when the module graph is finished, when there are no chunks
+yet.
+
+```js
+const preload = {
+  name: "preload",
+  bundle: {
+    handler(output) {
+      const entry = output.find((o) => o.facadeModuleId === routeModule);
+      manifest[route] = [entry.fileName, ...entry.imports];
+    },
+  },
+};
+```
+
+It is **read-only**, and carries no `code`. Rollup lets a plugin rewrite chunks
+in the equivalent hook, which is how one plugin comes to invalidate the source
+maps of every plugin after it; and the bytes are what `generate()` already
+returns, so copying every chunk into the isolate on each rebuild would be a cost
+paid by a hook that only wanted the shape.
 
 ### A hook's answer
 

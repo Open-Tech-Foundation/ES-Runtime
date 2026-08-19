@@ -64,7 +64,7 @@ use es_runtime_cli_common::{OpError, Value};
 
 /// Which hook of a plugin a call is for.
 ///
-/// Five, deliberately, against rollup's twenty-odd: every hook carried here is
+/// Six, deliberately, against rollup's twenty-odd: every hook carried here is
 /// a promise some future backend has to keep, so the list is short on purpose
 /// and grows only when something cannot be written without it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -79,6 +79,8 @@ pub enum Hook {
     Transform,
     /// After the graph is done, with the failure if there was one.
     End,
+    /// The chunks and assets the build produced, before they are written.
+    Bundle,
 }
 
 impl Hook {
@@ -90,6 +92,7 @@ impl Hook {
             Hook::Load => "load",
             Hook::Transform => "transform",
             Hook::End => "end",
+            Hook::Bundle => "bundle",
         }
     }
 }
@@ -183,6 +186,7 @@ pub struct Hooks {
     pub load: Option<HookSpec>,
     pub transform: Option<HookSpec>,
     pub end: Option<HookSpec>,
+    pub bundle: Option<HookSpec>,
 }
 
 impl Hooks {
@@ -193,6 +197,7 @@ impl Hooks {
             Hook::Load => self.load.as_ref(),
             Hook::Transform => self.transform.as_ref(),
             Hook::End => self.end.as_ref(),
+            Hook::Bundle => self.bundle.as_ref(),
         }
     }
 }
@@ -316,6 +321,54 @@ pub trait Pass: Send + Sync + std::fmt::Debug {
     fn end<'a>(&'a self, _error: Option<&'a str>, _ctx: &'a Arc<dyn Context>) -> Answer<'a, ()> {
         Box::pin(async { Ok(()) })
     }
+
+    /// What the build produced, before any of it is written.
+    ///
+    /// The hook that makes a plugin able to work with the *result* of a build
+    /// rather than only its inputs. Route-level `modulepreload` is the case
+    /// that demanded it: to preload the chunks a route pulls in, you need the
+    /// chunk graph — which chunk each entry became, which modules went into it,
+    /// which chunks it imports — and none of that exists until the graph has
+    /// been split.
+    ///
+    /// [`End`](Hook::End) is not this hook and cannot be made into it: it fires
+    /// when the *graph* is finished, before there are chunks at all, which is
+    /// why it is handed `null`.
+    ///
+    /// **Read-only.** The bundle is described, not surrendered: a hook may look
+    /// at what was produced and write files of its own, and cannot rewrite a
+    /// chunk on the way past. Rollup allows that and it is how a plugin comes
+    /// to invalidate the source maps of every plugin after it. The listing also
+    /// carries no `code` — the graph, not the bytes — because `generate()`
+    /// already hands the code back and copying every chunk into an isolate on
+    /// every rebuild is a price a hook that wanted the shape should not pay.
+    fn bundle<'a>(&'a self, _output: &'a [Output], _ctx: &'a Arc<dyn Context>) -> Answer<'a, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// One file a build produced, as [`Pass::bundle`] describes it.
+#[derive(Clone, Debug)]
+pub enum Output {
+    Chunk {
+        /// Where it will be written, relative to the output directory.
+        file_name: String,
+        /// The entry name it was built under.
+        name: String,
+        is_entry: bool,
+        is_dynamic_entry: bool,
+        /// The module this chunk *is*: the entry it was built for, or the
+        /// module behind a dynamic import. `None` for a shared chunk.
+        facade_module_id: Option<String>,
+        /// Every module that went into it.
+        module_ids: Vec<String>,
+        /// The chunks it imports, by file name — the edges a preload walks.
+        imports: Vec<String>,
+        dynamic_imports: Vec<String>,
+    },
+    Asset {
+        file_name: String,
+    },
 }
 
 /// What `resolve` answered.
@@ -512,7 +565,7 @@ fn kind(value: &Value) -> &'static str {
 // --- reading the guest's declaration ----------------------------------------
 
 /// Every hook name, for the "did you mean" in a rejection.
-const HOOK_NAMES: [&str; 5] = ["start", "resolve", "load", "transform", "end"];
+const HOOK_NAMES: [&str; 6] = ["start", "resolve", "load", "transform", "end", "bundle"];
 
 /// Reads one plugin's declaration.
 ///
@@ -541,6 +594,7 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             "load" => Hook::Load,
             "transform" => Hook::Transform,
             "end" => Hook::End,
+            "bundle" => Hook::Bundle,
             other => return Err(unknown_hook(&name, other)),
         };
         let spec = hook_spec(&name, hook, spec)?;
@@ -550,6 +604,7 @@ pub fn plugin(value: &Value) -> Result<Plugin, OpError> {
             Hook::Load => hooks.load = Some(spec),
             Hook::Transform => hooks.transform = Some(spec),
             Hook::End => hooks.end = Some(spec),
+            Hook::Bundle => hooks.bundle = Some(spec),
         }
     }
     Ok(Plugin { id, name, hooks })
@@ -571,7 +626,7 @@ fn hook_spec(plugin: &str, hook: Hook, value: &Value) -> Result<HookSpec, OpErro
     // `start` and `end` are called once, with no module in hand — a filter on
     // them cannot mean anything, and one that was quietly ignored would be a
     // plugin whose author believes it is scoped when it is not.
-    if !filter.is_empty() && matches!(hook, Hook::Start | Hook::End) {
+    if !filter.is_empty() && matches!(hook, Hook::Start | Hook::End | Hook::Bundle) {
         return Err(OpError::type_error(format!(
             "{plugin}.{}: this hook runs once, for the whole build, so it cannot be filtered",
             hook.name()

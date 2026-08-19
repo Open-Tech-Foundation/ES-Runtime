@@ -1,6 +1,6 @@
 ---
 title: Writing a plugin
-description: esdev's own plugin system — five hooks running in your isolate, declarative filters, and dependencies that are returned rather than declared.
+description: esdev's own plugin system — six hooks running in your isolate, declarative filters, and dependencies that are returned rather than declared.
 ---
 
 import { Callout } from "@opentf/web-docs";
@@ -74,7 +74,7 @@ side as a string literal instead of an `export`. Set it whenever the code you
 return is a different language from the file it came from: `"js"`, `"jsx"`,
 `"ts"`, `"css"`.
 
-## The five hooks
+## The six hooks
 
 | Hook | Handler | Returns |
 | --- | --- | --- |
@@ -83,8 +83,9 @@ return is a different language from the file it came from: `"js"`, `"jsx"`,
 | `load` | `(id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `transform` | `(code, id, ctx)` | `{ code, type?, map?, dependsOn? }`, or `null` |
 | `end` | `(error, ctx)` | nothing |
+| `bundle` | `(output, ctx)` | nothing |
 
-Five, against rollup's twenty-odd. Each is a promise whatever bundler sits
+Six, against rollup's twenty-odd. Each is a promise whatever bundler sits
 behind this has to keep, so the list is short on purpose. Data comes first and
 the context comes last, with nothing positional in between: anything one
 particular hook needs to say — `isEntry`, on a resolve — rides on the context

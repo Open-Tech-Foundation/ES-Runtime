@@ -329,6 +329,20 @@ impl contract::Pass for GuestPass {
         })
     }
 
+    fn bundle<'a>(
+        &'a self,
+        output: &'a [contract::Output],
+        ctx: &'a Arc<dyn contract::Context>,
+    ) -> contract::Answer<'a, ()> {
+        let ctx = ctx.clone();
+        Box::pin(async move {
+            let listing = Value::Array(output.iter().map(output_value).collect());
+            self.call(Hook::Bundle, vec![listing], Vec::new(), ctx)
+                .await?;
+            Ok(())
+        })
+    }
+
     fn end<'a>(
         &'a self,
         error: Option<&'a str>,
@@ -343,5 +357,50 @@ impl contract::Pass for GuestPass {
             self.call(Hook::End, vec![error], Vec::new(), ctx).await?;
             Ok(())
         })
+    }
+}
+
+/// One produced file, as the guest reads it.
+///
+/// The same field names the finished build uses, so a `bundle` hook and a
+/// consumer of `generate()` are reading one shape rather than two — minus
+/// `code`, which this hook is deliberately not given.
+fn output_value(output: &contract::Output) -> Value {
+    let strings = |items: &[String]| {
+        Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
+    };
+    match output {
+        contract::Output::Chunk {
+            file_name,
+            name,
+            is_entry,
+            is_dynamic_entry,
+            facade_module_id,
+            module_ids,
+            imports,
+            dynamic_imports,
+        } => Value::Object(vec![
+            ("type".to_string(), Value::String("chunk".to_string())),
+            ("fileName".to_string(), Value::String(file_name.clone())),
+            ("name".to_string(), Value::String(name.clone())),
+            ("isEntry".to_string(), Value::Bool(*is_entry)),
+            (
+                "isDynamicEntry".to_string(),
+                Value::Bool(*is_dynamic_entry),
+            ),
+            (
+                "facadeModuleId".to_string(),
+                facade_module_id
+                    .clone()
+                    .map_or(Value::Null, Value::String),
+            ),
+            ("moduleIds".to_string(), strings(module_ids)),
+            ("imports".to_string(), strings(imports)),
+            ("dynamicImports".to_string(), strings(dynamic_imports)),
+        ]),
+        contract::Output::Asset { file_name } => Value::Object(vec![
+            ("type".to_string(), Value::String("asset".to_string())),
+            ("fileName".to_string(), Value::String(file_name.clone())),
+        ]),
     }
 }
