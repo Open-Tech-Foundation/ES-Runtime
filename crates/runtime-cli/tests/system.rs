@@ -328,6 +328,37 @@ console.log("exiting");
 }
 
 #[test]
+fn a_reader_that_stopped_reading_does_not_hold_the_program_open() {
+    // A program takes the one chunk it wanted from a child's stdout, prints its
+    // summary and returns. It used to hang for ever: the stream read a chunk
+    // *ahead*, so a `system_read` was left outstanding on a child that had
+    // nothing more to say, and pending host work is what keeps the runtime
+    // ticking. The child's streams are demand-driven now — a read is only in
+    // flight because somebody is waiting for it.
+    let app = write(
+        "sys_held_reader.mjs",
+        r#"
+import { Command } from "runtime:system";
+const child = await new Command("sh", { args: ["-c", "echo one; sleep 45"] }).spawn();
+const reader = child.stdout.getReader();
+const { value } = await reader.read();
+console.log("read", new TextDecoder().decode(value).trim());
+await child.kill();
+console.log("exiting");
+"#,
+    );
+    let started = std::time::Instant::now();
+    let out = esrun().arg(&app).output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(stdout(&out).contains("read one"), "{}", stdout(&out));
+    assert!(stdout(&out).contains("exiting"), "{}", stdout(&out));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "a held reader kept the program alive"
+    );
+}
+
+#[test]
 fn a_child_can_run_esrun_itself() {
     // The composition test: a server runtime spawning an isolated job is the
     // point of the module.

@@ -276,22 +276,35 @@ class ChildProcess {
     return ops.system_kill(this.#id, signal);
   }
 
+  // Strictly on demand: `highWaterMark: 0` means a read is only ever in flight
+  // because somebody is waiting for it.
+  //
+  // The default of 1 makes a stream read one chunk *ahead* — so after a caller
+  // takes the chunk it wanted, a `system_read` is left outstanding on a child
+  // that may have nothing more to say. That read is pending host work, and
+  // pending host work is what keeps the runtime ticking: a program that read
+  // one line of a child's output, printed its summary and returned would then
+  // never exit. Zero is also the honest queue depth for a pipe, whose
+  // backpressure is the pipe itself.
   #readable(which) {
     const self = this;
-    return new ReadableStream({
-      async pull(controller) {
-        const chunk = await ops.system_read(self.#id, which);
-        if (chunk === null) {
-          controller.close();
+    return new ReadableStream(
+      {
+        async pull(controller) {
+          const chunk = await ops.system_read(self.#id, which);
+          if (chunk === null) {
+            controller.close();
+            self.#streamDone();
+          } else {
+            controller.enqueue(chunk);
+          }
+        },
+        cancel() {
           self.#streamDone();
-        } else {
-          controller.enqueue(chunk);
-        }
+        },
       },
-      cancel() {
-        self.#streamDone();
-      },
-    });
+      { highWaterMark: 0 },
+    );
   }
 
   #writable() {
