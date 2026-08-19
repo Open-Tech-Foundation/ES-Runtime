@@ -24,6 +24,220 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+### Added
+
+- **`esdev.json` carries `plugins`.** A project that compiles something this
+  toolchain does not know about — `.mdx`, Tailwind, another framework's
+  components — could only be built by a *program* that called `build()` itself.
+  `esdev build` and `esdev start` had nowhere to put a plugin, so a framework
+  could not be a project's build; it had to be its own.
+
+  ```json
+  {
+    "plugins": [
+      "./plugins/mdx.js",
+      { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }
+    ],
+    "targets": {
+      "server": { "entry": "src/server.ts", "out": "dist/server.js" },
+      "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
+                   "platform": "browser", "plugins": ["./plugins/only-web.js"] }
+    }
+  }
+  ```
+
+  An entry is the module to import — a path in this project, or a package. The
+  project's plugins apply to every target; a target's `plugins` are **added** to
+  them rather than replacing them, so a project that compiles `.mdx` compiles it
+  for the server bundle and the browser one. `export` names which export the
+  plugin is, and `options` is what to call it with when that export is a
+  factory.
+
+  `options` is the one thing JSON cannot express on its own: `mdx({ … })` is a
+  function application. So the file carries the argument and esdev makes the
+  call — which is the whole of the difference from an executable config, and
+  what keeps this file readable as *data*. `permissions` is still decidable
+  without running anything, which was the reason the config was JSON to begin
+  with.
+
+  They load into an isolate of their own, started on the first build that needs
+  one and held for the run. `esdev start` rebuilds on every save, and
+  re-evaluating a plugin's module — and whatever it initialises: a compiler, a
+  template cache, a Tailwind context — per keystroke would be a startup cost
+  paid forty times a minute, and a plugin holding state across builds (every
+  incremental compiler does) could not exist at all. The plugins run under
+  `esdev`'s own grant, in the project directory, with the same `runtime:`
+  namespace any other program gets.
+
+  Their passes go into **one list with this toolchain's own**, so `order: "pre"`
+  means before `esdev:css-modules` and not merely before the other plugins.
+
+- **`runtime:build`: a `bundle` hook — what the build produced.** The sixth
+  hook, and the one a plugin needed to work with the *result* of a build rather
+  than only its inputs. It runs once, after the graph has been split into chunks
+  and before any of it is written, with one entry per chunk (`fileName`, `name`,
+  `isEntry`, `isDynamicEntry`, `facadeModuleId`, `moduleIds`, `imports`,
+  `dynamicImports`) or asset.
+
+  Route-level `modulepreload` is the case it exists for: which chunk an entry
+  became, what went into it and what it imports do not exist until the split,
+  and the split happens *after* `end`. That is why `end` is handed `null` and
+  not the bundle — it fires when the module graph is finished, when there are no
+  chunks yet.
+
+  Read-only, and carrying no `code`. Rollup lets a plugin rewrite chunks in the
+  equivalent hook, which is how one plugin comes to invalidate the source maps
+  of every plugin after it; and the bytes are what `generate()` already returns,
+  so copying every chunk into the isolate on each rebuild would be a cost paid
+  by a hook that only wanted the shape.
+
+- **A chunk says which module it is.** `facadeModuleId` — the entry a chunk was
+  built for, or the module behind a dynamic import, and `null` for a shared
+  chunk. Rollup and rolldown both report it and this did not, so code written
+  against it read `undefined` and fell through to `find((c) => c.isEntry)` —
+  which picks the wrong chunk the moment a build emits a worker, since an
+  emitted worker chunk is an entry too.
+
+- **A plugin can declare what the *compiler* has to do for it.** Not a hook: a
+  hook is handed a module's source and hands source back, and that is enough for
+  almost everything — but the JSX pass runs inside the bundler, where a plugin
+  cannot reach.
+
+  ```js
+  export default {
+    name: "react-refresh",
+    jsx: { refresh: true },
+    transform: { filter: { id: /\.[jt]sx$/ }, handler },
+  };
+  ```
+
+  `jsx.refresh` asks for a registration per component and a signature per
+  hook-using function — what a component-refresh scheme matches components up by
+  so an edit re-renders in place instead of remounting. Finding those needs the
+  syntax tree the compiler already has; the per-module half the plugin writes
+  itself. Honoured only in a hot dev build of a target that named a `refresh`
+  scheme, which is a safety property rather than a policy: the calls inserted
+  reach globals that only a hot loop installs.
+
+- **`runtime:test`: `beforeAll`, `afterAll`, `beforeEach`, `afterEach`.** Each
+  may be registered more than once and all of them run, in registration order —
+  a helper module and the test file both have a right to a `beforeEach`.
+  `afterEach` runs after a test that failed, because it is cleanup; a
+  `beforeAll` that throws fails every test in the file rather than letting them
+  run against a fixture that was never built.
+
+  ```js
+  let db;
+  beforeEach(async () => { db = await open(":memory:"); });
+  afterEach(() => db.close());
+  ```
+
+- **A build error says where it happened.** `generate()` and `write()` throw a
+  `BuildError` whose `errors` is **every** diagnostic of the batch, each with
+  `{ message, id, plugin, kind, line, column, frame }` — line 1-based, column
+  0-based in UTF-16 code units, which is what an editor counts in, and `frame`
+  the offending line with the span underlined.
+
+  ```js
+  catch (err) {
+    for (const e of err.errors) {
+      overlay.show(`${e.id}:${e.line}:${e.column}`, e.frame ?? e.message);
+    }
+  }
+  ```
+
+  A failure used to be a string — the module id, a colon and *"Unexpected
+  token"* — which is enough to open the right file and nothing more: an editor
+  overlay could name the file and then had to stop. The bundler computed the
+  rest all along for its own terminal output. `esdev build` prints the frame
+  too, in place of the one-line summary.
+
+- **`ctx.type` on `transform`** — what the module *is now*, which is not always
+  what its extension says, since a pass ordered `pre` may already have changed
+  it. It is how a pass declines work somebody else has done.
+
+### Changed
+
+- **Hot reloading is generic, and React moved out into a plugin.** **Breaking**
+  for a project that set `"refresh": "react"` and did not create its
+  `esdev.json` with a current `esdev create`.
+
+  `esdev` implemented one framework's refresh scheme and knew its name, so
+  `"react"` was both the only value `refresh` would take and the only thing that
+  could implement it. Every other framework took a full page reload on each
+  edit — not because the mechanism was missing (`import.meta.hot` is the same
+  for everyone) but because there was nothing generic to hook into.
+
+  What `esdev` provides now is the generic half, the same for everyone:
+  `import.meta.hot` and the update channel; `ctx.refresh`, the scheme the target
+  named, handed to its plugins and present only while the loop is running that
+  target hot; and the compiler's component registrations, on request
+  (`jsx: { refresh: true }`, above).
+
+  Gone from the binary: the React Fast Refresh pass, the built-in scheme name,
+  and the `== "react"` comparison that selected either. The pass is now
+  `plugins/react-refresh.mjs`, written out with the `react` template and named
+  by its `esdev.json`. React has no privileges left — delete that entry and the
+  template loses Fast Refresh exactly as any other framework would.
+
+  **To migrate:** add the plugin to the target that names the scheme.
+
+  ```json
+  "web": { "entry": "index.html", "outdir": "dist",
+           "refresh": "react", "plugins": ["./plugins/react-refresh.mjs"] }
+  ```
+
+  A `refresh` on a target with **no plugins** is now refused, since nothing
+  could implement it — and a `refresh` that silently did nothing is a project
+  whose components stop keeping their state one day, with the reason sitting
+  unread in a config file.
+
+- **Tests run one at a time.** **Breaking** for a suite that relied on its
+  async cases overlapping.
+
+  `test()` used to call the function where it was written, so every async case
+  in a file ran at once. Two tests sharing a database, a temp directory, a port
+  or a module global interleave under that, and the failure is a flake nobody
+  can reproduce — and a `beforeEach` cannot exist at all, because there is no
+  "before": the next test has already started. Suites were writing a couple of
+  hundred lines of scheduler to get around it.
+
+  Registration and execution are now separate: `test()` appends to a queue, and
+  the queue drains one case at a time, in the order the file wrote them, with
+  the lifecycle hooks around each.
+
+  The host is told about a case when it is **registered** rather than when it
+  starts, so the report stays complete: a case that never got a turn because an
+  earlier one hung is reported as *"the test never started — a test before it
+  never finished"*, separately from the one that is actually stuck.
+
+### Fixed
+
+- **A filter regex that will not compile is refused, not ignored.** `\0` is
+  rollup's virtual-module prefix, so `/\0virtual/` is the first filter every
+  ported plugin writes — and Rust's `regex`, which matches filters on the host
+  side, has no `\0` escape. A pattern that failed to compile became one that
+  admitted *everything*, so a `load` hook scoped to virtual ids claimed the real
+  entry module and replaced its contents.
+
+  `\0` and `\/` are translated now, and whatever is left that will not compile —
+  a backreference, a lookaround — is refused at the declaration, naming the
+  pattern and why, rather than silently matching the whole graph. A pattern that
+  is neither a string nor a `RegExp` is refused for the same reason instead of
+  being dropped from the list.
+
+- **`order: "pre"` claims a file type ahead of a built-in pass.** Putting a
+  project's plugins in one list with `esdev`'s own was necessary and not
+  sufficient: `esdev:css-modules` filters on the module *id*, which is still
+  `.css` after a `pre` plugin has turned the stylesheet into JavaScript, and it
+  re-reads the file off disk rather than transforming the code it was handed
+  (deliberately — an `@import` chain is a set of files, not one string). A
+  Tailwind-style plugin's work was read, discarded, and the build failed with
+  *"imports tailwindcss, which is not there"*.
+
+  A transform now knows what the module *is* (`ctx.type`), and the CSS Modules
+  pass steps aside when it is no longer CSS.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added
