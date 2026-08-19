@@ -8,6 +8,8 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-08-19
+
 ### Added
 
 - **`runtime:workers` — durable workers.** State that outlives the process, in

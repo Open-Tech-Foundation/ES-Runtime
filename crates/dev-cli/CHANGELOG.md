@@ -24,6 +24,8 @@ is the point, since none of the three has any business in a deployment.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-19
+
 ### Added
 
 - **`esdev.json` carries `plugins`.** A project that compiles something this
