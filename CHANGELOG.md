@@ -117,6 +117,65 @@ namespace) is unstable and may change between minor releases until the API freez
     sit there until tomorrow.
 
 
+- **`runtime:process` — the process's own `stdout` and `stderr`.** `console.log`
+  formats a value, appends a newline and goes wherever the embedder pointed it.
+  That is right for a log line and wrong for a **display**: a spinner is a
+  carriage return and no newline, and a progress bar rewrites the line it is
+  already on.
+
+  ```js
+  import { stdout } from "runtime:process";
+
+  if (stdout.isTTY) {
+    stdout.write(`\r${bar(done / total, stdout.columns ?? 60)}`);
+  } else {
+    console.log(`${done}/${total}`);
+  }
+  ```
+
+  `write(chunk)` puts exactly those bytes on the stream and flushes — a string
+  is UTF-8, an `ArrayBuffer` or view goes as it is, and **no newline is added**.
+  `isTTY` says whether anyone is looking: a spinner redrawn with `\r` into a log
+  file is a file of spinner frames, and colour escapes in a pipe are noise in
+  somebody's `grep`. `columns` and `rows` come from the terminal itself rather
+  than from `$COLUMNS` — a shell exports that to itself rather than to a child,
+  and it is stale the moment the window is dragged — and are `undefined` where
+  the host cannot answer, rather than a plausible 80.
+
+  **No capability**, for the reason `console.log` needs none: writing to the
+  stream this program was started with reaches nothing it was not already
+  handed. So `--deny-all` still leaves a program able to say what it is doing.
+
+  The `Process` provider trait gains `write_stdout`, `write_stderr`,
+  `is_terminal` and `terminal_size`, all defaulted — an existing embedder
+  compiles unchanged and reports "no standard output, not a terminal" until it
+  implements them.
+
+### Fixed
+
+- **A child's output is read on demand, not one chunk ahead.** A program that
+  took the one chunk it wanted from a child's `stdout`, printed its summary and
+  returned never exited — `timeout 5` and exit 124.
+
+  A `ReadableStream` with the default high-water mark reads one chunk *ahead*,
+  so a `system_read` was left outstanding on a child that had nothing more to
+  say, and pending host work is what keeps the runtime ticking. Both of a
+  child's output streams are strictly demand-driven now: a read is in flight
+  only because somebody is waiting for it, which is also the honest queue depth
+  for a pipe, whose backpressure is the pipe itself.
+
+- **A package's stylesheet is not CommonJS.**
+  `import.meta.resolve("tailwindcss/index.css")` failed with *"this package is
+  CommonJS, which is not supported"*. It is not: it is a stylesheet.
+
+  The check asked whether the resolved file was ESM and answered "no" for every
+  extension it did not recognise, so a `.css`, `.json` or `.wasm` published in
+  an `exports` map came back as a CommonJS rejection — and CSS inside a package
+  needed a hand-written package resolver to find. Resolution says where a
+  subpath lives; what the caller does with the file is the caller's business.
+  Only `.cjs`, and `.js` outside a `"type": "module"` package, are CommonJS now.
+  The rejection those get is unchanged (D24).
+
 ## [0.26.0] - 2026-08-18
 
 ### Fixed
