@@ -226,6 +226,15 @@ declare module "runtime:build" {
     code: string;
     isEntry: boolean;
     isDynamicEntry: boolean;
+    /**
+     * The module this chunk *is*: the entry it was built for, or the module
+     * behind a dynamic import. `null` for a shared chunk, which is nobody's
+     * facade.
+     *
+     * How you find a particular entry's chunk. `output.find((c) => c.isEntry)`
+     * is not that question — an emitted worker chunk is an entry too.
+     */
+    facadeModuleId: string | null;
     /** Every module that went into this chunk. */
     moduleIds: string[];
     imports: string[];

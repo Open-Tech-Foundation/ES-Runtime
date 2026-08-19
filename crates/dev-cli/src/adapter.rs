@@ -433,7 +433,7 @@ fn virtual_id(id: &str) -> String {
 }
 
 /// The id as the plugin named it, with the backend's private notation removed.
-fn guest_id(id: &str) -> &str {
+pub fn guest_id(id: &str) -> &str {
     id.strip_prefix('\0').unwrap_or(id)
 }
 

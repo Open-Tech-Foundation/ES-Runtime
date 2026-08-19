@@ -77,6 +77,11 @@ const DurableErrorCode = Object.freeze({
   IdCollision: "ERR_DURABLE_ID_COLLISION",
   /// The runtime is shutting down and will not start new work.
   Shutdown: "ERR_DURABLE_SHUTDOWN",
+  /// The shard running this worker ended — it ran out of memory, threw where
+  /// nothing was catching, or stopped answering and was terminated. The state
+  /// is on disk, so the worker comes back on the next call; the call that was
+  /// in flight is the one that is lost.
+  ShardLost: "ERR_DURABLE_SHARD_LOST",
   /// `configure()` after the first worker was materialized. The settings decide
   /// where state lives, so changing them mid-flight would split it.
   Configured: "ERR_DURABLE_CONFIGURED",
@@ -123,6 +128,15 @@ const defaults = {
   // catalog. The ceiling matters because the machine's clock can move.
   alarmRetries: 5,
   alarmPoll: 60_000,
+  // How many shards — `Worker`s of our own — the durable workers run on. Zero
+  // runs them on the agent that addressed them, which is the whole story for a
+  // script and for a test. `module` is where the classes are defined, and is
+  // required as soon as there is a shard to tell.
+  shards: 0,
+  module: null,
+  // What a shard is granted. It is given `imports` regardless — it has to load
+  // the module its classes are in — and nothing else unless it is named here.
+  permissions: [],
 };
 
 let config = { ...defaults };
@@ -160,7 +174,27 @@ function configure(options = {}) {
         `unknown option "${key}" — expected one of: ${Object.keys(defaults).join(", ")}`,
       );
     }
-    next[key] = key === "dir" ? String(value) : positive(value, key);
+    if (key === "dir") next[key] = String(value);
+    else if (key === "module") next[key] = value === null ? null : String(value);
+    else if (key === "permissions") {
+      if (!Array.isArray(value) || value.some((p) => typeof p !== "string")) {
+        throw new TypeError("configure({ permissions }): expected an array of capability names");
+      }
+      next[key] = [...value];
+    } else if (key === "shards") {
+      next[key] =
+        value === "auto"
+          ? Math.max(1, Math.min(8, navigator.hardwareConcurrency ?? 2))
+          : value === 0
+            ? 0
+            : positive(value, "shards");
+    } else next[key] = positive(value, key);
+  }
+  if (next.shards > 0 && next.module === null) {
+    throw new TypeError(
+      "configure({ shards }) also needs { module }: a shard has to be told which module " +
+        'defines the classes it runs — configure({ shards: "auto", module: new URL("./workers.js", import.meta.url) })',
+    );
   }
   if (next.valueLimit > next.stateLimit) {
     throw new TypeError("valueLimit cannot exceed stateLimit");
@@ -411,15 +445,20 @@ class State {
   #handler = null; // whether the class has an alarm() method; null until known
   #collections; // declared name -> { index, unique }
   #opened = new Map(); // name -> Collection
+  // A sharded worker's values live in the shard that runs it. What the host
+  // keeps is the bytes — which is all a flush, a size and a comparison need —
+  // so nothing is decoded here twice.
+  #remote = false;
 
   #attempt = 0;
   #chain = { tail: Promise.resolve() };
   #txChain = { tail: Promise.resolve() };
   #tx = false;
 
-  constructor(db, { rows, alarm, attempt, index, collections }) {
+  constructor(db, { rows, alarm, attempt, index, collections, remote = false }) {
     this.#db = db;
     this.#collections = collections;
+    this.#remote = remote;
     this.#alarm = alarm;
     this.#attempt = attempt;
     this.#index = index;
@@ -441,7 +480,7 @@ class State {
     for (const row of rows) {
       const { key, value, codec } = row;
       this.#values.set(key, {
-        value: decode(value, codec, key),
+        value: remote ? undefined : decode(value, codec, key),
         bytes: value.byteLength,
         encoded: value,
       });
@@ -466,7 +505,12 @@ class State {
    * stored by `set`, not by being touched. */
   get(key) {
     this.#open();
-    return this.#values.get(this.#key(key))?.value;
+    const held = this.#values.get(this.#key(key));
+    if (held === undefined) return undefined;
+    if (held.value === undefined && this.#remote && held.encoded !== undefined) {
+      held.value = decode(held.encoded, CODEC_STRUCTURED_CLONE, key);
+    }
+    return held.value;
   }
 
   has(key) {
@@ -542,6 +586,57 @@ class State {
   /** `[key, value]` pairs, narrowed the same way `keys` is. */
   list(options = {}) {
     return this.keys(options).map((key) => [key, this.#values.get(key).value]);
+  }
+
+  /**
+   * Keys written by the shard this worker runs on. They arrive encoded — the
+   * shard did that, and checked them against the same ceilings — so this is the
+   * same write path with the encoding already done.
+   */
+  writeRemote(puts, dels) {
+    this.#open();
+    for (const [key, bytes] of puts) {
+      const held = this.#values.get(key);
+      this.#bytes = this.#bytes - (held?.bytes ?? 0) + bytes.byteLength;
+      this.#values.set(key, { value: undefined, bytes: bytes.byteLength, encoded: bytes });
+      this.#dirty.add(key);
+    }
+    for (const key of dels) {
+      const held = this.#values.get(key);
+      if (held) this.#bytes -= held.bytes;
+      this.#values.delete(key);
+      this.#dirty.add(key);
+    }
+    return this.#schedule();
+  }
+
+  /**
+   * A transaction a shard opened. The host holds it open while the shard runs
+   * the callback — every message that arrives meanwhile joins it — and the
+   * shard says how it ended.
+   */
+  remoteTransaction() {
+    let finish;
+    let fail;
+    let ready;
+    const started = new Promise((resolve) => {
+      ready = resolve;
+    });
+    const done = this.transaction(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = resolve;
+          fail = reject;
+          ready();
+        }),
+    );
+    handled(done);
+    return started.then(() => ({ finish, fail, done }));
+  }
+
+  /** The stored page as it is on disk: what a shard is handed when it opens. */
+  *encodedEntries() {
+    for (const [key, held] of this.#values) yield [key, held.encoded];
   }
 
   /** How many keys are stored. */
@@ -1384,13 +1479,17 @@ const same_value = (a, b) =>
 const LIFECYCLE = new Set(["start", "stop", "alarm", "constructor"]);
 
 class LiveWorker {
-  constructor(cls, id, db, instance, state, controller) {
+  constructor(cls, id, db, instance, state, controller, shard = null, key = null) {
     this.cls = cls;
     this.id = id;
     this.db = db;
     this.instance = instance;
     this.state = state;
     this.controller = controller;
+    // The shard running this worker's code, or null when it runs here.
+    this.shard = shard;
+    this.key = key;
+    this.tx = null;
     this.pending = 0;
     // True until `start()` has finished. A worker whose materialization is
     // still running has been idle since the beginning of time by the clock's
@@ -1408,13 +1507,50 @@ class LiveWorker {
    * the writes the call made are durable.
    */
   call(method, args) {
-    return this.enqueue(async () => {
-      const fn = this.instance[method];
-      if (typeof fn !== "function" || LIFECYCLE.has(method)) {
-        throw new TypeError(`${describe(this.cls, this.id)} has no method ${String(method)}()`);
+    return this.enqueue(() => this.#invoke("call", { method, args }));
+  }
+
+  /** Runs this worker's `alarm()`, wherever its code lives. */
+  fireAlarm() {
+    return this.enqueue(() => this.#invoke("alarm", {}));
+  }
+
+  #invoke(what, detail) {
+    if (this.shard === null) {
+      if (what === "alarm") return this.instance.alarm();
+      const fn = this.instance[detail.method];
+      if (typeof fn !== "function" || LIFECYCLE.has(detail.method)) {
+        throw new TypeError(
+          `${describe(this.cls, this.id)} has no method ${String(detail.method)}()`,
+        );
       }
-      return fn.apply(this.instance, args);
-    });
+      return fn.apply(this.instance, detail.args);
+    }
+    return request(this.shard, { [TAG]: what, key: this.key, ...detail });
+  }
+
+  /**
+   * The shard this worker was running on is gone. Nothing can be asked of it,
+   * so what is left is to let go: the calls waiting are rejected by the shard's
+   * own accounting, and the database handle — which is the host's — is closed.
+   */
+  abandon(error) {
+    if (this.closing) return this.closing;
+    this.controller.abort(
+      new DurableError(`the shard running this worker ended`, DurableErrorCode.ShardLost, {
+        cause: error,
+      }),
+    );
+    this.closing = (async () => {
+      try {
+        await this.state.close();
+      } catch {
+        // The state may have had a write in flight when the shard died. The
+        // handle still has to be released.
+      }
+      await this.db.close().catch(() => {});
+    })();
+    return handled(this.closing);
   }
 
   /**
@@ -1469,7 +1605,14 @@ class LiveWorker {
         new DurableError(`durable worker ${reason}`, DurableErrorCode.Shutdown),
       );
       try {
-        if (typeof this.instance.stop === "function") await this.instance.stop(reason);
+        if (this.shard !== null) {
+          this.shard.keys.delete(this.key);
+          if (!this.shard.dead) {
+            await request(this.shard, { [TAG]: "close", key: this.key, reason }).catch(() => {});
+          }
+        } else if (typeof this.instance.stop === "function") {
+          await this.instance.stop(reason);
+        }
       } finally {
         await this.state.close();
         await this.db.close();
@@ -1647,28 +1790,52 @@ async function materialize(cls, id) {
       );
 
       const controller = new AbortController();
-      const ctx = Object.freeze({ id, name, signal: controller.signal });
-      materializing = { id, state, ctx };
-      let instance;
-      try {
-        instance = new cls();
-      } finally {
-        materializing = null;
-      }
-      state.alarmHandler = typeof instance.alarm === "function";
-      worker = new LiveWorker(cls, id, store, instance, state, controller);
-      live.set(k, worker);
-      // `start()` runs before the mailbox opens rather than as its first entry:
-      // every caller is already waiting on this materialization, so there is
-      // nothing to get ahead of, and a `start` that throws must leave no worker
-      // behind rather than one whose first call reports somebody else's failure.
-      try {
-        if (typeof instance.start === "function") await instance.start();
-      } finally {
-        worker.starting = false;
+      const pool = config.shards > 0 ? await shardPool() : null;
+      if (pool === null) {
+        const ctx = Object.freeze({ id, name, signal: controller.signal });
+        materializing = { id, state, ctx };
+        let instance;
+        try {
+          instance = new cls();
+        } finally {
+          materializing = null;
+        }
+        state.alarmHandler = typeof instance.alarm === "function";
+        worker = new LiveWorker(cls, id, store, instance, state, controller);
+        live.set(k, worker);
+        // `start()` runs before the mailbox opens rather than as its first
+        // entry: every caller is already waiting on this materialization, so
+        // there is nothing to get ahead of, and a `start` that throws must
+        // leave no worker behind rather than one whose first call reports
+        // somebody else's failure.
+        try {
+          if (typeof instance.start === "function") await instance.start();
+        } finally {
+          worker.starting = false;
+        }
+      } else {
+        const shard = placement(pool, name, id);
+        worker = new LiveWorker(cls, id, store, null, state, controller, shard, k);
+        live.set(k, worker);
+        shard.keys.add(k);
+        try {
+          const opened = await request(shard, {
+            [TAG]: "open",
+            key: k,
+            name,
+            id,
+            alarm,
+            attempt: Number(meta.get("alarm_attempt") ?? 0),
+            state: [...state.encodedEntries()],
+          });
+          state.alarmHandler = opened.alarm === true;
+        } finally {
+          worker.starting = false;
+        }
       }
     } catch (e) {
       live.delete(k);
+      if (worker?.shard) worker.shard.keys.delete(k);
       await store.close().catch(() => {});
       throw e;
     }
@@ -1864,6 +2031,253 @@ Object.defineProperty(DurableWorker.prototype, Symbol.toStringTag, {
   configurable: true,
 });
 
+
+// ---------------------------------------------------------------------------
+// Shards
+// ---------------------------------------------------------------------------
+//
+// A shard is a `Worker` — a thread and an isolate of its own — that runs the
+// class's code. The storage does not move: the host agent keeps every database
+// handle, and a shard reaches it by message. That is what lets a shard hold
+// **no filesystem capability**, and it is what keeps one writer per file.
+//
+// What a shard costs is a hop (tens of microseconds) on a write, which is
+// nothing beside a commit. What it buys is a failure domain: a memory ceiling
+// that ends one shard rather than the process, and a watchdog that can
+// `terminate()` an isolate stuck in a loop — which cannot be done to the agent
+// the server itself is running on.
+//
+// The shard's entry module is the application's own, the one `configure` named:
+// importing it defines the classes, and its import of `runtime:workers` is what
+// installs the other half of this protocol. So there is no generated entry and
+// no second file to keep in step.
+
+// Everything crossing the boundary carries this, so a `Worker` an application
+// started for its own reasons — one that happens to import this module — is
+// never mistaken for a shard and its messages are never touched.
+const TAG = "__durable";
+const HEARTBEAT = 1000;
+
+let shards = null;
+
+function shardPool() {
+  if (shards) return shards.ready;
+  const permissions = [...new Set(["imports", ...config.permissions])];
+  const pool = { workers: [], ready: null, stopping: false };
+  shards = pool;
+  pool.ready = (async () => {
+    for (let index = 0; index < config.shards; index++) {
+      pool.workers.push(await startShard(index, String(config.module), permissions));
+    }
+    watch();
+    return pool;
+  })();
+  handled(pool.ready);
+  return pool.ready;
+}
+
+async function startShard(index, module, permissions) {
+  const worker = new Worker(module, { name: `durable-shard-${index}`, permissions });
+  const shard = {
+    index,
+    worker,
+    module,
+    permissions,
+    seq: 0,
+    waiting: new Map(), // seq -> { resolve, reject }
+    keys: new Set(), // the workers placed here
+    beat: 0,
+    answered: 0,
+    dead: false,
+  };
+  worker.addEventListener("message", (event) => {
+    const message = event.data;
+    if (message === null || typeof message !== "object" || !(TAG in message)) return;
+    void onShardMessage(shard, message);
+  });
+  worker.addEventListener("error", (event) => {
+    event.preventDefault();
+    loseShard(shard, event.error ?? new Error(event.message));
+  });
+  await request(shard, { [TAG]: "hello" });
+  return shard;
+}
+
+function request(shard, message) {
+  if (shard.dead) {
+    return Promise.reject(new DurableError("this shard is gone", DurableErrorCode.ShardLost));
+  }
+  const seq = ++shard.seq;
+  return new Promise((resolve, reject) => {
+    shard.waiting.set(seq, { resolve, reject });
+    shard.worker.postMessage({ ...message, seq });
+  });
+}
+
+// Everything a shard says. Requests it makes of the host — a write, a query, a
+// transaction — are answered on the same channel, keyed by the sequence number
+// it chose.
+async function onShardMessage(shard, message) {
+  const kind = message[TAG];
+  if (kind === "reply") {
+    const waiter = shard.waiting.get(message.seq);
+    if (waiter === undefined) return;
+    shard.waiting.delete(message.seq);
+    if (message.error) waiter.reject(rebuild(message.error));
+    else waiter.resolve(message.result);
+    return;
+  }
+  if (kind === "pong") {
+    shard.answered = message.n;
+    return;
+  }
+  let result;
+  let failure = null;
+  try {
+    result = await hostSide(message);
+  } catch (e) {
+    failure = describeError(e);
+  }
+  if (shard.dead) return;
+  shard.worker.postMessage({ [TAG]: "reply", seq: message.seq, result, error: failure });
+}
+
+// The half of the state API that has to happen where the database is.
+async function hostSide(message) {
+  const worker = live.get(message.key);
+  if (worker === undefined) {
+    fail(DurableErrorCode.Shutdown, "this durable worker is no longer open");
+  }
+  const state = worker.state;
+  switch (message[TAG]) {
+    case "write":
+      return state.writeRemote(message.puts, message.dels);
+    case "alarm-set":
+      return message.at === null ? state.alarm.delete() : state.alarm.set(message.at);
+    case "alarm-attempt":
+      return state.setAlarmAttempt(message.n);
+    case "collection": {
+      const collection = state.collection(message.name);
+      if (message.op !== "find") return collection[message.op](...message.args);
+      const query = collection.find(message.where, message.options);
+      for (const [step, argument] of message.steps) query[step](argument);
+      return query[message.terminal]();
+    }
+    case "transaction":
+      return state.remoteTransaction(message.key, (run) => runRemoteBody(worker, run));
+    default:
+      throw new TypeError(`unknown durable message ${JSON.stringify(message[TAG])}`);
+  }
+}
+
+// A `transaction` opened by a shard: the host holds it open while the shard
+// runs the callback, and the shard says how it ended.
+function runRemoteBody(worker, id) {
+  return new Promise((resolve, reject) => {
+    worker.pendingTransaction = { resolve, reject, id };
+  });
+}
+
+// A shard that failed, for any of the three reasons one can: it threw where
+// nothing was catching, it ran out of memory, or it stopped answering. Its
+// workers are dropped — their state is on disk, so they come back on the next
+// call — and a replacement is started for whoever needs one next.
+function loseShard(shard, error) {
+  if (shard.dead) return;
+  shard.dead = true;
+  for (const waiter of shard.waiting.values()) {
+    waiter.reject(
+      new DurableError(
+        `the shard running this durable worker ended: ${error?.message ?? error}`,
+        DurableErrorCode.ShardLost,
+        { cause: error },
+      ),
+    );
+  }
+  shard.waiting.clear();
+  for (const key of shard.keys) {
+    const worker = live.get(key);
+    if (worker !== undefined && worker.shard === shard) {
+      live.delete(key);
+      worker.abandon(error);
+    }
+  }
+  shard.keys.clear();
+  try {
+    shard.worker.terminate();
+  } catch {
+    // Already gone, which is the case this is cleaning up after.
+  }
+  if (shards === null || shards.stopping) return;
+  const index = shards.workers.indexOf(shard);
+  if (index < 0) return;
+  const pool = shards;
+  pool.workers[index] = null;
+  pool.ready = (async () => {
+    pool.workers[index] = await startShard(shard.index, shard.module, shard.permissions);
+    return pool;
+  })();
+  handled(pool.ready);
+}
+
+// Which shard a worker runs on. The answer has to be the same every time — a
+// worker's state is one file, and two shards holding one worker would be two
+// states — so it is a hash of the id rather than a queue.
+function placement(pool, name, id) {
+  const digest = fileKey(`${name} ${id}`);
+  return pool.workers[Number.parseInt(digest.slice(0, 8), 16) % pool.workers.length];
+}
+
+// The heartbeat. A shard busy with a call still answers it — the reply is a
+// message and the loop is free between statements — so a miss means the isolate
+// is not returning to its loop at all, which no amount of waiting fixes.
+let watchdog = null;
+
+function watch() {
+  if (watchdog !== null || shards === null) return;
+  watchdog = setInterval(() => {
+    for (const shard of shards.workers) {
+      if (shard === null || shard.dead) continue;
+      if (shard.beat > shard.answered + 2) {
+        loseShard(shard, new Error(`stopped answering ${(shard.beat - shard.answered) * HEARTBEAT}ms ago`));
+        continue;
+      }
+      shard.beat++;
+      shard.worker.postMessage({ [TAG]: "ping", n: shard.beat });
+    }
+  }, HEARTBEAT);
+}
+
+function stopWatching() {
+  if (watchdog === null) return;
+  clearInterval(watchdog);
+  watchdog = null;
+}
+
+// Errors have to cross as data. The class is rebuilt on the other side for the
+// standard ones, and the `code` travels regardless — which is the discriminator
+// this runtime's failures are meant to be told apart by.
+function describeError(e) {
+  if (e === null || typeof e !== "object") return { name: "Error", message: String(e) };
+  return { name: e.name ?? "Error", message: e.message ?? String(e), code: e.code, stack: e.stack };
+}
+
+function rebuild(shape) {
+  const Class = globalThis[shape.name];
+  let error;
+  if (typeof Class === "function" && Class.prototype instanceof Error) {
+    error = new Class(shape.message);
+  } else if (shape.name === "DurableError") {
+    error = new DurableError(shape.message, shape.code);
+  } else {
+    error = new Error(shape.message);
+    error.name = shape.name;
+  }
+  if (shape.code !== undefined) error.code = shape.code;
+  if (shape.stack !== undefined) error.stack = shape.stack;
+  return error;
+}
+
 // ---------------------------------------------------------------------------
 // Alarms
 // ---------------------------------------------------------------------------
@@ -2034,7 +2448,7 @@ async function fire(state, cls, id) {
     return;
   }
   try {
-    await worker.enqueue(() => run(state, worker));
+    await run(state, worker);
   } catch (e) {
     report(state, e, `the alarm on ${describe(cls, id)} could not be run`);
   }
@@ -2054,7 +2468,7 @@ async function run(state, worker) {
   // again. A failure puts one back.
   await worker.state.alarm.delete();
   try {
-    await worker.instance.alarm();
+    await worker.fireAlarm();
     if (worker.state.alarmAttempt !== 0) await worker.state.setAlarmAttempt(0);
   } catch (e) {
     const attempt = worker.state.alarmAttempt + 1;
@@ -2110,12 +2524,16 @@ async function shutdown() {
   shuttingDown = true;
   try {
     await scheduler?.handle.stop();
+    stopWatching();
+    if (shards) shards.stopping = true;
     // One at a time, not `Promise.all`: closing a database checkpoints its WAL,
     // and the engine has been seen to panic when many do so at once.
     for (const worker of [...live.values()]) await evict(worker, "shutdown");
     if (registry) await registry.db.close();
+    for (const shard of shards?.workers ?? []) shard?.worker.terminate();
   } finally {
     registry = null;
+    shards = null;
     shuttingDown = false;
     started = false;
   }

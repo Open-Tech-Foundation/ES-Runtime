@@ -499,6 +499,10 @@ fn built_value(built: server::Built) -> Value {
             ("code".to_string(), Value::String(chunk.code)),
             ("isEntry".to_string(), Value::Bool(chunk.is_entry)),
             (
+                "facadeModuleId".to_string(),
+                chunk.facade_module_id.map_or(Value::Null, Value::String),
+            ),
+            (
                 "isDynamicEntry".to_string(),
                 Value::Bool(chunk.is_dynamic_entry),
             ),

@@ -3025,8 +3025,13 @@ is a build somebody ran on purpose, not a server resolving imports under load.
 
 A `BuildResult` is `{ output, watchFiles, warnings }`. An `output` entry is
 either a chunk — `{ type: "chunk", fileName, name, code, isEntry,
-isDynamicEntry, moduleIds, imports, dynamicImports, map }` — or an asset:
-`{ type: "asset", fileName, source }`.
+isDynamicEntry, facadeModuleId, moduleIds, imports, dynamicImports, map }` — or
+an asset: `{ type: "asset", fileName, source }`.
+
+`facadeModuleId` is the module a chunk *is* — the entry it was built for, or the
+module behind a dynamic import — and `null` for a shared chunk. It is how you
+find one entry's chunk: `output.find((c) => c.isEntry)` asks a different
+question, since an emitted worker chunk is an entry as well.
 
 `watchFiles` is every file the build read **plus** every file a plugin declared
 with `this.addWatchFile()`. Paired with [`runtime:watch`](#runtimewatch), it is

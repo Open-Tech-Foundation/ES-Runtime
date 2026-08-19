@@ -48,6 +48,16 @@ pub struct Chunk {
     pub code: String,
     pub is_entry: bool,
     pub is_dynamic_entry: bool,
+    /// The module this chunk *is* — the entry it was made for, or the module
+    /// behind a dynamic import. `None` for a shared chunk, which is nobody's
+    /// facade.
+    ///
+    /// The field that turns "which chunk is my route" from a guess into a
+    /// lookup. Without it the only way to find an entry's chunk is
+    /// `find(isEntry)`, and an emitted worker chunk is an entry too — so a
+    /// build with one picks the wrong chunk, silently, and the consumer
+    /// preloads somebody else's modules.
+    pub facade_module_id: Option<String>,
     /// Every module that went into it — half of what invalidation needs.
     pub module_ids: Vec<String>,
     pub imports: Vec<String>,
@@ -320,6 +330,13 @@ async fn run(
                 code: chunk.code.clone(),
                 is_entry: chunk.is_entry,
                 is_dynamic_entry: chunk.is_dynamic_entry,
+                // Stripped of the backend's NUL prefix like every other id
+                // that reaches the guest: a plugin matches this against the
+                // id it resolved, and that id has no NUL in it.
+                facade_module_id: chunk
+                    .facade_module_id
+                    .as_ref()
+                    .map(|id| crate::adapter::guest_id(&id.to_string()).to_string()),
                 module_ids: chunk.module_ids.iter().map(ToString::to_string).collect(),
                 imports: chunk.imports.iter().map(ToString::to_string).collect(),
                 dynamic_imports: chunk
