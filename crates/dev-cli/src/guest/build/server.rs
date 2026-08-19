@@ -26,6 +26,8 @@ use rolldown::BundlerBuilder;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::adapter::Adapter;
+use crate::bundler::Failure;
+use crate::failures;
 
 use super::plugin::{Bridge, GuestPass};
 
@@ -97,7 +99,7 @@ enum Command {
         id: u64,
         write: bool,
         output: Box<OutputOptions>,
-        reply: oneshot::Sender<Result<Built, String>>,
+        reply: oneshot::Sender<Result<Built, Vec<Failure>>>,
     },
     Close {
         id: u64,
@@ -146,15 +148,16 @@ impl BuildServer {
         id: u64,
         write: bool,
         output: OutputOptions,
-    ) -> Result<Built, String> {
+    ) -> Result<Built, Vec<Failure>> {
         let (reply, answer) = oneshot::channel();
         self.send(Command::Generate {
             id,
             write,
             output: Box::new(output),
             reply,
-        })?;
-        answer.await.map_err(|_| gone())?
+        })
+        .map_err(|e| vec![plain("BUNDLER_STOPPED", e)])?;
+        answer.await.map_err(|_| vec![gone_failure()])?
     }
 
     pub fn close(&self, id: u64) {
@@ -168,6 +171,24 @@ impl BuildServer {
 
 fn gone() -> String {
     "the bundler stopped".to_string()
+}
+
+/// The same, in the shape a failed build reports in.
+fn gone_failure() -> Failure {
+    plain("BUNDLER_STOPPED", gone())
+}
+
+/// A failure with nowhere to point: the build never got as far as a module.
+fn plain(kind: &str, message: String) -> Failure {
+    Failure {
+        message,
+        id: None,
+        plugin: None,
+        kind: kind.to_string(),
+        line: None,
+        column: None,
+        frame: None,
+    }
 }
 
 /// The bundler thread's loop.
@@ -205,7 +226,10 @@ async fn serve(mut commands: mpsc::UnboundedReceiver<Command>, bridge: Arc<Bridg
                 tokio::spawn(async move {
                     let result = match options {
                         Some(options) => run(&options, *output, write, bridge).await,
-                        None => Err("this build is closed".to_string()),
+                        None => Err(vec![plain(
+                            "BUILD_CLOSED",
+                            "this build is closed".to_string(),
+                        )]),
                     };
                     let _ = reply.send(result);
                 });
@@ -214,39 +238,14 @@ async fn serve(mut commands: mpsc::UnboundedReceiver<Command>, bridge: Arc<Bridg
     }
 }
 
-/// Rolldown reports a failure as a *batch* of diagnostics; the guest gets one
-/// string with all of them, because a thrown `Error` has one message and hiding
-/// the other four behind "and 4 more" is how a build error becomes a bug
-/// report. Each is named by the module it came from.
-fn diagnostics<D: std::fmt::Display>(reported: Vec<(Option<String>, D)>) -> String {
-    reported
-        .into_iter()
-        .map(|(id, diagnostic)| match id {
-            Some(id) => format!("{id}: {diagnostic}"),
-            None => diagnostic.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The batch, unpacked. A macro rather than a function because the diagnostic
-/// type belongs to a crate this one does not depend on directly — it arrives
-/// through rolldown, and naming it would mean declaring a dependency to write
-/// one signature. The same reason, and the same shape, as `esdev build`'s.
-macro_rules! reported {
-    () => {
-        |error| {
-            diagnostics(
-                error
-                    .into_vec()
-                    .into_iter()
-                    .map(|diagnostic| (diagnostic.id(), diagnostic))
-                    .collect(),
-            )
-        }
-    };
-}
-
+/// Rolldown reports a failure as a *batch* of diagnostics, and the guest gets
+/// all of them: a thrown `Error` has one message, and hiding the other four
+/// behind "and 4 more" is how a build error becomes a bug report.
+///
+/// Each arrives as a [`Failure`](crate::bundler::Failure) — the summary, the
+/// module, and **the line, column and code frame** the bundler already computed
+/// for its own output. A dev server's overlay is the reason it is not a string
+/// any more: with a string it could name a file and then had to stop.
 /// One build, start to finish.
 ///
 /// The `Bundler` is constructed here rather than kept between calls, and that
@@ -259,7 +258,7 @@ async fn run(
     output: OutputOptions,
     write: bool,
     bridge: Arc<Bridge>,
-) -> Result<Built, String> {
+) -> Result<Built, Vec<Failure>> {
     // What `generate()`/`write()` said wins; what only `build()` said stands.
     let output = output.over(&options.bundler.output);
     // Whatever a plugin says through `this.warn()` during this build. Rolldown
@@ -298,18 +297,21 @@ async fn run(
     }));
 
     let mut bundler = BundlerBuilder::default()
-        .with_options(crate::bundler::translate(&options.bundler, output, {
-            let logs = logs.clone();
-            Some(Arc::new(move |line| logs.lock().expect("logs").push(line)))
-        })?)
+        .with_options(
+            crate::bundler::translate(&options.bundler, output, {
+                let logs = logs.clone();
+                Some(Arc::new(move |line| logs.lock().expect("logs").push(line)))
+            })
+            .map_err(|e| vec![plain("INVALID_OPTIONS", e)])?,
+        )
         .with_plugins(plugins)
         .build()
-        .map_err(reported!())?;
+        .map_err(|e| failures!(e))?;
 
     let built = if write {
-        bundler.write().await.map_err(reported!())?
+        bundler.write().await.map_err(|e| failures!(e))?
     } else {
-        bundler.generate().await.map_err(reported!())?
+        bundler.generate().await.map_err(|e| failures!(e))?
     };
 
     // Read *after* the build: the set is what this run actually touched,

@@ -126,37 +126,16 @@ pub struct BuildConfig {
 ///
 /// Rolldown's own `Display` is the message alone — "Unexpected token" — which
 /// in a project of twenty files is most of a question rather than an answer.
-/// The module id is what turns it into one, and it is the first thing a dev
-/// loop's user needs, because they are looking at the editor rather than the
-/// terminal when it happens.
-fn diagnostics<D: std::fmt::Display>(reported: Vec<(Option<String>, D)>) -> String {
-    reported
-        .into_iter()
-        .map(|(id, diagnostic)| match id {
-            Some(id) => format!("{id}: {diagnostic}"),
-            None => diagnostic.to_string(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The bundler's failures, paired with the module each came from.
-///
-/// Spelled at the call sites rather than as a typed helper because the
-/// diagnostic type belongs to a crate this one does not depend on directly —
-/// it arrives through rolldown, and naming it would mean declaring a
-/// dependency to write one signature.
+/// The **frame** is what turns it into one: the file, the line, the column and
+/// the offending source with the span underlined, which the bundler already
+/// renders for its own output. That is the first thing a dev loop's user needs,
+/// because they are looking at the editor rather than the terminal when it
+/// happens. Where a diagnostic has no frame — an unresolved import names no
+/// span — the module id and the summary are what is left, and that is what
+/// prints.
 macro_rules! reported {
     () => {
-        |error| {
-            $crate::build::diagnostics(
-                error
-                    .into_vec()
-                    .into_iter()
-                    .map(|diagnostic| (diagnostic.id(), diagnostic))
-                    .collect(),
-            )
-        }
+        |error| $crate::bundler::report(&$crate::failures!(error))
     };
 }
 

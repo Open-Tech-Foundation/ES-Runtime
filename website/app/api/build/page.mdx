@@ -99,7 +99,7 @@ at all.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `output` | `(OutputChunk \| OutputAsset)[]` | Chunks carry `code`, `fileName`, `isEntry`, `moduleIds`, `imports`, `dynamicImports`, `map`. |
+| `output` | `(OutputChunk \| OutputAsset)[]` | Chunks carry `code`, `fileName`, `isEntry`, `facadeModuleId`, `moduleIds`, `imports`, `dynamicImports`, `map`. |
 | `watchFiles` | `string[]` | Every file the build read, **plus** every file a plugin returned as [`dependsOn`](#dependson). |
 | `warnings` | `string[]` | The bundler's warnings and the plugins'. |
 
@@ -108,6 +108,41 @@ at all.
 cached chunks whose dependencies changed and keep the other thirty-seven —
 instead of clearing everything on every save, which is the same as having no
 cache.
+
+`facadeModuleId` is the module a chunk *is* — the entry it was built for, or the
+module behind a dynamic import — and `null` for a shared chunk. It is how you
+find one entry's chunk; `output.find((c) => c.isEntry)` asks a different
+question, since an emitted worker chunk is an entry as well.
+
+### When a build fails
+
+`generate()` and `write()` throw a `BuildError`, whose `errors` is **every**
+diagnostic of the batch — a thrown `Error` has one message, and hiding the other
+four behind *"and 4 more"* is how a build error becomes a bug report.
+
+| Field | Description |
+| --- | --- |
+| `message` | What went wrong, without the module or the excerpt. |
+| `id` | The module it happened in, or `null`. |
+| `plugin` | The plugin that reported it, or `null`. |
+| `kind` | The bundler's classification — `PARSE_ERROR`, `UNRESOLVED_IMPORT`, … |
+| `line` | 1-based, or `null`. |
+| `column` | 0-based, in **UTF-16 code units** — what an editor counts in. |
+| `frame` | The offending line with the span underlined, uncoloured. |
+
+```js
+try {
+  await bundle.write({ dir: "dist" });
+} catch (err) {
+  for (const e of err.errors) {
+    overlay.show(`${e.id}:${e.line}:${e.column}`, e.frame ?? e.message);
+  }
+}
+```
+
+An error used to be a string — the module id, a colon and *"Unexpected token"* —
+so an overlay could name the file and then had to stop. The bundler computed the
+line, the column and the frame all along for its own terminal output.
 
 ## Plugins
 

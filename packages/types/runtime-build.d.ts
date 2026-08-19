@@ -219,6 +219,42 @@ declare module "runtime:build" {
     cwd?: string;
   }
 
+  /** One diagnostic of a failed build, and where it happened. */
+  export interface BuildFailure {
+    /** What went wrong, without the module or the excerpt. */
+    message: string;
+    /** The module it happened in, when the diagnostic names one. */
+    id: string | null;
+    /** The plugin that reported it, for a failure that came from one. */
+    plugin: string | null;
+    /** The bundler's classification: `PARSE_ERROR`, `UNRESOLVED_IMPORT`, … */
+    kind: string;
+    /** 1-based. */
+    line: number | null;
+    /** 0-based, in UTF-16 code units — the unit an editor counts in. */
+    column: number | null;
+    /** The offending line, with the span underlined. Uncoloured. */
+    frame: string | null;
+  }
+
+  /**
+   * What `generate()` and `write()` throw. `errors` is **every** diagnostic of
+   * the batch, not the first: hiding the other four behind "and 4 more" is how
+   * a build error becomes a bug report.
+   *
+   * ```ts
+   * catch (err) {
+   *   for (const e of (err as BuildError).errors) {
+   *     overlay.show(`${e.id}:${e.line}:${e.column}`, e.frame ?? e.message);
+   *   }
+   * }
+   * ```
+   */
+  export class BuildError extends Error {
+    name: "BuildError";
+    errors: BuildFailure[];
+  }
+
   export interface OutputChunk {
     type: "chunk";
     fileName: string;

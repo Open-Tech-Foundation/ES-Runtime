@@ -148,11 +148,15 @@ impl HostExtension for BuildExtension {
                 let output = output_options(args.get(1));
                 Box::pin(async move {
                     let server = this.server()?;
-                    let built = server
-                        .generate(id, false, output)
-                        .await
-                        .map_err(build_error)?;
-                    Ok(built_value(built))
+                    // A failed build **resolves**, with the failures in
+                    // it. An op can only reject with a message, and a message
+                    // is exactly what a build error is not: the guest throws
+                    // its own error from these, carrying the line, the column
+                    // and the frame for each one.
+                    Ok(match server.generate(id, false, output).await {
+                        Ok(built) => built_value(built),
+                        Err(failures) => failed_value(&failures),
+                    })
                 })
             })
             .requires(Capability::FileRead),
@@ -167,11 +171,15 @@ impl HostExtension for BuildExtension {
                 let output = output_options(args.get(1));
                 Box::pin(async move {
                     let server = this.server()?;
-                    let built = server
-                        .generate(id, true, output)
-                        .await
-                        .map_err(build_error)?;
-                    Ok(built_value(built))
+                    // A failed build **resolves**, with the failures in
+                    // it. An op can only reject with a message, and a message
+                    // is exactly what a build error is not: the guest throws
+                    // its own error from these, carrying the line, the column
+                    // and the frame for each one.
+                    Ok(match server.generate(id, true, output).await {
+                        Ok(built) => built_value(built),
+                        Err(failures) => failed_value(&failures),
+                    })
                 })
             })
             .requires(Capability::FileRead)
@@ -533,6 +541,32 @@ fn built_value(built: server::Built) -> Value {
         ("watchFiles".to_string(), strings(built.watch_files)),
         ("warnings".to_string(), strings(built.warnings)),
     ])
+}
+
+/// A build that failed, as the guest reads it: every diagnostic, each with
+/// where it happened.
+fn failed_value(failures: &[crate::bundler::Failure]) -> Value {
+    let errors = failures
+        .iter()
+        .map(|failure| {
+            let text = |value: &Option<String>| {
+                value.clone().map_or(Value::Null, Value::String)
+            };
+            let number = |value: Option<u32>| {
+                value.map_or(Value::Null, |n| Value::Number(f64::from(n)))
+            };
+            Value::Object(vec![
+                ("message".to_string(), Value::String(failure.message.clone())),
+                ("id".to_string(), text(&failure.id)),
+                ("plugin".to_string(), text(&failure.plugin)),
+                ("kind".to_string(), Value::String(failure.kind.clone())),
+                ("line".to_string(), number(failure.line)),
+                ("column".to_string(), number(failure.column)),
+                ("frame".to_string(), text(&failure.frame)),
+            ])
+        })
+        .collect();
+    Value::Object(vec![("errors".to_string(), Value::Array(errors))])
 }
 
 fn strings(items: Vec<String>) -> Value {

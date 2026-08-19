@@ -3037,6 +3037,36 @@ question, since an emitted worker chunk is an entry as well.
 with `this.addWatchFile()`. Paired with [`runtime:watch`](#runtimewatch), it is
 what lets a dev server drop the chunks a change invalidates and keep the rest.
 
+### When a build fails
+
+`generate()` and `write()` throw a `BuildError`, whose `errors` is **every**
+diagnostic of the batch — a thrown `Error` has one message, and hiding the other
+four behind *"and 4 more"* is how a build error becomes a bug report.
+
+| Field | |
+| --- | --- |
+| `message` | What went wrong, without the module or the excerpt. |
+| `id` | The module it happened in, or `null`. |
+| `plugin` | The plugin that reported it, or `null`. |
+| `kind` | The bundler's classification — `PARSE_ERROR`, `UNRESOLVED_IMPORT`, … |
+| `line` | 1-based, or `null`. |
+| `column` | 0-based, in **UTF-16 code units** — what an editor counts in. |
+| `frame` | The offending line with the span underlined, uncoloured. |
+
+```js
+try {
+  await bundle.write({ dir: "dist" });
+} catch (err) {
+  for (const e of err.errors) {
+    overlay.show(`${e.id}:${e.line}:${e.column}`, e.frame ?? e.message);
+  }
+}
+```
+
+An error used to be a string — the module id, a colon, and *"Unexpected token"*
+— so an overlay could name the file and then had to stop. The bundler computed
+the rest all along for its own terminal output.
+
 ### Plugins
 
 The plugin system is **ours**, not the bundler's passed through: the `runtime:`

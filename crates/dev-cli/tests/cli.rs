@@ -4018,6 +4018,38 @@ fn runtime_watch_does_not_exist_under_esrun() {
 // `runtime:build` — the bundler, from guest JS (the other esdev-only module).
 // ---------------------------------------------------------------------------
 
+/// A failed build says **where**. It used to be a string — the module id, a
+/// colon and "Unexpected token" — so an overlay could name the file and then
+/// had to stop; the bundler computed the line, the column and the frame all
+/// along for its own terminal output.
+#[test]
+fn runtime_build_reports_where_a_build_failed() {
+    let dir = build_dir("rb_failure");
+    write_in(&dir, "broken.js", "export const a = 1;\nconst b = ;\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+const bundle = await build({ input: "broken.js" });
+try {
+  await bundle.generate({ format: "esm" });
+  console.log("NO ERROR");
+} catch (err) {
+  const [first] = err.errors;
+  console.log(err.name, err.errors.length, first.kind, first.line, first.column);
+  console.log(first.id.endsWith("broken.js"), first.frame.includes("const b = ;"));
+}
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("BuildError 1 PARSE_ERROR 2 10"), "{text}");
+    assert!(text.contains("true true"), "{text}");
+}
+
 /// The whole feature in one test: a plugin serving a **virtual module**
 /// (`resolveId` + `load`), a `transform`, an `external` **predicate**, output
 /// held in memory, and `watchFiles` covering both what was imported and what a

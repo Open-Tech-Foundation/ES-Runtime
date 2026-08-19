@@ -52,6 +52,110 @@ pub type ExternalFn = Arc<
 /// them into the result it hands back to the program that asked for the build.
 pub type LogSink = Arc<dyn Fn(String) + Send + Sync>;
 
+/// One thing that went wrong in a build, **with where it went wrong**.
+///
+/// A build error used to be a string: the module id, a colon, and the summary.
+/// That is enough to open the right file and nothing more — an editor overlay
+/// could name the file and then had to stop, and the reader went looking for
+/// "Unexpected token" by eye in a bundle of four hundred modules.
+///
+/// The bundler knows the rest and always did: it renders a code frame for its
+/// own terminal output and computes the line and column for its napi bindings.
+/// Both are read here and carried through, so an overlay can point at the
+/// character and a terminal can print the excerpt.
+#[derive(Clone, Debug)]
+pub struct Failure {
+    /// The summary — what went wrong, without the module or the excerpt.
+    pub message: String,
+    /// The module it happened in, when the diagnostic names one.
+    pub id: Option<String>,
+    /// The plugin that reported it, for a failure that came from one.
+    pub plugin: Option<String>,
+    /// The bundler's own classification (`PARSE_ERROR`, `UNRESOLVED_IMPORT`, …).
+    pub kind: String,
+    /// 1-based.
+    pub line: Option<u32>,
+    /// 0-based, in UTF-16 code units — the unit an editor counts in.
+    pub column: Option<u32>,
+    /// The rendered excerpt: the offending line, with the span underlined.
+    /// Uncoloured, because it travels to a browser overlay as often as to a
+    /// terminal.
+    pub frame: Option<String>,
+}
+
+impl Failure {
+    /// The one-line form: the module, then the summary. What a build error has
+    /// always printed as, kept so a caller that only wants a line still has one.
+    pub fn line_summary(&self) -> String {
+        match &self.id {
+            Some(id) => format!("{id}: {}", self.message),
+            None => self.message.clone(),
+        }
+    }
+
+    /// The whole of it, for a terminal: the summary line, then the frame under
+    /// it. The frame already names the file and the position, which is why it
+    /// replaces the summary line rather than following it.
+    pub fn report(&self) -> String {
+        match &self.frame {
+            Some(frame) if !frame.trim().is_empty() => frame.clone(),
+            _ => self.line_summary(),
+        }
+    }
+}
+
+/// Every failure in one of the bundler's batches, with its location.
+///
+/// A macro rather than a function because the diagnostic type belongs to a
+/// crate this one does not depend on directly — it arrives through rolldown,
+/// and naming it would mean declaring a dependency to write one signature. The
+/// same reason, and the same shape, as the `reported!` this replaces.
+#[macro_export]
+macro_rules! failures {
+    ($error:expr) => {{
+        {
+            $error
+                .into_vec()
+                .into_iter()
+                .map(|diagnostic| {
+                    let id = diagnostic.id();
+                    let plugin = diagnostic.plugin();
+                    let kind = diagnostic.kind().to_string();
+                    let message = diagnostic.to_string();
+                    // `to_diagnostic` is what the bundler renders its own
+                    // terminal output from: the labelled span, the source line
+                    // it points into, and the help text under it.
+                    let rendered = diagnostic.to_diagnostic();
+                    let at = rendered.get_primary_location();
+                    let frame = rendered.convert_to_string(false);
+                    $crate::bundler::Failure {
+                        message,
+                        id,
+                        plugin,
+                        kind,
+                        line: at.as_ref().and_then(|(_, line, _, _)| {
+                            u32::try_from(*line).ok()
+                        }),
+                        column: at.as_ref().and_then(|(_, _, column, _)| {
+                            u32::try_from(*column).ok()
+                        }),
+                        frame: (!frame.trim().is_empty()).then_some(frame),
+                    }
+                })
+                .collect::<Vec<$crate::bundler::Failure>>()
+        }
+    }};
+}
+
+/// Every failure in a batch, as the one string a caller that wants one prints.
+pub fn report(failures: &[Failure]) -> String {
+    failures
+        .iter()
+        .map(Failure::report)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// What `external` was.
 #[derive(Clone)]
 pub enum External {

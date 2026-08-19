@@ -322,6 +322,35 @@ function prepare(options) {
   return prepared;
 }
 
+// A build that failed, and **where**.
+//
+// A build error used to be a string — the module id, a colon, and "Unexpected
+// token" — which is enough to open the right file and nothing more. An editor
+// overlay could name the file and then had to stop, and the reader went looking
+// for the token by eye. The bundler knew the rest all along: it computes a line
+// and column and renders a code frame for its own terminal output, and both are
+// carried through now.
+//
+//   catch (err) {
+//     for (const e of err.errors) {
+//       overlay.show(`${e.id}:${e.line}:${e.column}`, e.frame ?? e.message);
+//     }
+//   }
+//
+// `errors` is every diagnostic of the batch, not the first: a thrown Error has
+// one message, and hiding the other four behind "and 4 more" is how a build
+// error becomes a bug report. Each carries `{ message, id, plugin, kind, line,
+// column, frame }`, with `line` 1-based, `column` 0-based in UTF-16 code units
+// (what an editor counts in), and any of them `null` when the diagnostic did
+// not point at a place.
+class BuildError extends Error {
+  constructor(errors) {
+    super(errors.map((e) => (e.id ? `${e.id}: ${e.message}` : e.message)).join("\n"));
+    this.name = "BuildError";
+    this.errors = errors;
+  }
+}
+
 // A build: the options, and whatever the last generate() produced.
 class Bundle {
   constructor(handle) {
@@ -355,6 +384,7 @@ class Bundle {
   async _run(op, output) {
     if (this._closed) throw new Error("this build is closed");
     const result = await ops[op](this._handle, output ?? null);
+    if (result.errors) throw new BuildError(result.errors);
     this.watchFiles = result.watchFiles;
     this.warnings = result.warnings;
     return result;
@@ -376,5 +406,5 @@ async function build(options) {
   return new Bundle(await ops.build_create(prepared));
 }
 
-export { build, Bundle };
+export { build, Bundle, BuildError };
 export default { build };
