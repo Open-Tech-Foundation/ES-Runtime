@@ -29,8 +29,22 @@ use es_runtime_cli_common::HostExtension;
 
 /// Every extension `esdev` installs on a run.
 pub fn extensions() -> Vec<Box<dyn HostExtension>> {
+    with_build(build::BuildExtension::new())
+}
+
+/// The same set, for the run that holds a project's configured plugins open
+/// while `esdev build` or `esdev start` bundles ([`crate::plugins`]).
+///
+/// The same three modules deliberately: a plugin is an ordinary program on this
+/// runtime, and one that watches a file or runs a compiler as a child process
+/// should find the same namespace any other program does.
+pub fn extensions_hosting(hosted: build::Hosted) -> Vec<Box<dyn HostExtension>> {
+    with_build(build::BuildExtension::hosting(hosted))
+}
+
+fn with_build(build: build::BuildExtension) -> Vec<Box<dyn HostExtension>> {
     vec![
-        Box::new(build::BuildExtension),
+        Box::new(build),
         Box::new(test::TestExtension),
         Box::new(watch::WatchExtension),
     ]

@@ -424,6 +424,10 @@ fn stylesheet(
 
 /// Builds an HTML target: bundle what it imports, copy what it references,
 /// write it back pointing at both.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every one is a distinct build setting; a struct would only move the list"
+)]
 pub async fn build(
     target: &Target,
     root: &Path,
@@ -432,6 +436,7 @@ pub async fn build(
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
+    plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<String, String> {
     let hash = dev.is_none();
     let entry = root.join(&target.entry);
@@ -532,7 +537,9 @@ pub async fn build(
             // Only in a hot dev loop. The transform's whole purpose is to keep
             // a component's state across a replacement, and a build that
             // replaces nothing has no state to keep.
-            dev.is_some_and(|dev| dev.hot) && target.refresh.as_deref() == Some("react"),
+            dev.is_some_and(|dev| dev.hot)
+                && target.refresh.as_deref() == Some(crate::config::BUILT_IN_REFRESH),
+            plugins,
         )
         .await?
     };

@@ -406,5 +406,28 @@ async function build(options) {
   return new Bundle(await ops.build_create(prepared));
 }
 
-export { build, Bundle, BuildError };
+// Hands this program's plugins to a build being driven from **outside** it, and
+// stays open until that build is done.
+//
+// This is the seam `esdev.json`'s `plugins` is built on, and it is not the API a
+// program that bundles should reach for — that one is `build()` above. A config
+// file is data and a plugin is a function, so esdev writes a small program that
+// imports the modules the file names and calls this with what they exported;
+// the build itself stays in the subcommand, where the HTML entries, the asset
+// copying and the staged output already live.
+//
+// It does not resolve until the outside build is finished, deliberately: this
+// isolate has to be alive to answer hooks, and an outstanding call is how a
+// program says it still has work. The pump alone cannot say it — a queue nobody
+// has posted to is not a reason to keep a program running.
+async function host(plugins) {
+  if (!Array.isArray(plugins)) {
+    throw new TypeError("host: plugins must be an array");
+  }
+  const described = plugins.filter((p) => p != null).map(describe);
+  pump();
+  await ops.build_host(described);
+}
+
+export { build, Bundle, BuildError, host };
 export default { build };

@@ -53,6 +53,7 @@ mod guest;
 mod html;
 mod inspect;
 mod install;
+mod plugins;
 mod prompt;
 mod refresh;
 mod resolve;
@@ -782,6 +783,9 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         lib,
         types: !no_types,
         dts_bundle,
+        // A command line names an entry, not a project, so there is no
+        // esdev.json to have declared any.
+        plugins: Vec::new(),
     })))
 }
 

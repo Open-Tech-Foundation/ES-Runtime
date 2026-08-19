@@ -18,6 +18,10 @@ path = "src/main.rs"
 es-runtime-cli-common.workspace = true
 es-runtime-common.workspace = true
 es-runtime-providers.workspace = true
+# A `file:` URL for a plugin module the config named by path — the generated
+# program that loads them has no file of its own for a relative specifier to be
+# relative to. Already in the tree (the loader speaks URLs), so no new crate.
+url.workspace = true
 tokio = { workspace = true, features = [
     "rt",
     "macros",

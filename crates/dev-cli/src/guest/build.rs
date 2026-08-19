@@ -82,7 +82,43 @@ use plugin::{Bridge, HookCall, HookReply};
 use server::{BuildServer, External, Options, OutputOptions};
 
 /// The `runtime:build` extension.
-pub struct BuildExtension;
+pub struct BuildExtension {
+    /// Set when this run exists to *serve* a build happening outside it — the
+    /// plugin host `esdev build` and `esdev start` start for a project's
+    /// configured plugins ([`crate::plugins`]).
+    ///
+    /// A `RefCell` because [`HostExtension::ops`] takes `&self` and these are
+    /// one-shot: the channels are moved into the ops the one time they are
+    /// built.
+    hosted: RefCell<Option<Hosted>>,
+}
+
+/// What a hosted run is wired to: the bridge the outside build posts hook calls
+/// on, the queue this isolate pumps them from, somewhere to hand the plugin
+/// declarations back, and the signal that the build is over.
+pub struct Hosted {
+    pub bridge: Arc<Bridge>,
+    pub hooks: mpsc::UnboundedReceiver<HookCall>,
+    pub declared: tokio::sync::oneshot::Sender<Result<Vec<Arc<contract::Plugin>>, String>>,
+    pub shutdown: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl BuildExtension {
+    /// The ordinary extension: a program that calls `build()` itself.
+    pub fn new() -> BuildExtension {
+        BuildExtension {
+            hosted: RefCell::new(None),
+        }
+    }
+
+    /// The extension for a run whose whole job is to hold a project's plugins
+    /// open for a build driven from outside it.
+    pub fn hosting(hosted: Hosted) -> BuildExtension {
+        BuildExtension {
+            hosted: RefCell::new(Some(hosted)),
+        }
+    }
+}
 
 const MODULES: &[HostModule] = &[HostModule {
     specifier: "runtime:build",
@@ -101,6 +137,14 @@ struct BuildState {
     server: Rc<RefCell<Option<Arc<BuildServer>>>>,
     file_system: Arc<dyn FileSystem>,
     base_dir: std::path::PathBuf,
+    /// The half of a hosted session the ops need: where the declarations go,
+    /// and what says the build is finished with them. Both are taken once.
+    session: RefCell<Option<Session>>,
+}
+
+struct Session {
+    declared: tokio::sync::oneshot::Sender<Result<Vec<Arc<contract::Plugin>>, String>>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 }
 
 impl HostExtension for BuildExtension {
@@ -109,13 +153,29 @@ impl HostExtension for BuildExtension {
     }
 
     fn ops(&self, ctx: &ExtensionContext<'_>) -> Vec<OpDecl> {
-        let (bridge, hooks) = Bridge::new();
+        // A hosted run shares the bridge with the build outside it; an ordinary
+        // one owns both ends of its own.
+        let (bridge, hooks, session) = match self.hosted.borrow_mut().take() {
+            Some(hosted) => (
+                hosted.bridge,
+                hosted.hooks,
+                Some(Session {
+                    declared: hosted.declared,
+                    shutdown: hosted.shutdown,
+                }),
+            ),
+            None => {
+                let (bridge, hooks) = Bridge::new();
+                (bridge, hooks, None)
+            }
+        };
         let state = Rc::new(BuildState {
             bridge,
             hooks: Rc::new(RefCell::new(hooks)),
             server: Rc::new(RefCell::new(None)),
             file_system: ctx.file_system.clone(),
             base_dir: ctx.base_dir.to_path_buf(),
+            session: RefCell::new(session),
         });
 
         let mut ops = Vec::new();
@@ -194,6 +254,49 @@ impl HostExtension for BuildExtension {
                 server.close(id);
             }
             Ok(Value::Undefined)
+        }));
+
+        // host(plugins) — this program's plugins, handed to the build running
+        // outside it.
+        //
+        // The seam `esdev.json`'s `plugins` is built on. A plugin is a
+        // function and a config file is data, so esdev writes a program that
+        // imports the modules the file names and calls this with what they
+        // exported; the build itself stays where it was, in the subcommand.
+        //
+        // It **does not return** until the build is finished with them, and
+        // that is the point rather than a limitation: the isolate has to stay
+        // alive to answer hooks, and a pending op is how a program says it has
+        // work outstanding. `build_hook` is `unref`'d and cannot do it — a
+        // pump waiting on a queue is not a reason to keep a program alive.
+        //
+        // Ungated: registering an object reaches nothing. The hooks it later
+        // runs are guest code under this run's own grants, like any other.
+        let this = state.clone();
+        ops.push(OpDecl::r#async("build_host", move |args| -> AsyncOp {
+            let this = this.clone();
+            let declared = plugins(args.first());
+            Box::pin(async move {
+                let Some(session) = this.session.borrow_mut().take() else {
+                    return Err(build_error(
+                        "nothing outside this program is driving a build —                          runtime:build's host() is how esdev loads a project's                          configured plugins, and a program that bundles calls                          build() instead"
+                            .to_string(),
+                    ));
+                };
+                // The host is waiting on this either way: a declaration it
+                // cannot read has to fail the build rather than leave it
+                // waiting for plugins that will never arrive.
+                let outcome = declared.map_err(|e| e.to_string());
+                let failed = outcome.is_err();
+                let _ = session.declared.send(outcome);
+                if failed {
+                    return Err(build_error("a plugin could not be read".to_string()));
+                }
+                // Resolves when the sender is dropped, which is what the host
+                // does when the last build is done.
+                let _ = session.shutdown.await;
+                Ok(Value::Undefined)
+            })
         }));
 
         // The pump: the next hook call for the guest to run.

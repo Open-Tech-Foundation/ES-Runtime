@@ -120,6 +120,15 @@ pub struct BuildConfig {
     /// The entry whose declarations are linked into one file, from
     /// `--dts-bundle[=<entry>]`. `None` leaves a `.d.ts` beside each module.
     pub dts_bundle: Option<String>,
+    /// The project's plugins that apply to this build ([`crate::plugins`]).
+    ///
+    /// Passes like any other, and installed in the same list as this
+    /// toolchain's own — which is what lets one declare `order: "pre"` and
+    /// claim a `.css` module before `esdev:css-modules` sees it. A plugin that
+    /// could only be ordered against other plugins could not do that, and
+    /// claiming a file type ahead of a built-in pass is most of what a
+    /// framework's plugin is for.
+    pub plugins: Vec<std::sync::Arc<dyn crate::contract::Pass>>,
 }
 
 /// A bundler failure, in the shape a person reads.
@@ -547,13 +556,14 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     let translated = crate::bundler::translate(&options, options.output.clone(), None)?;
     let mut bundler = rolldown::BundlerBuilder::default()
         .with_options(translated)
-        .with_plugins(vec![std::sync::Arc::new(crate::adapter::Adapter::new(
+        .with_plugins(installed(
             std::sync::Arc::new(crate::cssmodules::CssModules::new(
                 &cwd,
                 crate::cssmodules::Collected::new(),
                 config.minify,
             )),
-        ))])
+            &config.plugins,
+        ))
         .build()
         .map_err(reported!())?;
     bundler.write().await.map_err(reported!())?;
@@ -637,6 +647,7 @@ pub async fn bundle_browser_entries(
     conditions: Vec<String>,
     hmr: Option<String>,
     refresh: bool,
+    plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
@@ -653,9 +664,16 @@ pub async fn bundle_browser_entries(
     // bundler, and reusing it would apply the first run's options to the
     // second's inputs.
     let key = format!(
-        "{entries:?}|{}|{}|{minify}|{hash}|{refresh}|{define:?}|{conditions:?}",
+        "{entries:?}|{}|{}|{minify}|{hash}|{refresh}|{define:?}|{conditions:?}|{}",
         root.display(),
-        out_dir.display()
+        out_dir.display(),
+        // A plugin list that changed is a different build, and a warm bundler
+        // carrying the old one would apply plugins the project no longer has.
+        plugins
+            .iter()
+            .map(|p| p.name())
+            .collect::<Vec<_>>()
+            .join(","),
     );
     let options = crate::bundler::Options {
         input: entries
@@ -697,7 +715,10 @@ pub async fn bundle_browser_entries(
     // made a fresh one each build would be reading an empty one.
     let styles = if dev {
         let held = warm().lock().await;
-        build_warm(held, &key, root, out_dir, &options, minify, refresh).await?
+        build_warm(
+            held, &key, root, out_dir, &options, minify, refresh, plugins,
+        )
+        .await?
     } else {
         let styles = crate::cssmodules::Collected::new();
         let mut bundler = rolldown::BundlerBuilder::default()
@@ -706,7 +727,7 @@ pub async fn bundle_browser_entries(
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(browser_plugins(root, &styles, minify, refresh))
+            .with_plugins(browser_plugins(root, &styles, minify, refresh, plugins))
             .build()
             .map_err(reported!())?;
         bundler.write().await.map_err(reported!())?;
@@ -740,21 +761,44 @@ fn browser_plugins(
     styles: &crate::cssmodules::Collected,
     minify: bool,
     refresh: bool,
+    configured: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
-    let mut plugins: Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> =
-        vec![std::sync::Arc::new(crate::adapter::Adapter::new(
-            std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                root,
-                styles.clone(),
-                minify,
-            )),
-        ))];
+    let mut plugins = installed(
+        std::sync::Arc::new(crate::cssmodules::CssModules::new(
+            root,
+            styles.clone(),
+            minify,
+        )),
+        configured,
+    );
     if refresh {
         plugins.push(std::sync::Arc::new(crate::adapter::Adapter::new(
             std::sync::Arc::new(crate::refresh::ReactRefresh::new()),
         )));
     }
     plugins
+}
+
+/// This toolchain's own pass, then the project's, through one adapter each.
+///
+/// One list, deliberately. A configured plugin is a
+/// [`Pass`](crate::contract::Pass) exactly as `esdev:css-modules` is, so the
+/// backend sorts them together by the `order` each declared — which is how a
+/// plugin that says `order: "pre"` gets a `.css` file before the CSS Modules
+/// pass does. Keeping the project's plugins in a list of their own would make
+/// `pre` mean "before the other plugins", which is not what anyone writing it
+/// means.
+fn installed(
+    own: std::sync::Arc<dyn crate::contract::Pass>,
+    configured: &[std::sync::Arc<dyn crate::contract::Pass>],
+) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
+    std::iter::once(own)
+        .chain(configured.iter().cloned())
+        .map(|pass| {
+            std::sync::Arc::new(crate::adapter::Adapter::new(pass))
+                as std::sync::Arc<dyn rolldown::plugin::Pluginable>
+        })
+        .collect()
 }
 
 /// The browser bundler, held across the rebuilds of one `esdev start`.
@@ -963,6 +1007,10 @@ pub async fn hot_update(changed: &[PathBuf]) -> Option<Hot> {
 
 /// Builds the browser entries on the held bundler, making one if there is none
 /// or if the settings have changed.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every one is a distinct build setting; a struct would only move the list"
+)]
 async fn build_warm(
     mut held: tokio::sync::MutexGuard<'_, Option<Warm>>,
     key: &str,
@@ -971,6 +1019,7 @@ async fn build_warm(
     options: &crate::bundler::Options,
     minify: bool,
     refresh: bool,
+    plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Result<Vec<crate::cssmodules::Sheet>, String> {
     if held.as_ref().is_none_or(|warm| warm.key != key) {
         let styles = crate::cssmodules::Collected::new();
@@ -980,7 +1029,7 @@ async fn build_warm(
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(browser_plugins(root, &styles, minify, refresh))
+            .with_plugins(browser_plugins(root, &styles, minify, refresh, plugins))
             .build()
             .map_err(reported!())?;
         *held = Some(Warm {
@@ -1209,7 +1258,17 @@ async fn build_targets(
     selected: &[&crate::config::Target],
     staging: &crate::staging::Staging,
 ) -> Result<(), String> {
+    // Started once, on the first build that needs it, and kept for the run:
+    // a dev loop rebuilds on every save, and evaluating a plugin's module —
+    // and whatever it initialises — per keystroke would be paying a startup
+    // cost forty times a minute. A project with no `plugins` starts nothing.
+    let host = crate::plugins::host(&project.project.dir, &project.project.plugins).await?;
+
     for target in selected {
+        let plugins = host
+            .as_ref()
+            .map(|host| host.passes(&target.plugins))
+            .unwrap_or_default();
         let mut defines = target.define.clone();
         defines.extend(project.defines.iter().cloned());
         let mut conditions = target.conditions.clone();
@@ -1233,6 +1292,7 @@ async fn build_targets(
                 target.minify || project.minify,
                 defines,
                 conditions,
+                &plugins,
             )
             .await
             .map_err(|e| format!("target \"{}\": {e}", target.name))?;
@@ -1273,6 +1333,7 @@ async fn build_targets(
             lib: false,
             types: false,
             dts_bundle: None,
+            plugins,
         })
         .await
         .map_err(|e| format!("target \"{}\": {}", target.name, staging.reveal(&e)))?;

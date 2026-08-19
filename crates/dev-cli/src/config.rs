@@ -72,6 +72,32 @@ pub struct Project {
     /// and pasteable into a terminal. The translation happens once, here, and
     /// is checked by `esrun`'s own parser on the way through.
     pub permissions: Vec<String>,
+    /// Every plugin this project loads, in the order they are loaded — the
+    /// top-level ones first, then each target's own.
+    ///
+    /// One flat list rather than a list per target because they are loaded
+    /// **once**, into one isolate that lives for the run
+    /// ([`crate::plugins`]); a target names the ones that apply to it by
+    /// index. A dev loop rebuilds forty times a minute and a plugin is a
+    /// module with a module's initialisation, so paying for it per build would
+    /// be paying for it forty times.
+    pub plugins: Vec<PluginSpec>,
+}
+
+/// One plugin, as the file names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PluginSpec {
+    /// The module to import — a path relative to the project, or a package.
+    pub module: String,
+    /// Which export the plugin is. `None` is the default export.
+    pub export: Option<String>,
+    /// What to call it with, when the export is a **factory**.
+    ///
+    /// A plugin that takes options is a function you call, and JSON cannot
+    /// hold the call — so the file holds the argument instead and esdev makes
+    /// the call. An export that is not a function is the plugin itself, and
+    /// naming options for one is refused rather than ignored.
+    pub options: Option<Value>,
 }
 
 /// What `esdev start` runs and watches.
@@ -124,6 +150,14 @@ pub struct Target {
     pub define: Vec<(String, String)>,
     /// Extra `exports` conditions, as `--conditions` adds them.
     pub conditions: Vec<String>,
+    /// The plugins that apply to this target, as indices into
+    /// [`Project::plugins`] — the project's own first, then this target's.
+    ///
+    /// Indices rather than the specs themselves because a plugin is *loaded*
+    /// once and used by however many targets name it: two targets that both
+    /// take the project's `plugins` share the one instance, and the module
+    /// they came from is evaluated once.
+    pub plugins: Vec<usize>,
     /// Whether the built output is *executed* once the build finishes.
     ///
     /// This is how a static site gets generated without esdev knowing what a
@@ -182,6 +216,7 @@ pub enum Platform {
 /// The keys a target may carry.
 const TARGET_KEYS: &[&str] = &[
     "entry",
+    "plugins",
     "out",
     "outdir",
     "platform",
@@ -194,7 +229,7 @@ const TARGET_KEYS: &[&str] = &[
 ];
 
 /// The keys the file may carry at the top level.
-const TOP_LEVEL_KEYS: &[&str] = &["$schema", "targets", "start", "permissions"];
+const TOP_LEVEL_KEYS: &[&str] = &["$schema", "targets", "start", "permissions", "plugins"];
 
 /// The keys `start` may carry.
 ///
@@ -275,9 +310,17 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
              An empty object builds nothing; remove the file or name what it builds."
         ));
     }
+    // The project's own plugins load first, and every target gets them. A
+    // target's list adds to that rather than replacing it: a project that
+    // compiles `.mdx` compiles it for the server bundle and the browser one,
+    // and a config where naming one extra plugin silently dropped the shared
+    // ones would be a build that differs between targets for no stated reason.
+    let mut plugins = plugin_specs(root.get("plugins"), name, "`plugins`")?;
+    let shared: Vec<usize> = (0..plugins.len()).collect();
+
     let mut targets = targets
         .iter()
-        .map(|(target_name, value)| target(target_name, value, name))
+        .map(|(target_name, value)| target(target_name, value, name, &shared, &mut plugins))
         .collect::<Result<Vec<_>, _>>()?;
     // Sorted here rather than taken as they came. `serde_json` keeps insertion
     // order only when a feature enables it, and that feature is currently on
@@ -298,11 +341,18 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         targets,
         start,
         permissions,
+        plugins,
     }))
 }
 
 /// Parses one entry of `targets`.
-fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
+fn target(
+    name: &str,
+    value: &Value,
+    file: &str,
+    shared: &[usize],
+    plugins: &mut Vec<PluginSpec>,
+) -> Result<Target, String> {
     let at = format!("target \"{name}\"");
     if name.trim().is_empty() || name.chars().any(char::is_whitespace) {
         return Err(format!(
@@ -401,6 +451,15 @@ fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
         ));
     }
 
+    // Resolved before the target is built, because two of its fields depend on
+    // it: which plugins apply, and whether a `refresh` scheme esdev does not
+    // implement has anything that could.
+    let mut mine = shared.to_vec();
+    for spec in plugin_specs(map.get("plugins"), file, &format!("{at}'s `plugins`"))? {
+        mine.push(plugins.len());
+        plugins.push(spec);
+    }
+
     let built = Target {
         name: name.to_string(),
         entry,
@@ -410,7 +469,8 @@ fn target(name: &str, value: &Value, file: &str) -> Result<Target, String> {
         minify: flag(map.get("minify"), file, &format!("{at}'s `minify`"))?,
         define: defines(map.get("define"), file, &at)?,
         conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
-        refresh: refresh(map.get("refresh"), file, &at)?,
+        refresh: refresh(map.get("refresh"), file, &at, !mine.is_empty())?,
+        plugins: mine,
         run_after_build,
     };
 
@@ -504,22 +564,126 @@ fn read_port(map: &Map<String, Value>, key: &str, file: &str) -> Result<Option<u
     }
 }
 
-/// `refresh`, checked against what is actually implemented.
+/// Reads a `plugins` list.
 ///
-/// Refused rather than ignored: a name that is quietly dropped is a project
-/// whose components stop keeping their state one day, with the reason sitting
-/// unread in a config file.
-fn refresh(value: Option<&Value>, file: &str, at: &str) -> Result<Option<String>, String> {
+/// # Why a config file can carry a plugin at all
+///
+/// The header of this file argues that an executable config would be "a program
+/// whose entire content is data", and that argument turned on esdev having no
+/// plugin API. It has one — `runtime:build`'s, the same contract this
+/// toolchain's own passes implement — and without a way to say so here, a
+/// project that compiles `.jsx` or `.mdx` could only be built by a *program*
+/// that called `build()` itself. `esdev build` and `esdev start` could not
+/// build it at all.
+///
+/// So the file names the module and esdev imports it. What JSON cannot hold is
+/// the **call**: a plugin that takes options is a factory, and `mdx({ …})` is a
+/// function application. The file holds the argument instead —
+/// `{ "module": "…", "options": { … } }` — and esdev makes the call. That is
+/// the whole of the difference from an executable config, and it keeps
+/// `permissions` decidable without running anything: this file is still read as
+/// data, and the plugins load *after* what the run may do has been settled.
+///
+/// Two spellings, because most plugins need no options:
+///
+/// ```json
+/// "plugins": ["./plugins/mdx.js", { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }]
+/// ```
+fn plugin_specs(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<PluginSpec>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let items = value.as_array().ok_or_else(|| {
+        format!(
+            "{file}: {at} is {}, and should be a list of plugins.\n\n\
+             Each is a module to import — a path in this project, or a package: \
+             \"plugins\": [\"./plugins/mdx.js\"]",
+            kind(value)
+        )
+    })?;
+    items
+        .iter()
+        .map(|item| plugin_spec(item, file, at))
+        .collect()
+}
+
+fn plugin_spec(value: &Value, file: &str, at: &str) -> Result<PluginSpec, String> {
+    if let Value::String(_) = value {
+        return Ok(PluginSpec {
+            module: string(value, file, at)?.to_string(),
+            export: None,
+            options: None,
+        });
+    }
+    let map = object(value, file, at).map_err(|_| {
+        format!(
+            "{file}: {at} has {}, and a plugin is a module to import.\n\n\
+             Write the module — \"./plugins/mdx.js\" — or an object naming it with \
+             what to call it with: {{ \"module\": \"./plugins/mdx.js\", \"options\": {{ … }} }}",
+            kind(value)
+        )
+    })?;
+    known_keys(map, file, at, &["module", "export", "options"])?;
+    let module = match map.get("module") {
+        Some(module) => string(module, file, &format!("{at}'s `module`"))?.to_string(),
+        None => {
+            return Err(format!(
+                "{file}: {at} has no `module`.\n\n\
+                 A plugin is a module to import: {{ \"module\": \"./plugins/mdx.js\" }}"
+            ));
+        }
+    };
+    let export = match map.get("export") {
+        None => None,
+        Some(export) => Some(string(export, file, &format!("{at}'s `export`"))?.to_string()),
+    };
+    Ok(PluginSpec {
+        module,
+        export,
+        options: map.get("options").cloned(),
+    })
+}
+
+/// The scheme esdev implements itself. Others come from plugins.
+pub const BUILT_IN_REFRESH: &str = "react";
+
+/// `refresh`, checked against what can actually implement it.
+///
+/// A name is refused rather than ignored, because a name that is quietly
+/// dropped is a project whose components stop keeping their state one day, with
+/// the reason sitting unread in a config file.
+///
+/// **But esdev is no longer the only thing that can implement one.** `"react"`
+/// is built in ([`crate::refresh`]) and was for a while the only name allowed,
+/// which meant every framework that was not React got a full page reload on
+/// every edit while the React template kept its state — not because the
+/// mechanism was missing (`import.meta.hot` is the same for everyone) but
+/// because the config would not let the target say it had a scheme. A plugin
+/// can now write the per-module half itself, against the same
+/// [`Pass`](crate::contract::Pass) `react-refresh` uses.
+///
+/// So an unknown name is accepted **when the target has plugins**, and refused
+/// when it does not — where there is nothing that could implement it, the name
+/// is a typo, and saying so is the whole point of checking.
+fn refresh(
+    value: Option<&Value>,
+    file: &str,
+    at: &str,
+    has_plugins: bool,
+) -> Result<Option<String>, String> {
     let Some(value) = value else {
         return Ok(None);
     };
     let name = string(value, file, &format!("{at}'s `refresh`"))?;
-    if name != "react" {
+    if name != BUILT_IN_REFRESH && !has_plugins {
         return Err(format!(
-            "{file}: {at}'s `refresh` is \"{name}\", and the only scheme implemented is \"react\".\n\n\
+            "{file}: {at}'s `refresh` is \"{name}\", and the only scheme esdev \
+             implements is \"{BUILT_IN_REFRESH}\".\n\n\
              It names the framework whose hot-reload convention this target's modules \
              are prepared for — React's registers components and matches hook \
-             signatures so a component keeps its state across an edit."
+             signatures so a component keeps its state across an edit. Another \
+             framework's is a `plugins` entry: a transform against the same contract, \
+             and the name here is what tells it the dev loop is hot."
         ));
     }
     Ok(Some(name.to_string()))
