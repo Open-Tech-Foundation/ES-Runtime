@@ -13,6 +13,8 @@ itself.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-19
+
 ### Added
 
 - **`runtime:workers` — the durable-worker surface**, in a declaration file of
