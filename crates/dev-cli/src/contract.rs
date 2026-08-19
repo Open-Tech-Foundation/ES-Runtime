@@ -111,15 +111,16 @@ pub enum Pattern {
     /// project is a filter nobody can reason about.
     Exact(String),
     /// A regular expression, compiled from the guest's own `RegExp`.
-    Regex(regex::Regex),
-    /// A `RegExp` this side could not compile — JavaScript's syntax is larger
-    /// than the `regex` crate's (backreferences, lookaround).
     ///
-    /// **Matches everything.** A filter that cannot be evaluated must not
-    /// silently exclude modules the plugin was meant to see; the cost of being
-    /// wrong that way is a plugin that mysteriously does nothing. Erring the
-    /// other way costs a crossing, and the plugin's own code still decides.
-    Unsupported,
+    /// There is no third variant for "could not compile". A pattern this side
+    /// cannot evaluate is **refused where it was written** ([`compile`]), and
+    /// that is a fix rather than a policy: it used to become a pattern that
+    /// matched *everything*, so `/\0virtual/` — the id convention every plugin
+    /// ported from rollup filters on — silently claimed every module in the
+    /// graph, entry included. A filter that cannot be evaluated cannot be
+    /// honoured either way; saying so at the declaration is the only answer
+    /// that reaches the person who can change it.
+    Regex(regex::Regex),
 }
 
 impl Pattern {
@@ -127,7 +128,6 @@ impl Pattern {
         match self {
             Pattern::Exact(want) => text == want,
             Pattern::Regex(re) => re.is_match(text),
-            Pattern::Unsupported => true,
         }
     }
 }
@@ -494,6 +494,21 @@ fn describe(value: &Value) -> String {
     }
 }
 
+/// What a value is, for a rejection that has to name it. Narrower than
+/// [`describe`], which is about a hook's *return* and says what to write
+/// instead.
+fn kind(value: &Value) -> &'static str {
+    match value {
+        Value::String(_) => "a string",
+        Value::Number(_) => "a number",
+        Value::Bool(_) => "a boolean",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+        Value::Null => "null",
+        _ => "nothing",
+    }
+}
+
 // --- reading the guest's declaration ----------------------------------------
 
 /// Every hook name, for the "did you mean" in a rejection.
@@ -572,8 +587,11 @@ fn filter(plugin: &str, hook: Hook, value: Option<&Value>) -> Result<Filter, OpE
     if matches!(value, Value::Null | Value::Undefined) {
         return Ok(Filter::default());
     }
-    let id = patterns(field(value, "id"));
-    let code = patterns(field(value, "code"));
+    let at = |e: String| {
+        OpError::type_error(format!("{plugin}.{}: {e}", hook.name()))
+    };
+    let id = patterns(field(value, "id")).map_err(at)?;
+    let code = patterns(field(value, "code")).map_err(at)?;
     // Only `transform` is handed code to match against; a `code` filter on
     // anything else is a mistake worth naming rather than dropping.
     if !code.is_empty() && hook != Hook::Transform {
@@ -587,23 +605,33 @@ fn filter(plugin: &str, hook: Hook, value: Option<&Value>) -> Result<Filter, OpE
 
 /// One pattern, or a list of them. A string is exact; an object with `source`
 /// is a `RegExp` the guest sent as its own two parts.
-fn patterns(value: Option<&Value>) -> Vec<Pattern> {
+///
+/// Anything else is refused rather than dropped. A filter is the thing that
+/// decides which modules a hook is handed, so a pattern that was quietly
+/// ignored is a hook that runs on the wrong set — the same failure the
+/// uncompilable-regex case below produces, arriving through a typo instead.
+fn patterns(value: Option<&Value>) -> Result<Vec<Pattern>, String> {
     match value {
-        None => Vec::new(),
-        Some(Value::Array(items)) => items.iter().filter_map(pattern).collect(),
-        Some(one) => pattern(one).into_iter().collect(),
+        None => Ok(Vec::new()),
+        Some(Value::Array(items)) => items.iter().map(pattern).collect(),
+        Some(one) => Ok(vec![pattern(one)?]),
     }
 }
 
-fn pattern(value: &Value) -> Option<Pattern> {
+fn pattern(value: &Value) -> Result<Pattern, String> {
     match value {
-        Value::String(exact) => Some(Pattern::Exact(exact.clone())),
+        Value::String(exact) => Ok(Pattern::Exact(exact.clone())),
         Value::Object(_) => {
-            let source = field(value, "source")?.as_str()?;
+            let source = field(value, "source")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "a filter pattern must be a string or a RegExp".to_string())?;
             let flags = field(value, "flags").and_then(Value::as_str).unwrap_or("");
-            Some(compile(source, flags))
+            compile(source, flags)
         }
-        _ => None,
+        other => Err(format!(
+            "a filter pattern must be a string or a RegExp, got {}",
+            kind(other)
+        )),
     }
 }
 
@@ -611,10 +639,23 @@ fn pattern(value: &Value) -> Option<Pattern> {
 ///
 /// The flags that have a meaning here are translated into the inline form the
 /// `regex` crate takes; `g` and `y` are about a *search's* state rather than
-/// the pattern, and mean nothing to a predicate. A pattern using syntax this
-/// crate does not have — a backreference, a lookahead — cannot be evaluated
-/// here and becomes [`Pattern::Unsupported`], which admits everything.
-fn compile(source: &str, flags: &str) -> Pattern {
+/// the pattern, and mean nothing to a predicate.
+///
+/// # Why a pattern that will not compile is an error
+///
+/// It used to become a pattern that admitted **everything**, on the reasoning
+/// that a plugin which mysteriously does nothing is worse than one that is
+/// asked about a module it did not want. That reasoning was wrong in the one
+/// place it was most likely to be tested: `\0` is rollup's virtual-module
+/// convention, so `/\0virtual/` is the first filter every ported plugin
+/// writes — and the `regex` crate has no `\0` escape, so the filter compiled to
+/// nothing and the plugin's `load` hook claimed the entry module. A `load` that
+/// answers is not a crossing wasted; it is the wrong module's contents.
+///
+/// So: the escapes JavaScript has and this crate spells differently are
+/// [translated](js_syntax), and whatever is left that will not compile is
+/// refused at the declaration, where the person who wrote it is looking.
+fn compile(source: &str, flags: &str) -> Result<Pattern, String> {
     let mut inline = String::new();
     if flags.contains('i') {
         inline.push('i');
@@ -625,15 +666,57 @@ fn compile(source: &str, flags: &str) -> Pattern {
     if flags.contains('s') {
         inline.push('s');
     }
+    let translated = js_syntax(source);
     let pattern = if inline.is_empty() {
-        source.to_string()
+        translated
     } else {
-        format!("(?{inline}){source}")
+        format!("(?{inline}){translated}")
     };
-    match regex::Regex::new(&pattern) {
-        Ok(re) => Pattern::Regex(re),
-        Err(_) => Pattern::Unsupported,
+    regex::Regex::new(&pattern).map(Pattern::Regex).map_err(|e| {
+        format!(
+            "/{source}/{flags} cannot be evaluated here: {e}\n\n\
+             Filters are matched by the host, before a hook is called, so the \
+             pattern is compiled by Rust's `regex` — which has no backreferences \
+             and no lookaround. Rewrite the pattern, or drop the filter and let \
+             the hook decide."
+        )
+    })
+}
+
+/// The JavaScript regular-expression escapes this crate spells differently.
+///
+/// Two of them, and both appear in ordinary plugin filters:
+///
+/// * `\0` — a NUL. JavaScript's escape for it; the `regex` crate wants `\x00`.
+///   This is rollup's virtual-module prefix, so it is in the first filter most
+///   ported plugins write.
+/// * `\/` — an escaped delimiter. Legal inside a `/…/` literal and meaningless
+///   to a crate whose patterns are strings, which rejects the escape outright.
+///
+/// Nothing else is rewritten: a translation table that guessed would be a
+/// second regular-expression dialect to keep true, and everything it could not
+/// translate is [refused](compile) rather than mistranslated.
+fn js_syntax(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // `\0` is a NUL only when no digit follows it; `\01` is an octal
+            // escape neither side supports, and is left alone to be refused.
+            Some('0') if !chars.peek().is_some_and(char::is_ascii_digit) => out.push_str("\\x00"),
+            Some('/') => out.push('/'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
     }
+    out
 }
 
 /// A hook name that is not one of ours, reported with the one it was nearly.
@@ -742,18 +825,45 @@ mod tests {
         assert!(!filter.admits("/a/b.css", Some("'use client';")));
     }
 
-    /// A pattern this side cannot compile must admit everything. Excluding
-    /// modules a plugin was meant to see is the expensive way to be wrong.
+    /// A pattern this side cannot compile is refused where it was written.
+    /// It used to admit everything, which is how a `load` filtered on a
+    /// lookbehind came to claim modules it had never heard of.
     #[test]
-    fn an_unsupported_pattern_admits_everything() {
-        let Pattern::Unsupported = compile(r"(?<=foo)bar", "") else {
-            panic!("a lookbehind should not compile here");
+    fn an_unsupported_pattern_is_refused() {
+        let refused = compile(r"(?<=foo)bar", "").expect_err("a lookbehind cannot compile here");
+        assert!(refused.contains("cannot be evaluated here"), "{refused}");
+    }
+
+    /// `\0` is rollup's virtual-module prefix, so `/\0virtual/` is the first
+    /// filter a ported plugin writes. The `regex` crate has no `\0` escape, so
+    /// this compiled to nothing and matched **every** module — the entry
+    /// included, whose contents the plugin's `load` then replaced.
+    #[test]
+    fn a_nul_escape_matches_a_virtual_id_and_nothing_else() {
+        let Pattern::Regex(re) = compile(r"^\0virtual:", "").expect("a NUL escape") else {
+            panic!("a regex");
         };
-        let filter = Filter {
-            id: vec![compile(r"(?<=foo)bar", "")],
-            code: Vec::new(),
+        assert!(re.is_match("\0virtual:page"));
+        assert!(!re.is_match("/app/src/main.jsx"));
+    }
+
+    /// An escaped delimiter is legal in a `/…/` literal and is not an escape
+    /// the `regex` crate has.
+    #[test]
+    fn an_escaped_slash_is_a_slash() {
+        let Pattern::Regex(re) = compile(r"^\/app\/", "").expect("an escaped slash") else {
+            panic!("a regex");
         };
-        assert!(filter.admits("anything at all", None));
+        assert!(re.is_match("/app/main.js"));
+    }
+
+    /// A pattern that is neither a string nor a `RegExp` is refused rather than
+    /// dropped: a filter with one pattern silently missing admits a set nobody
+    /// asked for.
+    #[test]
+    fn a_pattern_that_is_not_one_is_refused() {
+        let refused = patterns(Some(&Value::Number(3.0))).expect_err("a number is not a pattern");
+        assert!(refused.contains("must be a string or a RegExp"), "{refused}");
     }
 
     /// One way to declare a hook. A bare function is rollup's shorthand, and

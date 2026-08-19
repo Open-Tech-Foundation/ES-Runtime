@@ -231,10 +231,13 @@ function unknownHook(name, given) {
   );
 }
 
-// A `RegExp`, as the two parts the host can rebuild it from. A pattern using
-// syntax the host cannot evaluate is not an error — it simply stops filtering,
-// and the hook is called for everything, because excluding modules a plugin was
-// meant to see is the expensive way to be wrong.
+// A `RegExp`, as the two parts the host can rebuild it from. The host compiles
+// it with Rust's `regex`, whose syntax is smaller than JavaScript's: `\0` and
+// `\/` are translated, and anything left that will not compile — a
+// backreference, a lookaround — is **refused where it was written**. It used to
+// stop filtering instead, which meant `/\0virtual/` (rollup's virtual-id
+// convention, and so the first filter a ported plugin writes) matched every
+// module in the graph and the plugin's `load` claimed the entry.
 function pattern(value) {
   if (typeof value === "string") return value;
   if (value instanceof RegExp) return { source: value.source, flags: value.flags };
