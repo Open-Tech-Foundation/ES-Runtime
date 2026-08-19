@@ -3186,13 +3186,45 @@ report, because what makes a run a test run is the module it imported.
 
 ### `test(name, fn)`
 
-Registers a test and **starts it immediately**; `fn` may be `async`. Tests are
-not queued, so one awaiting a timer does not hold up the next. `esdev` prints
+Registers a test; `fn` may be `async`. Cases run **one at a time**, in the order
+the file wrote them, and a test that awaits holds up the next. `esdev` prints
 the tally once the program reaches quiescence and exits non-zero if anything
 failed.
 
+That is deliberate, and it is a change: tests used to *start* where they were
+written, so every async case in a file ran at once. Two tests sharing a
+database, a temp directory, a port or a module global then interleave — a flake
+nobody can reproduce — and a `beforeEach` cannot exist at all, because there is
+no "before": the next test has already started.
+
 A test that never settles is reported as a failure — *"the test never finished"*
-— rather than left out of a green run.
+— rather than left out of a green run, and the cases queued behind it are
+reported as *"never started"*, so the report points at the one that is stuck.
+
+### `beforeAll` / `afterAll` / `beforeEach` / `afterEach`
+
+| Function | |
+| --- | --- |
+| `beforeAll(fn)` | Once, before the first test. One that throws fails every test in the file. |
+| `afterAll(fn)` | Once, after the last — that is, when the queue empties. |
+| `beforeEach(fn)` | Before every test. One that throws fails that test. |
+| `afterEach(fn)` | After every test, **including one that failed** — it is cleanup. |
+
+Each may be registered more than once and all of them run, in registration
+order: a helper module and the test file both have a right to a `beforeEach`.
+
+```js
+import { test, beforeEach, afterEach, assertEquals } from "runtime:test";
+
+let db;
+beforeEach(async () => { db = await open(":memory:"); });
+afterEach(() => db.close());
+
+test("stores a row", async () => {
+  await db.exec("insert into t values (1)");
+  assertEquals(await db.count("t"), 1);
+});
+```
 
 ### Assertions
 

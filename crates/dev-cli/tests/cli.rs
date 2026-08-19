@@ -2121,6 +2121,79 @@ fn a_test_that_never_finishes_fails_the_run() {
     assert!(text.contains("1 passed, 1 failed"), "{text}");
 }
 
+/// Cases run one at a time, in the order they were written, with the lifecycle
+/// hooks around each. Before this, `test()` *called* the function, so two async
+/// cases sharing a variable ran at once and a `beforeEach` had no "before" to
+/// happen in.
+#[test]
+fn tests_run_one_at_a_time_with_their_lifecycle_hooks() {
+    let dir = build_dir("t_serial");
+    write_in(
+        &dir,
+        "order.test.mjs",
+        r#"
+import { test, beforeAll, afterAll, beforeEach, afterEach, assertEquals } from "runtime:test";
+const order = [];
+let shared = 0;
+beforeAll(() => order.push("beforeAll"));
+afterAll(() => { order.push("afterAll"); console.log(order.join(" ")); });
+beforeEach(() => { shared = 0; order.push("beforeEach"); });
+afterEach(() => order.push("afterEach"));
+test("slow", async () => {
+  await new Promise((r) => setTimeout(r, 30));
+  shared += 1;
+  order.push("slow");
+  assertEquals(shared, 1);
+});
+test("fast", () => {
+  shared += 5;
+  order.push("fast");
+  assertEquals(shared, 5, "the slow test was still running");
+});
+"#,
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(
+        text.contains(
+            "beforeAll beforeEach slow afterEach beforeEach fast afterEach afterAll"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("2 passed"), "{text}");
+}
+
+/// The other half of running in a queue: a case that never got a turn is still
+/// in the report, and says so in its own words rather than borrowing the
+/// message of the test that is actually stuck.
+#[test]
+fn a_case_behind_one_that_hangs_says_it_never_started() {
+    let dir = build_dir("t_queued");
+    write_in(
+        &dir,
+        "queued.test.mjs",
+        "import { test } from 'runtime:test';\n\
+         test('hangs', () => new Promise(() => {}));\n\
+         test('behind it', () => {});\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("FAIL hangs"), "{text}");
+    assert!(text.contains("the test never finished"), "{text}");
+    assert!(text.contains("FAIL behind it"), "{text}");
+    assert!(text.contains("the test never started"), "{text}");
+}
+
 /// A test file is a module like any other, so running one directly is running
 /// a module — no subcommand needed, and the same report either way.
 #[test]

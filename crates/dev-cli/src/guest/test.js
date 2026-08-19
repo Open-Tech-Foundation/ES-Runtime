@@ -19,34 +19,156 @@
 //     a suite that ran perfectly.
 //
 // The runner keeps the results, not this module: `test()` tells the host a case
-// started and how it ended, and `esdev` prints the summary and decides the exit
+// exists and how it ended, and `esdev` prints the summary and decides the exit
 // code once the program is done. That is what removes the epilogue that used to
 // be appended too — so a test file is now, from the first byte to the last,
 // exactly the file the developer wrote.
+//
+// # One at a time
+//
+// A test used to *start* where it was written: `test()` called the function and
+// returned, so every async case in a file ran at once. It was cheap and it was
+// wrong. Two tests that share a database, a temp directory, a port or a module
+// global interleave, and the failure is a flake nobody can reproduce; a
+// `beforeEach` cannot exist at all, because there is no "before" — the next
+// test has already started. The 230 lines of scheduler every suite ended up
+// writing to get around it were the evidence.
+//
+// So registration and execution are separate. `test()` appends to a queue, and
+// the queue drains one case at a time, in the order the file wrote them, with
+// the lifecycle hooks around each. A test that awaits does hold up the next —
+// deliberately: that is what "one at a time" means, and it is what makes shared
+// state usable.
+//
+// The host is told about a case when it is **registered**, not when it starts,
+// so a case that never got to run because an earlier one hung is still in the
+// report — as a failure that says exactly that.
 
 const ops = globalThis.__ops;
 
-// Registers a test and starts it immediately.
+// Cases waiting to run, in the order they were written.
+const queue = [];
+
+// The lifecycle hooks, each in registration order. Several of the same kind are
+// allowed and all of them run: a helper module and the test file both have a
+// right to a `beforeEach`, and the one that loaded second is not the only one.
+const hooks = { beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
+
+// Whether a drain is already scheduled or running, so registering ten tests in
+// a row schedules one.
+let draining = false;
+// `beforeAll` and `afterAll` are once per program, not once per drain.
+let setUp = false;
+let tornDown = false;
+// What `beforeAll` threw, if it did: every case then fails with it rather than
+// running against a fixture that was never built.
+let setUpFailure = null;
+
+// The detail a failure is reported with: the stack when there is one, because a
+// failure is only actionable if it names the line that failed.
+const detail = (err) => (err?.stack ? String(err.stack) : String(err));
+
+function hook(kind) {
+  return function register(fn) {
+    if (typeof fn !== "function") {
+      throw new TypeError(`${kind}(): needs a function to run`);
+    }
+    hooks[kind].push(fn);
+  };
+}
+
+// Runs once before the first test, and once after the last.
 //
-// Not queued and not awaited: tests run concurrently, and one that awaits a
-// timer does not hold up the next. Nothing here collects promises — the host
-// knows a case is outstanding from the moment `test()` is called, and a case
-// that never settles is reported as unfinished rather than quietly dropped.
+// "After the last" is decided by the queue being empty, since a file does not
+// announce that it has finished registering. A test registered after the queue
+// has already drained still runs — it simply runs after `afterAll`, which is
+// the only honest answer available without a declaration this API does not
+// have.
+const beforeAll = hook("beforeAll");
+const afterAll = hook("afterAll");
+// Runs around every test, including one that fails. `afterEach` is cleanup, so
+// it runs whatever happened — a `beforeEach` that threw included.
+const beforeEach = hook("beforeEach");
+const afterEach = hook("afterEach");
+
+// Registers a test. It runs when the ones before it have finished.
+//
+// The id comes back now, at registration, and that is what keeps the report
+// complete: a case that never got to start because an earlier one never settled
+// is a case the host already knows about, and it is reported as a failure
+// rather than silently missing from a green run.
 function test(name, fn) {
   if (typeof fn !== "function") {
     throw new TypeError(`test(${JSON.stringify(String(name))}): needs a function to run`);
   }
-  const id = ops.test_started(String(name));
-  (async () => {
-    try {
-      await fn();
-      ops.test_finished(id, true, "");
-    } catch (err) {
-      // The stack, when there is one: a failure is only actionable if it names
-      // the line that failed.
-      ops.test_finished(id, false, err?.stack ? String(err.stack) : String(err));
+  queue.push({ id: ops.test_registered(String(name)), fn });
+  schedule();
+}
+
+function schedule() {
+  if (draining) return;
+  draining = true;
+  // A microtask, not a call: the rest of the file is still registering, and a
+  // drain that started on the first `test()` would run case one before case two
+  // existed. By the time microtasks run, the module body is done.
+  queueMicrotask(() => {
+    drain();
+  });
+}
+
+async function drain() {
+  try {
+    if (!setUp) {
+      setUp = true;
+      try {
+        for (const fn of hooks.beforeAll) await fn();
+      } catch (err) {
+        setUpFailure = err;
+      }
     }
-  })();
+    while (queue.length > 0) {
+      await runCase(queue.shift());
+    }
+    if (!tornDown) {
+      tornDown = true;
+      for (const fn of hooks.afterAll) {
+        try {
+          await fn();
+        } catch (err) {
+          // Nothing is left to fail, so it is reported as a case of its own —
+          // a teardown that threw is a broken suite, not a footnote.
+          ops.test_finished(ops.test_registered("afterAll"), false, detail(err));
+        }
+      }
+    }
+  } finally {
+    draining = false;
+  }
+}
+
+async function runCase({ id, fn }) {
+  ops.test_running(id);
+  if (setUpFailure !== null) {
+    ops.test_finished(id, false, `beforeAll failed, so this test never ran\n${detail(setUpFailure)}`);
+    return;
+  }
+  let failure = null;
+  try {
+    for (const before of hooks.beforeEach) await before();
+    await fn();
+  } catch (err) {
+    failure = err;
+  }
+  for (const after of hooks.afterEach) {
+    try {
+      await after();
+    } catch (err) {
+      // A cleanup that threw fails the case, unless the case had already
+      // failed — the first failure is the one that explains the rest.
+      failure ??= err;
+    }
+  }
+  ops.test_finished(id, failure === null, failure === null ? "" : detail(failure));
 }
 
 function assert(condition, message) {
@@ -240,5 +362,25 @@ async function assertRejects(fn, want, message) {
   checkThrew(threw, want, message, "reject", "with ");
 }
 
-export { test, assert, assertEquals, assertThrows, assertRejects };
-export default { test, assert, assertEquals, assertThrows, assertRejects };
+export {
+  test,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  assert,
+  assertEquals,
+  assertThrows,
+  assertRejects,
+};
+export default {
+  test,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+  assert,
+  assertEquals,
+  assertThrows,
+  assertRejects,
+};

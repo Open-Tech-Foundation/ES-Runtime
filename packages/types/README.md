@@ -55,6 +55,6 @@ no watcher and no test runner:
 
 - `runtime:build` — `build`, `Plugin`, `Hook`, `BuildOptions`, `BuildResult`
 - `runtime:watch` — `watch`, `Watcher`, `Change`
-- `runtime:test` — `test`, `assert`, `assertEquals`, `assertThrows`, `assertRejects`
+- `runtime:test` — `test`, `beforeAll`, `afterAll`, `beforeEach`, `afterEach`, `assert`, `assertEquals`, `assertThrows`, `assertRejects`
 
 …plus the few globals whose shape here differs from the standard libs.

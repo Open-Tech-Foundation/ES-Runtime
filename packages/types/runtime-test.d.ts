@@ -1,9 +1,11 @@
 declare module "runtime:test" {
   /**
-   * Registers a test and starts it immediately.
+   * Registers a test. It runs when the ones before it have finished.
    *
-   * Tests are **not** queued: each one starts when `test()` is called, so a
-   * test awaiting a timer does not hold up the next. `esdev` reports the tally
+   * Cases run **one at a time**, in the order the file wrote them. A test that
+   * awaits holds up the next, deliberately: two tests sharing a database, a
+   * temp directory, a port or a module global cannot interleave, and there is a
+   * "before" for {@link beforeEach} to happen in. `esdev` reports the tally
    * once the program is done.
    *
    * ```ts
@@ -14,9 +16,36 @@ declare module "runtime:test" {
    * ```
    *
    * A test that never settles is reported as a **failure** — "the test never
-   * finished" — rather than being left out of a green run.
+   * finished" — rather than being left out of a green run, and the cases behind
+   * it are reported as never having started.
    */
   export function test(name: string, fn: () => void | Promise<void>): void;
+
+  /** A lifecycle hook. Several of a kind may be registered; all of them run. */
+  export type Hook = () => void | Promise<void>;
+
+  /**
+   * Runs once before the first test. A `beforeAll` that throws fails every
+   * test in the file rather than letting them run against a fixture that was
+   * never built.
+   */
+  export function beforeAll(fn: Hook): void;
+
+  /**
+   * Runs once after the last test — which is the point at which the queue is
+   * empty, since a file does not announce that it has finished registering.
+   */
+  export function afterAll(fn: Hook): void;
+
+  /** Runs before every test. One that throws fails that test. */
+  export function beforeEach(fn: Hook): void;
+
+  /**
+   * Runs after every test, including one that failed — it is cleanup, so it
+   * runs whatever happened. One that throws fails the test unless the test had
+   * already failed.
+   */
+  export function afterEach(fn: Hook): void;
 
   /** Fails with `message` (or "assertion failed") unless `condition` is truthy. */
   export function assert(condition: unknown, message?: string): asserts condition;
@@ -58,6 +87,10 @@ declare module "runtime:test" {
 
   const _default: {
     test: typeof test;
+    beforeAll: typeof beforeAll;
+    afterAll: typeof afterAll;
+    beforeEach: typeof beforeEach;
+    afterEach: typeof afterEach;
     assert: typeof assert;
     assertEquals: typeof assertEquals;
     assertThrows: typeof assertThrows;

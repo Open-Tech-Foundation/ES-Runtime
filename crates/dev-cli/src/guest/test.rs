@@ -16,15 +16,24 @@
 //! physical line so line 1 stayed line 1, which meant it could carry no `//`
 //! comments, and the file that ran was not the file the developer wrote.
 //!
-//! Keeping the score in the host removes all of it. `test()` says a case
-//! started and, later, how it ended; `esdev` reads the tally after the program
-//! reaches quiescence, prints it, and picks the exit code. Nothing is injected
-//! into anybody's source.
+//! Keeping the score in the host removes all of it. `test()` says a case was
+//! registered, later that it started, later still how it ended; `esdev` reads
+//! the tally after the program reaches quiescence, prints it, and picks the
+//! exit code. Nothing is injected into anybody's source.
 //!
 //! It also fixes a failure the old design could not see. A test whose promise
 //! never settles used to hang the program at the epilogue's `Promise.all`;
 //! here, the case is simply never finished, and a started-but-unfinished case
 //! is reported as a **failure** rather than silently left out of a green run.
+//!
+//! # Three states, because the cases are a queue
+//!
+//! Cases run one at a time ([`runtime:test`](../test.js) explains why), so
+//! "never settled" splits in two. A case that *started* and hung is stuck on
+//! something of its own; a case that never started is behind one that hung, and
+//! reporting the two identically points a reader at twelve innocent tests. So
+//! the host is told at registration, told again when the queue reaches the
+//! case, and the report names which of the two happened.
 //!
 //! # Why a thread-local
 //!
@@ -46,6 +55,11 @@ use es_runtime_cli_common::{ExtensionContext, HostExtension, HostModule, OpDecl,
 /// One test case, from `test()` to whatever became of it.
 struct Case {
     name: String,
+    /// Whether the case ever got as far as running. Cases are queued and run
+    /// one at a time, so a case that never started is not the same failure as
+    /// one that started and hung — the first says an *earlier* test never
+    /// finished, and pointing at the wrong one costs an afternoon.
+    started: bool,
     /// `None` while it is still running — and still `None` at the end if it
     /// never settled, which is a failure with a name of its own.
     outcome: Option<Outcome>,
@@ -77,12 +91,14 @@ impl HostExtension for TestExtension {
 
     fn ops(&self, _ctx: &ExtensionContext<'_>) -> Vec<OpDecl> {
         vec![
-            // started(name) -> id
+            // registered(name) -> id
             //
-            // No capability, and nothing to gate: an assertion computes, and a
-            // tally is bookkeeping this process keeps about itself. The same
-            // reasoning as `runtime:hashing`.
-            OpDecl::sync("test_started", |args| {
+            // At registration rather than at the start, so a case that never
+            // got to run is still in the report. No capability, and nothing to
+            // gate: an assertion computes, and a tally is bookkeeping this
+            // process keeps about itself. The same reasoning as
+            // `runtime:hashing`.
+            OpDecl::sync("test_registered", |args| {
                 let name = args
                     .first()
                     .and_then(Value::as_str)
@@ -91,11 +107,28 @@ impl HostExtension for TestExtension {
                 let id = CASES.with_borrow_mut(|cases| {
                     cases.push(Case {
                         name,
+                        started: false,
                         outcome: None,
                     });
                     cases.len() - 1
                 });
                 Ok(Value::Number(id as f64))
+            }),
+            // running(id) — the queue reached this case.
+            OpDecl::sync("test_running", |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(-1.0);
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "the id came from `registered`, which handed out an index"
+                )]
+                let index = id as usize;
+                CASES.with_borrow_mut(|cases| {
+                    if let Some(case) = cases.get_mut(index) {
+                        case.started = true;
+                    }
+                });
+                Ok(Value::Undefined)
             }),
             // finished(id, ok, detail)
             OpDecl::sync("test_finished", |args| {
@@ -109,7 +142,7 @@ impl HostExtension for TestExtension {
                 #[expect(
                     clippy::cast_possible_truncation,
                     clippy::cast_sign_loss,
-                    reason = "the id came from `started`, which handed out an index"
+                    reason = "the id came from `registered`, which handed out an index"
                 )]
                 let index = id as usize;
                 CASES.with_borrow_mut(|cases| {
@@ -147,10 +180,18 @@ pub fn finish() -> ExitCode {
                 // here; a test that cannot finish is a failing test, and saying
                 // so is the difference between a red run and a green one that
                 // quietly ran fewer tests than it printed.
-                None => failures.push((
+                None if case.started => failures.push((
                     case.name.clone(),
                     "the test never finished — it is waiting on something that never happened"
                         .to_string(),
+                )),
+                // Never even started: the queue did not reach it, because a
+                // case ahead of it never finished. Named separately so the
+                // report points at the test that is stuck rather than at the
+                // twelve behind it.
+                None => failures.push((
+                    case.name.clone(),
+                    "the test never started — a test before it never finished".to_string(),
                 )),
             }
         }
@@ -198,6 +239,7 @@ mod tests {
             cases.clear();
             cases.push(Case {
                 name: "hangs".to_string(),
+                started: true,
                 outcome: None,
             });
         });
