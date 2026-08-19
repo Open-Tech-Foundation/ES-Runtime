@@ -549,14 +549,14 @@ fn failed_value(failures: &[crate::bundler::Failure]) -> Value {
     let errors = failures
         .iter()
         .map(|failure| {
-            let text = |value: &Option<String>| {
-                value.clone().map_or(Value::Null, Value::String)
-            };
-            let number = |value: Option<u32>| {
-                value.map_or(Value::Null, |n| Value::Number(f64::from(n)))
-            };
+            let text = |value: &Option<String>| value.clone().map_or(Value::Null, Value::String);
+            let number =
+                |value: Option<u32>| value.map_or(Value::Null, |n| Value::Number(f64::from(n)));
             Value::Object(vec![
-                ("message".to_string(), Value::String(failure.message.clone())),
+                (
+                    "message".to_string(),
+                    Value::String(failure.message.clone()),
+                ),
                 ("id".to_string(), text(&failure.id)),
                 ("plugin".to_string(), text(&failure.plugin)),
                 ("kind".to_string(), Value::String(failure.kind.clone())),

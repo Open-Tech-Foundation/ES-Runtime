@@ -19,7 +19,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
-use es_runtime_providers::{Process, ProviderError};
+use es_runtime_providers::{Process, ProviderError, StdStream};
 
 /// A [`Process`] reading the host environment/cwd/platform, with caller-provided
 /// program arguments, an optional env overlay, and a recorded exit code.
@@ -160,6 +160,62 @@ impl Process for SystemProcess {
             .load(Ordering::SeqCst)
             .then(|| self.exit.code.load(Ordering::SeqCst))
     }
+
+    /// The real file descriptor, flushed on every call.
+    ///
+    /// Flushed because the caller is drawing: a progress line that sits in a
+    /// buffer until the next newline is a progress line that appears once, at
+    /// the end. `stdout()` is line-buffered when it is a terminal and block-
+    /// buffered otherwise, and neither is what a `\r` wants.
+    fn write_stdout(&self, bytes: &[u8]) -> Result<(), ProviderError> {
+        write_to(&mut std::io::stdout().lock(), bytes, "standard output")
+    }
+
+    fn write_stderr(&self, bytes: &[u8]) -> Result<(), ProviderError> {
+        write_to(&mut std::io::stderr().lock(), bytes, "standard error")
+    }
+
+    fn is_terminal(&self, stream: StdStream) -> bool {
+        use std::io::IsTerminal;
+        match stream {
+            StdStream::In => std::io::stdin().is_terminal(),
+            StdStream::Out => std::io::stdout().is_terminal(),
+            StdStream::Err => std::io::stderr().is_terminal(),
+        }
+    }
+
+    /// The window size, asked of the terminal itself rather than of `$COLUMNS`
+    /// — which a shell exports to itself and not to a child, and which is stale
+    /// the moment the window is dragged.
+    ///
+    /// Unix only. On a platform without `TIOCGWINSZ` here the answer is "no
+    /// answer", and a caller wraps at whatever it likes; a made-up 80 would be
+    /// a width that is wrong rather than absent.
+    #[cfg(unix)]
+    fn terminal_size(&self) -> Option<(u16, u16)> {
+        // stderr as well as stdout: a program whose output is piped into
+        // something else still draws its progress on the terminal it kept.
+        for stream in [
+            &std::io::stdout() as &dyn std::os::fd::AsFd,
+            &std::io::stderr(),
+        ] {
+            if let Ok(size) = rustix::termios::tcgetwinsize(stream)
+                && size.ws_col > 0
+            {
+                return Some((size.ws_col, size.ws_row));
+            }
+        }
+        None
+    }
+}
+
+/// One write, all of it, then flushed. A short write is retried by
+/// `write_all`; anything left is a real failure and is reported as one rather
+/// than silently truncating what the program asked to print.
+fn write_to(out: &mut impl std::io::Write, bytes: &[u8], what: &str) -> Result<(), ProviderError> {
+    out.write_all(bytes)
+        .and_then(|()| out.flush())
+        .map_err(|e| ProviderError::Other(format!("cannot write to {what}: {e}")))
 }
 
 #[cfg(test)]

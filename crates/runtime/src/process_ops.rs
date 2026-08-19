@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, CapabilitySet, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, InterruptHandle, OpDecl, OpError, Value};
-use es_runtime_providers::{Process, Signal, Signals};
+use es_runtime_providers::{Process, Signal, Signals, StdStream};
 
 use crate::Result;
 
@@ -124,6 +124,62 @@ pub(crate) fn install(
     engine.register_op(OpDecl::sync("process_arch", move |_args| {
         let proc = require(&p)?;
         Ok(Value::String(proc.arch()))
+    }))?;
+
+    // The process's own standard output and error, as bytes, and whether either
+    // is a terminal.
+    //
+    // **Ungated**, like `console.log`, and for the same reason: writing to the
+    // stream this program was started with reaches nothing the program was not
+    // already handed. There is no path here to *another* process's output, no
+    // file is opened, and nothing is read — `--deny-all` still leaves a program
+    // able to say what it is doing, which is what makes a denied run debuggable
+    // at all.
+    //
+    // Bytes rather than a string, because a progress display is a `\r` and a
+    // partial line: the caller decides where a newline goes, and encoding
+    // happens once, in JS, where the text is.
+    let p = process.clone();
+    engine.register_op(OpDecl::sync("process_write", move |args| {
+        let proc = require(&p)?;
+        let bytes = args
+            .get(1)
+            .and_then(Value::as_bytes)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default();
+        let result = match args.first().and_then(Value::as_str) {
+            Some("stderr") => proc.write_stderr(&bytes),
+            _ => proc.write_stdout(&bytes),
+        };
+        result
+            .map(|()| Value::Undefined)
+            .map_err(|e| OpError::new(ExceptionClass::Error, e.to_string()))
+    }))?;
+
+    let p = process.clone();
+    engine.register_op(OpDecl::sync("process_is_terminal", move |args| {
+        let stream = match args.first().and_then(Value::as_str) {
+            Some("stdin") => StdStream::In,
+            Some("stderr") => StdStream::Err,
+            _ => StdStream::Out,
+        };
+        // A missing provider is "not a terminal" rather than an error: this is
+        // a question a program asks *before* deciding how to print, and one
+        // that throws would make drawing plainly the harder path.
+        Ok(Value::Bool(
+            p.as_ref().is_some_and(|proc| proc.is_terminal(stream)),
+        ))
+    }))?;
+
+    let p = process.clone();
+    engine.register_op(OpDecl::sync("process_terminal_size", move |_args| {
+        Ok(match p.as_ref().and_then(|proc| proc.terminal_size()) {
+            Some((columns, rows)) => Value::Array(vec![
+                Value::Number(f64::from(columns)),
+                Value::Number(f64::from(rows)),
+            ]),
+            None => Value::Null,
+        })
     }))?;
 
     // Permission introspection (D38). Ungated, and deliberately so: it reveals

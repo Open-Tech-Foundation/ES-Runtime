@@ -38,7 +38,7 @@ esrun targets the WinterTC web-platform surface, so web globals (`URL`, `Blob`,
 
 ## Covered
 
-- `runtime:process` — `env`, `args`, `platform`, `arch`, `cwd()`, `exit()`
+- `runtime:process` — `env`, `args`, `platform`, `arch`, `cwd()`, `exit()`, `stdout`, `stderr`
 - `runtime:path` — `join`, `resolve`, `normalize`, `dirname`, `basename`, `extname`, `parse`, `relative`, `isAbsolute`, `sep`, `delimiter`, `fromFileURL`, `toFileURL`
 - `runtime:fs` — `file()`, `write()`, `readDir`, `stat`, `exists`, `mkdir`, `remove`, `rename`, `Glob`
 - `runtime:db` — `connect`, `sql`, `queryAst`, `sqlite`, `Connection`, `Rows`, `Pool`, `Driver`, `DbError`, and the driver-authoring surface (`defineDriver`, `runBackendConformance`)

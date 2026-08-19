@@ -39,6 +39,8 @@ import process from "runtime:process";
 | `signals()` | `() => SignalName[]` | Signal names this platform can deliver. **Signals.** |
 | `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Signals.** |
 | `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one restores the default action. **Signals.** |
+| `stdout` | `StdStream` | The process's own standard output — `write(chunk)`, `isTTY`, `columns`, `rows`. **No capability**, like `console.log`. |
+| `stderr` | `StdStream` | The same, for standard error. |
 | `permissions` | `object` | What this run may reach (see below). **No capability.** |
 
 ## env — reading and writing
@@ -94,6 +96,41 @@ import { exit } from "runtime:process";
 if (failed) exit(1); // records the code and halts immediately
 exit();              // defaults to 0
 ```
+
+## stdout — drawing on a terminal
+
+`console.log` formats a value, appends a newline, and goes wherever the host
+pointed it. That is right for a log line and wrong for a **display**: a spinner
+is a carriage return and no newline, and a progress bar rewrites the line it is
+already on.
+
+```js
+import { stdout } from "runtime:process";
+
+if (stdout.isTTY) {
+  stdout.write(`\r${bar(done / total, stdout.columns ?? 60)}`);
+} else {
+  console.log(`${done}/${total}`);
+}
+```
+
+| Member | |
+| --- | --- |
+| `write(chunk)` | Exactly these bytes, flushed. **No newline is added.** A string is UTF-8; an `ArrayBuffer` or view is written as it is. |
+| `isTTY` | Whether this stream is attached to a terminal. |
+| `columns` / `rows` | The terminal's size, or `undefined` when there is no terminal or the host cannot say. |
+
+**Ask `isTTY` before you draw.** A spinner redrawn with `\r` into a log file is a
+file of spinner frames, and colour escapes in a pipe are noise in somebody's
+`grep`.
+
+The size comes from the terminal, not from `$COLUMNS` — a shell exports that to
+itself rather than to a child, and it is stale the moment the window is dragged.
+Where the host cannot answer it says so rather than reporting a plausible 80.
+
+Neither needs a capability, for the reason `console.log` does not: writing to
+the stream this program was started with reaches nothing it was not already
+handed, so `--deny-all` still leaves a program able to say what it is doing.
 
 ## permissions — what this run may reach
 

@@ -534,6 +534,63 @@ pub trait Process: Send + Sync {
 
     /// The exit code requested via [`exit`](Self::exit), if any.
     fn requested_exit_code(&self) -> Option<i32>;
+
+    /// Writes bytes to the process's own standard output, exactly as given.
+    ///
+    /// **Not `console.log`.** The console formats a value, appends a newline
+    /// and goes wherever the embedder pointed it; this is the byte stream a
+    /// terminal is attached to. The difference is the whole of a progress
+    /// display: a spinner is a carriage return and no newline, and there was no
+    /// way to write one.
+    ///
+    /// Default: refused, for a host that has no standard output to write to —
+    /// which is the honest answer for an embedding whose "console" is a log
+    /// collector. Refusing beats discarding: output that vanished is a bug
+    /// nobody can see.
+    fn write_stdout(&self, bytes: &[u8]) -> Result<(), ProviderError> {
+        let _ = bytes;
+        Err(ProviderError::Other(
+            "this host has no standard output".to_string(),
+        ))
+    }
+
+    /// The same, for standard error.
+    fn write_stderr(&self, bytes: &[u8]) -> Result<(), ProviderError> {
+        let _ = bytes;
+        Err(ProviderError::Other(
+            "this host has no standard error".to_string(),
+        ))
+    }
+
+    /// Whether the named stream is a terminal.
+    ///
+    /// What a program has to know before it draws anything: a spinner redrawn
+    /// with `\r` into a log file is a file of spinner frames, and colour
+    /// escapes in a pipe are noise in somebody's `grep`. Defaults to `false`,
+    /// which is the safe answer — plain output down a pipe is readable, and a
+    /// terminal drawn into a file is not.
+    fn is_terminal(&self, stream: StdStream) -> bool {
+        let _ = stream;
+        false
+    }
+
+    /// The terminal's size as `(columns, rows)`, when there is one and the host
+    /// can say. `None` is "no terminal, or no answer" — a caller wraps at
+    /// whatever it likes rather than being told a width that is not true.
+    fn terminal_size(&self) -> Option<(u16, u16)> {
+        None
+    }
+}
+
+/// One of the process's own standard streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdStream {
+    /// Standard input.
+    In,
+    /// Standard output.
+    Out,
+    /// Standard error.
+    Err,
 }
 
 /// How one of a child process's standard streams is connected

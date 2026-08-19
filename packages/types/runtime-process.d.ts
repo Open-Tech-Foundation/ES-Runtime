@@ -51,6 +51,41 @@ declare module "runtime:process" {
   export function cwd(): string;
 
   /**
+   * One of the process's own output streams.
+   *
+   * `console.log` formats a value and appends a newline; this writes exactly
+   * the bytes given. That difference is the whole of a progress display — a
+   * spinner is a carriage return and no newline.
+   *
+   * Ungated, like `console.log`: writing to the stream this program was started
+   * with reaches nothing it was not already handed.
+   */
+  export interface StdStream {
+    /** `"stdout"` or `"stderr"`. */
+    readonly name: "stdout" | "stderr";
+    /** Writes exactly these bytes, flushed. **No newline is added.** */
+    write(chunk: string | ArrayBuffer | ArrayBufferView): void;
+    /**
+     * Whether this stream is attached to a terminal.
+     *
+     * Ask before you draw: a spinner redrawn with `\r` into a log file is a
+     * file of spinner frames, and colour escapes in a pipe are noise in
+     * somebody's `grep`.
+     */
+    readonly isTTY: boolean;
+    /** The terminal's width, or `undefined` when there is no terminal. */
+    readonly columns: number | undefined;
+    /** The terminal's height, or `undefined`. */
+    readonly rows: number | undefined;
+  }
+
+  /** The process's standard output. */
+  export const stdout: StdStream;
+
+  /** The process's standard error. */
+  export const stderr: StdStream;
+
+  /**
    * Records the exit code and halts execution immediately — code after the call
    * does not run.
    */
@@ -160,6 +195,8 @@ declare module "runtime:process" {
     arch: typeof arch;
     cwd: typeof cwd;
     exit: typeof exit;
+    stdout: typeof stdout;
+    stderr: typeof stderr;
     unmask: typeof unmask;
     Secret: typeof Secret;
     signals: typeof signals;

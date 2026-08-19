@@ -2160,9 +2160,7 @@ test("fast", () => {
     let text = format!("{}{}", stdout(&out), stderr(&out));
     assert!(out.status.success(), "{text}");
     assert!(
-        text.contains(
-            "beforeAll beforeEach slow afterEach beforeEach fast afterEach afterAll"
-        ),
+        text.contains("beforeAll beforeEach slow afterEach beforeEach fast afterEach afterAll"),
         "{text}"
     );
     assert!(text.contains("2 passed"), "{text}");

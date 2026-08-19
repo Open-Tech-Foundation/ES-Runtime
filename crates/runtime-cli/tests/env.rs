@@ -333,3 +333,32 @@ console.log(new TextDecoder().decode(out.stdout).trim());
         stdout(&out)
     );
 }
+
+/// The process's own stdout, as bytes with no newline added — the thing a
+/// progress display needs and `console.log` cannot be. Ungated for the reason
+/// `console.log` is: writing to the stream this program was started with
+/// reaches nothing it was not already handed, so it works under `--deny-all`.
+#[test]
+fn stdout_writes_exactly_what_it_was_given_under_deny_all() {
+    let app = write(
+        "process-stdout.mjs",
+        r#"
+import { stdout, stderr } from "runtime:process";
+stdout.write("one");
+stdout.write("|two|");
+stdout.write(new TextEncoder().encode("three"));
+// Piped, not a terminal — which is exactly what a program has to be able to
+// ask before it starts redrawing a line.
+stdout.write(`|tty=${stdout.isTTY}|cols=${stdout.columns}`);
+stderr.write("on stderr");
+"#,
+    );
+    let out = esrun()
+        .arg("--deny-all")
+        .arg(&app)
+        .output()
+        .expect("spawn esrun");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert_eq!(stdout(&out), "one|two|three|tty=false|cols=undefined");
+    assert!(stderr(&out).contains("on stderr"), "{}", stderr(&out));
+}

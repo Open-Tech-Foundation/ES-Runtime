@@ -187,6 +187,79 @@ function exit(code = 0) {
   ops.process_exit(Number(code) | 0);
 }
 
+// ---- standard output -------------------------------------------------------
+//
+// `console.log` formats a value, appends a newline, and goes wherever the host
+// pointed it. That is the right shape for a log line and the wrong one for a
+// **display**: a spinner is a carriage return and no newline, a progress bar
+// rewrites the line it is already on, and neither is expressible as a series of
+// log calls. So the streams themselves are here.
+//
+//   import { stdout } from "runtime:process";
+//
+//   if (stdout.isTTY) {
+//     stdout.write(`\r${bar(done / total, stdout.columns ?? 60)}`);
+//   } else {
+//     console.log(`${done}/${total}`);
+//   }
+//
+// **`isTTY` is not a nicety.** A spinner redrawn with `\r` into a log file is a
+// file of spinner frames, and colour escapes in a pipe are noise in somebody's
+// grep. A program that cannot ask is a program that draws into both.
+//
+// Ungated, like `console.log`: writing to the stream this program was started
+// with reaches nothing the program was not already handed, so `--deny-all`
+// still leaves it able to say what it is doing.
+
+const encoder = new TextEncoder();
+
+// Text or bytes. A string is UTF-8; a view or buffer is written exactly as it
+// is, because a program drawing a box already knows which bytes it means.
+function toBytes(chunk) {
+  if (typeof chunk === "string") return encoder.encode(chunk);
+  if (chunk instanceof ArrayBuffer) return new Uint8Array(chunk);
+  if (ArrayBuffer.isView(chunk)) {
+    return new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+  }
+  throw new TypeError("write expects a string, ArrayBuffer, or ArrayBufferView");
+}
+
+function stream(name) {
+  return Object.freeze({
+    /** The name of this stream: "stdout" or "stderr". */
+    name,
+    // Exactly these bytes, flushed. No newline is added — that is the whole
+    // difference from console.log.
+    write(chunk) {
+      ops.process_write(name, toBytes(chunk));
+      return undefined;
+    },
+    // Whether this stream is attached to a terminal. A getter rather than a
+    // snapshot: a program may be handed a different stream than the one it
+    // started with, and the answer costs a syscall.
+    get isTTY() {
+      return ops.process_is_terminal(name);
+    },
+    // The terminal's width and height, or `undefined` when there is no
+    // terminal or the host cannot say. Asked of the terminal, not of
+    // `$COLUMNS`, which a shell exports to itself and which is stale the
+    // moment the window is dragged.
+    get columns() {
+      return size()?.[0];
+    },
+    get rows() {
+      return size()?.[1];
+    },
+  });
+}
+
+function size() {
+  return ops.process_terminal_size() ?? undefined;
+}
+
+const stdout = stream("stdout");
+const stderr = stream("stderr");
+
 // ---- signals ---------------------------------------------------------------
 //
 // Gated on Capability::Signals, not Env: watching a signal suppresses its
@@ -331,6 +404,8 @@ export {
   arch,
   cwd,
   exit,
+  stdout,
+  stderr,
   unmask,
   Secret,
   onSignal,
@@ -345,6 +420,8 @@ export default {
   arch,
   cwd,
   exit,
+  stdout,
+  stderr,
   unmask,
   Secret,
   onSignal,

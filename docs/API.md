@@ -1153,7 +1153,7 @@ Host process information: environment, arguments, working directory, platform,
 and exit. Aligned *in spirit* with the WinterTC CLI-API proposal (DECISIONS
 D26).
 
-- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`, and `args` / `platform` / `arch` / `exit` / `permissions`, which need none. `args` is the command line that started this program, so it is not host state a grant withholds (D65).
+- **Capability:** `Env` — except the [signal](#signals) exports, which need `Signals`, and `args` / `platform` / `arch` / `exit` / `stdout` / `stderr` / `permissions`, which need none. `args` is the command line that started this program, so it is not host state a grant withholds (D65).
 - **Status:** Available
 - **Loading:** on demand — importing it adds nothing to startup if unused.
 - **Snapshotting:** `env` and `args` are captured on **first access**, not at
@@ -1186,8 +1186,47 @@ environment wins on a conflict unless `--env-override` is passed, and later
 | `signals()`       | `() => SignalName[]`                | Signal names this platform can deliver. **Capability: `Signals`.**                                                                                                                        |
 | `onSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Run `fn` when `sig` arrives, suppressing its default action. **Capability: `Signals`.**                                                                          |
 | `offSignal(sig, fn)` | `(SignalName, (SignalName) => void) => void` | Remove a handler; removing the last one for a signal restores the default action. **Capability: `Signals`.**                                                     |
+| `stdout`          | `StdStream`                         | The process's own standard output — `write(chunk)`, `isTTY`, `columns`, `rows`. **Needs no capability**, like `console.log`. See **Drawing on a terminal** below.                          |
+| `stderr`          | `StdStream`                         | The same, for standard error.                                                                                                                                                             |
 | `permissions`     | `object`                            | What this process is allowed to reach — see **Permissions** below. **Needs no capability.**                                                                                               |
 | `default`         | `object`                            | An aggregate bundling all named exports. Named imports are preferred for clarity and tree-shaking.                                                                                        |
+
+### Drawing on a terminal
+
+`console.log` formats a value, appends a newline, and goes wherever the host
+pointed it. That is the right shape for a log line and the wrong one for a
+**display**: a spinner is a carriage return and no newline, and a progress bar
+rewrites the line it is already on. `stdout` and `stderr` are the streams
+themselves.
+
+```js
+import { stdout } from "runtime:process";
+
+if (stdout.isTTY) {
+  stdout.write(`\r${bar(done / total, stdout.columns ?? 60)}`);
+} else {
+  console.log(`${done}/${total}`);
+}
+```
+
+| Member | |
+| --- | --- |
+| `write(chunk)` | Exactly these bytes, flushed. **No newline is added.** A string is UTF-8; an `ArrayBuffer` or view is written as-is. |
+| `isTTY` | Whether this stream is attached to a terminal. |
+| `columns` / `rows` | The terminal's size, or `undefined` when there is no terminal or the host cannot say. |
+
+**Ask `isTTY` before you draw.** A spinner redrawn with `\r` into a log file is a
+file of spinner frames, and colour escapes in a pipe are noise in somebody's
+`grep`.
+
+The size is asked of the terminal, not of `$COLUMNS` — a shell exports that to
+itself rather than to a child, and it is stale the moment the window is dragged.
+Where the host cannot answer it says so, rather than reporting a plausible 80.
+
+Neither needs a capability, for the same reason `console.log` does not: writing
+to the stream this program was started with reaches nothing the program was not
+already handed. `--deny-all` still leaves a program able to say what it is
+doing.
 
 ### Permissions
 

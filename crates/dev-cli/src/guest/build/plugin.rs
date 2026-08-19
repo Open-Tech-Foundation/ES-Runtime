@@ -366,9 +366,8 @@ impl contract::Pass for GuestPass {
 /// consumer of `generate()` are reading one shape rather than two — minus
 /// `code`, which this hook is deliberately not given.
 fn output_value(output: &contract::Output) -> Value {
-    let strings = |items: &[String]| {
-        Value::Array(items.iter().map(|s| Value::String(s.clone())).collect())
-    };
+    let strings =
+        |items: &[String]| Value::Array(items.iter().map(|s| Value::String(s.clone())).collect());
     match output {
         contract::Output::Chunk {
             file_name,
@@ -384,15 +383,10 @@ fn output_value(output: &contract::Output) -> Value {
             ("fileName".to_string(), Value::String(file_name.clone())),
             ("name".to_string(), Value::String(name.clone())),
             ("isEntry".to_string(), Value::Bool(*is_entry)),
-            (
-                "isDynamicEntry".to_string(),
-                Value::Bool(*is_dynamic_entry),
-            ),
+            ("isDynamicEntry".to_string(), Value::Bool(*is_dynamic_entry)),
             (
                 "facadeModuleId".to_string(),
-                facade_module_id
-                    .clone()
-                    .map_or(Value::Null, Value::String),
+                facade_module_id.clone().map_or(Value::Null, Value::String),
             ),
             ("moduleIds".to_string(), strings(module_ids)),
             ("imports".to_string(), strings(imports)),

@@ -642,9 +642,7 @@ fn filter(plugin: &str, hook: Hook, value: Option<&Value>) -> Result<Filter, OpE
     if matches!(value, Value::Null | Value::Undefined) {
         return Ok(Filter::default());
     }
-    let at = |e: String| {
-        OpError::type_error(format!("{plugin}.{}: {e}", hook.name()))
-    };
+    let at = |e: String| OpError::type_error(format!("{plugin}.{}: {e}", hook.name()));
     let id = patterns(field(value, "id")).map_err(at)?;
     let code = patterns(field(value, "code")).map_err(at)?;
     // Only `transform` is handed code to match against; a `code` filter on
@@ -727,15 +725,17 @@ fn compile(source: &str, flags: &str) -> Result<Pattern, String> {
     } else {
         format!("(?{inline}){translated}")
     };
-    regex::Regex::new(&pattern).map(Pattern::Regex).map_err(|e| {
-        format!(
-            "/{source}/{flags} cannot be evaluated here: {e}\n\n\
+    regex::Regex::new(&pattern)
+        .map(Pattern::Regex)
+        .map_err(|e| {
+            format!(
+                "/{source}/{flags} cannot be evaluated here: {e}\n\n\
              Filters are matched by the host, before a hook is called, so the \
              pattern is compiled by Rust's `regex` — which has no backreferences \
              and no lookaround. Rewrite the pattern, or drop the filter and let \
              the hook decide."
-        )
-    })
+            )
+        })
 }
 
 /// The JavaScript regular-expression escapes this crate spells differently.
@@ -918,7 +918,10 @@ mod tests {
     #[test]
     fn a_pattern_that_is_not_one_is_refused() {
         let refused = patterns(Some(&Value::Number(3.0))).expect_err("a number is not a pattern");
-        assert!(refused.contains("must be a string or a RegExp"), "{refused}");
+        assert!(
+            refused.contains("must be a string or a RegExp"),
+            "{refused}"
+        );
     }
 
     /// One way to declare a hook. A bare function is rollup's shorthand, and

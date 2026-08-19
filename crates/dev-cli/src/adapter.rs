@@ -35,10 +35,9 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use rolldown::plugin::{
     HookBuildEndArgs, HookBuildStartArgs, HookGenerateBundleArgs, HookLoadArgs, HookLoadOutput,
-    HookLoadReturn,
-    HookNoopReturn, HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn, HookTransformArgs,
-    HookTransformOutput, HookTransformOutputMap, HookTransformReturn, HookUsage, Plugin,
-    PluginContext, PluginHookMeta, PluginOrder, SharedLoadPluginContext,
+    HookLoadReturn, HookNoopReturn, HookResolveIdArgs, HookResolveIdOutput, HookResolveIdReturn,
+    HookTransformArgs, HookTransformOutput, HookTransformOutputMap, HookTransformReturn, HookUsage,
+    Plugin, PluginContext, PluginHookMeta, PluginOrder, SharedLoadPluginContext,
     SharedTransformPluginContext,
 };
 use rolldown_common::{ModuleType, ResolvedExternal};
@@ -429,11 +428,11 @@ fn produced(bundle: &[rolldown_common::Output]) -> Vec<contract::Output> {
                 facade_module_id: chunk
                     .facade_module_id
                     .as_ref()
-                    .map(|id| guest_id(&id.to_string()).to_string()),
+                    .map(|id| guest_id(id.as_ref()).to_string()),
                 module_ids: chunk
                     .module_ids
                     .iter()
-                    .map(|id| guest_id(&id.to_string()).to_string())
+                    .map(|id| guest_id(id.as_ref()).to_string())
                     .collect(),
                 imports: chunk.imports.iter().map(ToString::to_string).collect(),
                 dynamic_imports: chunk

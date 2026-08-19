@@ -338,7 +338,7 @@ async fn run(
                 facade_module_id: chunk
                     .facade_module_id
                     .as_ref()
-                    .map(|id| crate::adapter::guest_id(&id.to_string()).to_string()),
+                    .map(|id| crate::adapter::guest_id(id.as_ref()).to_string()),
                 module_ids: chunk.module_ids.iter().map(ToString::to_string).collect(),
                 imports: chunk.imports.iter().map(ToString::to_string).collect(),
                 dynamic_imports: chunk

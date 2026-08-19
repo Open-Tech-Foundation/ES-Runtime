@@ -45,7 +45,10 @@ url.workspace = true
 # to a child process — `Child::kill` can only ever send SIGKILL. Unix-only;
 # already in the tree via tempfile, so no new crate in the graph.
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process"] }
+# `termios` is `tcgetwinsize` — the terminal's real size, for a program drawing
+# a progress line. `$COLUMNS` is not an answer: a shell exports it to itself
+# rather than to a child, and it is stale the moment the window is dragged.
+rustix = { workspace = true, features = ["process", "termios"] }
 
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime. `test-util`

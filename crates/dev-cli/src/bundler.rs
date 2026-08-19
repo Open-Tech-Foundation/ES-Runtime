@@ -133,12 +133,12 @@ macro_rules! failures {
                         id,
                         plugin,
                         kind,
-                        line: at.as_ref().and_then(|(_, line, _, _)| {
-                            u32::try_from(*line).ok()
-                        }),
-                        column: at.as_ref().and_then(|(_, _, column, _)| {
-                            u32::try_from(*column).ok()
-                        }),
+                        line: at
+                            .as_ref()
+                            .and_then(|(_, line, _, _)| u32::try_from(*line).ok()),
+                        column: at
+                            .as_ref()
+                            .and_then(|(_, _, column, _)| u32::try_from(*column).ok()),
                         frame: (!frame.trim().is_empty()).then_some(frame),
                     }
                 })
