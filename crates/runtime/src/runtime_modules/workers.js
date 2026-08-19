@@ -180,7 +180,10 @@ function configure(options = {}) {
 // name instead of being handed to a deserializer that will misread it.
 const CODEC_STRUCTURED_CLONE = 1;
 
-function encode(value, key) {
+// `limit` is the resident ceiling, and it is the *keys'* ceiling: a document
+// lives in a table and is read when it is asked for, so bounding it would bound
+// the thing collections exist to hold.
+function encode(value, what, limit = Infinity) {
   if (typeof serialize !== "function") {
     fail(DurableErrorCode.StateFormat, "this build cannot serialize durable state");
   }
@@ -188,16 +191,12 @@ function encode(value, key) {
   try {
     bytes = serialize(value);
   } catch (e) {
-    throw new TypeError(
-      `state.set(${JSON.stringify(key)}): the value cannot be stored — ${e?.message ?? e}`,
-      { cause: e },
-    );
+    throw new TypeError(`${what} cannot be stored — ${e?.message ?? e}`, { cause: e });
   }
-  if (bytes.byteLength > config.valueLimit) {
+  if (bytes.byteLength > limit) {
     fail(
       DurableErrorCode.StateTooLarge,
-      `state.set(${JSON.stringify(key)}): ${bytes.byteLength} bytes is over the ` +
-        `${config.valueLimit}-byte limit for one value`,
+      `${what}: ${bytes.byteLength} bytes is over the ${limit}-byte limit for one value`,
     );
   }
   return bytes;
@@ -377,6 +376,16 @@ function same(a, b) {
   return true;
 }
 
+// One at a time, in the order they were asked for.
+function serial(chain, work) {
+  const next = chain.tail.then(() => work());
+  chain.tail = next.then(
+    () => {},
+    () => {},
+  );
+  return next;
+}
+
 // Marks `promise` as having a rejection handler, and returns it unchanged. The
 // rejection still reaches anyone who awaits it.
 function handled(promise) {
@@ -400,11 +409,17 @@ class State {
   #alarm = null; // ms, or null
   #index; // (at, early) => Promise — keeps the catalog's copy in step
   #handler = null; // whether the class has an alarm() method; null until known
+  #collections; // declared name -> { index, unique }
+  #opened = new Map(); // name -> Collection
 
   #attempt = 0;
+  #chain = { tail: Promise.resolve() };
+  #txChain = { tail: Promise.resolve() };
+  #tx = false;
 
-  constructor(db, { rows, alarm, attempt, index }) {
+  constructor(db, { rows, alarm, attempt, index, collections }) {
     this.#db = db;
+    this.#collections = collections;
     this.#alarm = alarm;
     this.#attempt = attempt;
     this.#index = index;
@@ -543,9 +558,94 @@ class State {
    * call's result; call it yourself before a side effect that leaves the
    * process — a `fetch`, a message — since only the result is gated. */
   async sync() {
+    if (this.#tx) {
+      // Waiting for the transaction from inside it would be waiting for
+      // ourselves; writing into it is what "make it durable" means here, and it
+      // becomes true at the commit.
+      await this.#flushWithin();
+      return;
+    }
     while (this.#flushing || this.#dirty.size > 0) {
       await (this.#flushing ?? this.#schedule());
     }
+  }
+
+  /**
+   * Runs `work` with this worker's database to itself.
+   *
+   * A connection is one conversation — the catalog learned that the hard way —
+   * and a worker has two callers for its own: the flush behind a `set`, and
+   * whatever a collection is doing. They are not ordered by anything else, so
+   * they are ordered here. Re-entrant, because a collection call inside a
+   * `transaction` is already holding it.
+   */
+  run(work) {
+    // Two chains, and which one a statement joins depends on whether a
+    // transaction is open. Outside one, *nothing* bypasses: a flush and a
+    // collection write both want this connection and neither knows about the
+    // other, which is exactly the pair that put two statements on it and
+    // panicked the engine. Inside one, the outer queue is already held by the
+    // transaction, so joining it again would be a wait on itself — the inner
+    // chain keeps that work one-at-a-time without waiting for the holder.
+    return serial(this.#tx ? this.#txChain : this.#chain, work);
+  }
+
+  /**
+   * A named collection: rows in a table of their own, queried rather than held.
+   *
+   * Only what the class declared in `static schema` exists — a name it does not
+   * know is a typo, and a typo that quietly made a table would be a second
+   * store nobody meant to have.
+   */
+  collection(name) {
+    this.#open();
+    const declared = this.#collections.get(name);
+    if (declared === undefined) {
+      const known = [...this.#collections.keys()];
+      throw new TypeError(
+        `no collection ${JSON.stringify(name)} is declared on this durable worker` +
+          (known.length ? ` — it has ${known.map((n) => JSON.stringify(n)).join(", ")}` : ""),
+      );
+    }
+    let held = this.#opened.get(name);
+    if (held === undefined) {
+      held = new Collection(this, this.#db, name, declared);
+      this.#opened.set(name, held);
+    }
+    return held;
+  }
+
+  /**
+   * Runs `work` inside a transaction over everything this worker stores — its
+   * keys and its collections alike. It commits when `work` returns and rolls
+   * back when it throws.
+   */
+  transaction(work) {
+    this.#open();
+    return this.run(async () => {
+      this.#tx = true;
+      try {
+        return await this.#db.transaction(async () => {
+          const value = await work();
+          // Anything `set` left behind goes in before the commit, so a
+          // transaction really does cover both halves of this worker's storage.
+          await this.#flushWithin();
+          return value;
+        });
+      } finally {
+        this.#tx = false;
+      }
+    });
+  }
+
+  // The dirty keys, written on the connection the transaction is already
+  // holding. Not a flush: no queue, no scheduling, and no promise of its own.
+  #flushWithin() {
+    const keys = [...this.#dirty];
+    this.#dirty.clear();
+    if (keys.length === 0) return Promise.resolve();
+    const { puts, gone } = this.#pending(keys);
+    return retryBusy(() => this.run(() => this.#commit(puts, gone)));
   }
 
   // The catalog is written *before* the worker's own file and again after, and
@@ -564,16 +664,16 @@ class State {
     }
     const at = when === null ? null : whenMs(when);
     if (at !== null) await this.#index(at, true);
-    if (at === null) {
-      await retryBusy(() => this.#db.execute("DELETE FROM _meta WHERE key = 'alarm'"));
-    } else {
-      await retryBusy(() =>
-        this.#db.execute(
-          sql`INSERT INTO _meta (key, value) VALUES ('alarm', ${String(at)})
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-        ),
-      );
-    }
+    await retryBusy(() =>
+      this.run(() =>
+        at === null
+          ? this.#db.execute("DELETE FROM _meta WHERE key = 'alarm'")
+          : this.#db.execute(
+              sql`INSERT INTO _meta (key, value) VALUES ('alarm', ${String(at)})
+                  ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+            ),
+      ),
+    );
     this.#alarm = at;
     await this.#index(at, false);
   }
@@ -594,17 +694,19 @@ class State {
   async setAlarmAttempt(n) {
     this.#attempt = n;
     await retryBusy(() =>
-      n === 0
-        ? this.#db.execute("DELETE FROM _meta WHERE key = 'alarm_attempt'")
-        : this.#db.execute(
-            sql`INSERT INTO _meta (key, value) VALUES ('alarm_attempt', ${String(n)})
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-          ),
+      this.run(() =>
+        n === 0
+          ? this.#db.execute("DELETE FROM _meta WHERE key = 'alarm_attempt'")
+          : this.#db.execute(
+              sql`INSERT INTO _meta (key, value) VALUES ('alarm_attempt', ${String(n)})
+                  ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+            ),
+      ),
     );
   }
 
   #write(key, value) {
-    const bytes = encode(value, key);
+    const bytes = encode(value, `state.set(${JSON.stringify(key)})`, config.valueLimit);
     const held = this.#values.get(key);
     // A `set` that stores what is already stored is not a write. It is worth
     // checking because the storing is the expensive half: a commit that changes
@@ -640,6 +742,10 @@ class State {
   // handled without consuming it: a caller that does await `set()` still sees
   // the failure, and so does the gate.
   #schedule() {
+    // Inside a transaction there is no flush to schedule: the write goes into
+    // the transaction with everything else, and becomes true when it commits —
+    // which is what a statement inside a transaction has always meant.
+    if (this.#tx) return this.#flushWithin();
     if (this.#flushing) {
       this.#queued ??= handled(
         this.#flushing.then(
@@ -661,15 +767,9 @@ class State {
       this.#flushing = null;
       return;
     }
-    const puts = [];
-    const gone = [];
-    for (const key of keys) {
-      const held = this.#values.get(key);
-      if (held) puts.push([key, held.encoded, CODEC_STRUCTURED_CLONE]);
-      else gone.push([key]);
-    }
+    const { puts, gone } = this.#pending(keys);
     try {
-      await retryBusy(() => this.#commit(puts, gone));
+      await retryBusy(() => this.run(() => this.#commit(puts, gone)));
     } catch (e) {
       // The keys go back on the dirty set: a failed commit must not be a write
       // that quietly never happens, and the next flush retries it.
@@ -679,6 +779,17 @@ class State {
     }
     this.#flushing = null;
     if (this.#dirty.size > 0) this.#schedule();
+  }
+
+  #pending(keys) {
+    const puts = [];
+    const gone = [];
+    for (const key of keys) {
+      const held = this.#values.get(key);
+      if (held) puts.push([key, held.encoded, CODEC_STRUCTURED_CLONE]);
+      else gone.push([key]);
+    }
+    return { puts, gone };
   }
 
   // One changed key is what a call usually leaves behind, and a statement on
@@ -703,6 +814,568 @@ class State {
     this.#closed = true;
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// Collections
+// ---------------------------------------------------------------------------
+
+// A collection is a table of its own: the document as bytes, and the fields the
+// class declared as real columns beside it, indexed. Which is the whole trade —
+// what is declared can be queried and sorted by the database, and what is not is
+// inside a blob the database cannot see into, because the blob is what keeps a
+// `Date` a `Date`.
+const NAME = /^[A-Za-z0-9_]{1,64}$/;
+
+const table = (name) => `"c_${name}"`;
+const column = (field) => `"f_${field}"`;
+
+// Parses `static schema` into what the storage layer needs, and refuses
+// anything it could not build a table from — at the first use of the class,
+// which is where a schema typo should be reported.
+const parsed = new WeakMap();
+
+// Parsed once per class, and parsed at `get()` rather than at the first open:
+// a schema is a literal in the source, so a typo in one should be reported by
+// the line that addresses the worker, not by the filesystem later.
+function schemaOf(cls) {
+  let held = parsed.get(cls);
+  if (held === undefined) {
+    held = parseSchema(cls);
+    parsed.set(cls, held);
+  }
+  return held;
+}
+
+function parseSchema(cls) {
+  const schema = cls.schema;
+  const out = new Map();
+  if (schema === undefined) return out;
+  if (schema === null || typeof schema !== "object") {
+    throw new TypeError(`${storageName(cls)}: static schema must be an object`);
+  }
+  const { collections = {}, ...rest } = schema;
+  const unknown = Object.keys(rest);
+  if (unknown.length > 0) {
+    throw new TypeError(
+      `${storageName(cls)}: static schema has no ${JSON.stringify(unknown[0])} — it takes { collections }`,
+    );
+  }
+  for (const [name, declared] of Object.entries(collections)) {
+    if (!NAME.test(name)) {
+      throw new TypeError(`${storageName(cls)}: ${JSON.stringify(name)} is not a collection name`);
+    }
+    const { index = [], unique = [], ...extra } = declared ?? {};
+    const left = Object.keys(extra);
+    if (left.length > 0) {
+      throw new TypeError(
+        `${storageName(cls)}.${name}: no such option ${JSON.stringify(left[0])} — it takes { index, unique }`,
+      );
+    }
+    const fields = new Map();
+    for (const [list, isUnique] of [
+      [index, false],
+      [unique, true],
+    ]) {
+      if (!Array.isArray(list)) {
+        throw new TypeError(`${storageName(cls)}.${name}: index and unique must be arrays`);
+      }
+      for (const field of list) {
+        if (typeof field !== "string" || !NAME.test(field)) {
+          throw new TypeError(
+            `${storageName(cls)}.${name}: ${JSON.stringify(field)} is not a field name — ` +
+              "a declared field is a plain top-level property",
+          );
+        }
+        if (field === "id" || field === "doc" || field === "codec") {
+          throw new TypeError(
+            `${storageName(cls)}.${name}: ${JSON.stringify(field)} is a column this table already has`,
+          );
+        }
+        fields.set(field, isUnique || (fields.get(field) ?? false));
+      }
+    }
+    out.set(name, fields);
+  }
+  return out;
+}
+
+// What a declared field may be, and what it becomes in its column. A column
+// exists to be compared and sorted, so what goes in it has to be a value SQLite
+// can order — and a document that would put something else there is a mistake
+// worth reporting at the insert rather than at the query.
+function promoted(value, field) {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" || typeof value === "number") return value;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "bigint") return Number(value);
+  throw new TypeError(
+    `the declared field ${JSON.stringify(field)} must be a string, number, boolean, Date or null — ` +
+      `got ${value?.constructor?.name ?? typeof value}`,
+  );
+}
+
+// The operators a `where` may use. Everything else is a bare value, which is
+// equality — the case almost every query is.
+const OPERATORS = {
+  eq: "=",
+  ne: "!=",
+  gt: ">",
+  gte: ">=",
+  lt: "<",
+  lte: "<=",
+};
+
+// What the declared schema hashes to. Compared against the hash stored in the
+// worker's own file, so an unchanged schema costs a string comparison and a
+// changed one costs the difference — the reason a wake-up is not a migration.
+const schemaHash = (collections) =>
+  hash(
+    "blake3",
+    JSON.stringify([...collections].map(([name, fields]) => [name, [...fields].sort()])),
+    "hex",
+  );
+
+// Brings one worker's file up to what its class declares: the tables, the
+// columns for declared fields, and the indexes over them. It runs at hydration,
+// which is what makes a deploy's first wake the slow one — the alternative is a
+// migration step somebody has to remember to run against every worker.
+//
+// Nothing is ever dropped. A field or a collection removed from the schema
+// leaves its column and its table alone: the class stopped asking for it, which
+// is not the same as the data being unwanted, and a schema edit that deletes
+// rows is a schema edit nobody can undo.
+async function ensureCollections(store, collections, stored) {
+  const want = schemaHash(collections);
+  if (stored === want) return want;
+  for (const [name, fields] of collections) {
+    await retryBusy(() =>
+      store.execute(
+        `CREATE TABLE IF NOT EXISTS ${table(name)} (
+           id    TEXT PRIMARY KEY,
+           doc   BLOB NOT NULL,
+           codec INTEGER NOT NULL
+         )`,
+      ),
+    );
+    const info = await (await store.query(`PRAGMA table_info(${table(name)})`)).toArray();
+    const have = new Set(info.map((c) => c.toObject().name));
+    const added = [];
+    for (const field of fields.keys()) {
+      if (have.has(`f_${field}`)) continue;
+      await retryBusy(() =>
+        store.execute(`ALTER TABLE ${table(name)} ADD COLUMN ${column(field)}`),
+      );
+      added.push(field);
+    }
+    // A column added to a table that already has rows is null in all of them,
+    // and a query over it would then quietly miss every document written before
+    // the field was declared. So the documents are read once and the column
+    // filled in — the cost of declaring a field late, paid where it is visible.
+    if (added.length > 0) {
+      const rows = await (await store.query(`SELECT id, doc, codec FROM ${table(name)}`)).toArray();
+      const updates = rows.map((row) => {
+        const r = row.toObject();
+        const doc = decode(r.doc, r.codec, name);
+        return [...added.map((field) => promoted(doc?.[field], field)), r.id];
+      });
+      if (updates.length > 0) {
+        await retryBusy(() =>
+          store.executeMany(
+            `UPDATE ${table(name)} SET ${added.map((f) => `${column(f)} = ?`).join(", ")} WHERE id = ?`,
+            updates,
+          ),
+        );
+      }
+    }
+    for (const [field, unique] of fields) {
+      await retryBusy(() =>
+        store.execute(
+          `CREATE ${unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS "c_${name}_f_${field}" ` +
+            `ON ${table(name)} (${column(field)})`,
+        ),
+      );
+    }
+  }
+  await retryBusy(() =>
+    store.execute(
+      sql`INSERT INTO _meta (key, value) VALUES ('schema', ${want})
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ),
+  );
+  return want;
+}
+
+class Collection {
+  #state;
+  #db;
+  #name;
+  #fields;
+
+  constructor(state, db, name, fields) {
+    this.#state = state;
+    this.#db = db;
+    this.#name = name;
+    this.#fields = fields;
+  }
+
+  /** The collection's name, as the class declared it. */
+  get name() {
+    return this.#name;
+  }
+
+  /**
+   * Stores `doc`, returning its id — `doc.id` when it has one, a fresh UUID
+   * when it does not. An id that is already there is replaced.
+   */
+  async insert(doc) {
+    const [row] = this.#rows([doc]);
+    await retryBusy(() => this.#state.run(() => this.#db.execute(this.#upsert(), row)));
+    return row[0];
+  }
+
+  /** Several documents in one statement, which is one crossing and one commit. */
+  async insertMany(docs) {
+    const rows = this.#rows(docs);
+    if (rows.length === 0) return [];
+    await retryBusy(() => this.#state.run(() => this.#db.executeMany(this.#upsert(), rows)));
+    return rows.map((row) => row[0]);
+  }
+
+  /** The document with `id`, or `undefined`. */
+  async get(id) {
+    const row = await this.#state.run(() =>
+      one(this.#db, `SELECT doc, codec FROM ${table(this.#name)} WHERE id = ?`, [text(id)]),
+    );
+    return row === null ? undefined : decode(row.doc, row.codec, `${this.#name}/${id}`);
+  }
+
+  /**
+   * Applies `patch` — an object to merge, or a function of the document — and
+   * returns what is now stored, or `undefined` if there was nothing to change.
+   */
+  async update(id, patch) {
+    const current = await this.get(id);
+    if (current === undefined) return undefined;
+    const next = typeof patch === "function" ? await patch(current) : { ...current, ...patch };
+    if (next === undefined || next === null) return undefined;
+    next.id = current.id ?? text(id);
+    const [row] = this.#rows([next]);
+    await retryBusy(() => this.#state.run(() => this.#db.execute(this.#upsert(), row)));
+    return next;
+  }
+
+  /** Removes it. Resolves to whether there was one. */
+  async delete(id) {
+    const result = await retryBusy(() =>
+      this.#state.run(() =>
+        this.#db.execute(`DELETE FROM ${table(this.#name)} WHERE id = ?`, [text(id)]),
+      ),
+    );
+    return result.changes > 0;
+  }
+
+  /** Removes everything `where` selects, and answers how many that was. */
+  async deleteWhere(where) {
+    const { text: clause, params } = this.#where(where);
+    const result = await retryBusy(() =>
+      this.#state.run(() =>
+        this.#db.execute(`DELETE FROM ${table(this.#name)}${clause}`, params),
+      ),
+    );
+    return result.changes;
+  }
+
+  /**
+   * A query. Nothing runs until it is iterated, `toArray`-ed, or counted.
+   *
+   *     await state.collection("messages")
+   *       .find({ authorId: "u1", ts: { gte: since } })
+   *       .sort({ ts: "desc" })
+   *       .limit(20)
+   *       .toArray();
+   *
+   * Every field named has to be one the class declared, because the rest are
+   * inside a blob the database cannot see into. `{ scan: true }` says to read
+   * the documents and filter them here instead, which is honest work on a small
+   * collection and a full read on a large one.
+   */
+  find(where = {}, options = {}) {
+    return new Query(this.#state, this.#db, this.#name, this.#fields, where, options);
+  }
+
+  /** How many documents `where` selects. */
+  count(where = {}, options = {}) {
+    return this.find(where, options).count();
+  }
+
+  #upsert() {
+    const fields = [...this.#fields.keys()];
+    const columns = ["id", "doc", "codec", ...fields.map(column)];
+    return (
+      `INSERT INTO ${table(this.#name)} (${columns.join(", ")}) ` +
+      `VALUES (${columns.map(() => "?").join(", ")}) ` +
+      `ON CONFLICT(id) DO UPDATE SET ${columns
+        .slice(1)
+        .map((c) => `${c} = excluded.${c}`)
+        .join(", ")}`
+    );
+  }
+
+  #rows(docs) {
+    return [...docs].map((doc) => {
+      if (doc === null || typeof doc !== "object") {
+        throw new TypeError("a document must be an object");
+      }
+      const id = typeof doc.id === "string" && doc.id.length > 0 ? doc.id : crypto.randomUUID();
+      const stored = doc.id === id ? doc : { ...doc, id };
+      const bytes = encode(stored, `the document ${JSON.stringify(id)} in ${this.#name}`);
+      return [
+        id,
+        bytes,
+        CODEC_STRUCTURED_CLONE,
+        ...[...this.#fields.keys()].map((field) => promoted(stored[field], field)),
+      ];
+    });
+  }
+
+  #where(where) {
+    return whereClause(this.#fields, where, this.#name, false);
+  }
+}
+
+// Shared by `find` and `deleteWhere`: the SQL a `where` becomes, and the
+// parameters beside it.
+function whereClause(fields, where, name, scan) {
+  if (where === null || typeof where !== "object") {
+    throw new TypeError("a query is an object of fields to match");
+  }
+  const parts = [];
+  const params = [];
+  const inJs = [];
+  for (const [field, test] of Object.entries(where)) {
+    if (field !== "id" && !fields.has(field)) {
+      if (scan) {
+        inJs.push([field, test]);
+        continue;
+      }
+      throw new TypeError(
+        `${name}: ${JSON.stringify(field)} is not a declared field, so it is inside the ` +
+          "document rather than beside it — declare it in `static schema`, or pass { scan: true } " +
+          "to read the documents and filter here",
+      );
+    }
+    const col = field === "id" ? "id" : column(field);
+    if (test !== null && typeof test === "object" && !(test instanceof Date)) {
+      for (const [op, operand] of Object.entries(test)) {
+        if (op === "in") {
+          if (!Array.isArray(operand) || operand.length === 0) {
+            throw new TypeError(`${name}.${field}: "in" takes a non-empty array`);
+          }
+          parts.push(`${col} IN (${operand.map(() => "?").join(", ")})`);
+          params.push(...operand.map((v) => promoted(v, field)));
+          continue;
+        }
+        const sqlOp = OPERATORS[op];
+        if (sqlOp === undefined) {
+          throw new TypeError(
+            `${name}.${field}: no such comparison ${JSON.stringify(op)} — ` +
+              `expected one of: ${Object.keys(OPERATORS).join(", ")}, in`,
+          );
+        }
+        parts.push(`${col} ${sqlOp} ?`);
+        params.push(promoted(operand, field));
+      }
+      continue;
+    }
+    const value = field === "id" ? text(test) : promoted(test, field);
+    parts.push(value === null ? `${col} IS NULL` : `${col} = ?`);
+    if (value !== null) params.push(value);
+  }
+  return { text: parts.length ? ` WHERE ${parts.join(" AND ")}` : "", params, inJs };
+}
+
+const text = (id) => {
+  if (typeof id !== "string") throw new TypeError("a document id must be a string");
+  return id;
+};
+
+class Query {
+  #state;
+  #db;
+  #name;
+  #fields;
+  #where;
+  #scan;
+  #order = [];
+  #limit = null;
+  #offset = 0;
+
+  constructor(state, db, name, fields, where, { scan = false } = {}) {
+    this.#state = state;
+    this.#db = db;
+    this.#name = name;
+    this.#fields = fields;
+    this.#where = where;
+    this.#scan = scan === true;
+  }
+
+  /** `sort({ ts: "desc" })`, and as many keys as you like. */
+  sort(order) {
+    for (const [field, direction] of Object.entries(order)) {
+      if (field !== "id" && !this.#fields.has(field) && !this.#scan) {
+        throw new TypeError(
+          `${this.#name}: cannot sort by ${JSON.stringify(field)}, which is not a declared field`,
+        );
+      }
+      if (direction !== "asc" && direction !== "desc") {
+        throw new TypeError(`${this.#name}: a sort direction is "asc" or "desc"`);
+      }
+      this.#order.push([field, direction]);
+    }
+    return this;
+  }
+
+  limit(n) {
+    this.#limit = positive(n, "limit");
+    return this;
+  }
+
+  offset(n) {
+    this.#offset = positive(n + 1, "offset") - 1;
+    return this;
+  }
+
+  /** Every match, as an array. */
+  async toArray() {
+    const out = [];
+    for await (const doc of this) out.push(doc);
+    return out;
+  }
+
+  /** The first match, or `null`. */
+  async first() {
+    for await (const doc of this) return doc;
+    return null;
+  }
+
+  /** How many there are. Counted by the database unless this is a scan. */
+  async count() {
+    if (this.#scan) return (await this.toArray()).length;
+    const { text: clause, params } = whereClause(this.#fields, this.#where, this.#name, false);
+    const row = await this.#state.run(() =>
+      one(this.#db, `SELECT count(*) AS n FROM ${table(this.#name)}${clause}`, params),
+    );
+    return row.n;
+  }
+
+  /** Matches, one at a time, pulled a batch at a time from the database. */
+  /** Matches, one at a time. */
+  async *[Symbol.asyncIterator]() {
+    for (const doc of await this.#fetch()) yield doc;
+  }
+
+  // The whole result, read in one turn on the connection.
+  //
+  // Deliberately *not* streamed while the caller iterates: a cursor holds the
+  // connection open across the loop body, and a loop body that touched this
+  // worker's state — an `await state.set` inside a `for await` is the obvious
+  // thing to write — would then be waiting on a connection its own iteration is
+  // holding. `.limit()` is what bounds a large collection; the iterator stays
+  // async so streaming can arrive later without changing what callers wrote.
+  async #fetch() {
+    const {
+      text: clause,
+      params,
+      inJs,
+    } = whereClause(this.#fields, this.#where, this.#name, this.#scan);
+    const indexed = this.#order.filter(([f]) => f === "id" || this.#fields.has(f));
+    const jsOrder = this.#order.filter(([f]) => f !== "id" && !this.#fields.has(f));
+    const orderBy = indexed.length
+      ? ` ORDER BY ${indexed
+          .map(([f, d]) => `${f === "id" ? "id" : column(f)} ${d === "desc" ? "DESC" : "ASC"}`)
+          .join(", ")}`
+      : "";
+    // A query the database can answer entirely is limited by the database. One
+    // that needs documents read cannot be, since what is filtered here is not
+    // known there — so the limit is applied after the filtering instead.
+    const pushDown = inJs.length === 0 && jsOrder.length === 0;
+    const tail =
+      pushDown && this.#limit !== null ? ` LIMIT ${this.#limit} OFFSET ${this.#offset}` : "";
+    const rows = await this.#state.run(async () =>
+      (
+        await this.#db.query(
+          `SELECT doc, codec FROM ${table(this.#name)}${clause}${orderBy}${tail}`,
+          params,
+        )
+      ).toArray(),
+    );
+    let docs = rows.map((row) => {
+      const r = row.toObject();
+      return decode(r.doc, r.codec, this.#name);
+    });
+    if (inJs.length > 0) docs = docs.filter((doc) => matches(doc, inJs));
+    if (jsOrder.length > 0) {
+      docs.sort((a, b) => {
+        for (const [field, direction] of this.#order) {
+          const x = a?.[field] instanceof Date ? a[field].getTime() : a?.[field];
+          const y = b?.[field] instanceof Date ? b[field].getTime() : b?.[field];
+          if (x === y) continue;
+          const less =
+            x === undefined || x === null ? true : y === undefined || y === null ? false : x < y;
+          return (less ? -1 : 1) * (direction === "desc" ? -1 : 1);
+        }
+        return 0;
+      });
+    }
+    if (pushDown) return docs;
+    const end = this.#limit === null ? docs.length : this.#offset + this.#limit;
+    return docs.slice(this.#offset, end);
+  }
+}
+
+// The part of a `where` the database could not answer, applied to a document
+// that has been read.
+function matches(doc, inJs) {
+  for (const [field, test] of inJs) {
+    const value = doc?.[field];
+    if (test !== null && typeof test === "object" && !(test instanceof Date)) {
+      for (const [op, operand] of Object.entries(test)) {
+        if (op === "in") {
+          if (!operand.some((o) => same_value(value, o))) return false;
+          continue;
+        }
+        const x = value instanceof Date ? value.getTime() : value;
+        const y = operand instanceof Date ? operand.getTime() : operand;
+        const ok =
+          op === "eq"
+            ? x === y
+            : op === "ne"
+              ? x !== y
+              : op === "gt"
+                ? x > y
+                : op === "gte"
+                  ? x >= y
+                  : op === "lt"
+                    ? x < y
+                    : op === "lte"
+                      ? x <= y
+                      : undefined;
+        if (ok === undefined) {
+          throw new TypeError(`no such comparison ${JSON.stringify(op)}`);
+        }
+        if (!ok) return false;
+      }
+      continue;
+    }
+    if (!same_value(value, test)) return false;
+  }
+  return true;
+}
+
+const same_value = (a, b) =>
+  a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : a === b;
 
 // ---------------------------------------------------------------------------
 // Live workers: the mailbox, the gate, and eviction
@@ -919,6 +1592,7 @@ async function materialize(cls, id) {
     await evictIdle();
 
     const name = storageName(cls);
+    const collections = schemaOf(cls);
     const file = fileKey(id);
     const dir = `${registry.dir}/${name}/${file.slice(0, 2)}`;
     await mkdir(dir, { recursive: true });
@@ -947,11 +1621,13 @@ async function materialize(cls, id) {
         }),
       );
       const alarm = meta.has("alarm") ? Number(meta.get("alarm")) : null;
+      await ensureCollections(store, collections, meta.get("schema"));
       const state = new State(store, {
         rows: rows.map((r) => r.toObject()),
         alarm,
         attempt: Number(meta.get("alarm_attempt") ?? 0),
         index: (at, early) => indexAlarm(name, id, at, early),
+        collections,
       });
 
       const now = Date.now();
@@ -1130,6 +1806,7 @@ class DurableWorker {
    * a method is called on it. */
   static get(id) {
     storageName(this);
+    schemaOf(this);
     return reference(this, checkId(id));
   }
 

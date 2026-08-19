@@ -46,6 +46,58 @@ declare module "runtime:workers" {
     live: boolean;
   }
 
+  /** What a class declares in `static schema`. */
+  export interface DurableSchema {
+    collections?: Record<string, { index?: string[]; unique?: string[] }>;
+  }
+
+  /** A value a declared field may hold: what a column can be ordered by. */
+  export type DurableField = string | number | boolean | Date | bigint | null | undefined;
+
+  /** How one field is compared. A bare value means equality. */
+  export type DurableTest =
+    | DurableField
+    | {
+        eq?: DurableField;
+        ne?: DurableField;
+        gt?: DurableField;
+        gte?: DurableField;
+        lt?: DurableField;
+        lte?: DurableField;
+        in?: DurableField[];
+      };
+
+  /** Fields to match. Every name must be one the class declared, unless the
+   * query was made with `{ scan: true }`. */
+  export type DurableWhere = Record<string, DurableTest>;
+
+  /** A query. Nothing runs until it is iterated, `toArray`-ed or counted. */
+  export interface DurableQuery<T> extends AsyncIterable<T> {
+    sort(order: Record<string, "asc" | "desc">): DurableQuery<T>;
+    limit(n: number): DurableQuery<T>;
+    offset(n: number): DurableQuery<T>;
+    toArray(): Promise<T[]>;
+    first(): Promise<T | null>;
+    count(): Promise<number>;
+  }
+
+  /** Documents in a table of their own: queried rather than held. */
+  export interface DurableCollection<T = Record<string, unknown>> {
+    readonly name: string;
+    /** Stores it, returning its id — `doc.id`, or a fresh UUID. */
+    insert(doc: T): Promise<string>;
+    /** Several in one statement. */
+    insertMany(docs: Iterable<T>): Promise<string[]>;
+    get(id: string): Promise<T | undefined>;
+    /** Merges an object, or applies a function. Resolves to what is now stored. */
+    update(id: string, patch: Partial<T> | ((doc: T) => T | Promise<T>)): Promise<T | undefined>;
+    delete(id: string): Promise<boolean>;
+    /** Removes everything `where` selects; resolves to how many that was. */
+    deleteWhere(where: DurableWhere): Promise<number>;
+    find(where?: DurableWhere, options?: { scan?: boolean }): DurableQuery<T>;
+    count(where?: DurableWhere, options?: { scan?: boolean }): Promise<number>;
+  }
+
   /** When this worker's `alarm()` should next run. */
   export interface DurableAlarm {
     /** The time set, or `null`. Synchronous, like the rest of the state. */
@@ -108,6 +160,10 @@ declare module "runtime:workers" {
     sync(): Promise<void>;
     /** When this worker's `alarm()` should next run. */
     readonly alarm: DurableAlarm;
+    /** A collection the class declared in `static schema`. */
+    collection<T = Record<string, unknown>>(name: string): DurableCollection<T>;
+    /** Runs `work` in one transaction over the keys and the collections alike. */
+    transaction<T>(work: () => T | Promise<T>): Promise<T>;
   }
 
   /** What a worker knows about itself. */
@@ -153,6 +209,11 @@ declare module "runtime:workers" {
   export class DurableWorker {
     /** The storage name, if the class name is not the right one. */
     static durableName?: string;
+
+    /** The collections this worker keeps, and which of their fields are
+     * queryable. Applied to a worker's own file the first time it is opened
+     * after a change. */
+    static schema?: DurableSchema;
 
     /** A reference to the worker of this class with `id`. */
     static get<T extends DurableWorker>(this: new () => T, id: string): DurableRef<T>;

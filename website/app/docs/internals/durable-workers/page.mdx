@@ -154,6 +154,55 @@ never exit — a script that used one durable worker would sit there for the who
 idle window with nothing to do. The cost is that a worker alone in a quiet
 process stays open until something else happens, which costs one file handle.
 
+## Collections: a blob the database cannot read, beside columns it can
+
+A collection is a table per name: `id`, the document as structured-clone bytes,
+and one real column for each field the class declared, with an index on it.
+
+That is the whole trade, and it is deliberate. The blob is what keeps a `Date` a
+`Date` — the property the keys have and JSON does not — and it is exactly what
+makes the document opaque to SQL. So what you want to query, you declare, and it
+is copied out into a column where the database can order it. What you do not
+declare is still stored, still returned, and simply not indexed.
+
+`{ scan: true }` is the escape hatch and says what it costs: the rows are read,
+the documents decoded, and the filter applied here. On a small collection that
+is honest work; on a large one it is a full read, which is why it cannot happen
+by accident.
+
+### Declaring a field later
+
+The column is added on the first wake after the deploy — and then **filled in
+from the documents already stored**. Without that backfill the column would be
+null for everything written before the field existed, and a query over it would
+silently return a subset. That read-and-update pass is the cost of declaring a
+field late, and it is paid once, on the worker's first wake, where it is visible
+as a slow first call rather than as wrong answers later.
+
+Nothing is ever dropped. A field or a collection removed from the schema keeps
+its column and its table: a class that stopped asking for something is not the
+same as data nobody wants, and a schema edit that deletes rows is one nobody can
+undo.
+
+### One connection, two chains
+
+A worker's connection has two users that know nothing about each other: the
+flush behind a `set`, and whatever a collection is doing. Both go through one
+serial chain, for the reason the catalog does — the engine panics rather than
+refuses when two statements overlap.
+
+A transaction is the exception, and it needs a second chain rather than a
+bypass. It holds the outer chain for its whole body, so nothing else can reach
+the connection; statements *inside* it join an inner chain instead, which keeps
+them one at a time without waiting for the holder. A `set` inside a transaction
+therefore stops scheduling a flush of its own and is written by the transaction,
+which is what makes `state.transaction` cover both halves of the storage.
+
+A query is read in one turn rather than streamed while the caller iterates. A
+cursor would hold the connection across the loop body, and the obvious loop body
+— `await state.set(…)` per document — would then be waiting on the connection
+its own iteration is holding. `.limit()` bounds the read instead.
+
 ## Alarms: an index that may be early, never late
 
 A worker's alarm time is stored twice — in its own file, where it is the truth,
@@ -220,9 +269,6 @@ smaller than the process. Placement is a shard problem rather than a
 thread-per-worker one for a reason that is arithmetic rather than taste: an
 isolate costs **megabytes of heap and an OS thread**, so a thousand live workers
 would be gigabytes and a thousand threads.
-
-**Collections.** Declared, indexed, queryable state, for what the resident
-ceiling will not hold.
 
 Durable *execution* — retries, a step journal, workflows — is deliberately not
 planned as a second subsystem. With alarms and workers in place it is a class on

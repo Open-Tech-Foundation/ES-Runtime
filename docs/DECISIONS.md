@@ -661,6 +661,30 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D82 — Collections: a document the database cannot read, beside the columns it can · *Proposed (2026-08-19)* · *delivers a phase D80 deferred*
+
+**Context:** D80 put a worker's state in its heap and capped it at 1 MiB for a reason it stands by — a resident cache with a soft limit is an unbounded one — and then owed an answer for everything that outgrows the cap. Without one, the answer is "open a second database beside the one the runtime already gave you", which is the shape this whole feature exists to remove.
+
+**Decision (maintainer sign-off pending):**
+
+- **A table per declared collection: `id`, the document as structured-clone bytes, and one real indexed column per declared field.** The blob is what keeps a `Date` a `Date` — the property the keys have and JSON does not — and it is exactly what makes the document opaque to SQL. So the trade is made explicit rather than hidden: what you want to query, you declare, and it is copied out where the database can order it. **Rejected: storing documents as JSON** so `json_extract` could reach every field. It would make everything queryable and make `Date`, `Map`, `Set` and `BigInt` stop surviving the round trip, which is a worse trade than declaring two field names.
+
+- **A name the class did not declare throws, and so does a field.** `{ scan: true }` reads the documents and filters in JavaScript, and has to be asked for because on a large collection it is a full read. A typo that quietly created a table would be a second store nobody meant to have; a field that quietly scanned would be a query that gets slower with success.
+
+- **A field declared later gets its column *and a backfill*.** Adding the column alone would leave it null for every document written before, so a query over it would silently return a subset — the failure that looks like working software. The read-and-update pass happens on that worker's first wake after the deploy, where it is visible as one slow call rather than as wrong answers later. **Nothing is ever dropped**: a field or a collection removed from the schema keeps its column and its table, because a class that stopped asking for something is not the same as data nobody wants, and a schema edit that deletes rows is one nobody can undo.
+
+- **One connection, two chains.** A worker's connection has two users that know nothing about each other — the flush behind a `set` and whatever a collection is doing — and the engine *panics* rather than refuses when two statements overlap (D80 found the same thing on the catalog). So everything goes through one serial chain. A transaction is the exception and gets a **second chain rather than a bypass**: it holds the outer chain for its whole body, and statements inside it serialize on the inner one, which keeps them one at a time without waiting for the holder. A first attempt used a "already inside" flag instead, and it was wrong in the way flags are — it could not tell "called from within the current work" from "called while the current work is in flight", which is precisely the flush-versus-insert pair. The test that caught it is in the suite.
+
+- **A `set` inside a transaction is written *by* the transaction**, and resolves when its statement completes rather than at the commit — the semantics every SQL client has. The alternative, resolving at commit, deadlocks the obvious code (`await state.set(…)` inside the callback), and the outside world is protected anyway: the call's gate cannot deliver a result until the transaction has finished.
+
+- **A query is read in one turn, not streamed while the caller iterates.** A cursor holds the connection across the loop body, and the obvious loop body — a `state.set` per document — would then wait on a connection its own iteration holds. `.limit()` is what bounds a large collection. The iterator stays async so streaming can arrive later without changing what callers wrote.
+
+- **The resident ceiling is the keys' ceiling.** A document is not measured against `valueLimit`: bounding it would bound the thing collections exist to hold.
+
+**Consequences:** `static schema` is the second thing a class may declare, and it is parsed at `get()` rather than at the first open — a schema is a literal in the source, so a mistake in one belongs to the line that addressed the worker. `packages/types` gains the collection and query types; API.md, the site's API and internals pages and the CHANGELOG carry the surface (D27). Verified by 9 end-to-end tests against the real binary — round trip with types intact, every comparison and sort, the undeclared-name and undeclared-field refusals and the `scan` escape, a unique collision reporting `ERR_DB_UNIQUE_VIOLATION`, a field declared later finding what came before it, one transaction over both halves committing and rolling back, keys and documents interleaved in one call and surviving together, a query iterated while the worker writes, and the resident ceiling not applying — plus 2 conformance cases over the schema itself. **Not solved here:** no compound index (each declared field gets its own, so a two-field query uses one and filters the rest); no aggregation beyond `count`; and a query's result is materialized, so a scan of a collection larger than memory needs `.limit()` and a cursor field rather than patience.
+
+---
+
 ### D81 — Alarms: a scheduler a process starts, and an index that may be early but never late · *Proposed (2026-08-19)* · *delivers a phase D80 deferred*
 
 **Context:** D80 shipped durable workers that only run when somebody addresses them, which leaves out everything a service actually schedules — a retry in five minutes, a cart abandoned for an hour, a nightly roll-up. Doing it outside means the thing D80 exists to avoid: a second service holding the timers.

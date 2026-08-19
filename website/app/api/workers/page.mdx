@@ -122,6 +122,8 @@ arrays, `BigInt`, cycles — not only what JSON survives.
 | `list(range)` | `[key, value]` pairs, same narrowing. |
 | `sync()` | Waits for every write so far. |
 | `alarm.get()` / `alarm.set(when)` / `alarm.delete()` | The durable timer — see below. |
+| `collection(name)` | A declared collection — see below. |
+| `transaction(fn)` | One transaction over the keys and the collections alike. |
 
 Mutating what `get` returns changes nothing on disk — a value is stored by
 `set`, not by being touched.
@@ -134,6 +136,62 @@ Mutating what `get` returns changes nothing on disk — a value is stored by
 State is resident, so its ceiling is real: **1 MiB a worker, 128 KiB a value**,
 refused at the write with `ERR_DURABLE_STATE_TOO_LARGE`. What grows without
 bound belongs in a database of its own — [`runtime:db`](/api/db) is right there.
+
+## Collections
+
+The keys are for the small, hot thing a request needs. **Collections are for
+what grows**: documents in a table of their own, queried rather than held, and
+not measured against the resident ceiling.
+
+```js
+export class Room extends DurableWorker {
+  static schema = {
+    collections: { messages: { index: ["ts", "author"], unique: ["clientId"] } },
+  };
+
+  async post(message) { return this.state.collection("messages").insert(message); }
+
+  async recent(n = 20) {
+    return this.state.collection("messages")
+      .find({ ts: { gte: Date.now() - 86_400_000 } })
+      .sort({ ts: "desc" })
+      .limit(n)
+      .toArray();
+  }
+}
+```
+
+A document is stored the way a key is — structured clone — so a `Date` comes
+back a `Date`. What the class **declares** is copied into a real indexed column
+beside it, and that is what can be matched and sorted.
+
+| Declaration | |
+| --- | --- |
+| `index: ["ts"]` | A column and an index. Matchable and sortable. |
+| `unique: ["clientId"]` | The same, unique. A collision is `ERR_DB_UNIQUE_VIOLATION`. |
+
+| `collection(name)` | |
+| --- | --- |
+| `insert(doc)` / `insertMany(docs)` | Stores; resolves to the id(s) — `doc.id`, or a fresh UUID. |
+| `get(id)` | The document, or `undefined`. |
+| `update(id, patch)` | An object to merge, or a function of the document. |
+| `delete(id)` / `deleteWhere(where)` | Removes one, or everything selected. |
+| `find(where?, { scan })` | A query: `.sort()`, `.limit()`, `.offset()`, `.toArray()`, `.first()`, `.count()`, `for await`. |
+| `count(where?)` | How many match. |
+
+A bare value is equality; `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are the
+comparisons.
+
+<Callout type="warning" title="Only declared fields are queryable">
+  Naming a field the class did not declare throws — it is inside the document,
+  not beside it. `{ scan: true }` reads the documents and filters here instead,
+  which is honest work on a small collection and a full read on a large one.
+</Callout>
+
+`state.transaction(fn)` covers both halves: it commits when `fn` returns and
+rolls back when it throws. **Schema changes apply on the first wake after a
+deploy** — a newly declared field gets its column *and is filled in from the
+documents already there*. Nothing is ever dropped.
 
 ## Alarms
 
@@ -245,6 +303,6 @@ onSignal("SIGTERM", async () => {
 
 ## Not yet
 
-Shards (a worker on a `Worker` of its own, with a watchdog and a memory
-ceiling) and collections (declared, indexed, queryable state). Each arrives with
-its own phase rather than as an option that does nothing today.
+Shards: a worker on a `Worker` of its own, with a watchdog and a memory
+ceiling. It arrives with its own phase rather than as an option that does
+nothing today.

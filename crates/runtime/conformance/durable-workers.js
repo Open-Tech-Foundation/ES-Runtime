@@ -122,3 +122,35 @@ test("startAlarms rejects an onError that is not a function", async () => {
   }
   assertThrows(() => startAlarms({ classes: [Alarming], onError: "log" }), "TypeError");
 });
+
+// A schema is a literal in the source. Parsing it at `get()` means a mistake is
+// reported by the line that addressed the worker, before any file is opened.
+test("a schema is checked where it is written", async () => {
+  const { DurableWorker } = await import("runtime:workers");
+  class NotAnObject extends DurableWorker {
+    static schema = "messages";
+  }
+  class WrongKey extends DurableWorker {
+    static schema = { collection: {} };
+  }
+  class BadName extends DurableWorker {
+    static schema = { collections: { "not a name": {} } };
+  }
+  class BadField extends DurableWorker {
+    static schema = { collections: { ok: { index: ["a field"] } } };
+  }
+  class TakenColumn extends DurableWorker {
+    static schema = { collections: { ok: { index: ["doc"] } } };
+  }
+  for (const cls of [NotAnObject, WrongKey, BadName, BadField, TakenColumn]) {
+    assertThrows(() => cls.get("x"), "TypeError");
+  }
+});
+
+test("a declared schema is accepted", async () => {
+  const { DurableWorker } = await import("runtime:workers");
+  class Fine extends DurableWorker {
+    static schema = { collections: { messages: { index: ["ts"], unique: ["clientId"] } } };
+  }
+  assertEquals(Fine.get("room").id, "room");
+});

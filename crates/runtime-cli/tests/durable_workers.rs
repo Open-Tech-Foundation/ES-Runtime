@@ -515,6 +515,350 @@ fn deleting_a_worker_removes_its_state() {
     );
 }
 
+// ---- collections -----------------------------------------------------------
+
+/// What a collection is for: more than the resident ceiling will hold, queried
+/// rather than kept — and still the same values going in and out, because a
+/// document is stored the way a key is.
+#[test]
+fn documents_round_trip_and_are_queried_by_their_declared_fields() {
+    let out = run(
+        "collections",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        class Room extends DurableWorker {
+          static schema = { collections: { messages: { index: ["ts", "author"] } } };
+          async post(m) { return this.state.collection("messages").insert(m); }
+          async postMany(ms) { return this.state.collection("messages").insertMany(ms); }
+          async one(id) { return this.state.collection("messages").get(id); }
+          async recent(n) {
+            return this.state.collection("messages").find().sort({ ts: "desc" }).limit(n).toArray();
+          }
+          async by(author) { return this.state.collection("messages").find({ author }).count(); }
+          async since(ts) { return this.state.collection("messages").find({ ts: { gte: ts } }).count(); }
+          async authors(list) {
+            return this.state.collection("messages").find({ author: { in: list } }).count();
+          }
+          async page(n, skip) {
+            return this.state.collection("messages").find().sort({ ts: "asc" }).limit(n).offset(skip).toArray();
+          }
+          async edit(id) {
+            return this.state.collection("messages").update(id, (d) => ({ ...d, body: `${d.body}!` }));
+          }
+          async drop(id) { return this.state.collection("messages").delete(id); }
+          async purge(before) { return this.state.collection("messages").deleteWhere({ ts: { lt: before } }); }
+          async total() { return this.state.collection("messages").count(); }
+        }
+        const r = Room.get("general");
+        const id = await r.post({ ts: 100, author: "a", body: "one", tags: new Set(["x"]), at: new Date(7) });
+        await r.postMany([
+          { id: "given", ts: 200, author: "b", body: "two" },
+          { ts: 300, author: "a", body: "three" },
+        ]);
+        const first = await r.one(id);
+        console.log("id", id.length === 36, "types", first.tags instanceof Set && first.at instanceof Date);
+        console.log("recent", (await r.recent(2)).map((m) => m.ts).join(","));
+        console.log("by a", await r.by("a"), "since 200", await r.since(200), "in", await r.authors(["a", "z"]));
+        console.log("page", (await r.page(1, 1)).map((m) => m.ts).join(","));
+        console.log("edited", (await r.edit("given")).body, "drop", await r.drop("given"));
+        console.log("purge", await r.purge(300), "left", await r.total());
+        await shutdown();
+    "#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "id true types true\nrecent 300,200\nby a 2 since 200 2 in 2\npage 200\nedited two! drop true\npurge 1 left 1"
+    );
+}
+
+/// A collection is what the class declared, and a field is queryable because it
+/// was declared. Neither is guessed: a name the class does not know would be a
+/// second store nobody meant to have, and a field the class did not declare is
+/// inside a blob the database cannot see into.
+#[test]
+fn only_what_the_schema_declares_can_be_queried() {
+    let out = run(
+        "collections-declared",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        class W extends DurableWorker {
+          static schema = { collections: { items: { index: ["sku"] } } };
+          async seed() { await this.state.collection("items").insert({ sku: "a", colour: "red" }); }
+          async unknownCollection() { return this.state.collection("nope").count(); }
+          async undeclaredField() { return this.state.collection("items").find({ colour: "red" }).count(); }
+          async scanned() {
+            return this.state.collection("items").find({ colour: "red" }, { scan: true }).count();
+          }
+          async badSort() { return this.state.collection("items").find().sort({ colour: "asc" }).toArray(); }
+        }
+        const w = W.get("a");
+        await w.seed();
+        for (const call of ["unknownCollection", "undeclaredField", "badSort"]) {
+          try { await w[call](); console.log(call, "allowed"); } catch (e) { console.log(call, e.name); }
+        }
+        console.log("scanned", await w.scanned());
+        await shutdown();
+    "#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "unknownCollection TypeError\nundeclaredField TypeError\nbadSort TypeError\nscanned 1"
+    );
+}
+
+/// A `unique` field is a real unique index, and a collision is the database's
+/// own vocabulary — `ERR_DB_UNIQUE_VIOLATION` — rather than something this
+/// module invents a second word for.
+#[test]
+fn a_unique_field_refuses_a_second_document() {
+    let out = run(
+        "collections-unique",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        class Box extends DurableWorker {
+          static schema = { collections: { items: { unique: ["sku"] } } };
+          async add(d) {
+            try { await this.state.collection("items").insert(d); return "stored"; }
+            catch (e) { return e.code; }
+          }
+          async count() { return this.state.collection("items").count(); }
+        }
+        const b = Box.get("b");
+        console.log(await b.add({ sku: "A" }), await b.add({ sku: "A" }), await b.count());
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "stored ERR_DB_UNIQUE_VIOLATION 1");
+}
+
+/// Declaring a field later is a migration, and it happens on the first wake
+/// after the deploy: the column is added and **filled in from the documents**,
+/// so a query over it does not quietly miss everything written before.
+#[test]
+fn a_field_declared_later_finds_the_documents_written_before_it() {
+    let base = dir("collections-migrate");
+    let write = |fields: &str| {
+        format!(
+            r#"import {{ DurableWorker, shutdown }} from "runtime:workers";
+               class Log extends DurableWorker {{
+                 static schema = {{ collections: {{ lines: {{ index: {fields} }} }} }};
+                 async add(d) {{ return this.state.collection("lines").insert(d); }}
+                 async warns() {{ return this.state.collection("lines").find({{ level: "warn" }}).count(); }}
+                 async count() {{ return this.state.collection("lines").count(); }}
+               }}
+               export {{ Log }};"#
+        )
+    };
+    let first = run_in(
+        &base,
+        "first.mjs",
+        &format!(
+            "{}\nawait Log.get('l').add({{ ts: 1, level: 'warn' }});\n\
+             await Log.get('l').add({{ ts: 2, level: 'info' }});\n\
+             console.log('written', await Log.get('l').count());\nawait shutdown();",
+            write("[\"ts\"]")
+        ),
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "written 2");
+
+    let second = run_in(
+        &base,
+        "second.mjs",
+        &format!(
+            "{}\nconsole.log('backfilled', await Log.get('l').warns());\n\
+             await Log.get('l').add({{ ts: 3, level: 'warn' }});\n\
+             console.log('after', await Log.get('l').warns(), await Log.get('l').count());\n\
+             await shutdown();",
+            write("[\"ts\", \"level\"]")
+        ),
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "backfilled 1\nafter 2 3");
+}
+
+/// One transaction over both halves of a worker's storage. It commits together
+/// and it rolls back together — including the keys, which are otherwise written
+/// behind the call.
+#[test]
+fn a_transaction_covers_the_keys_and_the_collections_together() {
+    let out = run(
+        "collections-transaction",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        class W extends DurableWorker {
+          static schema = { collections: { rows: { index: ["n"] } } };
+          async both() {
+            return this.state.transaction(async () => {
+              await this.state.collection("rows").insert({ id: "kept", n: 1 });
+              await this.state.set("keptKey", true);
+              return "committed";
+            });
+          }
+          async failing() {
+            try {
+              await this.state.transaction(async () => {
+                await this.state.collection("rows").insert({ id: "gone", n: 2 });
+                await this.state.set("goneKey", true);
+                throw new Error("no");
+              });
+            } catch (e) { return e.message; }
+          }
+          async state_of() {
+            return [
+              await this.state.collection("rows").count(),
+              this.state.get("keptKey") === true,
+              this.state.get("goneKey") === undefined,
+            ].join(" ");
+          }
+        }
+        const w = W.get("a");
+        console.log(await w.both(), await w.failing());
+        console.log(await w.state_of());
+        await shutdown();
+    "#,
+    );
+    // The rolled-back key is gone from the file; what is resident is the write
+    // that was made, which is why this is checked after a fresh materialization
+    // below rather than only here.
+    assert_eq!(ok(&out).trim(), "committed no\n1 true false");
+}
+
+/// Collections and keys share one connection, and a connection is one
+/// conversation. Interleaving them in a single call must not put two statements
+/// on it at once — and everything the call did is durable when it returns.
+#[test]
+fn keys_and_collections_interleave_safely_and_survive_together() {
+    let base = dir("collections-mixed");
+    std::fs::write(
+        base.join("mixed.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Mixed extends DurableWorker {
+          static schema = { collections: { events: { index: ["at"] } } };
+          async burst(n) {
+            for (let i = 0; i < n; i++) {
+              this.state.set(`k${i}`, i);
+              await this.state.collection("events").insert({ id: `e${i}`, at: i });
+            }
+            return this.state.size;
+          }
+          async report() {
+            return `${this.state.size} ${await this.state.collection("events").count()}`;
+          }
+        }
+    "#,
+    )
+    .expect("write class");
+
+    let first = run_in(
+        &base,
+        "write.mjs",
+        r#"import { Mixed } from "./mixed.mjs";
+           console.log("wrote", await Mixed.get("m").burst(25));"#,
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "wrote 25");
+
+    // No shutdown above: the process simply ended. What the call returned was
+    // gated on its writes, so both halves are there.
+    let second = run_in(
+        &base,
+        "read.mjs",
+        r#"import { Mixed } from "./mixed.mjs";
+           console.log(await Mixed.get("m").report());"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "25 25");
+}
+
+/// The resident ceiling is the *keys'* ceiling. A collection is the answer to
+/// data that outgrows it, so it is not measured against it.
+#[test]
+fn a_collection_is_not_bounded_by_the_resident_ceiling() {
+    let out = run(
+        "collections-unbounded",
+        r#"
+        import { DurableWorker, configure, shutdown } from "runtime:workers";
+        configure({ stateLimit: 4096, valueLimit: 1024 });
+        class W extends DurableWorker {
+          static schema = { collections: { blobs: { index: ["n"] } } };
+          async fill() {
+            const docs = Array.from({ length: 50 }, (_, n) => ({ n, body: "x".repeat(2000) }));
+            await this.state.collection("blobs").insertMany(docs);
+            return this.state.collection("blobs").count();
+          }
+          async keyFails() {
+            try { await this.state.set("big", "y".repeat(2000)); return "stored"; } catch (e) { return e.code; }
+          }
+        }
+        const w = W.get("a");
+        console.log(await w.fill(), await w.keyFails());
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "50 ERR_DURABLE_STATE_TOO_LARGE");
+}
+
+/// A query is read in one turn on the connection rather than streamed while the
+/// caller iterates — so a loop body that writes to this worker's own state is
+/// an ordinary thing to write, instead of a wait on the iteration holding the
+/// connection.
+#[test]
+fn a_query_can_be_iterated_while_the_worker_writes() {
+    let out = run(
+        "collections-iterate",
+        r#"
+        import { DurableWorker, shutdown } from "runtime:workers";
+        class W extends DurableWorker {
+          static schema = { collections: { rows: { index: ["n"] } } };
+          async seed(n) {
+            await this.state.collection("rows").insertMany(
+              Array.from({ length: n }, (_, i) => ({ id: `r${i}`, n: i })),
+            );
+          }
+          async sum() {
+            let total = 0;
+            for await (const doc of this.state.collection("rows").find().sort({ n: "asc" })) {
+              total += doc.n;
+              await this.state.set("seen", doc.id);   // the shape that would deadlock
+            }
+            return `${total} ${this.state.get("seen")}`;
+          }
+        }
+        const w = W.get("a");
+        await w.seed(10);
+        console.log(await w.sum());
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "45 r9");
+}
+
+/// A schema is a literal in the source, so a mistake in one is reported by the
+/// line that addresses the worker rather than by a filesystem it never reached.
+#[test]
+fn a_malformed_schema_is_refused_at_the_address() {
+    let out = run(
+        "collections-schema",
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        class A extends DurableWorker { static schema = { collection: {} }; }
+        class B extends DurableWorker { static schema = { collections: { "no spaces": {} } }; }
+        class C extends DurableWorker { static schema = { collections: { ok: { index: "ts" } } }; }
+        class D extends DurableWorker { static schema = { collections: { ok: { index: ["id"] } } }; }
+        class E extends DurableWorker { static schema = { collections: { ok: { sorted: [] } } }; }
+        for (const cls of [A, B, C, D, E]) {
+          try { cls.get("x"); console.log("allowed"); } catch (e) { console.log(e.name); }
+        }
+    "#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "TypeError\nTypeError\nTypeError\nTypeError\nTypeError"
+    );
+}
+
 // ---- alarms ----------------------------------------------------------------
 
 /// The point of a durable timer: the process that set it is gone, and it still

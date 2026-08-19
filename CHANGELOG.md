@@ -51,9 +51,41 @@ namespace) is unstable and may change between minor releases until the API freez
     `--allow-write`, under the same jail everything else uses. The module is
     guest JavaScript over `runtime:db`, `runtime:fs` and `runtime:hashing`.
 
-  Shards (a worker on a `Worker` of its own) and collections (declared, indexed
-  state) are the phases after this one, and are absent rather than present as
-  options that do nothing.
+  Shards (a worker on a `Worker` of its own) are the phase after this one, and
+  absent rather than present as an option that does nothing.
+
+- **Collections: durable-worker state that grows** (DECISIONS D82). The keys are
+  resident and capped; a collection is documents in a table of their own,
+  queried rather than held.
+
+  ```js
+  export class Room extends DurableWorker {
+    static schema = {
+      collections: { messages: { index: ["ts", "author"], unique: ["clientId"] } },
+    };
+
+    async recent(n = 20) {
+      return this.state.collection("messages")
+        .find({ ts: { gte: Date.now() - 86_400_000 } })
+        .sort({ ts: "desc" })
+        .limit(n)
+        .toArray();
+    }
+  }
+  ```
+
+  - A document is stored the way a key is — structured clone — so a `Date` comes
+    back a `Date`. What the class **declares** is copied into a real indexed
+    column beside it, and that is what can be matched and sorted; a name or a
+    field the class did not declare throws, unless the query asks for
+    `{ scan: true }`.
+  - `insert`, `insertMany`, `get`, `update`, `delete`, `deleteWhere`, `count`,
+    and a `find` builder with `sort` / `limit` / `offset` / `toArray` / `first`
+    / `count` / `for await`.
+  - `state.transaction(fn)` covers the keys and the collections together.
+  - **A field declared later gets its column and a backfill** on the first wake
+    after the deploy, so a query over it does not quietly miss what came before
+    it. Nothing is ever dropped.
 
 - **Durable workers can ask to be woken** (DECISIONS D81). `state.alarm.set(when)`
   stores a time beside the worker's state, so it survives a restart — and the

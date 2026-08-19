@@ -2711,7 +2711,9 @@ arrays, `BigInt`, cycles — not only what JSON survives.
 | `keys({ prefix, start, end, limit, reverse })` | Sorted keys. Synchronous. |
 | `list(range)` | `[key, value]` pairs, same narrowing. |
 | `sync()` | Waits for every write so far. |
-| `alarm.get()` / `alarm.set(when)` / `alarm.delete()` | The durable timer — see below. |
+| `alarm.get()` / `alarm.set(when)` / `alarm.delete()` | The durable timer — see [Alarms](#alarms). |
+| `collection(name)` | A declared collection — see [Collections](#collections). |
+| `transaction(fn)` | One transaction over the keys and the collections alike. |
 
 Mutating what `get` returns changes nothing on disk — a value is stored by
 `set`, not by being touched. A `set` that stores what is already stored writes
@@ -2727,6 +2729,92 @@ first, or make it the value you return.
 per value by default, refused at the write with `ERR_DURABLE_STATE_TOO_LARGE`.
 State that grows without bound belongs in a database of its own — `runtime:db`
 is right there.
+
+### Collections
+
+The keys are for the small, hot thing a request needs immediately. **Collections
+are for what grows**: documents in a table of their own, queried rather than
+held, and not measured against the resident ceiling.
+
+A class declares what it keeps. Nothing else exists — a name the class does not
+know is a typo, and a typo that quietly made a table would be a second store
+nobody meant to have.
+
+```js
+export class Room extends DurableWorker {
+  static schema = {
+    collections: {
+      messages: { index: ["ts", "author"], unique: ["clientId"] },
+    },
+  };
+
+  async post(message) {
+    return this.state.collection("messages").insert(message);
+  }
+
+  async recent(n = 20) {
+    return this.state.collection("messages")
+      .find({ ts: { gte: Date.now() - 86_400_000 } })
+      .sort({ ts: "desc" })
+      .limit(n)
+      .toArray();
+  }
+}
+```
+
+A document is stored the way a key is — structured clone — so a `Date` comes
+back a `Date`. What the class **declares** is also copied into a real, indexed
+column beside it, and that is what can be matched and sorted; everything else is
+inside the document, where the database cannot see it.
+
+| Declaration | |
+| --- | --- |
+| `index: ["ts"]` | A column and an index. Matchable and sortable. |
+| `unique: ["clientId"]` | The same, unique — a collision is a `DbError` with `ERR_DB_UNIQUE_VIOLATION`, the same code `runtime:db` gives. |
+
+A declared field must be a string, number, boolean, `Date`, `bigint` or null —
+what a column can be *ordered by*. A document that would put something else
+there is refused at the insert.
+
+| `collection(name)` | |
+| --- | --- |
+| `insert(doc)` | Stores it; resolves to its id — `doc.id`, or a fresh UUID. |
+| `insertMany(docs)` | One statement, one commit. |
+| `get(id)` | The document, or `undefined`. |
+| `update(id, patch)` | An object to merge, or a function of the document. Resolves to what is now stored. |
+| `delete(id)` | Resolves to whether there was one. |
+| `deleteWhere(where)` | Removes what it selects; resolves to how many. |
+| `find(where?, { scan })` | A query — see below. |
+| `count(where?)` | How many match. |
+
+**`find` returns a query, and nothing runs until it is asked for**:
+`.sort({ field: "asc" | "desc" })`, `.limit(n)`, `.offset(n)`, then `.toArray()`,
+`.first()`, `.count()`, or `for await`.
+
+```js
+const where = { author: "u1", ts: { gte: since, lt: until }, kind: { in: ["a", "b"] } };
+```
+
+A bare value is equality; `eq`, `ne`, `gt`, `gte`, `lt`, `lte` and `in` are the
+comparisons. Naming a field the class did not declare **throws** — it is inside
+the document, not beside it — unless the query says `{ scan: true }`, which
+reads the documents and filters here instead. That is honest work on a small
+collection and a full read on a large one, which is why it has to be asked for.
+
+A query is read in one turn on the connection rather than streamed while you
+iterate, so a loop body that writes to this worker's state is an ordinary thing
+to write. `.limit()` is what bounds a large collection.
+
+**`state.transaction(fn)`** covers both halves at once: it commits when `fn`
+returns and rolls back when it throws, and the keys written inside it are
+written by it rather than behind the call.
+
+**Schema changes apply on the first wake after a deploy.** A new collection is
+created, a newly declared field gets its column *and is filled in from the
+documents already there* — so a query over it does not quietly miss everything
+written before it was declared. Nothing is ever dropped: a field or a collection
+removed from the schema keeps its column and its table, because a class that
+stopped asking for something is not the same as data nobody wants.
 
 ### Alarms
 
@@ -2844,10 +2932,9 @@ onSignal("SIGTERM", async () => {
 
 ### Not yet
 
-Each of these arrives with its own phase rather than as a flag that does
-nothing today: **shards** (a worker running on a `Worker` of its own, with the
-watchdog and memory ceiling that come with one) and **collections** (declared,
-indexed, queryable state for what does not fit in the resident ceiling).
+One phase is still to come, and arrives rather than being a flag that does
+nothing today: **shards** — a worker running on a `Worker` of its own, with the
+watchdog and the memory ceiling that come with one.
 
 ---
 
