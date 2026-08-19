@@ -51,9 +51,38 @@ namespace) is unstable and may change between minor releases until the API freez
     `--allow-write`, under the same jail everything else uses. The module is
     guest JavaScript over `runtime:db`, `runtime:fs` and `runtime:hashing`.
 
-  Shards (a worker on a `Worker` of its own), collections (declared, indexed
-  state) and alarms (a durable timer) are the phases after this one, and are
-  absent rather than present as options that do nothing.
+  Shards (a worker on a `Worker` of its own) and collections (declared, indexed
+  state) are the phases after this one, and are absent rather than present as
+  options that do nothing.
+
+- **Durable workers can ask to be woken** (DECISIONS D81). `state.alarm.set(when)`
+  stores a time beside the worker's state, so it survives a restart — and the
+  worker is woken whether or not anybody addresses it.
+
+  ```js
+  export class Reminder extends DurableWorker {
+    async schedule(at) { await this.state.alarm.set(at); }
+    async alarm() {
+      await deliver(this.state.get("message"));
+      // setting the next one here is how a worker repeats
+    }
+  }
+
+  startAlarms({ classes: [Reminder] });   // a process says it runs alarms
+  ```
+
+  - The alarm is **cleared before the handler runs**, and `alarm()` goes through
+    the same mailbox a call does — so it never interleaves with one, and its
+    writes are gated the same way.
+  - **A failing `alarm()` is retried** (1s, 2s, 4s… to a five-minute cap,
+    `alarmRetries` times) with the count stored, then cleared and **reported**:
+    a scheduled job that fails silently is how a queue loses work.
+  - `startAlarms({ classes })` requires the list. Anything scheduled for a class
+    a process does not list is left for the process that does, rather than
+    firing on whichever deployment happened to be busy.
+  - While the scheduler runs, the process stays alive — which is why it is not
+    started for you: a script that scheduled something for tomorrow should not
+    sit there until tomorrow.
 
 
 ## [0.26.0] - 2026-08-18

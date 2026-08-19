@@ -18,6 +18,10 @@ declare module "runtime:workers" {
     stateLimit?: number;
     /** The ceiling on a single stored value, in bytes. Default 128 KiB. */
     valueLimit?: number;
+    /** How many times a failing `alarm()` is retried. Default `5`. */
+    alarmRetries?: number;
+    /** The longest the alarm scheduler sleeps between looks. Default `60_000` ms. */
+    alarmPoll?: number;
   }
 
   /** Narrows what {@link DurableState.keys} and {@link DurableState.list} return. */
@@ -40,6 +44,37 @@ declare module "runtime:workers" {
     bytes: number;
     /** Whether it is open in this process right now. */
     live: boolean;
+  }
+
+  /** When this worker's `alarm()` should next run. */
+  export interface DurableAlarm {
+    /** The time set, or `null`. Synchronous, like the rest of the state. */
+    get(): Date | null;
+    /** Sets it; resolves when it is durable. A time in the past runs at once. */
+    set(when: Date | number): Promise<void>;
+    /** Unsets it. */
+    delete(): Promise<void>;
+  }
+
+  /** What {@link startAlarms} returns. */
+  export interface AlarmScheduler {
+    /** Stops servicing alarms; resolves when the sweep in flight has finished. */
+    stop(): Promise<void>;
+    /** Whether it is still running. */
+    readonly running: boolean;
+  }
+
+  export interface AlarmOptions {
+    /**
+     * The durable worker classes this process runs alarms for. Required:
+     * anything scheduled for a class not listed is left for the process that
+     * does list it.
+     */
+    classes: Array<typeof DurableWorker>;
+    /** Hears about an alarm that failed for the last time. Defaults to `console.error`. */
+    onError?: (error: unknown, context: string) => void;
+    /** How many due workers one sweep wakes. Default `32`. */
+    batch?: number;
   }
 
   /**
@@ -71,6 +106,8 @@ declare module "runtime:workers" {
     readonly bytes: number;
     /** Waits for every write made so far to be durable. */
     sync(): Promise<void>;
+    /** When this worker's `alarm()` should next run. */
+    readonly alarm: DurableAlarm;
   }
 
   /** What a worker knows about itself. */
@@ -136,6 +173,8 @@ declare module "runtime:workers" {
     start?(): void | Promise<void>;
     /** Runs before the worker is closed — `"idle"`, `"shutdown"` or `"deleted"`. */
     stop?(reason: string): void | Promise<void>;
+    /** Runs when the alarm set on this worker comes due. */
+    alarm?(): void | Promise<void>;
   }
 
   /** Stable `code` values on a {@link DurableError}. */
@@ -155,6 +194,12 @@ declare module "runtime:workers" {
   }
 
   export function configure(options?: DurableConfig): Required<DurableConfig>;
+
+  /**
+   * Starts servicing alarms: due workers are woken and their `alarm()` runs.
+   * While it is running the process stays alive.
+   */
+  export function startAlarms(options: AlarmOptions): AlarmScheduler;
 
   /**
    * Closes every open worker — flushing what they wrote, running their `stop()`

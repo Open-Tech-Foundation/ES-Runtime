@@ -515,6 +515,295 @@ fn deleting_a_worker_removes_its_state() {
     );
 }
 
+// ---- alarms ----------------------------------------------------------------
+
+/// The point of a durable timer: the process that set it is gone, and it still
+/// runs. Nothing was left running to remember it — the time is in the worker's
+/// own file, and the catalog is what makes it findable without opening every
+/// file to look.
+#[test]
+fn an_alarm_set_in_one_process_runs_in_the_next() {
+    let base = dir("alarm-restart");
+    std::fs::write(
+        base.join("job.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Job extends DurableWorker {
+          async at(ms) { await this.state.alarm.set(Date.now() + ms); }
+          async alarm() { await this.state.set("ran", new Date()); }
+          async ran() { return this.state.get("ran") instanceof Date; }
+          async pending() { return this.state.alarm.get() !== null; }
+        }
+    "#,
+    )
+    .expect("write class");
+
+    let first = run_in(
+        &base,
+        "set.mjs",
+        r#"import { Job } from "./job.mjs";
+           import { shutdown } from "runtime:workers";
+           await Job.get("j").at(20);
+           console.log("scheduled", await Job.get("j").pending(), await Job.get("j").ran());
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "scheduled true false");
+
+    let second = run_in(
+        &base,
+        "wake.mjs",
+        r#"import { Job } from "./job.mjs";
+           import { startAlarms, shutdown } from "runtime:workers";
+           const alarms = startAlarms({ classes: [Job] });
+           await new Promise((r) => setTimeout(r, 300));
+           console.log("ran", await Job.get("j").ran(), "pending", await Job.get("j").pending());
+           await alarms.stop();
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "ran true pending false");
+}
+
+/// The alarm is cleared before the handler runs, so setting the next one inside
+/// it is how a worker repeats — and a handler that sets nothing is not woken
+/// again.
+#[test]
+fn an_alarm_repeats_only_while_its_handler_asks_to() {
+    let out = run(
+        "alarm-repeat",
+        r#"
+        import { DurableWorker, startAlarms, shutdown } from "runtime:workers";
+        class Ticker extends DurableWorker {
+          async start_at(ms) { await this.state.alarm.set(Date.now() + ms); }
+          async alarm() {
+            const n = (this.state.get("n") ?? 0) + 1;
+            this.state.set("n", n);
+            if (n < 3) await this.state.alarm.set(Date.now() + 10);
+          }
+          async n() { return this.state.get("n") ?? 0; }
+          async pending() { return this.state.alarm.get() !== null; }
+        }
+        const t = Ticker.get("a");
+        await t.start_at(10);
+        const alarms = startAlarms({ classes: [Ticker] });
+        await new Promise((r) => setTimeout(r, 400));
+        console.log(await t.n(), await t.pending());
+        await alarms.stop();
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "3 false");
+}
+
+/// A failing alarm is retried, and when it has failed for the last time it is
+/// *reported* rather than dropped: a scheduled job that fails silently is how a
+/// queue loses work. The retry count is stored, so it survives a restart too.
+#[test]
+fn a_failing_alarm_is_retried_and_then_reported() {
+    let out = run(
+        "alarm-retry",
+        r#"
+        import { DurableWorker, configure, startAlarms, shutdown } from "runtime:workers";
+        configure({ alarmRetries: 2 });
+        class Flaky extends DurableWorker {
+          async at(ms) { await this.state.alarm.set(Date.now() + ms); }
+          async alarm() {
+            const n = (this.state.get("tries") ?? 0) + 1;
+            await this.state.set("tries", n);
+            throw new Error(`boom ${n}`);
+          }
+          async tries() { return this.state.get("tries") ?? 0; }
+          async pending() { return this.state.alarm.get() !== null; }
+        }
+        const f = Flaky.get("f");
+        await f.at(5);
+        const reported = [];
+        const alarms = startAlarms({ classes: [Flaky], onError: (e) => reported.push(e.message) });
+        await new Promise((r) => setTimeout(r, 4000));
+        console.log(await f.tries(), await f.pending(), reported.join(","));
+        await alarms.stop();
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "3 false boom 3");
+}
+
+/// An alarm runs through the same mailbox a call does, so it cannot interleave
+/// with one — the reason a worker's state never needs a lock.
+#[test]
+fn an_alarm_waits_for_the_call_in_flight() {
+    let out = run(
+        "alarm-mailbox",
+        r#"
+        import { DurableWorker, startAlarms, shutdown } from "runtime:workers";
+        class W extends DurableWorker {
+          async slow() {
+            this.state.set("log", [...(this.state.get("log") ?? []), "call:start"]);
+            await new Promise((r) => setTimeout(r, 120));
+            this.state.set("log", [...(this.state.get("log") ?? []), "call:end"]);
+          }
+          async alarm() {
+            this.state.set("log", [...(this.state.get("log") ?? []), "alarm"]);
+          }
+          async at(ms) { await this.state.alarm.set(Date.now() + ms); }
+          async log() { return (this.state.get("log") ?? []).join(" "); }
+        }
+        const w = W.get("a");
+        await w.at(10);
+        const alarms = startAlarms({ classes: [W] });
+        await w.slow();
+        await new Promise((r) => setTimeout(r, 200));
+        console.log(await w.log());
+        await alarms.stop();
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "call:start call:end alarm");
+}
+
+/// Setting an alarm on a class with no `alarm()` is refused where the mistake
+/// is — at the `set` — rather than by a scheduler nobody is watching.
+#[test]
+fn an_alarm_needs_a_handler_to_set_it_on() {
+    let out = run(
+        "alarm-handler",
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        class Deaf extends DurableWorker {
+          async trySet() {
+            try { await this.state.alarm.set(Date.now() + 1000); return "allowed"; }
+            catch (e) { return e.name; }
+          }
+        }
+        console.log(await Deaf.get("a").trySet());
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "TypeError");
+}
+
+/// Alarms run because a process said it would run them. Stopping means stopping:
+/// the timer is dropped, the process is free to exit, and what was due stays due
+/// for whoever runs next.
+#[test]
+fn stopping_the_scheduler_leaves_the_alarm_for_next_time() {
+    let out = run(
+        "alarm-stop",
+        r#"
+        import { DurableWorker, startAlarms, shutdown } from "runtime:workers";
+        class W extends DurableWorker {
+          async at(ms) { await this.state.alarm.set(Date.now() + ms); }
+          async alarm() { await this.state.set("ran", true); }
+          async ran() { return this.state.get("ran") ?? false; }
+          async pending() { return this.state.alarm.get() !== null; }
+        }
+        const w = W.get("a");
+        await w.at(150);
+        const alarms = startAlarms({ classes: [W] });
+        await alarms.stop();
+        await new Promise((r) => setTimeout(r, 300));
+        console.log(await w.ran(), await w.pending(), alarms.running);
+        await shutdown();
+    "#,
+    );
+    assert_eq!(ok(&out).trim(), "false true false");
+}
+
+/// A worker whose class this process never defined cannot be woken here — and
+/// must not stop the scheduler from doing everything else, nor turn it into a
+/// spin on a row that is permanently overdue.
+#[test]
+fn an_alarm_for_a_class_this_process_does_not_have_is_left_alone() {
+    let base = dir("alarm-unknown");
+    std::fs::write(
+        base.join("both.mjs"),
+        r#"
+        import { DurableWorker } from "runtime:workers";
+        export class Absent extends DurableWorker {
+          async at(ms) { await this.state.alarm.set(Date.now() + ms); }
+          async alarm() { await this.state.set("ran", true); }
+          async ran() { return this.state.get("ran") ?? false; }
+        }
+    "#,
+    )
+    .expect("write class");
+
+    let first = run_in(
+        &base,
+        "set.mjs",
+        r#"import { Absent } from "./both.mjs";
+           import { shutdown } from "runtime:workers";
+           await Absent.get("a").at(5);
+           console.log("set");
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&first).trim(), "set");
+
+    // This process defines a different class entirely: the overdue row is not
+    // one it can run.
+    let second = run_in(
+        &base,
+        "other.mjs",
+        r#"import { DurableWorker, startAlarms, shutdown } from "runtime:workers";
+           class Present extends DurableWorker {
+             async at(ms) { await this.state.alarm.set(Date.now() + ms); }
+             async alarm() { await this.state.set("ran", true); }
+             async ran() { return this.state.get("ran") ?? false; }
+           }
+           const p = Present.get("p");
+           await p.at(10);
+           const alarms = startAlarms({ classes: [Present], onError: (e) => console.log("REPORTED", e.message) });
+           await new Promise((r) => setTimeout(r, 300));
+           console.log("mine ran:", await p.ran());
+           await alarms.stop();
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&second).trim(), "mine ran: true");
+
+    // …and the one it could not run is still waiting for a process that can.
+    let third = run_in(
+        &base,
+        "back.mjs",
+        r#"import { Absent } from "./both.mjs";
+           import { startAlarms, shutdown } from "runtime:workers";
+           const alarms = startAlarms({ classes: [Absent] });
+           await new Promise((r) => setTimeout(r, 300));
+           console.log("ran:", await Absent.get("a").ran());
+           await alarms.stop();
+           await shutdown();"#,
+        &[],
+    );
+    assert_eq!(ok(&third).trim(), "ran: true");
+}
+
+/// The class list is required, because a scheduler that guessed would service
+/// whatever this process happened to have addressed — firing an alarm on a busy
+/// deployment and not on an idle one.
+#[test]
+fn the_scheduler_must_be_told_which_classes_it_runs() {
+    let out = run(
+        "alarm-classes",
+        r#"
+        import { DurableWorker, startAlarms } from "runtime:workers";
+        class W extends DurableWorker { async alarm() {} }
+        for (const bad of [undefined, {}, { classes: [] }, { classes: [class X {}] }]) {
+          try { startAlarms(bad); console.log("allowed"); } catch (e) { console.log(e.name); }
+        }
+        // …and one at a time: a second call would otherwise ignore the classes
+        // it was given.
+        const alarms = startAlarms({ classes: [W] });
+        try { startAlarms({ classes: [W] }); console.log("twice"); } catch (e) { console.log(e.name); }
+        await alarms.stop();
+    "#,
+    );
+    assert_eq!(
+        ok(&out).trim(),
+        "TypeError\nTypeError\nTypeError\nTypeError\nTypeError"
+    );
+}
+
 // ---- capabilities ----------------------------------------------------------
 
 /// The module adds no authority of its own: importing it is always allowed

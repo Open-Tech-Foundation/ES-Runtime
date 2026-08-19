@@ -103,3 +103,22 @@ test("configure refuses what it does not know", async () => {
   assertThrows(() => configure({ mailbox: "many" }), "TypeError");
   assertThrows(() => configure({ valueLimit: 4096, stateLimit: 1024 }), "TypeError");
 });
+
+// The scheduler will not guess which classes this process is responsible for,
+// and each entry has to be one — both checked at the call, since a scheduler
+// that started with a bad list would simply never fire anything.
+test("startAlarms must be told which classes it runs", async () => {
+  const { startAlarms } = await import("runtime:workers");
+  assertThrows(() => startAlarms(), "TypeError");
+  assertThrows(() => startAlarms({}), "TypeError");
+  assertThrows(() => startAlarms({ classes: [] }), "TypeError");
+  assertThrows(() => startAlarms({ classes: [class NotOne {}] }), "TypeError");
+});
+
+test("startAlarms rejects an onError that is not a function", async () => {
+  const { DurableWorker, startAlarms } = await import("runtime:workers");
+  class Alarming extends DurableWorker {
+    async alarm() {}
+  }
+  assertThrows(() => startAlarms({ classes: [Alarming], onError: "log" }), "TypeError");
+});

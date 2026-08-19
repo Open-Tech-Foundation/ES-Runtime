@@ -2677,6 +2677,7 @@ boilerplate at all.
 | `this.ctx` | `{ id, name, signal }`; `signal` aborts when it is being closed |
 | `start()` | After the state is loaded, before the first call |
 | `stop(reason)` | Before it is closed: `"idle"`, `"shutdown"` or `"deleted"` |
+| `alarm()` | When the alarm set on this worker comes due — see [Alarms](#alarms) |
 | `static durableName` | The storage name, when the class name is not the right one |
 
 **`new Cart()` throws.** A durable worker is addressed, because which state an
@@ -2710,6 +2711,7 @@ arrays, `BigInt`, cycles — not only what JSON survives.
 | `keys({ prefix, start, end, limit, reverse })` | Sorted keys. Synchronous. |
 | `list(range)` | `[key, value]` pairs, same narrowing. |
 | `sync()` | Waits for every write so far. |
+| `alarm.get()` / `alarm.set(when)` / `alarm.delete()` | The durable timer — see below. |
 
 Mutating what `get` returns changes nothing on disk — a value is stored by
 `set`, not by being touched. A `set` that stores what is already stored writes
@@ -2726,6 +2728,82 @@ per value by default, refused at the write with `ERR_DURABLE_STATE_TOO_LARGE`.
 State that grows without bound belongs in a database of its own — `runtime:db`
 is right there.
 
+### Alarms
+
+A durable worker can ask to be woken. The time is stored beside its state, so it
+survives a restart the way the state does — and the worker is woken whether or
+not anyone addresses it.
+
+```js
+export class Reminder extends DurableWorker {
+  async schedule(at, message) {
+    this.state.set("message", message);
+    await this.state.alarm.set(at);            // a Date, or ms since the epoch
+  }
+
+  async alarm() {
+    await deliver(this.state.get("message"));
+    // Setting the next one here is how a worker repeats:
+    // await this.state.alarm.set(Date.now() + 86_400_000);
+  }
+}
+```
+
+| | |
+| --- | --- |
+| `state.alarm.get()` | The time set, or `null`. Synchronous, like the rest of the state. |
+| `state.alarm.set(when)` | A `Date` or a number of milliseconds. In the past means *now*. |
+| `state.alarm.delete()` | Unset. |
+
+The alarm is **cleared before the handler runs**, so a handler that sets nothing
+is not woken again and one that sets the next time repeats. `alarm()` goes
+through the same mailbox a call does, so it never interleaves with one, and its
+writes are gated exactly as a call's are.
+
+Setting an alarm on a class with no `alarm()` method is a `TypeError` at the
+`set` — where the mistake is, rather than in a scheduler nobody is watching.
+
+**A failing `alarm()` is retried** — 1s, 2s, 4s, doubling to a five-minute cap —
+`alarmRetries` times (default 5). The count is stored, so a restart does not
+reset it. After the last attempt the alarm is cleared and the failure is
+**reported**, because a scheduled job that fails silently is how a queue loses
+work.
+
+#### `startAlarms({ classes, onError, batch })`
+
+Nothing fires until a process says it is the one running alarms:
+
+```js
+import { startAlarms } from "runtime:workers";
+import { Reminder } from "./workers.js";
+
+const alarms = startAlarms({ classes: [Reminder] });
+// …
+await alarms.stop();
+```
+
+`classes` is **required**. A class is not something the runtime can discover —
+importing a module that defines one proves nothing about whether this deployment
+is meant to service it — and a scheduler that guessed would fire an alarm on a
+busy process and not on an idle one. Anything scheduled for a class not listed
+is left exactly as it is, for the process that does list it.
+
+| Option | |
+| --- | --- |
+| `classes` | **Required.** The `DurableWorker` subclasses this process runs alarms for. |
+| `onError` | Hears an alarm that failed for the last time, and a worker that could not be opened. Defaults to `console.error`. |
+| `batch` | How many due workers one sweep wakes. Default `32`. |
+
+`stop()` drops the timer and resolves once the sweep in flight has finished;
+`shutdown()` calls it. **While it is running the process stays alive** — a
+service with work scheduled has a reason to be up — which is also why it is not
+started for you: a script that set an alarm for tomorrow should not sit there
+until tomorrow.
+
+There is no separate polling loop to tune. The scheduler sleeps until the next
+alarm is due, wakes early when an earlier one is set, and looks again at least
+every `alarmPoll` (default 60s), which bounds what a clock change can do.
+
 ### `configure(options)` and `shutdown()`
 
 `configure` is optional; with no call the defaults apply, which is the point —
@@ -2739,6 +2817,8 @@ used, since these decide where state lives.
 | `maxLive` | `128` | How many may be open at once |
 | `mailbox` | `1024` | How many calls may wait on one worker |
 | `stateLimit` / `valueLimit` | 1 MiB / 128 KiB | The ceilings above |
+| `alarmRetries` | `5` | How many times a failing `alarm()` is retried |
+| `alarmPoll` | `60000` | The longest the scheduler sleeps between looks |
 
 Eviction is checked when work arrives rather than on a timer: a repeating timer
 is a reason a process can never exit, and a script that used one durable worker
@@ -2766,9 +2846,8 @@ onSignal("SIGTERM", async () => {
 
 Each of these arrives with its own phase rather than as a flag that does
 nothing today: **shards** (a worker running on a `Worker` of its own, with the
-watchdog and memory ceiling that come with one), **collections** (declared,
-indexed, queryable state for what does not fit in the resident ceiling), and
-**alarms** (a durable timer that survives a restart).
+watchdog and memory ceiling that come with one) and **collections** (declared,
+indexed, queryable state for what does not fit in the resident ceiling).
 
 ---
 

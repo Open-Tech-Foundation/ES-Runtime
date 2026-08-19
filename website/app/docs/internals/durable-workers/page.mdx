@@ -154,6 +154,50 @@ never exit — a script that used one durable worker would sit there for the who
 idle window with nothing to do. The cost is that a worker alone in a quiet
 process stays open until something else happens, which costs one file handle.
 
+## Alarms: an index that may be early, never late
+
+A worker's alarm time is stored twice — in its own file, where it is the truth,
+and in the catalog, where it is what makes the alarm *findable* without opening
+every worker to ask. Two files means no transaction spans them, so the order of
+the two writes is the design:
+
+1. the catalog, moved **earlier** only (`MIN` of what is there and the new time),
+2. the worker's own file,
+3. the catalog again, exactly.
+
+A crash anywhere in that sequence therefore leaves the index **early**, and an
+early index costs one wake-up that opens a worker, finds nothing due, and puts
+the index right. A late one would be an alarm that never fires. Opening a worker
+reconciles the two in the same way, so a directory repairs itself.
+
+The scheduler asks the catalog for the minimum future time among the classes it
+runs and sleeps until then — no polling loop, no fixed interval. Setting an
+earlier alarm wakes it immediately; `alarmPoll` (60s) is only a ceiling, so a
+clock that jumps cannot leave it asleep for ever.
+
+### Why the class list is required
+
+`startAlarms({ classes })` will not guess. A class is a JavaScript value in one
+process's module graph; whether *this* deployment is the one meant to service a
+given class is not something the runtime can read off it. If the scheduler had
+fallen back to "classes something has addressed so far", an alarm would fire on
+a busy process and not on an idle one — the failure mode that is hardest to see
+and worst to have. Rows for classes not listed are excluded by the query itself,
+so they are neither woken nor stepped over.
+
+### Firing
+
+An alarm goes through the worker's mailbox, so it cannot interleave with a call,
+and it is cleared **before** the handler runs: a handler that sets the next time
+repeats, one that sets nothing is done. A failure puts one back — 1s, 2s, 4s, to
+a five-minute cap — with the attempt count stored beside the alarm, so a restart
+does not reset it, and the last failure is reported rather than dropped.
+
+The process stays alive while the scheduler runs, and this is the one place this
+module holds a timer at all. Which is why it is not started for you: eviction
+deliberately has no timer so that a script exits, and an alarm scheduler that
+started itself would undo that for anyone who merely *set* a time.
+
 ## What this is not
 
 Not an actor model. The [non-goal](/docs/scope) — no process model, scheduler,
@@ -179,8 +223,6 @@ would be gigabytes and a thousand threads.
 
 **Collections.** Declared, indexed, queryable state, for what the resident
 ceiling will not hold.
-
-**Alarms.** A durable timer that survives a restart.
 
 Durable *execution* — retries, a step journal, workflows — is deliberately not
 planned as a second subsystem. With alarms and workers in place it is a class on

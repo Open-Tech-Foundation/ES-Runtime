@@ -23,7 +23,7 @@ idle. Its state is still there for the next process to name it.
 ## Import
 
 ```js
-import { DurableWorker, configure, shutdown } from "runtime:workers";
+import { DurableWorker, configure, startAlarms, shutdown } from "runtime:workers";
 ```
 
 ```js
@@ -76,6 +76,7 @@ serve(async (request) => {
 | --- | --- | --- |
 | `DurableWorker` | `class` | The base class. Extend it. |
 | `configure` | `function` | `configure(options?)` — settings, before the first worker is used. |
+| `startAlarms` | `function` | `startAlarms({ classes })` — begins servicing alarms in this process. |
 | `shutdown` | `async function` | Closes every open worker and releases the directory. |
 | `DurableError`, `DurableErrorCode` | `class`, `object` | The failures, and their stable codes. |
 
@@ -88,6 +89,7 @@ serve(async (request) => {
 | `this.ctx` | `{ id, name, signal }`; `signal` aborts when it is being closed |
 | `start()` | After the state is loaded, before the first call |
 | `stop(reason)` | Before it is closed: `"idle"`, `"shutdown"` or `"deleted"` |
+| `alarm()` | When the alarm set on this worker comes due |
 | `static durableName` | The storage name, when the class name is not the right one |
 
 `new Cart()` throws — a durable worker is addressed, because which state an
@@ -119,6 +121,7 @@ arrays, `BigInt`, cycles — not only what JSON survives.
 | `keys({ prefix, start, end, limit, reverse })` | Sorted keys. Synchronous. |
 | `list(range)` | `[key, value]` pairs, same narrowing. |
 | `sync()` | Waits for every write so far. |
+| `alarm.get()` / `alarm.set(when)` / `alarm.delete()` | The durable timer — see below. |
 
 Mutating what `get` returns changes nothing on disk — a value is stored by
 `set`, not by being touched.
@@ -132,6 +135,68 @@ State is resident, so its ceiling is real: **1 MiB a worker, 128 KiB a value**,
 refused at the write with `ERR_DURABLE_STATE_TOO_LARGE`. What grows without
 bound belongs in a database of its own — [`runtime:db`](/api/db) is right there.
 
+## Alarms
+
+A durable worker can ask to be woken. The time is stored beside its state, so it
+survives a restart — and the worker is woken whether or not anyone addresses it.
+
+```js
+export class Reminder extends DurableWorker {
+  async schedule(at, message) {
+    this.state.set("message", message);
+    await this.state.alarm.set(at);          // a Date, or ms since the epoch
+  }
+  async alarm() {
+    await deliver(this.state.get("message"));
+    // setting the next one here is how a worker repeats
+  }
+}
+```
+
+| | |
+| --- | --- |
+| `state.alarm.get()` | The time set, or `null`. Synchronous. |
+| `state.alarm.set(when)` | A `Date` or ms. In the past means *now*. |
+| `state.alarm.delete()` | Unset. |
+
+The alarm is **cleared before the handler runs**, so a handler that sets nothing
+is not woken again. `alarm()` goes through the same mailbox a call does, so it
+never interleaves with one. Setting an alarm on a class with no `alarm()` is a
+`TypeError` at the `set`.
+
+A failing `alarm()` is retried — 1s, 2s, 4s, doubling to a five-minute cap —
+`alarmRetries` times (default 5), with the count stored so a restart does not
+reset it. After the last attempt it is cleared and **reported**.
+
+### `startAlarms({ classes, onError, batch })`
+
+Nothing fires until a process says it is the one running alarms:
+
+```js
+import { startAlarms } from "runtime:workers";
+import { Reminder } from "./workers.js";
+
+const alarms = startAlarms({ classes: [Reminder] });
+await alarms.stop();
+```
+
+<Callout type="warning" title="classes is required">
+  A class is not something the runtime can discover, and a scheduler that
+  guessed would fire an alarm on a busy process and not on an idle one. Anything
+  scheduled for a class not listed is left for the process that does list it.
+</Callout>
+
+| Option | |
+| --- | --- |
+| `classes` | **Required.** The `DurableWorker` subclasses this process runs alarms for. |
+| `onError` | An alarm that failed for the last time, or a worker that could not be opened. Defaults to `console.error`. |
+| `batch` | How many due workers one sweep wakes. Default `32`. |
+
+**While it is running the process stays alive** — which is why it is not started
+for you: a script that set an alarm for tomorrow should not sit there until
+tomorrow. `stop()` drops the timer and resolves once the sweep in flight has
+finished; `shutdown()` calls it.
+
 ## `configure(options)`
 
 Optional. With no call the defaults apply; it must come before the first worker
@@ -144,6 +209,8 @@ is used, since these decide where state lives.
 | `maxLive` | `128` | How many may be open at once |
 | `mailbox` | `1024` | How many calls may wait on one worker |
 | `stateLimit` / `valueLimit` | 1 MiB / 128 KiB | The ceilings above |
+| `alarmRetries` | `5` | How many times a failing `alarm()` is retried |
+| `alarmPoll` | `60000` | The longest the scheduler sleeps between looks |
 
 ## `shutdown()`
 
@@ -179,6 +246,5 @@ onSignal("SIGTERM", async () => {
 ## Not yet
 
 Shards (a worker on a `Worker` of its own, with a watchdog and a memory
-ceiling), collections (declared, indexed, queryable state), and alarms (a
-durable timer that survives a restart). Each arrives with its own phase rather
-than as an option that does nothing today.
+ceiling) and collections (declared, indexed, queryable state). Each arrives with
+its own phase rather than as an option that does nothing today.

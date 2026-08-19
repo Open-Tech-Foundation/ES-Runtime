@@ -118,6 +118,11 @@ const defaults = {
   // is resident, so these bound memory as much as they bound the file.
   stateLimit: 1024 * 1024,
   valueLimit: 128 * 1024,
+  // How many times a failing `alarm()` is retried before it is given up on and
+  // reported, and the longest the scheduler will sleep between looks at the
+  // catalog. The ceiling matters because the machine's clock can move.
+  alarmRetries: 5,
+  alarmPoll: 60_000,
 };
 
 let config = { ...defaults };
@@ -265,8 +270,12 @@ const REGISTRY_SCHEMA = [
      created_at  INTEGER NOT NULL,
      last_active INTEGER NOT NULL,
      bytes       INTEGER NOT NULL DEFAULT 0,
+     next_alarm  INTEGER,
      PRIMARY KEY (class, id)
    )`,
+  // What makes an alarm findable without opening every worker's database: the
+  // scheduler asks this index which one is next, and opens exactly that one.
+  `CREATE INDEX IF NOT EXISTS worker_alarm ON worker (next_alarm) WHERE next_alarm IS NOT NULL`,
 ];
 
 let registry = null; // { db, dir }
@@ -296,6 +305,15 @@ async function registryDb() {
   await mkdir(dir, { recursive: true });
   const db = await openOwned(`${dir}/_registry.db`, dir);
   for (const ddl of REGISTRY_SCHEMA) await retryBusy(() => onCatalog(() => db.execute(ddl)));
+  // A catalog written before alarms existed has no column for them. The table
+  // is an index over the workers' own files rather than the state itself, so
+  // widening it is the whole migration.
+  const columns = await (await onCatalog(() => db.query("PRAGMA table_info(worker)"))).toArray();
+  if (!columns.some((c) => c.toObject().name === "next_alarm")) {
+    await retryBusy(() =>
+      onCatalog(() => db.execute("ALTER TABLE worker ADD COLUMN next_alarm INTEGER")),
+    );
+  }
   registry = { db, dir };
   return db;
 }
@@ -341,6 +359,16 @@ const WORKER_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 ];
 
+// A time may be given as a Date or as milliseconds since the epoch — the two
+// spellings every other timer in this runtime accepts.
+function whenMs(when) {
+  const at = when instanceof Date ? when.getTime() : when;
+  if (typeof at !== "number" || !Number.isFinite(at)) {
+    throw new TypeError("an alarm time must be a Date or a number of milliseconds");
+  }
+  return Math.trunc(at);
+}
+
 // Whether two byte strings are the same. Short-circuits on length, which is
 // what almost every different value differs in.
 function same(a, b) {
@@ -369,9 +397,32 @@ class State {
   #queued = null;
   #bytes = 0;
   #closed = false;
+  #alarm = null; // ms, or null
+  #index; // (at, early) => Promise — keeps the catalog's copy in step
+  #handler = null; // whether the class has an alarm() method; null until known
 
-  constructor(db, rows) {
+  #attempt = 0;
+
+  constructor(db, { rows, alarm, attempt, index }) {
     this.#db = db;
+    this.#alarm = alarm;
+    this.#attempt = attempt;
+    this.#index = index;
+    /**
+     * When this worker's `alarm()` should next run.
+     *
+     * The time is stored beside the state, so it survives a restart the same
+     * way the state does — and a worker with an alarm set is woken by the
+     * scheduler whether or not anybody addresses it.
+     */
+    this.alarm = Object.freeze({
+      /** The time set, or `null`. Synchronous, like the rest of the state. */
+      get: () => this.#alarm && new Date(this.#alarm),
+      /** Sets it; resolves when it is durable. A time in the past runs at once. */
+      set: (when) => this.#setAlarm(when),
+      /** Unsets it. */
+      delete: () => this.#setAlarm(null),
+    });
     for (const row of rows) {
       const { key, value, codec } = row;
       this.#values.set(key, {
@@ -495,6 +546,61 @@ class State {
     while (this.#flushing || this.#dirty.size > 0) {
       await (this.#flushing ?? this.#schedule());
     }
+  }
+
+  // The catalog is written *before* the worker's own file and again after, and
+  // that order is the whole reliability argument: the catalog is only an index,
+  // so an entry that is early causes a wake-up that finds nothing to do — while
+  // one that is late is an alarm that never fires. Between the two writes a
+  // crash therefore leaves the index early, never late. (`MIN` on the way in,
+  // exact on the way out, so moving an alarm *later* still cannot lose the one
+  // it replaced.)
+  async #setAlarm(when) {
+    this.#open();
+    if (when !== null && this.#handler === false) {
+      throw new TypeError(
+        "this durable worker has no alarm() method, so an alarm set on it could never run",
+      );
+    }
+    const at = when === null ? null : whenMs(when);
+    if (at !== null) await this.#index(at, true);
+    if (at === null) {
+      await retryBusy(() => this.#db.execute("DELETE FROM _meta WHERE key = 'alarm'"));
+    } else {
+      await retryBusy(() =>
+        this.#db.execute(
+          sql`INSERT INTO _meta (key, value) VALUES ('alarm', ${String(at)})
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        ),
+      );
+    }
+    this.#alarm = at;
+    await this.#index(at, false);
+  }
+
+  /** Told once, when the instance exists: whether its class can answer an
+   * alarm at all. Setting one on a class that cannot is refused at the `set`,
+   * where the mistake is, rather than by a scheduler nobody is watching. */
+  set alarmHandler(present) {
+    this.#handler = present;
+  }
+
+  /** How many times the pending alarm has failed. Stored, so a retry count is
+   * not lost with the process that was counting. */
+  get alarmAttempt() {
+    return this.#attempt;
+  }
+
+  async setAlarmAttempt(n) {
+    this.#attempt = n;
+    await retryBusy(() =>
+      n === 0
+        ? this.#db.execute("DELETE FROM _meta WHERE key = 'alarm_attempt'")
+        : this.#db.execute(
+            sql`INSERT INTO _meta (key, value) VALUES ('alarm_attempt', ${String(n)})
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+          ),
+    );
   }
 
   #write(key, value) {
@@ -629,6 +735,22 @@ class LiveWorker {
    * the writes the call made are durable.
    */
   call(method, args) {
+    return this.enqueue(async () => {
+      const fn = this.instance[method];
+      if (typeof fn !== "function" || LIFECYCLE.has(method)) {
+        throw new TypeError(`${describe(this.cls, this.id)} has no method ${String(method)}()`);
+      }
+      return fn.apply(this.instance, args);
+    });
+  }
+
+  /**
+   * Puts `work` in this worker's mailbox: it runs after everything already
+   * queued, and its result is not handed back until the writes it made are
+   * durable. Both a method call and an alarm arrive this way, which is what
+   * makes an alarm unable to interleave with a call.
+   */
+  enqueue(work) {
     if (this.closing) {
       return Promise.reject(
         new DurableError(
@@ -648,11 +770,7 @@ class LiveWorker {
     }
     this.pending++;
     const run = async () => {
-      const fn = this.instance[method];
-      if (typeof fn !== "function" || LIFECYCLE.has(method)) {
-        throw new TypeError(`${describe(this.cls, this.id)} has no method ${String(method)}()`);
-      }
-      const result = await fn.apply(this.instance, args);
+      const result = await work();
       // The gate. Everything this call wrote is on disk before its caller is
       // told anything at all, so a crash between the two is a call that never
       // returned rather than one that lied.
@@ -735,6 +853,24 @@ async function evict(worker, reason) {
   }
 }
 
+// Writes the catalog's copy of a worker's alarm. `early` is the first of the two
+// writes `State.#setAlarm` makes: it only ever moves the time *earlier*, so the
+// window between them cannot lose an alarm that was already indexed.
+async function indexAlarm(name, id, at, early) {
+  const db = await registryDb();
+  await retryBusy(() =>
+    onCatalog(() =>
+      db.execute(
+        early
+          ? sql`UPDATE worker SET next_alarm = MIN(COALESCE(next_alarm, ${at}), ${at})
+                WHERE class = ${name} AND id = ${id}`
+          : sql`UPDATE worker SET next_alarm = ${at} WHERE class = ${name} AND id = ${id}`,
+      ),
+    ),
+  );
+  wakeScheduler();
+}
+
 async function touch(cls, id, bytes) {
   if (!registry) return;
   try {
@@ -804,18 +940,32 @@ async function materialize(cls, id) {
         );
       }
       const rows = await (await store.query("SELECT key, value, codec FROM _state")).toArray();
-      const state = new State(
-        store,
-        rows.map((r) => r.toObject()),
+      const meta = new Map(
+        (await (await store.query("SELECT key, value FROM _meta")).toArray()).map((r) => {
+          const m = r.toObject();
+          return [m.key, m.value];
+        }),
       );
+      const alarm = meta.has("alarm") ? Number(meta.get("alarm")) : null;
+      const state = new State(store, {
+        rows: rows.map((r) => r.toObject()),
+        alarm,
+        attempt: Number(meta.get("alarm_attempt") ?? 0),
+        index: (at, early) => indexAlarm(name, id, at, early),
+      });
 
       const now = Date.now();
       await retryBusy(() =>
         onCatalog(() =>
           db.execute(
-            sql`INSERT INTO worker (class, id, file, created_at, last_active, bytes)
-                VALUES (${name}, ${id}, ${file}, ${now}, ${now}, ${state.bytes})
-                ON CONFLICT(class, id) DO UPDATE SET last_active = excluded.last_active`,
+            // The alarm is written here as well as by `state.alarm.set`: the
+            // worker's own file is the truth and the catalog only an index, so
+            // opening one is the moment to make the index agree again — which
+            // is how a crash between the two writes is repaired.
+            sql`INSERT INTO worker (class, id, file, created_at, last_active, bytes, next_alarm)
+                VALUES (${name}, ${id}, ${file}, ${now}, ${now}, ${state.bytes}, ${alarm})
+                ON CONFLICT(class, id) DO UPDATE SET last_active = excluded.last_active,
+                                                     next_alarm = excluded.next_alarm`,
           ),
         ),
       );
@@ -829,6 +979,7 @@ async function materialize(cls, id) {
       } finally {
         materializing = null;
       }
+      state.alarmHandler = typeof instance.alarm === "function";
       worker = new LiveWorker(cls, id, store, instance, state, controller);
       live.set(k, worker);
       // `start()` runs before the mailbox opens rather than as its first entry:
@@ -1037,6 +1188,236 @@ Object.defineProperty(DurableWorker.prototype, Symbol.toStringTag, {
 });
 
 // ---------------------------------------------------------------------------
+// Alarms
+// ---------------------------------------------------------------------------
+
+// A process that wants to run alarms says so. There is no hidden timer that
+// starts itself, for the reason eviction has none: a timer is a claim on the
+// process staying alive, and a script that set an alarm for tomorrow would
+// otherwise not exit until tomorrow. A server calls this once; a script that
+// only *sets* alarms never has to.
+let scheduler = null;
+
+/**
+ * Starts servicing alarms: due workers are woken and their `alarm()` runs.
+ *
+ * `classes` is the list of durable-worker classes **this process can run**, and
+ * it is required. A class is not something the runtime can discover — importing
+ * a module that defines one proves nothing about whether this deployment is the
+ * one meant to service it — and a scheduler that quietly serviced only the
+ * classes something had happened to address would fire an alarm on a busy
+ * process and not on an idle one. Anything scheduled for a class not listed
+ * here is left exactly as it is, for the process that does list it.
+ *
+ * While it is running the process stays alive, which is the point — a service
+ * that has work scheduled has a reason to be up. `stop()` gives that up and
+ * resolves once the sweep in flight has finished.
+ *
+ * `onError` hears about an alarm that failed for the last time, and about a
+ * worker that could not be opened. Without one, both go to `console.error`,
+ * because a scheduled job failing silently is how a queue loses work.
+ */
+function startAlarms({ classes, onError, batch = 32 } = {}) {
+  if (!Array.isArray(classes) || classes.length === 0) {
+    throw new TypeError(
+      "startAlarms({ classes }): name the durable worker classes this process runs alarms for, " +
+        "e.g. startAlarms({ classes: [Cart] })",
+    );
+  }
+  if (onError !== undefined && typeof onError !== "function") {
+    throw new TypeError("startAlarms({ onError }): onError must be a function");
+  }
+  const named = classes.map((cls) => {
+    if (typeof cls !== "function" || !Object.prototype.isPrototypeOf.call(DurableWorker, cls)) {
+      throw new TypeError("startAlarms({ classes }): each entry must be a DurableWorker subclass");
+    }
+    return storageName(cls);
+  });
+  if (scheduler) {
+    // Returning the running one would quietly ignore the classes this call
+    // named, which is a scheduler that does not do what its caller asked.
+    throw new TypeError(
+      "alarms are already being serviced in this process — stop that scheduler before " +
+        "starting another, or name every class in one call",
+    );
+  }
+  const state = {
+    timer: null,
+    stopped: false,
+    running: null,
+    again: false,
+    onError,
+    names: named,
+    batch: positive(batch, "batch"),
+  };
+  state.handle = Object.freeze({
+    /** Stops servicing alarms. Resolves when the sweep in flight has finished. */
+    async stop() {
+      state.stopped = true;
+      clearTimeout(state.timer);
+      state.timer = null;
+      if (scheduler === state) scheduler = null;
+      await state.running;
+    },
+    /** Whether it is still running. */
+    get running() {
+      return !state.stopped;
+    },
+  });
+  scheduler = state;
+  tick(state);
+  return state.handle;
+}
+
+// Called whenever an alarm is written, so one set for *sooner* than the timer
+// that is already waiting does not have to wait for it.
+function wakeScheduler() {
+  const state = scheduler;
+  if (!state || state.stopped) return;
+  if (state.running) {
+    state.again = true;
+    return;
+  }
+  clearTimeout(state.timer);
+  state.timer = null;
+  tick(state);
+}
+
+function tick(state) {
+  if (state.stopped || state.running) return;
+  state.running = (async () => {
+    let delay = config.alarmPoll;
+    try {
+      await fireDue(state);
+      const next = await nextAlarm(state);
+      if (next !== null) delay = Math.min(delay, Math.max(0, next - Date.now()));
+    } catch (e) {
+      report(state, e, "the alarm scheduler failed");
+    }
+    return delay;
+  })();
+  state.running.then((delay) => {
+    state.running = null;
+    if (state.stopped) return;
+    if (state.again) {
+      state.again = false;
+      tick(state);
+      return;
+    }
+    state.timer = setTimeout(() => tick(state), delay);
+  });
+}
+
+// The `class IN (…)` on both queries is what keeps a class this process does
+// not run out of its way entirely: not fetched, not skipped in a loop, and —
+// since such a row is overdue for ever — never the reason the scheduler wakes
+// up again immediately.
+const placeholders = (names) => names.map(() => "?").join(", ");
+
+async function nextAlarm(state) {
+  const db = await registryDb();
+  const row = await onCatalog(() =>
+    one(
+      db,
+      `SELECT MIN(next_alarm) AS at FROM worker
+       WHERE next_alarm IS NOT NULL AND class IN (${placeholders(state.names)})`,
+      state.names,
+    ),
+  );
+  return row?.at ?? null;
+}
+
+async function fireDue(state) {
+  const db = await registryDb();
+  const rows = await (
+    await onCatalog(() =>
+      db.query(
+        `SELECT class, id FROM worker
+         WHERE next_alarm IS NOT NULL AND next_alarm <= ? AND class IN (${placeholders(state.names)})
+         ORDER BY next_alarm LIMIT ?`,
+        [Date.now(), ...state.names, state.batch],
+      ),
+    )
+  ).toArray();
+  for (const row of rows) {
+    if (state.stopped) break;
+    const due = row.toObject();
+    await fire(state, names.get(due.class), due.id);
+  }
+}
+
+// One worker's alarm, run through its mailbox — so it cannot interleave with a
+// call, and its writes are gated exactly as a call's are.
+async function fire(state, cls, id) {
+  let worker;
+  try {
+    worker = await materialize(cls, id);
+  } catch (e) {
+    report(state, e, `could not open ${describe(cls, id)} for its alarm`);
+    return;
+  }
+  try {
+    await worker.enqueue(() => run(state, worker));
+  } catch (e) {
+    report(state, e, `the alarm on ${describe(cls, id)} could not be run`);
+  }
+}
+
+async function run(state, worker) {
+  const at = worker.state.alarm.get();
+  if (at === null || at.getTime() > Date.now()) {
+    // The catalog said due and the worker's own file disagrees. The file is the
+    // truth — this is the crash window the two-step write leaves — so the index
+    // is corrected and nothing runs.
+    await indexAlarm(storageName(worker.cls), worker.id, at === null ? null : at.getTime(), false);
+    return;
+  }
+  // Cleared before the handler runs, so an `alarm()` that sets the next one is
+  // the natural way to repeat, and a handler that sets nothing is not woken
+  // again. A failure puts one back.
+  await worker.state.alarm.delete();
+  try {
+    await worker.instance.alarm();
+    if (worker.state.alarmAttempt !== 0) await worker.state.setAlarmAttempt(0);
+  } catch (e) {
+    const attempt = worker.state.alarmAttempt + 1;
+    if (attempt > config.alarmRetries) {
+      await worker.state.setAlarmAttempt(0);
+      report(
+        state,
+        e,
+        `the alarm on ${describe(worker.cls, worker.id)} failed ${attempt} times and was given up on`,
+      );
+      return;
+    }
+    await worker.state.setAlarmAttempt(attempt);
+    // Unless the handler scheduled the next one itself on its way out, in which
+    // case that is the time it asked for and a retry would overwrite it.
+    if (worker.state.alarm.get() === null) {
+      await worker.state.alarm.set(Date.now() + backoff(attempt));
+    }
+  }
+}
+
+// 1s, 2s, 4s … capped at five minutes. Deliberately not configurable: the
+// number of retries is the interesting knob, and a schedule with two of them is
+// two things to explain.
+const backoff = (attempt) => Math.min(1000 * 2 ** (attempt - 1), 300_000);
+
+function report(state, error, context) {
+  if (state.onError) {
+    try {
+      state.onError(error, context);
+      return;
+    } catch {
+      // An `onError` that throws is not a reason to lose the failure it was
+      // told about.
+    }
+  }
+  console.error(`${context}:`, error);
+}
+
+// ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
 
@@ -1051,6 +1432,7 @@ Object.defineProperty(DurableWorker.prototype, Symbol.toStringTag, {
 async function shutdown() {
   shuttingDown = true;
   try {
+    await scheduler?.handle.stop();
     // One at a time, not `Promise.all`: closing a database checkpoints its WAL,
     // and the engine has been seen to panic when many do so at once.
     for (const worker of [...live.values()]) await evict(worker, "shutdown");
@@ -1062,5 +1444,12 @@ async function shutdown() {
   }
 }
 
-export { DurableWorker, configure, shutdown, DurableError, DurableErrorCode };
-export default { DurableWorker, configure, shutdown, DurableError, DurableErrorCode };
+export { DurableWorker, configure, startAlarms, shutdown, DurableError, DurableErrorCode };
+export default {
+  DurableWorker,
+  configure,
+  startAlarms,
+  shutdown,
+  DurableError,
+  DurableErrorCode,
+};
