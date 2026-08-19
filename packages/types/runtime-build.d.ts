@@ -95,6 +95,16 @@ declare module "runtime:build" {
      * changed it. This is how a pass declines work somebody else has done.
      */
     readonly type?: string;
+    /**
+     * The hot-reload scheme this target named (`esdev.json`'s `refresh`), and
+     * only while the dev loop is running it hot. `undefined` in a release
+     * build, in a server target, and where no scheme was named.
+     *
+     * What a plugin implementing a scheme has to know before it does anything:
+     * the per-module wrapper that makes a component replaceable makes every
+     * module a hot boundary, which is exactly wrong in what you ship.
+     */
+    readonly refresh?: string;
   }
 
   export type EmittedFile =

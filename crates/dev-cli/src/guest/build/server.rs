@@ -292,7 +292,11 @@ async fn run(
     // rather than kept, because a build is where they are used and the options
     // they came from outlive them.
     plugins.extend(options.plugins.iter().map(|declared| {
-        let pass = Arc::new(GuestPass::new(bridge.clone(), Arc::clone(declared)));
+        // No refresh scheme: `build()` is a program describing its own build,
+        // and `refresh` is a *target's* key in `esdev.json`. A program that
+        // wants its plugins to know is the one that decided, and says so in
+        // the options it already writes.
+        let pass = Arc::new(GuestPass::new(bridge.clone(), Arc::clone(declared), None));
         Arc::new(Adapter::new(pass)) as rolldown::plugin::__inner::SharedPluginable
     }));
 

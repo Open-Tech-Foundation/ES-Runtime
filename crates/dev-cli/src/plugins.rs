@@ -73,17 +73,26 @@ impl PluginHost {
     /// The passes a target's plugin indices name, in the order they were
     /// declared.
     ///
+    /// `refresh` is the hot-reload scheme that target named, and only when the
+    /// build is the dev loop's and the loop is hot — the plugins read it as
+    /// `ctx.refresh`. It is passed per target rather than held per plugin
+    /// because one plugin object serves every target, and a browser target can
+    /// be hot while the server target beside it is not.
+    ///
     /// An index that is out of range is skipped rather than panicking: the
     /// indices come from the config that produced this list, so it cannot
     /// happen — and a build that fell over on an internal accounting slip
     /// would be a worse answer than one that built.
-    pub fn passes(&self, which: &[usize]) -> Vec<Arc<dyn contract::Pass>> {
+    pub fn passes(&self, which: &[usize], refresh: Option<&str>) -> Vec<Arc<dyn contract::Pass>> {
         which
             .iter()
             .filter_map(|i| self.plugins.get(*i))
             .map(|plugin| {
-                Arc::new(GuestPass::new(self.bridge.clone(), Arc::clone(plugin)))
-                    as Arc<dyn contract::Pass>
+                Arc::new(GuestPass::new(
+                    self.bridge.clone(),
+                    Arc::clone(plugin),
+                    refresh.map(str::to_string),
+                )) as Arc<dyn contract::Pass>
             })
             .collect()
     }

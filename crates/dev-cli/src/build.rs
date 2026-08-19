@@ -1265,9 +1265,19 @@ async fn build_targets(
     let host = crate::plugins::host(&project.project.dir, &project.project.plugins).await?;
 
     for target in selected {
+        // The scheme this target named, and only where it can mean anything: a
+        // hot dev loop. A release build has no replacement to keep state
+        // across, and the per-module wrapper a scheme installs is pure weight
+        // in anything shipped — so a plugin implementing one is told when to
+        // install it rather than having to guess.
+        let refresh = project
+            .dev
+            .as_ref()
+            .filter(|dev| dev.hot)
+            .and(target.refresh.as_deref());
         let plugins = host
             .as_ref()
-            .map(|host| host.passes(&target.plugins))
+            .map(|host| host.passes(&target.plugins, refresh))
             .unwrap_or_default();
         let mut defines = target.define.clone();
         defines.extend(project.defines.iter().cloned());

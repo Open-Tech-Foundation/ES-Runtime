@@ -214,20 +214,54 @@ pub struct GuestPass {
     /// Shared rather than cloned: a filter is a compiled regular expression,
     /// and a dev server builds forty times a minute.
     plugin: Arc<contract::Plugin>,
+    /// The hot-reload scheme this target named, when the build is the dev
+    /// loop's and the loop is hot — `"otfw"`, `"react"`, whatever the config
+    /// wrote. `None` for a release build, a server target, or a project that
+    /// named no scheme.
+    ///
+    /// **A plugin cannot work this out for itself**, and the whole of a
+    /// framework's refresh support depends on knowing it: the per-module
+    /// wrapper that makes a component replaceable is exactly wrong in anything
+    /// shipped, because it makes every module a hot boundary. Without this a
+    /// plugin implementing a scheme would have to inject it into every build,
+    /// so `"refresh": "<name>"` would be a config key that named something and
+    /// changed nothing.
+    ///
+    /// Per pass rather than per plugin: one plugin object serves every target,
+    /// and a project's browser target can be hot while its server target is
+    /// not.
+    refresh: Option<String>,
 }
 
 impl GuestPass {
-    pub fn new(bridge: Arc<Bridge>, plugin: Arc<contract::Plugin>) -> GuestPass {
-        GuestPass { bridge, plugin }
+    pub fn new(
+        bridge: Arc<Bridge>,
+        plugin: Arc<contract::Plugin>,
+        refresh: Option<String>,
+    ) -> GuestPass {
+        GuestPass {
+            bridge,
+            plugin,
+            refresh,
+        }
     }
 
     async fn call(
         &self,
         hook: Hook,
         args: Vec<Value>,
-        meta: Vec<(String, Value)>,
+        mut meta: Vec<(String, Value)>,
         ctx: Arc<dyn contract::Context>,
     ) -> Result<Value, String> {
+        // On every hook's context, not just `transform`: a scheme's runtime is
+        // often a virtual module a `load` serves, and that hook has to know
+        // whether to serve it.
+        //
+        // Added only when there is one, so the ordinary build pays nothing for
+        // a key it would always read as null.
+        if let Some(refresh) = &self.refresh {
+            meta.push(("refresh".to_string(), Value::String(refresh.clone())));
+        }
         self.bridge
             .call(self.plugin.id, hook.name(), args, meta, Some(ctx))
             .await

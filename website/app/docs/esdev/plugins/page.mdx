@@ -187,6 +187,7 @@ The last argument of every handler, never `this`.
 | `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
 | `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
 | `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |
+| `ctx.refresh` | The hot-reload scheme the target named ([`refresh`](/docs/esdev/start#another-frameworks-scheme)), **only** while the dev loop is running it hot. Absent in a release build. |
 | `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
 
 It is an argument so that an arrow-function handler keeps it. Rollup's

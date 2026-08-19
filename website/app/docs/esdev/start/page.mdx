@@ -198,6 +198,21 @@ Name yours, and write the per-module half as a
 }
 ```
 
+Your plugin is told: `ctx.refresh` is the name the target wrote, and it is there
+**only while the loop is running that target hot** — absent in a release build,
+in a server target, and where no scheme was named. That is the half that makes
+the key mean something. A wrapper that makes every module a hot boundary is
+exactly wrong in anything you ship, so a plugin that could not tell the
+difference would have to do nothing at all:
+
+```js
+transform: {
+  filter: { id: /\.otfw$/ },
+  handler: (code, id, ctx) =>
+    ctx.refresh === "otfw" ? { code: wrapForHot(code, id) } : null,
+}
+```
+
 A name esdev does not implement is accepted when the target has plugins and
 **refused** when it has none — where nothing could implement it, the name can
 only be a typo, and a `refresh` that silently did nothing is a project whose

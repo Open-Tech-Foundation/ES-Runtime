@@ -3193,6 +3193,7 @@ keeps it, where rollup's `this` is silently lost:
 | `ctx.warn` / `info` / `debug` | diagnostics; warnings come back in `warnings` |
 | `ctx.error(msg)` | fails the build — throws |
 | `ctx.isEntry` | on `resolve`: whether the specifier is an entry |
+| `ctx.refresh` | the hot-reload scheme the target named (`esdev.json`'s `refresh`), **only** while the dev loop is running it hot. Absent in a release build, so a plugin implementing a scheme installs its per-module wrapper where it means something and nowhere else. |
 | `ctx.type` | on `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. It is how a pass declines work somebody else has done: `esdev:css-modules` filters on `.css` and steps aside for a plugin that claimed the stylesheet first. |
 
 It is live only while its hook runs; stashing it and calling `resolve()` later

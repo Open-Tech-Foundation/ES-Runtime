@@ -4414,6 +4414,102 @@ fn runtime_build_host_is_refused_when_nothing_is_driving_a_build() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The plugin a `refresh` scheme is written as: it installs its per-module
+/// wrapper only when a scheme was named, and reads which one from `ctx.refresh`.
+fn refresh_plugin(dir: &Path) {
+    write_in(
+        dir,
+        "plugin.mjs",
+        r#"
+export default {
+  name: "otfw-refresh",
+  transform: {
+    filter: { id: /\.mjs$/ },
+    handler(code, id, ctx) {
+      // The whole of the feature: a wrapper that makes every module a hot
+      // boundary is exactly wrong in anything shipped.
+      if (ctx.refresh !== "otfw") return null;
+      return { code: `globalThis.__otfw_hot = ${JSON.stringify(ctx.refresh)};\n${code}` };
+    },
+  },
+};
+"#,
+    );
+}
+
+fn refresh_project(dir: &Path, port: Option<u16>) {
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    refresh_plugin(dir);
+    write_in(dir, "src/main.mjs", "document.title = 'app';\n");
+    write_in(
+        dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body><div id=root></div></body></html>\n",
+    );
+    let start = port.map_or_else(String::new, |port| {
+        format!(r#", "start": {{ "port": {port} }}"#)
+    });
+    write_in(
+        dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "plugins": ["./plugin.mjs"],
+                 "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist",
+                                        "refresh": "otfw" }} }}{start} }}"#
+        ),
+    );
+}
+
+/// A release build names no scheme, so the wrapper is not installed. Without
+/// this half, `refresh` would be a config key a plugin had to ignore — it would
+/// have to inject its wrapper into everything, including what you ship.
+#[test]
+fn a_release_build_tells_a_plugin_no_refresh_scheme() {
+    let dir = build_dir("p_refresh_release");
+    refresh_project(&dir, None);
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let bundle = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("the assets")
+        .filter_map(Result::ok)
+        .map(|entry| std::fs::read_to_string(entry.path()).unwrap_or_default())
+        .collect::<String>();
+    assert!(bundle.contains("document.title"), "nothing was built");
+    assert!(
+        !bundle.contains("__otfw_hot"),
+        "a release build installed a hot-reload wrapper: {bundle}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **`refresh` names a scheme a plugin can implement, and the plugin is told
+/// which.** `"react"` is the one esdev implements and was for a while the only
+/// name the config would take — so every other framework took a full page
+/// reload on each edit. Accepting the name was half of it; a plugin that cannot
+/// learn the name, or that the loop is hot, has to guess, and the only safe
+/// guess is to do nothing.
+#[test]
+fn the_hot_dev_loop_tells_a_plugin_which_refresh_scheme() {
+    let dir = watch_dir("s_refresh");
+    let port = test_port("s_refresh");
+    refresh_project(&dir, Some(port));
+
+    let _supervisor = start_in(&dir);
+
+    let bundle = wait_for_http(port, "/assets/main.js", |body| body.contains("__otfw_hot"));
+    assert!(
+        bundle.contains(r#"__otfw_hot = "otfw""#),
+        "the scheme never reached the plugin: {bundle}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The dev loop, with a plugin. Two things are under test that a single build
 /// cannot show:
 ///
