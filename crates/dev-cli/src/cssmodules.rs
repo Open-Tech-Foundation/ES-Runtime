@@ -199,9 +199,23 @@ impl contract::Pass for CssModules {
         &'a self,
         _code: &'a str,
         id: &'a str,
+        module_type: &'a str,
         _ctx: &'a Arc<dyn contract::Context>,
     ) -> Answer<'a, Option<ModuleResult>> {
         Box::pin(async move {
+            // Somebody got here first. A plugin ordered `pre` — a Tailwind
+            // compiler, a CSS-in-JS pass — turns a stylesheet into JavaScript,
+            // and this pass filters on the *id*, which is still `.css`. Running
+            // anyway would read the file off disk again (below, deliberately:
+            // an `@import` chain is a set of files, not the one string a
+            // transform is handed) and hand back the unprocessed stylesheet,
+            // undoing the plugin's whole reason for claiming it.
+            //
+            // This is what makes `order: "pre"` mean something against a
+            // built-in pass rather than only against the other plugins.
+            if module_type != "css" {
+                return Ok(None);
+            }
             let path = Path::new(id);
             let read = Files::default();
             let names = self

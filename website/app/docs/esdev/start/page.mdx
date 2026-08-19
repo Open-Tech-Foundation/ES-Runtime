@@ -180,6 +180,30 @@ on the target:
 Under it, the refresh is an ordinary `accept` callback — a framework with its own
 scheme writes its own pass rather than esdev learning about it.
 
+### Another framework's scheme
+
+`"react"` is the one esdev implements, and it used to be the only name the
+config would take — so every other framework got a full page reload on each
+edit, not because the mechanism was missing (`import.meta.hot` is the same for
+everyone) but because the target had no way to say it had a scheme.
+
+Name yours, and write the per-module half as a
+[plugin](/docs/esdev/plugins) — a `transform` against the same contract
+`react-refresh` uses:
+
+```json
+{
+  "plugins": ["./plugins/otfw-refresh.js"],
+  "targets": { "web": { "entry": "index.html", "outdir": "dist", "refresh": "otfw" } }
+}
+```
+
+A name esdev does not implement is accepted when the target has plugins and
+**refused** when it has none — where nothing could implement it, the name can
+only be a typo, and a `refresh` that silently did nothing is a project whose
+components stop keeping their state one day with the reason sitting unread in a
+config file.
+
 <Callout type="note" title="What it costs">
   Dev mode turns treeshaking off, so the react template's dev bundle goes from
   870 KB to 1.45 MB and a rebuild costs ~20 ms more. Development only — nothing

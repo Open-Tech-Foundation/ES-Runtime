@@ -4013,6 +4013,489 @@ fn runtime_watch_does_not_exist_under_esrun() {
 }
 
 // ---------------------------------------------------------------------------
+// `esdev.json`'s `plugins` — a project's own passes, in the subcommand's build
+//
+// Until these, a project that compiled anything the toolchain does not know
+// about could only be built by a *program* that called `build()` itself:
+// `esdev build` and `esdev start` had nowhere to put a plugin. What is under
+// test here is the whole path — the file names a module, esdev evaluates it in
+// an isolate of its own, and the hooks it declared run against the bundle the
+// subcommand is making.
+// ---------------------------------------------------------------------------
+
+/// The plugin the tests below load: a virtual module whose contents come from
+/// the options the config passed to the factory. A factory rather than a plain
+/// object on purpose — the call is the thing a JSON config cannot make for
+/// itself.
+fn banner_plugin(dir: &Path) {
+    write_in(
+        dir,
+        "plugin.mjs",
+        r#"
+export default function banner(options) {
+  const text = options?.text ?? "NO OPTIONS";
+  return {
+    name: "banner",
+    resolve: {
+      filter: { id: "virtual:banner" },
+      handler: () => ({ id: "virtual:banner", virtual: true }),
+    },
+    load: {
+      filter: { id: "virtual:banner" },
+      handler: () => ({ code: `export default ${JSON.stringify(text)};` }),
+    },
+  };
+}
+"#,
+    );
+}
+
+/// The whole feature: the config names a module, esdev imports it, calls the
+/// factory with the options the file carried, and the plugin serves a module
+/// that exists on no disk — for **every** target, because a project's plugins
+/// are the project's.
+#[test]
+fn build_loads_the_plugins_the_project_config_names() {
+    let dir = build_dir("p_plugins");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    banner_plugin(&dir);
+    write_in(
+        &dir,
+        "src/server.mjs",
+        "import banner from 'virtual:banner';\nconsole.log('server', banner);\n",
+    );
+    write_in(
+        &dir,
+        "src/client.mjs",
+        "import banner from 'virtual:banner';\nconsole.log('client', banner);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": [{ "module": "./plugin.mjs", "options": { "text": "FROM THE CONFIG" } }],
+          "targets": {
+            "server":  { "entry": "src/server.mjs", "out": "dist/server.js" },
+            "browser": { "entry": "src/client.mjs", "outdir": "dist/client",
+                         "platform": "browser" }
+          }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let server = std::fs::read_to_string(dir.join("dist/server.js")).expect("the server bundle");
+    assert!(server.contains("FROM THE CONFIG"), "{server}");
+    let client =
+        std::fs::read_to_string(dir.join("dist/client/client.js")).expect("the browser bundle");
+    assert!(client.contains("FROM THE CONFIG"), "{client}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A target's own `plugins` add to the project's rather than replacing them,
+/// and only that target gets them.
+#[test]
+fn a_targets_own_plugins_are_added_to_the_projects() {
+    let dir = build_dir("p_plugins_target");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    banner_plugin(&dir);
+    write_in(
+        &dir,
+        "plugin-extra.mjs",
+        r#"
+export default {
+  name: "extra",
+  resolve: {
+    filter: { id: "virtual:extra" },
+    handler: () => ({ id: "virtual:extra", virtual: true }),
+  },
+  load: {
+    filter: { id: "virtual:extra" },
+    handler: () => ({ code: 'export default "EXTRA";' }),
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "src/one.mjs",
+        "import banner from 'virtual:banner';\nimport extra from 'virtual:extra';\n\
+         console.log(banner, extra);\n",
+    );
+    // The second target gets the project's plugin only, and reaching for the
+    // first target's would be a build that fails — which is the assertion.
+    write_in(
+        &dir,
+        "src/two.mjs",
+        "import banner from 'virtual:banner';\nconsole.log(banner);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": [{ "module": "./plugin.mjs", "options": { "text": "SHARED" } }],
+          "targets": {
+            "one": { "entry": "src/one.mjs", "out": "dist/one.js",
+                     "plugins": ["./plugin-extra.mjs"] },
+            "two": { "entry": "src/two.mjs", "out": "dist/two.js" }
+          }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+
+    let one = std::fs::read_to_string(dir.join("dist/one.js")).expect("one");
+    assert!(one.contains("SHARED"), "{one}");
+    assert!(one.contains("EXTRA"), "{one}");
+    let two = std::fs::read_to_string(dir.join("dist/two.js")).expect("two");
+    assert!(two.contains("SHARED"), "{two}");
+    assert!(
+        !two.contains("EXTRA"),
+        "a target's plugin reached another: {two}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **`order: "pre"` is ordered against the built-in passes, not only against
+/// the other plugins.** A Tailwind compiler claims `.css` so that
+/// `@import "tailwindcss"` never reaches `esdev:css-modules`, which would treat
+/// it as a file to fetch and fail with "which is not there".
+///
+/// Two things have to hold for that, and this is a regression test for both:
+/// the plugin's transform runs first, and the built-in pass then **steps
+/// aside** — it filters on the id, which is still `.css`, and would otherwise
+/// re-read the stylesheet off disk and undo the whole thing.
+#[test]
+fn a_pre_ordered_plugin_claims_css_ahead_of_the_built_in_pass() {
+    let dir = build_dir("p_plugins_pre");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"
+export default {
+  name: "tailwind-ish",
+  transform: {
+    order: "pre",
+    filter: { id: /\.css$/ },
+    handler: (code, id, ctx) => ({
+      code: `export default { button: "COMPILED-${ctx.type}" };`,
+      type: "js",
+    }),
+  },
+};
+"#,
+    );
+    // The `@import` names a package, which is exactly what the built-in CSS
+    // pass cannot resolve — so if it ever sees this file, the build fails.
+    write_in(
+        &dir,
+        "src/ui.css",
+        "@import \"tailwindcss\";\n.button { color: red }\n",
+    );
+    write_in(
+        &dir,
+        "src/app.mjs",
+        "import styles from './ui.css';\nconsole.log(styles.button);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": ["./plugin.mjs"],
+          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("the bundle");
+    // `ctx.type` is what the module was when the hook was called — the extension
+    // said `.css`, and nothing had changed it yet.
+    assert!(bundle.contains("COMPILED-css"), "{bundle}");
+    assert!(
+        !bundle.contains("color: red"),
+        "the built-in pass re-read the stylesheet: {bundle}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A stylesheet nobody claimed is still the built-in pass's, so stepping aside
+/// for a plugin did not quietly turn CSS Modules off.
+#[test]
+fn css_modules_still_scopes_a_stylesheet_no_plugin_claimed() {
+    let dir = build_dir("p_plugins_css_intact");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    banner_plugin(&dir);
+    write_in(&dir, "src/ui.module.css", ".button { color: red }\n");
+    write_in(
+        &dir,
+        "src/app.mjs",
+        "import banner from 'virtual:banner';\nimport styles from './ui.module.css';\n\
+         console.log(banner, styles.button);\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": [{ "module": "./plugin.mjs", "options": { "text": "B" } }],
+          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("the bundle");
+    // The scoped name the CSS Modules pass mints — the source class mapped to a
+    // name derived from the file's path, which is neither the class alone nor
+    // anything a plugin here produced.
+    assert!(
+        bundle.contains("\"button\": \"button_"),
+        "the class was not scoped: {bundle}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A plugin that cannot be loaded fails the build **where it was named**, not
+/// as a module-not-found inside a program nobody typed.
+#[test]
+fn a_plugin_that_cannot_be_loaded_is_reported_against_the_config() {
+    let dir = build_dir("p_plugins_missing");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.mjs", "console.log('hi');\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": ["./plugins/not-here.mjs"],
+          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("./plugins/not-here.mjs"), "{text}");
+    assert!(!dir.join("dist/app.js").exists(), "a failed build wrote");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A module that exports no plugin is named too — the module, and which export
+/// was looked for.
+#[test]
+fn a_plugin_module_with_no_export_says_so() {
+    let dir = build_dir("p_plugins_noexport");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "plugin.mjs", "export const other = 1;\n");
+    write_in(&dir, "src/app.mjs", "console.log('hi');\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": ["./plugin.mjs"],
+          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(!out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(text.contains("no default export"), "{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A project with no `plugins` starts no isolate and builds exactly as it
+/// always did — the cost of the feature is paid only by projects that use it.
+#[test]
+fn a_project_without_plugins_is_unchanged() {
+    let dir = build_dir("p_plugins_none");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/app.mjs", "console.log('plain');\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{ "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } } }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("the bundle");
+    assert!(bundle.contains("plain"), "{bundle}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The case the whole feature was asked for: a configured plugin reading the
+/// **chunk graph** and writing a route manifest. `end` fires before there are
+/// chunks, and until `esdev.json` had a plugin slot the only way to reach the
+/// graph was for the framework to call `build()` itself.
+#[test]
+fn a_configured_plugin_reads_the_chunk_graph_and_writes_a_manifest() {
+    let dir = build_dir("p_plugins_bundle");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/shared.mjs", "export const shared = 1;\n");
+    write_in(
+        &dir,
+        "src/app.mjs",
+        "import { shared } from './shared.mjs';\nconsole.log(shared);\n",
+    );
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"
+import { write } from "runtime:fs";
+export default {
+  name: "manifest",
+  bundle: {
+    handler: async (output) => {
+      const entry = output.find((o) => o.type === "chunk" && o.isEntry);
+      // `facadeModuleId` is the module the chunk *is*, and `imports` are the
+      // chunks a preload would have to fetch beside it.
+      await write(
+        "manifest.json",
+        JSON.stringify({
+          file: entry.fileName,
+          module: entry.facadeModuleId.endsWith("app.mjs"),
+          modules: entry.moduleIds.length,
+          imports: entry.imports,
+        }),
+      );
+    },
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        r#"{
+          "plugins": ["./plugin.mjs"],
+          "targets": { "app": { "entry": "src/app.mjs", "out": "dist/app.js" } }
+        }"#,
+    );
+
+    let out = esdev_in(&dir).arg("build").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}{}", stdout(&out), stderr(&out));
+    let manifest = std::fs::read_to_string(dir.join("manifest.json")).expect("the manifest");
+    assert!(manifest.contains("\"module\":true"), "{manifest}");
+    assert!(manifest.contains("\"file\":\"app.js\""), "{manifest}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `host()` is esdev's seam, not an API a program that bundles should reach
+/// for. Called with nothing driving a build from outside, it says which one is
+/// which rather than waiting for ever on a build nobody started.
+#[test]
+fn runtime_build_host_is_refused_when_nothing_is_driving_a_build() {
+    let dir = build_dir("rb_host_alone");
+    write_in(
+        &dir,
+        "app.mjs",
+        "import { host } from 'runtime:build';\n\
+         try { await host([]); console.log('RESOLVED'); }\n\
+         catch (err) { console.log('refused:', err.message); }\n",
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("refused:"), "{text}");
+    assert!(text.contains("build() instead"), "{text}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The dev loop, with a plugin. Two things are under test that a single build
+/// cannot show:
+///
+/// * the plugin still applies on a **rebuild** — the isolate holding it is
+///   started once and kept, because evaluating a plugin's module (and whatever
+///   it initialises) on every save would be a startup cost per keystroke;
+/// * a plugin holding **state across builds** works, which is what every
+///   incremental compiler is. The counter here stands in for one: it is the
+///   plugin's own module scope, and a fresh isolate per build would reset it.
+#[test]
+fn start_keeps_the_projects_plugins_across_rebuilds() {
+    let dir = watch_dir("s_plugins");
+    let port = test_port("s_plugins");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "plugin.mjs",
+        r#"
+// Module scope: it survives for as long as the isolate does, and a host that
+// reloaded the plugin per build would hand back 1 every time.
+let builds = 0;
+export default {
+  name: "counter",
+  resolve: {
+    filter: { id: "virtual:builds" },
+    handler: () => ({ id: "virtual:builds", virtual: true }),
+  },
+  load: {
+    filter: { id: "virtual:builds" },
+    handler: () => ({ code: `export default ${++builds};` }),
+  },
+};
+"#,
+    );
+    write_in(
+        &dir,
+        "src/main.mjs",
+        "import builds from 'virtual:builds';\ndocument.title = 'FIRST build ' + builds;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><head>\
+         <script type=\"module\" src=\"./src/main.mjs\"></script></head>\
+         <body><div id=root></div></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "plugins": ["./plugin.mjs"],
+                 "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
+                 "start": {{ "port": {port} }} }}"#
+        ),
+    );
+
+    let _supervisor = start_in(&dir);
+
+    let bundle = wait_for_http(port, "/assets/main.js", |body| body.contains("FIRST build"));
+    assert!(bundle.contains("FIRST build"), "{bundle}");
+    assert!(bundle.contains("build 1"), "the plugin never ran: {bundle}");
+
+    // A save rebuilds. The plugin applies again — and its counter has moved,
+    // which it could not have done if the isolate holding it were new.
+    write_in(
+        &dir,
+        "src/main.mjs",
+        "import builds from 'virtual:builds';\ndocument.title = 'SECOND build ' + builds;\n",
+    );
+    let rebuilt = wait_for_http(port, "/assets/main.js", |body| {
+        body.contains("SECOND build")
+    });
+    assert!(rebuilt.contains("SECOND build"), "the change never landed");
+    assert!(
+        !rebuilt.contains("build 1"),
+        "the plugin was reloaded for the rebuild: {rebuilt}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
 // `runtime:build` — the bundler, from guest JS (the other esdev-only module).
 // ---------------------------------------------------------------------------
 

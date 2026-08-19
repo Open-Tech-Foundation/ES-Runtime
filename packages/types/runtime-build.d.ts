@@ -88,6 +88,13 @@ declare module "runtime:build" {
     error(log: string | Error | { message: string }): never;
     /** On `resolve`: whether the specifier being resolved is an entry. */
     readonly isEntry?: boolean;
+    /**
+     * On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, …
+     *
+     * Not always what the extension says: a pass ordered `pre` may already have
+     * changed it. This is how a pass declines work somebody else has done.
+     */
+    readonly type?: string;
   }
 
   export type EmittedFile =

@@ -88,6 +88,7 @@ impl contract::Pass for ReactRefresh {
         &'a self,
         code: &'a str,
         id: &'a str,
+        _module_type: &'a str,
         _ctx: &'a Arc<dyn contract::Context>,
     ) -> Answer<'a, Option<ModuleResult>> {
         Box::pin(async move {

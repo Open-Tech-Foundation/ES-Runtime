@@ -310,6 +310,7 @@ impl contract::Pass for GuestPass {
         &'a self,
         code: &'a str,
         id: &'a str,
+        module_type: &'a str,
         ctx: &'a Arc<dyn contract::Context>,
     ) -> contract::Answer<'a, Option<contract::ModuleResult>> {
         let ctx = ctx.clone();
@@ -321,7 +322,11 @@ impl contract::Pass for GuestPass {
                         Value::String(code.to_string()),
                         Value::String(id.to_string()),
                     ],
-                    Vec::new(),
+                    // On the context, like `isEntry` on a resolve: the
+                    // signature stays `(code, id, ctx)` and anything a
+                    // particular hook needs to say rides alongside rather than
+                    // shifting the arguments.
+                    vec![("type".to_string(), Value::String(module_type.to_string()))],
                     ctx,
                 )
                 .await?;

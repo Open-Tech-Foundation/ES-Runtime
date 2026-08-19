@@ -111,10 +111,66 @@ esdev build src/app.ts           # ignores the file entirely
 | `assets` | Copied into the output: a file by name, a directory by its **contents** |
 | `then` | `"run"` — execute the output once built |
 | `minify`, `define`, `conditions` | As the flags, for this target alone |
+| `plugins` | Plugins for this target, **added** to the project's ([below](#plugins)) |
 
 `define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
 string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
 takes a release build of a project whose day to day is unminified.
+
+### Plugins
+
+A project that compiles something the toolchain does not know about — `.mdx`,
+Tailwind, another framework's components — names the plugin here, and `esdev
+build` and `esdev start` load it:
+
+```json
+{
+  "plugins": [
+    "./plugins/mdx.js",
+    { "module": "@otfw/compiler", "options": { "jsx": "automatic" } }
+  ],
+  "targets": {
+    "server": { "entry": "src/server.ts", "out": "dist/server.js" },
+    "browser": { "entry": "src/client.tsx", "outdir": "dist/client",
+                 "platform": "browser", "plugins": ["./plugins/only-web.js"] }
+  }
+}
+```
+
+An entry is the **module to import** — a path in this project, or a package.
+Top-level plugins apply to every target; a target's `plugins` are added to them
+rather than replacing them, so a project that compiles `.mdx` compiles it for
+the server bundle and the browser one.
+
+| Key | |
+| --- | --- |
+| `module` | What to import |
+| `export` | Which export the plugin is. Default: the default export |
+| `options` | What to call it with, when the export is a **factory** |
+
+`options` is the one thing a JSON file cannot express on its own: a plugin that
+takes options is a function you call, and `mdx({ … })` is a function
+application. So the file carries the argument and esdev makes the call. That is
+the whole of the difference from an executable config — this file is still read
+as *data*, which is what keeps `permissions` decidable without running anything.
+
+They are written against [esdev's plugin
+contract](/docs/esdev/plugins), the same one `runtime:build` serves, and they go
+into one list with esdev's own passes — so `order: "pre"` means before
+`esdev:css-modules`, not merely before the other plugins.
+
+<Callout type="note" title="Loaded once, and kept">
+  The plugins load into an isolate of their own, started on the first build that
+  needs one and held for the run. `esdev start` rebuilds on every save, and
+  re-evaluating a plugin's module — and whatever it initialises: a compiler, a
+  template cache, a Tailwind context — per keystroke would be paying a startup
+  cost forty times a minute, and a plugin that holds state across builds could
+  not exist at all.
+
+  They run under esdev's own grant, in the project directory, with the same
+  `runtime:` namespace any other program gets. A plugin you configured is code
+  you chose to run.
+</Callout>
 
 ### The three shapes
 

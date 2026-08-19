@@ -948,6 +948,114 @@ mod tests {
         assert!(!target.run_after_build);
     }
 
+    /// The project's plugins are every target's, and a target's own are added
+    /// to them rather than replacing them: a project that compiles `.mdx`
+    /// compiles it for the server bundle and the browser one.
+    #[test]
+    fn a_targets_plugins_add_to_the_projects() {
+        let project = read(
+            r#"{
+              "plugins": ["./plugins/mdx.js"],
+              "targets": {
+                "api": { "entry": "src/api.ts", "out": "dist/api.js" },
+                "web": { "entry": "src/web.ts", "out": "dist/web.js",
+                         "plugins": ["./plugins/only-web.js"] }
+              }
+            }"#,
+        )
+        .expect("parsed");
+
+        assert_eq!(
+            project
+                .plugins
+                .iter()
+                .map(|p| p.module.as_str())
+                .collect::<Vec<_>>(),
+            ["./plugins/mdx.js", "./plugins/only-web.js"],
+        );
+        // Sorted by name, so `api` is first.
+        assert_eq!(project.targets[0].plugins, [0]);
+        assert_eq!(project.targets[1].plugins, [0, 1]);
+    }
+
+    /// The call a JSON file cannot make. A plugin that takes options is a
+    /// factory, so the file carries the argument and esdev makes the call.
+    #[test]
+    fn a_plugin_may_name_its_export_and_its_options() {
+        let project = read(
+            r#"{
+              "plugins": [{ "module": "@otfw/compiler", "export": "compiler",
+                            "options": { "jsx": "automatic" } }],
+              "targets": { "web": { "entry": "src/web.ts", "out": "dist/web.js" } }
+            }"#,
+        )
+        .expect("parsed");
+        let plugin = &project.plugins[0];
+        assert_eq!(plugin.module, "@otfw/compiler");
+        assert_eq!(plugin.export.as_deref(), Some("compiler"));
+        assert_eq!(plugin.options.as_ref().unwrap()["jsx"], "automatic");
+    }
+
+    /// A plugin with no `module` names nothing to import, and a mistyped key
+    /// beside it is a setting that would silently do nothing.
+    #[test]
+    fn a_plugin_entry_has_to_name_a_module() {
+        let refused = read(
+            r#"{ "plugins": [{ "options": {} }],
+                 "targets": { "web": { "entry": "a.ts", "out": "dist/a.js" } } }"#,
+        )
+        .expect_err("no module");
+        assert!(refused.contains("has no `module`"), "{refused}");
+
+        let mistyped = read(
+            r#"{ "plugins": [{ "module": "./p.js", "option": {} }],
+                 "targets": { "web": { "entry": "a.ts", "out": "dist/a.js" } } }"#,
+        )
+        .expect_err("mistyped key");
+        assert!(mistyped.contains("option"), "{mistyped}");
+    }
+
+    /// `plugins` is a list. A bare string is the shape somebody reaches for
+    /// first, and accepting it silently would build with one plugin where the
+    /// file says one plugin's *characters*.
+    #[test]
+    fn plugins_is_a_list() {
+        let refused = read(
+            r#"{ "plugins": "./p.js",
+                 "targets": { "web": { "entry": "a.ts", "out": "dist/a.js" } } }"#,
+        )
+        .expect_err("not a list");
+        assert!(refused.contains("list of plugins"), "{refused}");
+    }
+
+    /// `refresh` names a scheme, and esdev implements one. A name it does not
+    /// know is a typo when nothing could implement it — and a plugin's job when
+    /// the target has plugins, which is what stopped every non-React framework
+    /// from having a hot loop at all.
+    #[test]
+    fn an_unknown_refresh_scheme_needs_a_plugin_that_could_implement_it() {
+        let refused =
+            read(r#"{ "targets": { "web": { "entry": "index.html", "refresh": "otfw" } } }"#)
+                .expect_err("no plugin to implement it");
+        assert!(
+            refused.contains("only scheme esdev implements"),
+            "{refused}"
+        );
+
+        let accepted = read(
+            r#"{ "plugins": ["./plugins/otfw.js"],
+                 "targets": { "web": { "entry": "index.html", "refresh": "otfw" } } }"#,
+        )
+        .expect("a plugin can implement it");
+        assert_eq!(accepted.targets[0].refresh.as_deref(), Some("otfw"));
+
+        // The built-in still needs nothing.
+        let react =
+            read(r#"{ "targets": { "web": { "entry": "index.html", "refresh": "react" } } }"#)
+                .expect("the built-in scheme");
+        assert_eq!(react.targets[0].refresh.as_deref(), Some("react"));
+    }
+
     /// The same default the command line has: a config that omits `out` and a
     /// command line that omits `--out` must write the same file.
     #[test]

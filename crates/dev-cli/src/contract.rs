@@ -307,10 +307,19 @@ pub trait Pass: Send + Sync + std::fmt::Debug {
     }
 
     /// A module's contents, rewritten. `None` is "leave it alone".
+    ///
+    /// `module_type` is what the module is **now** — `"css"`, `"jsx"`, `"js"`,
+    /// … — which is not always what its extension says, because a pass that ran
+    /// before this one may already have changed it. That is how a pass declines
+    /// work somebody else has done: `esdev:css-modules` filters on `\.css$` and
+    /// still has to step aside for a plugin that ordered itself `pre` and
+    /// turned the stylesheet into JavaScript, or it would read the file off
+    /// disk again and undo the whole thing.
     fn transform<'a>(
         &'a self,
         _code: &'a str,
         _id: &'a str,
+        _module_type: &'a str,
         _ctx: &'a Arc<dyn Context>,
     ) -> Answer<'a, Option<ModuleResult>> {
         Box::pin(async { Ok(None) })

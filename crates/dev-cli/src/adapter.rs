@@ -351,9 +351,13 @@ impl Plugin for Adapter {
             return Ok(None);
         }
         let ctx: Arc<dyn contract::Context> = Arc::new(HookCtx::Transform(ctx));
+        // What the module is *now*, which is not always what its extension
+        // says: a pass ordered `pre` may already have turned this stylesheet
+        // into JavaScript, and a pass that ignored that would undo it.
+        let module_type = args.module_type.to_string();
         let Some(result) = self
             .pass
-            .transform(args.code, id, &ctx)
+            .transform(args.code, id, &module_type, &ctx)
             .await
             .map_err(|e| anyhow!(e))?
         else {

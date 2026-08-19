@@ -187,6 +187,7 @@ The last argument of every handler, never `this`.
 | `ctx.warn(msg)` / `info` / `debug` | Diagnostics. Warnings come back from the build, prefixed with your plugin's name. |
 | `ctx.error(msg)` | Fails the build. It **throws** — it does not return, because you are saying the build cannot continue. |
 | `ctx.isEntry` | On `resolve`: whether this specifier is an entry. |
+| `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
 
 It is an argument so that an arrow-function handler keeps it. Rollup's
 context-as-`this` is silently lost by an arrow, and a hook whose `this.resolve`
@@ -223,6 +224,20 @@ order you listed them.
 
 ```text
 order: pre-one -> normal -> post-one
+```
+
+**It orders you against esdev's own passes too, not only against the other
+plugins.** That is the point of it for a CSS compiler: `esdev:css-modules` is
+unordered, so a plugin that says `pre` gets the stylesheet first, and the
+built-in pass then sees `ctx.type` is no longer `"css"` and steps aside rather
+than re-reading the file off disk and undoing the work.
+
+```js
+transform: {
+  order: "pre",
+  filter: { id: /\.css$/ },
+  handler: (code, id) => ({ code: compileTailwind(code, id), type: "js" }),
+}
 ```
 
 ## What the build hands back
