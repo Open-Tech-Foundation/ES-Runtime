@@ -4134,6 +4134,44 @@ try {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `add()` refuses a tree that is already being watched — **including one a
+/// recursive watch already covers**, which is the spelling that happens: a dev
+/// server watches `app/`, then adds the package `app/` lives in as a
+/// dependency. Comparing paths for equality caught the exact repeat and let the
+/// overlap through, and an overlap is every event delivered twice on the
+/// backends that allow it.
+#[test]
+fn runtime_watch_does_not_watch_one_tree_twice() {
+    let dir = watch_dir("w_overlap");
+    std::fs::create_dir_all(dir.join("pkg/src/app/deeper")).expect("create tree");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { watch } from "runtime:watch";
+const w = await watch(["pkg/src/app"], { recursive: true });
+// Inside what is already watched, and the same path again.
+console.log("inside:", await w.add("pkg/src/app/deeper"));
+console.log("same:", await w.add("pkg/src/app"));
+// Around it: the new watch covers the old one, which stops being its own.
+console.log("around:", await w.add("pkg"));
+// And now everything under it is covered by that.
+console.log("inside again:", await w.add("pkg/src"));
+await w.close();
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    let printed = stdout(&out);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(printed.contains("inside: false"), "{printed}");
+    assert!(printed.contains("same: false"), "{printed}");
+    assert!(printed.contains("around: true"), "{printed}");
+    assert!(printed.contains("inside again: false"), "{printed}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// And it is `esdev`'s, not the runtime's: the same program under `esrun` must
 /// fail at the import rather than run with a watcher that never fires.
 #[test]

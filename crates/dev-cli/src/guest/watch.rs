@@ -34,7 +34,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -185,10 +185,22 @@ impl HostExtension for WatchExtension {
                     let real = PathBuf::from(real_path(&fs, &path).await?);
                     let mut watchers = map.borrow_mut();
                     let handle = require_handle(&mut watchers, id)?;
-                    if handle.paths.contains(&real) {
-                        // Watching the same tree twice would deliver every event
-                        // twice on the backends that allow it.
+                    // Watching one tree twice delivers every event twice on the
+                    // backends that allow it — and **a parent is the same tree**
+                    // when the watcher is recursive, which is the spelling that
+                    // actually happens: a dev server watches `app/` and then
+                    // adds the package `app/` lives in as a dependency.
+                    // Comparing for equality alone caught the exact repeat and
+                    // let the overlap through.
+                    if handle.covered(&real) {
                         return Ok(Value::Bool(false));
+                    }
+                    // The other direction: the new path covers trees already
+                    // watched, so they stop being watches of their own rather
+                    // than becoming a second delivery of the same events.
+                    for covered in handle.covering(&real) {
+                        let _ = handle.watcher.unwatch(&covered);
+                        handle.paths.retain(|p| *p != covered);
                     }
                     watch_path(handle, real)?;
                     Ok(Value::Bool(true))
@@ -335,6 +347,29 @@ async fn debounce(
             }
             None => return,
         }
+    }
+}
+
+impl WatchHandle {
+    /// Whether this path is already being watched — itself, or inside a tree a
+    /// recursive watch already covers.
+    fn covered(&self, path: &Path) -> bool {
+        self.paths
+            .iter()
+            .any(|watched| watched == path || (self.recursive && path.starts_with(watched)))
+    }
+
+    /// The paths this one would swallow: watches that sit inside it, and so
+    /// stop being watches of their own once it is added.
+    fn covering(&self, path: &Path) -> Vec<PathBuf> {
+        if !self.recursive {
+            return Vec::new();
+        }
+        self.paths
+            .iter()
+            .filter(|watched| watched.starts_with(path))
+            .cloned()
+            .collect()
     }
 }
 

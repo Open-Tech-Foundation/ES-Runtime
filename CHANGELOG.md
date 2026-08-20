@@ -70,6 +70,15 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **`runtime:watch`'s `add()` no longer watches one tree twice.** It refused a
+  path already in the set, comparing for equality — so the exact repeat was
+  caught and the overlap was not. A dev server that watches `app/` and then adds
+  the package `app/` lives in as a dependency was watching that subtree twice,
+  which is every event delivered twice on the backends that allow it. A
+  recursive watch now covers what is inside it, in both directions: a path
+  inside an existing watch is refused, and one that encloses existing watches
+  replaces them.
+
 - **An HTML entry no longer builds an empty page and succeeds.**
   `src="/src/main.jsx"` — what Vite's own React template ships, so what people
   arrive with — built 0 scripts and exited 0: a rooted path is a URL the
