@@ -174,6 +174,25 @@ impl SystemFileSystem {
         } else {
             self.base.join(raw)
         };
+        // A path that names a **root itself** — `.`, `./`, `data/..`, or the
+        // root's own absolute path — has no parent this may resolve: the
+        // directory above the jail is not somewhere it is allowed to look, and
+        // holding back the last component would send it there. Resolved whole
+        // instead, which is also where the root-mutation guard lives.
+        //
+        // It only began to matter when mutations moved onto this path. `remove`
+        // and `chmod` must not resolve their final component (removing a link
+        // removes the link), and `remove(".")` then arrived here for the first
+        // time — and was reported as an escape from `/tmp` rather than as the
+        // refusal to destroy the sandbox that it is.
+        if let Ok(real) = path::canonicalize(&abs)
+            && self.roots(access).contains(&real)
+        {
+            return self.scoped(
+                reject_root_mutation(real, self.roots(access), access)?,
+                access,
+            );
+        }
         let (parent, name) = match (abs.parent(), abs.file_name()) {
             (Some(parent), Some(name)) => (parent.to_path_buf(), name.to_os_string()),
             // No final component to hold back (a bare root); fall through.
@@ -194,6 +213,28 @@ impl SystemFileSystem {
             reject_root_mutation(resolved, self.roots(access), access)?,
             access,
         )
+    }
+
+    /// A jailed path, **pinned to the directory it resolved in**.
+    ///
+    /// The pair every mutation uses now. [`jailed`](Self::jailed) decides
+    /// whether the path is allowed; [`anchor`](crate::anchor) makes the answer
+    /// stick, by holding the parent open so the syscall cannot be pointed at a
+    /// different directory than the one that was checked.
+    fn anchored(&self, p: &str, access: Access) -> Result<crate::anchor::Anchored, ProviderError> {
+        let real = self.jailed(p, access)?;
+        crate::anchor::anchor(&real, self.roots(access))
+    }
+
+    /// The same, without resolving the final component — for an operation
+    /// about the link rather than about what it points at.
+    fn anchored_nofollow(
+        &self,
+        p: &str,
+        access: Access,
+    ) -> Result<crate::anchor::Anchored, ProviderError> {
+        let real = self.jailed_nofollow(p, access)?;
+        crate::anchor::anchor(&real, self.roots(access))
     }
 
     pub(crate) fn jailed(&self, p: &str, access: Access) -> Result<PathBuf, ProviderError> {
@@ -218,6 +259,41 @@ pub(crate) fn roots_with(root: &Path, allow: &PathAllowlist) -> Vec<PathBuf> {
     let mut roots = vec![root.to_path_buf()];
     roots.extend(allow.roots_outside(root));
     roots
+}
+
+/// Every prefix of a path, shortest first — `a`, `a/b`, `a/b/c`.
+///
+/// What a recursive `mkdir` walks. `create_dir_all` resolves the whole path and
+/// then creates along it, which is a fresh lookup per level with a window at
+/// each; jailing and pinning one prefix at a time means every directory is
+/// created inside a parent that was checked a moment earlier and is still open.
+///
+/// The separator the caller wrote is preserved rather than normalised, because
+/// each prefix goes back through the same jail the whole path would have.
+/// The whole of a pinned file, by descriptor.
+fn read_all(anchored: &crate::anchor::Anchored, path: &str) -> Result<Vec<u8>, ProviderError> {
+    use std::io::Read;
+    let mut file = anchored.open()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| other(path, e))?;
+    Ok(bytes)
+}
+
+/// Only a **named** component is a directory to create. `.`, `/` and `..`
+/// carry the accumulating path along and produce nothing of their own — a
+/// leading `./` would otherwise ask for `mkdir(".")`, which resolves to the
+/// jail root and is refused as the sandbox-destroying request it would be if
+/// anyone meant it.
+fn prefixes(path: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut at = PathBuf::new();
+    for component in Path::new(path).components() {
+        at.push(component.as_os_str());
+        if matches!(component, std::path::Component::Normal(_)) {
+            out.push(at.to_string_lossy().into_owned());
+        }
+    }
+    out
 }
 
 /// Rejects the empty path before it can be joined onto the base directory.
@@ -438,18 +514,26 @@ fn mtime_ms(md: &std::fs::Metadata) -> Option<f64> {
 
 impl FileSystem for SystemFileSystem {
     fn read(&self, path: String) -> BoxFuture<Result<Vec<u8>, ProviderError>> {
-        let resolved = self.jailed(&path, Access::Read);
-        if let Ok(p) = &resolved
-            && let Ok(md) = std::fs::metadata(p)
+        // Pinned like a write. A read that follows a swapped component hands
+        // the guest the contents of a file outside the jail, which is a smaller
+        // catastrophe than writing one and is still a catastrophe.
+        let resolved = self.anchored(&path, Access::Read);
+        if let Ok(anchored) = &resolved
+            && let Ok(md) = std::fs::metadata(anchored.path())
             && md.len() < 64 * 1024
         {
-            return Box::pin(std::future::ready(
-                std::fs::read(p).map_err(|e| other(&path, e)),
-            ));
+            return Box::pin(std::future::ready(read_all(anchored, &path)));
         }
         Box::pin(async move {
-            let p = resolved?;
-            tokio::fs::read(&p).await.map_err(|e| other(&path, e))
+            let anchored = resolved?;
+            // Off the runtime thread, which is what `tokio::fs::read` was
+            // doing: a large file is a blocking read however it is spelled.
+            tokio::task::spawn_blocking(move || {
+                let text = anchored.path().to_string_lossy().into_owned();
+                read_all(&anchored, &text)
+            })
+            .await
+            .map_err(|e| other(&path, std::io::Error::other(e)))?
         })
     }
 
@@ -459,39 +543,28 @@ impl FileSystem for SystemFileSystem {
         data: Vec<u8>,
         append: bool,
     ) -> BoxFuture<Result<u64, ProviderError>> {
-        let resolved = self.jailed(&path, Access::Write);
+        // Not `jailed`: a write must not follow a symlink at the final name any
+        // more than at a directory above it, and resolving the last component
+        // is exactly what following it means. The link at the name is refused
+        // by the `NOFOLLOW` open instead.
+        let resolved = self.anchored_nofollow(&path, Access::Write);
         let len = data.len() as u64;
 
-        if let Ok(p) = &resolved
+        if let Ok(anchored) = &resolved
             && len < 64 * 1024
         {
-            let res = (|| -> std::io::Result<()> {
-                let mut opts = std::fs::OpenOptions::new();
-                opts.write(true).create(true);
-                if append {
-                    opts.append(true);
-                } else {
-                    opts.truncate(true);
-                }
+            let res = (|| -> Result<(), ProviderError> {
                 use std::io::Write;
-                let mut f = opts.open(p)?;
-                f.write_all(&data)?;
+                let mut f = anchored.create(append)?;
+                f.write_all(&data).map_err(|e| other(&path, e))?;
                 Ok(())
             })();
-            return Box::pin(std::future::ready(
-                res.map(|_| len).map_err(|e| other(&path, e)),
-            ));
+            return Box::pin(std::future::ready(res.map(|()| len)));
         }
         Box::pin(async move {
-            let p = resolved?;
-            let mut opts = tokio::fs::OpenOptions::new();
-            opts.write(true).create(true);
-            if append {
-                opts.append(true);
-            } else {
-                opts.truncate(true);
-            }
-            let mut f = opts.open(&p).await.map_err(|e| other(&path, e))?;
+            let anchored = resolved?;
+            let file = anchored.create(append)?;
+            let mut f = tokio::fs::File::from_std(file);
             f.write_all(&data).await.map_err(|e| other(&path, e))?;
             // `tokio::fs::File` dispatches writes to the blocking pool and
             // returns before they land, so `write_all` alone leaves the promise
@@ -573,44 +646,73 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn mkdir(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path, Access::Write);
-        Box::pin(async move {
-            let p = resolved?;
-            if recursive {
-                tokio::fs::create_dir_all(&p).await
-            } else {
-                tokio::fs::create_dir(&p).await
+        // `create_dir_all` resolves the whole path once and then creates along
+        // it, which is a fresh lookup per level with a window at each. Every
+        // level is jailed and pinned separately instead — `a`, then `a/b`, then
+        // `a/b/c` — so each directory is created inside a parent that was
+        // checked a moment earlier and is still open.
+        //
+        // One at a time, and **in order**: a step cannot be resolved before the
+        // step above it exists, so these are not gathered up front.
+        let result = (|| -> Result<(), ProviderError> {
+            let steps = match recursive {
+                // No named component at all — `.`, `/`, `data/..`. Nothing to
+                // create; resolving the path itself produces the refusal it has
+                // always produced, rather than an empty loop reporting success.
+                true if prefixes(&path).is_empty() => vec![path.clone()],
+                true => prefixes(&path),
+                false => vec![path.clone()],
+            };
+            for step in &steps {
+                match self.anchored_nofollow(step, Access::Write)?.mkdir() {
+                    Ok(()) => {}
+                    // "Creates missing parents and succeeds if it already
+                    // exists" is what `recursive` means, at the last level as
+                    // much as the ones above it — but only when what is there
+                    // is a **directory**. A file in the way is the failure
+                    // `create_dir_all` reports, and telling the two apart needs
+                    // the last component resolved, which is what `anchored`
+                    // does and `anchored_nofollow` deliberately does not.
+                    Err(e) if recursive && e.code() == Some(ErrorCode::AlreadyExists) => {
+                        if !self.anchored(step, Access::Write)?.is_dir()? {
+                            return Err(e);
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
             }
-            .map_err(|e| other(&path, e))
-        })
+            Ok(())
+        })();
+        Box::pin(std::future::ready(result))
     }
 
     fn remove(&self, path: String, recursive: bool) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path, Access::Write);
+        // Not `jailed`: removing a symlink removes the link, so the final
+        // component must not be resolved — otherwise `remove("link")` would be
+        // a decision about the file at the other end of it.
+        let resolved = self.anchored_nofollow(&path, Access::Write);
         Box::pin(async move {
-            let p = resolved?;
-            let md = tokio::fs::symlink_metadata(&p)
-                .await
-                .map_err(|e| other(&path, e))?;
-            if md.is_dir() {
+            let anchored = resolved?;
+            if anchored.is_dir()? {
                 if recursive {
-                    tokio::fs::remove_dir_all(&p).await
+                    anchored.remove_tree()
                 } else {
-                    tokio::fs::remove_dir(&p).await
+                    anchored.unlink(true)
                 }
             } else {
-                tokio::fs::remove_file(&p).await
+                anchored.unlink(false)
             }
-            .map_err(|e| other(&path, e))
         })
     }
 
     fn rename(&self, from: String, to: String) -> BoxFuture<Result<(), ProviderError>> {
-        let from_r = self.jailed(&from, Access::Write);
-        let to_r = self.jailed(&to, Access::Write);
+        // Both ends pinned, and neither final component resolved: renaming a
+        // symlink moves the link.
+        let from_r = self.anchored_nofollow(&from, Access::Write);
+        let to_r = self.anchored_nofollow(&to, Access::Write);
         Box::pin(async move {
             let (a, b) = (from_r?, to_r?);
-            tokio::fs::rename(&a, &b).await.map_err(|e| other(&from, e))
+            a.rename_to(&b)
         })
     }
 
@@ -656,16 +758,13 @@ impl FileSystem for SystemFileSystem {
 
     fn read_link(&self, path: String) -> BoxFuture<Result<String, ProviderError>> {
         // Not `jailed`: that would resolve the link being asked about.
-        let resolved = self.jailed_nofollow(&path, Access::Read);
+        let resolved = self.anchored_nofollow(&path, Access::Read);
         Box::pin(async move {
-            let p = resolved?;
             // The stored target, verbatim — it may be relative, and may not
             // exist. Not jailed, because it is data read out of the link rather
             // than a path being accessed; `real_path` is what resolves it, and
             // that is jailed.
-            let target = tokio::fs::read_link(&p)
-                .await
-                .map_err(|e| other(&path, e))?;
+            let target = resolved?.read_link()?;
             Ok(target.to_string_lossy().into_owned())
         })
     }
@@ -679,7 +778,7 @@ impl FileSystem for SystemFileSystem {
         // Not `jailed`: the link does not exist yet, and where one *does* the
         // call is about to fail with EEXIST — following it to decide where it
         // may be created would be answering about the wrong file either way.
-        let resolved = self.jailed_nofollow(&path, Access::Write);
+        let resolved = self.anchored_nofollow(&path, Access::Write);
         Box::pin(async move {
             let link = resolved?;
             // The target is **data**, not a path being accessed: it is what
@@ -692,29 +791,20 @@ impl FileSystem for SystemFileSystem {
             {
                 // One kind of symlink here; `kind` is Windows' question.
                 let _ = kind;
-                tokio::fs::symlink(&target_path, &link)
-                    .await
-                    .map_err(|e| other(&path, e))
+                link.symlink_to(&target_path)
             }
-            #[cfg(windows)]
+            #[cfg(not(unix))]
             {
-                // Windows picks the kind at creation, so it has to be decided
-                // now — and it is decided by what the **caller said**, with a
-                // file link when they said nothing. Node's default, and Deno's
-                // requirement to name `dir` explicitly.
-                //
-                // It used to be inferred from the target instead, by stat'ing
-                // it. That was a nicety with a capability hole under it: the
-                // target is unjailed data, so the stat was a lookup at an
-                // arbitrary path — outside the jail as easily as inside — on
-                // behalf of a guest holding `FileWrite` and possibly not
-                // `FileRead`. It leaked only existence and file-vs-directory,
-                // which is still one bit more than a write capability is
-                // supposed to be able to ask for, and no convenience is worth
-                // reading through a boundary to provide.
+                // Windows picks the kind at creation, and it is decided by what
+                // the **caller said**, with a file link when they said nothing.
+                // Node's default, and Deno's requirement to name `dir`
+                // explicitly. Deliberately not inferred by looking at the
+                // target: the target is unjailed data, so that would be a
+                // metadata read at an arbitrary path for a caller who may hold
+                // only `FileWrite`.
                 match kind.unwrap_or(SymlinkKind::File) {
-                    SymlinkKind::Dir => tokio::fs::symlink_dir(&target_path, &link).await,
-                    SymlinkKind::File => tokio::fs::symlink_file(&target_path, &link).await,
+                    SymlinkKind::Dir => tokio::fs::symlink_dir(&target_path, link.path()).await,
+                    SymlinkKind::File => tokio::fs::symlink_file(&target_path, link.path()).await,
                 }
                 .map_err(|e| other(&path, e))
             }
@@ -722,31 +812,24 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn truncate(&self, path: String, len: u64) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path, Access::Write);
-        Box::pin(async move {
-            let p = resolved?;
-            let file = tokio::fs::OpenOptions::new()
-                .write(true)
-                .open(&p)
-                .await
-                .map_err(|e| other(&path, e))?;
-            file.set_len(len).await.map_err(|e| other(&path, e))
-        })
+        let resolved = self.anchored_nofollow(&path, Access::Write);
+        Box::pin(async move { resolved?.truncate(len) })
     }
 
     fn chmod(&self, path: String, mode: u32) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.jailed(&path, Access::Write);
-        Box::pin(async move {
-            let p = resolved?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                tokio::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode))
-                    .await
-                    .map_err(|e| other(&path, e))
-            }
-            #[cfg(not(unix))]
-            {
+        #[cfg(unix)]
+        {
+            // Pinned, and `NOFOLLOW` at the last component: `chmod` on a
+            // symlink must not quietly change the permissions of whatever it
+            // points at.
+            let resolved = self.anchored_nofollow(&path, Access::Write);
+            Box::pin(async move { resolved?.chmod(mode) })
+        }
+        #[cfg(not(unix))]
+        {
+            let resolved = self.jailed(&path, Access::Write);
+            Box::pin(async move {
+                let p = resolved?;
                 // Windows has no mode bits — only a read-only flag. Honour the
                 // owner-write bit and nothing else, which is the whole of what
                 // the platform can represent (the same mapping Node makes).
@@ -758,8 +841,8 @@ impl FileSystem for SystemFileSystem {
                 tokio::fs::set_permissions(&p, perms)
                     .await
                     .map_err(|e| other(&path, e))
-            }
-        })
+            })
+        }
     }
 
     fn make_temp_dir(

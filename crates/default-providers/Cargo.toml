@@ -48,7 +48,10 @@ url.workspace = true
 # `termios` is `tcgetwinsize` — the terminal's real size, for a program drawing
 # a progress line. `$COLUMNS` is not an answer: a shell exports it to itself
 # rather than to a child, and it is stale the moment the window is dragged.
-rustix = { workspace = true, features = ["process", "termios"] }
+# `fs` is the `*at` family: the jail resolves a path and then acts on it
+# relative to the descriptor of the directory it resolved in, so the name cannot
+# be swapped between the two (crate::anchor).
+rustix = { workspace = true, features = ["fs", "process", "termios"] }
 
 [dev-dependencies]
 # Test-only: the async test harness and a current-thread runtime. `test-util`

@@ -661,6 +661,34 @@ They are **two layers, not two alternatives**, and the layering is the load-bear
 
 ---
 
+### D83 — The jail acts by descriptor, not by name · *Proposed (2026-08-20)* · *hardens D25*
+
+**Context:** every jailed operation was two lookups of one name. `confine()` resolved the path and proved it sat under a root; the syscall then resolved the same *string* again. Between them the filesystem is mutable, and a name is not a file — so a guest running two operations at once could replace a directory component with a symlink after the check and before the use, and the write followed the new one. The jail reported success and the bytes landed outside it.
+
+It was not a narrow window, either. `jailed()` resolves **eagerly**, before the future is even constructed, and the syscall happens a poll and a blocking-pool handoff later; the gap spans a scheduling round-trip. And it stopped being theoretical when `runtime:fs` gained `symlink()`: creating the malicious link previously needed `ln` (so `RunProcess`) or a process outside the jail, and now needs `FileWrite` and nothing else.
+
+**Decision (maintainer sign-off pending):**
+
+- **The resolved path is pinned to the directory it resolved in, and every operation acts relative to that descriptor.** A descriptor refers to an *inode*, not to a name: once the parent is open, renaming it, deleting it or replacing it with a link changes nothing about where the write goes. `openat`/`mkdirat`/`unlinkat`/`renameat`/`symlinkat` and friends, through `rustix` — which was already a direct dependency, chosen originally because this crate is `forbid(unsafe_code)`, so this adds no crate to the graph.
+
+- **Rejected: checking harder.** No amount of re-validation helps, because the last thing to happen is always the kernel resolving the path again for the syscall. The only fix is to stop handing the kernel a path. A verify-then-act with an inode comparison was considered and is the same bug with more steps.
+
+- **Rejected: `openat2(RESOLVE_BENEATH)` as the primary mechanism.** It is the strongest thing available and it is Linux 5.6+, so it could only ever be one branch of two. It also does not preserve the jail's semantics: it rejects *absolute* symlinks outright, where this jail follows any link — absolute or not — and then asks whether the result is under a root. Keeping one resolution path that behaves identically everywhere was worth more than an atomic fast path on one kernel with a subtly different meaning.
+
+- **The walk is `NOFOLLOW` at every step, which is what makes the pin trustworthy.** `confine()` returns a *canonical* path, so no component of it should be a symlink; opening each one `NOFOLLOW` turns "should not" into "cannot", and a component that has become one since the check is reported as an escape rather than followed. The final component is opened `NOFOLLOW` too, so a link dropped at the last name is refused as well.
+
+- **Recursive `mkdir` and `remove` are the same idea applied to a walk.** `create_dir_all` and `remove_dir_all` resolve by path at every level, which is a window per level; a recursive delete redirected halfway is the one outcome that cannot be undone. Both now descend by descriptor — `mkdir` jails and pins one prefix at a time in order, `remove` opens each subdirectory from its parent's descriptor and unlinks relative to it.
+
+**What this does not cover, stated rather than implied:**
+
+- **Windows.** There is no `*at` family; the equivalent is `NtCreateFile` with `RootDirectory` in its `OBJECT_ATTRIBUTES`, which neither `std` nor `rustix` exposes. Windows keeps the path-based behaviour and keeps the race. Bounded in practice by `symlink()` needing Developer Mode or admin there.
+
+- **Hard links.** `NOFOLLOW` sees a symlink; nothing sees a hard link, because a hard link *is* the file. This is why `runtime:fs` has no `link()` operation, and why adding one is not a small change.
+
+- **Mount points.** A bind mount appearing mid-walk would be followed. Placing one needs privileges no guest of this runtime has.
+
+- **Timing side-channels.** Out of scope, and not closable for filesystem I/O by anyone: durations are data-dependent through the page cache, the dentry cache and the disk. The jail stops a guest *reaching* outside it; it has never claimed to hide how long its own reads take.
+
 ### D82 — Collections: a document the database cannot read, beside the columns it can · *Proposed (2026-08-19)* · *delivers a phase D80 deferred*
 
 **Context:** D80 put a worker's state in its heap and capped it at 1 MiB for a reason it stands by — a resident cache with a soft limit is an unbounded one — and then owed an answer for everything that outgrows the cap. Without one, the answer is "open a second database beside the one the runtime already gave you", which is the shape this whole feature exists to remove.

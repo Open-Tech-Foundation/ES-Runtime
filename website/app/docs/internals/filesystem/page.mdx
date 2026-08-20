@@ -47,6 +47,30 @@ writable, and a path in neither set is `ERR_JAIL_ESCAPE` as before. Module
 resolution is unaffected: the loader detects its own root and never consults these
 lists, so a granted path makes bytes readable, not code importable.
 
+**The check and the use name the same directory, because they are the same
+descriptor.** Resolving a path and then handing that path to a syscall is two
+lookups of one name, and between them the filesystem is mutable — a component
+replaced by a symlink after the check is followed by the use, and the bytes land
+wherever it now points. So the resolution ends by *opening* the parent
+directory, and the operation runs relative to that descriptor: `openat`,
+`mkdirat`, `unlinkat`, `renameat`. A descriptor refers to an inode, not a name,
+so renaming or replacing the directory afterwards changes nothing about where
+the write goes.
+
+Each step of the walk below the root is opened `NOFOLLOW`. A canonical path has
+no symlinks in it, so a component that *is* one has been swapped since the
+check, and it is refused as an escape rather than followed. Recursive `mkdir`
+and `remove` descend the same way, one descriptor at a time — a recursive delete
+redirected halfway is the one outcome nobody can undo.
+
+Three things this does not cover, said here rather than left to be discovered.
+**Windows** has no `*at` family, keeps the path-based behaviour, and keeps the
+race. **Hard links** are invisible to `NOFOLLOW` — a hard link *is* the file —
+which is why there is no `link()` operation. And **timing** is not a boundary
+this or any filesystem can hold: durations are data-dependent through the page
+cache and the disk, and the jail's claim is that a guest cannot reach outside
+it, not that it cannot measure inside it.
+
 **A symlink you *write* may point anywhere; one you *follow* may not.** The
 target handed to `symlink()` is the data stored in the link — the same value
 `readLink()` returns unresolved — and it is not confined: it may be relative, may

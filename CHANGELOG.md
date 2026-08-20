@@ -70,6 +70,39 @@ namespace) is unstable and may change between minor releases until the API freez
   metadata read at an arbitrary path for a caller who may hold only `FileWrite`. Needs `FileWrite` alone —
   creating a link stores a string and reads nothing.
 
+### Security
+
+- **The filesystem jail acts by descriptor, not by name** (DECISIONS D83). Every
+  jailed operation used to look the same name up twice: `confine()` resolved the
+  path and proved it sat under a root, then the syscall resolved that *string*
+  again. Between the two the filesystem is mutable, so a guest running two
+  operations at once could replace a directory component with a symlink after
+  the check and before the use — and the write followed the new one, out of the
+  jail, with the jail reporting success.
+
+  The window was not small: resolution happens eagerly, before the future is
+  constructed, and the syscall lands a poll and a blocking-pool handoff later.
+  And it stopped being theoretical when `symlink()` arrived in this release —
+  creating the link previously needed `ln`, and so `RunProcess`, or a process
+  outside the jail; it now needs `FileWrite` and nothing else.
+
+  Resolution ends by **opening the parent directory**, and the operation runs
+  relative to that descriptor. A descriptor refers to an inode rather than a
+  name, so nothing done to the name afterwards can redirect it. Each step below
+  the root is opened `NOFOLLOW`, so a component that has become a symlink since
+  the check is refused as an escape rather than followed; recursive `mkdir` and
+  `remove` descend the same way, one descriptor at a time, because a recursive
+  delete redirected halfway is the one outcome that cannot be undone.
+
+  Covered: `read`, `write`, `mkdir`, `remove`, `rename`, `symlink`, `readLink`,
+  `truncate`, `chmod`. Not covered, and written down rather than implied:
+  **Windows**, which has no `*at` family and keeps the old behaviour; **hard
+  links**, which `NOFOLLOW` cannot see and which is why there is no `link()`
+  operation; and **timing side-channels**, which no filesystem can close.
+
+  No new dependency — `rustix` was already direct here, chosen because this
+  crate is `forbid(unsafe_code)`.
+
 ### Fixed
 
 - **`runtime:watch`'s `add()` no longer watches one tree twice.** It refused a

@@ -18,6 +18,7 @@
 #![forbid(unsafe_code)]
 
 mod accept_backoff;
+mod anchor;
 mod body_deadline;
 mod broadcast;
 mod checkout;
