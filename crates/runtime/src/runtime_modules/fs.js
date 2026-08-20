@@ -219,7 +219,10 @@ async function readLink(path) {
 //
 // `type` is `"file"` or `"dir"`, and only Windows has the question: it makes a
 // link to a directory a different object from a link to a file and picks at
-// creation. Left out, it is inferred from what the target is. Unix ignores it.
+// creation. Left out, it is a file link — Node's default. It is deliberately
+// not inferred from the target: the target is unjailed data, and looking at it
+// would be a metadata read at an arbitrary path for a caller who may hold only
+// FileWrite. Unix ignores it.
 async function symlink(target, path, { type } = {}) {
   return ops.fs_symlink(pathOf(target), pathOf(path), type ? String(type) : null);
 }

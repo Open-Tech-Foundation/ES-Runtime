@@ -65,7 +65,9 @@ namespace) is unstable and may change between minor releases until the API freez
 
   `ERR_ALREADY_EXISTS` if the path is taken, like Node's and Deno's; `type:
   "file" | "dir"` is the Windows question of which kind of link to create, and
-  is inferred from the target when it is not given. Needs `FileWrite` alone —
+  defaults to `"file"` as Node's does — deliberately not inferred from the
+  target, because the target is unjailed data and looking at it would be a
+  metadata read at an arbitrary path for a caller who may hold only `FileWrite`. Needs `FileWrite` alone —
   creating a link stores a string and reads nothing.
 
 ### Fixed

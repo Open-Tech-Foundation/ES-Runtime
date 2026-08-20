@@ -844,9 +844,11 @@ pub trait FileSystem: Send + Sync {
     /// read through.
     ///
     /// `kind` decides which kind of link Windows creates, where a link to a
-    /// directory is a different object from a link to a file; `None` means
-    /// infer it from what the target is now. Unix has one kind of symlink and
-    /// ignores it.
+    /// directory is a different object from a link to a file; `None` means a
+    /// file link, as Node defaults to. It is **not** inferred from the target:
+    /// the target is unjailed data, so looking at it would be a metadata read
+    /// at an arbitrary path on behalf of a caller who may hold only
+    /// `FileWrite`. Unix has one kind of symlink and ignores this.
     fn symlink(
         &self,
         target: String,

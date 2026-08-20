@@ -155,7 +155,9 @@ declare module "runtime:fs" {
     /**
      * `"file"` or `"dir"`. Only Windows has the question — it makes a link to a
      * directory a different object from a link to a file and picks at creation.
-     * Left out, it is inferred from what the target is now. Unix ignores it.
+     * Left out, it is a **file** link, as Node defaults to: it is not inferred
+     * from the target, because the target is unjailed data and looking at it
+     * would be a metadata read at an arbitrary path. Unix ignores it.
      */
     type?: "file" | "dir";
   }

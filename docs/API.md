@@ -1425,7 +1425,7 @@ Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 | `copy(from, to)`      | `(path, path) => Promise<number>`               | Copies a file, overwriting `to`; resolves to bytes copied. Needs **both** `FileRead` and `FileWrite`. `ERR_SAME_FILE` if `from` and `to` are the same file. |
 | `realPath(path)`      | `(path) => Promise<string>`                     | The canonical location — symlinks followed, `.`/`..` removed. `ERR_NOT_FOUND` if missing, `ERR_JAIL_ESCAPE` if it resolves outside the jail. `FileRead`. |
 | `readLink(path)`      | `(path) => Promise<string>`                     | The stored target of a symlink, verbatim (may be relative, may dangle). `FileRead`. |
-| `symlink(target, path, opts?)` | `(path, path, { type? }) => Promise<void>` | Creates a symlink at `path` holding `target`. `ERR_ALREADY_EXISTS` if `path` is taken. `type` is `"file"`/`"dir"` and only Windows asks. `FileWrite`. |
+| `symlink(target, path, opts?)` | `(path, path, { type? }) => Promise<void>` | Creates a symlink at `path` holding `target`. `ERR_ALREADY_EXISTS` if `path` is taken. `type` is `"file"`/`"dir"` and only Windows asks, defaulting to `"file"`. `FileWrite`. |
 | `truncate(path, len?)`| `(path, number) => Promise<void>`               | Sets the file's length exactly, zero-filling if it grows.                   |
 | `chmod(path, mode)`   | `(path, number) => Promise<void>`               | Sets permission bits (`0o600`). Windows honours only the owner-write bit, as the read-only flag. |
 | `makeTempDir(opts?)`  | `({ dir?, prefix? }) => Promise<string>`        | Creates a directory with an unpredictable name; resolves to its path.       |

@@ -699,27 +699,20 @@ impl FileSystem for SystemFileSystem {
             #[cfg(windows)]
             {
                 // Windows picks the kind at creation, so it has to be decided
-                // now — from what the caller said, or from what the target is.
-                // Resolved against the link's own directory, because that is
-                // what a relative target is relative to.
-                let kind = match kind {
-                    Some(kind) => kind,
-                    None => {
-                        let against = match link.parent() {
-                            Some(dir) if target_path.is_relative() => dir.join(&target_path),
-                            _ => target_path.clone(),
-                        };
-                        if tokio::fs::metadata(&against)
-                            .await
-                            .is_ok_and(|m| m.is_dir())
-                        {
-                            SymlinkKind::Dir
-                        } else {
-                            SymlinkKind::File
-                        }
-                    }
-                };
-                match kind {
+                // now — and it is decided by what the **caller said**, with a
+                // file link when they said nothing. Node's default, and Deno's
+                // requirement to name `dir` explicitly.
+                //
+                // It used to be inferred from the target instead, by stat'ing
+                // it. That was a nicety with a capability hole under it: the
+                // target is unjailed data, so the stat was a lookup at an
+                // arbitrary path — outside the jail as easily as inside — on
+                // behalf of a guest holding `FileWrite` and possibly not
+                // `FileRead`. It leaked only existence and file-vs-directory,
+                // which is still one bit more than a write capability is
+                // supposed to be able to ask for, and no convenience is worth
+                // reading through a boundary to provide.
+                match kind.unwrap_or(SymlinkKind::File) {
                     SymlinkKind::Dir => tokio::fs::symlink_dir(&target_path, &link).await,
                     SymlinkKind::File => tokio::fs::symlink_file(&target_path, &link).await,
                 }
