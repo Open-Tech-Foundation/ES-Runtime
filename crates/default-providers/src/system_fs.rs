@@ -215,7 +215,8 @@ impl SystemFileSystem {
         )
     }
 
-    /// A jailed path, **pinned to the directory it resolved in**.
+    /// A jailed path, **pinned to the directory it resolved in**, following a
+    /// symlink at the final component as `jailed` does.
     ///
     /// The pair every mutation uses now. [`jailed`](Self::jailed) decides
     /// whether the path is allowed; [`anchor`](crate::anchor) makes the answer
@@ -543,11 +544,13 @@ impl FileSystem for SystemFileSystem {
         data: Vec<u8>,
         append: bool,
     ) -> BoxFuture<Result<u64, ProviderError>> {
-        // Not `jailed`: a write must not follow a symlink at the final name any
-        // more than at a directory above it, and resolving the last component
-        // is exactly what following it means. The link at the name is refused
-        // by the `NOFOLLOW` open instead.
-        let resolved = self.anchored_nofollow(&path, Access::Write);
+        // Following, as this has always done: `write` through a symlink that is
+        // *already there* writes the file it points at, which is what every
+        // runtime does and what a symlinked config file needs. `jailed`
+        // resolves that link and confines where it lands, so the target is
+        // checked — and the `NOFOLLOW` open below is then about a link
+        // **swapped in afterwards**, which is a different thing and is refused.
+        let resolved = self.anchored(&path, Access::Write);
         let len = data.len() as u64;
 
         if let Ok(anchored) = &resolved
@@ -812,17 +815,19 @@ impl FileSystem for SystemFileSystem {
     }
 
     fn truncate(&self, path: String, len: u64) -> BoxFuture<Result<(), ProviderError>> {
-        let resolved = self.anchored_nofollow(&path, Access::Write);
+        // Follows an existing link, like `write`: the file at the end of it is
+        // the file whose length this is about.
+        let resolved = self.anchored(&path, Access::Write);
         Box::pin(async move { resolved?.truncate(len) })
     }
 
     fn chmod(&self, path: String, mode: u32) -> BoxFuture<Result<(), ProviderError>> {
         #[cfg(unix)]
         {
-            // Pinned, and `NOFOLLOW` at the last component: `chmod` on a
-            // symlink must not quietly change the permissions of whatever it
-            // points at.
-            let resolved = self.anchored_nofollow(&path, Access::Write);
+            // Follows an existing link, as it always has and as Node does —
+            // a symlink has no permission bits of its own worth setting, so
+            // the mode is about the file at the other end.
+            let resolved = self.anchored(&path, Access::Write);
             Box::pin(async move { resolved?.chmod(mode) })
         }
         #[cfg(not(unix))]
@@ -1508,6 +1513,63 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
         assert!(!root.parent().unwrap().join("escaped-link").exists());
+    }
+
+    /// Following a link that was already there is not the same thing as
+    /// following one swapped in afterwards. The first is what every runtime
+    /// does — a symlinked config file is written by writing it — and the jail
+    /// resolves and confines the target, so it is checked. The second is the
+    /// attack, and it is refused.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_write_follows_a_link_that_was_already_there() {
+        let (root, fs) = jail("write-through-link");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real/config.json"), b"old").unwrap();
+        std::os::unix::fs::symlink("real/config.json", root.join("config.json")).unwrap();
+
+        fs.write("config.json".into(), b"new".to_vec(), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read(root.join("real/config.json")).unwrap(),
+            b"new"
+        );
+        // Still a link: the write went through it rather than replacing it.
+        assert!(root.join("config.json").is_symlink());
+
+        // The same for the other two that resolve their last component.
+        fs.truncate("config.json".into(), 1).await.unwrap();
+        assert_eq!(std::fs::read(root.join("real/config.json")).unwrap(), b"n");
+        fs.chmod("config.json".into(), 0o600).await.unwrap();
+    }
+
+    /// `remove` and `rename` are about the **link**, not what it points at.
+    /// They resolved the final component before, so removing a link deleted the
+    /// file at the other end of it — which is not what any other runtime does,
+    /// and is a surprising way to lose a file.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn removing_a_link_removes_the_link() {
+        let (root, fs) = jail("remove-link");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::write(root.join("real/kept.txt"), b"keep me").unwrap();
+        std::os::unix::fs::symlink("real/kept.txt", root.join("link.txt")).unwrap();
+
+        fs.remove("link.txt".into(), false).await.unwrap();
+        assert!(!root.join("link.txt").exists());
+        assert_eq!(
+            std::fs::read(root.join("real/kept.txt")).unwrap(),
+            b"keep me",
+            "the file the link pointed at must survive"
+        );
+
+        std::os::unix::fs::symlink("real/kept.txt", root.join("moved.txt")).unwrap();
+        fs.rename("moved.txt".into(), "elsewhere.txt".into())
+            .await
+            .unwrap();
+        assert!(root.join("elsewhere.txt").is_symlink());
+        assert!(std::fs::read(root.join("real/kept.txt")).is_ok());
     }
 
     #[cfg(unix)]

@@ -63,45 +63,13 @@ namespace) is unstable and may change between minor releases until the API freez
   canonicalize-then-confine as any other path. So a link out of the jail is one
   the program that made it cannot follow.
 
-  `ERR_ALREADY_EXISTS` if the path is taken, like Node's and Deno's; `type:
+  `ERR_ALREADY_EXISTS` if the path is taken, like Node's and Deno's. `type:
   "file" | "dir"` is the Windows question of which kind of link to create, and
-  defaults to `"file"` as Node's does — deliberately not inferred from the
-  target, because the target is unjailed data and looking at it would be a
-  metadata read at an arbitrary path for a caller who may hold only `FileWrite`. Needs `FileWrite` alone —
-  creating a link stores a string and reads nothing.
+  defaults to `"file"` as Node's does — deliberately **not** inferred by looking
+  at the target, because the target is unjailed data and a lookup there would be
+  a metadata read at an arbitrary path.
 
-### Security
-
-- **The filesystem jail acts by descriptor, not by name** (DECISIONS D83). Every
-  jailed operation used to look the same name up twice: `confine()` resolved the
-  path and proved it sat under a root, then the syscall resolved that *string*
-  again. Between the two the filesystem is mutable, so a guest running two
-  operations at once could replace a directory component with a symlink after
-  the check and before the use — and the write followed the new one, out of the
-  jail, with the jail reporting success.
-
-  The window was not small: resolution happens eagerly, before the future is
-  constructed, and the syscall lands a poll and a blocking-pool handoff later.
-  And it stopped being theoretical when `symlink()` arrived in this release —
-  creating the link previously needed `ln`, and so `RunProcess`, or a process
-  outside the jail; it now needs `FileWrite` and nothing else.
-
-  Resolution ends by **opening the parent directory**, and the operation runs
-  relative to that descriptor. A descriptor refers to an inode rather than a
-  name, so nothing done to the name afterwards can redirect it. Each step below
-  the root is opened `NOFOLLOW`, so a component that has become a symlink since
-  the check is refused as an escape rather than followed; recursive `mkdir` and
-  `remove` descend the same way, one descriptor at a time, because a recursive
-  delete redirected halfway is the one outcome that cannot be undone.
-
-  Covered: `read`, `write`, `mkdir`, `remove`, `rename`, `symlink`, `readLink`,
-  `truncate`, `chmod`. Not covered, and written down rather than implied:
-  **Windows**, which has no `*at` family and keeps the old behaviour; **hard
-  links**, which `NOFOLLOW` cannot see and which is why there is no `link()`
-  operation; and **timing side-channels**, which no filesystem can close.
-
-  No new dependency — `rustix` was already direct here, chosen because this
-  crate is `forbid(unsafe_code)`.
+  Needs `FileWrite` alone: creating a link stores a string and reads nothing.
 
 ### Fixed
 
@@ -151,8 +119,9 @@ namespace) is unstable and may change between minor releases until the API freez
   frame of that one is the plumbing. The terminal line names the plugin:
   `[otfw] app/page.jsx: cannot compile this route`.
 
-- **A plugin filter that names nothing is refused, instead of claiming the whole
-  graph.** `filter` is read for `id` and `code`; anything else in it used to
+- **Breaking (plugins written against 0.4): a plugin filter that names nothing
+  is refused, instead of claiming the whole graph.** `filter` is read for `id`
+  and `code`; anything else in it used to
   produce an *empty* filter, and an empty filter is not "no modules" — it is
   every module, because a hook with no filter is a hook that wants the graph.
 
@@ -167,6 +136,50 @@ namespace) is unstable and may change between minor releases until the API freez
   typo'd `ID`, for rollup's `include`, for `{}`, and for `{ id: [] }`. All five
   are now refused at the declaration, where the person who wrote them is
   looking, and the message names the field that is missing.
+
+### Security
+
+- **The filesystem jail acts by descriptor, not by name** (DECISIONS D83). Every
+  jailed operation used to look the same name up twice: `confine()` resolved the
+  path and proved it sat under a root, then the syscall resolved that *string*
+  again. Between the two the filesystem is mutable, so a guest running two
+  operations at once could replace a directory component with a symlink after
+  the check and before the use — and the write followed the new one, out of the
+  jail, with the jail reporting success.
+
+  The window was not small: resolution happens eagerly, before the future is
+  constructed, and the syscall lands a poll and a blocking-pool handoff later.
+  And it stopped being theoretical when `symlink()` arrived in this release —
+  creating the link previously needed `ln`, and so `RunProcess`, or a process
+  outside the jail; it now needs `FileWrite` and nothing else.
+
+  Resolution ends by **opening the parent directory**, and the operation runs
+  relative to that descriptor. A descriptor refers to an inode rather than a
+  name, so nothing done to the name afterwards can redirect it. Each step below
+  the root is opened `NOFOLLOW`, so a component that has become a symlink since
+  the check is refused as an escape rather than followed; recursive `mkdir` and
+  `remove` descend the same way, one descriptor at a time, because a recursive
+  delete redirected halfway is the one outcome that cannot be undone.
+
+  Covered: `read`, `write`, `mkdir`, `remove`, `rename`, `symlink`, `readLink`,
+  `truncate`, `chmod`. A link that was **already there** is still followed by
+  the operations that always followed it — `read`, `write`, `truncate` and
+  `chmod` resolve it through the jail, so a symlinked config file is written by
+  writing it. What is refused is a link **swapped in after** the check, which is
+  a different thing.
+
+  **Breaking (`remove` and `rename` on a symlink):** those two are about the
+  link, and they resolved it before — so `remove("link")` deleted the file at
+  the other end of it and `rename` moved that file rather than the link. They
+  act on the link itself now, as every other runtime does.
+
+  Not covered, and written down rather than implied:
+  **Windows**, which has no `*at` family and keeps the old behaviour; **hard
+  links**, which `NOFOLLOW` cannot see and which is why there is no `link()`
+  operation; and **timing side-channels**, which no filesystem can close.
+
+  No new dependency — `rustix` was already direct here, chosen because this
+  crate is `forbid(unsafe_code)`.
 
 ## [0.27.0] - 2026-08-19
 
