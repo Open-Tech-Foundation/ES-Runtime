@@ -10,6 +10,29 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **A plugin's error says which module it happened in.** `ctx.error()` from a
+  `transform` produced a diagnostic with `id: null` and `plugin: null` — the
+  hook had been called *with* the id and the message named the plugin — whose
+  `message` was a JS stack through `runtime:build`'s own dispatcher wrapped in
+  the bundler's `plugin \`x\` threw an error / Caused by:` chain, and whose
+  `frame` was that same text again behind a `[x]` banner rather than a code
+  frame.
+
+  ```js
+  ctx.error("cannot compile this route");
+  // → { id: "app/page.jsx", plugin: "otfw", message: "cannot compile this route",
+  //     frame: null }
+  ```
+
+  The bundler carries neither the plugin nor the module: a hook fails with an
+  error, and *which module a hook was called about* is not something it tells a
+  plugin driver at all. Both are attached where they are known — the one place
+  that called the hook — and read back off when the batch is. A plugin that
+  **crashed** rather than reported keeps its stack, because the first frame of
+  that one is the line in the plugin; `ctx.error()` does not, because the first
+  frame of that one is the plumbing. The terminal line names the plugin:
+  `[otfw] app/page.jsx: cannot compile this route`.
+
 - **A plugin filter that names nothing is refused, instead of claiming the whole
   graph.** `filter` is read for `id` and `code`; anything else in it used to
   produce an *empty* filter, and an empty filter is not "no modules" — it is

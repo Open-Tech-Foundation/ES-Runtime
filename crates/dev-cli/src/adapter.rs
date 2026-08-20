@@ -225,6 +225,16 @@ impl Adapter {
             .is_some_and(|spec| spec.filter.admits(id, code))
     }
 
+    /// A hook's failure, on its way to the backend, carrying who it was and
+    /// which module it happened in.
+    ///
+    /// The backend keeps neither ([`MARK`] explains why), and the module id it
+    /// never had: it does not tell a plugin driver what a hook was called
+    /// about. This is the only place both are in hand at once.
+    fn failed(&self, id: Option<&str>, message: String) -> anyhow::Error {
+        anyhow!(blamed(self.pass.name(), id, &message))
+    }
+
     fn order(&self, hook: Hook) -> Option<PluginHookMeta> {
         let order = match self.pass.hooks().get(hook)?.order {
             Order::Pre => PluginOrder::Pre,
@@ -274,7 +284,11 @@ impl Plugin for Adapter {
         _args: &HookBuildStartArgs<'_>,
     ) -> HookNoopReturn {
         let ctx: Arc<dyn contract::Context> = Arc::new(HookCtx::Plain(ctx.clone()));
-        let files = self.pass.start(&ctx).await.map_err(|e| anyhow!(e))?;
+        let files = self
+            .pass
+            .start(&ctx)
+            .await
+            .map_err(|e| self.failed(None, e))?;
         declare(&ctx, &files);
         Ok(())
     }
@@ -293,7 +307,10 @@ impl Plugin for Adapter {
             .pass
             .resolve(args.specifier, args.importer, args.is_entry, &ctx)
             .await
-            .map_err(|e| anyhow!(e))?;
+            // The **importer** rather than the specifier: the field says which
+            // module the failure happened in, and for a resolve that is the
+            // file whose import could not be answered.
+            .map_err(|e| self.failed(args.importer.map(guest_id), e))?;
         Ok(match out {
             contract::Resolved::Pass => None,
             contract::Resolved::To {
@@ -325,7 +342,12 @@ impl Plugin for Adapter {
             return Ok(None);
         }
         let ctx: Arc<dyn contract::Context> = Arc::new(HookCtx::Load(ctx));
-        let Some(result) = self.pass.load(id, &ctx).await.map_err(|e| anyhow!(e))? else {
+        let Some(result) = self
+            .pass
+            .load(id, &ctx)
+            .await
+            .map_err(|e| self.failed(Some(id), e))?
+        else {
             return Ok(None);
         };
         let result = convert(result, Hook::Load)?;
@@ -359,7 +381,7 @@ impl Plugin for Adapter {
             .pass
             .transform(args.code, id, &module_type, &ctx)
             .await
-            .map_err(|e| anyhow!(e))?
+            .map_err(|e| self.failed(Some(id), e))?
         else {
             return Ok(None);
         };
@@ -388,7 +410,10 @@ impl Plugin for Adapter {
         let error = args.map(|args| {
             args.errors
                 .iter()
-                .map(ToString::to_string)
+                // Untagged: a failure another plugin reported carries its
+                // attribution in the message ([`MARK`]), and a plugin reading
+                // `error` wants what was said rather than how it travelled.
+                .map(|e| untagged(&e.to_string()))
                 .collect::<Vec<_>>()
                 .join("\n")
         });
@@ -396,7 +421,7 @@ impl Plugin for Adapter {
         self.pass
             .end(error.as_deref(), &ctx)
             .await
-            .map_err(|e| anyhow!(e))?;
+            .map_err(|e| self.failed(None, e))?;
         Ok(())
     }
 
@@ -410,7 +435,7 @@ impl Plugin for Adapter {
         self.pass
             .bundle(&output, &ctx)
             .await
-            .map_err(|e| anyhow!(e))?;
+            .map_err(|e| self.failed(None, e))?;
         Ok(())
     }
 }
@@ -479,6 +504,102 @@ fn declare(ctx: &Arc<dyn contract::Context>, files: &[String]) {
     }
 }
 
+// --- a pass that failed, and where -------------------------------------------
+
+/// The byte a pass failure's attribution is wrapped in on its way through the
+/// backend.
+///
+/// # Why an attribution has to travel in the message at all
+///
+/// Because the backend loses it. A hook that fails returns an
+/// `anyhow::Error` — that is the whole of the error type rolldown's plugin
+/// signatures have — and rolldown turns it into a diagnostic whose `id()` and
+/// `plugin()` are both `None`, whose `kind` is the plugin's name, and whose
+/// message is the anyhow chain rendered with `{:?}`: *"plugin `x` threw an
+/// error / Caused by: …"*, wrapping whatever the plugin actually said.
+///
+/// So a compiler plugin that reported "cannot compile this route" in
+/// `app/page.jsx` produced a build error naming **no file and no plugin**, with
+/// a "code frame" that was the same sentence again behind a `[x]` banner. The
+/// consumer's editor overlay had nothing to point at, and their CLI grew a
+/// parser for `Caused by:` to dig the sentence back out.
+///
+/// The parts are not recoverable from the diagnostic afterwards — rolldown
+/// keeps the original error in a private field of a type it does not export —
+/// and the module id was never in it to begin with: the backend does not tell a
+/// plugin driver which module a hook was called about. Only this file knows
+/// that, because this file is what called the hook.
+///
+/// So the attribution goes *with* the message, wrapped in a byte no source file
+/// and no error message contains, and comes back off in [`attribute`] when the
+/// batch is read. No shared state, nothing to key on, and nothing to keep in
+/// step across two concurrent builds.
+const MARK: char = '\u{1}';
+
+/// A failure message, tagged with the plugin it came from and the module it
+/// happened in.
+fn blamed(plugin: &str, id: Option<&str>, message: &str) -> String {
+    format!("{MARK}{plugin}{MARK}{}{MARK}{message}", id.unwrap_or(""))
+}
+
+/// The attribution in `text`, and the message with it removed.
+///
+/// `None` when there is none: a parse error, an unresolved import and every
+/// other diagnostic the backend raises for itself pass through untouched.
+fn blame(text: &str) -> Option<(String, Option<String>, String)> {
+    let (before, tagged) = text.split_once(MARK)?;
+    let (plugin, rest) = tagged.split_once(MARK)?;
+    let (id, message) = rest.split_once(MARK)?;
+    // anyhow renders a cause indented by four, so a multi-line message — a
+    // stack, most often — arrives four columns further right than it was
+    // written. Put it back, and only when it was actually done to us.
+    let message = if before.contains("Caused by:") {
+        let mut lines = message.lines();
+        let first = lines.next().unwrap_or_default().to_string();
+        std::iter::once(first)
+            .chain(lines.map(|line| line.strip_prefix("    ").unwrap_or(line).to_string()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        message.to_string()
+    };
+    Some((
+        plugin.to_string(),
+        (!id.is_empty()).then(|| id.to_string()),
+        message,
+    ))
+}
+
+/// Puts a pass failure back together: the plugin that reported it, the module
+/// it happened in, and what it said — nothing else.
+///
+/// The frame goes with it. For a plugin error the backend renders the message
+/// again under a `[plugin]` banner and calls that a code frame, which is not
+/// one: it points at no source and adds nothing to the line above it. A frame
+/// that came from somewhere else — an inner diagnostic that really does have a
+/// span — has no tag in it and is left alone.
+pub fn attribute(failure: &mut crate::bundler::Failure) {
+    let Some((plugin, id, message)) = blame(&failure.message) else {
+        return;
+    };
+    failure.message = message;
+    failure.plugin = Some(plugin);
+    failure.id = id.or_else(|| failure.id.take());
+    if failure.frame.as_deref().is_some_and(|f| f.contains(MARK)) {
+        failure.frame = None;
+    }
+}
+
+/// The same text with any attribution taken out, for somewhere it is shown as
+/// it is — the `end` hook's `error`, which is the backend's own rendering of
+/// the batch rather than a diagnostic this side rebuilds.
+pub fn untagged(text: &str) -> String {
+    match blame(text) {
+        Some((_, _, message)) => message,
+        None => text.to_string(),
+    }
+}
+
 /// The id a virtual module is given inside the bundler.
 ///
 /// Rolldown, like every bundler descended from rollup, marks "there is no file
@@ -531,4 +652,108 @@ fn convert(result: contract::ModuleResult, hook: Hook) -> anyhow::Result<Module>
         module_type,
         depends_on: result.depends_on,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn failure(message: &str, frame: Option<&str>) -> crate::bundler::Failure {
+        crate::bundler::Failure {
+            message: message.to_string(),
+            id: None,
+            plugin: None,
+            kind: "PLUGIN_ERROR".to_string(),
+            line: None,
+            column: None,
+            frame: frame.map(str::to_string),
+        }
+    }
+
+    /// What the backend does to a hook's error on the way out, spelled here so
+    /// the test is about the shape rather than about rolldown: the message is
+    /// the anyhow chain rendered with `{:?}`, and a cause is indented by four.
+    fn as_the_backend_renders_it(tagged: &str) -> String {
+        let indented = tagged
+            .lines()
+            .enumerate()
+            .map(|(n, line)| {
+                if n == 0 {
+                    line.to_string()
+                } else {
+                    format!("    {line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("plugin `otfw` threw an error\n\nCaused by:\n    {indented}")
+    }
+
+    /// The whole point: the module and the plugin come back, and the message is
+    /// what the plugin said rather than the chain that carried it.
+    #[test]
+    fn a_pass_failure_names_the_module_and_the_plugin() {
+        let carried = as_the_backend_renders_it(&blamed(
+            "otfw",
+            Some("/app/page.jsx"),
+            "cannot compile this route",
+        ));
+        // The backend renders the frame from the same message, so it carries
+        // the tag too — which is how a frame that is not one is told apart from
+        // a frame that is.
+        let mut failed = failure(&carried, Some(&format!("[otfw] {carried}")));
+        attribute(&mut failed);
+        assert_eq!(failed.message, "cannot compile this route");
+        assert_eq!(failed.id.as_deref(), Some("/app/page.jsx"));
+        assert_eq!(failed.plugin.as_deref(), Some("otfw"));
+        // Not a code frame: it is the message again behind a banner, so it is
+        // dropped rather than shown twice.
+        assert!(failed.frame.is_none());
+    }
+
+    /// A multi-line message — a stack, from a plugin that crashed rather than
+    /// reported — comes back at the indentation it was written at.
+    #[test]
+    fn a_cause_is_de_indented_by_the_four_anyhow_added() {
+        let stack = "ReferenceError: nope is not defined\n    at handler (file:///p.mjs:4:9)";
+        let carried = as_the_backend_renders_it(&blamed("otfw", Some("/app/dep.js"), stack));
+        let mut failed = failure(&carried, None);
+        attribute(&mut failed);
+        assert_eq!(failed.message, stack);
+    }
+
+    /// A diagnostic the backend raised for itself — a parse error, an
+    /// unresolved import — has no attribution in it and is left exactly as it
+    /// was.
+    #[test]
+    fn a_failure_that_did_not_come_from_a_pass_is_untouched() {
+        let mut failed = failure("Unexpected token", Some("1 | const = 2"));
+        failed.id = Some("/app/main.js".to_string());
+        attribute(&mut failed);
+        assert_eq!(failed.message, "Unexpected token");
+        assert_eq!(failed.plugin, None);
+        assert_eq!(failed.id.as_deref(), Some("/app/main.js"));
+        assert_eq!(failed.frame.as_deref(), Some("1 | const = 2"));
+    }
+
+    /// A hook with no module in hand — `start`, `end`, `bundle` — keeps
+    /// whatever id the diagnostic itself had.
+    #[test]
+    fn a_whole_build_hook_leaves_the_diagnostics_own_id_alone() {
+        let carried = as_the_backend_renders_it(&blamed("otfw", None, "the manifest is missing"));
+        let mut failed = failure(&carried, None);
+        failed.id = Some("/app/main.js".to_string());
+        attribute(&mut failed);
+        assert_eq!(failed.id.as_deref(), Some("/app/main.js"));
+        assert_eq!(failed.plugin.as_deref(), Some("otfw"));
+    }
+
+    /// The `end` hook is handed the batch as text, so the attribution has to
+    /// come off there too — a plugin reading it wants what was said.
+    #[test]
+    fn text_shown_as_it_is_carries_no_attribution() {
+        let carried = as_the_backend_renders_it(&blamed("otfw", Some("/a.js"), "no"));
+        assert_eq!(untagged(&carried), "no");
+        assert_eq!(untagged("Unexpected token"), "Unexpected token");
+    }
 }

@@ -3090,7 +3090,7 @@ four behind *"and 4 more"* is how a build error becomes a bug report.
 | `kind` | The bundler's classification — `PARSE_ERROR`, `UNRESOLVED_IMPORT`, … |
 | `line` | 1-based, or `null`. |
 | `column` | 0-based, in **UTF-16 code units** — what an editor counts in. |
-| `frame` | The offending line with the span underlined, uncoloured. |
+| `frame` | The offending line with the span underlined, uncoloured — `null` when the diagnostic points at no span. |
 
 ```js
 try {
@@ -3105,6 +3105,20 @@ try {
 An error used to be a string — the module id, a colon, and *"Unexpected token"*
 — so an overlay could name the file and then had to stop. The bundler computed
 the rest all along for its own terminal output.
+
+**A failure a plugin reported is filled in the same way.** `ctx.error("cannot
+compile this route")` from a `transform` comes back with `id` set to the module
+the hook was called about, `plugin` set to the plugin's name, `message` set to
+what was said, and `frame` `null` — the bundler has no span for it, and a
+"frame" that is the message a second time under a banner is not one. None of
+that is the bundler's doing: a hook fails with an error, and what a hook was
+called *about* is not something the bundler tells its plugin driver. It is
+attached on the way out and read back off when the batch is.
+
+A plugin that **crashed** rather than reported — a `TypeError`, something
+undefined — keeps its stack in `message`, because the first frame of it is the
+line in the plugin. `ctx.error()` does not, because the first frame of *that*
+stack is `runtime:build`'s own dispatcher.
 
 ### Plugins
 
@@ -3217,7 +3231,7 @@ keeps it, where rollup's `this` is silently lost:
 | `ctx.resolve(source, importer?)` | the bundler's resolver, mid-hook; `null` if nothing resolves |
 | `ctx.emit({ type, … })` | adds a chunk or asset to a running build; returns a reference id |
 | `ctx.warn` / `info` / `debug` | diagnostics; warnings come back in `warnings` |
-| `ctx.error(msg)` | fails the build — throws |
+| `ctx.error(msg)` | fails the build — throws. The diagnostic names the module the hook was called about and the plugin that reported it |
 | `ctx.isEntry` | on `resolve`: whether the specifier is an entry |
 | `ctx.refresh` | the hot-reload scheme the target named (`esdev.json`'s `refresh`), on **every** hook's context — `start` included, since a scheme's runtime is often a virtual module a `load` serves. Present **only** while the dev loop is running that target hot: absent under `esdev build`, absent in a target that named no scheme, and absent under `esdev start --no-hot`, so a plugin implementing a scheme installs its per-module wrapper where it means something and nowhere else. |
 | `ctx.type` | on `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. It is how a pass declines work somebody else has done: `esdev:css-modules` filters on `.css` and steps aside for a plugin that claimed the stylesheet first. |

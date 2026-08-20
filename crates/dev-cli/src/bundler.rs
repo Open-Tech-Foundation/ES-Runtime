@@ -96,9 +96,15 @@ impl Failure {
     /// The whole of it, for a terminal: the summary line, then the frame under
     /// it. The frame already names the file and the position, which is why it
     /// replaces the summary line rather than following it.
+    ///
+    /// A failure with no frame and a plugin behind it is prefixed with the
+    /// plugin's name. Which one refused is the first thing a reader wants when
+    /// a build stops on something no compiler of ours wrote, and a diagnostic
+    /// with a frame does not need it — the frame names the file already.
     pub fn report(&self) -> String {
-        match &self.frame {
-            Some(frame) if !frame.trim().is_empty() => frame.clone(),
+        match (&self.frame, &self.plugin) {
+            (Some(frame), _) if !frame.trim().is_empty() => frame.clone(),
+            (_, Some(plugin)) => format!("[{plugin}] {}", self.line_summary()),
             _ => self.line_summary(),
         }
     }
@@ -128,7 +134,7 @@ macro_rules! failures {
                     let rendered = diagnostic.to_diagnostic();
                     let at = rendered.get_primary_location();
                     let frame = rendered.convert_to_string(false);
-                    $crate::bundler::Failure {
+                    let mut failure = $crate::bundler::Failure {
                         message,
                         id,
                         plugin,
@@ -140,7 +146,12 @@ macro_rules! failures {
                             .as_ref()
                             .and_then(|(_, _, column, _)| u32::try_from(*column).ok()),
                         frame: (!frame.trim().is_empty()).then_some(frame),
-                    }
+                    };
+                    // A failure a *pass* reported arrives with the plugin and
+                    // the module wrapped into its message, because the backend
+                    // carries neither. This is where they come back off.
+                    $crate::adapter::attribute(&mut failure);
+                    failure
                 })
                 .collect::<Vec<$crate::bundler::Failure>>()
         }

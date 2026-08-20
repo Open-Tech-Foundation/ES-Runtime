@@ -5301,6 +5301,74 @@ try {
     assert!(stdout(&out).contains("reported"), "{}", stdout(&out));
 }
 
+/// A plugin failure says **where**: the module the hook was called about, and
+/// the plugin that reported it.
+///
+/// The backend carries neither. A hook returns an `anyhow::Error` — that is the
+/// whole of the error type its signatures have — and what comes back out is a
+/// diagnostic with `id: null`, `plugin: null`, a message that is the anyhow
+/// chain (`plugin `x` threw an error / Caused by: …`) around a stack through
+/// `runtime:build`'s own dispatcher, and a "frame" that is the same sentence a
+/// second time behind a banner. An editor overlay had nothing to point at.
+#[test]
+fn runtime_build_says_which_module_a_plugin_failed_in() {
+    let dir = build_dir("rb_blame");
+    write_in(&dir, "main.js", "import \"./dep.js\";\n");
+    write_in(&dir, "dep.js", "export const x = 1;\n");
+    write_in(
+        &dir,
+        "app.mjs",
+        r#"
+import { build } from "runtime:build";
+
+const reported = {
+  name: "otfw",
+  transform: {
+    filter: { id: /dep\.js$/ },
+    handler(code, id, ctx) {
+      ctx.error("cannot compile this route");
+    },
+  },
+};
+const crashed = {
+  name: "otfw",
+  transform: { filter: { id: /dep\.js$/ }, handler() { return nope.missing; } },
+};
+
+for (const [what, plugin] of [["reported", reported], ["crashed", crashed]]) {
+  const bundle = await build({ input: "main.js", plugins: [plugin] });
+  try {
+    await bundle.generate({});
+    console.log("NOT REACHED");
+  } catch (err) {
+    for (const e of err.errors) {
+      const first = e.message.split(String.fromCharCode(10))[0];
+      console.log(what, "|", e.plugin, "|", (e.id ?? "").split("/").pop(), "|", e.frame, "|", first);
+    }
+  }
+  await bundle.close();
+}
+"#,
+    );
+
+    let out = esdev_in(&dir).arg("app.mjs").output().expect("spawn esdev");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let printed = stdout(&out);
+    // What ctx.error() said, attributed — and nothing else. Not a stack through
+    // the dispatcher that carried it, and not a frame that is the message again.
+    assert!(
+        printed.contains("reported | otfw | dep.js | null | cannot compile this route"),
+        "{printed}"
+    );
+    // A plugin that *crashed* is a different failure and keeps its stack: the
+    // first frame is the line in the plugin, which is the whole of what helps.
+    assert!(
+        printed.contains("crashed | otfw | dep.js | null | ReferenceError: nope is not defined"),
+        "{printed}"
+    );
+    assert!(!printed.contains("Caused by"), "{printed}");
+}
+
 /// Building reads, so it needs `FileRead`; writing the result out needs
 /// `FileWrite` as well, and refusing one must not refuse the other.
 #[test]

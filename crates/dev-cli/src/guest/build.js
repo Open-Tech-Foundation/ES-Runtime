@@ -108,12 +108,33 @@ async function dispatch(call) {
     const value = await invoke(call);
     ops.build_hook_reply(call.id, true, normalize(call.hook, value));
   } catch (err) {
-    // The build fails with what the plugin threw, stack and all: a plugin
-    // error that arrived as "build failed" would be the worst possible
-    // outcome of putting plugins in a different thread from the bundler.
-    ops.build_hook_reply(call.id, false, String(err?.stack ?? err));
+    ops.build_hook_reply(call.id, false, failure(err));
   }
 }
+
+// The two ways a hook can fail are not the same failure, and they do not want
+// the same text.
+//
+// A plugin that **crashed** — a TypeError, something undefined — is a bug in
+// the plugin, and the stack is the whole of what is useful: it names the line.
+//
+// A plugin that **reported**, through `ctx.error()`, is a compiler saying it
+// cannot compile this module. Its stack begins in this file's `error()`, runs
+// through the dispatcher above and ends in the pump — five frames of the
+// plumbing that carried the message, and none of the compiler that wrote it.
+// That is what used to be printed, and what a consumer's CLI grew a stack
+// stripper to take back off.
+//
+// The host adds the plugin's name and the module's id to whichever of the two
+// this is; neither is this module's to know.
+function failure(err) {
+  return err?.[REPORTED] === true ? message(err) : String(err?.stack ?? err);
+}
+
+// Marks an error as *reported by the plugin* rather than thrown at it. A symbol
+// so that it cannot collide with a field on somebody's own Error subclass, and
+// so that it does not show up in whatever the plugin logs.
+const REPORTED = Symbol("reported");
 
 function invoke(call) {
   const target = registry.get(call.plugin);
@@ -161,8 +182,14 @@ function context(id, meta) {
     },
     // Fails the build. Throws — it does not return, because the plugin is
     // saying the build cannot continue and returning would pretend otherwise.
+    //
+    // What comes out the other end is the message, the module the hook was
+    // called about and the plugin's name: a diagnostic a person can act on,
+    // rather than a stack through this file.
     error(log) {
-      throw log instanceof Error ? log : new Error(message(log));
+      const err = log instanceof Error ? log : new Error(message(log));
+      err[REPORTED] = true;
+      throw err;
     },
   };
 }

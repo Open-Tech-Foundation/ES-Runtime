@@ -128,7 +128,7 @@ four behind *"and 4 more"* is how a build error becomes a bug report.
 | `kind` | The bundler's classification — `PARSE_ERROR`, `UNRESOLVED_IMPORT`, … |
 | `line` | 1-based, or `null`. |
 | `column` | 0-based, in **UTF-16 code units** — what an editor counts in. |
-| `frame` | The offending line with the span underlined, uncoloured. |
+| `frame` | The offending line with the span underlined, uncoloured — `null` when the diagnostic points at no span. |
 
 ```js
 try {
@@ -143,6 +143,14 @@ try {
 An error used to be a string — the module id, a colon and *"Unexpected token"* —
 so an overlay could name the file and then had to stop. The bundler computed the
 line, the column and the frame all along for its own terminal output.
+
+A failure a **plugin** reported is filled in the same way. `ctx.error("cannot
+compile this route")` from a `transform` arrives with `id` set to the module the
+hook was called about, `plugin` set to the plugin's name, `message` set to what
+was said, and `frame` `null` — there is no span for it, and a frame that is the
+message a second time under a banner is not one. A plugin that *crashed* — a
+`TypeError`, something undefined — keeps its stack in `message` instead, because
+the first frame of that one is the line in the plugin.
 
 ## Plugins
 
