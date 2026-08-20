@@ -69,6 +69,22 @@ enum Outcome {
     Passed,
     /// The stack, when the error had one; the error's text otherwise.
     Failed(String),
+    /// Never run, and **said so**. A skipped case is counted in the tally
+    /// rather than left out of it, for the same reason an unfinished one is a
+    /// failure: a green run that quietly ran fewer tests than it printed is the
+    /// worst thing a runner can do.
+    Skipped(Skip),
+}
+
+/// Why a case did not run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Skip {
+    /// `test.skip` / `describe.skip` — the file said so.
+    Asked,
+    /// Something else asked to be the only thing that runs. Counted apart,
+    /// because a `.only` left in a commit turns a suite green in a tenth of the
+    /// time and the tally is the only place that shows it.
+    Only,
 }
 
 thread_local! {
@@ -130,6 +146,27 @@ impl HostExtension for TestExtension {
                 });
                 Ok(Value::Undefined)
             }),
+            // skipped(id, because) — the case will not run, and is in the
+            // report saying so rather than missing from it.
+            OpDecl::sync("test_skipped", |args| {
+                let id = args.first().and_then(Value::as_number).unwrap_or(-1.0);
+                let because = match args.get(1).and_then(Value::as_str) {
+                    Some("only") => Skip::Only,
+                    _ => Skip::Asked,
+                };
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "the id came from `registered`, which handed out an index"
+                )]
+                let index = id as usize;
+                CASES.with_borrow_mut(|cases| {
+                    if let Some(case) = cases.get_mut(index) {
+                        case.outcome = Some(Outcome::Skipped(because));
+                    }
+                });
+                Ok(Value::Undefined)
+            }),
             // finished(id, ok, detail)
             OpDecl::sync("test_finished", |args| {
                 let id = args.first().and_then(Value::as_number).unwrap_or(-1.0);
@@ -167,12 +204,16 @@ impl HostExtension for TestExtension {
 /// one that did not has nothing to print. That is what makes
 /// `esdev app.test.ts` work on its own, with the same output the runner gives.
 pub fn finish() -> ExitCode {
-    let (passed, failures) = CASES.with_borrow(|cases| {
+    let (passed, skipped, held, failures) = CASES.with_borrow(|cases| {
         let mut passed = 0usize;
+        let mut skipped = 0usize;
+        let mut held = 0usize;
         let mut failures: Vec<(String, String)> = Vec::new();
         for case in cases {
             match &case.outcome {
                 Some(Outcome::Passed) => passed += 1,
+                Some(Outcome::Skipped(Skip::Asked)) => skipped += 1,
+                Some(Outcome::Skipped(Skip::Only)) => held += 1,
                 Some(Outcome::Failed(detail)) => {
                     failures.push((case.name.clone(), detail.clone()));
                 }
@@ -195,10 +236,10 @@ pub fn finish() -> ExitCode {
                 )),
             }
         }
-        (passed, failures)
+        (passed, skipped, held, failures)
     });
 
-    if passed == 0 && failures.is_empty() {
+    if passed == 0 && skipped == 0 && held == 0 && failures.is_empty() {
         return ExitCode::SUCCESS;
     }
 
@@ -208,7 +249,20 @@ pub fn finish() -> ExitCode {
             println!("    {line}");
         }
     }
-    println!("  {passed} passed, {} failed", failures.len());
+    // Named on its own line, because it is the one that is easy to leave in a
+    // commit: the tally underneath it is otherwise a small green number, and a
+    // suite that ran one of its two hundred tests looks exactly like a fast one.
+    if held > 0 {
+        println!(
+            "  only: {held} other test{} did not run",
+            if held == 1 { "" } else { "s" }
+        );
+    }
+    let mut tally = format!("  {passed} passed, {} failed", failures.len());
+    if skipped + held > 0 {
+        tally.push_str(&format!(", {} skipped", skipped + held));
+    }
+    println!("{tally}");
 
     if failures.is_empty() {
         ExitCode::SUCCESS

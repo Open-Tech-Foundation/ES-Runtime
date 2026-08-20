@@ -15,6 +15,10 @@ itself.
 
 ### Added
 
+- **`runtime:test`'s `describe`**, and `.skip`/`.only` on it and on `test`.
+  `test` becomes a callable object rather than a function declaration so the two
+  can hang off it.
+
 - **`runtime:fs`'s `symlink(target, path, options?)`**, with `SymlinkOptions`.
 
 ### Changed

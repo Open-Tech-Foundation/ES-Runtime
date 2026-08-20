@@ -3307,7 +3307,7 @@ boundary without being one. Stated rather than implied.
 - **Loading:** on demand.
 
 ```js
-import { test, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
+import { test, describe, assert, assertEquals, assertThrows, assertRejects } from "runtime:test";
 
 test("adds", () => assertEquals(add(2, 3), 5));
 test("fetches", async () => assertEquals((await get("/")).status, 200));
@@ -3339,14 +3339,72 @@ A test that never settles is reported as a failure — *"the test never finished
 — rather than left out of a green run, and the cases queued behind it are
 reported as *"never started"*, so the report points at the one that is stuck.
 
+### `test.skip` and `test.only`
+
+`test.skip(name, fn?)` registers the case and reports it as **skipped** without
+running it; the body may be left out. `test.only(name, fn)` runs that case and
+skips the rest.
+
+Both are in the tally, and `only` gets a line of its own:
+
+```
+  only: 27 other tests did not run
+  1 passed, 0 failed, 27 skipped
+```
+
+Which is the point of counting them. A skipped case that vanished from the
+report would be the same failure this runner already refuses for a case that
+never finished — a green run that quietly ran fewer tests than it printed — and
+a `.only` left in a commit otherwise looks exactly like a suite that got faster.
+
+Whether a case is the exception is decided once the file has finished
+registering, not where it is written, since a `.only` further down the file
+speaks for the cases above it.
+
+### `describe(name, body)`
+
+A group: a name that composes into its tests' (`"db > inserts > rejects a
+null"`), and — the half that matters — a **scope**.
+
+```js
+import { test, describe, beforeAll, beforeEach } from "runtime:test";
+
+describe("db", () => {
+  beforeAll(() => open());        // once, before this group's first test
+  afterAll(() => close());        // once, after this group's last test
+  beforeEach(() => reset());      // around this group's tests, and no others
+
+  test("inserts", async () => …);
+
+  describe("constraints", () => {
+    test("rejects a null", async () => …);
+  });
+});
+```
+
+A hook written inside the body belongs to the tests inside it. Without that a
+group is a naming convention, and a naming convention is what a template string
+already does — a file that sets up a database for six of its twenty cases would
+still be setting it up for the other fourteen.
+
+`describe.skip` skips every test in the group; `describe.only` runs the group
+and skips everything outside it.
+
+The body **registers and returns**. It is not where awaiting belongs, and an
+`async` one is refused rather than half-run: only the part before its first
+`await` would register in time, and the rest would land after the queue had
+already drained. (TypeScript will not catch it — every function is assignable
+where `void` is expected — so the refusal is at runtime, with a message saying
+where to put the `await` instead.)
+
 ### `beforeAll` / `afterAll` / `beforeEach` / `afterEach`
 
 | Function | |
 | --- | --- |
-| `beforeAll(fn)` | Once, before the first test. One that throws fails every test in the file. |
-| `afterAll(fn)` | Once, after the last — that is, when the queue empties. |
-| `beforeEach(fn)` | Before every test. One that throws fails that test. |
-| `afterEach(fn)` | After every test, **including one that failed** — it is cleanup. |
+| `beforeAll(fn)` | Once, before the first test **of its scope** — the file, or the `describe` it is written in. One that throws fails every test in that scope. |
+| `afterAll(fn)` | Once, after the last test of its scope — that is, when that scope has no cases left. An inner group's runs before the outer one that set up what it is tearing down. |
+| `beforeEach(fn)` | Before every test in scope, **outermost group first**. One that throws fails that test. |
+| `afterEach(fn)` | After every test in scope, **innermost group first**, including one that failed — it is cleanup. |
 
 Each may be registered more than once and all of them run, in registration
 order: a helper module and the test file both have a right to a `beforeEach`.

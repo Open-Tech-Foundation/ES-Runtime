@@ -10,6 +10,40 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Added
 
+- **`runtime:test` groups its tests, and can skip or focus one** — `describe`,
+  `test.skip`, `test.only`, and `.skip`/`.only` on a group.
+
+  ```js
+  describe("db", () => {
+    beforeAll(() => open());       // once, before this group's first test
+    beforeEach(() => reset());     // around this group's tests, and no others
+
+    test("inserts", async () => …);
+    test.only("the one being worked on", async () => …);
+  });
+  ```
+
+  A group composes the name — `"db > constraints > rejects a null"` — and, the
+  half that earns it, **scopes the hooks**. Without that, `describe` is a naming
+  convention, which a template string already is, and a file that sets up a
+  database for six of its twenty cases would still be setting it up for the
+  other fourteen. `beforeEach` runs outermost-first and `afterEach`
+  innermost-first; a group's `afterAll` runs when *its* last case has run, not
+  at the end of the file.
+
+  A skipped case is **counted in the tally**, not left out of it — the same
+  reasoning as a case that never finished being a failure rather than a silence.
+  `only` says how much it held back, on a line of its own, because a `.only` left
+  in a commit otherwise looks exactly like a suite that got faster:
+
+  ```text
+    only: 27 other tests did not run
+    1 passed, 0 failed, 27 skipped
+  ```
+
+  A `describe` body registers and returns; an `async` one is refused rather than
+  half-run, since only the part before its first `await` would register in time.
+
 - **`runtime:fs` can make a symbolic link**, not only read one. `readLink` and
   `realPath` have been there since the module shipped, and there was nothing
   that created what they read.

@@ -19,31 +19,80 @@ declare module "runtime:test" {
    * finished" — rather than being left out of a green run, and the cases behind
    * it are reported as never having started.
    */
-  export function test(name: string, fn: () => void | Promise<void>): void;
+  export const test: {
+    (name: string, fn: () => void | Promise<void>): void;
+    /**
+     * Registers the case and reports it as **skipped** without running it —
+     * counted in the tally rather than left out of it, because a green run
+     * that quietly ran fewer tests than it printed is the failure this runner
+     * is arranged against. The body may be left out.
+     */
+    skip(name: string, fn?: () => void | Promise<void>): void;
+    /**
+     * Runs this case and skips the rest — the one you are working on. The
+     * cases held back are counted and named in the report, so a `.only` left
+     * in a commit is visible rather than being a suite that got faster.
+     */
+    only(name: string, fn: () => void | Promise<void>): void;
+  };
+
+  /**
+   * A group of tests: a name that composes into theirs (`"db > inserts > …"`),
+   * and — the half that matters — a **scope**. A hook registered inside the
+   * body belongs to the tests inside it, so a file that sets up a database for
+   * six of its twenty cases is not setting it up for the other fourteen.
+   *
+   * ```ts
+   * describe("db", () => {
+   *   beforeAll(() => open());     // once, before this group's first test
+   *   afterAll(() => close());     // once, after this group's last test
+   *   beforeEach(() => reset());   // around this group's tests only
+   *
+   *   test("inserts", () => …);
+   * });
+   * ```
+   *
+   * The body **registers and returns**: it is not where awaiting belongs, and
+   * an `async` one is refused rather than half-run, because only the part
+   * before its first `await` would register in time.
+   */
+  export const describe: {
+    (name: string, body: () => void): void;
+    /** Skips every test in the group, and reports each as skipped. */
+    skip(name: string, body: () => void): void;
+    /** Runs this group and skips everything outside it. */
+    only(name: string, body: () => void): void;
+  };
 
   /** A lifecycle hook. Several of a kind may be registered; all of them run. */
   export type Hook = () => void | Promise<void>;
 
   /**
-   * Runs once before the first test. A `beforeAll` that throws fails every
-   * test in the file rather than letting them run against a fixture that was
-   * never built.
+   * Runs once before the first test **of its scope** — the file, or the
+   * {@link describe} it is written in. One that throws fails every test in
+   * that scope rather than letting them run against a fixture that was never
+   * built.
    */
   export function beforeAll(fn: Hook): void;
 
   /**
-   * Runs once after the last test — which is the point at which the queue is
-   * empty, since a file does not announce that it has finished registering.
+   * Runs once after the last test of its scope — which is the point at which
+   * that scope has no cases left, since a file does not announce that it has
+   * finished registering. An inner group's runs before the outer one that set
+   * up what it is tearing down.
    */
   export function afterAll(fn: Hook): void;
 
-  /** Runs before every test. One that throws fails that test. */
+  /**
+   * Runs before every test in scope, outermost group first. One that throws
+   * fails that test.
+   */
   export function beforeEach(fn: Hook): void;
 
   /**
-   * Runs after every test, including one that failed — it is cleanup, so it
-   * runs whatever happened. One that throws fails the test unless the test had
-   * already failed.
+   * Runs after every test in scope, innermost group first, including one that
+   * failed — it is cleanup, so it runs whatever happened. One that throws fails
+   * the test unless the test had already failed.
    */
   export function afterEach(fn: Hook): void;
 
@@ -87,6 +136,7 @@ declare module "runtime:test" {
 
   const _default: {
     test: typeof test;
+    describe: typeof describe;
     beforeAll: typeof beforeAll;
     afterAll: typeof afterAll;
     beforeEach: typeof beforeEach;

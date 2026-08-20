@@ -43,7 +43,11 @@ export const assertSorted = (xs: number[]) => assertEquals(xs, [...xs].sort());
 
 | | |
 | --- | --- |
-| `test(name, fn)` | `fn` may be async; failures are collected |
+| `test(name, fn)` | `fn` may be async; cases run one at a time |
+| `test.skip(name, fn?)` | Registered and reported as skipped, never run |
+| `test.only(name, fn)` | Runs this one; the rest are counted as skipped |
+| `describe(name, body)` | A group: a composed name, and a scope for its hooks |
+| `describe.skip` / `describe.only` | The same pair, for the whole group |
 | `assert(cond, msg?)` | |
 | `assertEquals(actual, expected, msg?)` | Structural |
 | `assertThrows(fn, expected?, msg?)` | |
@@ -63,6 +67,43 @@ key set rather than key order, and a cyclic structure terminates.
 | `"TypeError"` | the error's `name`, or a substring of its message |
 | `/too long/` | tested against the message |
 | `HttpError` | an `instanceof` check |
+
+## Group what shares a fixture
+
+`describe` composes the name — `"db > constraints > rejects a null"` — and, the
+half that earns it, **scopes the hooks**: a `beforeEach` written inside one runs
+for the tests inside it and no others.
+
+```ts
+import { test, describe, beforeAll, afterAll, beforeEach } from "runtime:test";
+
+describe("db", () => {
+  beforeAll(() => open());
+  afterAll(() => close());       // runs when this group's last test has run
+  beforeEach(() => reset());
+
+  test("inserts", async () => {});
+});
+
+test("needs no database", () => {});   // and does not pay for one
+```
+
+The body registers and returns — an `async` one is refused, because only the
+part before its first `await` would register in time.
+
+## Run one while you work on it
+
+`test.only` runs that case and skips the rest; `describe.only` does it for a
+group. What did not run is counted and said out loud:
+
+```text
+  only: 27 other tests did not run
+  1 passed, 0 failed, 27 skipped
+```
+
+That line is the point. A `.only` left in a commit otherwise looks exactly like
+a suite that got faster, and a skipped case missing from the report is the same
+failure as a case that quietly never ran.
 
 ## One process per file
 
@@ -108,6 +149,5 @@ pending promise, so a test waiting on something that never happened hung the
 file forever.
 
 <Callout type="note" title="Not yet">
-  Parallelism across files, `describe` nesting, per-file timeouts, and a
-  machine-readable reporter.
+  Parallelism across files, per-file timeouts, and a machine-readable reporter.
 </Callout>

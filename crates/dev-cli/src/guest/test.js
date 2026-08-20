@@ -43,53 +43,157 @@
 // The host is told about a case when it is **registered**, not when it starts,
 // so a case that never got to run because an earlier one hung is still in the
 // report — as a failure that says exactly that.
+//
+// # Groups
+//
+// `describe()` is a name and a scope, and the scope is the half that matters: a
+// `beforeEach` written inside one belongs to the tests inside it, and a file
+// that sets up a database for six of its twenty cases should not be setting it
+// up for the other fourteen. Without that, a group is a naming convention, and
+// a naming convention is a thing a template string already does.
+//
+// The body runs **synchronously**, at once, and registers; it is not where
+// awaiting belongs. An `async` one is refused rather than half-run, because
+// half of it registers before the first `await` and the rest lands after the
+// queue has already drained.
+//
+// # skip and only
+//
+// A skipped case is **reported as skipped**, not left out. This runner already
+// treats a case that never finished as a failure rather than a silence, for the
+// reason that decides this too: a green run that quietly ran fewer tests than it
+// printed is the worst thing a test runner can do. `only` is the same statement
+// from the other side — the cases it did not run are counted and said out loud,
+// so a `.only` left in a commit is visible in the tally rather than being a
+// suite that passes in a tenth of the time.
 
 const ops = globalThis.__ops;
 
 // Cases waiting to run, in the order they were written.
 const queue = [];
 
-// The lifecycle hooks, each in registration order. Several of the same kind are
-// allowed and all of them run: a helper module and the test file both have a
-// right to a `beforeEach`, and the one that loaded second is not the only one.
-const hooks = { beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] };
+// A group: a name, the hooks that belong to it, and what it is still waiting
+// for. The file itself is one, with no name — which is what makes a hook
+// written outside any `describe` the outermost scope rather than a special
+// case.
+function group(name, parent) {
+  return {
+    name,
+    parent,
+    // Each in registration order. Several of the same kind are allowed and all
+    // of them run: a helper module and the test file both have a right to a
+    // `beforeEach`, and the one that loaded second is not the only one.
+    hooks: { beforeAll: [], afterAll: [], beforeEach: [], afterEach: [] },
+    // Cases registered in it or in a group inside it, still to finish. What
+    // decides when its `afterAll` runs.
+    left: 0,
+    opened: false,
+    closed: false,
+    // What its `beforeAll` threw, if it did: every case under it then fails
+    // with that rather than running against a fixture that was never built.
+    failure: null,
+    skip: false,
+    only: false,
+  };
+}
+
+// The file's own scope, and the one being registered into right now.
+const file = group("", null);
+let current = file;
+// Every group made, in the order they were made — so what is left open at the
+// end is closed innermost first.
+const groups = [file];
 
 // Whether a drain is already scheduled or running, so registering ten tests in
 // a row schedules one.
 let draining = false;
-// `beforeAll` and `afterAll` are once per program, not once per drain.
-let setUp = false;
-let tornDown = false;
-// What `beforeAll` threw, if it did: every case then fails with it rather than
-// running against a fixture that was never built.
-let setUpFailure = null;
+// Whether anything anywhere asked to be the only thing that runs. Sticky: a
+// `.only` registered after a drain has begun still speaks for the cases behind
+// it, and un-deciding it later would run tests the file said not to.
+let exclusive = false;
 
 // The detail a failure is reported with: the stack when there is one, because a
 // failure is only actionable if it names the line that failed.
 const detail = (err) => (err?.stack ? String(err.stack) : String(err));
+
+// The name a case is reported under: its groups, outermost first, then its own.
+function label(scope, name) {
+  const parts = [name];
+  for (let at = scope; at && at.parent; at = at.parent) parts.unshift(at.name);
+  return parts.join(" > ");
+}
+
+// Every hook of a kind that applies to a case, outermost group first — which is
+// the order a `beforeEach` has to run in, and the reverse of an `afterEach`.
+function around(scope, kind) {
+  const out = [];
+  for (let at = scope; at; at = at.parent) out.unshift(...at.hooks[kind]);
+  return out;
+}
+
+// The `beforeAll` failure a case inherits: its own group's, or the nearest one
+// outside it.
+function broken(scope) {
+  for (let at = scope; at; at = at.parent) if (at.failure !== null) return at.failure;
+  return null;
+}
 
 function hook(kind) {
   return function register(fn) {
     if (typeof fn !== "function") {
       throw new TypeError(`${kind}(): needs a function to run`);
     }
-    hooks[kind].push(fn);
+    // The group being registered into, not the file: a `beforeEach` inside a
+    // `describe` is that group's, and running it for the file's other tests is
+    // the thing having groups at all is meant to stop.
+    current.hooks[kind].push(fn);
   };
 }
 
-// Runs once before the first test, and once after the last.
+// Runs once before the first test **of its group**, and once after the last.
 //
-// "After the last" is decided by the queue being empty, since a file does not
-// announce that it has finished registering. A test registered after the queue
-// has already drained still runs — it simply runs after `afterAll`, which is
-// the only honest answer available without a declaration this API does not
-// have.
+// At the top level of a file that is once per file. "After the last" is decided
+// by the group having no cases left, since a file does not announce that it has
+// finished registering — so a test registered after its group has drained runs
+// after that group's `afterAll`, which is the only honest answer available
+// without a declaration this API does not have.
 const beforeAll = hook("beforeAll");
 const afterAll = hook("afterAll");
-// Runs around every test, including one that fails. `afterEach` is cleanup, so
-// it runs whatever happened — a `beforeEach` that threw included.
+// Runs around every test in scope, including one that fails. `afterEach` is
+// cleanup, so it runs whatever happened — a `beforeEach` that threw included.
 const beforeEach = hook("beforeEach");
 const afterEach = hook("afterEach");
+
+// A group of tests. The body registers and returns; it does not await.
+function describe(name, body, mode) {
+  if (typeof body !== "function") {
+    throw new TypeError(
+      `describe(${JSON.stringify(String(name))}): needs a function that registers the tests`,
+    );
+  }
+  const made = group(String(name), current);
+  // A group that is skipped skips everything in it, and one marked `only`
+  // makes every case in it an `only` — which is what makes `describe.only`
+  // mean the group rather than nothing.
+  made.skip = mode === "skip" || current.skip;
+  made.only = mode === "only" || current.only;
+  if (made.only) exclusive = true;
+  groups.push(made);
+  const outer = current;
+  current = made;
+  try {
+    const returned = body();
+    if (returned !== null && typeof returned?.then === "function") {
+      throw new TypeError(
+        `describe(${JSON.stringify(String(name))}): the body registers tests and returns — ` +
+          `it cannot be async, because only the part before its first await would register ` +
+          `in time. Await inside a test, or in beforeAll.`,
+      );
+    }
+  } finally {
+    current = outer;
+  }
+}
 
 // Registers a test. It runs when the ones before it have finished.
 //
@@ -97,13 +201,31 @@ const afterEach = hook("afterEach");
 // complete: a case that never got to start because an earlier one never settled
 // is a case the host already knows about, and it is reported as a failure
 // rather than silently missing from a green run.
-function test(name, fn) {
-  if (typeof fn !== "function") {
+function test(name, fn, mode) {
+  const skip = mode === "skip" || current.skip;
+  if (!skip && typeof fn !== "function") {
     throw new TypeError(`test(${JSON.stringify(String(name))}): needs a function to run`);
   }
-  queue.push({ id: ops.test_registered(String(name)), fn });
+  const scope = current;
+  const id = ops.test_registered(label(scope, String(name)));
+  if (skip) {
+    // Reported now and never queued: nothing about it runs, its group's
+    // `beforeAll` included.
+    ops.test_skipped(id, "");
+    return;
+  }
+  const only = mode === "only" || scope.only;
+  if (only) exclusive = true;
+  for (let at = scope; at; at = at.parent) at.left += 1;
+  queue.push({ id, fn, scope, only });
   schedule();
 }
+
+// `test.skip(...)` and `test.only(...)`, and the same pair on `describe`.
+test.skip = (name, fn) => test(name, fn, "skip");
+test.only = (name, fn) => test(name, fn, "only");
+describe.skip = (name, body) => describe(name, body, "skip");
+describe.only = (name, body) => describe(name, body, "only");
 
 function schedule() {
   if (draining) return;
@@ -118,48 +240,84 @@ function schedule() {
 
 async function drain() {
   try {
-    if (!setUp) {
-      setUp = true;
-      try {
-        for (const fn of hooks.beforeAll) await fn();
-      } catch (err) {
-        setUpFailure = err;
-      }
-    }
     while (queue.length > 0) {
-      await runCase(queue.shift());
-    }
-    if (!tornDown) {
-      tornDown = true;
-      for (const fn of hooks.afterAll) {
-        try {
-          await fn();
-        } catch (err) {
-          // Nothing is left to fail, so it is reported as a case of its own —
-          // a teardown that threw is a broken suite, not a footnote.
-          ops.test_finished(ops.test_registered("afterAll"), false, detail(err));
-        }
+      const next = queue.shift();
+      // Something asked to be the only thing that runs, and this is not it.
+      // Decided here rather than at registration, because whether a case is
+      // the exception is not known until the file has finished registering.
+      if (exclusive && !next.only) {
+        ops.test_skipped(next.id, "only");
+        await settled(next.scope);
+        continue;
       }
+      await runCase(next);
     }
+    // Whatever is still open — a group whose last case has run leaves through
+    // `settled` below, so this is the file's own scope, and any group a case
+    // registered into after its own drain.
+    for (const scope of [...groups].reverse()) await close(scope);
   } finally {
     draining = false;
   }
 }
 
-async function runCase({ id, fn }) {
+// Runs a group's `beforeAll`, and its enclosing groups' first. Once each.
+async function open(scope) {
+  if (scope.parent) await open(scope.parent);
+  if (scope.opened) return;
+  scope.opened = true;
+  // An outer `beforeAll` failed, so this one does not run: it would be setting
+  // up on top of something that was never built.
+  if (broken(scope.parent) !== null) return;
+  try {
+    for (const fn of scope.hooks.beforeAll) await fn();
+  } catch (err) {
+    scope.failure = err;
+  }
+}
+
+// Runs a group's `afterAll`, if its `beforeAll` ran.
+async function close(scope) {
+  if (!scope.opened || scope.closed) return;
+  scope.closed = true;
+  for (const fn of scope.hooks.afterAll) {
+    try {
+      await fn();
+    } catch (err) {
+      // Nothing is left to fail, so it is reported as a case of its own — a
+      // teardown that threw is a broken suite, not a footnote.
+      ops.test_finished(ops.test_registered(label(scope, "afterAll")), false, detail(err));
+    }
+  }
+}
+
+// One case is done. A group with nothing left is finished with, innermost
+// first — so an inner `afterAll` runs before the outer one that set up what it
+// is tearing down.
+async function settled(scope) {
+  for (let at = scope; at; at = at.parent) {
+    at.left -= 1;
+    if (at.left === 0) await close(at);
+  }
+}
+
+async function runCase({ id, fn, scope }) {
   ops.test_running(id);
-  if (setUpFailure !== null) {
-    ops.test_finished(id, false, `beforeAll failed, so this test never ran\n${detail(setUpFailure)}`);
+  await open(scope);
+  const failed = broken(scope);
+  if (failed !== null) {
+    ops.test_finished(id, false, `beforeAll failed, so this test never ran\n${detail(failed)}`);
+    await settled(scope);
     return;
   }
   let failure = null;
   try {
-    for (const before of hooks.beforeEach) await before();
+    for (const before of around(scope, "beforeEach")) await before();
     await fn();
   } catch (err) {
     failure = err;
   }
-  for (const after of hooks.afterEach) {
+  for (const after of around(scope, "afterEach").reverse()) {
     try {
       await after();
     } catch (err) {
@@ -169,6 +327,7 @@ async function runCase({ id, fn }) {
     }
   }
   ops.test_finished(id, failure === null, failure === null ? "" : detail(failure));
+  await settled(scope);
 }
 
 function assert(condition, message) {
@@ -364,6 +523,7 @@ async function assertRejects(fn, want, message) {
 
 export {
   test,
+  describe,
   beforeAll,
   afterAll,
   beforeEach,
@@ -375,6 +535,7 @@ export {
 };
 export default {
   test,
+  describe,
   beforeAll,
   afterAll,
   beforeEach,

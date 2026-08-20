@@ -2166,6 +2166,156 @@ test("fast", () => {
     assert!(text.contains("2 passed"), "{text}");
 }
 
+/// A group is a **scope**, not a naming convention: a hook written inside one
+/// belongs to the tests inside it. Without that, `describe` is a template
+/// string, and a file that sets up a database for six of its twenty cases sets
+/// it up for the other fourteen too.
+#[test]
+fn a_group_scopes_its_hooks_and_composes_its_names() {
+    let dir = build_dir("t_group");
+    write_in(
+        &dir,
+        "group.test.mjs",
+        r#"
+import { test, describe, beforeAll, afterAll, beforeEach, afterEach } from "runtime:test";
+const order = [];
+beforeAll(() => order.push("file:all"));
+afterAll(() => { order.push("file:/all"); console.log(order.join(" ")); });
+beforeEach(() => order.push("file:each"));
+afterEach(() => order.push("file:/each"));
+
+test("top", () => order.push("top"));
+
+describe("db", () => {
+  beforeAll(() => order.push("db:all"));
+  afterAll(() => order.push("db:/all"));
+  beforeEach(() => order.push("db:each"));
+  test("inserts", () => order.push("inserts"));
+  describe("nested", () => {
+    beforeEach(() => order.push("nested:each"));
+    test("deep", () => order.push("deep"));
+  });
+});
+
+test("last", () => order.push("last"));
+"#,
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    // The file's hooks wrap every case; the group's wrap only its own, and its
+    // `afterAll` runs when its last case has run rather than at the end of the
+    // file. `beforeEach` runs outermost-first and `afterEach` innermost-first.
+    assert!(
+        text.contains(
+            "file:all file:each top file:/each \
+             db:all file:each db:each inserts file:/each \
+             file:each db:each nested:each deep file:/each \
+             db:/all file:each last file:/each file:/all"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("4 passed"), "{text}");
+
+    // A case is reported under its groups, outermost first, so a failure names
+    // where it lives rather than only what it is called.
+    write_in(
+        &dir,
+        "named.test.mjs",
+        "import { test, describe, assert } from 'runtime:test';\n         describe('db', () => describe('inserts', () => test('rejects a null', () => assert(false))));\n",
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .arg("named")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        text.contains("FAIL db > inserts > rejects a null"),
+        "{text}"
+    );
+}
+
+/// A skipped case is **in the report**, and one held back by somebody else's
+/// `.only` is named apart from it. A green run that quietly ran fewer tests
+/// than it printed is the failure this whole runner is arranged against.
+#[test]
+fn a_skipped_case_is_reported_rather_than_left_out() {
+    let dir = build_dir("t_skip");
+    write_in(
+        &dir,
+        "skip.test.mjs",
+        r#"
+import { test, describe } from "runtime:test";
+test("runs", () => {});
+test.skip("not this one", () => { throw new Error("MUST NOT RUN"); });
+describe.skip("nor this group", () => {
+  test("nor this", () => { throw new Error("MUST NOT RUN"); });
+});
+"#,
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed, 0 failed, 2 skipped"), "{text}");
+
+    // `only` runs one thing and says how much it did not run — a `.only` left
+    // in a commit otherwise looks exactly like a suite that got faster. The
+    // hooks the one case needs still run.
+    write_in(
+        &dir,
+        "only.test.mjs",
+        r#"
+import { test, describe, beforeAll } from "runtime:test";
+beforeAll(() => console.log("SETUP"));
+test("one", () => { throw new Error("MUST NOT RUN"); });
+describe("group", () => {
+  test.only("the one being worked on", () => {});
+  test("two", () => { throw new Error("MUST NOT RUN"); });
+});
+"#,
+    );
+    let out = esdev_in(&dir)
+        .arg("test")
+        .arg("only")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("SETUP"), "{text}");
+    assert!(text.contains("only: 2 other tests did not run"), "{text}");
+    assert!(text.contains("1 passed, 0 failed, 2 skipped"), "{text}");
+}
+
+/// A `describe` body registers and returns. An `async` one would register the
+/// part before its first `await` and land the rest after the queue had already
+/// drained, so it is refused rather than half-honoured.
+#[test]
+fn an_async_group_body_is_refused() {
+    let dir = build_dir("t_async_group");
+    write_in(
+        &dir,
+        "async.test.mjs",
+        "import { test, describe } from 'runtime:test';\n         describe('slow', async () => { test('a', () => {}); });\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let text = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("it cannot be async"), "{text}");
+}
+
 /// The other half of running in a queue: a case that never got a turn is still
 /// in the report, and says so in its own words rather than borrowing the
 /// message of the test that is actually stuck.
