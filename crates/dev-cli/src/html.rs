@@ -78,6 +78,17 @@ enum Kind {
     Asset,
 }
 
+/// Where a reference points, which decides whether this build owns it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Where {
+    /// A relative path: a file in this project, and an input to this build.
+    Project,
+    /// A rooted path: a URL the deployment already serves. Left exactly as
+    /// written — but checked, because it is also how a page comes to build
+    /// nothing at all ([`misrooted`]).
+    Rooted,
+}
+
 /// One reference found in the document.
 struct Reference {
     /// The attribute value, entity references already decoded — so
@@ -85,6 +96,7 @@ struct Reference {
     /// disk.
     url: String,
     kind: Kind,
+    at: Where,
     /// The attribute this came from, to write back: `src` or `href`.
     attribute: &'static str,
     /// Where the whole attribute sits in the source, so the rewrite is a splice
@@ -92,24 +104,71 @@ struct Reference {
     span: Range<usize>,
 }
 
-/// Whether an attribute value names a file in this project.
+/// Whether an attribute value names a file this build has anything to do with,
+/// and on what terms.
 ///
-/// The three "no"s are the ones that matter: a rooted path is a URL the
-/// deployment already serves, a scheme-ful or protocol-relative URL is somebody
-/// else's host, and a fragment or query-only value is not a file at all.
-fn is_local(url: &str) -> bool {
+/// The two "no"s are the ones that matter: a scheme-ful or protocol-relative
+/// URL is somebody else's host, and a fragment or query-only value is not a
+/// file at all. A rooted path is neither — it is a URL of this deployment's,
+/// and this build leaves it alone.
+fn origin(url: &str) -> Option<Where> {
     let url = url.trim();
-    if url.is_empty() || url.starts_with('/') || url.starts_with('#') || url.starts_with('?') {
-        return false;
+    if url.is_empty() || url.starts_with('#') || url.starts_with('?') {
+        return None;
+    }
+    if url.starts_with("//") {
+        return None;
+    }
+    if url.starts_with('/') {
+        return Some(Where::Rooted);
     }
     // `data:`, `https:`, `mailto:` — anything with a scheme. A Windows path
     // (`C:\…`) is not something an HTML attribute should carry either.
-    !url.split_once(':').is_some_and(|(scheme, _)| {
+    let scheme_ful = url.split_once(':').is_some_and(|(scheme, _)| {
         !scheme.is_empty()
             && scheme
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '.')
-    })
+    });
+    (!scheme_ful).then_some(Where::Project)
+}
+
+/// A rooted reference that names a **source file of this project** — which is
+/// almost always the wrong spelling, and is silent in the worst way.
+///
+/// `src="/src/main.jsx"` is what Vite's own React template ships, so it is what
+/// people arrive with. Here a rooted path is a URL the deployment serves, so
+/// the reference is left alone and the entry it names is never built: the
+/// document is written out pointing at a file that was not produced, the target
+/// reports zero scripts, and the build succeeds. An empty page that exits 0 is
+/// the outcome that costs an afternoon.
+///
+/// What makes it decidable rather than a guess is the `assets` list. A rooted
+/// URL the assets copy will satisfy — `/styles.css` with `"assets":
+/// ["styles.css"]`, or with a `public/` directory holding it — is a correct
+/// spelling and stays one. What is left is a rooted URL naming a file that
+/// nothing copies to the output, which is a 404 in production whatever this
+/// build thinks of it.
+fn misrooted(url: &str, root: &Path, assets: &[String]) -> Option<String> {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let relative = path.trim_start_matches('/');
+    if relative.is_empty() || !root.join(relative).is_file() {
+        return None;
+    }
+    // A file asset lands at the output root under its own *name*; a directory
+    // asset lands as its contents, so a path inside it is a path from the root.
+    let copied = assets.iter().any(|asset| {
+        let from = root.join(asset);
+        if from.is_dir() {
+            from.join(relative).exists()
+        } else {
+            Path::new(asset)
+                .file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(relative))
+                && from.is_file()
+        }
+    });
+    (!copied).then(|| relative.to_string())
 }
 
 /// The attribute a tag carries a reference in, and what that reference is.
@@ -160,12 +219,13 @@ fn discover(html: &str) -> Vec<Reference> {
             continue;
         };
         let url = String::from_utf8_lossy(&value.value).into_owned();
-        if !is_local(&url) {
+        let Some(at) = origin(&url) else {
             continue;
-        }
+        };
         found.push(Reference {
             url,
             kind,
+            at,
             attribute,
             // An unquoted value's span runs to whatever ended it — the `>` or
             // the space before the next attribute — because that is the byte
@@ -464,6 +524,20 @@ pub async fn build(
     let mut copied = 0usize;
 
     for reference in &references {
+        if reference.at == Where::Rooted {
+            if let Some(named) = misrooted(&reference.url, root, &target.assets) {
+                return Err(format!(
+                    "{} references {}, and {named} is a file in this project.\n\n\
+                     A rooted path is a URL the deployment already serves, so this build \
+                     leaves it alone — nothing is built from it, and the page written out \
+                     points at a file that was never produced. Write ./{named} to build \
+                     it, or add it to this target's `assets` if the deployment really \
+                     serves it as it is.",
+                    target.entry, reference.url,
+                ));
+            }
+            continue;
+        }
         let path = base.join(&reference.url);
         if !path.is_file() {
             return Err(format!(
@@ -897,17 +971,60 @@ mod tests {
 
     #[test]
     fn a_relative_path_is_an_input_and_everything_else_is_a_url() {
-        assert!(is_local("./src/entry.client.tsx"));
-        assert!(is_local("src/entry.client.tsx"));
-        assert!(is_local("../shared/styles.css"));
+        for input in [
+            "./src/entry.client.tsx",
+            "src/entry.client.tsx",
+            "../shared/styles.css",
+        ] {
+            assert_eq!(origin(input), Some(Where::Project), "{input}");
+        }
+        // A URL of this deployment's: left alone, and checked rather than
+        // dropped, because it is also how a page comes to build nothing.
+        assert_eq!(origin("/assets/vendor.js"), Some(Where::Rooted));
+        // Somebody else's host, or not a file at all.
+        for other in [
+            "https://cdn.example.com/a.js",
+            "//cdn.example.com/a.js",
+            "data:text/css,body{}",
+            "#main",
+            "",
+        ] {
+            assert_eq!(origin(other), None, "{other}");
+        }
+    }
 
-        // Already a URL the deployment serves, or somebody else's host.
-        assert!(!is_local("/assets/vendor.js"));
-        assert!(!is_local("https://cdn.example.com/a.js"));
-        assert!(!is_local("//cdn.example.com/a.js"));
-        assert!(!is_local("data:text/css,body{}"));
-        assert!(!is_local("#main"));
-        assert!(!is_local(""));
+    /// The Vite spelling. `src="/src/main.jsx"` builds nothing and exits 0,
+    /// which is the outcome that costs an afternoon — so it is refused, and
+    /// only when the rooted path names a file nothing copies to the output.
+    #[test]
+    fn a_rooted_path_naming_a_source_file_is_refused() {
+        let root = std::env::temp_dir().join(format!("esdev-misrooted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("public")).unwrap();
+        std::fs::write(root.join("src/main.jsx"), "export {};").unwrap();
+        std::fs::write(root.join("styles.css"), "body{}").unwrap();
+        std::fs::write(root.join("public/logo.svg"), "<svg/>").unwrap();
+
+        let assets = vec!["styles.css".to_string(), "public".to_string()];
+        assert_eq!(
+            misrooted("/src/main.jsx", &root, &assets),
+            Some("src/main.jsx".to_string())
+        );
+        // A query or a fragment does not make it a different file.
+        assert_eq!(
+            misrooted("/src/main.jsx?v=2", &root, &assets),
+            Some("src/main.jsx".to_string())
+        );
+        // What the assets copy will put at the output root is the correct
+        // spelling and stays one — named as a file, or found inside a directory.
+        assert_eq!(misrooted("/styles.css", &root, &assets), None);
+        assert_eq!(misrooted("/logo.svg", &root, &assets), None);
+        // Nothing of ours: a URL the deployment serves from somewhere else.
+        assert_eq!(misrooted("/api/session", &root, &assets), None);
+        assert_eq!(misrooted("/", &root, &assets), None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -923,19 +1040,30 @@ mod tests {
                </head><body><img src="./logo.png"></body></html>"#,
         );
 
+        // A rooted reference is discovered along with the rest — it is left as
+        // written, but a build that dropped it here could not tell the person
+        // who meant `./` about it. Somebody else's host is not discovered at
+        // all, because nothing about it is ours to say.
         let urls: Vec<&str> = found.iter().map(|r| r.url.as_str()).collect();
         assert_eq!(
             urls,
             [
                 "./styles.css",
+                "/favicon.ico",
                 "./src/main.tsx",
                 "./legacy.js",
                 "./logo.png"
             ]
         );
-        assert_eq!(found[1].kind, Kind::Module);
+        assert_eq!(found[1].at, Where::Rooted);
+        assert!(
+            found
+                .iter()
+                .all(|r| r.url != "https://cdn.example.com/a.js")
+        );
+        assert_eq!(found[2].kind, Kind::Module);
         // A classic script has no imports to follow, so it is a file.
-        assert_eq!(found[2].kind, Kind::Asset);
+        assert_eq!(found[3].kind, Kind::Asset);
     }
 
     /// The reason this is a real tokenizer and not a search for `src=`. Each of

@@ -70,6 +70,20 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ### Fixed
 
+- **An HTML entry no longer builds an empty page and succeeds.**
+  `src="/src/main.jsx"` — what Vite's own React template ships, so what people
+  arrive with — built 0 scripts and exited 0: a rooted path is a URL the
+  deployment already serves, so the reference was left alone and the entry it
+  named was never built.
+
+  A rooted reference that names a **source file of this project** is refused
+  now, with both spellings in the message. What makes it decidable rather than a
+  guess is the target's `assets` list: a rooted URL the assets copy will satisfy
+  — `/styles.css` with `"assets": ["styles.css"]`, or a `public/` directory
+  holding it — is a correct spelling and stays one. What is left is a rooted URL
+  naming a file nothing copies to the output, which is a 404 in production
+  whatever this build thinks of it.
+
 - **A plugin's error says which module it happened in.** `ctx.error()` from a
   `transform` produced a diagnostic with `id: null` and `plugin: null` — the
   hook had been called *with* the id and the message named the plugin — whose
