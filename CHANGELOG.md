@@ -8,6 +8,32 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:fs` can make a symbolic link**, not only read one. `readLink` and
+  `realPath` have been there since the module shipped, and there was nothing
+  that created what they read.
+
+  ```js
+  import { symlink } from "runtime:fs";
+
+  await symlink("../shared/pkg", "node_modules/pkg");
+  ```
+
+  **The target is data, not a path being accessed.** It is stored verbatim, is
+  what `readLink` hands back, and may be relative, may not exist, and may name
+  somewhere outside the root jail — which is what makes "a dependency that
+  resolves outside the project" reproducible in a test without shelling out to
+  `ln -sfn`. It is not a hole: only the link's own location is jailed, as a
+  write, and every read *through* the link goes back through the same
+  canonicalize-then-confine as any other path. So a link out of the jail is one
+  the program that made it cannot follow.
+
+  `ERR_ALREADY_EXISTS` if the path is taken, like Node's and Deno's; `type:
+  "file" | "dir"` is the Windows question of which kind of link to create, and
+  is inferred from the target when it is not given. Needs `FileWrite` alone —
+  creating a link stores a string and reads nothing.
+
 ### Fixed
 
 - **A plugin's error says which module it happened in.** `ctx.error()` from a

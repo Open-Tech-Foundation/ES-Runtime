@@ -9,6 +9,7 @@ import {
   readLink,
   realPath,
   remove,
+  symlink,
   truncate,
   write,
 } from "runtime:fs";
@@ -56,6 +57,35 @@ if (platform !== "windows") {
     target = "not-a-link";
   }
   console.log(`READLINK plain:${target}`);
+}
+
+// A link this run makes itself: the target is stored verbatim, the link reads
+// through to the file, and the same call twice does not overwrite.
+if (platform !== "windows") {
+  await symlink("src.txt", `${dir}/link.txt`);
+  const stored = await readLink(`${dir}/link.txt`);
+  const through = await file(`${dir}/link.txt`).text();
+  console.log(`SYMLINK stored:${stored} through:${through === "hello world"}`);
+
+  let again = "overwrote";
+  try {
+    await symlink("dst.txt", `${dir}/link.txt`);
+  } catch (e) {
+    again = e.code ?? "threw";
+  }
+  console.log(`SYMLINK exists:${again}`);
+
+  // A link may be written pointing out of the jail — it is data, and it is what
+  // makes a dependency resolving outside the project reproducible — and it
+  // still cannot be followed out.
+  await symlink("/etc", `${dir}/out`);
+  let followed = "read-through";
+  try {
+    await file(`${dir}/out/hostname`).text();
+  } catch (e) {
+    followed = e.code ?? "threw";
+  }
+  console.log(`SYMLINK outward:${await readLink(`${dir}/out`)} followed:${followed}`);
 }
 
 // A write that has resolved must be readable in full. Over 64 KiB this takes

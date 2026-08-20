@@ -208,6 +208,22 @@ async function readLink(path) {
   return ops.fs_read_link(pathOf(path));
 }
 
+// Creates a symbolic link at `path` holding `target`. Fails if `path` exists —
+// remove it first, as `ln -sfn` does for you.
+//
+// **The target is data, not a path being accessed.** It is stored verbatim, is
+// what `readLink` hands back, and may be relative, may not exist, and may name
+// somewhere outside the root jail — which is not a hole: reading *through* the
+// link afterwards resolves and confines it like any other path, so a link that
+// points out of the jail is one this program cannot follow.
+//
+// `type` is `"file"` or `"dir"`, and only Windows has the question: it makes a
+// link to a directory a different object from a link to a file and picks at
+// creation. Left out, it is inferred from what the target is. Unix ignores it.
+async function symlink(target, path, { type } = {}) {
+  return ops.fs_symlink(pathOf(target), pathOf(path), type ? String(type) : null);
+}
+
 // Sets the file's length exactly, zero-filling if it grows.
 async function truncate(path, len = 0) {
   return ops.fs_truncate(pathOf(path), Number(len) || 0);
@@ -247,6 +263,7 @@ export {
   copy,
   realPath,
   readLink,
+  symlink,
   truncate,
   chmod,
   makeTempDir,
@@ -265,6 +282,7 @@ export default {
   copy,
   realPath,
   readLink,
+  symlink,
   truncate,
   chmod,
   makeTempDir,

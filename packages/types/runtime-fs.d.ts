@@ -150,6 +150,33 @@ declare module "runtime:fs" {
    */
   export function readLink(path: PathLike): Promise<string>;
 
+  /** What a symbolic link points at, for the platform that has to be told. */
+  export interface SymlinkOptions {
+    /**
+     * `"file"` or `"dir"`. Only Windows has the question — it makes a link to a
+     * directory a different object from a link to a file and picks at creation.
+     * Left out, it is inferred from what the target is now. Unix ignores it.
+     */
+    type?: "file" | "dir";
+  }
+
+  /**
+   * Create a symbolic link at `path` holding `target`. Fails with
+   * `ERR_ALREADY_EXISTS` if `path` is taken — remove it first, as `ln -sfn`
+   * does for you. Needs `FileWrite`.
+   *
+   * **The target is data, not a path being accessed.** It is stored verbatim,
+   * is what {@link readLink} hands back, and may be relative, may not exist,
+   * and may name somewhere outside the root jail — which is not a hole:
+   * reading *through* the link resolves and confines it like any other path, so
+   * a link that points out of the jail is one this program cannot follow.
+   */
+  export function symlink(
+    target: PathLike,
+    path: PathLike,
+    options?: SymlinkOptions,
+  ): Promise<void>;
+
   /** Set the file's length exactly, zero-filling if it grows. Needs `FileWrite`. */
   export function truncate(path: PathLike, len?: number): Promise<void>;
 
@@ -193,6 +220,7 @@ declare module "runtime:fs" {
     copy: typeof copy;
     realPath: typeof realPath;
     readLink: typeof readLink;
+    symlink: typeof symlink;
     truncate: typeof truncate;
     chmod: typeof chmod;
     makeTempDir: typeof makeTempDir;

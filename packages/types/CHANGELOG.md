@@ -13,6 +13,10 @@ itself.
 
 ## [Unreleased]
 
+### Added
+
+- **`runtime:fs`'s `symlink(target, path, options?)`**, with `SymlinkOptions`.
+
 ### Changed
 
 - **`HookFilter` names `id`, `code` or both.** It was an interface with two

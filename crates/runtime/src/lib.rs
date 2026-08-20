@@ -2166,6 +2166,20 @@ mod tests {
             Self::ready(Err(Self::not_found(&path)))
         }
 
+        fn symlink(
+            &self,
+            _target: String,
+            path: String,
+            _kind: Option<es_runtime_providers::SymlinkKind>,
+        ) -> es_runtime_providers::BoxFuture<
+            std::result::Result<(), es_runtime_providers::ProviderError>,
+        > {
+            // No links in an in-memory map, for the same reason `read_link` has
+            // none: what a link does is a filesystem's behaviour, and it is
+            // tested against the default provider.
+            Self::ready(Err(Self::not_found(&path)))
+        }
+
         fn truncate(
             &self,
             path: String,
@@ -2305,6 +2319,9 @@ mod tests {
         for write_op in [
             "__ops.fs_truncate('/a', 0)",
             "__ops.fs_chmod('/a', 384)",
+            // Creating a link stores a string and reads nothing; following one
+            // later is a read, and gated where reads are.
+            "__ops.fs_symlink('/a', '/b', null)",
             "__ops.fs_make_temp_dir('', 't-')",
             "__ops.fs_make_temp_file('', 't-')",
         ] {

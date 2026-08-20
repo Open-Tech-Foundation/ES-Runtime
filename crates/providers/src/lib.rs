@@ -743,6 +743,20 @@ pub struct DirEntry {
     pub is_symlink: bool,
 }
 
+/// What a symbolic link points at, for the platform that has to be told.
+///
+/// Windows makes a link to a directory a different object from a link to a
+/// file, and picks at creation time; Unix has one kind and does not care. It is
+/// an enum rather than a bool so that "which kind" reads as which kind at every
+/// call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymlinkKind {
+    /// A link to a regular file.
+    File,
+    /// A link to a directory.
+    Dir,
+}
+
 /// Options for [`FileSystem::glob_scan`].
 pub struct GlobScanOptions {
     /// Match dotfiles and dot-directories (default: skipped).
@@ -816,6 +830,29 @@ pub trait FileSystem: Send + Sync {
     /// value, which may be relative and may not exist. Use
     /// [`real_path`](Self::real_path) to resolve it.
     fn read_link(&self, path: String) -> BoxFuture<Result<String, ProviderError>>;
+
+    /// Creates a symbolic link at `path` holding `target`, and fails if `path`
+    /// already exists.
+    ///
+    /// **`path` is jailed; `target` is not.** The link's own location is a path
+    /// being written and is confined like every other, but the target is the
+    /// *data stored in it* — the same value [`read_link`](Self::read_link)
+    /// hands back unresolved — and it may be relative, may not exist, and may
+    /// name somewhere outside the jail. That is not a hole: following the link
+    /// afterwards goes through the same canonicalize-then-confine as any other
+    /// path, so a link out of the jail is a link the guest that made it cannot
+    /// read through.
+    ///
+    /// `kind` decides which kind of link Windows creates, where a link to a
+    /// directory is a different object from a link to a file; `None` means
+    /// infer it from what the target is now. Unix has one kind of symlink and
+    /// ignores it.
+    fn symlink(
+        &self,
+        target: String,
+        path: String,
+        kind: Option<SymlinkKind>,
+    ) -> BoxFuture<Result<(), ProviderError>>;
 
     /// Truncates or extends the file at `path` to exactly `len` bytes. Extending
     /// zero-fills.

@@ -42,11 +42,22 @@ import { file, write, readDir, stat, mkdir, remove, rename, copy, Glob } from "r
 | `copy(from, to)` | `(from, to) => Promise<number>` | Copies a file, overwriting the destination; resolves to bytes copied. Needs **both** FileRead and FileWrite. `ERR_SAME_FILE` if `from` and `to` are the same file. | `await copy("./a.txt", "./b.txt")` |
 | `realPath(path)` | `(path) => Promise<string>` | Canonical location — symlinks followed, `.`/`..` removed. Throws if missing or outside the jail. | `await realPath("./a/../b")` |
 | `readLink(path)` | `(path) => Promise<string>` | The stored symlink target, verbatim (may be relative or dangling). | `await readLink("./link")` |
+| `symlink(target, path, opts?)` | `(target, path, { type? }) => Promise<void>` | Creates a symlink at `path` holding `target`. `ERR_ALREADY_EXISTS` if `path` is taken. `type` is `"file"`/`"dir"`, and only Windows asks. | `await symlink("../pkg", "./node_modules/pkg")` |
 | `truncate(path, len?)` | `(path, len) => Promise<void>` | Sets the file's length exactly, zero-filling if it grows. | `await truncate("./log", 0)` |
 | `chmod(path, mode)` | `(path, mode) => Promise<void>` | Sets permission bits. Windows honours only the owner-write bit, as the read-only flag. | `await chmod("./key.pem", 0o600)` |
 | `makeTempDir(opts?)` | `({ dir?, prefix? }) => Promise<string>` | Creates a directory with an unpredictable name; returns its path. | `await makeTempDir({ prefix: "build-" })` |
 | `makeTempFile(opts?)` | `({ dir?, prefix? }) => Promise<string>` | Creates an empty file with an unpredictable name; returns its path. | `await makeTempFile({ prefix: "up-" })` |
 | `new Glob(pattern)` | `Glob` | Glob matcher/scanner. `match(path)` is pure; `scan(cwd \| options)` is an async iterator over the jailed tree. Patterns: `*`, `**`, `?`, `[a-z]`, `[!x]`, `{a,b}`, leading `!`. | `new Glob("**/*.ts").match("src/app.ts") // true` |
+
+<Callout type="note" title="A symlink's target is data, not a path">
+  `path` — the link itself — is jailed like every other write. `target` is the
+  value stored in it, the one `readLink` hands back unresolved: it may be
+  relative, may not exist, and may name somewhere outside the jail. That is what
+  makes "a dependency that resolves outside the project" reproducible in a test
+  without shelling out to `ln`, and it is not a hole — following the link is an
+  access, and an access is canonicalized and confined like any other, so a link
+  out of the jail is one the program that made it cannot read through.
+</Callout>
 
 ## FsFile — the `file(path)` handle
 

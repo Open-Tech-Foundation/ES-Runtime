@@ -12,7 +12,7 @@ use std::time::UNIX_EPOCH;
 
 use es_runtime_common::ErrorCode;
 use es_runtime_providers::{
-    BoxFuture, DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError,
+    BoxFuture, DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError, SymlinkKind,
 };
 use globset::GlobBuilder;
 use tokio::io::AsyncWriteExt;
@@ -670,6 +670,64 @@ impl FileSystem for SystemFileSystem {
         })
     }
 
+    fn symlink(
+        &self,
+        target: String,
+        path: String,
+        kind: Option<SymlinkKind>,
+    ) -> BoxFuture<Result<(), ProviderError>> {
+        // Not `jailed`: the link does not exist yet, and where one *does* the
+        // call is about to fail with EEXIST — following it to decide where it
+        // may be created would be answering about the wrong file either way.
+        let resolved = self.jailed_nofollow(&path, Access::Write);
+        Box::pin(async move {
+            let link = resolved?;
+            // The target is **data**, not a path being accessed: it is what
+            // `read_link` hands back, verbatim, and it may be relative, may not
+            // exist, and may name somewhere outside the jail. Reading *through*
+            // the link later goes through the jail like everything else, so a
+            // link that points out is one the guest cannot follow.
+            let target_path = PathBuf::from(&target);
+            #[cfg(unix)]
+            {
+                // One kind of symlink here; `kind` is Windows' question.
+                let _ = kind;
+                tokio::fs::symlink(&target_path, &link)
+                    .await
+                    .map_err(|e| other(&path, e))
+            }
+            #[cfg(windows)]
+            {
+                // Windows picks the kind at creation, so it has to be decided
+                // now — from what the caller said, or from what the target is.
+                // Resolved against the link's own directory, because that is
+                // what a relative target is relative to.
+                let kind = match kind {
+                    Some(kind) => kind,
+                    None => {
+                        let against = match link.parent() {
+                            Some(dir) if target_path.is_relative() => dir.join(&target_path),
+                            _ => target_path.clone(),
+                        };
+                        if tokio::fs::metadata(&against)
+                            .await
+                            .is_ok_and(|m| m.is_dir())
+                        {
+                            SymlinkKind::Dir
+                        } else {
+                            SymlinkKind::File
+                        }
+                    }
+                };
+                match kind {
+                    SymlinkKind::Dir => tokio::fs::symlink_dir(&target_path, &link).await,
+                    SymlinkKind::File => tokio::fs::symlink_file(&target_path, &link).await,
+                }
+                .map_err(|e| other(&path, e))
+            }
+        })
+    }
+
     fn truncate(&self, path: String, len: u64) -> BoxFuture<Result<(), ProviderError>> {
         let resolved = self.jailed(&path, Access::Write);
         Box::pin(async move {
@@ -1301,6 +1359,79 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("out")).unwrap();
         let err = fs.real_path("out".into()).await.unwrap_err();
         assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+    }
+
+    /// The link's own path is jailed like every other write; the **target** is
+    /// the data stored in it, and is not.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_writes_a_link_the_jail_reads_back() {
+        let (root, fs) = jail("symlink");
+        std::fs::write(root.join("target.txt"), b"x").unwrap();
+        fs.symlink("target.txt".into(), "link".into(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(fs.read_link("link".into()).await.unwrap(), "target.txt");
+        assert_eq!(fs.read("link".into()).await.unwrap(), b"x");
+        // Made where it was asked for, not somewhere resolved.
+        assert!(root.join("link").is_symlink());
+    }
+
+    /// A link that already exists is not replaced. `ln -sfn` removes first, and
+    /// so does a caller who means to: a symlink that silently overwrote would
+    /// be the one mutation in this API that destroys without being asked.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlink_refuses_to_replace_what_is_there() {
+        let (root, fs) = jail("symlink-exists");
+        std::fs::write(root.join("taken"), b"x").unwrap();
+        let err = fs
+            .symlink("elsewhere".into(), "taken".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::AlreadyExists), "{err}");
+        assert_eq!(std::fs::read(root.join("taken")).unwrap(), b"x");
+    }
+
+    /// The link may be *written* pointing anywhere — that is what makes it
+    /// usable for the case it exists for, a dependency resolving outside the
+    /// project — and it still cannot be *followed* out of the jail.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_may_point_out_of_the_jail_and_still_not_be_followed() {
+        let (root, fs) = jail("symlink-outside");
+        let outside = root.parent().unwrap().join("esrun-fs-symlink-target");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret"), b"s").unwrap();
+
+        fs.symlink(outside.to_string_lossy().into(), "out".into(), None)
+            .await
+            .unwrap();
+        // Stored verbatim: it is data, and `read_link` hands it back.
+        assert_eq!(
+            fs.read_link("out".into()).await.unwrap(),
+            outside.to_string_lossy()
+        );
+        // Following it is an access, and the jail is where accesses are judged.
+        let err = fs.read("out/secret".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+        let err = fs.real_path("out".into()).await.unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+    }
+
+    /// The link's own path is a write, so a jail escape in *it* is refused
+    /// before anything is created.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_cannot_be_created_outside_the_jail() {
+        let (root, fs) = jail("symlink-escape");
+        let err = fs
+            .symlink("x".into(), "../escaped-link".into(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), Some(ErrorCode::JailEscape), "{err}");
+        assert!(!root.parent().unwrap().join("escaped-link").exists());
     }
 
     #[cfg(unix)]

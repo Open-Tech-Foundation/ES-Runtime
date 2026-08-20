@@ -47,6 +47,16 @@ writable, and a path in neither set is `ERR_JAIL_ESCAPE` as before. Module
 resolution is unaffected: the loader detects its own root and never consults these
 lists, so a granted path makes bytes readable, not code importable.
 
+**A symlink you *write* may point anywhere; one you *follow* may not.** The
+target handed to `symlink()` is the data stored in the link — the same value
+`readLink()` returns unresolved — and it is not confined: it may be relative, may
+dangle, and may name a path outside the jail. Only the link's own location is
+jailed, as a write. The asymmetry is the point: creating one stores a string,
+and every read *through* it goes back through canonicalize-then-confine above,
+so a link out of the jail is one the program that made it cannot follow. Which
+leaves the case it exists for available — a test that needs a dependency
+resolving outside the project, reproduced without shelling out to `ln`.
+
 ## The root is not a target
 
 Reading the root is ordinary — `stat(".")`, `readDir(".")`, `realPath(".")` all

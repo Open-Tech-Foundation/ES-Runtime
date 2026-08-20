@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use es_runtime_common::{Capability, ErrorCode, ExceptionClass, IntoException};
 use es_runtime_engine::{Engine, OpDecl, OpError, Value};
-use es_runtime_providers::{DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError};
+use es_runtime_providers::{
+    DirEntry, FileStat, FileSystem, GlobScanOptions, ProviderError, SymlinkKind,
+};
 
 use crate::Result;
 
@@ -215,6 +217,33 @@ pub(crate) fn install(engine: &mut dyn Engine, fs: Option<Arc<dyn FileSystem>>) 
             })
         })
         .requires(Capability::FileRead),
+    )?;
+
+    let f = fs.clone();
+    engine.register_op(
+        OpDecl::r#async("fs_symlink", move |args| {
+            let f = f.clone();
+            let target = arg_str(&args, 0);
+            let path = arg_str(&args, 1);
+            // Windows makes a link to a directory a different object from a
+            // link to a file and picks at creation; anything else is inferred
+            // from the target by the provider. Unix has one kind.
+            let kind = match args.get(2).and_then(Value::as_str) {
+                Some("dir") => Some(SymlinkKind::Dir),
+                Some("file") => Some(SymlinkKind::File),
+                _ => None,
+            };
+            Box::pin(async move {
+                require(&f)?
+                    .symlink(target, path, kind)
+                    .await
+                    .map_err(map_err)?;
+                Ok(Value::Undefined)
+            })
+        })
+        // The write alone. Creating a link stores a string; it reads nothing —
+        // and reading *through* it later is a read, gated where reads are.
+        .requires(Capability::FileWrite),
     )?;
 
     let f = fs.clone();

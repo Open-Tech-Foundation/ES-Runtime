@@ -1425,6 +1425,7 @@ Paths may be a string, a `file:` URL (string or `URL`), or a `file()` handle.
 | `copy(from, to)`      | `(path, path) => Promise<number>`               | Copies a file, overwriting `to`; resolves to bytes copied. Needs **both** `FileRead` and `FileWrite`. `ERR_SAME_FILE` if `from` and `to` are the same file. |
 | `realPath(path)`      | `(path) => Promise<string>`                     | The canonical location — symlinks followed, `.`/`..` removed. `ERR_NOT_FOUND` if missing, `ERR_JAIL_ESCAPE` if it resolves outside the jail. `FileRead`. |
 | `readLink(path)`      | `(path) => Promise<string>`                     | The stored target of a symlink, verbatim (may be relative, may dangle). `FileRead`. |
+| `symlink(target, path, opts?)` | `(path, path, { type? }) => Promise<void>` | Creates a symlink at `path` holding `target`. `ERR_ALREADY_EXISTS` if `path` is taken. `type` is `"file"`/`"dir"` and only Windows asks. `FileWrite`. |
 | `truncate(path, len?)`| `(path, number) => Promise<void>`               | Sets the file's length exactly, zero-filling if it grows.                   |
 | `chmod(path, mode)`   | `(path, number) => Promise<void>`               | Sets permission bits (`0o600`). Windows honours only the owner-write bit, as the read-only flag. |
 | `makeTempDir(opts?)`  | `({ dir?, prefix? }) => Promise<string>`        | Creates a directory with an unpredictable name; resolves to its path.       |
@@ -1436,6 +1437,16 @@ filesystem call that escapes it. Pass `dir` to place them elsewhere inside the
 jail. The name comes from the host's temp-file machinery, so it is
 unpredictable: a guessable name in a shared directory is a symlink-attack
 invitation. Nothing is cleaned up automatically — what you create, you remove.
+
+**A symlink's target is data, not a path.** `path` — the link itself — is
+jailed like every other write, and `target` is the value stored in it: the same
+one `readLink` hands back unresolved. It may be relative, may not exist, and may
+name somewhere outside the jail, which is what makes "a dependency that resolves
+outside the project" reproducible in a test without shelling out to `ln`. It is
+not a hole: following the link is an access, and an access is canonicalized and
+confined like any other, so a link out of the jail is one the program that made
+it cannot read through. Creating one needs `FileWrite` alone — it stores a
+string and reads nothing.
 
 **`copy` needs both capabilities.** It reads one path and writes another;
 gating it on the write alone would let a guest with no read access duplicate a

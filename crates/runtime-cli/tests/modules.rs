@@ -1813,5 +1813,23 @@ fn the_added_fs_surface_works_against_a_real_disk() {
         stdout.contains("REALPATH missing:ERR_NOT_FOUND"),
         "{stdout}"
     );
+    if !cfg!(windows) {
+        assert!(
+            stdout.contains("SYMLINK stored:src.txt through:true"),
+            "{stdout}"
+        );
+        // Not replaced. `ln -sfn` removes first, and so does a caller who means
+        // to — a symlink that silently overwrote would be the one mutation here
+        // that destroys without being asked.
+        assert!(
+            stdout.contains("SYMLINK exists:ERR_ALREADY_EXISTS"),
+            "{stdout}"
+        );
+        // Written pointing anywhere, followed only inside the jail.
+        assert!(
+            stdout.contains("SYMLINK outward:/etc followed:ERR_JAIL_ESCAPE"),
+            "{stdout}"
+        );
+    }
     assert!(stdout.contains("FS_SURFACE_OK"), "{stdout}");
 }
