@@ -8,6 +8,25 @@ namespace) is unstable and may change between minor releases until the API freez
 
 ## [Unreleased]
 
+### Fixed
+
+- **A plugin filter that names nothing is refused, instead of claiming the whole
+  graph.** `filter` is read for `id` and `code`; anything else in it used to
+  produce an *empty* filter, and an empty filter is not "no modules" — it is
+  every module, because a hook with no filter is a hook that wants the graph.
+
+  ```js
+  transform: { filter: /\.mdx$/, handler }        // ✗ refused, names no field
+  transform: { filter: { id: /\.mdx$/ }, handler } // ✓
+  ```
+
+  The bare pattern is the spelling this API had before 0.5, so **every plugin
+  written against the old one became a silent catch-all on upgrade** — running
+  on modules it was never written for, and rewriting them. The same went for a
+  typo'd `ID`, for rollup's `include`, for `{}`, and for `{ id: [] }`. All five
+  are now refused at the declaration, where the person who wrote them is
+  looking, and the message names the field that is missing.
+
 ## [0.27.0] - 2026-08-19
 
 ### Added

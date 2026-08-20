@@ -107,10 +107,6 @@ declare module "runtime:build" {
     readonly refresh?: string;
   }
 
-  export type EmittedFile =
-    | { type: "asset"; name?: string; fileName?: string; source: string | Uint8Array }
-    | { type: "chunk"; id: string; name?: string; fileName?: string };
-
   /** One pattern: a string is an **exact** match, a RegExp is tested. */
   export type FilterPattern = string | RegExp | (string | RegExp)[];
 
@@ -119,13 +115,24 @@ declare module "runtime:build" {
    * crosses into this isolate** — which is why it is declarative rather than a
    * predicate you write. An unfiltered `transform` is one crossing per module
    * in the graph.
+   *
+   * **It has to name `id`, `code` or both**, and it has to be an object: a
+   * filter with no key this contract knows is not a narrower hook, it is every
+   * module in the graph. A bare `filter: /\.mdx$/` — the spelling before
+   * 0.5 — is refused at the declaration for that reason, as is a typo'd key
+   * and rollup's `include`.
    */
-  export interface HookFilter {
-    /** Matched against the module id — or, for `resolve`, the specifier. */
-    id?: FilterPattern;
-    /** Matched against the module's source. `transform` only. */
-    code?: FilterPattern;
-  }
+  export type HookFilter =
+    | {
+        /** Matched against the module id — or, for `resolve`, the specifier. */
+        id: FilterPattern;
+        /** Matched against the module's source. `transform` only. */
+        code?: FilterPattern;
+      }
+    | {
+        id?: FilterPattern;
+        code: FilterPattern;
+      };
 
   /** Where a hook runs relative to the plugins that did not say. */
   export type HookOrder = "pre" | "post";

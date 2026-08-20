@@ -244,21 +244,75 @@ function pattern(value) {
   throw new TypeError("a filter pattern must be a string or a RegExp");
 }
 
-function patterns(value) {
+function patterns(at, key, value) {
   if (value === undefined || value === null) return undefined;
-  return Array.isArray(value) ? value.map(pattern) : pattern(value);
+  if (!Array.isArray(value)) return pattern(value);
+  if (value.length === 0) {
+    // Empty is not "nothing": the host reads an empty list as no constraint,
+    // so this would widen the hook to the graph rather than narrowing it away.
+    throw new TypeError(
+      `${at}: ${key} is an empty list, which matches every module rather than none — ` +
+        `name a pattern, or leave the key out.`,
+    );
+  }
+  return value.map(pattern);
 }
 
+// What a filter may say. Two keys, and one that says neither is refused rather
+// than read as an empty filter — which is the whole reason this is longer than
+// the four lines it used to be.
+const FILTER_KEYS = ["id", "code"];
+
+// Which modules a hook wants, in the shape the host matches them in.
+//
+// **A filter with no key this contract knows is refused.** An empty filter is
+// not "no modules" — it is *every* module, because a hook with no filter is a
+// hook that wants the graph. So each of these turned a scoped hook into a
+// catch-all, and none of them said so:
+//
+//   filter: /\.mdx$/          the spelling before 0.5. A RegExp is an object,
+//                             so it passed the type check, and then no `id`
+//                             was found in it. Every plugin written against
+//                             the old API became a catch-all on upgrade.
+//   filter: { ID: /\.mdx$/ }  a typo.
+//   filter: { include: … }    rollup's key, which this contract does not have.
+//
+// A `transform` that claims the whole graph does not announce itself. It runs
+// on modules it was never written for, and what it returns is what they are.
 function filterOf(name, hook, filter) {
   if (filter === undefined || filter === null) return undefined;
+  const at = `${name}.${hook}: filter`;
+  if (filter instanceof RegExp) {
+    throw new TypeError(
+      `${at} must be an object — write { id: ${String(filter)} }. ` +
+        `A bare pattern was the spelling before 0.5; it names no field now, and a ` +
+        `filter that names no field would be handed every module in the graph.`,
+    );
+  }
   if (typeof filter !== "object") {
-    throw new TypeError(`${name}.${hook}: filter must be an object`);
+    throw new TypeError(`${at} must be an object, got ${typeof filter}`);
+  }
+  for (const key of Object.keys(filter)) {
+    if (FILTER_KEYS.includes(key)) continue;
+    const near = FILTER_KEYS.find((known) => distance(key.toLowerCase(), known) <= 1);
+    throw new TypeError(
+      near
+        ? `${at}: unknown key "${key}". Did you mean "${near}"?`
+        : `${at}: unknown key "${key}". A filter matches on ${FILTER_KEYS.join(" or ")}.`,
+    );
   }
   const out = {};
-  const id = patterns(filter.id);
-  const code = patterns(filter.code);
+  const id = patterns(at, "id", filter.id);
+  const code = patterns(at, "code", filter.code);
   if (id !== undefined) out.id = id;
   if (code !== undefined) out.code = code;
+  if (out.id === undefined && out.code === undefined) {
+    throw new TypeError(
+      `${at} must say what it matches: { id }, { code }, or both. ` +
+        `A filter with neither is not a narrower hook — it is every module in the ` +
+        `graph, which is what leaving the filter off already means.`,
+    );
+  }
   return out;
 }
 

@@ -4,7 +4,7 @@
 
 [Website](https://esrun.opentechf.org) | [Docs](https://esrun.opentechf.org/docs) | [API](https://esrun.opentechf.org/api)
 
-*Part of the <img src="https://raw.githubusercontent.com/Open-Tech-Foundation/website/3ed7ac70ec44465eec0f94e5185cb28a9b11ed07/static/img/OTF-Logo.svg" width="24" align="center" /> [Open Tech Foundation](https://github.com/Open-Tech-Foundation) ecosystem.*
+*An [Open Tech Foundation](https://opentechf.org/) project*
 </div>
 
 > ### A secure, standards-based JavaScript runtime for the server. V8-based, WinterTC-compliant, deny-by-default.

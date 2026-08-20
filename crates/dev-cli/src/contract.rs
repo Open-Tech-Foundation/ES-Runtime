@@ -688,6 +688,29 @@ fn hook_spec(plugin: &str, hook: Hook, value: &Value) -> Result<HookSpec, OpErro
     Ok(HookSpec { filter, order })
 }
 
+/// The keys a filter may carry. Two, and a filter carrying neither is refused —
+/// see [`filter`].
+const FILTER_KEYS: [&str; 2] = ["id", "code"];
+
+/// Which modules a hook asked for.
+///
+/// # Why a filter with nothing in it is an error
+///
+/// Because an empty filter is not "no modules" — it is **every** module, since
+/// a hook with no filter is a hook that wants the graph. So a filter this side
+/// could not read used to widen the hook rather than narrow it, and the three
+/// spellings that produced one are all things people write:
+///
+/// * `filter: /\.mdx$/` — the spelling before 0.5. A `RegExp` crosses as an
+///   object with `source` and `flags`, so it was an object with no `id` in it,
+///   and *every plugin written against the old API became a catch-all on
+///   upgrade*.
+/// * `filter: { ID: … }` — a typo.
+/// * `filter: { include: … }` — rollup's key, which this contract does not have.
+///
+/// None of them announced itself. A `transform` that claims the whole graph
+/// just runs on modules it was never written for, and what it returns is what
+/// they become.
 fn filter(plugin: &str, hook: Hook, value: Option<&Value>) -> Result<Filter, OpError> {
     let Some(value) = value else {
         return Ok(Filter::default());
@@ -696,8 +719,48 @@ fn filter(plugin: &str, hook: Hook, value: Option<&Value>) -> Result<Filter, OpE
         return Ok(Filter::default());
     }
     let at = |e: String| OpError::type_error(format!("{plugin}.{}: {e}", hook.name()));
+    let Value::Object(fields) = value else {
+        return Err(at(format!("filter must be an object, got {}", kind(value))));
+    };
+    // A `RegExp` is an object too, which is exactly how the old spelling got
+    // through. Named for what it is rather than reported as two unknown keys.
+    if fields.iter().any(|(key, _)| key == "source")
+        && !fields
+            .iter()
+            .any(|(key, _)| FILTER_KEYS.contains(&key.as_str()))
+    {
+        let source = field(value, "source").and_then(Value::as_str).unwrap_or("");
+        return Err(at(format!(
+            "filter must be an object — write {{ id: /{source}/ }}. A bare pattern was \
+             the spelling before 0.5; it names no field now, and a filter that names no \
+             field would be handed every module in the graph."
+        )));
+    }
+    for (key, _) in fields {
+        if FILTER_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let near = FILTER_KEYS
+            .iter()
+            .find(|known| edit_distance(&key.to_ascii_lowercase(), known) <= 1);
+        return Err(at(match near {
+            Some(known) => format!("filter: unknown key {key:?}. Did you mean {known:?}?"),
+            None => format!(
+                "filter: unknown key {key:?}. A filter matches on {}.",
+                FILTER_KEYS.join(" or ")
+            ),
+        }));
+    }
     let id = patterns(field(value, "id")).map_err(at)?;
     let code = patterns(field(value, "code")).map_err(at)?;
+    if id.is_empty() && code.is_empty() {
+        return Err(at(
+            "filter must say what it matches: { id }, { code }, or both. A filter with \
+             neither is not a narrower hook — it is every module in the graph, which is \
+             what leaving the filter off already means."
+                .to_string(),
+        ));
+    }
     // Only `transform` is handed code to match against; a `code` filter on
     // anything else is a mistake worth naming rather than dropping.
     if !code.is_empty() && hook != Hook::Transform {
@@ -1034,6 +1097,72 @@ mod tests {
         );
         let err = plugin(&spec).expect_err("a code filter on load must be refused");
         assert!(err.to_string().contains("only transform"), "{err}");
+    }
+
+    /// The one that made this check necessary: a bare `RegExp` is an object, so
+    /// it passed the type check and then had no `id` in it — and every plugin
+    /// written against the 0.4 spelling became a catch-all on upgrade.
+    #[test]
+    fn a_bare_pattern_is_refused_rather_than_matching_everything() {
+        let spec = declare(
+            "mdx",
+            vec![(
+                "transform",
+                Value::Object(vec![("filter".to_string(), re(r"\.mdx$"))]),
+            )],
+        );
+        let err = plugin(&spec).expect_err("a bare pattern must be refused");
+        let err = err.to_string();
+        assert!(err.contains("write { id: /\\.mdx$/ }"), "{err}");
+    }
+
+    /// A key this contract does not have is the same failure arriving through a
+    /// typo, or through rollup's vocabulary.
+    #[test]
+    fn a_filter_key_that_is_not_ours_names_the_one_it_was_nearly() {
+        let spec = declare(
+            "mdx",
+            vec![(
+                "transform",
+                Value::Object(vec![(
+                    "filter".to_string(),
+                    Value::Object(vec![("ID".to_string(), re(r"\.mdx$"))]),
+                )]),
+            )],
+        );
+        let err = plugin(&spec).expect_err("an unknown key must be refused");
+        assert!(err.to_string().contains("Did you mean \"id\""), "{err}");
+
+        let spec = declare(
+            "mdx",
+            vec![(
+                "transform",
+                Value::Object(vec![(
+                    "filter".to_string(),
+                    Value::Object(vec![("include".to_string(), re(r"\.mdx$"))]),
+                )]),
+            )],
+        );
+        let err = plugin(&spec).expect_err("rollup's key must be refused");
+        assert!(err.to_string().contains("unknown key \"include\""), "{err}");
+    }
+
+    /// `filter: {}` is not a narrower hook. It is every module in the graph,
+    /// which is what leaving the filter off already means.
+    #[test]
+    fn a_filter_that_names_nothing_is_refused() {
+        let spec = declare(
+            "mdx",
+            vec![(
+                "transform",
+                Value::Object(vec![("filter".to_string(), Value::Object(Vec::new()))]),
+            )],
+        );
+        let err = plugin(&spec).expect_err("an empty filter must be refused");
+        assert!(
+            err.to_string().contains("must say what it matches"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -3188,9 +3188,17 @@ Each hook may declare, alongside its handler:
 **A filter is matched on the host's side, before anything crosses.** In rollup a
 hook returning `null` costs a function call; here it costs a round trip into the
 isolate, so an unfiltered `transform` is one crossing *per module in the graph*.
-A pattern the host cannot evaluate — JavaScript's regular expressions are larger
-than the matcher's — stops filtering rather than failing, because excluding
-modules a plugin was meant to see is the expensive way to be wrong.
+
+**A filter has to name `id`, `code` or both**, and anything else is refused at
+the declaration — a bare `filter: /\.mdx$/`, a typo'd `ID`, rollup's `include`,
+an empty `{}`, an empty list of patterns. The reason it is an error rather than
+a shrug is that the shrug ran the other way: a filter with nothing the host
+recognises in it is not a narrower hook, it is **every module in the graph**,
+because a hook with no filter is a hook that wants all of them. A `transform`
+that quietly became a catch-all does not announce itself; it just runs on
+modules it was never written for, and what it returns is what they are. A
+pattern the host cannot evaluate — JavaScript's regular expressions are larger
+than the matcher's — is refused for the same reason.
 
 **`dependsOn` is returned, not declared.** Rollup's `this.addWatchFile()` is a
 call you can forget, and forgetting it produces a build that serves stale
@@ -3211,7 +3219,7 @@ keeps it, where rollup's `this` is silently lost:
 | `ctx.warn` / `info` / `debug` | diagnostics; warnings come back in `warnings` |
 | `ctx.error(msg)` | fails the build — throws |
 | `ctx.isEntry` | on `resolve`: whether the specifier is an entry |
-| `ctx.refresh` | the hot-reload scheme the target named (`esdev.json`'s `refresh`), **only** while the dev loop is running it hot. Absent in a release build, so a plugin implementing a scheme installs its per-module wrapper where it means something and nowhere else. |
+| `ctx.refresh` | the hot-reload scheme the target named (`esdev.json`'s `refresh`), on **every** hook's context — `start` included, since a scheme's runtime is often a virtual module a `load` serves. Present **only** while the dev loop is running that target hot: absent under `esdev build`, absent in a target that named no scheme, and absent under `esdev start --no-hot`, so a plugin implementing a scheme installs its per-module wrapper where it means something and nowhere else. |
 | `ctx.type` | on `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. It is how a pass declines work somebody else has done: `esdev:css-modules` filters on `.css` and steps aside for a plugin that claimed the stylesheet first. |
 
 It is live only while its hook runs; stashing it and calling `resolve()` later

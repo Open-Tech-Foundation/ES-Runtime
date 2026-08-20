@@ -4865,6 +4865,16 @@ await refuse({ name: "wide", start: { filter: { id: /x/ }, handler() {} } }, "fi
 await refuse({ name: "codef", load: { filter: { code: /x/ }, handler() {} } }, "code-on-load");
 await refuse({ name: "ord", transform: { order: "first", handler() {} } }, "order");
 await refuse({ name: "none", transform: { filter: { id: /x/ } } }, "no-handler");
+// A filter with no key this contract knows would be handed the whole graph,
+// so it is refused where it was written rather than honoured as a catch-all.
+await refuse({ name: "bare", transform: { filter: /x/, handler() {} } }, "bare-pattern");
+await refuse({ name: "typo", transform: { filter: { ID: /x/ }, handler() {} } }, "filter-typo");
+await refuse(
+  { name: "rollup", transform: { filter: { include: /x/ }, handler() {} } },
+  "rollup-key",
+);
+await refuse({ name: "empty", transform: { filter: {}, handler() {} } }, "empty-filter");
+await refuse({ name: "none", transform: { filter: { id: [] }, handler() {} } }, "empty-list");
 "#,
     );
 
@@ -4886,6 +4896,16 @@ await refuse({ name: "none", transform: { filter: { id: /x/ } } }, "no-handler")
     );
     assert!(printed.contains(r#""pre" or "post""#), "{printed}");
     assert!(printed.contains("handler must be a function"), "{printed}");
+    // The 0.4 spelling names the field it is missing, rather than becoming a
+    // filter that matches everything.
+    assert!(printed.contains("write { id: /x/ }"), "{printed}");
+    assert!(
+        printed.contains(r#"unknown key "ID". Did you mean "id"?"#),
+        "{printed}"
+    );
+    assert!(printed.contains(r#"unknown key "include""#), "{printed}");
+    assert!(printed.contains("must say what it matches"), "{printed}");
+    assert!(printed.contains("empty list"), "{printed}");
 }
 
 /// `order` decides which plugin sees a module first — the thing a framework

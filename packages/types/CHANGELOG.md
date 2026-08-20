@@ -13,6 +13,19 @@ itself.
 
 ## [Unreleased]
 
+### Changed
+
+- **`HookFilter` names `id`, `code` or both.** It was an interface with two
+  optional keys, which made `filter: {}` — and, through structural typing, a
+  bare `filter: /\.mdx$/` — legal to write and a catch-all to run. It is a
+  union of the two one-key-required shapes now, so the editor refuses what the
+  runtime refuses.
+
+### Fixed
+
+- **`EmittedFile` was declared twice** in `runtime-build.d.ts`, which is a
+  duplicate-identifier error for anyone typechecking against it. One copy left.
+
 ## [0.3.0] - 2026-08-19
 
 ### Added

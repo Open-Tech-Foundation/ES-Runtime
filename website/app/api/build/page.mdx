@@ -239,10 +239,17 @@ produces a build that serves stale output.
 | both given | a module has to satisfy each; within one, any pattern will do |
 
 Matched on the host's side, before anything crosses into the isolate — so an
-unfiltered `transform` costs one crossing **per module in the graph**. A pattern
-the matcher cannot evaluate (lookbehind, backreferences) stops filtering rather
-than failing, and the hook is called for everything. `start` and `end` run once
-for the whole build and cannot be filtered.
+unfiltered `transform` costs one crossing **per module in the graph**. `start`,
+`end` and `bundle` run once for the whole build and cannot be filtered.
+
+A filter has to **name `id`, `code` or both**. A bare `filter: /\.mdx$/`, a
+typo'd `ID`, rollup's `include`, an empty `{}` and an empty list of patterns are
+all refused where they were written, and so is a pattern the matcher cannot
+evaluate (lookbehind, backreferences). The reason none of them is a shrug: a
+filter with nothing the host recognises in it is not a narrower hook, it is
+**every module in the graph** — a hook with no filter is a hook that wants all
+of them. A `transform` that quietly became a catch-all runs on modules it was
+never written for, and says nothing about it.
 
 ### order
 
@@ -258,6 +265,8 @@ declaration order. Anything else is refused.
 | `ctx.warn(msg)` / `info` / `debug` | Diagnostics; warnings come back in `warnings`, prefixed with the plugin's name. |
 | `ctx.error(msg)` | Fails the build. Throws — it does not return. |
 | `ctx.isEntry` | On `resolve`: whether the specifier is an entry. |
+| `ctx.type` | On `transform`: what the module **is now** — `"css"`, `"jsx"`, `"js"`, … Not always what the extension says, since a pass ordered `pre` may already have changed it. |
+| `ctx.refresh` | The hot-reload scheme the target named in `esdev.json`, on **every** hook's context — `start` included, since a scheme's runtime is often a virtual module a `load` serves. Present only while the dev loop is running that target hot: absent under `esdev build`, under `--no-hot`, and in a target that named no scheme. |
 
 An argument, so an arrow-function handler keeps it. Live only while its hook
 runs: stashing `ctx` and calling it later throws.
@@ -273,6 +282,9 @@ rather than at `generate()`.
 | an unknown hook name | `unknown hook "transfrom". Did you mean "transform"?` |
 | `filter` on `start`/`end` | `this hook runs once, for the whole build, so it cannot be filtered` |
 | `filter.code` off `transform` | `only transform can filter on code — it is the only hook given any` |
+| a bare pattern as the filter | `filter must be an object — write { id: /\.mdx$/ }` |
+| a filter key that is not ours | `filter: unknown key "ID". Did you mean "id"?` |
+| a filter naming neither | `filter must say what it matches: { id }, { code }, or both` |
 | `order` other than pre/post | `order must be "pre" or "post", got "first"` |
 | a string from `load`/`transform` | `must return an object or null — return { code } instead` |
 
