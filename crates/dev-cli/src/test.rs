@@ -47,6 +47,25 @@ pub struct TestConfig {
     pub file: Option<String>,
     /// Substring filters on the discovered paths; empty means all of them.
     pub filters: Vec<String>,
+    /// How many files may run at once, from `--jobs`. `None` is [`jobs`].
+    pub jobs: Option<usize>,
+    /// Keep running, re-running the files when a source file changes.
+    pub watch: bool,
+}
+
+/// How many test files run at once when `--jobs` did not say.
+///
+/// **A file is a process, and a process is an isolate.** That is what makes the
+/// runner robust — a test that wedges or exhausts its heap takes only itself
+/// down — and it is also what makes it expensive: every job holds a V8 heap, so
+/// the useful number is bounded by memory as well as by cores. The cap is the
+/// conservative half of that trade; a machine with more of both says so with
+/// `--jobs`.
+pub fn jobs() -> usize {
+    std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(1)
+        .min(8)
 }
 
 /// Suffixes that make a file a test.
@@ -61,6 +80,148 @@ const TEST_SUFFIXES: &[&str] = &[
 
 /// Directories discovery never descends into.
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", "dist", "target", ".cache"];
+
+/// Runs each file in its own process, up to `jobs` at a time, and reports how
+/// many failed.
+///
+/// **Output is buffered per file whenever more than one runs at a time**, and
+/// printed whole when that file finishes. Two suites writing to one terminal
+/// interleave line by line, which turns a failure's message and the assertion
+/// above it into two things a reader has to reassemble. With `--jobs=1` nothing
+/// is buffered and the child writes straight through — which is what you want
+/// from the run where you are watching a test hang.
+pub async fn run_all(exe: &Path, root: &Path, files: &[PathBuf], jobs: usize) -> usize {
+    use futures_util::StreamExt;
+
+    let named = |file: &Path| {
+        file.strip_prefix(root)
+            .unwrap_or(file)
+            .display()
+            .to_string()
+    };
+
+    if jobs <= 1 {
+        let mut failed = 0usize;
+        for file in files {
+            println!("{}", named(file));
+            let status = tokio::process::Command::new(exe)
+                .arg("test")
+                .arg(format!("--file={}", file.display()))
+                .status()
+                .await;
+            match status {
+                Ok(status) if status.success() => {}
+                Ok(_) => failed += 1,
+                Err(e) => {
+                    eprintln!("  cannot run it: {e}");
+                    failed += 1;
+                }
+            }
+        }
+        return failed;
+    }
+
+    let runs = files.iter().map(|file| {
+        let exe = exe.to_path_buf();
+        let name = named(file);
+        let file = file.clone();
+        async move {
+            let output = tokio::process::Command::new(&exe)
+                .arg("test")
+                .arg(format!("--file={}", file.display()))
+                .output()
+                .await;
+            (name, output)
+        }
+    });
+
+    let mut failed = 0usize;
+    let mut results = futures_util::stream::iter(runs).buffer_unordered(jobs);
+    while let Some((name, output)) = results.next().await {
+        println!("{name}");
+        match output {
+            Ok(output) => {
+                // The child's two streams, in the order a reader expects them:
+                // what the test printed, then what went wrong. Written through
+                // rather than re-formatted — a harness's output is its own.
+                print!("{}", String::from_utf8_lossy(&output.stdout));
+                eprint!("{}", String::from_utf8_lossy(&output.stderr));
+                if !output.status.success() {
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("  cannot run it: {e}");
+                failed += 1;
+            }
+        }
+    }
+    failed
+}
+
+/// Runs the files, then runs them again on every change, until interrupted.
+///
+/// **Discovery happens per run, not once.** A test you are about to write does
+/// not exist when the watcher starts, and a watcher that only knew the files it
+/// began with would be silent about the one you just created — which is the file
+/// you are watching for.
+///
+/// The exit status of a watched run is nobody's: it ends when the developer ends
+/// it, and what they read is the tally printed after each pass.
+pub async fn watch(root: &Path, config: &TestConfig, exe: &Path) -> Result<(), String> {
+    use notify::{RecursiveMode, Watcher};
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let scope = root.to_path_buf();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res
+            && crate::watch::is_change(&event.kind)
+            && event
+                .paths
+                .iter()
+                .any(|path| crate::watch::is_interesting(path, &scope))
+        {
+            let _ = tx.send(());
+        }
+    })
+    .map_err(|e| format!("cannot start the file watcher: {e}"))?;
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|e| format!("cannot watch {}: {e}", root.display()))?;
+
+    let paint = crate::style::Palette::stderr();
+    loop {
+        let files = discover(root, &config.filters);
+        if files.is_empty() {
+            eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
+        } else {
+            let jobs = config.jobs.unwrap_or_else(jobs).min(files.len()).max(1);
+            let failed = run_all(exe, root, &files, jobs).await;
+            report(files.len(), failed);
+        }
+        eprintln!("{}", paint.dim("watching for changes — ^C to stop"));
+
+        tokio::select! {
+            change = crate::watch::coalesce(&mut rx) => {
+                if change.is_none() {
+                    return Ok(());
+                }
+            }
+            _ = tokio::signal::ctrl_c() => return Ok(()),
+        }
+        println!();
+    }
+}
+
+/// The tally a run ends with.
+pub fn report(total: usize, failed: usize) {
+    let files = if total == 1 { "file" } else { "files" };
+    if failed == 0 {
+        println!("\n{total} {files} passed");
+    } else {
+        println!("\n{failed} of {total} {files} failed");
+    }
+}
 
 /// Every test file under `root`, sorted, honouring `filters`.
 pub fn discover(root: &Path, filters: &[String]) -> Vec<PathBuf> {

@@ -115,6 +115,20 @@ the prelude snapshot makes that cheap.
 `--file=<path>` is what a child is invoked with, and is equally a supported way
 to run one file by hand.
 
+Files run **in parallel** — the machine's parallelism, at most 8, since every job
+holds a V8 heap. Each file's output is held and printed whole when it finishes,
+so two suites never interleave line by line.
+
+```sh
+esdev test                  # all of them, in parallel
+esdev test db --watch       # the files whose path contains "db", again on every save
+esdev test --jobs=1         # one at a time, writing straight to the terminal
+```
+
+`--jobs=1` is the run to reach for when a test is hanging and you want to watch
+it happen. `--watch` re-discovers files every pass, so a test you are about to
+write is one the watcher will find.
+
 ## The file is the entry, unaltered
 
 It keeps its own path, its module resolution, its relative imports and its
@@ -149,5 +163,5 @@ pending promise, so a test waiting on something that never happened hung the
 file forever.
 
 <Callout type="note" title="Not yet">
-  Parallelism across files, per-file timeouts, and a machine-readable reporter.
+  Per-file timeouts, coverage, and a machine-readable reporter.
 </Callout>

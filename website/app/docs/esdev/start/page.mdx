@@ -80,6 +80,23 @@ server still coming back up. The client reconnects on its own, backing off to a
 what you want at 40 ms a build. `serve` overrides the directory served when
 there is no `run`.
 
+## Previewing the release build
+
+The dev loop is not what ships: `NODE_ENV` is `"development"` here and nothing is
+hashed. `esdev preview` serves the **release** output, which is where the
+failures the dev loop is blind to show up — a package that hands over a different
+module under `production`, a `<link>` pointing at a name hashing changed.
+
+```sh
+esdev build
+esdev preview            # → http://127.0.0.1:4173
+esdev preview --dir=dist --port=5000
+```
+
+It serves; it does not build. Missing paths that look like routes fall back to
+`index.html`, as a client-side router needs. A project whose output is a server
+bundle has nothing to serve — run it the way production will, under `esrun`.
+
 ## The port
 
 `--port` is the port you open. With a `run` target that is your server's; without

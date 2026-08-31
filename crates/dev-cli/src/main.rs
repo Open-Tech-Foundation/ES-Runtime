@@ -54,6 +54,7 @@ mod html;
 mod inspect;
 mod install;
 mod plugins;
+mod preview;
 mod prompt;
 mod resolve;
 mod staging;
@@ -67,6 +68,7 @@ mod watch;
 use build::{BuildConfig, BuildRequest, ProjectBuild};
 use create::{CreateConfig, DEFAULT_TEMPLATE};
 use inspect::InspectConfig;
+use preview::PreviewConfig;
 use start::StartConfig;
 use test::TestConfig;
 use trace::PermissionTrace;
@@ -91,6 +93,8 @@ enum Command {
     Start(Box<StartConfig>),
     /// Write a new project from a template.
     Create(CreateConfig),
+    /// Serve what a build wrote, the way it will be served.
+    Preview(PreviewConfig),
 }
 
 const USAGE: &str = "\
@@ -109,6 +113,7 @@ COMMANDS:
     start                       Build, run, and keep both current
     build [entry]               Bundle to deploy, or --lib to publish
     test [filter...]            Run the test files
+    preview                     Serve the built output before deploying it
     upgrade                     Update esdev to the latest release
 
     Each takes --help: `esdev build --help`.
@@ -164,8 +169,16 @@ USAGE:
     esdev test --file=<path>    Run exactly one file
     esdev test -h, --help       Show this help
 
+OPTIONS:
+    --jobs=<n>                  How many files run at once. The default is the
+                                machine's parallelism, at most 8 — each file is
+                                a process holding a V8 heap
+    --watch                     Run them again whenever a source file changes
+
 Each file runs in its own process, so one that wedges, exhausts its heap or
-calls exit() cannot decide the fate of the others. The file itself is the
+calls exit() cannot decide the fate of the others. Files run in parallel, and
+each one's output is held and printed whole when it finishes — --jobs=1 runs
+them one at a time and lets each write straight to the terminal. The file itself is the
 entry — it keeps its own path, its module resolution and its TypeScript — and
 imports what it uses from runtime:test:
 
@@ -181,6 +194,32 @@ with a ReferenceError. Types come from @opentf/esrun-types
 
     The API:  https://esrun.opentechf.org/api/test
     The how:  https://esrun.opentechf.org/docs/esdev/test
+";
+
+const PREVIEW_USAGE: &str = "\
+esdev preview — serve the built output, the way it will be served
+
+USAGE:
+    esdev preview [options]     Serve what `esdev build` wrote
+
+OPTIONS:
+    --dir=<path>                The directory to serve. Without it: the site
+                                esdev.json describes
+    --port=<n>                  The port to open (default 4173, or any free one
+                                if that is taken)
+    --config=<path>             Read this instead of ./esdev.json
+    -h, --help                  Show this help
+
+It serves; it does not build. The dev loop's build is not the one that ships —
+NODE_ENV is \"development\" there and nothing is content-hashed — so this is where
+a release build gets looked at before it is deployed. Missing paths that look
+like routes fall back to index.html, as they must for a client-side router.
+
+Loopback only, like every endpoint esdev opens. A project whose output is a
+server bundle has nothing to serve: run it under esrun, which is what will run
+it in production.
+
+    Building:  https://esrun.opentechf.org/docs/esdev/build
 ";
 
 const CREATE_USAGE: &str = "\
@@ -345,6 +384,9 @@ fn parse_args() -> Result<Command, String> {
         }
         if first == "create" {
             return parse_create(argv).map(Command::Create);
+        }
+        if first == "preview" {
+            return parse_preview(argv).map(Command::Preview);
         }
         if first == "upgrade" {
             if let Some(extra) = argv.next() {
@@ -568,6 +610,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     let mut dts_bundle: Option<Option<String>> = None;
     let mut conditions = Vec::new();
     let mut defines = Vec::new();
+    let mut alias: Vec<(String, String)> = Vec::new();
     let mut config_path: Option<String> = None;
     let mut target: Option<String> = None;
     for arg in args {
@@ -624,6 +667,37 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                     }
                     conditions.push(name.to_string());
                 }
+            }
+            "--alias" => {
+                let pair = require_value(flag, value)?;
+                let (find, to) = pair.split_once('=').ok_or_else(|| {
+                    format!(
+                        "{flag}={pair} is not a rewrite — write --alias=<name>=<path>, \
+                         e.g. --alias=@=./src."
+                    )
+                })?;
+                if find.trim().is_empty() {
+                    return Err(format!(
+                        "{flag}={pair} has no name to rewrite.\n\n\
+                         An alias rewrites the start of a specifier: --alias=@=./src."
+                    ));
+                }
+                // Absolute from here, against the working directory the path was
+                // typed in — the same rule the config file follows against the
+                // project directory, and for the same reason.
+                let is_path = to.starts_with("./")
+                    || to.starts_with("../")
+                    || std::path::Path::new(to).is_absolute();
+                let to = if is_path {
+                    std::env::current_dir()
+                        .map_err(|e| format!("cannot read working directory: {e}"))?
+                        .join(to)
+                        .to_string_lossy()
+                        .into_owned()
+                } else {
+                    to.to_string()
+                };
+                alias.push((find.to_string(), to));
             }
             "--define" => {
                 let pair = require_value(flag, value)?;
@@ -730,6 +804,10 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             }
         ));
     }
+    // Longest first, so `@/ui` wins over `@`: the resolver takes the first
+    // match, and the order they were typed in is not that.
+    alias.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+
     let source = sources.remove(0);
     // The whole shape of a library build follows from its unit being a
     // directory, so a file here is not a small mistake to guess past: it would
@@ -781,6 +859,14 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
             }
         }
     };
+    if !alias.is_empty() && lib {
+        return Err("--alias is a bundling rule, and --lib does not bundle.\n\n\
+             A published module keeps the specifier its source wrote, and the \
+             build that consumes it resolves that — so an alias applied here \
+             would ship a package whose imports work under this toolchain and \
+             nowhere else."
+            .to_string());
+    }
     if !formats.is_empty() && !lib {
         return Err("--format only means something with --lib.\n\n\
              An application build's output is loaded by esrun, which loads ES \
@@ -817,6 +903,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         minify,
         conditions,
         defines,
+        alias,
         lib,
         formats,
         types: !no_types,
@@ -825,6 +912,35 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         // esdev.json to have declared any.
         plugins: Vec::new(),
     })))
+}
+
+/// Parses `esdev preview [options]`.
+fn parse_preview(args: impl Iterator<Item = String>) -> Result<PreviewConfig, String> {
+    let mut dir = None;
+    let mut port = None;
+    let mut config = None;
+    for arg in args {
+        let (flag, value) = split_flag_value(&arg);
+        match flag {
+            "-h" | "--help" => {
+                reject_value(flag, value)?;
+                println!("{PREVIEW_USAGE}");
+                std::process::exit(0);
+            }
+            "--dir" => dir = Some(require_value(flag, value)?.to_string()),
+            "--config" => config = Some(require_value(flag, value)?.to_string()),
+            "--port" => {
+                let text = require_value(flag, value)?;
+                port = Some(text.parse::<u16>().map_err(|_| {
+                    format!("{flag}={text} is not a port — a number from 1 to 65535.")
+                })?);
+            }
+            other => {
+                return Err(format!("unknown option: {other}\n\n{PREVIEW_USAGE}"));
+            }
+        }
+    }
+    Ok(PreviewConfig { dir, port, config })
 }
 
 /// Parses `esdev create <dir> [options]`.
@@ -971,6 +1087,8 @@ fn parse_start(args: impl Iterator<Item = String>) -> Result<StartConfig, String
 fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> {
     let mut file = None;
     let mut filters = Vec::new();
+    let mut jobs = None;
+    let mut watch = false;
     for arg in args {
         let (flag, value) = split_flag_value(&arg);
         match flag {
@@ -980,13 +1098,46 @@ fn parse_test(args: impl Iterator<Item = String>) -> Result<TestConfig, String> 
                 std::process::exit(0);
             }
             "--file" => file = Some(require_value(flag, value)?.to_string()),
+            "--jobs" => {
+                let text = require_value(flag, value)?;
+                let count = text
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "{flag}={text} is not a number of files to run at once.\n\n\
+                         One or more; --jobs=1 runs them one at a time and lets each \
+                         one write straight to the terminal."
+                        )
+                    })?;
+                jobs = Some(count);
+            }
+            "--watch" => {
+                reject_value(flag, value)?;
+                watch = true;
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unknown option: {flag}\n\n{TEST_USAGE}"));
             }
             filter => filters.push(filter.to_string()),
         }
     }
-    Ok(TestConfig { file, filters })
+    // `--file` is the child's own flag: it is one run of one file, with no
+    // discovery to repeat and no second file to run beside it.
+    if file.is_some() && (watch || jobs.is_some()) {
+        return Err("--file runs one file, so there is nothing to schedule or \
+             re-run.\n\n\
+             Drop --file to watch or to run several at once; a filter narrows \
+             which ones: `esdev test --watch db`."
+            .to_string());
+    }
+    Ok(TestConfig {
+        file,
+        filters,
+        jobs,
+        watch,
+    })
 }
 
 /// Runs one test file, or discovers and runs them all.
@@ -1022,42 +1173,40 @@ async fn run_tests(config: TestConfig) -> ExitCode {
     }
 
     let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let Ok(exe) = std::env::current_exe() else {
+        eprintln!("error: cannot find the esdev binary");
+        return ExitCode::FAILURE;
+    };
+
+    if config.watch {
+        // A watched run ends when the developer ends it, so its status is the
+        // watcher's rather than any pass's.
+        return match test::watch(&root, &config, &exe).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("error: {err}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
     let files = test::discover(&root, &config.filters);
     if files.is_empty() {
         eprintln!("no test files found (looked for *.test.js/.mjs/.ts/.tsx/.jsx)");
         return ExitCode::FAILURE;
     }
 
-    let Ok(exe) = std::env::current_exe() else {
-        eprintln!("error: cannot find the esdev binary");
-        return ExitCode::FAILURE;
-    };
-    let mut failed = 0usize;
-    for file in &files {
-        println!("{}", file.strip_prefix(&root).unwrap_or(file).display());
-        let status = tokio::process::Command::new(&exe)
-            .arg("test")
-            .arg(format!("--file={}", file.display()))
-            .status()
-            .await;
-        match status {
-            Ok(status) if status.success() => {}
-            Ok(_) => failed += 1,
-            Err(e) => {
-                eprintln!("  cannot run it: {e}");
-                failed += 1;
-            }
-        }
-    }
+    let jobs = config
+        .jobs
+        .unwrap_or_else(test::jobs)
+        .min(files.len())
+        .max(1);
+    let failed = test::run_all(&exe, &root, &files, jobs).await;
     let total = files.len();
+    test::report(total, failed);
     if failed == 0 {
-        println!("\n{total} file{} passed", if total == 1 { "" } else { "s" });
         ExitCode::SUCCESS
     } else {
-        println!(
-            "\n{failed} of {total} file{} failed",
-            if total == 1 { "" } else { "s" }
-        );
         ExitCode::FAILURE
     }
 }
@@ -1100,6 +1249,7 @@ async fn main() -> ExitCode {
         Ok(Command::Test(config)) => return run_tests(config).await,
         Ok(Command::Build(request)) => build::run(request).await,
         Ok(Command::Start(config)) => start::start(*config).await,
+        Ok(Command::Preview(config)) => preview::run(config).await,
         Ok(Command::Create(config)) => match create::create(&config) {
             Ok(report) => {
                 print!("{report}");

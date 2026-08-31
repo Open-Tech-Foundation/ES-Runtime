@@ -137,6 +137,69 @@ namespace) is unstable and may change between minor releases until the API freez
   not the `src/./datetime/./types.ts` that joining a specifier onto a directory
   produces.
 
+- **`alias`: a specifier rewrite the build is told about.** `@/db` is how most
+  source is written and was an unresolved import here.
+
+  ```json
+  { "alias": { "@": "./src", "react": "preact/compat" } }
+  ```
+
+  Top level in `esdev.json`, because a rewrite is a property of the source tree
+  rather than of one output; `--alias=@=./src` says the same for an entry with
+  no project around it. A path resolves against the project, anything else names
+  a package, and the longest match wins. It is a **bundling** rule: a module run
+  unbundled — `esdev src/thing.ts`, or a file `esdev test` runs — resolves the
+  way `esrun` does. `--lib` refuses it, since a published module keeps the
+  specifier its source wrote.
+
+- **`import.meta.env`, from `.env` and the environment.** A browser bundle
+  cannot read the environment at run time, so what configures it is compiled in
+  — and only what says out loud that it may be:
+
+  ```sh
+  PUBLIC_API_URL=https://api.example.com    # .env, or the environment itself
+  ```
+
+  ```ts
+  fetch(`${import.meta.env.PUBLIC_API_URL}/users`);
+  if (import.meta.env.DEV) { … }
+  ```
+
+  `PUBLIC_`-prefixed variables only; everything else stays out of the artifact
+  and is read at run time through `runtime:env`, under the `env` capability.
+  `.env` first, then the environment, so a variable exported in the shell beats
+  the file. `MODE`, `DEV` and `PROD` come from the build — booleans, not the
+  strings `"false"` — and `import.meta.env` itself is replaced too, so
+  destructuring it works. A `--lib` build compiles in none of it.
+
+- **`esdev preview` — serve the release build before deploying it.**
+
+  ```sh
+  esdev build && esdev preview        # → http://127.0.0.1:4173
+  ```
+
+  The dev loop's build is not the one that ships (`NODE_ENV` is
+  `"development"`, nothing is hashed), so the failures that only appear in a
+  release build had nowhere to appear before it was deployed. It serves and does
+  not build; missing paths that look like routes fall back to `index.html`;
+  loopback only. A project whose output is a server bundle is told to run it
+  under `esrun`, which is what production will do.
+
+- **`esdev test` runs files in parallel, and can watch.** One process per file
+  is what makes the runner robust, and it was also what made it slow: they ran
+  one at a time. The default is now the machine's parallelism, at most 8 — every
+  job holds a V8 heap — and each file's output is held and printed whole, so two
+  suites never interleave line by line.
+
+  ```sh
+  esdev test                  # all of them, in parallel
+  esdev test db --watch       # ...and again on every save
+  esdev test --jobs=1         # one at a time, writing straight through
+  ```
+
+  `--watch` re-discovers files every pass, so the test you are about to write is
+  one it will find. `--file` refuses both, being one run of one file.
+
 - **`runtime:build` takes an `exports` output option** (`"auto"` | `"named"` |
   `"default"` | `"none"`) — how a non-ESM `format` assigns what a module
   exports. The same option `--lib`'s CommonJS output sets to `"named"`.

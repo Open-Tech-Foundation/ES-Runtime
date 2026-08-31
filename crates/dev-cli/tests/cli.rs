@@ -887,6 +887,164 @@ fn build_rejects_a_missing_entry_and_a_second_one() {
 }
 
 // ---------------------------------------------------------------------------
+// `alias` and `import.meta.env`: the two things a project configures that a
+// bundler has to be told, and that a hand-written `--define` was the only way
+// to say.
+// ---------------------------------------------------------------------------
+
+/// `@/db` is how most of the ecosystem's source is written, and without this it
+/// was an unresolved import.
+#[test]
+fn an_alias_is_rewritten_before_it_is_resolved() {
+    let dir = build_dir("b_alias");
+    std::fs::create_dir_all(dir.join("src/lib")).expect("create src");
+    write_in(
+        &dir,
+        "src/lib/util.ts",
+        "export const help = (): string => 'helped';\n",
+    );
+    write_in(
+        &dir,
+        "src/server.ts",
+        "import { help } from '@/lib/util.js';\nexport default help();\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"alias\": { \"@\": \"./src\" },\n  \
+         \"targets\": { \"server\": { \"entry\": \"src/server.ts\", \
+         \"out\": \"dist/server.js\" } } }\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/server.js")).expect("read bundle");
+    assert!(bundle.contains("helped"), "{bundle}");
+
+    // …and the same rewrite off the command line, for an entry with no project
+    // around it.
+    let flagged = esdev_in(&dir)
+        .args([
+            "build",
+            "src/server.ts",
+            "--out=flag/server.js",
+            "--alias=@=./src",
+        ])
+        .output()
+        .expect("spawn esdev build");
+    assert!(flagged.status.success(), "{}", stderr(&flagged));
+    assert!(
+        std::fs::read_to_string(dir.join("flag/server.js"))
+            .expect("read bundle")
+            .contains("helped")
+    );
+
+    // A published library keeps the specifier its source wrote — the consuming
+    // build resolves it, and it has never heard of this alias.
+    let lib = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--out=libout", "--alias=@=./src"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(!lib.status.success(), "{}", stdout(&lib));
+    assert!(
+        stderr(&lib).contains("--lib does not bundle"),
+        "{}",
+        stderr(&lib)
+    );
+}
+
+/// A browser bundle cannot read the environment at run time, so what it is
+/// configured with has to be compiled in — and what is compiled in is public by
+/// definition, which is what the prefix says out loud.
+#[test]
+fn import_meta_env_carries_the_public_variables_and_no_others() {
+    let dir = build_dir("b_env");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        ".env",
+        "PUBLIC_API=https://api.example.com\nSECRET_KEY=do-not-ship\n",
+    );
+    write_in(
+        &dir,
+        "src/app.ts",
+        "export const api = import.meta.env.PUBLIC_API;\n\
+         export const mode = import.meta.env.MODE;\n\
+         export const dev = import.meta.env.DEV;\n\
+         export const all = import.meta.env;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/app.ts", "--out=dist/app.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("read bundle");
+
+    assert!(bundle.contains("https://api.example.com"), "{bundle}");
+    assert!(bundle.contains("\"production\""), "{bundle}");
+    // A boolean, not the string "false": `if (import.meta.env.DEV)` on a string
+    // is a branch that always runs.
+    assert!(bundle.contains("dev = false"), "{bundle}");
+    // The object itself is replaced too, so destructuring it works.
+    assert!(bundle.contains("\"PROD\": true"), "{bundle}");
+    // The one that matters: what was not marked public did not travel.
+    assert!(!bundle.contains("do-not-ship"), "{bundle}");
+    assert!(!bundle.contains("SECRET_KEY"), "{bundle}");
+}
+
+/// The file is what the machine has checked out; the environment is what that
+/// machine was told. The second wins.
+#[test]
+fn the_environment_beats_the_env_file() {
+    let dir = build_dir("b_env_order");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, ".env", "PUBLIC_API=from-the-file\n");
+    write_in(
+        &dir,
+        "src/app.ts",
+        "export const api = import.meta.env.PUBLIC_API;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/app.ts", "--out=dist/app.js"])
+        .env("PUBLIC_API", "from-the-environment")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let bundle = std::fs::read_to_string(dir.join("dist/app.js")).expect("read bundle");
+    assert!(bundle.contains("from-the-environment"), "{bundle}");
+    assert!(!bundle.contains("from-the-file"), "{bundle}");
+}
+
+/// A library is an input to somebody else's build, and which environment the
+/// code runs in is that build's to decide — the same rule that keeps `--lib`
+/// from defining `NODE_ENV`.
+#[test]
+fn a_library_compiles_in_no_environment() {
+    let dir = build_dir("b_env_lib");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, ".env", "PUBLIC_API=https://api.example.com\n");
+    write_in(
+        &dir,
+        "src/index.ts",
+        "export const api: unknown = import.meta.env.PUBLIC_API;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let module = std::fs::read_to_string(dir.join("dist/index.js")).expect("read module");
+    assert!(module.contains("import.meta.env.PUBLIC_API"), "{module}");
+    assert!(!module.contains("api.example.com"), "{module}");
+}
+
+// ---------------------------------------------------------------------------
 // `esdev build --lib` (DECISIONS D59)
 //
 // The same command, for an artifact that is not deployed but published — so
@@ -3598,6 +3756,205 @@ fn two_module_scripts_that_would_collide_are_refused() {
 // loop makes. The app's own server is what runs. A build that fails leaves
 // what was working alone. And the browser is told, once, after the restart.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// `esdev preview`: the release build, before it is a deployment
+// ---------------------------------------------------------------------------
+
+/// The dev loop serves a build that is not the one that ships — NODE_ENV is
+/// "development" and nothing is hashed — so the last look before deploying has
+/// to be at the release output itself.
+#[test]
+fn preview_serves_the_build_with_a_route_fallback() {
+    let dir = build_dir("b_preview");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/main.ts",
+        "document.body.innerHTML = `<h1>${import.meta.env.MODE}</h1>`;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body>\
+         <script type=\"module\" src=\"./src/main.ts\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }\n",
+    );
+
+    // Nothing built yet: a preview serves what a build wrote, and says so
+    // rather than opening a port onto an empty directory.
+    let unbuilt = esdev_in(&dir)
+        .args(["preview", "--port=0"])
+        .output()
+        .expect("spawn esdev preview");
+    assert!(!unbuilt.status.success(), "{}", stdout(&unbuilt));
+    assert!(
+        stderr(&unbuilt).contains("esdev build"),
+        "{}",
+        stderr(&unbuilt)
+    );
+
+    let built = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(built.status.success(), "{}", stderr(&built));
+
+    let port = test_port("preview");
+    let mut command = esdev_in(&dir);
+    command
+        .args(["preview", &format!("--port={port}")])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let _server = Supervisor(Some(command.spawn().expect("spawn esdev preview")));
+
+    let index = wait_for_http(port, "/", |response| response.contains("<!doctype html"));
+    assert!(index.contains("<script"), "{index}");
+    // The document points at the hashed bundle a release build wrote, which is
+    // the half `esdev start` cannot show.
+    assert!(index.contains("/assets/main-"), "{index}");
+
+    // A reload on a route the router owns has to reach the router.
+    let route = http_get(port, "/about").expect("a response");
+    assert!(route.contains("200 OK"), "{route}");
+    assert!(route.contains("<script"), "{route}");
+
+    // …and a missing file that is not a route is still missing.
+    let missing = http_get(port, "/nope.js").expect("a response");
+    assert!(missing.contains("404"), "{missing}");
+}
+
+/// A server bundle is run, not served — and by the binary that will run it in
+/// production.
+#[test]
+fn preview_says_a_server_project_is_run_rather_than_served() {
+    let dir = build_dir("b_preview_server");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/api.ts", "export default 1;\n");
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"targets\": { \"api\": { \"entry\": \"src/api.ts\", \
+         \"out\": \"dist/api.js\" } } }\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["preview", "--port=0"])
+        .output()
+        .expect("spawn esdev preview");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    assert!(stderr(&out).contains("esrun"), "{}", stderr(&out));
+}
+
+// ---------------------------------------------------------------------------
+// `esdev test`: what runs at once, and what happens on a save
+// ---------------------------------------------------------------------------
+
+/// A file is a process, so the machine's cores are the runner's to use — and
+/// with more than one running, output is held and printed whole rather than
+/// interleaved line by line with another file's.
+#[test]
+fn tests_run_in_parallel_and_keep_each_files_output_together() {
+    let dir = build_dir("b_test_jobs");
+    for i in 1..=4 {
+        write_in(
+            &dir,
+            &format!("slow{i}.test.ts"),
+            &format!(
+                "import {{ test, assertEquals }} from \"runtime:test\";\n\
+                 test(\"slow {i}\", async () => {{\n  \
+                 await new Promise((r) => setTimeout(r, 300));\n  \
+                 console.log(\"line one of {i}\");\n  \
+                 console.log(\"line two of {i}\");\n  \
+                 assertEquals(1 + 1, 2);\n}});\n"
+            ),
+        );
+    }
+    write_in(
+        &dir,
+        "broken.test.ts",
+        "import { test, assertEquals } from \"runtime:test\";\n\
+         test(\"fails\", () => { assertEquals(1, 2); });\n",
+    );
+
+    let started = std::time::Instant::now();
+    let out = esdev_in(&dir)
+        .arg("test")
+        .output()
+        .expect("spawn esdev test");
+    let elapsed = started.elapsed();
+    assert!(
+        !out.status.success(),
+        "a failing file passed: {}",
+        stdout(&out)
+    );
+
+    let report = stdout(&out);
+    assert!(report.contains("1 of 5 files failed"), "{report}");
+    // Four 300ms files, so anything near 1.2s means they ran one after another.
+    assert!(
+        elapsed < Duration::from_millis(1100),
+        "ran serially: {elapsed:?}\n{report}"
+    );
+    // Each file's lines stayed together: nothing came between them.
+    for i in 1..=4 {
+        let together = format!("line one of {i}\nline two of {i}");
+        assert!(
+            report.replace("\r\n", "\n").contains(&together),
+            "output interleaved:\n{report}"
+        );
+    }
+
+    // --jobs=1 is the other half of the deal: one at a time, writing straight
+    // through, for the run where a test is hanging and you want to see it.
+    let serial = esdev_in(&dir)
+        .args(["test", "--jobs=1", "slow1"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(serial.status.success(), "{}", stderr(&serial));
+    assert!(
+        stdout(&serial).contains("1 file passed"),
+        "{}",
+        stdout(&serial)
+    );
+}
+
+/// `--file` is one run of one file — the shape the parent invokes for each
+/// child — so there is nothing to schedule and nothing to re-run.
+#[test]
+fn test_refuses_to_schedule_a_single_file() {
+    let dir = build_dir("b_test_args");
+    write_in(
+        &dir,
+        "one.test.ts",
+        "import { test } from \"runtime:test\";\ntest(\"ok\", () => {});\n",
+    );
+
+    for flag in ["--watch", "--jobs=2"] {
+        let out = esdev_in(&dir)
+            .args(["test", "--file=one.test.ts", flag])
+            .output()
+            .expect("spawn esdev test");
+        assert!(!out.status.success(), "{flag}: {}", stdout(&out));
+        assert!(stderr(&out).contains("--file"), "{flag}: {}", stderr(&out));
+    }
+
+    let bad = esdev_in(&dir)
+        .args(["test", "--jobs=0"])
+        .output()
+        .expect("spawn esdev test");
+    assert!(!bad.status.success(), "{}", stdout(&bad));
+    assert!(stderr(&bad).contains("--jobs=0"), "{}", stderr(&bad));
+}
 
 /// `esdev start` runs the application as a child of its own, so killing only
 /// the supervisor leaves that child holding a port — and, having inherited the

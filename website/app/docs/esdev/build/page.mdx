@@ -51,6 +51,7 @@ The build is a security step, not only a packaging one.
 | `--minify` | Minify the output |
 | `--conditions=<list>` | Extra `exports` conditions, comma-separated. These **add** to the defaults (`import`, `default`, `worker`) |
 | `--define=<name>=<value>` | Replace `<name>` at build time. `process.env.NODE_ENV` defaults to `"production"` |
+| `--alias=<name>=<to>` | Rewrite the start of a specifier before it resolves. Repeatable |
 
 ## What it gets right for you
 
@@ -73,8 +74,10 @@ A dynamic `import()` emits a chunk beside the entry, content-hashed. That is
 what `outdir` below is for.
 
 <Callout type="note" title="Not yet">
-  Source maps, watching a build, and any output format but ESM. A minified
-  bundle's stack traces are currently unmapped.
+  Source maps, watching a build, and importing an asset from a module
+  (`import logo from "./logo.png"` — reference it from the document or a
+  stylesheet, or copy it with `assets`). A minified bundle's stack traces are
+  currently unmapped.
 </Callout>
 
 ## A project: `esdev.json`
@@ -111,11 +114,56 @@ esdev build src/app.ts           # ignores the file entirely
 | `assets` | Copied into the output: a file by name, a directory by its **contents** |
 | `then` | `"run"` — execute the output once built |
 | `minify`, `define`, `conditions` | As the flags, for this target alone |
+| `alias` (top level) | Specifier rewrites for every target ([below](#aliases)) |
 | `plugins` | Plugins for this target, **added** to the project's ([below](#plugins)) |
 
 `define` values keep the JSON type you wrote: `"MODE": "dev"` replaces with a
 string, `"PORT": 8080` with a number. A flag beats the file, so `--minify`
 takes a release build of a project whose day to day is unminified.
+
+### Aliases
+
+Top level, because a rewrite is a property of the source tree rather than of one
+output:
+
+```json
+{ "alias": { "@": "./src", "react": "preact/compat" } }
+```
+
+A path is resolved against the project; anything else names a package. The
+longest match wins, so `@/ui` beats `@`. `--alias=@=./src` is the same thing for
+an entry with no project around it.
+
+<Callout type="note" title="A bundling rule, and only that">
+  `@/db` resolves because the bundler was told what `@` is. A module run
+  *unbundled* — `esdev src/thing.ts`, or a file `esdev test` runs — resolves the
+  way `esrun` does and knows nothing about it. `--lib` refuses aliases outright:
+  a published module keeps the specifier its source wrote.
+</Callout>
+
+### `import.meta.env`
+
+A browser bundle cannot read the environment at run time, so what configures it
+is compiled in — and what is compiled in is public, which is what the prefix
+says out loud:
+
+```sh
+# .env, or the environment itself
+PUBLIC_API_URL=https://api.example.com
+```
+
+```ts
+fetch(`${import.meta.env.PUBLIC_API_URL}/users`);
+if (import.meta.env.DEV) { … }        // MODE, DEV, PROD are always there
+```
+
+| | |
+| --- | --- |
+| **`PUBLIC_` only** | Everything else stays out of the artifact. A secret is read at run time through [`runtime:env`](/api/env) |
+| **`.env`, then the environment** | A variable exported in the shell beats the file — CI needs that way round |
+| **`MODE`, `DEV`, `PROD`** | `"development"`/`"production"`, and two booleans, from the build itself |
+| **The object too** | `const { PUBLIC_API_URL } = import.meta.env` works; it is replaced whole |
+| **Not in `--lib`** | Which environment the code runs in is the consuming build's to say |
 
 ### Plugins
 

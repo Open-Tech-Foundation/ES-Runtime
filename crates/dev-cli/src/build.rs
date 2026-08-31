@@ -189,6 +189,13 @@ pub struct BuildConfig {
     pub conditions: Vec<String>,
     /// Extra compile-time replacements, from `--define=<name>=<value>`.
     pub defines: Vec<(String, String)>,
+    /// Specifier rewrites, from the project's `alias` or `--alias=<find>=<to>`.
+    ///
+    /// Empty for a `--lib` build, and not because it would be hard: a published
+    /// module keeps the specifier its source wrote, and a consumer's build
+    /// resolves it. Rewriting one here would ship a package whose imports only
+    /// work under this toolchain.
+    pub alias: Vec<(String, String)>,
     /// Build a library rather than a deployable application.
     pub lib: bool,
     /// The module systems a `--lib` build writes, from `--format`. ESM alone
@@ -236,6 +243,91 @@ fn node_env(dev: bool) -> &'static str {
     } else {
         "\"production\""
     }
+}
+
+/// The prefix that makes a variable safe to compile into an artifact.
+///
+/// **A build's output is read by whoever has it**: a browser bundle is served to
+/// the public, and a server bundle is a file on a machine you may not be the
+/// only one on. So the environment is not swept into the build — a variable is
+/// compiled in when its name says out loud that it may be. Everything else is
+/// read at *run* time through `runtime:env`, under the `env` capability, which
+/// is where a secret belongs.
+pub const PUBLIC_PREFIX: &str = "PUBLIC_";
+
+/// `import.meta.env`, as compile-time replacements.
+///
+/// Three sources, later winning over earlier: the project's `.env` file, the
+/// process environment, and the build's own mode. A variable exported in the
+/// shell therefore beats the file, which is the way round CI needs — the file
+/// is what a machine has checked out, and the environment is what that machine
+/// was told.
+///
+/// `import.meta.env` itself is replaced as well as each of its properties, so
+/// `const { PUBLIC_API } = import.meta.env` works and does not become a read of
+/// something undefined. The bundler takes the longest match, so the object never
+/// shadows the property.
+pub fn env_defines(root: &Path, dev: bool) -> Result<Vec<(String, String)>, String> {
+    let mut values: Vec<(String, String)> = Vec::new();
+    let mut put = |name: String, value: String| match values
+        .iter_mut()
+        .find(|(existing, _)| *existing == name)
+    {
+        Some(slot) => slot.1 = value,
+        None => values.push((name, value)),
+    };
+
+    let file = root.join(".env");
+    if file.is_file() {
+        // The label the shared parser puts on its errors names `esrun`'s flag,
+        // and this is a build reading a file it found. The rest of the message
+        // — the line number and what is wrong with it — is what matters and is
+        // kept as written.
+        let entries =
+            es_runtime_cli_common::dotenv::load(&file).map_err(|e| e.replace("--env-file ", ""))?;
+        for (name, value) in entries {
+            if name.starts_with(PUBLIC_PREFIX) {
+                put(name, value);
+            }
+        }
+    }
+    for (name, value) in std::env::vars() {
+        if name.starts_with(PUBLIC_PREFIX) {
+            put(name, value);
+        }
+    }
+
+    let mode = if dev { "development" } else { "production" };
+    put("MODE".to_string(), mode.to_string());
+
+    let mut defines: Vec<(String, String)> = values
+        .iter()
+        .map(|(name, value)| {
+            (
+                format!("import.meta.env.{name}"),
+                serde_json::Value::String(value.clone()).to_string(),
+            )
+        })
+        .collect();
+    // Booleans rather than strings, because they are read as conditions:
+    // `if (import.meta.env.DEV)` on the string "false" is a branch that always
+    // runs, and it would be dead code in the deployment.
+    defines.push(("import.meta.env.DEV".to_string(), dev.to_string()));
+    defines.push(("import.meta.env.PROD".to_string(), (!dev).to_string()));
+
+    let object: serde_json::Map<String, serde_json::Value> = values
+        .into_iter()
+        .map(|(name, value)| (name, serde_json::Value::String(value)))
+        .chain([
+            ("DEV".to_string(), serde_json::Value::Bool(dev)),
+            ("PROD".to_string(), serde_json::Value::Bool(!dev)),
+        ])
+        .collect();
+    defines.push((
+        "import.meta.env".to_string(),
+        serde_json::Value::Object(object).to_string(),
+    ));
+    Ok(defines)
 }
 
 /// Where a bundle goes when `--out` did not say.
@@ -546,10 +638,16 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     let mut define: Vec<(String, String)> = if config.lib {
         Vec::new()
     } else {
-        vec![(
+        let mut define = vec![(
             "process.env.NODE_ENV".to_string(),
             node_env(config.dev).to_string(),
-        )]
+        )];
+        // A library gets none of this either, and for the reason the rest of
+        // `--lib` exists: which environment the code runs in is the consuming
+        // build's to say, and a value compiled in here is one they cannot
+        // change.
+        define.extend(env_defines(&cwd, config.dev)?);
+        define
     };
     define.extend(config.defines);
 
@@ -649,6 +747,11 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             preserve_modules_root: preserve_root
                 .as_ref()
                 .map(|root| root.to_string_lossy().into_owned()),
+            alias: config
+                .alias
+                .iter()
+                .map(|(find, to)| (find.clone(), vec![to.clone()]))
+                .collect(),
             external: Some(external.clone()),
             output: crate::bundler::OutputOptions {
                 format: Some(format.name().to_string()),
@@ -848,6 +951,7 @@ pub async fn bundle_browser_entries(
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
+    alias: Vec<(String, String)>,
     hmr: Option<String>,
     jsx: crate::contract::Jsx,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
@@ -867,7 +971,7 @@ pub async fn bundle_browser_entries(
     // bundler, and reusing it would apply the first run's options to the
     // second's inputs.
     let key = format!(
-        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{define:?}|{conditions:?}|{}",
+        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{define:?}|{conditions:?}|{alias:?}|{}",
         root.display(),
         out_dir.display(),
         // A plugin list that changed is a different build, and a warm bundler
@@ -886,6 +990,10 @@ pub async fn bundle_browser_entries(
         cwd: Some(root.to_path_buf()),
         platform: crate::resolve::Target::Browser,
         conditions,
+        alias: alias
+            .into_iter()
+            .map(|(find, to)| (find, vec![to]))
+            .collect(),
         define,
         minify,
         hmr_runtime: hmr,
@@ -1471,7 +1579,10 @@ async fn build_targets(
             .as_ref()
             .map(|host| host.passes(&target.plugins, refresh))
             .unwrap_or_default();
-        let mut defines = target.define.clone();
+        // The project's `.env` and the environment first, so a `define` in the
+        // file or on the command line overrides one rather than fighting it.
+        let mut defines = env_defines(&project.project.dir, project.dev.is_some())?;
+        defines.extend(target.define.clone());
         defines.extend(project.defines.iter().cloned());
         let mut conditions = target.conditions.clone();
         conditions.extend(project.conditions.iter().cloned());
@@ -1494,6 +1605,7 @@ async fn build_targets(
                 target.minify || project.minify,
                 defines,
                 conditions,
+                project.project.alias.clone(),
                 &plugins,
                 host.as_ref()
                     .map(|host| host.jsx(&target.plugins))
@@ -1535,6 +1647,7 @@ async fn build_targets(
             minify: target.minify || project.minify,
             conditions,
             defines,
+            alias: project.project.alias.clone(),
             lib: false,
             formats: Vec::new(),
             types: false,

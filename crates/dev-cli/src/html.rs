@@ -496,6 +496,7 @@ pub async fn build(
     minify: bool,
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
+    alias: Vec<(String, String)>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
     jsx: crate::contract::Jsx,
 ) -> Result<String, String> {
@@ -608,6 +609,7 @@ pub async fn build(
             minify,
             defines,
             conditions,
+            alias,
             dev.filter(|dev| dev.hot).map(|_| hot_runtime()),
             // Only in a hot dev loop, and only for a target that named a
             // refresh scheme. The registrations the compiler inserts call

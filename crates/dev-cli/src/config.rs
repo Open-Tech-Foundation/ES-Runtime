@@ -72,6 +72,17 @@ pub struct Project {
     /// and pasteable into a terminal. The translation happens once, here, and
     /// is checked by `esrun`'s own parser on the way through.
     pub permissions: Vec<String>,
+    /// Specifier rewrites applied to every target's build: `find` → what it is
+    /// replaced with, longest prefix first.
+    ///
+    /// **A bundling rule, and only a bundling rule.** `@/db` resolves because
+    /// the bundler was told what `@` is; a module run *unbundled* — `esdev
+    /// src/thing.ts`, or a file `esdev test` runs — resolves the way `esrun`
+    /// does and knows nothing about it. That boundary is why the paths are
+    /// resolved here, against the project rather than the working directory: an
+    /// alias that means something different depending on where the build was
+    /// started from would be worse than not having one.
+    pub alias: Vec<(String, String)>,
     /// Every plugin this project loads, in the order they are loaded — the
     /// top-level ones first, then each target's own.
     ///
@@ -232,7 +243,14 @@ const TARGET_KEYS: &[&str] = &[
 ];
 
 /// The keys the file may carry at the top level.
-const TOP_LEVEL_KEYS: &[&str] = &["$schema", "targets", "start", "permissions", "plugins"];
+const TOP_LEVEL_KEYS: &[&str] = &[
+    "$schema",
+    "targets",
+    "start",
+    "permissions",
+    "plugins",
+    "alias",
+];
 
 /// The keys `start` may carry.
 ///
@@ -339,12 +357,14 @@ pub fn parse(text: &str, dir: PathBuf, name: &str) -> Result<Option<Project>, St
         Some(permissions) => permission_flags(permissions, name)?,
         None => Vec::new(),
     };
+    let alias = aliases(root.get("alias"), name, &dir)?;
     Ok(Some(Project {
         dir,
         targets,
         start,
         permissions,
         plugins,
+        alias,
     }))
 }
 
@@ -845,6 +865,52 @@ fn defines(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<(String, S
             other => Ok((name.clone(), other.to_string())),
         })
         .collect()
+}
+
+/// Parses `alias`: what a specifier is rewritten to before it is resolved.
+///
+/// A **path** replacement is resolved against the project directory and kept
+/// absolute, because that is the only spelling that means the same thing from
+/// every working directory a build might be started from. Anything else is left
+/// as written — `"react": "preact/compat"` names a package, and where that lives
+/// is the resolver's question, not this file's.
+fn aliases(value: Option<&Value>, file: &str, dir: &Path) -> Result<Vec<(String, String)>, String> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let map = object(value, file, "`alias`")?;
+    let mut found = Vec::new();
+    for (find, replacement) in map {
+        if find.trim().is_empty() {
+            return Err(format!(
+                "{file}: `alias` has an empty name.\n\n\
+                 An alias rewrites the start of a specifier: \
+                 \"alias\": {{ \"@\": \"./src\" }}."
+            ));
+        }
+        let Value::String(replacement) = replacement else {
+            return Err(format!(
+                "{file}: `alias.{find}` is {}, and an alias is replaced by one \
+                 path or package name.\n\n  \
+                 \"alias\": {{ \"@\": \"./src\", \"react\": \"preact/compat\" }}",
+                kind(replacement)
+            ));
+        };
+        let is_path = replacement.starts_with("./")
+            || replacement.starts_with("../")
+            || Path::new(replacement).is_absolute();
+        let to = if is_path {
+            dir.join(replacement).to_string_lossy().into_owned()
+        } else {
+            replacement.clone()
+        };
+        found.push((find.clone(), to));
+    }
+    // Longest first, so `@/ui` wins over `@` — a resolver takes the first match,
+    // and the first match written in a JSON object is whichever one the map
+    // happened to yield.
+    found.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
+    Ok(found)
 }
 
 /// Rejects a key that is not in `allowed`, naming the nearest one when the
