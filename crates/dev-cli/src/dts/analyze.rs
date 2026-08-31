@@ -142,11 +142,57 @@ pub fn analyze(label: &str, source: &str) -> Result<Analysis, String> {
     // declaration's range out of it is a single pass.
     let sites = reference_sites(&semantic);
 
+    if let Some(specifier) = local_import_type(program) {
+        return Err(unsupported(
+            label,
+            &format!("import(\"{specifier}\")"),
+            "an inline import type is a reference to another module of this library, \
+             and linking resolves import *statements* — so the one file would keep a \
+             relative specifier with nothing beside it to resolve to",
+        ));
+    }
+
     let mut analysis = Analysis::default();
     for statement in &program.body {
         read_statement(label, source, program, &sites, statement, &mut analysis)?;
     }
     Ok(analysis)
+}
+
+/// The first `import("./x")` **type** naming a module of this library, if there
+/// is one.
+///
+/// It is refused rather than emitted, which is this module's rule everywhere
+/// (see its header): the alternative is a single `index.d.ts` carrying
+/// `import("./DateTime.js")` with no `DateTime.d.ts` beside it any more —
+/// TS2307 in the consumer's editor, from a build that said it succeeded.
+///
+/// A **bare** specifier is left alone: `import("hono").Context` names a package
+/// the consumer resolves for themselves, exactly as an import statement of it
+/// would, and the linker keeps those.
+///
+/// A visitor, because an import type is a type: it sits wherever a type may sit
+/// — a property, a union, a type argument several levels down — and not at the
+/// top of the file where the import statements are.
+fn local_import_type(program: &oxc::ast::ast::Program<'_>) -> Option<String> {
+    use oxc::ast_visit::Visit;
+
+    #[derive(Default)]
+    struct Found(Option<String>);
+
+    impl<'a> Visit<'a> for Found {
+        fn visit_ts_import_type(&mut self, it: &oxc::ast::ast::TSImportType<'a>) {
+            let specifier = it.source.value.as_str();
+            if self.0.is_none() && (specifier.starts_with("./") || specifier.starts_with("../")) {
+                self.0 = Some(specifier.to_string());
+            }
+            oxc::ast_visit::walk::walk_ts_import_type(self, it);
+        }
+    }
+
+    let mut found = Found::default();
+    found.visit_program(program);
+    found.0
 }
 
 /// Every place a top-level binding is named, as absolute spans in the source.
@@ -343,8 +389,19 @@ fn read_statement(
                         source,
                         program,
                         sites,
-                        statement.span(),
-                        function.span(),
+                        Inlined {
+                            statement: statement.span(),
+                            declaration: function.span(),
+                            // **The one place a modifier has to be added rather
+                            // than dropped.** `export default function f(): void;`
+                            // carries no `declare` — the export modifier is what
+                            // made it a declaration — so inlining it as
+                            // `function f(): void;` is TS1046, a top-level
+                            // declaration in a `.d.ts` with neither modifier.
+                            // Every other shape here arrives as `export declare
+                            // …` and keeps its `declare` when the `export` goes.
+                            prefix: DECLARE,
+                        },
                         vec![name.clone()],
                         analysis,
                     );
@@ -368,8 +425,11 @@ fn read_statement(
                         source,
                         program,
                         sites,
-                        statement.span(),
-                        class.span(),
+                        Inlined {
+                            statement: statement.span(),
+                            declaration: class.span(),
+                            prefix: DECLARE,
+                        },
                         vec![name.clone()],
                         analysis,
                     );
@@ -425,8 +485,14 @@ fn push_decl(
         source,
         program,
         sites,
-        statement_span,
-        declaration.span(),
+        Inlined {
+            statement: statement_span,
+            declaration: declaration.span(),
+            // Nothing to add: a named export's declaration already carries
+            // `declare` where the grammar wants one, since that is how
+            // isolated-declarations printed it.
+            prefix: "",
+        },
         names,
         analysis,
     ))
@@ -443,20 +509,34 @@ fn push_named_decl(
     source: &str,
     program: &oxc::ast::ast::Program<'_>,
     sites: &[(Span, String)],
-    statement_span: Span,
-    declaration_span: Span,
+    inlined: Inlined<'_>,
     names: Vec<String>,
     analysis: &mut Analysis,
 ) -> usize {
-    let doc = leading_comments(source, program, statement_span.start);
-    let body = &source[declaration_span.start as usize..declaration_span.end as usize];
-    let sites = sites_within(sites, declaration_span, doc.len());
+    let Inlined {
+        statement,
+        declaration,
+        prefix,
+    } = inlined;
+    let doc = leading_comments(source, program, statement.start);
+    let body = &source[declaration.start as usize..declaration.end as usize];
+    let sites = sites_within(sites, declaration, doc.len() + prefix.len());
     analysis.decls.push(Decl {
         names,
-        text: format!("{doc}{body}"),
+        text: format!("{doc}{prefix}{body}"),
         sites,
     });
     analysis.decls.len() - 1
+}
+
+/// Where one declaration's text comes from: the statement it was written as
+/// (which is what its comments are attached to), the declaration inside it
+/// (which is the text, with the `export` modifier outside the span and so
+/// dropped), and whatever has to be put back in front of it.
+struct Inlined<'a> {
+    statement: Span,
+    declaration: Span,
+    prefix: &'a str,
 }
 
 /// The top-level names a declaration binds.
@@ -515,6 +595,10 @@ fn module_export_name(name: &ModuleExportName<'_>) -> String {
 /// Loud rather than silent, for the same reason a declaration that cannot be
 /// derived fails the build: a `.d.ts` is *believed*, so producing a wrong one is
 /// worse than producing none.
+/// What a default-exported declaration is missing once its `export default` is
+/// gone. See the call site.
+const DECLARE: &str = "declare ";
+
 fn unsupported(label: &str, construct: &str, why: &str) -> String {
     format!(
         "{label}: `{construct}` cannot be bundled into one declaration file — {why}.\n\n\

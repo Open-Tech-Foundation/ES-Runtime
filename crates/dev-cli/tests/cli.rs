@@ -1789,6 +1789,94 @@ fn dts_project(name: &str) -> PathBuf {
     dir
 }
 
+/// `export default function f(): string;` carries no `declare` — the export
+/// modifier is what made it a declaration — so inlining it as
+/// `function f(): string;` is TS1046, a top-level declaration in a `.d.ts` with
+/// neither modifier. Found by bundling `@opentf/std`, where every utility is a
+/// default export: 317 of them in one file, and `tsc` rejecting the package.
+#[test]
+fn dts_bundle_keeps_declare_on_an_inlined_default_export() {
+    let dir = build_dir("l_dts_declare");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/splice.ts",
+        "export default function splice(s: string): string {\n  return s;\n}\n",
+    );
+    write_in(
+        &dir,
+        "src/box.ts",
+        "export default class Box {\n  readonly size: number = 1;\n}\n",
+    );
+    write_in(
+        &dir,
+        "src/index.ts",
+        "export { default as splice } from './splice.js';\n\
+         export { default as Box } from './box.js';\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--dts-bundle"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let text = bundled(&dir);
+    assert!(text.contains("declare function splice"), "{text}");
+    assert!(text.contains("declare class Box"), "{text}");
+    // The modifier is added, not doubled: a named export already has one.
+    assert!(!text.contains("declare declare"), "{text}");
+}
+
+/// An inline `import("./x")` is a reference to another module of the library,
+/// and linking resolves import *statements* — so it would survive into a single
+/// `index.d.ts` with nothing beside it to resolve to (TS2307, in the consumer's
+/// editor, from a build that said it succeeded). It is refused instead, which is
+/// what this linker does with every construct it cannot link.
+#[test]
+fn dts_bundle_refuses_an_import_type_it_cannot_link() {
+    let dir = build_dir("l_dts_import_type");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/clock.ts", "export default class Clock {}\n");
+    write_in(
+        &dir,
+        "src/index.ts",
+        "export interface Options {\n  \
+         readonly at?: import('./clock.js').default;\n}\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--dts-bundle"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let message = stderr(&out);
+    assert!(message.contains("import(\"./clock.js\")"), "{message}");
+    // The module is named as it is spelled, not as a specifier joined onto a
+    // directory: `src/./index.ts` is what that produces.
+    assert!(message.contains("src/index.ts"), "{message}");
+    assert!(!message.contains("/./"), "{message}");
+    assert!(message.contains("--dts-bundle"), "{message}");
+
+    // A package is not this library's to link, and is left alone.
+    write_in(
+        &dir,
+        "src/index.ts",
+        "export interface Options {\n  \
+         readonly at?: import('a-package').Clock;\n}\n",
+    );
+    let external = esdev_in(&dir)
+        .args(["build", "--lib", "src", "--dts-bundle"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(external.status.success(), "{}", stderr(&external));
+    assert!(
+        bundled(&dir).contains("import(\"a-package\")"),
+        "{}",
+        bundled(&dir)
+    );
+}
+
 fn bundled(dir: &Path) -> String {
     std::fs::read_to_string(dir.join("dist/index.d.ts")).expect("read bundled declarations")
 }

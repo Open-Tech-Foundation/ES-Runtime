@@ -136,7 +136,10 @@ impl Graph {
             return Ok(*id);
         }
 
-        let label = path.display().to_string();
+        // Normalised, because the path was built by joining a specifier onto a
+        // directory: `src/./datetime/./types.ts` is what that produces, and it
+        // is the name every diagnostic about this module prints.
+        let label = PathBuf::from_iter(path.components()).display().to_string();
         let source = declarations
             .get(&canonical)
             .or_else(|| declarations.get(path))

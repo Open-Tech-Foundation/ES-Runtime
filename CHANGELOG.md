@@ -120,6 +120,23 @@ namespace) is unstable and may change between minor releases until the API freez
   against the built ES modules and against the CommonJS output loaded through
   `require()`.
 
+- **`--dts-bundle` keeps `declare` on a default export, and refuses an
+  `import("./x")` type instead of dangling it.** `export default function
+  f(): string;` carries no `declare` — the export modifier is what made it a
+  declaration — so inlining it as `function f(): string;` was TS1046 in the
+  bundled file. Every library whose modules default-export was affected;
+  `@opentf/std` had 317 of them in one `index.d.ts`.
+
+  An inline `import("./x")` type is a reference to another module of the
+  library, and linking resolves import *statements* — so it survived into the
+  single file with nothing beside it to resolve to (TS2307). It now stops the
+  build and names itself, like every other construct this linker cannot link.
+  An `import("a-package")` is untouched: a package is the consumer's to resolve.
+
+  A module is also named in diagnostics as it is spelled — `src/datetime/types.ts`,
+  not the `src/./datetime/./types.ts` that joining a specifier onto a directory
+  produces.
+
 - **`runtime:build` takes an `exports` output option** (`"auto"` | `"named"` |
   `"default"` | `"none"`) — how a non-ESM `format` assigns what a module
   exports. The same option `--lib`'s CommonJS output sets to `"named"`.

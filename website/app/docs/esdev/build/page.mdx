@@ -447,7 +447,8 @@ Keep the per-module `.d.ts` if your `exports` map has subpaths — `@you/pkg/poo
 has to find a real `pool.d.ts`.
 
 A construct that cannot be linked into one file — a namespace import, `export =`,
-a module augmentation — stops the build and names itself. A `.d.ts` is believed:
+a module augmentation, an inline `import("./x")` type — stops the build and names
+itself. A `.d.ts` is believed:
 nothing runs it and no test covers it, so a wrong one is worse than none.
 
 <Callout type="note" title="Written here, not borrowed">
