@@ -497,6 +497,7 @@ pub async fn build(
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
     alias: Vec<(String, String)>,
+    sourcemap: Option<String>,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
     jsx: crate::contract::Jsx,
 ) -> Result<String, String> {
@@ -598,8 +599,8 @@ pub async fn build(
     // written as a stylesheet and linked below. Returned rather than filled into
     // a handle passed down, because in the dev loop the plugin outlives the
     // build and keeps whichever handle it was constructed with.
-    let (bundled, sheets) = if modules.is_empty() {
-        (Vec::new(), Vec::new())
+    let (bundled, sheets, imported) = if modules.is_empty() {
+        (Vec::new(), Vec::new(), 0)
     } else {
         crate::build::bundle_browser_entries(
             modules,
@@ -610,6 +611,7 @@ pub async fn build(
             defines,
             conditions,
             alias,
+            sourcemap,
             dev.filter(|dev| dev.hot).map(|_| hot_runtime()),
             // Only in a hot dev loop, and only for a target that named a
             // refresh scheme. The registrations the compiler inserts call
@@ -711,7 +713,10 @@ pub async fn build(
         .map_err(|e| format!("cannot write {}: {e}", written.display()))?;
 
     let scripts = bundled.len();
-    let copied = copied + pulled_in;
+    // Three ways a file lands in the output and one count for them: the
+    // target's `assets` list, the files a stylesheet referenced, and the files
+    // a *module* imported.
+    let copied = copied + pulled_in + imported;
     Ok(format!(
         "{} ({scripts} script{}, {styled} stylesheet{}, {copied} asset{})",
         written

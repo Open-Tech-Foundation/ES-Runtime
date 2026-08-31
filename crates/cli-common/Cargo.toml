@@ -23,6 +23,9 @@ self_update.workspace = true
 # The release listing, parsed rather than pattern-matched. Both already in the
 # tree (via `es-runtime` and `reqwest`), so naming them here costs nothing.
 serde_json.workspace = true
+# Reading an inline source map back out of a bundle, to put a stack trace's
+# frames where they were written (`sourcemap`).
+base64.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 
 # build.rs runs V8 to bake the prelude snapshot once, here, so that both

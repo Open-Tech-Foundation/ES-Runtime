@@ -887,6 +887,278 @@ fn build_rejects_a_missing_entry_and_a_second_one() {
 }
 
 // ---------------------------------------------------------------------------
+// Source maps, and the frames they put back
+// ---------------------------------------------------------------------------
+
+/// A stack trace from a deployed bundle names the bundle, which is a true
+/// statement and a useless one. This is both halves: the build writes the map,
+/// and the binary that runs the bundle reads it when it prints the stack.
+#[test]
+fn a_source_map_puts_a_stack_trace_back_in_the_source() {
+    let dir = build_dir("b_sourcemap");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(
+        &dir,
+        "src/util.ts",
+        "export function boom(n: number): number {\n  \
+         if (n > 1) throw new Error('too big');\n  return n;\n}\n",
+    );
+    write_in(
+        &dir,
+        "src/app.ts",
+        "import { boom } from './util.js';\nconsole.log(boom(5));\n",
+    );
+
+    // Off unless asked: a .map beside a deployment costs bytes and discloses
+    // the source, and neither is the toolchain's decision.
+    let plain = esdev_in(&dir)
+        .args(["build", "src/app.ts", "--out=plain/app.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(plain.status.success(), "{}", stderr(&plain));
+    assert!(!dir.join("plain/app.js.map").exists());
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/app.ts", "--out=dist/app.js", "--sourcemap"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    let map = std::fs::read_to_string(dir.join("dist/app.js.map")).expect("read the map");
+    assert!(
+        std::fs::read_to_string(dir.join("dist/app.js"))
+            .expect("read the bundle")
+            .contains("//# sourceMappingURL=app.js.map")
+    );
+    // Absolute, and naming the real source rather than a path relative to the
+    // staging directory the build wrote it in and then moved out of.
+    let sources: serde_json::Value = serde_json::from_str(&map).expect("valid JSON");
+    let first = sources["sources"][0].as_str().expect("a source");
+    assert!(first.ends_with("src/util.ts"), "{first}");
+    assert!(
+        std::path::Path::new(first).is_file(),
+        "the map names a file that is not there: {first}"
+    );
+
+    // The half only the runtime can do.
+    let Some(esrun) = sibling_binary("esrun") else {
+        return;
+    };
+    let ran = Command::new(esrun)
+        .current_dir(&dir)
+        .arg("dist/app.js")
+        .output()
+        .expect("spawn esrun");
+    assert!(!ran.status.success());
+    let trace = stderr(&ran);
+    assert!(trace.contains("src/util.ts:2:"), "unmapped:\n{trace}");
+    assert!(trace.contains("src/app.ts:2:"), "unmapped:\n{trace}");
+    assert!(
+        !trace.contains("dist/app.js:"),
+        "still the bundle:\n{trace}"
+    );
+}
+
+/// The dev loop maps itself: nothing is deployed, so neither half of the
+/// decision a release build makes applies, and an unmapped dev bundle is a
+/// stack trace pointing into generated code on every save.
+#[test]
+fn the_dev_loop_maps_without_being_asked() {
+    let dir = build_dir("b_sourcemap_dev");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    write_in(&dir, "src/main.ts", "export const x: number = 1;\n");
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body>\
+         <script type=\"module\" src=\"./src/main.ts\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }\n",
+    );
+
+    let release = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(release.status.success(), "{}", stderr(&release));
+    let bundle = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|e| e == "js"))
+        .expect("a bundle");
+    let released = std::fs::read_to_string(&bundle).expect("read the bundle");
+    assert!(!released.contains("sourceMappingURL"), "{released}");
+
+    // A `sourcemap` a target names is what it gets, in either mode.
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\", \
+         \"sourcemap\": \"inline\" } } }\n",
+    );
+    let mapped = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(mapped.status.success(), "{}", stderr(&mapped));
+    let bundle = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|e| e == "js"))
+        .expect("a bundle");
+    let text = std::fs::read_to_string(&bundle).expect("read the bundle");
+    assert!(
+        text.contains("sourceMappingURL=data:application/json"),
+        "no inline map in {}: {}",
+        bundle.display(),
+        &text[text.len().saturating_sub(200)..]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Assets a module imports
+// ---------------------------------------------------------------------------
+
+/// `import logo from "./logo.png"` used to stop the build — the bundler read
+/// the image as source and reported that it was not valid UTF-8. The `assets`
+/// copy could not answer it either: it cannot hash a name, and it does not know
+/// the file was referenced at all.
+#[test]
+fn an_imported_asset_is_emitted_hashed_and_referenced_by_url() {
+    let dir = build_dir("b_asset_import");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::write(dir.join("src/logo.png"), b"\x89PNG\r\n\x1a\nfirst").expect("write png");
+    write_in(
+        &dir,
+        "src/main.ts",
+        "import logo from './logo.png';\n\
+         document.body.innerHTML = `<img src=\"${logo}\">`;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body>\
+         <script type=\"module\" src=\"./src/main.ts\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        "{ \"targets\": { \"web\": { \"entry\": \"index.html\", \"outdir\": \"dist\" } } }\n",
+    );
+
+    let out = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stdout(&out).contains("1 asset"), "{}", stdout(&out));
+
+    let emitted: Vec<_> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".png"))
+        .collect();
+    assert_eq!(emitted.len(), 1, "{emitted:?}");
+    let name = &emitted[0];
+    assert!(
+        name.starts_with("logo-") && name.len() > "logo-.png".len(),
+        "{name}"
+    );
+
+    // The module exports the URL the file is served from, and it is the name
+    // that was written.
+    let bundle = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| path.extension().is_some_and(|e| e == "js"))
+        .expect("a bundle");
+    let text = std::fs::read_to_string(bundle).expect("read the bundle");
+    assert!(text.contains(&format!("/assets/{name}")), "{text}");
+
+    // Changed bytes, changed name — which is the whole reason the copy was not
+    // enough: a cache cannot serve last week's image under this week's URL.
+    std::fs::write(dir.join("src/logo.png"), b"\x89PNG\r\n\x1a\nsecond").expect("write png");
+    let again = esdev_in(&dir)
+        .arg("build")
+        .output()
+        .expect("spawn esdev build");
+    assert!(again.status.success(), "{}", stderr(&again));
+    let second: Vec<_> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".png"))
+        .collect();
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert_ne!(&second[0], name, "the URL did not change with the file");
+}
+
+/// A server bundle and a browser bundle contain the same component, so they
+/// have to agree about the URL: the markup one sends names the file the other
+/// fetches.
+#[test]
+fn a_server_build_emits_the_same_asset_url() {
+    let dir = build_dir("b_asset_server");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::write(dir.join("src/logo.png"), b"\x89PNG\r\n\x1a\n").expect("write png");
+    write_in(
+        &dir,
+        "src/server.ts",
+        "import logo from './logo.png';\nexport default `<img src=\"${logo}\">`;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "src/server.ts", "--out=dist/server.js"])
+        .output()
+        .expect("spawn esdev build");
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let bundle = std::fs::read_to_string(dir.join("dist/server.js")).expect("read the bundle");
+    let emitted: Vec<_> = std::fs::read_dir(dir.join("dist/assets"))
+        .expect("read assets")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(emitted.len(), 1, "{emitted:?}");
+    assert!(
+        bundle.contains(&format!("/assets/{}", emitted[0])),
+        "{bundle}"
+    );
+}
+
+/// A library is an input to a build that has not run yet, and where that build
+/// serves a file from is its own decision — so the import is refused, with the
+/// reason, rather than emitting a URL that is only correct here.
+#[test]
+fn a_library_refuses_an_asset_import_and_says_why() {
+    let dir = build_dir("b_asset_lib");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::write(dir.join("src/logo.png"), b"\x89PNG\r\n\x1a\n").expect("write png");
+    write_in(
+        &dir,
+        "src/index.ts",
+        "import logo from './logo.png';\nexport const url: string = logo;\n",
+    );
+
+    let out = esdev_in(&dir)
+        .args(["build", "--lib", "src"])
+        .output()
+        .expect("spawn esdev build --lib");
+    assert!(!out.status.success(), "{}", stdout(&out));
+    let message = stderr(&out);
+    // The frame points at the import, and the explanation says what to do.
+    assert!(message.contains("src/index.ts"), "{message}");
+    assert!(message.contains("--lib cannot know one"), "{message}");
+    assert!(message.contains("data:"), "{message}");
+}
+
+// ---------------------------------------------------------------------------
 // `alias` and `import.meta.env`: the two things a project configures that a
 // bundler has to be told, and that a hand-written `--define` was the only way
 // to say.
@@ -4180,6 +4452,59 @@ fn start_needs_a_project_to_start() {
     let out = esdev_in(&dir).arg("start").output().expect("spawn esdev");
     assert!(!out.status.success());
     assert!(stderr(&out).contains("esdev.json"), "{}", stderr(&out));
+}
+
+/// The dev loop holds one bundler across rebuilds, and the pass that emits an
+/// imported file is inside it — so the collector has to be held too, or a
+/// rebuild the bundler answered from its cache forgets a file that is still
+/// imported and stops writing it.
+#[test]
+fn the_dev_loop_serves_an_imported_asset_and_maps_its_bundle() {
+    let dir = watch_dir("s_asset");
+    let port = test_port("s_asset");
+    std::fs::create_dir_all(dir.join("src")).expect("create src");
+    std::fs::write(dir.join("src/logo.png"), b"\x89PNG\r\n\x1a\ndev").expect("write png");
+    write_in(
+        &dir,
+        "src/main.ts",
+        "import logo from './logo.png';\n\
+         document.body.innerHTML = `<img id=logo src=\"${logo}\">`;\n",
+    );
+    write_in(
+        &dir,
+        "index.html",
+        "<!doctype html><html><body>\
+         <script type=\"module\" src=\"./src/main.ts\"></script></body></html>\n",
+    );
+    write_in(
+        &dir,
+        "esdev.json",
+        &format!(
+            r#"{{ "targets": {{ "web": {{ "entry": "index.html", "outdir": "dist" }} }},
+                 "start": {{ "port": {port} }} }}"#
+        ),
+    );
+
+    let _supervisor = start_in(&dir);
+    let document = wait_for_http(port, "/", |body| body.contains("<script"));
+    assert!(document.contains("200 OK"), "{document}");
+
+    // The bundle names the file, and the file is there to be fetched.
+    let bundle = http_get(port, "/assets/main.js").expect("a bundle");
+    let url = bundle
+        .split("/assets/logo-")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .map(|name| format!("/assets/logo-{name}"))
+        .expect("an asset URL in the bundle");
+    let asset = http_get(port, &url).expect("the asset");
+    assert!(asset.contains("200 OK"), "{url} was not served:\n{asset}");
+
+    // …and the dev bundle carries its map, so what breaks points at the source.
+    assert!(
+        bundle.contains("sourceMappingURL=data:application/json"),
+        "the dev bundle is unmapped"
+    );
 }
 
 /// A project with no server of its own: esdev serves the output, falls back to

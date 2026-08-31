@@ -1471,6 +1471,7 @@ dependencies = [
 name = "es-runtime-cli-common"
 version = "0.27.0"
 dependencies = [
+ "base64 0.22.1",
  "es-runtime",
  "es-runtime-common",
  "es-runtime-default-providers",

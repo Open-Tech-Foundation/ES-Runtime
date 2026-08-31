@@ -37,6 +37,11 @@ authors = ["Open Tech Foundation <https://opentechf.org> and its contributors"]
 # Single source of truth for dependency versions. Pinned per DECISIONS.md D7
 # (supply chain) / ARCHITECTURE.md §7; bumped deliberately, not floated.
 [workspace.dependencies]
+# Base64, for the two places a payload arrives encoded: the runtime's own
+# `atob`/`btoa` and friends, and an inline source map read back out of a bundle
+# when a stack trace is printed (`cli-common::sourcemap`).
+base64 = "0.22"
+
 # Error model (DECISIONS.md D12).
 thiserror = "2.0.18"
 # Observability (ARCHITECTURE.md §8): structured spans, no println!.

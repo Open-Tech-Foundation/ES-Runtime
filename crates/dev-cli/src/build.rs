@@ -189,6 +189,9 @@ pub struct BuildConfig {
     pub conditions: Vec<String>,
     /// Extra compile-time replacements, from `--define=<name>=<value>`.
     pub defines: Vec<(String, String)>,
+    /// Whether to write source maps, and in which shape: `"external"`,
+    /// `"inline"` or `"hidden"`. `None` writes none.
+    pub sourcemap: Option<String>,
     /// Specifier rewrites, from the project's `alias` or `--alias=<find>=<to>`.
     ///
     /// Empty for a `--lib` build, and not because it would be hard: a published
@@ -328,6 +331,25 @@ pub fn env_defines(root: &Path, dev: bool) -> Result<Vec<(String, String)>, Stri
         serde_json::Value::Object(object).to_string(),
     ));
     Ok(defines)
+}
+
+/// The source-map setting one target's build runs under.
+///
+/// **The dev loop maps itself and a release build asks.** A `.map` in a
+/// deployment is a decision with two halves — it costs bytes beside the bundle,
+/// and it discloses the source to anyone who fetches it — and neither is the
+/// toolchain's to make. In the dev loop neither half applies: nothing is
+/// deployed, and the whole point of the loop is that what breaks is findable.
+///
+/// Inline in the dev loop rather than a file beside the bundle, because the file
+/// would be one more thing the dev server has to serve and one more stale
+/// artifact after a rebuild that no longer produces it.
+pub fn sourcemap_for(target: &crate::config::Target, dev: bool) -> Option<String> {
+    match (&target.sourcemap, dev) {
+        (Some(kind), _) => Some(kind.clone()),
+        (None, true) => Some("inline".to_string()),
+        (None, false) => None,
+    }
 }
 
 /// Where a bundle goes when `--out` did not say.
@@ -697,6 +719,9 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
     // private copy of the registry: a consumer can dedupe, override or patch
     // a dependency they still have, and can do none of those to one that was
     // inlined into a file they did not write.
+    // The files the modules import: recorded as the graph is walked, written
+    // once the whole build has succeeded.
+    let assets = crate::assets::Emitted::new();
     let external = crate::bundler::External::when(move |specifier, _, _| {
         if specifier.starts_with("runtime:") {
             if let Ok(mut seen) = recorded.lock() {
@@ -762,6 +787,7 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                 // Saying `named` is that same output with the shape settled — and
                 // it is the shape the `.d.cts` beside it describes.
                 exports: matches!(format, Format::Cjs).then(|| "named".to_string()),
+                sourcemap: config.sourcemap.clone(),
                 dir: Some(out_dir.to_string_lossy().into_owned()),
                 entry_filenames: Some(filenames.clone()),
                 // Left at the same pattern as an entry so the emitted tree mirrors
@@ -787,11 +813,21 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
         let mut bundler = rolldown::BundlerBuilder::default()
             .with_options(translated)
             .with_plugins(installed(
-                std::sync::Arc::new(crate::cssmodules::CssModules::new(
-                    &cwd,
-                    crate::cssmodules::Collected::new(),
-                    config.minify,
-                )),
+                vec![
+                    std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                        &cwd,
+                        crate::cssmodules::Collected::new(),
+                        config.minify,
+                    )),
+                    if config.lib {
+                        // A library does not decide where a file is served
+                        // from — the build that consumes it does.
+                        std::sync::Arc::new(crate::assets::Assets::refusing())
+                            as std::sync::Arc<dyn crate::contract::Pass>
+                    } else {
+                        std::sync::Arc::new(crate::assets::Assets::new(assets.clone()))
+                    },
+                ],
                 &config.plugins,
             ))
             .build()
@@ -806,6 +842,16 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
             .await
             .map_err(reported!())
             .map_err(|failed| {
+                // The backend renders a plugin's refusal as "plugin `x` threw an
+                // error" and keeps only that: it stringifies the outermost error,
+                // and what the pass said is the cause underneath it. So the one
+                // refusal a person can actually hit is explained here, where the
+                // build knows why it installed a pass that refuses.
+                let failed = if lib && failed.contains(crate::assets::PASS_NAME) {
+                    format!("{failed}\n\n{}", crate::assets::WHY_A_LIBRARY_REFUSES)
+                } else {
+                    failed
+                };
                 if formats.len() == 1 {
                     return failed;
                 }
@@ -816,6 +862,12 @@ pub async fn build(config: BuildConfig) -> Result<String, String> {
                 )
             })?;
     }
+
+    // Beside the bundle that imports them, under `assets/`, which is where the
+    // rooted URL the module now exports points. `out_dir` is the directory in
+    // every shape this command takes: the one `--out` named, the one a target's
+    // `outdir` named, or the parent of the single file `--out` wrote.
+    assets.write(&cwd.join(&out_dir).join(crate::assets::ASSET_DIR))?;
 
     if !config.lib {
         // `[name].js` is a pattern, not a filename, so the directory case is
@@ -952,10 +1004,11 @@ pub async fn bundle_browser_entries(
     defines: Vec<(String, String)>,
     conditions: Vec<String>,
     alias: Vec<(String, String)>,
+    sourcemap: Option<String>,
     hmr: Option<String>,
     jsx: crate::contract::Jsx,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
-) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>), String> {
+) -> Result<(Vec<(String, String)>, Vec<crate::cssmodules::Sheet>, usize), String> {
     // Hashed for a deployment, stable for the dev loop — the same call `dev`
     // makes everywhere, spelled once here.
     let hash = !dev;
@@ -971,7 +1024,7 @@ pub async fn bundle_browser_entries(
     // bundler, and reusing it would apply the first run's options to the
     // second's inputs.
     let key = format!(
-        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{define:?}|{conditions:?}|{alias:?}|{}",
+        "{entries:?}|{}|{}|{minify}|{hash}|{jsx:?}|{define:?}|{conditions:?}|{alias:?}|{sourcemap:?}|{}",
         root.display(),
         out_dir.display(),
         // A plugin list that changed is a different build, and a warm bundler
@@ -1010,6 +1063,7 @@ pub async fn bundle_browser_entries(
             // filename to keep stable, and a shared chunk that changed without
             // its name changing is a browser running two halves of two builds.
             chunk_filenames: Some("[name]-[hash].js".to_string()),
+            sourcemap,
             ..crate::bundler::OutputOptions::default()
         },
         ..crate::bundler::Options::default()
@@ -1024,23 +1078,28 @@ pub async fn bundle_browser_entries(
     // it. Which is why the collector is the bundler's rather than the caller's:
     // a held plugin keeps the handle it was constructed with, so a caller that
     // made a fresh one each build would be reading an empty one.
-    let styles = if dev {
+    let (styles, assets) = if dev {
         let held = warm().lock().await;
         build_warm(held, &key, root, out_dir, &options, minify, plugins).await?
     } else {
         let styles = crate::cssmodules::Collected::new();
+        let assets = crate::assets::Emitted::new();
         let mut bundler = rolldown::BundlerBuilder::default()
             .with_options(crate::bundler::translate(
                 &options,
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(browser_plugins(root, &styles, minify, plugins))
+            .with_plugins(browser_plugins(root, &styles, &assets, minify, plugins))
             .build()
             .map_err(reported!())?;
         bundler.write().await.map_err(reported!())?;
-        styles.take()
+        (styles.take(), assets)
     };
+    // Into the same directory the bundle and its chunks go: a document's build
+    // writes everything hashed under one `assets/`, and an imported file is one
+    // more hashed thing.
+    let emitted = assets.write(out_dir)?;
 
     let mut written = Vec::new();
     for name in names {
@@ -1056,7 +1115,7 @@ pub async fn bundle_browser_entries(
             .map_err(|e| format!("cannot name {filename}: {e}"))?;
         written.push((name, filename));
     }
-    Ok((written, styles))
+    Ok((written, styles, emitted))
 }
 
 /// The passes a browser build runs, in the order they are declared.
@@ -1067,15 +1126,19 @@ pub async fn bundle_browser_entries(
 fn browser_plugins(
     root: &Path,
     styles: &crate::cssmodules::Collected,
+    assets: &crate::assets::Emitted,
     minify: bool,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
     installed(
-        std::sync::Arc::new(crate::cssmodules::CssModules::new(
-            root,
-            styles.clone(),
-            minify,
-        )),
+        vec![
+            std::sync::Arc::new(crate::cssmodules::CssModules::new(
+                root,
+                styles.clone(),
+                minify,
+            )),
+            std::sync::Arc::new(crate::assets::Assets::new(assets.clone())),
+        ],
         configured,
     )
 }
@@ -1090,10 +1153,10 @@ fn browser_plugins(
 /// `pre` mean "before the other plugins", which is not what anyone writing it
 /// means.
 fn installed(
-    own: std::sync::Arc<dyn crate::contract::Pass>,
+    own: Vec<std::sync::Arc<dyn crate::contract::Pass>>,
     configured: &[std::sync::Arc<dyn crate::contract::Pass>],
 ) -> Vec<std::sync::Arc<dyn rolldown::plugin::Pluginable>> {
-    std::iter::once(own)
+    own.into_iter()
         .chain(configured.iter().cloned())
         .map(|pass| {
             std::sync::Arc::new(crate::adapter::Adapter::new(pass))
@@ -1154,6 +1217,11 @@ struct Warm {
     /// plugin holds the handle it was constructed with, and the plugin is
     /// inside the bundler.
     styles: crate::cssmodules::Collected,
+    /// The assets pass's collector, held for the same reason and **not**
+    /// drained: a rebuild the bundler answered from its cache never re-runs the
+    /// `load` hook, so a collector emptied each time would forget a file that
+    /// is still imported and stop writing it.
+    assets: crate::assets::Emitted,
 }
 
 /// How many patch files stay on disk.
@@ -1320,22 +1388,24 @@ async fn build_warm(
     options: &crate::bundler::Options,
     minify: bool,
     plugins: &[std::sync::Arc<dyn crate::contract::Pass>],
-) -> Result<Vec<crate::cssmodules::Sheet>, String> {
+) -> Result<(Vec<crate::cssmodules::Sheet>, crate::assets::Emitted), String> {
     if held.as_ref().is_none_or(|warm| warm.key != key) {
         let styles = crate::cssmodules::Collected::new();
+        let assets = crate::assets::Emitted::new();
         let bundler = rolldown::BundlerBuilder::default()
             .with_options(crate::bundler::translate(
                 options,
                 options.output.clone(),
                 None,
             )?)
-            .with_plugins(browser_plugins(root, &styles, minify, plugins))
+            .with_plugins(browser_plugins(root, &styles, &assets, minify, plugins))
             .build()
             .map_err(reported!())?;
         *held = Some(Warm {
             key: key.to_string(),
             bundler,
             styles,
+            assets,
             out_dir: out_dir.to_path_buf(),
             // A new bundler is a new graph, so whatever the page was told about
             // the old one is worthless. Starting the session empty is what stops
@@ -1351,8 +1421,9 @@ async fn build_warm(
     // stays held either way and the error is simply reported.
     warm.bundler.write().await.map_err(reported!())?;
     // Drained, not read: the same collector serves every rebuild, and sheets
-    // left in it would be emitted again next time.
-    Ok(warm.styles.take())
+    // left in it would be emitted again next time. The assets collector is the
+    // other way round — see [`Warm::assets`].
+    Ok((warm.styles.take(), warm.assets.clone()))
 }
 
 /// Copies a target's `assets` into its output directory, and reports how many.
@@ -1606,6 +1677,7 @@ async fn build_targets(
                 defines,
                 conditions,
                 project.project.alias.clone(),
+                sourcemap_for(target, project.dev.is_some()),
                 &plugins,
                 host.as_ref()
                     .map(|host| host.jsx(&target.plugins))
@@ -1648,6 +1720,12 @@ async fn build_targets(
             conditions,
             defines,
             alias: project.project.alias.clone(),
+            // A dev build maps itself, always: the whole point of the loop is
+            // that what breaks is findable, and an unmapped bundle is a stack
+            // trace pointing into generated code. A release build says whether
+            // it wants them, since a `.map` beside a deployed bundle is a
+            // decision (about size, and about what the file discloses).
+            sourcemap: sourcemap_for(target, project.dev.is_some()),
             lib: false,
             formats: Vec::new(),
             types: false,

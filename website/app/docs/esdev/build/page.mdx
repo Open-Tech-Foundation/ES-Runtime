@@ -52,6 +52,7 @@ The build is a security step, not only a packaging one.
 | `--conditions=<list>` | Extra `exports` conditions, comma-separated. These **add** to the defaults (`import`, `default`, `worker`) |
 | `--define=<name>=<value>` | Replace `<name>` at build time. `process.env.NODE_ENV` defaults to `"production"` |
 | `--alias=<name>=<to>` | Rewrite the start of a specifier before it resolves. Repeatable |
+| `--sourcemap[=<kind>]` | A `.map` beside the output, or `=inline`, or `=hidden` |
 
 ## What it gets right for you
 
@@ -74,11 +75,62 @@ A dynamic `import()` emits a chunk beside the entry, content-hashed. That is
 what `outdir` below is for.
 
 <Callout type="note" title="Not yet">
-  Source maps, watching a build, and importing an asset from a module
-  (`import logo from "./logo.png"` — reference it from the document or a
-  stylesheet, or copy it with `assets`). A minified bundle's stack traces are
-  currently unmapped.
+  Watching a build, and `?raw` / `?url` suffixes on an import.
 </Callout>
+
+## Source maps
+
+```sh
+esdev build src/server.ts --out=dist/server.js --sourcemap
+```
+
+Off unless asked, because a `.map` beside a deployment is a decision with two
+halves — bytes, and disclosing your source to whoever fetches it — and neither is
+the toolchain's to make. The dev loop maps itself regardless: nothing is deployed
+there, and an unmapped dev bundle is a stack trace into generated code on every
+save.
+
+| | |
+| --- | --- |
+| `--sourcemap` | A `.map` beside the output, pointed at by the bundle |
+| `--sourcemap=inline` | A data URL in the file itself |
+| `--sourcemap=hidden` | Written, with nothing pointing at it — for an error reporter you upload to |
+| `"sourcemap": true` | The same, per target in `esdev.json`. `"inline"`, `"hidden"` and `false` too |
+
+**And `esrun` reads them.** A stack trace printed by either binary is remapped
+through whatever map the file it names carries, so a deployed bundle blames the
+line you wrote:
+
+```text
+Error: too big
+    at boom (file:///srv/app/src/util.ts:2:14)     # not dist/server.js:3:19
+```
+
+Only what is printed changes. `error.stack` inside your program stays exactly
+what the engine built, so a program that ships its own stack to an error
+reporter still sends the truth about the file that ran.
+
+## Assets a module imports
+
+```ts
+import logo from "./logo.png";
+document.body.innerHTML = `<img src="${logo}">`;
+```
+
+The file is emitted with a content hash and the import becomes its URL —
+`/assets/logo-1a2b3c4d.png`. Images, fonts, media, PDFs and `.wasm`; a `.json`
+import stays a module, since the bundler parses one already.
+
+| | |
+| --- | --- |
+| **Hashed** | A changed file is a changed URL, so a cache cannot serve last week's |
+| **The same URL in both bundles** | Rooted, so the markup a server renders names the file the browser fetches |
+| **Counted by the build** | The file is in the output because a module imported it — nothing to remember in `esdev.json` |
+| **Not in `--lib`** | A library cannot know where the consuming build serves a file from, so it refuses and says so |
+
+`assets` is still the answer for a file nothing imports — a `favicon.ico`, a
+`robots.txt` — where the name must *not* change.
+
 
 ## A project: `esdev.json`
 
@@ -113,7 +165,7 @@ esdev build src/app.ts           # ignores the file entirely
 | `platform` | `server` (default) or `browser` |
 | `assets` | Copied into the output: a file by name, a directory by its **contents** |
 | `then` | `"run"` — execute the output once built |
-| `minify`, `define`, `conditions` | As the flags, for this target alone |
+| `minify`, `define`, `conditions`, `sourcemap` | As the flags, for this target alone |
 | `alias` (top level) | Specifier rewrites for every target ([below](#aliases)) |
 | `plugins` | Plugins for this target, **added** to the project's ([below](#plugins)) |
 

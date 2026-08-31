@@ -39,6 +39,7 @@ use es_runtime_cli_common::permissions::{Baseline, Permissions};
 use es_runtime_cli_common::{Config, Source};
 
 mod adapter;
+mod assets;
 mod build;
 mod bundler;
 mod config;
@@ -303,6 +304,9 @@ OPTIONS:
     --out=<path>                Where to write it. A file for an application
                                 (default dist/<entry>.js), a directory for --lib
     --minify                    Minify the output
+    --sourcemap[=<kind>]        Write source maps: a .map beside the output, or
+                                =inline in the file, or =hidden for neither
+    --alias=<name>=<path>       Rewrite the start of a specifier. Repeatable
     --define=<name>=<value>     Replace <name> with <value> at build time.
                                 process.env.NODE_ENV defaults to \"production\"
                                 for an application, and to nothing for --lib
@@ -611,6 +615,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
     let mut conditions = Vec::new();
     let mut defines = Vec::new();
     let mut alias: Vec<(String, String)> = Vec::new();
+    let mut sourcemap: Option<String> = None;
     let mut config_path: Option<String> = None;
     let mut target: Option<String> = None;
     for arg in args {
@@ -667,6 +672,18 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
                     }
                     conditions.push(name.to_string());
                 }
+            }
+            "--sourcemap" => {
+                let kind = value.unwrap_or("external");
+                if !matches!(kind, "external" | "inline" | "hidden") {
+                    return Err(format!(
+                        "--sourcemap={kind} is not a shape of source map.\n\n  \
+                         --sourcemap           a .map beside the output\n  \
+                         --sourcemap=inline    a data URL in the file itself\n  \
+                         --sourcemap=hidden    written, with nothing pointing at it"
+                    ));
+                }
+                sourcemap = Some(kind.to_string());
             }
             "--alias" => {
                 let pair = require_value(flag, value)?;
@@ -904,6 +921,7 @@ fn parse_build(args: impl Iterator<Item = String>) -> Result<BuildRequest, Strin
         conditions,
         defines,
         alias,
+        sourcemap,
         lib,
         formats,
         types: !no_types,

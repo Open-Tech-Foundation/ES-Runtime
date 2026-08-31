@@ -25,7 +25,7 @@
 //! subcommand's business. This module knows how to say things, not what to say.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -103,7 +103,21 @@ impl Failure {
     /// with a frame does not need it — the frame names the file already.
     pub fn report(&self) -> String {
         match (&self.frame, &self.plugin) {
-            (Some(frame), _) if !frame.trim().is_empty() => frame.clone(),
+            (Some(frame), _) if !frame.trim().is_empty() => {
+                // **The frame does not always carry the message.** For a
+                // diagnostic the backend raised itself it does — the summary
+                // line is the first line of the frame — but when a *plugin*
+                // refused a module, what the backend renders is "plugin `x`
+                // threw an error" and the plugin's own explanation is only in
+                // the message. Printing the frame alone there loses the half
+                // that says what to do about it.
+                let message = self.message.trim();
+                if message.is_empty() || frame.contains(message) {
+                    frame.clone()
+                } else {
+                    format!("{}\n{message}", frame.trim_end())
+                }
+            }
             (_, Some(plugin)) => format!("[{plugin}] {}", self.line_summary()),
             _ => self.line_summary(),
         }
@@ -292,6 +306,33 @@ impl OutputOptions {
     }
 }
 
+/// One `sources` entry, resolved against the map that carries it.
+///
+/// `.` and `..` are folded rather than left in the path: `dist/../src/app.ts`
+/// is the same file as `src/app.ts` and only one of them is a name a person
+/// wants to read in a stack trace. Nothing is canonicalized — a symlinked source
+/// directory should keep the name the developer knows it by, and the file may
+/// not even be there any more when the map is read.
+fn absolute_source(source: &str, map: &str) -> String {
+    let source = PathBuf::from(source);
+    if source.is_absolute() {
+        return source.to_string_lossy().into_owned();
+    }
+    let mut resolved = PathBuf::from(map)
+        .parent()
+        .map_or_else(PathBuf::new, Path::to_path_buf);
+    for part in source.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => resolved.push(other),
+        }
+    }
+    resolved.to_string_lossy().into_owned()
+}
+
 /// Translates a build into the bundler's own options. The only such
 /// translation in this binary, deliberately.
 pub fn translate(
@@ -386,6 +427,27 @@ pub fn translate(
             Some("external" | "true") => Some(SourceMapType::File),
             _ => None,
         },
+        // **Absolute, and this is a correctness fix rather than a preference.**
+        // A map's `sources` are written relative to where the map is, and every
+        // build here writes into a staging directory that is then *moved* into
+        // place (D78) — so a relative path correct at write time names a
+        // directory that no longer exists a moment later. The transform runs
+        // while the map is still staged, where joining the two is still right.
+        //
+        // It is also what makes a map useful to a stack trace: a frame carries
+        // an output path, and the answer wanted from it is a source file, not a
+        // path relative to a `.map` the reader would have to find first.
+        sourcemap_path_transform: output.sourcemap.as_deref().and_then(|kind| {
+            (kind != "none").then(|| {
+                rolldown_common::SourceMapPathTransform::new(std::sync::Arc::new(
+                    |source: &str, map: &str| {
+                        let absolute = absolute_source(source, map);
+                        Box::pin(async move { Ok(absolute) })
+                            as Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send>>
+                    },
+                ))
+            })
+        }),
         banner: output
             .banner
             .map(|text| rolldown_common::AddonOutputOption::String(Some(text))),

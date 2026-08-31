@@ -15,6 +15,10 @@ use es_runtime::ModuleEvalState;
 pub fn print_error(err: &str) {
     use std::io::IsTerminal;
 
+    // Frames first: what is printed should name the code that was written, not
+    // the bundle it was written into ([`crate::sourcemap`]). A build with no
+    // map beside it comes back unchanged.
+    let err = &crate::sourcemap::remap(err);
     let use_color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     if !use_color {
         eprintln!("error: {err}");

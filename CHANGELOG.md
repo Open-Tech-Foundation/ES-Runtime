@@ -137,6 +137,50 @@ namespace) is unstable and may change between minor releases until the API freez
   not the `src/./datetime/./types.ts` that joining a specifier onto a directory
   produces.
 
+- **Source maps, and both halves of them.** `esdev build --sourcemap` writes a
+  `.map` (or `=inline`, or `=hidden`); `"sourcemap"` says the same per target in
+  `esdev.json`. Off unless asked for a release build — a map beside a deployment
+  costs bytes and discloses source — and **on in the dev loop**, where neither
+  half applies.
+
+  The half that was missing everywhere: **`esrun` reads them when it prints a
+  stack trace.**
+
+  ```text
+  Error: too big
+      at boom (file:///srv/app/src/util.ts:2:14)      # not dist/server.js:3:19
+  ```
+
+  Only the printed frames change; `error.stack` inside the program stays what
+  the engine built, so a program shipping its own stack to a reporter still
+  sends the truth about the file that ran. A map's `sources` are absolute,
+  which is what makes this work at all: a build stages its output and moves it
+  into place, so a path relative to the map named a directory that no longer
+  existed a moment later.
+
+- **`import logo from "./logo.png"`.** It used to stop the build — the bundler
+  read the image as source and reported that it was not valid UTF-8. The file is
+  now emitted with a content hash and the import becomes its URL,
+  `/assets/logo-1a2b3c4d.png`.
+
+  The `assets` copy could not answer this: it cannot hash a name, so a changed
+  image keeps its URL and a cache serves the old one; and it does not know the
+  file was referenced at all, so forgetting to list one is a 404 in production
+  rather than anything the build says. CSS already disagreed with it —
+  `url(./logo.png)` in a stylesheet has always been followed and hashed. Images,
+  fonts, media, PDFs and `.wasm`; `.json` stays a module. The URL is rooted and
+  identical in the server and browser bundles, so the markup one renders names
+  the file the other fetches. `--lib` refuses it, naming the reason: a library
+  cannot know where the consuming build serves a file from.
+
+  `assets` remains the answer for a file nothing imports, where the name must
+  *not* change.
+
+- **A plugin's own message survives a load failure.** The bundler renders one as
+  "plugin `x` threw an error" and keeps only that line, so what the plugin
+  actually said — including every guest plugin's — was dropped from the
+  diagnostic. It is printed under the frame now.
+
 - **`alias`: a specifier rewrite the build is told about.** `@/db` is how most
   source is written and was an unresolved import here.
 

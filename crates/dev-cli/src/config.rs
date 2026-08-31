@@ -149,6 +149,13 @@ pub struct Target {
     pub assets: Vec<String>,
     /// Whether to minify this target.
     pub minify: bool,
+    /// Whether this target's build writes source maps, and in which shape:
+    /// `"external"` (a `.map` beside the output), `"inline"` (a data URL in the
+    /// file itself) or `"hidden"` (written, and not pointed at).
+    ///
+    /// `None` is "the build decides", which for a release build is none and for
+    /// the dev loop is inline ([`crate::build::sourcemap_for`]).
+    pub sourcemap: Option<String>,
     /// `"refresh": "<scheme>"` — the hot-reload scheme this target's modules
     /// should be prepared for, applied in the dev loop only.
     ///
@@ -236,6 +243,7 @@ const TARGET_KEYS: &[&str] = &[
     "platform",
     "assets",
     "minify",
+    "sourcemap",
     "define",
     "conditions",
     "then",
@@ -490,6 +498,7 @@ fn target(
         platform,
         assets: string_array(map.get("assets"), file, &format!("{at}'s `assets`"))?,
         minify: flag(map.get("minify"), file, &format!("{at}'s `minify`"))?,
+        sourcemap: sourcemap(map.get("sourcemap"), file, &at)?,
         define: defines(map.get("define"), file, &at)?,
         conditions: string_array(map.get("conditions"), file, &format!("{at}'s `conditions`"))?,
         refresh: refresh(map.get("refresh"), file, &at, !mine.is_empty())?,
@@ -865,6 +874,33 @@ fn defines(value: Option<&Value>, file: &str, at: &str) -> Result<Vec<(String, S
             other => Ok((name.clone(), other.to_string())),
         })
         .collect()
+}
+
+/// Parses a target's `sourcemap`: `true`, or which shape of one.
+///
+/// A boolean as well as the three names, because "yes" is what most projects
+/// mean and `true` is how a JSON file says it. `false` is "none", which is also
+/// what leaving the key out means for a release build.
+fn sourcemap(value: Option<&Value>, file: &str, at: &str) -> Result<Option<String>, String> {
+    match value {
+        None => Ok(None),
+        Some(Value::Bool(true)) => Ok(Some("external".to_string())),
+        Some(Value::Bool(false)) => Ok(Some("none".to_string())),
+        Some(Value::String(kind))
+            if matches!(kind.as_str(), "external" | "inline" | "hidden" | "none") =>
+        {
+            Ok(Some(kind.clone()))
+        }
+        Some(other) => Err(format!(
+            "{file}: {at}'s `sourcemap` is {}, and it says whether a build writes \
+             them.\n\n  \
+             true, or \"external\" — a .map beside the output\n  \
+             \"inline\"        — a data URL in the file itself\n  \
+             \"hidden\"        — written, with nothing pointing at it\n  \
+             false, or \"none\"  — none",
+            kind(other)
+        )),
+    }
 }
 
 /// Parses `alias`: what a specifier is rewritten to before it is resolved.
